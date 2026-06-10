@@ -535,7 +535,19 @@ class TokenRepo:
         row = await self._db.fetchone(
             "SELECT * FROM auth_tokens WHERE key = ?", (_TOKEN_KEY,)
         )
-        return _row_to_dict(row) if row else None
+        if not row:
+            return None
+        data = _row_to_dict(row)
+        # Decrypt tokens that were encrypted at rest (transparent for legacy
+        # plaintext rows). An undecryptable token decrypts to None → the
+        # caller sees no usable session and re-auth kicks in.
+        from app.services.local_db.secret_store import unprotect
+
+        if data.get("access_token") is not None:
+            data["access_token"] = unprotect(data["access_token"])
+        if data.get("refresh_token") is not None:
+            data["refresh_token"] = unprotect(data["refresh_token"])
+        return data
 
     async def save(
         self,
@@ -544,6 +556,9 @@ class TokenRepo:
         refresh_token: str | None = None,
         expires_at: int | None = None,
     ) -> None:
+        # Encrypt at rest (no-op passthrough if the keychain is unavailable).
+        from app.services.local_db.secret_store import protect
+
         await self._db.execute(
             """INSERT INTO auth_tokens (key, access_token, refresh_token, user_id, expires_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?)
@@ -553,7 +568,14 @@ class TokenRepo:
                  user_id=excluded.user_id,
                  expires_at=excluded.expires_at,
                  updated_at=excluded.updated_at""",
-            (_TOKEN_KEY, access_token, refresh_token, user_id, expires_at, _now()),
+            (
+                _TOKEN_KEY,
+                protect(access_token),
+                protect(refresh_token),
+                user_id,
+                expires_at,
+                _now(),
+            ),
         )
         await self._db.commit()
 
@@ -1217,10 +1239,24 @@ VALID_PROVIDERS: frozenset[str] = frozenset({
 
 
 def _encode_key(value: str) -> str:
+    # Prefer real encryption-at-rest via the OS keychain; protect() returns
+    # an ``enc:v1:`` string when available, else the plaintext (which we then
+    # base64-encode for the historical at-rest obfuscation).
+    from app.services.local_db.secret_store import protect
+
+    protected = protect(value)
+    if protected != value:
+        return protected  # already an enc:v1: token
     return _base64.b64encode(value.encode()).decode()
 
 
 def _decode_key(encoded: str) -> str:
+    from app.services.local_db.secret_store import unprotect
+
+    # Encrypted values (enc:v1:) round-trip through unprotect; an
+    # undecryptable one yields "" so a stale key isn't used as-is.
+    if encoded.startswith("enc:v1:"):
+        return unprotect(encoded) or ""
     try:
         return _base64.b64decode(encoded.encode()).decode()
     except Exception:

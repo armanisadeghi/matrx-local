@@ -50,12 +50,25 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
-import matrx_scheduler
-
 from app.common.system_logger import get_logger
 
 
 logger = get_logger()
+
+
+def _matrx_scheduler():
+    """Import matrx_scheduler lazily.
+
+    The package is an OPTIONAL extra (``uv sync --extra scheduler``) and is
+    not yet on PyPI, so it may be absent. Importing it lazily lets the rest
+    of this module — notably ``is_scheduler_enabled()`` — work without it.
+    Callers run only after the feature flag is on, and main.py's Phase 8
+    wraps the whole path in try/except, so a missing package degrades to
+    "scheduler disabled" instead of crashing startup.
+    """
+    import matrx_scheduler  # type: ignore[import-not-found]
+
+    return matrx_scheduler
 
 
 # The string this host advertises as in ``sch_task.surfaces[]``. Pairs with
@@ -100,6 +113,8 @@ async def configure_scheduler_host(supabase_client: Any) -> bool:
         )
         return False
 
+    matrx_scheduler = _matrx_scheduler()
+
     if matrx_scheduler.is_configured():
         logger.info(
             "[scheduler_host] already configured — skipping re-configure"
@@ -142,6 +157,7 @@ async def start_scheduler_host() -> bool:
     """
     if not is_scheduler_enabled():
         return False
+    matrx_scheduler = _matrx_scheduler()
     if not matrx_scheduler.is_configured():
         logger.warning(
             "[scheduler_host] start_scheduler_host called but matrx-scheduler "
@@ -164,6 +180,10 @@ async def stop_scheduler_host() -> None:
     but never re-raised so a wedged scanner can't block engine
     teardown. Mirrors aidream's pattern.
     """
+    try:
+        matrx_scheduler = _matrx_scheduler()
+    except Exception:
+        return
     if not matrx_scheduler.is_configured():
         return
     try:
@@ -185,7 +205,13 @@ def scheduler_status() -> Optional[dict[str, Any]]:
     (and remote agents poking the engine) can see whether the scheduler
     is actually polling.
     """
-    if not is_scheduler_enabled() or not matrx_scheduler.is_configured():
+    if not is_scheduler_enabled():
+        return None
+    try:
+        matrx_scheduler = _matrx_scheduler()
+    except Exception:
+        return None
+    if not matrx_scheduler.is_configured():
         return None
     try:
         st = matrx_scheduler.status()

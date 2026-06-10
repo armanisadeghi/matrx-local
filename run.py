@@ -156,8 +156,14 @@ def _read_version() -> str:
 _APP_VERSION = _read_version()
 
 import uvicorn
-from PIL import Image
-from pystray import Icon, Menu, MenuItem
+
+# NOTE: PIL.Image and pystray are imported LAZILY inside the tray functions,
+# not here. pystray's __init__ connects to the X display at import time on
+# Linux, which crashes in headless environments (CI, Tauri-sidecar, servers)
+# before the tray-skip guard in setup_tray() ever runs. The engine is a
+# server sidecar — it must boot without a display. Type hints referencing
+# Icon/MenuItem stay valid because this module uses `from __future__ import
+# annotations` (annotations are never evaluated at runtime).
 
 from app.main import app
 from app.config import MATRX_HOME_DIR
@@ -254,7 +260,9 @@ def remove_discovery_file() -> None:
         pass
 
 
-def create_tray_image() -> Image.Image:
+def create_tray_image() -> "Image.Image":
+    from PIL import Image  # lazy — only needed when a tray is actually shown
+
     icon_path = STATIC_DIR / "apple-touch-icon.png"
     if icon_path.exists():
         return Image.open(str(icon_path))
@@ -454,6 +462,11 @@ def setup_tray(port: int) -> None:
         )
         _wait_forever()
         return
+
+    # Lazy import — pystray touches the X display on import (Linux), so we
+    # only pull it in here, after the sidecar/headless guards above have
+    # already returned for environments without a usable tray.
+    from pystray import Icon, Menu, MenuItem
 
     menu = Menu(
         MenuItem(f"Matrx Local (:{port})", lambda *_: None, enabled=False),

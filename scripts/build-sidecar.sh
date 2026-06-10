@@ -371,6 +371,13 @@ args = [
     "--hidden-import", "supabase",
     "--hidden-import", "openwakeword",
     "--hidden-import", "onnxruntime",
+    # OS keychain (credential encryption at rest) — backends load dynamically.
+    "--hidden-import", "keyring",
+    "--hidden-import", "keyring.backends",
+    "--hidden-import", "keyring.backends.chainer",
+    "--hidden-import", "keyring.backends.fail",
+    "--hidden-import", "cryptography",
+    "--hidden-import", "cryptography.fernet",
     # stdlib modules missed by PyInstaller auto-analysis; required by
     # user-installed image-gen packages (transformers imports filecmp at top level)
     "--hidden-import", "filecmp",

@@ -1214,7 +1214,15 @@ async def websocket_endpoint(websocket: WebSocket):
     url = _sanitize_url(websocket.url)
     logger.info(f"WebSocket connecting: {url}")
 
-    token = websocket.query_params.get("token")
+    # Accept the token from the Authorization header OR the ?token= query
+    # param (browsers can't set headers on a WS upgrade; non-browser clients
+    # and the desktop test panel use the header). Mirrors extension_auth's
+    # _extract_bearer_ws precedence.
+    _auth_hdr = websocket.headers.get("authorization", "")
+    if _auth_hdr.lower().startswith("bearer "):
+        token = _auth_hdr[7:].strip() or None
+    else:
+        token = websocket.query_params.get("token")
     if not token:
         logger.warning(
             f"WebSocket rejected - missing token: {url} | Headers: {dict(websocket.headers)}"

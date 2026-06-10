@@ -115,6 +115,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "tts_auto_clean_markdown": False,
     # Extension bridge
     "extension_broadcast_enabled": True,
+    # Voice assistant (mirror desktop/src/lib/settings.ts defaults)
+    "voice_assistant_system_prompt_id": "builtin-voice-assistant",
+    "voice_silence_timeout_ms": 1400,
+    "voice_restore_prompt_on_exit": True,
     # UI
     "sidebar_collapsed": False,
 }

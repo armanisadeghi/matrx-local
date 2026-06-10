@@ -7,10 +7,20 @@ so no token is required.
 
 from __future__ import annotations
 
+import os
 import sys
 
 import httpx
 import pytest
+
+# These probe real display / audio / network hardware via the OS. On a headless
+# CI runner there is no display or audio device, so the endpoints can't return
+# meaningful data. CI sets MATRX_CI_HEADLESS=1 to skip them; they still run on
+# developer machines and hardware-backed runners.
+_headless = pytest.mark.skipif(
+    os.environ.get("MATRX_CI_HEADLESS") == "1",
+    reason="requires real display/audio/network hardware (headless CI)",
+)
 
 
 def test_devices_permissions(http_public: httpx.Client) -> None:
@@ -31,6 +41,7 @@ def test_devices_system(http_public: httpx.Client) -> None:
     assert isinstance(data, dict)
 
 
+@_headless
 def test_devices_screens(http_public: httpx.Client) -> None:
     """GET /devices/screens returns 200 (may be empty list on headless)."""
     r = http_public.get("/devices/screens")
@@ -39,6 +50,7 @@ def test_devices_screens(http_public: httpx.Client) -> None:
     )
 
 
+@_headless
 def test_devices_audio(http_public: httpx.Client) -> None:
     """GET /devices/audio returns 200 with list of audio devices."""
     r = http_public.get("/devices/audio")
@@ -49,6 +61,7 @@ def test_devices_audio(http_public: httpx.Client) -> None:
     )
 
 
+@_headless
 def test_devices_network(http_public: httpx.Client) -> None:
     """GET /devices/network returns 200."""
     r = http_public.get("/devices/network")

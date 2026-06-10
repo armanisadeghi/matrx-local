@@ -43,6 +43,7 @@ const SECTION_KEYS: Record<ConfigSection, (keyof AppSettings)[]> = {
     "minimizeToTray",
     "autoCheckUpdates",
     "updateCheckInterval",
+    "extensionBroadcastEnabled",
   ],
   appearance: ["theme", "sidebarCollapsed"],
   chatAi: [
@@ -78,6 +79,9 @@ const SECTION_KEYS: Record<ConfigSection, (keyof AppSettings)[]> = {
     "transcriptionAutoInit",
     "transcriptionAudioDevice",
     "transcriptionProcessingTimeout",
+    "voiceAssistantSystemPromptId",
+    "voiceSilenceTimeoutMs",
+    "voiceRestorePromptOnExit",
   ],
   tts: [
     "ttsDefaultVoice",

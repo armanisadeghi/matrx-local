@@ -97,6 +97,9 @@ def page_file_for_route(route: str) -> list[Path]:
     # /tts → TextToSpeech.tsx
     if base == "tts":
         candidates.append(PAGES_DIR / "TextToSpeech.tsx")
+    # /aimatrx → AiMatrx.tsx (intercaps the single-word route can't infer)
+    if base == "aimatrx":
+        candidates.append(PAGES_DIR / "AiMatrx.tsx")
 
     return candidates
 

@@ -45,6 +45,8 @@ jobs:
         env:
           TUNNEL_ENABLED: "0"
           TAURI_SIDECAR: "1"
+          # Skip device-probe tests that need real display/audio/network hardware.
+          MATRX_CI_HEADLESS: "1"
 
   frontend:
     runs-on: ubuntu-22.04

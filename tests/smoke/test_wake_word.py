@@ -21,9 +21,9 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_wake_word_status(http_public: httpx.Client):
+def test_wake_word_status(http: httpx.Client):
     """GET /wake-word/status returns the expected shape."""
-    r = http_public.get("/wake-word/status")
+    r = http.get("/wake-word/status")
     assert r.status_code == 200
     data = r.json()
     assert "running" in data
@@ -36,15 +36,20 @@ def test_wake_word_status(http_public: httpx.Client):
 # ---------------------------------------------------------------------------
 
 
-def test_wake_word_models_list(http_public: httpx.Client):
-    """GET /wake-word/models lists available pre-trained models."""
-    r = http_public.get("/wake-word/models")
+def test_wake_word_models_list(http: httpx.Client):
+    """GET /wake-word/models lists available wake-word models."""
+    r = http.get("/wake-word/models")
     assert r.status_code == 200
     data = r.json()
-    assert "pretrained" in data
-    assert isinstance(data["pretrained"], list)
-    names = [m["name"] for m in data["pretrained"]]
-    assert "hey_jarvis" in names, "hey_jarvis should be in the pre-trained model list"
+    assert "models" in data, f"expected a 'models' key, got {list(data)}"
+    assert isinstance(data["models"], list) and data["models"]
+    # Each entry carries a filename + description; a hey_jarvis model ships
+    # built-in (closest phonetics to "Hey Matrix").
+    blob = " ".join(
+        f"{m.get('filename', '')} {m.get('description', '')}".lower()
+        for m in data["models"]
+    )
+    assert "jarvis" in blob, "expected a hey_jarvis model in the list"
 
 
 # ---------------------------------------------------------------------------
@@ -83,18 +88,18 @@ def test_wake_word_settings_roundtrip(http: httpx.Client):
 # ---------------------------------------------------------------------------
 
 
-def test_wake_word_start_without_device(http_public: httpx.Client):
+def test_wake_word_start_without_device(http: httpx.Client):
     """POST /wake-word/start should succeed or fail gracefully without a real mic."""
-    r = http_public.post("/wake-word/start", json={})
+    r = http.post("/wake-word/start", json={})
     # Accept 200 (started) or 500 (no audio device in CI/test environment)
     assert r.status_code in (200, 500), f"Unexpected status: {r.status_code}"
     if r.status_code == 200:
-        http_public.post("/wake-word/stop")
+        http.post("/wake-word/stop")
 
 
-def test_wake_word_stop_when_not_running(http_public: httpx.Client):
+def test_wake_word_stop_when_not_running(http: httpx.Client):
     """POST /wake-word/stop is safe to call when not running."""
-    r = http_public.post("/wake-word/stop")
+    r = http.post("/wake-word/stop")
     assert r.status_code == 200
 
 
@@ -103,9 +108,9 @@ def test_wake_word_stop_when_not_running(http_public: httpx.Client):
 # ---------------------------------------------------------------------------
 
 
-def test_wake_word_configure(http_public: httpx.Client):
+def test_wake_word_configure(http: httpx.Client):
     """POST /wake-word/configure accepts model_name and threshold updates."""
-    r = http_public.post(
+    r = http.post(
         "/wake-word/configure",
         json={"threshold": 0.7},
     )

@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  # Manual trigger (e.g. from environments that cannot push tags). tauri-action
+  # creates/uses the vX.Y.Z tag and release itself from tauri.conf.json, so a
+  # dispatch from main is equivalent to pushing the tag — downstream jobs
+  # resolve the tag from tauri.conf.json instead of github.ref_name.
+  workflow_dispatch:
 
 jobs:
   release:
@@ -327,16 +332,29 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Extract version from tag
+      - uses: actions/checkout@v4
+
+      - name: Resolve version and tag
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        # Tag push: derive from the ref. workflow_dispatch: the ref is a branch,
+        # so read the version from tauri.conf.json (the same source tauri-action
+        # used to create the release tag).
+        run: |
+          if [[ "$GITHUB_REF_NAME" == v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(jq -r .version desktop/src-tauri/tauri.conf.json)"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=${VERSION} tag=v${VERSION}"
 
       - name: Rename release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${{ steps.version.outputs.tag }}"
           VERSION="${{ steps.version.outputs.version }}"
           REPO="${{ github.repository }}"
 
@@ -419,7 +437,7 @@ jobs:
       - name: Patch latest.json URLs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
           REPO: ${{ github.repository }}
         run: |
@@ -488,7 +506,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Expose shell variables as env vars so the Python heredoc can read them
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.version.outputs.tag }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail

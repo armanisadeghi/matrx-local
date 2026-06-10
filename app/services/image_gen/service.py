@@ -79,6 +79,10 @@ class ImageGenService:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        # Serializes load_model() at the async boundary so two concurrent
+        # requests can't both pass the "already loaded?" check and each spawn
+        # a full model load (which would double VRAM use / OOM).
+        self._load_lock = asyncio.Lock()
         self._pipeline: Any = None
         self._loaded_model_id: str | None = None
         self._is_loading = False
@@ -130,12 +134,15 @@ class ImageGenService:
         if model is None:
             return {"success": False, "error": f"Unknown model: {model_id}"}
 
-        if self._loaded_model_id == model_id and self._pipeline is not None:
-            return {"success": True, "model_id": model_id, "already_loaded": True}
+        # Hold the async lock across the check-and-load so concurrent callers
+        # serialize instead of racing into two parallel model loads.
+        async with self._load_lock:
+            if self._loaded_model_id == model_id and self._pipeline is not None:
+                return {"success": True, "model_id": model_id, "already_loaded": True}
 
-        loop = asyncio.get_running_loop()
-        self._event_loop = loop  # Captured before entering the thread pool
-        return await loop.run_in_executor(None, self._load_model_sync, model)
+            loop = asyncio.get_running_loop()
+            self._event_loop = loop  # Captured before entering the thread pool
+            return await loop.run_in_executor(None, self._load_model_sync, model)
 
     async def unload_model(self) -> dict:
         """Unload the current pipeline and free VRAM."""

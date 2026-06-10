@@ -60,6 +60,8 @@ a = Analysis(
         'app.tools.tools.wifi_bluetooth',
         # stdlib modules not auto-discovered by PyInstaller but required by
         # user-installed image-gen packages (transformers uses filecmp directly)
+        # Dynamically/lazily imported — PyInstaller's static analysis misses these:
+        'supabase', 'openwakeword', 'onnxruntime',
         'filecmp', 'doctest',
     ],
     hookspath=[],
@@ -68,7 +70,7 @@ a = Analysis(
     excludes=[
         'torch', 'torchvision', 'torchaudio', 'tensorflow', 'tensorboard',
         'triton', 'scipy', 'nipype', 'nibabel', 'pyxnat', 'openai_whisper',
-        'whisper', 'matplotlib', 'sklearn', 'skimage', 'cv2',
+        'whisper', 'matplotlib', 'sklearn', 'skimage',
         'IPython', 'ipykernel', 'jupyter', 'ipywidgets',
     ],
     noarchive=False,

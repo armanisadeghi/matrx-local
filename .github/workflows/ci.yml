@@ -1,0 +1,71 @@
+name: CI
+
+# Fast, deterministic gate that runs on every push / PR — distinct from the
+# release workflow (which only fires on v* tags and does no verification).
+# This catches the failure classes that previously only surfaced at release
+# time: a broken dependency graph (`uv sync`), Python syntax/import errors,
+# the engine smoke suite, and TypeScript type errors.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      # Proves the dependency graph resolves from a clean checkout (no sibling
+      # repos, no path sources). This is the regression guard for the
+      # matrx-scheduler path-dependency that used to break `uv sync` on CI.
+      - name: Install dependencies
+        run: uv sync --extra transcription --no-cache
+        shell: bash
+
+      - name: Byte-compile (syntax check)
+        run: uv run python -m compileall -q app run.py
+
+      - name: Lint (advisory)
+        run: uv run ruff check app || true
+
+      - name: Smoke + parity tests
+        run: uv run --frozen pytest tests/smoke tests/parity -q
+        env:
+          TUNNEL_ENABLED: "0"
+          TAURI_SIDECAR: "1"
+
+  frontend:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript typecheck
+        run: pnpm tsc -b

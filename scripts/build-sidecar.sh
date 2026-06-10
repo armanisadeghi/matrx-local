@@ -274,7 +274,6 @@ args = [
     "--exclude-module", "matplotlib",
     "--exclude-module", "sklearn",
     "--exclude-module", "skimage",
-    "--exclude-module", "cv2",
     "--exclude-module", "IPython",
     "--exclude-module", "ipykernel",
     "--exclude-module", "jupyter",
@@ -365,6 +364,13 @@ args = [
     "--hidden-import", "app.tools.tools.media",
     "--hidden-import", "app.tools.tools.wifi_bluetooth",
     "--hidden-import", "pydantic_settings",
+    # Lazily/dynamically imported — PyInstaller's static analysis misses these
+    # (supabase + onnxruntime are imported inside functions; openwakeword loads
+    # its ONNX backend dynamically). Omitting them causes ModuleNotFoundError
+    # in the frozen sidecar only (works fine from source).
+    "--hidden-import", "supabase",
+    "--hidden-import", "openwakeword",
+    "--hidden-import", "onnxruntime",
     # stdlib modules missed by PyInstaller auto-analysis; required by
     # user-installed image-gen packages (transformers imports filecmp at top level)
     "--hidden-import", "filecmp",

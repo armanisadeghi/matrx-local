@@ -383,16 +383,25 @@ def _extract_bearer_ws(websocket: WebSocket) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-async def _verify_token(token: str) -> ExtensionPrincipal:
+async def _verify_token(token: str, *, via_tunnel: bool = False) -> ExtensionPrincipal:
     """Verify ``token`` and return a populated principal.
 
-    Tries JWKS for asymmetric (RS256/ES256) tokens. HS256 tokens cannot
-    be verified by JWKS and the engine has no signing secret (it runs on
-    the user's machine — there's no place to put one); these fall through
-    to a presence-only principal accepted on loopback.
+    Verification strategy:
+      * RS256/ES256 + JWKS configured → verify the signature locally.
+      * Otherwise (HS256 — the Supabase project's mode — or no JWKS) → the
+        engine cannot check the signature itself (it holds no symmetric
+        secret by design). Ask the issuer instead: introspect the token via
+        the Supabase auth server. A confirmed token yields a fully-verified
+        principal even for HS256.
 
-    Raises only if the token is malformed or — for asymmetric tokens — its
-    signature is invalid. Callers translate to HTTP 401 / WS 1008.
+    Trust fallback when introspection cannot confirm the token:
+      * via tunnel → REJECT. Remote callers must present a verified identity;
+        there is no presence-only bypass over the public bridge.
+      * direct loopback → degraded (presence-only) principal. The loopback
+        socket is the trust boundary for local callers.
+
+    Raises on malformed tokens, failed crypto verification, or an
+    unverifiable token arriving over the tunnel. Callers map to 401 / 1008.
     """
     # Peek at the token header to choose the validation path.
     try:
@@ -420,15 +429,27 @@ async def _verify_token(token: str) -> ExtensionPrincipal:
             _debug_log_jwks_failure(token, exc)
             raise exc
 
-    # HS256 token (or no JWKS configured) → presence-only over loopback.
-    # The engine cannot cryptographically verify these tokens by design.
-    # The trust boundary is the loopback socket, not the signature.
-    if alg == "HS256":
-        _log_startup_notice_once(
-            "hs256_token_passthrough" if jwks_url else "presence_only"
+    # HS256 (or no JWKS): verify by introspection against the auth server.
+    from app.api.remote_auth import verify_supabase_token
+
+    verified = await verify_supabase_token(token)
+    if verified is not None:
+        return ExtensionPrincipal(
+            user_id=verified.user_id,
+            email=verified.email,
+            is_anon=verified.is_anon,
+            raw_token=token,
+            verified=True,
         )
-    else:
-        _log_startup_notice_once("presence_only")
+
+    # Introspection could not confirm the token.
+    if via_tunnel:
+        raise ValueError("unverified token over tunnel")
+
+    # Direct loopback: presence-only is acceptable (the socket is the boundary).
+    _log_startup_notice_once(
+        "hs256_token_passthrough" if jwks_url else "presence_only"
+    )
     return _degraded_principal(token)
 
 
@@ -504,8 +525,12 @@ async def validate_extension_principal(request: Request) -> ExtensionPrincipal:
             detail="Authorization Bearer token required",
         )
 
+    from app.api.remote_auth import headers_indicate_tunnel
+
     try:
-        principal = await _verify_token(token)
+        principal = await _verify_token(
+            token, via_tunnel=headers_indicate_tunnel(request.headers)
+        )
     except Exception as exc:
         _log_rejection(
             "http",
@@ -564,8 +589,12 @@ async def validate_extension_principal_ws(
         )
         return None
 
+    from app.api.remote_auth import headers_indicate_tunnel
+
     try:
-        return await _verify_token(token)
+        return await _verify_token(
+            token, via_tunnel=headers_indicate_tunnel(websocket.headers)
+        )
     except Exception as exc:
         _log_rejection(
             "ws",

@@ -6,7 +6,10 @@ The database file lives at ``~/.matrx/matrx.db`` (configurable via
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import stat
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -35,10 +38,29 @@ class LocalDatabase:
     async def connect(self) -> None:
         """Open the database and run any pending migrations."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # The DB holds Supabase JWTs/refresh tokens and (base64) API keys.
+        # Lock the directory + file to the owner so other local users can't
+        # read the user's credentials. Best-effort: chmod is a no-op / not
+        # meaningful on Windows, so we only enforce it on POSIX.
+        if not sys.platform.startswith("win"):
+            try:
+                os.chmod(self.path.parent, stat.S_IRWXU)  # 0o700
+            except OSError:
+                logger.debug("[local_db] could not chmod data dir", exc_info=True)
+
         self._db = await aiosqlite.connect(str(self.path))
+
+        if not sys.platform.startswith("win"):
+            try:
+                os.chmod(self.path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+            except OSError:
+                logger.debug("[local_db] could not chmod db file", exc_info=True)
 
         # WAL mode for concurrent reads while writing
         await self._db.execute("PRAGMA journal_mode=WAL")
+        # Wait up to 5s for a competing writer instead of erroring immediately
+        # with SQLITE_BUSY (background sync loop vs request handlers race).
+        await self._db.execute("PRAGMA busy_timeout=5000")
         # Foreign keys are off by default in SQLite
         await self._db.execute("PRAGMA foreign_keys=ON")
         # Sync less aggressively — we have WAL for crash safety

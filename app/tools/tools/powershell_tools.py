@@ -31,6 +31,19 @@ def _ps_unavailable_error() -> ToolResult:
     return ToolResult(type=ToolResultType.ERROR, output=msg)
 
 
+def _ps_quote(val: str) -> str:
+    """Escape a value for safe embedding inside a PowerShell single-quoted
+    literal ('...').
+
+    Within a single-quoted PowerShell string the only metacharacter is the
+    single quote itself, escaped by doubling it. Doing this on every piece of
+    user input prevents the quote-breakout command injection that raw
+    f-string interpolation allowed (e.g. name="x'; rm-stuff; #").
+    Callers MUST keep the surrounding quotes: f"...'{_ps_quote(v)}'...".
+    """
+    return str(val).replace("'", "''")
+
+
 async def _run_ps(script: str, timeout: int = 30) -> tuple[str, str, int]:
     """Run a PowerShell script. Returns (stdout, stderr, returncode)."""
     exe = _powershell_exe()
@@ -67,7 +80,7 @@ async def tool_ps_get_env(
     """
     try:
         if name:
-            script = f"$v = [System.Environment]::GetEnvironmentVariable('{name}'); if ($null -eq $v) {{ 'NOT SET' }} else {{ $v }}"
+            script = f"$v = [System.Environment]::GetEnvironmentVariable('{_ps_quote(name)}'); if ($null -eq $v) {{ 'NOT SET' }} else {{ $v }}"
             stdout, stderr, rc = await _run_ps(script)
             if rc != 0:
                 return ToolResult(type=ToolResultType.ERROR, output=f"PowerShell error: {stderr or stdout}")
@@ -122,15 +135,27 @@ async def tool_ps_set_env(
         return ToolResult(type=ToolResultType.ERROR, output="Scope must be Process, User, or Machine.")
 
     try:
+        # Use SetEnvironmentVariable for every scope (incl. Process) so the
+        # variable NAME is passed as a quoted string argument rather than
+        # interpolated into a `$env:NAME` reference — the latter allowed
+        # injection via a crafted name. All inputs are quote-escaped.
         if scope == "Process":
-            script = f"$env:{name} = '{value.replace(chr(39), chr(39)*2)}'; \"Set {name} (Process scope)\""
+            script = (
+                f"[System.Environment]::SetEnvironmentVariable("
+                f"'{_ps_quote(name)}', '{_ps_quote(value)}', 'Process'); "
+                f"\"Set {_ps_quote(name)} (Process scope)\""
+            )
         else:
             if not PLATFORM["is_windows"]:
                 return ToolResult(
                     type=ToolResultType.ERROR,
                     output=f"Scope '{scope}' is only available on Windows. Use 'Process' on macOS/Linux.",
                 )
-            script = f"[System.Environment]::SetEnvironmentVariable('{name}', '{value.replace(chr(39), chr(39)*2)}', '{scope}'); \"Set {name} ({scope} scope)\""
+            script = (
+                f"[System.Environment]::SetEnvironmentVariable("
+                f"'{_ps_quote(name)}', '{_ps_quote(value)}', '{_ps_quote(scope)}'); "
+                f"\"Set {_ps_quote(name)} ({_ps_quote(scope)} scope)\""
+            )
 
         stdout, stderr, rc = await _run_ps(script)
         if rc != 0:
@@ -170,9 +195,9 @@ async def tool_registry_read(
         )
     try:
         if value_name:
-            script = f"(Get-ItemProperty -Path '{key_path}' -Name '{value_name}' -ErrorAction Stop).'{value_name}'"
+            script = f"(Get-ItemProperty -Path '{_ps_quote(key_path)}' -Name '{_ps_quote(value_name)}' -ErrorAction Stop).'{_ps_quote(value_name)}'"
         else:
-            script = f"Get-ItemProperty -Path '{key_path}' -ErrorAction Stop | ConvertTo-Json -Depth 2"
+            script = f"Get-ItemProperty -Path '{_ps_quote(key_path)}' -ErrorAction Stop | ConvertTo-Json -Depth 2"
 
         stdout, stderr, rc = await _run_ps(script, timeout=15)
         if rc != 0:
@@ -234,12 +259,16 @@ async def tool_registry_write(
         )
 
     try:
+        kp = _ps_quote(key_path)
+        vn = _ps_quote(value_name)
+        vv = _ps_quote(value)
+        # value_type is allow-listed above, safe to interpolate bare.
         script = f"""
-if (-not (Test-Path '{key_path}')) {{
-    New-Item -Path '{key_path}' -Force | Out-Null
+if (-not (Test-Path '{kp}')) {{
+    New-Item -Path '{kp}' -Force | Out-Null
 }}
-Set-ItemProperty -Path '{key_path}' -Name '{value_name}' -Value '{value}' -Type {value_type} -ErrorAction Stop
-"Written: {key_path}\\{value_name} = {value} ({value_type})"
+Set-ItemProperty -Path '{kp}' -Name '{vn}' -Value '{vv}' -Type {value_type} -ErrorAction Stop
+"Written: {vn} ({value_type})"
 """
         stdout, stderr, rc = await _run_ps(script, timeout=15)
         if rc != 0:
@@ -278,11 +307,12 @@ async def tool_service_list(
             if status:
                 status_map = {"running": "Running", "stopped": "Stopped", "paused": "Paused"}
                 ps_status = status_map.get(status.lower(), status)
-                status_filter = f" | Where-Object {{ $_.Status -eq '{ps_status}' }}"
+                status_filter = f" | Where-Object {{ $_.Status -eq '{_ps_quote(ps_status)}' }}"
 
             name_filter = ""
             if filter:
-                name_filter = f" | Where-Object {{ $_.Name -like '*{filter}*' -or $_.DisplayName -like '*{filter}*' }}"
+                f = _ps_quote(filter)
+                name_filter = f" | Where-Object {{ $_.Name -like '*{f}*' -or $_.DisplayName -like '*{f}*' }}"
 
             script = f"""
 Get-Service{status_filter}{name_filter} | Sort-Object Status, DisplayName |
@@ -381,7 +411,7 @@ async def tool_service_control(
                 "pause": "Suspend-Service",
                 "resume": "Resume-Service",
             }[action]
-            script = f"{ps_cmd} -Name '{name}' -ErrorAction Stop -PassThru | Select-Object -ExpandProperty Status"
+            script = f"{ps_cmd} -Name '{_ps_quote(name)}' -ErrorAction Stop -PassThru | Select-Object -ExpandProperty Status"
             stdout, stderr, rc = await _run_ps(script, timeout=30)
             if rc != 0:
                 return ToolResult(type=ToolResultType.ERROR, output=f"Service {action} failed: {stderr or stdout}")
@@ -467,11 +497,11 @@ async def tool_event_log(
 
         source_filter = ""
         if source:
-            source_filter = f" | Where-Object {{ $_.ProviderName -like '*{source}*' }}"
+            source_filter = f" | Where-Object {{ $_.ProviderName -like '*{_ps_quote(source)}*' }}"
 
         script = f"""
 try {{
-    Get-WinEvent -LogName '{log_name}' -MaxEvents {count * 3} -ErrorAction Stop{level_filter_part}{source_filter} |
+    Get-WinEvent -LogName '{_ps_quote(log_name)}' -MaxEvents {count * 3} -ErrorAction Stop{level_filter_part}{source_filter} |
     Select-Object -First {count} |
     ForEach-Object {{
         $ts = $_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss')
@@ -545,7 +575,7 @@ async def tool_windows_features(
 
     try:
         state_filter = " | Where-Object { $_.State -eq 'Enabled' }" if installed_only else ""
-        name_filter = f" | Where-Object {{ $_.FeatureName -like '*{filter}*' }}" if filter else ""
+        name_filter = f" | Where-Object {{ $_.FeatureName -like '*{_ps_quote(filter)}*' }}" if filter else ""
 
         script = f"""
 Get-WindowsOptionalFeature -Online -ErrorAction Stop{name_filter}{state_filter} |

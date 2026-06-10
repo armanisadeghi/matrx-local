@@ -21,7 +21,27 @@ from app.common.system_logger import get_logger
 
 logger = get_logger()
 
-# Routes that don't require auth (health checks, discovery, read-only metadata).
+from app.api.remote_auth import (
+    headers_indicate_tunnel,
+    token_is_local_api_key,
+    verify_supabase_token,
+)
+
+# ── Trust tiers ────────────────────────────────────────────────────────────
+#
+# The engine binds 127.0.0.1 only. Two kinds of caller reach that socket:
+#   * Direct loopback — the Tauri webview, a local browser, the Rust shell
+#     calling /admin/*. These are inside the user's machine; the loopback
+#     socket itself is the trust boundary, so presence of a Bearer is enough.
+#   * Via the Cloudflare tunnel — mobile / remote browser. This is the
+#     designed remote-access feature, but the traffic is untrusted: it must
+#     carry a *verified* Supabase identity (or the local API key).
+#
+# headers_indicate_tunnel() distinguishes the two (Cf-Ray / Cf-Connecting-Ip).
+# See app/api/remote_auth.py for why that signal is safe.
+
+# Always public — safe even when served over the tunnel (health, discovery,
+# read-only metadata, OAuth callback). No user data, no mutation of identity.
 _PUBLIC_PATHS = frozenset(
     {
         "/",
@@ -34,7 +54,6 @@ _PUBLIC_PATHS = frozenset(
         "/chat/models",         # read-only model list, no user data
         "/chat/agents",         # read-only agent/prompt list, no user data — frontend calls this before auth
         "/chat/sync/status",    # read-only sync status — useful for diagnostics before auth
-        "/chat/sync/trigger",   # force sync — public so it can be called from setup/diagnostics
         "/chat/ai-status",      # read-only provider availability — needed before auth to show warnings
         "/remote-scraper/queue/poller-stats",
         "/docs",
@@ -45,40 +64,46 @@ _PUBLIC_PATHS = frozenset(
         "/version",
         "/ports",
         "/cloud/heartbeat",
-        # ── Bootstrap endpoints ──────────────────────────────────────────────
-        # These are called by the frontend immediately after login to hand the
-        # JWT to the engine. They MUST be public: the JWT is the credential
-        # being *given* to the engine (inside the request body), not a token
-        # the engine can validate before accepting the call. Blocking these
-        # with a 401 creates a deadlock — auth can never be established.
-        "/cloud/configure",
-        "/cloud/reconfigure",
-        "/settings",  # PUT /settings is called in parallel with /cloud/configure
         # OAuth callback — the external browser delivers this with no token.
         # Auth is completed inside the Tauri webview after the code is forwarded.
         "/auth/callback",
         # Tunnel status — needed by mobile/remote clients before they have a
         # session to check if the tunnel is active without authenticating first.
         "/tunnel/status",
-        # Setup — all setup endpoints run before auth is established.
-        # The wizard checks system status, installs browsers/dirs, and downloads
-        # transcription models — none of these require user identity.
-        "/setup/status",
-        "/setup/install",
-        "/setup/install-transcription",
-        # Token sync — the JWT is the credential being *given* to Python.
-        # Must be public for the same reason as /cloud/configure.
-        "/auth/token",
-        # Admin lifecycle endpoints — called by the Tauri shell (Rust) to
-        # coordinate engine startup/shutdown without reaching across to kill
-        # engine-owned children. See app/launcher.py and app/api/admin_routes.py
-        # for the full ownership contract. The engine binds 127.0.0.1 only,
-        # so localhost is the trust boundary; Rust has no JWT to send.
+    }
+)
+
+# Local-bootstrap — allowed WITHOUT a token only on direct loopback, because
+# the legitimate callers (Rust shell, the desktop UI handing the engine its
+# JWT during sign-in) have no verifiable credential to send yet, and the
+# loopback socket is their trust boundary. Over the tunnel these become
+# dangerous (remote DoS via /admin/shutdown, identity hijack via
+# /cloud/configure, info disclosure via /setup/debug), so when the request
+# arrives via the tunnel they fall through to the full verified-auth check.
+_LOCAL_BOOTSTRAP_PATHS = frozenset(
+    {
+        "/cloud/configure",
+        "/cloud/reconfigure",
+        "/settings",          # PUT /settings runs in parallel with /cloud/configure
+        "/chat/sync/trigger",  # force sync — used from setup/diagnostics
+        "/auth/token",        # JWT is the credential being *given* to the engine
         "/admin/status",
         "/admin/shutdown",
         "/admin/diagnose",
     }
 )
+
+# Path PREFIXES that are local-bootstrap (same rule as above): permissive on
+# direct loopback, verified-auth required over the tunnel.
+_LOCAL_BOOTSTRAP_PREFIXES = (
+    "/devices/",     # device status polling — local UI
+    "/fetch-proxy",  # in-app browser iframe navigation (also an SSRF vector)
+    "/setup/",       # setup wizard — system probing, installs
+)
+
+
+def _is_local_bootstrap(path: str) -> bool:
+    return path in _LOCAL_BOOTSTRAP_PATHS or path.startswith(_LOCAL_BOOTSTRAP_PREFIXES)
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +209,15 @@ async def oauth_callback(request: Request):
         )
         payload["raw"] = params
 
-    # Broadcast to all connected WebSocket clients (the Tauri webview is one).
+    # Broadcast the OAuth credentials ONLY to direct-loopback WebSocket
+    # clients (the Tauri webview signing in is one of these). Tunnel-borne
+    # connections are remote and untrusted — sending a freshly-minted OAuth
+    # code / access token to them would let any remote WS client harvest
+    # another user's login. The desktop sign-in webview always connects over
+    # direct loopback, so it still receives the payload.
     for conn in websocket_manager.connections.values():
+        if getattr(conn, "via_tunnel", False):
+            continue
         await websocket_manager._send(conn, payload)
 
     return HTMLResponse(_SUCCESS_HTML)
@@ -200,14 +232,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path.rstrip("/") or "/"
 
-        # Skip auth for public routes, device status, fetch-proxy (iframe nav), and OPTIONS.
-        if (
-            path in _PUBLIC_PATHS
-            or path.startswith("/devices/")
-            or path.startswith("/fetch-proxy")
-            or path.startswith("/setup/")
-            or request.method == "OPTIONS"
-        ):
+        # CORS preflights carry no credentials and must pass through.
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
+        via_tunnel = headers_indicate_tunnel(request.headers)
+        request.state.via_tunnel = via_tunnel
+
+        # Always-public routes (health/discovery/read-only) — allowed on any path.
+        if path in _PUBLIC_PATHS:
+            return await call_next(request)
+
+        # Local-bootstrap routes — permissive on direct loopback (the Rust
+        # shell / desktop UI have no verifiable token yet), but over the
+        # tunnel they require a verified identity like any other route.
+        if _is_local_bootstrap(path) and not via_tunnel:
             return await call_next(request)
 
         # Extract Bearer token — prefer Authorization header, fall back to
@@ -215,20 +254,40 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # cannot set custom request headers).
         auth = request.headers.get("authorization", "")
         if auth.lower().startswith("bearer "):
-            token = auth[7:]
+            token = auth[7:].strip()
         else:
-            token = request.query_params.get("token") or None
+            token = (request.query_params.get("token") or "").strip() or None
 
         if not token:
             logger.warning(
-                "[auth] rejected %s %s — missing bearer token or ?token= query",
+                "[auth] rejected %s %s — missing bearer token or ?token= query (tunnel=%s)",
                 request.method,
                 path,
+                via_tunnel,
             )
             return JSONResponse(
                 status_code=401,
-                content={"detail": "Authorization header required"},
+                content={"detail": "Authorization required"},
             )
+
+        # Tunnel traffic is untrusted: require a cryptographically-verified
+        # Supabase identity (validated by the auth server, since the project
+        # signs HS256 and the engine holds no secret) or the local API key.
+        # Direct-loopback traffic keeps the presence-only boundary — the
+        # loopback socket itself is the trust boundary there.
+        if via_tunnel and not token_is_local_api_key(token):
+            user = await verify_supabase_token(token)
+            if user is None:
+                logger.warning(
+                    "[auth] rejected %s %s — unverified token over tunnel",
+                    request.method,
+                    path,
+                )
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid or expired credentials"},
+                )
+            request.state.principal = user
 
         # Store token on request state for downstream forwarding.
         request.state.user_token = token

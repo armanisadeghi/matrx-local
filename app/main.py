@@ -970,10 +970,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("[app/main.py] ── Shutdown complete ────────────────────────────────")
 
 
+def _app_version() -> str:
+    """Resolve the real package version so /version and /openapi.json don't
+    advertise a stale hardcoded number."""
+    try:
+        from importlib.metadata import version as _meta_version
+
+        return _meta_version("matrx-local")
+    except Exception:
+        return "0.0.0"
+
+
 app = FastAPI(
     title="Matrx Local",
     description="Local companion service for AI Matrx — browser-to-filesystem bridge",
-    version="0.2.0",
+    version=_app_version(),
     lifespan=lifespan,
 )
 
@@ -1195,10 +1206,27 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=1008, reason="Missing auth token")
         return
 
+    # Tunnel-borne WS connections are untrusted (this channel can execute
+    # tools): require a verified Supabase identity or the local API key.
+    # Direct-loopback connections keep the presence-only boundary.
+    from app.api.remote_auth import (
+        headers_indicate_tunnel,
+        token_is_local_api_key,
+        verify_supabase_token,
+    )
+
+    via_tunnel = headers_indicate_tunnel(websocket.headers)
+    if via_tunnel and not token_is_local_api_key(token):
+        verified = await verify_supabase_token(token)
+        if verified is None:
+            logger.warning("WebSocket rejected - unverified token over tunnel: %s", url)
+            await websocket.close(code=1008, reason="Invalid or expired credentials")
+            return
+
     # Store token for downstream forwarding.
     websocket.state.user_token = token
 
-    conn = await websocket_manager.connect(websocket)
+    conn = await websocket_manager.connect(websocket, via_tunnel=via_tunnel)
     try:
         while True:
             data = await websocket.receive_text()

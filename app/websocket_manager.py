@@ -15,11 +15,14 @@ logger = get_logger()
 
 
 class Connection:
-    __slots__ = ("websocket", "session", "_running_tasks")
+    __slots__ = ("websocket", "session", "_running_tasks", "via_tunnel")
 
-    def __init__(self, websocket: WebSocket, session: ToolSession) -> None:
+    def __init__(
+        self, websocket: WebSocket, session: ToolSession, via_tunnel: bool = False
+    ) -> None:
         self.websocket = websocket
         self.session = session
+        self.via_tunnel = via_tunnel
         self._running_tasks: dict[str, asyncio.Task] = {}
 
     def cancel_all(self) -> int:
@@ -36,12 +39,17 @@ class WebSocketManager:
     def __init__(self) -> None:
         self.connections: dict[int, Connection] = {}
 
-    async def connect(self, websocket: WebSocket) -> Connection:
+    async def connect(self, websocket: WebSocket, via_tunnel: bool = False) -> Connection:
         await websocket.accept()
         session = ToolSession()
-        conn = Connection(websocket, session)
+        conn = Connection(websocket, session, via_tunnel=via_tunnel)
         self.connections[id(websocket)] = conn
-        logger.info("WebSocket connected: %s (session cwd: %s)", id(websocket), session.cwd)
+        logger.info(
+            "WebSocket connected: %s (session cwd: %s, tunnel=%s)",
+            id(websocket),
+            session.cwd,
+            via_tunnel,
+        )
         return conn
 
     async def disconnect(self, websocket: WebSocket) -> None:

@@ -210,6 +210,13 @@ async def load_tools_and_register() -> None:
         )
         return
 
+    # Track whether the load actually succeeded. We must NOT latch
+    # _tools_loaded=True on failure — doing so makes this idempotent guard
+    # short-circuit every retry, leaving the AI permanently tool-less while
+    # /chat/tools cheerfully reports "loaded". Local OS-tool registration is
+    # the load-bearing step; if it throws, the next call should try again.
+    local_tools_ok = False
+
     # --- Phase A: load DB tools into matrx-ai registry ---
     try:
         from matrx_ai.tools.handle_tool_calls import initialize_tool_system
@@ -226,11 +233,12 @@ async def load_tools_and_register() -> None:
     try:
         from app.services.ai.local_tool_bridge import register_local_tools
         n = register_local_tools()
+        local_tools_ok = True
         logger.info("[engine] matrx-ai: registered %d local OS tools ✓", n)
     except Exception:
         logger.error(
             "[engine] matrx-ai: local tool registration FAILED — "
-            "AI won't have access to OS tools",
+            "AI won't have access to OS tools (will retry on next call)",
             exc_info=True,
         )
 
@@ -243,7 +251,9 @@ async def load_tools_and_register() -> None:
     except Exception:
         logger.warning("[engine] Could not probe local LLM registry", exc_info=True)
 
-    _tools_loaded = True
+    # Only mark loaded when the critical local-tool registration succeeded, so
+    # a transient failure doesn't permanently wedge the registry as "loaded".
+    _tools_loaded = local_tools_ok
 
 
 def is_initialized() -> bool:

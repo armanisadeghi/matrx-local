@@ -62,8 +62,27 @@ def _wrap_background(command: str, cwd: str) -> str:
     return f"cd {_quote(cwd)} && {{ {command} ; }}"
 
 
+# Substrings that mark an env var as a secret we must NOT leak into shell
+# subprocesses. The engine loads the user's AI provider API keys into
+# os.environ (app/services/ai/key_manager.py) so matrx-ai can read them; if we
+# inherited the full environment into every shell tool, any command the caller
+# runs (`env`, `printenv`, `set`) would dump every provider key. Strip them.
+_SECRET_ENV_SUBSTRINGS = (
+    "API_KEY", "APIKEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD",
+    "PRIVATE_KEY", "ACCESS_KEY", "SESSION_KEY", "CREDENTIAL",
+    "HF_TOKEN", "HUGGING_FACE", "_KEY",
+)
+
+
+def _is_secret_env_name(name: str) -> bool:
+    upper = name.upper()
+    return any(marker in upper for marker in _SECRET_ENV_SUBSTRINGS)
+
+
 def _shell_env() -> dict[str, str]:
-    env = dict(os.environ)
+    # Filter out secret-bearing variables so shell tools can't exfiltrate the
+    # user's provider API keys / tokens via the process environment.
+    env = {k: v for k, v in os.environ.items() if not _is_secret_env_name(k)}
     if PLATFORM["is_windows"]:
         env.setdefault("USERPROFILE", os.path.expanduser("~"))
     else:

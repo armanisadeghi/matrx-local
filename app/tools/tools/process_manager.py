@@ -463,7 +463,12 @@ async def tool_launch_app(
             else:
                 cmd = [application] + args
         elif PLATFORM["is_windows"]:
-            cmd = ["start", "", application] + args
+            # Launch the executable directly (CreateProcess, PATH-resolved).
+            # The previous ["start", "", application] form required shell=True,
+            # which concatenated args into a cmd.exe command line and allowed
+            # command injection — and also broke the wait=True path (it tried
+            # to exec a binary literally named "start").
+            cmd = [application] + args
         else:
             cmd = [application] + args
 
@@ -490,7 +495,9 @@ async def tool_launch_app(
             if PLATFORM["is_mac"] and cmd[0] == "open":
                 subprocess.Popen(cmd)
             elif PLATFORM["is_windows"]:
-                subprocess.Popen(cmd, shell=True)
+                # No shell=True: cmd is an argv list (CreateProcess), so args
+                # are passed as discrete arguments, not a shell command line.
+                subprocess.Popen(cmd)
             else:
                 subprocess.Popen(cmd, start_new_session=True)
             return ToolResult(output=f"Launched: {application}")
@@ -504,6 +511,54 @@ async def tool_launch_app(
         return ToolResult(type=ToolResultType.ERROR, output=f"Failed to launch app: {e}")
 
 
+# Process names this tool must never kill. Killing them violates the
+# lifecycle ownership contract (CLAUDE.md hard rule §0): llama-server and
+# cloudflared are owned by the Rust shell / Python engine respectively, and
+# killing the engine/scraper from a tool is a self-DoS. Matched
+# case-insensitively as substrings of the process name.
+_PROTECTED_PROCESS_NAMES = (
+    "llama-server",
+    "cloudflared",
+    "matrx-engine",
+    "matrx_engine",
+)
+
+
+def _protected_pids() -> set[int]:
+    """PIDs that must never be killed: this process and its parent (the engine
+    supervisor / Tauri shell)."""
+    pids: set[int] = set()
+    try:
+        pids.add(os.getpid())
+        pids.add(os.getppid())
+    except Exception:
+        pass
+    return pids
+
+
+def _name_is_protected(candidate: str | None) -> bool:
+    if not candidate:
+        return False
+    low = candidate.lower()
+    return any(p in low for p in _PROTECTED_PROCESS_NAMES)
+
+
+def _pid_is_protected(pid: int) -> tuple[bool, str]:
+    if pid in _protected_pids():
+        return True, "engine/supervisor process"
+    if CAPABILITIES.get("has_psutil"):
+        try:
+            import psutil  # noqa: F811
+
+            pname = psutil.Process(pid).name()
+            if _name_is_protected(pname):
+                return True, f"engine-owned process '{pname}'"
+        except Exception:
+            # If we can't resolve the name, don't block on that basis.
+            pass
+    return False, ""
+
+
 async def tool_kill_process(
     session: ToolSession,
     pid: int | None = None,
@@ -515,6 +570,24 @@ async def tool_kill_process(
         return ToolResult(
             type=ToolResultType.ERROR,
             output="Must provide either 'pid' or 'name'.",
+        )
+
+    # Enforce the ownership contract: never let a tool kill the engine, its
+    # supervisor, or engine-owned children (llama-server, cloudflared).
+    if pid is not None:
+        protected, why = _pid_is_protected(pid)
+        if protected:
+            return ToolResult(
+                type=ToolResultType.ERROR,
+                output=f"Refusing to kill PID {pid}: {why} (protected by ownership contract).",
+            )
+    if _name_is_protected(name):
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=(
+                f"Refusing to kill '{name}': matches a protected engine-owned "
+                "process (llama-server / cloudflared / matrx-engine)."
+            ),
         )
 
     killed = []
@@ -544,6 +617,10 @@ async def tool_kill_process(
             for proc in psutil.process_iter(["pid", "name"]):
                 try:
                     if proc.info["name"] and name.lower() in proc.info["name"].lower():
+                        # Skip engine-owned processes even if the name filter
+                        # would otherwise match them (e.g. name="server").
+                        if _name_is_protected(proc.info["name"]) or proc.info["pid"] in _protected_pids():
+                            continue
                         if force:
                             proc.kill()
                         else:

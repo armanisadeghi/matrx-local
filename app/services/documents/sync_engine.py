@@ -243,19 +243,32 @@ class SyncEngine:
             state = self.fm.load_sync_state()
             last_known_hash = state.get("note_hashes", {}).get(file_path)
 
-            if (
-                local_hash
-                and remote_hash
-                and local_hash != remote_hash
-                and last_known_hash
-                and local_hash != last_known_hash
-            ):
-                local_content = self.fm.read_note(file_path) or ""
-                self.fm.save_conflict(file_path, local_content, content, note_id)
-                logger.warning(
-                    "Sync conflict detected for %s (note %s)", file_path, note_id
+            # A local file that differs from the incoming remote content may
+            # only be overwritten when we can PROVE it carries no unsynced
+            # local edit — i.e. its hash matches what we recorded at the last
+            # successful sync. If we cannot prove that (last_known_hash is
+            # missing/None because sync state was reset or corrupted, OR the
+            # local hash has moved away from last-known, meaning the user
+            # edited it), we must NOT clobber it. Treat it as a conflict and
+            # preserve both copies. Previously the guard required
+            # last_known_hash to be truthy, so a None/corrupted sync state
+            # silently fell through to an unconditional overwrite and ate the
+            # local edit.
+            if local_hash and remote_hash and local_hash != remote_hash:
+                local_unchanged_since_sync = (
+                    last_known_hash is not None and local_hash == last_known_hash
                 )
-                return {**note, "_conflict": True}
+                if not local_unchanged_since_sync:
+                    local_content = self.fm.read_note(file_path) or ""
+                    self.fm.save_conflict(file_path, local_content, content, note_id)
+                    logger.warning(
+                        "Sync conflict detected for %s (note %s) — local edit "
+                        "preserved (last_known_hash=%s)",
+                        file_path,
+                        note_id,
+                        "missing" if last_known_hash is None else "stale",
+                    )
+                    return {**note, "_conflict": True}
 
         file_path = self.fm.write_note(folder_name, label, content, file_path)
         c_hash = content_hash(content)

@@ -52,25 +52,20 @@ dependencies = [
     "tabulate>=0.9.0",
     "PyMuPDF>=1.27.1",
     "pytesseract>=0.3.13",
-    # Matrx — all pulled from PyPI. See [tool.uv.sources] note below for
-    # the publish status of each one. PyPI publishes happen via tag-push
+    # Matrx — all pulled from PyPI. PyPI publishes happen via tag-push
     # to ``matrx-<pkg>/v<x.y.z>`` (see aidream/.github/workflows/
-    # publish-package.yml).
+    # publish-package.yml). There is intentionally no [tool.uv.sources]
+    # path override — see the note further down near [tool.uv].
     "matrx-utils>=1.0.19",
     "matrx-orm>=3.0.32",
     "matrx-ai>=0.1.26",
     # matrx-scheduler — the desktop sidecar participates in the cross-
-    # component scheduling spine as surface='desktop'. NOT YET ON PyPI.
-    # Sourced from the sibling aidream repo via the [tool.uv.sources]
-    # path entry below for local dev. CI cannot resolve the path source
-    # (aidream is not checked out alongside matrx-local on GitHub
-    # Actions runners) — therefore CI builds will fail to find this
-    # dep until matrx-scheduler is published to PyPI.
-    #
-    # Activation path for CI: cut + push tag ``matrx-scheduler/v0.3.0``
-    # from aidream once PyPI's Trusted Publisher is configured for the
-    # package (one-time manual step on PyPI.org/manage/account/publishing/).
-    "matrx-scheduler",
+    # component scheduling spine as surface='desktop'. Published to PyPI
+    # (Trusted Publisher), so it resolves from PyPI on CI like the other
+    # matrx-* packages. Do NOT re-add a [tool.uv.sources] path entry for it:
+    # the sibling aidream repo is not checked out on CI runners and a path
+    # source breaks `uv sync` from a clean checkout.
+    "matrx-scheduler>=0.3.0",
     # Supabase Python client — powers the engine↔extension Broadcast plumb
     # in `app/api/extension_broadcast.py` (C2.d substrate). Already pulled in
     # transitively via matrx-ai/matrx-utils, but we declare it explicitly so
@@ -133,34 +128,12 @@ dev = [
     "ruff",
 ]
 
-[tool.uv.sources]
-# matrx-scheduler is developed in the sibling aidream repo's uv
-# workspace (aidream/packages/matrx-scheduler) and is NOT YET PUBLISHED
-# to PyPI. We pin it as a path dependency for LOCAL development so the
-# matrx-local sidecar can import the host configurator
-# (matrx_scheduler.configure / start_scanner / etc.).
-#
-# CI WARNING: GitHub Actions runners do not have the aidream repo
-# checked out alongside matrx-local. The path source below will cause
-# ``uv sync`` to fail with ``Distribution not found at:
-# file:///Users/runner/.../aidream/packages/matrx-scheduler``. matrx-
-# local CI release builds will be broken until matrx-scheduler is
-# published to PyPI and this entry is removed.
-#
-# To unblock CI: cut + push tag ``matrx-scheduler/v0.3.0`` from aidream
-# (requires matrx-scheduler in the publish workflow tag-trigger list
-# AND a one-time PyPI Trusted Publisher configuration for the package
-# at https://pypi.org/manage/account/publishing/). Then delete the
-# entry below.
-#
-# For other matrx-* packages with in-flight aidream-side changes
-# (matrx-utils 1.1.0 vs PyPI 1.0.19, matrx-ai 0.2.0 vs PyPI 0.1.26,
-# matrx-connect, matrx-rag), the path-source pattern was tried during
-# the 2026-05-13 integration session and reverted because it breaks
-# CI. Local dev that needs to consume aidream-workspace changes ahead
-# of PyPI should either build aidream wheels and pip-install them, or
-# wait for the tag-push to publish.
-matrx-scheduler = { path = "../aidream/packages/matrx-scheduler", editable = true }
+# NOTE: there is intentionally no [tool.uv.sources] section. All matrx-*
+# packages (including matrx-scheduler) resolve from PyPI. Do NOT add a path
+# source for a sibling repo (e.g. ../aidream/packages/...): those paths do
+# not exist on a clean checkout or on CI runners and break `uv sync` for
+# everyone. To consume in-flight aidream-workspace changes ahead of a PyPI
+# release, build a wheel from aidream and `uv pip install` it locally.
 
 [tool.uv]
 python-preference = "only-managed"

@@ -146,6 +146,8 @@ export function useTts(): [UseTtsState, UseTtsActions] {
     try {
       setStatus(await getTtsStatus());
     } catch (e) {
+      // Pre-discovery fetches are expected to fail at app boot — not a warning.
+      if (e instanceof Error && e.message === "Engine not discovered") return;
       logWarn("tts", "status fetch failed", e);
     }
   }, []);
@@ -156,13 +158,34 @@ export function useTts(): [UseTtsState, UseTtsActions] {
       setVoices(v);
       setLanguageGroups(groupVoicesByLanguage(v));
     } catch (e) {
+      if (e instanceof Error && e.message === "Engine not discovered") return;
       logWarn("tts", "voices fetch failed", e);
     }
   }, []);
 
   useEffect(() => {
-    refreshStatus();
-    refreshVoices();
+    // Init fetch with quiet retry: the engine usually isn't discovered yet
+    // when this provider mounts at app boot. Retry until it is (or give up
+    // after ~2 min) instead of warning on each pre-discovery attempt.
+    let cancelled = false;
+    void (async () => {
+      for (let i = 0; i < 60 && !cancelled; i++) {
+        try {
+          const s = await getTtsStatus();
+          const v = await getTtsVoices();
+          if (cancelled) return;
+          setStatus(s);
+          setVoices(v);
+          setLanguageGroups(groupVoicesByLanguage(v));
+          return;
+        } catch {
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

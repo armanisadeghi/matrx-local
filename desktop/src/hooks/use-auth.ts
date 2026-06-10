@@ -135,8 +135,10 @@ export function useAuth() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
+      // INITIAL_SESSION with no session is the normal signed-out boot state,
+      // and SIGNED_OUT is a user action — neither is degraded functionality.
       emitClientLog(
-        session ? "success" : "warn",
+        session ? "success" : event === "INITIAL_SESSION" || event === "SIGNED_OUT" ? "info" : "warn",
         `Auth state: ${event}${session ? ` (${session.user.email ?? session.user.id})` : ""}`,
         "auth",
       );

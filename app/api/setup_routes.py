@@ -17,8 +17,13 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+# Captured at import (= engine boot). /setup/logs uses this to bound its
+# history replay to the current run — system.log persists across runs.
+_PROCESS_START = time.time()
 
 from app.common.platform_ctx import PLATFORM
 
@@ -1475,11 +1480,30 @@ async def stream_logs(request: Request, lines: int = 200):
         if not os.path.isfile(log_path):
             yield f"event: log\ndata: {json.dumps({'line': f'[setup/logs] Log file not found: {log_path}', 'level': 'warn', 'timestamp': time.time()})}\n\n"
         else:
-            # ── Tail the last N lines for history ────────────────────────────────
+            # ── Tail the last N lines for history — current boot only ────────────
+            # system.log persists across runs, so a naive tail replays lines from
+            # previous runs (sometimes weeks old) which the client then stamps
+            # with the current time — stale warnings resurfacing in issue
+            # reports was a real bug. Filter by each line's own timestamp;
+            # unparsable lines (tracebacks etc.) inherit the previous line's
+            # include/exclude decision.
+            def _line_after_boot(raw: str, prev: bool, cutoff: datetime) -> bool:
+                try:
+                    return datetime.strptime(raw[:23], "%Y-%m-%d %H:%M:%S,%f") >= cutoff
+                except ValueError:
+                    return prev
+
             try:
                 with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
                     all_lines = fh.readlines()
-                history = all_lines[-lines:] if len(all_lines) > lines else all_lines
+                cutoff = datetime.fromtimestamp(_PROCESS_START - 5.0)
+                history: list[str] = []
+                include = False
+                for raw in all_lines:
+                    include = _line_after_boot(raw, include, cutoff)
+                    if include:
+                        history.append(raw)
+                history = history[-lines:] if len(history) > lines else history
                 for raw in history:
                     raw = raw.rstrip("\n")
                     if raw:

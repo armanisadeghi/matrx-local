@@ -28,6 +28,7 @@ matrx-local ALWAYS runs in client mode
 from __future__ import annotations
 
 import os
+import re
 
 from dotenv import load_dotenv
 
@@ -218,14 +219,74 @@ async def load_tools_and_register() -> None:
     local_tools_ok = False
 
     # --- Phase A: load DB tools into matrx-ai registry ---
+    # matrx_ai vcprints a red error + traceback to stdout when the server
+    # registry fetch fails (the deployed server 404s this app's endpoint for
+    # matrx-ai 0.1.x). That is an expected, mitigated condition — Phase A½
+    # backfills the definitions — so capture the stdout noise and keep it at
+    # DEBUG instead of tripping issue reports with 3 ERR lines on every boot.
+    import contextlib
+    import io
+
+    _tool_init_out = io.StringIO()
     try:
         from matrx_ai.tools.handle_tool_calls import initialize_tool_system
-        count = await initialize_tool_system()
-        logger.info("[engine] matrx-ai: loaded %d tools from DB into registry ✓", count)
+        try:
+            with contextlib.redirect_stdout(_tool_init_out):
+                count = await initialize_tool_system()
+        finally:
+            captured = _tool_init_out.getvalue().strip()
+            if captured:
+                # Single line, ANSI stripped: the desktop log viewer classifies
+                # unprefixed continuation lines by keyword ("traceback", "error"
+                # …) which would put this right back into issue reports as ERR.
+                compact = re.sub(r"\x1b\[[0-9;]*m", "", captured)
+                compact = " | ".join(
+                    s for s in (p.strip() for p in compact.splitlines()) if s
+                )
+                logger.debug("[engine] matrx-ai tool init output: %s", compact)
+        if count:
+            logger.info("[engine] matrx-ai: loaded %d tools from DB into registry ✓", count)
+        else:
+            logger.warning(
+                "[engine] matrx-ai: server tool registry returned 0 tools — "
+                "falling back to the local manifest"
+            )
     except Exception:
         logger.warning(
             "[engine] matrx-ai: FAILED to load tool registry from DB — "
             "AI agents won't have access to cloud-registered tools",
+            exc_info=True,
+        )
+
+    # --- Phase A½: backfill local tool definitions from the manifest ---
+    # The server's tool registry endpoint may be unavailable or may not carry
+    # this app's tools (the deployed server 404s /api/ai-tools/app/matrx_local
+    # for matrx-ai 0.1.x clients). The desktop owns its OS tools end-to-end —
+    # the manifest has the schemas and Phase B registers the executors — so
+    # synthesize definitions for any manifest tool the server didn't provide.
+    # Server-provided definitions win; we only fill gaps.
+    try:
+        from matrx_ai.tools.registry import ToolRegistryV2
+
+        from app.services.ai.local_tool_bridge import build_local_tool_definitions
+
+        registry = ToolRegistryV2.get_instance()
+        missing = [
+            d for d in build_local_tool_definitions() if registry.get(d.name) is None
+        ]
+        if missing:
+            n = registry.load_from_definitions(missing)
+            logger.info(
+                "[engine] matrx-ai: backfilled %d/%d local tool definitions from "
+                "manifest (server registry %s) ✓",
+                n,
+                len(missing),
+                "empty" if registry.count == n else "incomplete",
+            )
+    except Exception:
+        logger.error(
+            "[engine] matrx-ai: local tool definition backfill FAILED — "
+            "AI won't see local tool schemas",
             exc_info=True,
         )
 

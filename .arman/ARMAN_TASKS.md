@@ -8,6 +8,19 @@ _Last updated: 2026-03-25_
 
 ## Active
 
+- [ ] **Reconcile AIDream server ↔ matrx-ai tool registry (aidream repo)** — The
+  deployed server 404s `GET /api/ai-tools/app/matrx_local` (the endpoint
+  matrx-ai 0.1.26 from PyPI calls); the DB has migrated to the surface-based
+  system (`tool_def` + `tool_surface_defaults`) and has no `matrx_local`
+  surface. The desktop now backfills its 62 local tool definitions from
+  `LOCAL_TOOL_MANIFEST` so chat tools work without the server, but
+  *cloud-registered* tools won't reach the desktop until either: (a) matrx-ai
+  0.2.x (new protocol) is published to PyPI and matrx-local bumps it, or
+  (b) the server re-adds a compat route for `/api/ai-tools/app/{source_app}`.
+  Option (a) is the real fix — same playbook as matrx-scheduler 0.3.0.
+- [ ] **Grant Screen Recording permission** — Setup wizard reports it denied;
+  click "Review & Grant" (System Settings → Privacy & Security → Screen
+  Recording) so screenshot tools work.
 - [ ] **Train “Hey Matrix” OWW model** — [`docs/wake-word-training.md`](../docs/wake-word-training.md)
 - [ ] **Windows EV code-signing cert** — Before broad public launch (SmartScreen).
 - [ ] **`MAIN_SERVER` URL** — For a future “real” proxy proof test (callback from server). Pick canonical production base URL.

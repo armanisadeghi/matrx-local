@@ -416,3 +416,85 @@ def evict_session(conversation_id: str) -> None:
 def session_count() -> int:
     """Return the number of active ToolSessions."""
     return get_bridge().session_count
+
+
+# ---------------------------------------------------------------------------
+# Local tool definitions — registry fallback when the server registry is
+# unavailable. The manifest (arg models included) is the single source of
+# truth for the desktop's own tools, so the engine can synthesize full
+# ToolDefinitions without any server round-trip.
+# ---------------------------------------------------------------------------
+
+def _entry_param_dict(entry: Any) -> dict[str, Any]:
+    """Convert a manifest entry's schema into matrx-ai's internal param dict.
+
+    matrx-ai's own ``_pydantic_to_param_dict`` drops ``required`` flags and
+    mishandles ``Optional[...]`` fields (pydantic emits ``anyOf`` with no top
+    -level ``type``), so we do the conversion here: per-property dicts with
+    ``required: True`` markers, picking the first non-null branch for
+    optionals — matching what ``ToolDefinition._build_json_schema`` expects.
+    """
+    if entry.arg_model is None:
+        return dict(entry.parameters or {})
+
+    schema = entry.arg_model.model_json_schema()
+    required = set(schema.get("required", []))
+    params: dict[str, Any] = {}
+
+    for fname, fs in (schema.get("properties") or {}).items():
+        fs = dict(fs)
+        if "type" not in fs and "anyOf" in fs:
+            branches = [b for b in fs["anyOf"] if b.get("type") != "null"]
+            if branches:
+                merged = dict(branches[0])
+                merged.update({k: v for k, v in fs.items() if k != "anyOf"})
+                fs = merged
+        param: dict[str, Any] = {
+            "type": fs.get("type", "string"),
+            "description": fs.get("description", ""),
+        }
+        for k in (
+            "items", "enum", "default", "minimum", "maximum",
+            "minItems", "maxItems", "properties", "pattern", "uniqueItems",
+        ):
+            if k in fs:
+                param[k] = fs[k]
+        if fname in required:
+            param["required"] = True
+        params[fname] = param
+    return params
+
+
+def build_local_tool_definitions() -> list[Any]:
+    """Build a ToolDefinition for every manifest tool.
+
+    ``tool_type=EXTERNAL_HANDLER`` + ``source_app="matrx_local"`` routes
+    execution to the LocalToolBridge handlers registered in ``register()`` —
+    the same path a server-provided definition would take.
+    """
+    from matrx_ai.tools.models import ToolDefinition, ToolType
+
+    from app.tools.local_tool_manifest import LOCAL_TOOL_MANIFEST
+
+    defs: list[Any] = []
+    for entry in LOCAL_TOOL_MANIFEST:
+        try:
+            defs.append(
+                ToolDefinition(
+                    name=entry.name,
+                    description=entry.description,
+                    parameters=_entry_param_dict(entry),
+                    tool_type=ToolType.EXTERNAL_HANDLER,
+                    source_app=entry.source_app,
+                    category=entry.category,
+                    tags=list(entry.tags or []),
+                    version=str(entry.version or "1.0.0"),
+                    timeout_seconds=float(entry.timeout_seconds or 120.0),
+                )
+            )
+        except Exception:
+            logger.warning(
+                "Could not build ToolDefinition for local tool %s", entry.name,
+                exc_info=True,
+            )
+    return defs

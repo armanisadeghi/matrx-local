@@ -199,3 +199,4 @@ desktop/src-tauri/binaries/.llama-server-version
 # macOS Finder metadata
 .DS_Store
 **/.DS_Store
+bg.pid

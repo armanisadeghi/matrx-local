@@ -141,6 +141,10 @@ class SettingsSync:
         self._is_orphan: bool = False
         self._last_error: Optional[str] = None
         self._last_registration_at: Optional[str] = None
+        # Consecutive heartbeat failures (network or HTTP). Lets the engine
+        # distinguish a transient blip from a sustained outage instead of
+        # silently logging every failure at DEBUG and reporting healthy.
+        self._heartbeat_failures: int = 0
         self._last_registration_result: Optional[str] = None  # "ok" | "error:<msg>"
         self._configure_called_at: Optional[str] = None
 
@@ -201,6 +205,7 @@ class SettingsSync:
             "last_registration_at": self._last_registration_at,
             "last_registration_result": self._last_registration_result,
             "last_error": self._last_error,
+            "heartbeat_failures": self._heartbeat_failures,
         }
 
     # ── local settings ──────────────────────────────────────────────────
@@ -588,7 +593,9 @@ class SettingsSync:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.patch(url, json=payload, headers=headers)
-                if not resp.is_success:
+                if resp.is_success:
+                    self._heartbeat_failures = 0
+                else:
                     # Heartbeat failure may indicate orphan state
                     self._log_http_error("heartbeat", resp)
                     if resp.status_code in (401, 403):
@@ -599,8 +606,35 @@ class SettingsSync:
                             resp.status_code,
                             self._instance_id,
                         )
+                    else:
+                        self._note_heartbeat_failure(f"HTTP {resp.status_code}")
         except Exception as exc:
-            logger.debug("Heartbeat failed (non-critical): %s", exc)
+            # Network failure (offline, DNS, timeout). A single blip is
+            # expected; a sustained run means the instance is unreachable from
+            # the cloud even though it's running — surface that, don't bury it.
+            self._note_heartbeat_failure(str(exc))
+
+    # Number of consecutive failures before we escalate from DEBUG to a single
+    # WARNING (≈ this many heartbeat intervals of being unreachable).
+    _HEARTBEAT_FAIL_THRESHOLD = 3
+
+    def _note_heartbeat_failure(self, reason: str) -> None:
+        self._heartbeat_failures += 1
+        self._last_error = f"heartbeat failed ({reason})"
+        if self._heartbeat_failures == self._HEARTBEAT_FAIL_THRESHOLD:
+            logger.warning(
+                "Heartbeat has failed %d times in a row — this instance may be "
+                "unreachable from the cloud (offline / DNS / server down). "
+                "Last reason: %s",
+                self._heartbeat_failures,
+                reason,
+            )
+        else:
+            logger.debug(
+                "Heartbeat failed (#%d, non-critical): %s",
+                self._heartbeat_failures,
+                reason,
+            )
 
 
 # Module-level singleton

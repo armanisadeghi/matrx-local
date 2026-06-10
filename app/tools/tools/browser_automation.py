@@ -26,6 +26,19 @@ _browser_contexts: dict[str, object] = {}
 _browser_instances: dict[str, object] = {}
 _playwright_instance = None
 
+# Per-browser-type locks so two concurrent tool calls can't both pass the
+# "already launched?" check and each spawn a browser (leaking the first one
+# and returning a context that may be torn down underneath the other caller).
+_browser_locks: dict[str, asyncio.Lock] = {}
+
+
+def _browser_lock(browser_type: str) -> asyncio.Lock:
+    lk = _browser_locks.get(browser_type)
+    if lk is None:
+        lk = asyncio.Lock()
+        _browser_locks[browser_type] = lk
+    return lk
+
 SCREENSHOTS_DIR = TEMP_DIR / "browser_screenshots"
 
 BrowserType = Literal["chromium", "firefox", "webkit"]
@@ -78,7 +91,7 @@ async def _get_browser(browser_type: BrowserType = _DEFAULT_BROWSER):
     """Get or create a shared browser context for the requested browser type."""
     global _browser_contexts, _browser_instances
 
-    # Return existing connected context
+    # Fast path: return an existing connected context without locking.
     if browser_type in _browser_instances:
         inst = _browser_instances[browser_type]
         try:
@@ -87,52 +100,64 @@ async def _get_browser(browser_type: BrowserType = _DEFAULT_BROWSER):
         except Exception:
             pass
 
-    pw = await _get_playwright()
-    if pw is None:
-        return None
+    # Slow path: serialize creation so concurrent callers don't each launch.
+    async with _browser_lock(browser_type):
+        # Re-check now that we hold the lock — another caller may have created
+        # the browser while we waited.
+        if browser_type in _browser_instances:
+            inst = _browser_instances[browser_type]
+            try:
+                if inst.is_connected():
+                    return _browser_contexts[browser_type]
+            except Exception:
+                pass
 
-    headed = _supports_headed()
-
-    # Common launch kwargs
-    launch_kwargs: dict = {
-        "headless": not headed,
-    }
-
-    # Browser-specific options
-    if browser_type == "chromium":
-        launch_kwargs["args"] = ["--no-first-run", "--no-default-browser-check"]
-        browser_launcher = pw.chromium
-    elif browser_type == "firefox":
-        browser_launcher = pw.firefox
-    elif browser_type == "webkit":
-        if PLATFORM["is_linux"]:
-            launch_kwargs["headless"] = True
-        browser_launcher = pw.webkit
-    else:
-        browser_launcher = pw.chromium
-
-    try:
-        instance = await browser_launcher.launch(**launch_kwargs)
-    except Exception:
-        # Fallback to headless if headed launch fails
-        launch_kwargs["headless"] = True
-        try:
-            instance = await browser_launcher.launch(**launch_kwargs)
-        except Exception as e:
-            logger.error("Failed to launch %s browser: %s", browser_type, e)
+        pw = await _get_playwright()
+        if pw is None:
             return None
 
-    context = await instance.new_context(
-        viewport={"width": 1280, "height": 720},
-        user_agent=(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ),
-    )
+        headed = _supports_headed()
 
-    _browser_instances[browser_type] = instance
-    _browser_contexts[browser_type] = context
-    return context
+        # Common launch kwargs
+        launch_kwargs: dict = {
+            "headless": not headed,
+        }
+
+        # Browser-specific options
+        if browser_type == "chromium":
+            launch_kwargs["args"] = ["--no-first-run", "--no-default-browser-check"]
+            browser_launcher = pw.chromium
+        elif browser_type == "firefox":
+            browser_launcher = pw.firefox
+        elif browser_type == "webkit":
+            if PLATFORM["is_linux"]:
+                launch_kwargs["headless"] = True
+            browser_launcher = pw.webkit
+        else:
+            browser_launcher = pw.chromium
+
+        try:
+            instance = await browser_launcher.launch(**launch_kwargs)
+        except Exception:
+            # Fallback to headless if headed launch fails
+            launch_kwargs["headless"] = True
+            try:
+                instance = await browser_launcher.launch(**launch_kwargs)
+            except Exception as e:
+                logger.error("Failed to launch %s browser: %s", browser_type, e)
+                return None
+
+        context = await instance.new_context(
+            viewport={"width": 1280, "height": 720},
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+        )
+
+        _browser_instances[browser_type] = instance
+        _browser_contexts[browser_type] = context
+        return context
 
 
 async def _get_page(context, url: str | None = None):

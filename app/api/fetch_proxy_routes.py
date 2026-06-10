@@ -14,7 +14,9 @@ POST /fetch-proxy/extract – Fetch a URL and return raw text for scraping
 
 from __future__ import annotations
 
+import ipaddress
 import re
+import socket
 import urllib.parse
 from typing import Annotated
 
@@ -28,6 +30,55 @@ from app.common.system_logger import get_logger
 logger = get_logger()
 
 router = APIRouter(prefix="/fetch-proxy", tags=["fetch-proxy"])
+
+
+def _assert_safe_fetch_url(raw_url: str) -> None:
+    """Reject SSRF-prone targets before fetching.
+
+    The fetch-proxy makes a server-side request to an arbitrary URL and
+    returns the response to the caller. Without restrictions a (remote,
+    authenticated) caller could use the engine to reach the user's private
+    network — localhost services, other LAN hosts, or the cloud metadata
+    endpoint. Allow only http/https to publicly-routable hosts.
+
+    Raises HTTPException(400) on a disallowed target.
+    """
+    parsed = urllib.parse.urlparse(raw_url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only http and https URLs may be fetched.",
+        )
+    host = parsed.hostname
+    if not host:
+        raise HTTPException(status_code=400, detail="URL has no host.")
+
+    # Resolve every address the host maps to and reject if ANY is private,
+    # loopback, link-local, or otherwise not globally routable. Resolving
+    # here also blunts DNS-rebinding to an internal address.
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+    except OSError:
+        raise HTTPException(status_code=400, detail="Could not resolve host.")
+
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Refusing to fetch a private/internal address.",
+            )
 
 # ---------------------------------------------------------------------------
 # Shared HTTP client (connection-pooled, reused across requests)
@@ -124,6 +175,7 @@ async def proxy_page(
     url: Annotated[str, Query(description="Target URL to fetch and proxy")],
 ) -> Response:
     """Fetch *url* server-side, strip blocking headers, rewrite links, return HTML."""
+    _assert_safe_fetch_url(url)
     try:
         resp = await _fetch(url)
     except httpx.RequestError as exc:
@@ -181,6 +233,7 @@ async def extract_page(req: ExtractRequest) -> ExtractResult:
     same-origin / X-Frame-Options restrictions.  It does NOT execute JavaScript,
     but it will capture JS-rendered content if Playwright is available.
     """
+    _assert_safe_fetch_url(req.url)
     try:
         resp = await _fetch(req.url)
     except httpx.RequestError as exc:

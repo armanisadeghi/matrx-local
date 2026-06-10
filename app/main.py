@@ -172,12 +172,28 @@ def _truncate_jwt(val: str) -> str:
 
 
 def _sanitize_url(url: str | object) -> str:
-    """Hide sensitive query params like 'token' in URLs for logging."""
+    """Hide sensitive query params in URLs for logging.
+
+    Covers ``token`` plus the OAuth credentials that flow through
+    /auth/callback (``code``, ``access_token``, ``refresh_token``) — these
+    previously landed in the access log in plaintext because only ``token``
+    was matched.
+    """
     url_str = str(url)
-    # Simple regex to find token=... and truncate it
+
+    def _redact(m: "re.Match") -> str:
+        val = m.group(2)
+        # Always redact — OAuth codes are often short and would slip past the
+        # length-gated JWT truncator, ending up in the log verbatim.
+        if len(val) <= 12:
+            shown = f"{val[:2]}…"
+        else:
+            shown = f"{val[:_JWT_HEAD]}…{val[-_JWT_TAIL:]}"
+        return m.group(1) + shown
+
     return re.sub(
-        r"([?&]token=)([^&]+)",
-        lambda m: m.group(1) + _truncate_jwt(m.group(2)),
+        r"([?&](?:token|code|access_token|refresh_token)=)([^&]+)",
+        _redact,
         url_str,
     )
 

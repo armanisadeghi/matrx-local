@@ -382,7 +382,9 @@ class DocumentFileManager:
             target = Path(mapped_dir) / filename
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content, encoding="utf-8")
+                # Atomic temp+rename like the canonical note write, so a crash
+                # mid-write can't leave a truncated/corrupt mapped-dir copy.
+                _atomic_write(target, content)
                 written.append(str(target))
             except Exception:
                 logger.warning(

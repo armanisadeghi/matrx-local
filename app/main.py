@@ -1235,16 +1235,20 @@ async def websocket_endpoint(websocket: WebSocket):
     # Direct-loopback connections keep the presence-only boundary.
     from app.api.remote_auth import (
         headers_indicate_tunnel,
-        token_is_local_api_key,
+        is_instance_owner,
         verify_supabase_token,
     )
 
     via_tunnel = headers_indicate_tunnel(websocket.headers)
-    if via_tunnel and not token_is_local_api_key(token):
+    if via_tunnel:
         verified = await verify_supabase_token(token)
         if verified is None:
             logger.warning("WebSocket rejected - unverified token over tunnel: %s", url)
             await websocket.close(code=1008, reason="Invalid or expired credentials")
+            return
+        if not await is_instance_owner(verified.user_id):
+            logger.warning("WebSocket rejected - non-owner token over tunnel: %s", url)
+            await websocket.close(code=1008, reason="Not authorized for this instance")
             return
 
     # Store token for downstream forwarding.

@@ -472,6 +472,18 @@ wheels = [
 ]
 
 [[package]]
+name = "croniter"
+version = "6.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/df/de/5832661ed55107b8a09af3f0a2e71e0957226a59eb1dcf0a445cce6daf20/croniter-6.2.2.tar.gz", hash = "sha256:ba60832a5ec8e12e51b8691c3309a113d1cf6526bdf1a48150ce8ec7a532d0ab", size = 113762, upload-time = "2026-03-15T08:43:48.112Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d0/39/783980e78cb92c2d7bdb1fc7dbc86e94ccc6d58224d76a7f1f51b6c51e30/croniter-6.2.2-py3-none-any.whl", hash = "sha256:a5d17b1060974d36251ea4faf388233eca8acf0d09cbd92d35f4c4ac8f279960", size = 45422, upload-time = "2026-03-15T08:43:46.626Z" },
+]
+
+[[package]]
 name = "cryptography"
 version = "46.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1684,6 +1696,9 @@ image-gen = [
     { name = "torchvision" },
     { name = "transformers" },
 ]
+scheduler = [
+    { name = "matrx-scheduler" },
+]
 transcription = [
     { name = "openai-whisper" },
 ]
@@ -1715,6 +1730,7 @@ requires-dist = [
     { name = "markdownify", specifier = ">=0.14.1" },
     { name = "matrx-ai", specifier = ">=0.1.26" },
     { name = "matrx-orm", specifier = ">=3.0.32" },
+    { name = "matrx-scheduler", marker = "extra == 'scheduler'", specifier = ">=0.3.0" },
     { name = "matrx-utils", specifier = ">=1.0.19" },
     { name = "mss", specifier = ">=9.0.1" },
     { name = "numpy", specifier = ">=2.4.2" },
@@ -1763,7 +1779,7 @@ requires-dist = [
     { name = "yt-dlp", specifier = ">=2024.1.0" },
     { name = "zeroconf", specifier = ">=0.131.0" },
 ]
-provides-extras = ["transcription", "image-gen", "all"]
+provides-extras = ["transcription", "scheduler", "image-gen", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1787,6 +1803,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3b/1e/a7fb6b16c9ded293a700d0d2be7a83ef035e37e5364fa72778051d003828/matrx_orm-3.0.32.tar.gz", hash = "sha256:da7f89c563004ca61be40cac6f19fdf894e705f9a116949f5753f9ee9449be50", size = 509425, upload-time = "2026-03-24T22:17:31.477Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/d5/1c12f8875f3f9b88abfec07d7c5fd27190ffb1fdb52c282ea43011daecdf/matrx_orm-3.0.32-py3-none-any.whl", hash = "sha256:7b685eaa8c07ac14983b7a3d55480062b67375e928bdc66d724f578470d4414f", size = 323067, upload-time = "2026-03-24T22:17:29.917Z" },
+]
+
+[[package]]
+name = "matrx-scheduler"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "croniter" },
+    { name = "matrx-utils" },
+    { name = "pydantic" },
+    { name = "supabase" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/71/54/a5cbcb8b4cf980843d3e5803a97fbf99583ed554077e4554ae55311ca84e/matrx_scheduler-0.3.0.tar.gz", hash = "sha256:539387d0604e094749ef73883483b1532b4f2ac66441e21a2ab1d6f349c39ff9", size = 40250, upload-time = "2026-06-10T16:44:41.606Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/be/ac145022ab74b65c32d66f6403f07b71a5f134c650c81535465a81dcaaa0/matrx_scheduler-0.3.0-py3-none-any.whl", hash = "sha256:585496281292fd2b3d1807ade49a9279ce394613434308245b665d72c2e6fbc0", size = 35222, upload-time = "2026-06-10T16:44:40.434Z" },
 ]
 
 [[package]]

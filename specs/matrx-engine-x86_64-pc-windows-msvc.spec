@@ -85,6 +85,7 @@ a = Analysis(
         # user-installed image-gen packages (transformers uses filecmp directly)
         # Dynamically/lazily imported — PyInstaller's static analysis misses these:
         'supabase', 'openwakeword', 'onnxruntime',
+        'matrx_scheduler',
         # OS keychain (credential encryption at rest) + crypto backend.
         'keyring', 'keyring.backends', 'keyring.backends.chainer',
         'keyring.backends.fail', 'keyring.backends.null',

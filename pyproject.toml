@@ -59,13 +59,11 @@ dependencies = [
     "matrx-utils>=1.0.19",
     "matrx-orm>=3.0.32",
     "matrx-ai>=0.1.26",
-    # matrx-scheduler is intentionally NOT declared here. It is not yet on
-    # PyPI, so declaring it (in core OR an extra) makes `uv lock`/`uv sync`
-    # unsatisfiable from a clean checkout — which is what previously broke CI.
-    # The Phase 8 scheduler host that uses it is gated OFF by default
-    # (MATRX_LOCAL_SCHEDULER_ENABLED) and imports the package lazily, so its
-    # absence degrades cleanly to "scheduler disabled". Once it is published,
-    # add it back as an optional extra and `uv sync --extra scheduler`.
+    # matrx-scheduler — see the optional [scheduler] extra below. Kept OUT of
+    # core on purpose: the Phase 8 host that uses it is gated off by default
+    # (MATRX_LOCAL_SCHEDULER_ENABLED) and imports it lazily, so the engine runs
+    # fine without it. Install with `uv sync --extra scheduler` (it is bundled
+    # into release builds — see scripts/build-sidecar.sh / specs).
     # Supabase Python client — powers the engine↔extension Broadcast plumb
     # in `app/api/extension_broadcast.py` (C2.d substrate). Already pulled in
     # transitively via matrx-ai/matrx-utils, but we declare it explicitly so
@@ -106,6 +104,11 @@ dependencies = [
 [project.optional-dependencies]
 transcription = [
     "openai-whisper",
+]
+scheduler = [
+    # Cross-component scheduling host (surface='desktop'). Optional + lazily
+    # imported; the Phase 8 host is gated off by default. Published on PyPI.
+    "matrx-scheduler>=0.3.0",
 ]
 image-gen = [
     # Hugging Face diffusers-based image generation (large install ~3-10 GB)

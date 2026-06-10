@@ -579,6 +579,22 @@ class TokenRepo:
         )
         await self._db.commit()
 
+    async def get_owner_user_id(self) -> str | None:
+        """Return the signed-in owner's user_id without decrypting tokens.
+
+        Used by the auth layer to authorize remote (tunnel) callers: only the
+        user who signed into THIS instance may drive it remotely. Reads just
+        the plaintext user_id column, so it's cheap and avoids touching the
+        keychain on every request.
+        """
+        row = await self._db.fetchone(
+            "SELECT user_id FROM auth_tokens WHERE key = ?", (_TOKEN_KEY,)
+        )
+        if not row:
+            return None
+        uid = _row_to_dict(row).get("user_id")
+        return uid or None
+
     async def clear(self) -> None:
         await self._db.execute("DELETE FROM auth_tokens WHERE key = ?", (_TOKEN_KEY,))
         await self._db.commit()

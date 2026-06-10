@@ -23,7 +23,7 @@ logger = get_logger()
 
 from app.api.remote_auth import (
     headers_indicate_tunnel,
-    token_is_local_api_key,
+    is_instance_owner,
     verify_supabase_token,
 )
 
@@ -272,10 +272,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Tunnel traffic is untrusted: require a cryptographically-verified
         # Supabase identity (validated by the auth server, since the project
-        # signs HS256 and the engine holds no secret) or the local API key.
+        # signs HS256 and the engine holds no secret) AND that the identity is
+        # this instance's owner. A static local API key is deliberately NOT
+        # accepted over the tunnel — it's a loopback-only credential.
         # Direct-loopback traffic keeps the presence-only boundary — the
         # loopback socket itself is the trust boundary there.
-        if via_tunnel and not token_is_local_api_key(token):
+        if via_tunnel:
             user = await verify_supabase_token(token)
             if user is None:
                 logger.warning(
@@ -286,6 +288,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Invalid or expired credentials"},
+                )
+            # Owner-only: a valid token from a *different* AI Matrx user must
+            # not control this machine remotely.
+            if not await is_instance_owner(user.user_id):
+                logger.warning(
+                    "[auth] rejected %s %s — token user is not this instance's owner",
+                    request.method,
+                    path,
+                )
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Not authorized for this instance"},
                 )
             request.state.principal = user
 

@@ -39,10 +39,10 @@ jobs:
           # --no-cache forces a fresh PyPI index fetch (avoids stale CDN edge cache
           # when a matrx-* package was published moments before this workflow ran).
           # Retry once after 30s if resolution fails — gives CDN time to propagate.
-          uv sync --extra transcription --no-cache || {
+          uv sync --extra transcription --extra scheduler --no-cache || {
             echo "⚠ uv sync failed — retrying in 30s (PyPI CDN propagation delay)..."
             sleep 30
-            uv sync --extra transcription --no-cache
+            uv sync --extra transcription --extra scheduler --no-cache
           }
         shell: bash
 

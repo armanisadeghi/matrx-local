@@ -525,12 +525,11 @@ async def validate_extension_principal(request: Request) -> ExtensionPrincipal:
             detail="Authorization Bearer token required",
         )
 
-    from app.api.remote_auth import headers_indicate_tunnel
+    from app.api.remote_auth import headers_indicate_tunnel, is_instance_owner
 
+    _via_tunnel = headers_indicate_tunnel(request.headers)
     try:
-        principal = await _verify_token(
-            token, via_tunnel=headers_indicate_tunnel(request.headers)
-        )
+        principal = await _verify_token(token, via_tunnel=_via_tunnel)
     except Exception as exc:
         _log_rejection(
             "http",
@@ -550,6 +549,12 @@ async def validate_extension_principal(request: Request) -> ExtensionPrincipal:
             status_code=401,
             detail="Invalid or expired credentials",
         ) from exc
+
+    # Owner-only over the tunnel: a valid token from another AI Matrx user must
+    # not reach this instance's extension/sandbox surface.
+    if _via_tunnel and not await is_instance_owner(principal.user_id):
+        _log_rejection("http", request.url.path, "not_instance_owner", method=request.method)
+        raise HTTPException(status_code=403, detail="Not authorized for this instance")
 
     request.state.principal = principal
     return principal
@@ -589,12 +594,11 @@ async def validate_extension_principal_ws(
         )
         return None
 
-    from app.api.remote_auth import headers_indicate_tunnel
+    from app.api.remote_auth import headers_indicate_tunnel, is_instance_owner
 
+    _via_tunnel = headers_indicate_tunnel(websocket.headers)
     try:
-        return await _verify_token(
-            token, via_tunnel=headers_indicate_tunnel(websocket.headers)
-        )
+        principal = await _verify_token(token, via_tunnel=_via_tunnel)
     except Exception as exc:
         _log_rejection(
             "ws",
@@ -611,3 +615,13 @@ async def validate_extension_principal_ws(
             reason="Invalid or expired credentials",
         )
         return None
+
+    if _via_tunnel and not await is_instance_owner(principal.user_id):
+        _log_rejection("ws", websocket.url.path, "not_instance_owner")
+        await websocket.close(
+            code=WS_CLOSE_POLICY_VIOLATION,
+            reason="Not authorized for this instance",
+        )
+        return None
+
+    return principal

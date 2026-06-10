@@ -371,6 +371,9 @@ args = [
     "--hidden-import", "supabase",
     "--hidden-import", "openwakeword",
     "--hidden-import", "onnxruntime",
+    # Cross-component scheduler host (optional extra, lazily imported, gated off
+    # by default) — bundle it so flipping MATRX_LOCAL_SCHEDULER_ENABLED works.
+    "--hidden-import", "matrx_scheduler",
     # OS keychain (credential encryption at rest) — backends load dynamically.
     "--hidden-import", "keyring",
     "--hidden-import", "keyring.backends",

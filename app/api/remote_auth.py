@@ -44,7 +44,6 @@ Trust contract enforced by callers (see ``auth.py`` / ``extension_auth.py``):
 from __future__ import annotations
 
 import hashlib
-import os
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -80,29 +79,14 @@ def headers_indicate_tunnel(headers) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Local API key (headless / tests)
-# ---------------------------------------------------------------------------
-
-
-def _local_api_keys() -> set[str]:
-    """Accepted non-JWT bearer tokens for local/headless/test callers."""
-    keys: set[str] = set()
-    env_key = os.getenv("MATRX_LOCAL_API_KEY", "").strip()
-    if env_key:
-        keys.add(env_key)
-    # Test harness (conftest.py spawns the engine with TEST_MODE=1) sends a
-    # fixed placeholder token; accept it ONLY in test mode.
-    if os.getenv("TEST_MODE", "").strip() in ("1", "true", "True"):
-        keys.add("test-token-matrx-local")
-    return keys
-
-
-def token_is_local_api_key(token: str) -> bool:
-    return bool(token) and token in _local_api_keys()
-
-
-# ---------------------------------------------------------------------------
 # Supabase token verification (introspection — works for HS256)
+#
+# Note: there is intentionally no "local API key" accepted here. Over the
+# tunnel only a verified Supabase identity (owner) is accepted; on direct
+# loopback the presence-only boundary in AuthMiddleware already accepts any
+# token (the loopback socket is the trust boundary), so a separate local-key
+# concept would be redundant and a static secret accepted remotely would only
+# widen the attack surface.
 # ---------------------------------------------------------------------------
 
 
@@ -221,3 +205,25 @@ def invalidate_token(token: str) -> None:
     """Drop a token from the verification cache (e.g. on logout)."""
     if token:
         _verify_cache.pop(_token_key(token), None)
+
+
+async def is_instance_owner(user_id: str) -> bool:
+    """Return True when ``user_id`` is the owner who signed into THIS instance.
+
+    Remote (tunnel) callers must be the machine's own owner — a valid token
+    from a different AI Matrx account must not be able to drive someone else's
+    machine. The owner is the user_id persisted in auth_tokens when the desktop
+    UI signed in. If no owner is recorded yet (nobody has signed in locally),
+    no remote caller can match — remote control requires a prior local sign-in.
+    """
+    if not user_id:
+        return False
+    try:
+        from app.services.local_db.repositories import TokenRepo
+
+        owner = await TokenRepo().get_owner_user_id()
+    except Exception:
+        # Fail closed: if we can't determine the owner, don't authorize remote.
+        logger.debug("[remote_auth] owner lookup failed", exc_info=True)
+        return False
+    return bool(owner) and owner == user_id

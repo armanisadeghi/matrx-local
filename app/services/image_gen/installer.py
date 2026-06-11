@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import subprocess
+import time
 import sys
 import threading
 from pathlib import Path
@@ -311,12 +312,37 @@ def _run_pip_streaming(
     )
 
     assert proc.stdout is not None
+
+    # Inactivity watchdog: a wedged pip (stuck resolver, dead network FD)
+    # previously hung here forever — and start_install refuses to start while
+    # status == "running", so the installer was bricked until engine restart.
+    INACTIVITY_TIMEOUT_S = 600.0
+    last_output = time.monotonic()
+    watchdog_fired = threading.Event()
+
+    def _watchdog() -> None:
+        while proc.poll() is None:
+            if time.monotonic() - last_output > INACTIVITY_TIMEOUT_S:
+                watchdog_fired.set()
+                proc.kill()
+                return
+            time.sleep(5.0)
+
+    watchdog = threading.Thread(target=_watchdog, daemon=True, name="pip-watchdog")
+    watchdog.start()
+
     for raw_line in proc.stdout:
+        last_output = time.monotonic()
         line = raw_line.rstrip("\n").rstrip("\r")
         if line:
             progress.log(line)
 
     proc.wait()
+    if watchdog_fired.is_set():
+        raise RuntimeError(
+            f"pip produced no output for {int(INACTIVITY_TIMEOUT_S)}s and was "
+            f"killed while installing {packages}"
+        )
     if proc.returncode != 0:
         raise RuntimeError(
             f"pip exited with code {proc.returncode} while installing {packages}"
@@ -448,7 +474,7 @@ def _do_install(progress: InstallProgress) -> None:
             raise RuntimeError(
                 f"Post-install import check failed:\n{check.stderr[-2000:]}"
             )
-        progress.update("verifying", 97.0, "All imports verified ✓")
+        progress.update("verifying", 95.0, "All imports verified ✓")
 
         # ── Step 3.5: patch transformers for frozen-binary compatibility ─────────
         # transformers/dynamic_module_utils.py imports `filecmp` at the top level.
@@ -456,7 +482,7 @@ def _do_install(progress: InstallProgress) -> None:
         # doesn't appear in the engine's own import graph.  We patch the installed
         # copy to guard the import so it degrades gracefully inside the frozen binary
         # (always-copy fallback is safe and correct).
-        progress.update("verifying", 94.0, "Applying compatibility patches…")
+        progress.update("verifying", 96.0, "Applying compatibility patches…")
         _patch_transformers_filecmp(pkg_dir)
         progress.update("verifying", 97.0, "Compatibility patches applied ✓")
 

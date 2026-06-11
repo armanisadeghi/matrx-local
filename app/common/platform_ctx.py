@@ -307,8 +307,11 @@ def _probe_audio_devices() -> tuple[bool, bool, bool]:
 
     try:
         import sounddevice as sd  # type: ignore[import]
+        # DeviceList is a tuple subclass, NOT a list — the old isinstance(list)
+        # check wrapped the whole list and .get() raised, so mic/speakers were
+        # reported unavailable on every platform.
         devices = sd.query_devices()
-        for d in (devices if isinstance(devices, list) else [devices]):
+        for d in (devices if not isinstance(devices, dict) else [devices]):
             if d.get("max_input_channels", 0) > 0:
                 mic_available = True
             if d.get("max_output_channels", 0) > 0:

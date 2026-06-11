@@ -154,17 +154,31 @@ async def download_model(name: str, on_progress=None) -> OWWModelInfo:
 
     logger.info(f"Downloading OWW model {lookup_name} from {url} → {dest}")
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=120.0) as client:
-        async with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0))
-            done = 0
-            with open(dest, "wb") as fh:
-                async for chunk in resp.aiter_bytes(chunk_size=65536):
-                    fh.write(chunk)
-                    done += len(chunk)
-                    if on_progress:
-                        await on_progress(done, total)
+    # Download to a temp file and rename: writing directly to the final path
+    # left a partial .onnx on interruption, which model_exists() (st_size > 0)
+    # then treated as valid forever — the service crashed at ONNX load on
+    # every start with no self-heal path.
+    tmp = dest.with_suffix(".onnx.tmp")
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=120.0) as client:
+            async with client.stream("GET", url) as resp:
+                resp.raise_for_status()
+                total = int(resp.headers.get("content-length", 0))
+                done = 0
+                with open(tmp, "wb") as fh:
+                    async for chunk in resp.aiter_bytes(chunk_size=65536):
+                        fh.write(chunk)
+                        done += len(chunk)
+                        if on_progress:
+                            await on_progress(done, total)
+        if total and tmp.stat().st_size != total:
+            raise OSError(
+                f"Incomplete download: got {tmp.stat().st_size} of {total} bytes"
+            )
+        tmp.replace(dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
     logger.info(f"OWW model {lookup_name} downloaded ({dest.stat().st_size} bytes)")
 

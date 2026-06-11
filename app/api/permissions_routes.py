@@ -10,6 +10,8 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -139,7 +141,18 @@ async def _run(cmd: list[str], timeout: int = 15) -> tuple[str, str, int]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        # wait_for abandons communicate() but does NOT kill the child —
+        # system_profiler/PowerShell/ffmpeg kept running (and their pipes
+        # leaked) every time a probe timed out.
+        proc.kill()
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+        raise
     return stdout.decode(errors="replace"), stderr.decode(errors="replace"), proc.returncode or 0
 
 
@@ -712,8 +725,34 @@ async def record_screen(req: RecordScreenRequest):
     try:
         if CAPABILITIES["has_ffmpeg"]:
             if PLATFORM["is_mac"]:
-                # List available avfoundation devices and capture
-                screen_id = str(req.screen_index - 1) if req.screen_index else "0"
+                # avfoundation enumerates CAMERAS before screens — index 0 is
+                # the FaceTime camera on most Macs, so the old `-i "0:none"`
+                # recorded the webcam as a "screen recording". Resolve the
+                # actual "Capture screen N" device index from the device list.
+                screen_n = (req.screen_index - 1) if req.screen_index else 0
+                _, list_err, _ = await _run(
+                    ["ffmpeg", "-f", "avfoundation",
+                     "-list_devices", "true", "-i", ""],
+                    timeout=15,
+                )
+                screen_id: str | None = None
+                fallback_first_screen: str | None = None
+                for line in list_err.splitlines():
+                    m = re.search(r"\[(\d+)\]\s+Capture screen (\d+)", line)
+                    if m:
+                        if fallback_first_screen is None:
+                            fallback_first_screen = m.group(1)
+                        if int(m.group(2)) == screen_n:
+                            screen_id = m.group(1)
+                            break
+                screen_id = screen_id or fallback_first_screen
+                if screen_id is None:
+                    return {
+                        "output": "No screen capture device found — grant "
+                                  "Screen Recording permission and retry",
+                        "metadata": None,
+                        "type": "error",
+                    }
                 cmd = [
                     "ffmpeg", "-y",
                     "-f", "avfoundation",
@@ -738,12 +777,14 @@ async def record_screen(req: RecordScreenRequest):
                     str(out_path),
                 ]
             else:
-                display = ":0.0"
+                # x11grab defaults to the full screen size — the hardcoded
+                # 1920x1080 errored on smaller displays ("capture area outside
+                # screen"); honor $DISPLAY instead of assuming :0.0.
+                display = os.environ.get("DISPLAY", ":0.0")
                 cmd = [
                     "ffmpeg", "-y",
                     "-f", "x11grab",
                     "-framerate", "30",
-                    "-video_size", "1920x1080",
                     "-i", display,
                     "-t", str(req.duration_seconds),
                     "-c:v", "libx264",

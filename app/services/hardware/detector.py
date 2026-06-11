@@ -579,12 +579,16 @@ def _detect_audio_devices() -> dict[str, Any]:
 
     try:
         import sounddevice as sd  # type: ignore[import]
+        # sd.query_devices() returns DeviceList, a *tuple* subclass — the old
+        # `isinstance(devices, list)` check wrapped the whole list into a
+        # 1-element list and the .get() below raised, so the profile always
+        # reported zero audio devices. Only a single-device dict needs wrapping.
         devices = sd.query_devices()
-        if not isinstance(devices, list):
+        if isinstance(devices, dict):
             devices = [devices]
 
         host_apis = sd.query_hostapis()
-        if not isinstance(host_apis, list):
+        if isinstance(host_apis, dict):
             host_apis = [host_apis]
 
         host_api_names = {i: h.get("name", f"API {i}") for i, h in enumerate(host_apis)}

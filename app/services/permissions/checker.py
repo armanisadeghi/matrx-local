@@ -97,7 +97,18 @@ async def _run(cmd: list[str], timeout: int = 10) -> tuple[str, str, int]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        # wait_for abandons communicate() but does NOT kill the child —
+        # system_profiler/PowerShell/ffmpeg kept running (and their pipes
+        # leaked) every time a probe timed out.
+        proc.kill()
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+        raise
     return (
         stdout.decode(errors="replace"),
         stderr.decode(errors="replace"),
@@ -1624,19 +1635,25 @@ def _tcc_db_status(service: str) -> PermissionStatus:
 
     try:
         conn = _sqlite3.connect(f"file:{tcc_db}?mode=ro", uri=True, timeout=2.0)
-        # The `client` column holds the bundle ID or process name.
-        # We check for any row matching our service regardless of client so we
-        # know whether the user has ever been asked (and what they answered).
+        # The `client` column holds the bundle ID or process name. Filter to
+        # OUR clients — matching any row meant e.g. Zoom's microphone grant
+        # reported "granted" for Matrx even when Matrx itself was denied.
+        our_clients = (
+            "com.aimatrx.desktop",     # packaged app bundle id
+            "matrx-engine",            # sidecar process name (TCC by path)
+            "aimatrx-desktop",
+        )
+        placeholders = ",".join("?" for _ in our_clients)
         rows = conn.execute(
-            "SELECT auth_value FROM access WHERE service=?", (service,)
+            f"SELECT auth_value FROM access WHERE service=? AND client IN ({placeholders})",
+            (service, *our_clients),
         ).fetchall()
+        if not rows:
+            conn.close()
+            return PermissionStatus.NOT_DETERMINED  # we have never been asked
         conn.close()
 
-        if not rows:
-            return PermissionStatus.NOT_DETERMINED  # never been asked
-
-        # If ANY row has auth_value=2 (allow), the service is accessible.
-        # Otherwise take the most recently set value.
+        # If ANY of our rows has auth_value=2 (allow), the service is accessible.
         values = [r[0] for r in rows]
         if 2 in values:
             return PermissionStatus.GRANTED

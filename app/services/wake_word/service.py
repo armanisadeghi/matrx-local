@@ -224,6 +224,14 @@ class WakeWordService:
             await self._emit("wake-word-error", str(exc))
         finally:
             self._running = False
+            # Signal the real state — leaving _mode on "listening" showed a
+            # live UI over a dead loop. MUTED is the existing "not listening"
+            # state stop() also uses.
+            self._mode = _Mode.MUTED
+            try:
+                await self._emit("wake-word-mode", _Mode.MUTED.value)
+            except Exception:
+                pass
             logger.info("OWW detection loop exited")
 
     async def _run_loop(self) -> None:
@@ -250,8 +258,10 @@ class WakeWordService:
         device_index = self._resolve_device(self._device_name)
 
         # Audio ring buffer — filled by the sounddevice callback
+        # All appends are marshalled onto the event-loop thread via
+        # call_soon_threadsafe, and the drain below runs on the same thread —
+        # no lock needed.
         audio_buffer: list[np.ndarray] = []
-        buffer_lock = asyncio.Lock()
 
         def _audio_callback(
             indata: np.ndarray, frames: int, _time, status
@@ -262,8 +272,12 @@ class WakeWordService:
                         self._emit("wake-word-error", str(status))
                     )
                 )
-            # indata shape: (frames, channels) — flatten to mono float32
-            mono = indata[:, 0].astype(np.float32)
+            # indata shape: (frames, channels) — flatten to mono.
+            # openWakeWord expects int16-scale PCM: its melspectrogram does
+            # np.astype(int16) on the raw values, so feeding float32 in
+            # [-1, 1] truncates to -1/0/1 (digital silence) and detection
+            # NEVER fires. Keep the float copy only for the RMS gate.
+            mono = (indata[:, 0] * 32767.0).astype(np.int16)
             loop.call_soon_threadsafe(audio_buffer.append, mono)
 
         stream = sd.InputStream(
@@ -292,7 +306,7 @@ class WakeWordService:
 
                     # Emit RMS at ~5 Hz regardless of mode (keeps the UI meter alive)
                     if frame_count % RMS_EMIT_EVERY_N == 0:
-                        rms = float(np.sqrt(np.mean(chunk ** 2)))
+                        rms = float(np.sqrt(np.mean((chunk.astype(np.float32) / 32767.0) ** 2)))
                         await self._emit("wake-word-rms", min(rms * 10, 1.0))
 
                     # Auto-expire dismiss cooldown
@@ -308,8 +322,8 @@ class WakeWordService:
                     if time.monotonic() - last_trigger < COOLDOWN_S:
                         continue
 
-                    # Energy gate — skip near-silence frames
-                    rms = float(np.sqrt(np.mean(chunk ** 2)))
+                    # Energy gate — skip near-silence frames (float scale)
+                    rms = float(np.sqrt(np.mean((chunk.astype(np.float32) / 32767.0) ** 2)))
                     if rms < 0.0005:
                         continue
 

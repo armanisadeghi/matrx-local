@@ -68,15 +68,19 @@ async def list_downloads(status: Optional[str] = None, category: Optional[str] =
 async def enqueue_download(req: EnqueueRequest):
     """Enqueue a new download (or return existing if already queued/active)."""
     manager = get_download_manager()
-    entry = await manager.enqueue(
-        category=req.category,
-        filename=req.filename,
-        display_name=req.display_name,
-        urls=req.urls,
-        priority=req.priority,
-        metadata=req.metadata,
-        download_id=req.download_id,
-    )
+    try:
+        entry = await manager.enqueue(
+            category=req.category,
+            filename=req.filename,
+            display_name=req.display_name,
+            urls=req.urls,
+            priority=req.priority,
+            metadata=req.metadata,
+            download_id=req.download_id,
+        )
+    except ValueError as exc:
+        # Missing dest_dir etc. — caller error, not a server fault.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return entry.to_dict()
 
 

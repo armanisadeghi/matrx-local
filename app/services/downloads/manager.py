@@ -30,6 +30,8 @@ from typing import Any, AsyncIterator, Deque, Literal, Optional, Tuple
 
 import httpx
 
+from pathlib import Path
+
 from app.common.system_logger import get_logger
 from app.services.local_db.database import get_db
 
@@ -220,7 +222,20 @@ class DownloadManager:
         priority: int = 0,
         download_id: Optional[str] = None,
     ) -> DownloadEntry:
-        """Add a download to the priority queue (idempotent by filename+category)."""
+        """Add a download to the priority queue (idempotent by filename+category).
+
+        ``metadata.dest_dir`` is REQUIRED: it is where the downloaded bytes are
+        written. The manager previously had no destination concept at all — it
+        streamed the bytes, counted them, discarded them, and reported
+        "completed". Failing loudly here is the only honest behavior.
+        """
+        dest_dir = (metadata or {}).get("dest_dir")
+        if not dest_dir:
+            raise ValueError(
+                "engine-side downloads require metadata.dest_dir — "
+                "without it the downloaded bytes have nowhere to go"
+            )
+
         # Idempotency: skip if already queued/active/completed for this file
         for entry in self._entries.values():
             if entry.filename == filename and entry.category == category:
@@ -228,7 +243,25 @@ class DownloadManager:
                     logger.debug("[downloads] Already queued/active: %s", filename)
                     return entry
                 if entry.status == "completed":
-                    logger.debug("[downloads] Already completed: %s", filename)
+                    # Completed is only terminal while the file still exists —
+                    # a deleted file must be re-downloadable.
+                    existing_dest = Path(
+                        (entry.metadata or {}).get("dest_dir", dest_dir)
+                    ) / entry.filename
+                    if existing_dest.exists():
+                        logger.debug("[downloads] Already completed: %s", filename)
+                        return entry
+                    logger.info(
+                        "[downloads] %s marked completed but file is gone — re-downloading",
+                        filename,
+                    )
+                    entry.status = "queued"
+                    entry.bytes_done = 0
+                    entry.completed_at = None
+                    entry.metadata = {**(entry.metadata or {}), "dest_dir": dest_dir}
+                    entry.updated_at = _now()
+                    self._cancel_flags[entry.id] = asyncio.Event()
+                    await self._persist(entry)
                     return entry
 
         dl_id = download_id or str(uuid.uuid4())
@@ -597,6 +630,7 @@ class DownloadManager:
                             bytes_before=bytes_before_this_part,
                             cancel_flag=cancel_flag,
                             chunk_size=chunk_size,
+                            dest=self._part_dest(entry, url, part_idx),
                         )
                         bytes_before_this_part += part_bytes
                         last_error = None
@@ -640,6 +674,21 @@ class DownloadManager:
             entry.filename, entry.id, entry.bytes_done,
         )
 
+    def _part_dest(self, entry: DownloadEntry, url: str, part_idx: int) -> Path:
+        """Resolve where a part's bytes land on disk.
+
+        Multi-part downloads (e.g. split GGUF) are distinct files — use each
+        URL's basename; single-part downloads use the entry filename.
+        """
+        dest_dir = Path((entry.metadata or {}).get("dest_dir", "."))
+        if entry.part_total > 1:
+            name = url.split("?")[0].rstrip("/").rsplit("/", 1)[-1] or (
+                f"{entry.filename}.part{part_idx + 1}"
+            )
+        else:
+            name = entry.filename
+        return dest_dir / name
+
     async def _download_part(
         self,
         *,
@@ -649,63 +698,76 @@ class DownloadManager:
         bytes_before: int,
         cancel_flag: asyncio.Event,
         chunk_size: int,
+        dest: Path,
     ) -> int:
-        """Stream a single URL, updating entry progress on every chunk.
+        """Stream a single URL to ``dest`` (tmp → rename), updating progress.
         Returns the number of bytes downloaded for this part."""
-        async with client.stream("GET", url) as response:
-            response.raise_for_status()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".part")
+        part_bytes_done = 0
+        last_emit_bytes = 0
+        try:
+            with open(tmp, "wb") as fh:
+                async with client.stream("GET", url) as response:
+                    response.raise_for_status()
 
-            part_total = int(response.headers.get("content-length", 0))
-            if part_total and entry.total_bytes <= 0:
-                entry.total_bytes = part_total
-                await self._persist_progress(entry)
+                    part_total = int(response.headers.get("content-length", 0))
+                    if part_total and entry.total_bytes <= 0:
+                        entry.total_bytes = part_total
+                        await self._persist_progress(entry)
 
-            part_bytes_done = 0
-            last_emit_bytes = 0
+                    async for chunk in response.aiter_bytes(chunk_size=chunk_size):
+                        if cancel_flag.is_set():
+                            raise asyncio.CancelledError()
 
-            async for chunk in response.aiter_bytes(chunk_size=chunk_size):
-                if cancel_flag.is_set():
-                    raise asyncio.CancelledError()
+                        fh.write(chunk)
+                        part_bytes_done += len(chunk)
+                        entry.bytes_done = bytes_before + part_bytes_done
+                        entry.updated_at = _now()
 
-                part_bytes_done += len(chunk)
-                entry.bytes_done = bytes_before + part_bytes_done
-                entry.updated_at = _now()
+                        entry.record_sample(entry.bytes_done)
+                        speed_bps = entry.current_speed_bps()
 
-                entry.record_sample(entry.bytes_done)
-                speed_bps = entry.current_speed_bps()
+                        # Update aggregate bandwidth
+                        self._update_bandwidth()
 
-                # Update aggregate bandwidth
-                self._update_bandwidth()
+                        # Emit only once per _PROGRESS_CHUNK_BYTES to avoid flooding
+                        if entry.bytes_done - last_emit_bytes >= _PROGRESS_CHUNK_BYTES:
+                            last_emit_bytes = entry.bytes_done
+                            await self._persist_progress(entry)
 
-                # Emit only once per _PROGRESS_CHUNK_BYTES to avoid flooding
-                if entry.bytes_done - last_emit_bytes >= _PROGRESS_CHUNK_BYTES:
-                    last_emit_bytes = entry.bytes_done
-                    await self._persist_progress(entry)
+                            remaining = entry.total_bytes - entry.bytes_done
+                            eta: Optional[float] = None
+                            if speed_bps > 0 and remaining > 0:
+                                eta = remaining / speed_bps
 
-                    remaining = entry.total_bytes - entry.bytes_done
-                    eta: Optional[float] = None
-                    if speed_bps > 0 and remaining > 0:
-                        eta = remaining / speed_bps
+                            await self._broadcast(ProgressEvent(
+                                id=entry.id,
+                                category=entry.category,
+                                filename=entry.filename,
+                                display_name=entry.display_name,
+                                status="active",
+                                bytes_done=entry.bytes_done,
+                                total_bytes=entry.total_bytes,
+                                percent=entry.percent,
+                                part_current=entry.part_current,
+                                part_total=entry.part_total,
+                                speed_bps=speed_bps,
+                                eta_seconds=eta,
+                                updated_at=entry.updated_at,
+                                bandwidth_bps=self._bandwidth_bps,
+                            ))
+        except BaseException:
+            # Failed/cancelled part: drop the partial temp file. The retry
+            # loop in _download restarts the part from scratch.
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
-                    await self._broadcast(ProgressEvent(
-                        id=entry.id,
-                        category=entry.category,
-                        filename=entry.filename,
-                        display_name=entry.display_name,
-                        status="active",
-                        bytes_done=entry.bytes_done,
-                        total_bytes=entry.total_bytes,
-                        percent=entry.percent,
-                        part_current=entry.part_current,
-                        part_total=entry.part_total,
-                        speed_bps=speed_bps,
-                        eta_seconds=eta,
-                        updated_at=entry.updated_at,
-                        bandwidth_bps=self._bandwidth_bps,
-                    ))
-
-            return part_bytes_done
-
+        tmp.replace(dest)
+        return part_bytes_done
     # ------------------------------------------------------------------
     # Internal: periodic logging
     # ------------------------------------------------------------------

@@ -275,20 +275,46 @@ class TtsService:
         # Acquire the in-progress flag synchronously *before* scheduling the
         # executor task, otherwise two concurrent callers can both pass the
         # guard and both spawn a download.
+        loop = asyncio.get_running_loop()
         with self._lock:
             if self._is_downloading:
-                return {"success": False, "error": "Download already in progress",
-                        "error_code": "in_progress"}
-            self._is_downloading = True
-            self._download_progress = 0.0
+                waiter = getattr(self, "_download_future", None)
+            else:
+                self._is_downloading = True
+                self._download_progress = 0.0
+                waiter = None
+                self._download_future = loop.create_future()
 
-        loop = asyncio.get_running_loop()
+        if waiter is not None:
+            # A concurrent cold-start: wait for the in-flight download instead
+            # of surfacing a spurious "in_progress" error to the second caller
+            # (synthesize() treated that as a failure).
+            try:
+                return dict(await asyncio.shield(waiter))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return {"success": False, "error": str(exc),
+                        "error_code": "download_failed"}
+
         self._event_loop = loop  # captured for thread-pool → loop dispatch
         try:
-            return await loop.run_in_executor(None, self._download_model_sync)
-        finally:
+            result = await loop.run_in_executor(None, self._download_model_sync)
+        except BaseException as exc:
+            if not self._download_future.done():
+                self._download_future.set_result(
+                    {"success": False, "error": str(exc),
+                     "error_code": "download_failed"}
+                )
             with self._lock:
                 self._is_downloading = False
+            raise
+        else:
+            if not self._download_future.done():
+                self._download_future.set_result(result)
+            with self._lock:
+                self._is_downloading = False
+            return result
 
     def _emit_dm_progress(
         self,
@@ -475,7 +501,17 @@ class TtsService:
         if result.get("success"):
             return result
 
-        # Self-heal: delete files and retry once.
+        # Self-heal: delete files and retry once — but ONLY for failures that
+        # re-downloading can plausibly fix. Environmental errors (ImportError
+        # in a frozen build, OOM) previously triggered a delete + 330 MB
+        # download + fail cycle on every synth call.
+        if not result.get("retriable_by_redownload", True):
+            logger.warning(
+                "[tts] load failed (%s) — not a file problem; skipping re-download",
+                result.get("error"),
+            )
+            return result
+
         logger.warning("[tts] load failed (%s); deleting files and re-downloading",
                        result.get("error"))
         for fn in (ONNX_MODEL_FILENAME, VOICES_BIN_FILENAME):
@@ -507,7 +543,17 @@ class TtsService:
                 logger.error("[tts] Failed to load model: %s", exc, exc_info=True)
                 self._kokoro = None
                 self._model_loaded = False
-                return {"success": False, "error": str(exc), "error_code": "load_failed"}
+                return {
+                    "success": False,
+                    "error": str(exc),
+                    "error_code": "load_failed",
+                    "error_type": type(exc).__name__,
+                    # Environmental failures (missing package, OOM, provider
+                    # init) won't be fixed by re-downloading the files.
+                    "retriable_by_redownload": not isinstance(
+                        exc, (ImportError, ModuleNotFoundError, MemoryError)
+                    ),
+                }
 
     async def unload(self) -> dict[str, Any]:
         loop = asyncio.get_running_loop()

@@ -402,28 +402,40 @@ async def stream_install_progress() -> StreamingResponse:
         progress = get_active_progress()
         assert progress is not None
 
-        # Send a heartbeat every 5 s even when pip is silent (e.g. resolving deps)
-        # so the browser doesn't close the connection.
-        heartbeat_task: asyncio.Task | None = None
+        # Keep-alive between events: pip's silent dependency-resolution phase
+        # can outlast proxy/browser idle timeouts. (The old "heartbeat task"
+        # here was declared but never started — dead code.) SSE comment lines
+        # (": ...") are ignored by EventSource parsers, so they're safe to
+        # interleave with real events.
+        # Pump events through a local queue so the keepalive timeout never
+        # cancels the generator's __anext__ (which would corrupt it).
+        queue: asyncio.Queue = asyncio.Queue()
+        _SENTINEL = object()
 
-        async def heartbeat():
-            while True:
-                await asyncio.sleep(5)
-                try:
-                    await asyncio.wait_for(asyncio.shield(asyncio.sleep(0)), timeout=0)
-                except Exception:
-                    pass
+        async def _pump() -> None:
+            try:
+                async for ev in progress.events():
+                    await queue.put(ev)
+                    if ev.get("status") in ("complete", "error"):
+                        break
+            except Exception as pump_exc:
+                await queue.put({"status": "error", "message": str(pump_exc)})
+            finally:
+                await queue.put(_SENTINEL)
 
+        pump_task = asyncio.create_task(_pump())
         try:
-            async for event in progress.events():
-                yield f"data: {json.dumps(event)}\n\n"
-                if event.get("status") in ("complete", "error"):
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if event is _SENTINEL:
                     break
-        except Exception as exc:
-            yield f"data: {json.dumps({'status': 'error', 'message': str(exc)})}\n\n"
+                yield f"data: {json.dumps(event)}\n\n"
         finally:
-            if heartbeat_task:
-                heartbeat_task.cancel()
+            pump_task.cancel()
 
     return StreamingResponse(
         event_stream(),

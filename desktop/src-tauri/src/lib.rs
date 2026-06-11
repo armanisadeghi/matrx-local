@@ -1403,9 +1403,10 @@ pub fn run() {
             std::sync::Arc::new(tokio::sync::Mutex::new(llm::server::LlmServer::new()))
                 as llm::commands::LlmServerState,
         )
-        .manage(std::sync::Arc::new(std::sync::Mutex::new(
-            None::<tauri_plugin_shell::process::CommandChild>,
-        )) as llm::commands::LlmProcessHandle)
+        .manage::<llm::commands::LlmProcessHandle>(std::sync::Arc::new(
+            // PID slot (see LlmProcessHandle docs) — populated at spawn.
+            std::sync::Mutex::new(None),
+        ))
         .manage(llm::commands::LlmDownloadCancelState(
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         ))

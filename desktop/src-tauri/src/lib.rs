@@ -293,6 +293,24 @@ async fn start_sidecar(
         }
     }
 
+    // Spawn-in-progress guard: the handle check above releases its lock
+    // before we spawn, so two concurrent invocations (recovery modal + init
+    // effect) could both pass it — the second's kill_orphaned_sidecars()
+    // would then kill the first's freshly spawned engine mid-boot and
+    // overwrite (leak) its child handle.
+    static SIDECAR_SPAWNING: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    struct SpawnGuard;
+    impl Drop for SpawnGuard {
+        fn drop(&mut self) {
+            SIDECAR_SPAWNING.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    if SIDECAR_SPAWNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(()); // another start_sidecar is mid-spawn
+    }
+    let _spawn_guard = SpawnGuard;
+
     // Kill any orphaned sidecar processes from a previous session before
     // spawning a new one.  Without this, port 22140 may still be held by
     // a zombie from a crash/force-quit, and the new sidecar will fail.
@@ -401,13 +419,19 @@ async fn start_sidecar(
 #[tauri::command]
 async fn stop_sidecar(state: tauri::State<'_, SidecarState>) -> Result<(), String> {
     let child = state.child.lock().unwrap().take();
-    if let Some(c) = child {
-        sigterm_then_kill(c);
-    }
-    // Also nuke any orphaned processes by name — covers the case where the
-    // process was SIGKILLed by the OS (e.g. macOS watchdog) before we could
-    // clear the handle, leaving port 22140 still bound by a lingering child.
-    kill_orphaned_sidecars();
+    // sigterm_then_kill std::thread::sleep-waits up to 20s — run it on a
+    // blocking thread so it doesn't pin a tokio worker and starve other
+    // commands (status polls, health checks) for the whole shutdown wait.
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(c) = child {
+            sigterm_then_kill(c);
+        }
+        // Also nuke any orphaned processes by name — covers the case where
+        // the process was SIGKILLed by the OS (e.g. macOS watchdog) before we
+        // could clear the handle, leaving port 22140 still bound.
+        kill_orphaned_sidecars();
+    })
+    .await;
     Ok(())
 }
 
@@ -490,8 +514,18 @@ fn sigterm_then_kill(child: tauri_plugin_shell::process::CommandChild) {
 /// and runs to completion regardless of what happens to us.
 ///
 /// Sequence (executed inside the detached subprocess):
-///   T+0.2s:  pkill -TERM   ← graceful; Python's lifespan teardown gets to run
-///   T+5.2s:  pkill -KILL   ← force; anything still alive dies
+///   T+1s:   pkill -TERM   ← graceful; Python's lifespan teardown gets to run
+///   T+26s:  pkill -KILL   ← force; fires only after the primary 20s
+///           SIGTERM-wait in `sigterm_then_kill` has fully elapsed
+///
+/// BRACKET TRICK: `pkill -f` matches the FULL COMMAND LINE of every process —
+/// including the `sh -c <script>` running this net, whose argv contains the
+/// patterns. Without `[M]atrx`-style bracketing the first pkill SIGTERM'd the
+/// net's own shell and the rest of the ladder never executed — the engine
+/// survived Quit, which is the exact production bug this net exists to fix.
+/// `[X]` the regex matches literal `X`, but the argv text `[X]` is not
+/// matched by it. The same bracketing protects the net from the pkills in
+/// `graceful_shutdown_sync` / `kill_orphaned_sidecars`.
 ///
 /// Patterns match the bundled macOS Helper-app ("Matrx Engine"), the Linux
 /// flat binary ("matrx-engine"), the legacy "aimatrx-engine" name, plus
@@ -512,13 +546,12 @@ fn spawn_detached_shutdown_safety_net() {
     #[cfg(unix)]
     {
         let script = "\
-            sleep 0.2; \
-            pkill -TERM -f 'Matrx Engine|matrx-engine|aimatrx-engine' 2>/dev/null; \
-            pkill -TERM -f 'cloudflared tunnel' 2>/dev/null; \
-            sleep 5; \
-            pkill -KILL -f 'Matrx Engine|matrx-engine|aimatrx-engine' 2>/dev/null; \
-            pkill -KILL -f 'cloudflared tunnel' 2>/dev/null; \
-            pkill -KILL -f 'llama-server' 2>/dev/null; \
+            sleep 1; \
+            pkill -TERM -f '[M]atrx Engine|[m]atrx-engine|[a]imatrx-engine' 2>/dev/null; \
+            sleep 25; \
+            pkill -KILL -f '[M]atrx Engine|[m]atrx-engine|[a]imatrx-engine' 2>/dev/null; \
+            pkill -KILL -f '[c]loudflared tunnel' 2>/dev/null; \
+            pkill -KILL -f '[l]lama-server' 2>/dev/null; \
             true";
 
         let mut cmd = std::process::Command::new("sh");
@@ -547,8 +580,13 @@ fn spawn_detached_shutdown_safety_net() {
 
     #[cfg(windows)]
     {
-        // /T = kill process tree, /F = force. The leading `timeout` gives
-        // anything mid-shutdown ~1s to exit on its own before /F lands.
+        // /T = kill process tree, /F = force.
+        // `ping -n 26` ~= 25s sleep. `timeout /t` exits IMMEDIATELY with
+        // "Input redirection is not supported" when stdin is NUL (it is,
+        // below), so the force-kills used to land at T+0 and beat the
+        // graceful ladder on every Windows quit. 25s also exceeds the 20s
+        // SIGTERM-wait in sigterm_then_kill, so this net can never preempt
+        // a healthy graceful shutdown.
         let script = "\
             timeout /t 1 /nobreak >nul & \
             taskkill /F /T /IM \"matrx-engine.exe\" >nul 2>&1 & \
@@ -706,9 +744,22 @@ fn graceful_shutdown_sync(
         }
     }
     if !llm_killed {
+        // Prong (b): the tokio mutex was held (e.g. a start mid health-wait).
+        // The handle stores the PID published at spawn time — kill by PID.
         if let Ok(mut guard) = llm_process.lock() {
-            if let Some(child) = guard.take() {
-                let _ = child.kill();
+            if let Some(pid) = guard.take() {
+                #[cfg(unix)]
+                {
+                    let _ = std::process::Command::new("kill")
+                        .args(["-9", &pid.to_string()])
+                        .output();
+                }
+                #[cfg(windows)]
+                {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/F", "/PID", &pid.to_string()])
+                        .output();
+                }
             }
         }
     }

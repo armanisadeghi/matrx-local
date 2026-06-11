@@ -7,7 +7,7 @@
  * cloud sync trigger.
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { engine } from "@/lib/api";
 import type { ProxyStatus } from "@/lib/api";
 import type { EngineStatus } from "@/hooks/use-engine";
@@ -148,5 +148,11 @@ export function useServiceStatus(engineStatus: EngineStatus): [
     poll();
   }, [poll]);
 
-  return [state, { triggerCloudSync, refresh }];
+  // Stable actions object — see React Patterns in CLAUDE.md.
+  const actions = useMemo(
+    () => ({ triggerCloudSync, refresh }),
+    [triggerCloudSync, refresh],
+  );
+
+  return [state, actions];
 }

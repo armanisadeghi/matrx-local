@@ -61,6 +61,7 @@ export function Dashboard({
   const [browserInstallMessage, setBrowserInstallMessage] = useState<
     string | null
   >(null);
+  const [browserInstallError, setBrowserInstallError] = useState(false);
   const [permissionsModalOpen, setPermissionsModalOpen] = useState(false);
 
   // Tauri-plugin-backed permission states (authoritative TCC identity for the .app bundle)
@@ -84,6 +85,7 @@ export function Dashboard({
   const installBrowser = useCallback(async () => {
     setInstallingBrowser(true);
     setBrowserInstallMessage(null);
+    setBrowserInstallError(false);
     try {
       const result = await engine.installCapability("browser_automation");
       if (result.success) {
@@ -92,6 +94,7 @@ export function Dashboard({
         );
         onRefresh();
       } else {
+        setBrowserInstallError(true);
         setBrowserInstallMessage(`Install failed: ${result.message}`);
       }
     } catch (err) {
@@ -101,6 +104,7 @@ export function Dashboard({
         errMsg.includes("network") ||
         errMsg.includes("Failed to fetch") ||
         errMsg.includes("Load failed");
+      setBrowserInstallError(true);
       setBrowserInstallMessage(
         engineCrashed
           ? "Engine became unreachable during install — the OS may have killed it. Restart the engine and try again."
@@ -220,6 +224,7 @@ export function Dashboard({
               engineStatus={engineStatus}
               installing={installingBrowser}
               installMessage={browserInstallMessage}
+              installError={browserInstallError}
               onInstall={installBrowser}
             />
             <StatusCard
@@ -513,12 +518,14 @@ function BrowserStatusCard({
   engineStatus,
   installing,
   installMessage,
+  installError,
   onInstall,
 }: {
   browserStatus: BrowserStatus | null;
   engineStatus: EngineStatus;
   installing: boolean;
   installMessage: string | null;
+  installError: boolean;
   onInstall: () => void;
 }) {
   const isReady = browserStatus?.chrome_found === true;
@@ -581,7 +588,7 @@ function BrowserStatusCard({
         )}
         {installMessage && (
           <p
-            className={`mt-1.5 text-[11px] leading-tight ${installMessage.startsWith("Install failed") || installMessage.startsWith("Error") ? "text-red-400" : "text-emerald-400"}`}
+            className={`mt-1.5 text-[11px] leading-tight ${installError ? "text-red-400" : "text-emerald-400"}`}
           >
             {installMessage}
           </p>

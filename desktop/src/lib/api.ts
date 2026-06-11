@@ -819,6 +819,29 @@ class EngineAPI {
   async connectWebSocket(): Promise<void> {
     if (!this.wsUrl) throw new Error("Engine not discovered");
 
+    // Guard against duplicate sockets: the SIGNED_IN auth handler and
+    // scheduleReconnect can both land here. Reuse a socket that is already
+    // open or still connecting; tear down any half-open leftover first.
+    if (this.ws) {
+      if (
+        this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING
+      ) {
+        return;
+      }
+      const stale = this.ws;
+      this.ws = null;
+      stale.onopen = null;
+      stale.onmessage = null;
+      stale.onclose = null;
+      stale.onerror = null;
+      try {
+        stale.close();
+      } catch {
+        // already closed
+      }
+    }
+
     // WebSocket does not support arbitrary headers in the browser.
     // The server validates auth via a `?token=` query parameter instead.
     const token = this._getAccessToken ? await this._getAccessToken() : null;
@@ -855,6 +878,10 @@ class EngineAPI {
       };
 
       this.ws.onclose = () => {
+        // Settle every in-flight request — their responses can never arrive
+        // on a closed socket, and leaving them pending hangs callers for the
+        // full 2-minute timeout.
+        this.rejectAllPending("WebSocket disconnected");
         this.emit("disconnected", null);
         this.scheduleReconnect();
       };
@@ -918,7 +945,15 @@ class EngineAPI {
 
     return new Promise((resolve, reject) => {
       this.pendingRequests.set(id, { resolve, reject });
-      this.ws!.send(JSON.stringify({ id, tool, input }));
+      try {
+        this.ws!.send(JSON.stringify({ id, tool, input }));
+      } catch (e) {
+        // A throwing send (socket torn down between the readyState check and
+        // here) must not leak the pending entry.
+        this.pendingRequests.delete(id);
+        reject(e instanceof Error ? e : new Error(String(e)));
+        return;
+      }
 
       // Timeout after 2 minutes
       setTimeout(() => {
@@ -1433,6 +1468,15 @@ class EngineAPI {
     }, this.reconnectDelay);
   }
 
+  /** Reject and clear every in-flight WS request. */
+  private rejectAllPending(reason: string) {
+    const pending = Array.from(this.pendingRequests.values());
+    this.pendingRequests.clear();
+    for (const p of pending) {
+      p.reject(new Error(reason));
+    }
+  }
+
   /** Disconnect and clean up. */
   disconnect() {
     if (this.reconnectTimer) {
@@ -1443,7 +1487,7 @@ class EngineAPI {
       this.ws.close();
       this.ws = null;
     }
-    this.pendingRequests.clear();
+    this.rejectAllPending("WebSocket disconnected");
   }
 
   get connected(): boolean {
@@ -2772,6 +2816,8 @@ class EngineAPI {
   subscribeBridgeEvents(
     onEvent: (event: BridgeEvent) => void,
     onError?: (error: Event) => void,
+    onOpen?: () => void,
+    onClose?: () => void,
   ): () => void {
     if (!this.baseUrl || !this.wsUrl) {
       throw new Error("Engine not discovered");
@@ -2786,6 +2832,9 @@ class EngineAPI {
         ? `${this.wsUrl!.replace(/\/ws$/, "")}/extension/bridge-events?token=${encodeURIComponent(token)}`
         : `${this.wsUrl!.replace(/\/ws$/, "")}/extension/bridge-events`;
       socket = new WebSocket(url);
+      socket.onopen = () => {
+        if (!closed) onOpen?.();
+      };
       socket.onmessage = (ev) => {
         try {
           onEvent(JSON.parse(ev.data) as BridgeEvent);
@@ -2795,6 +2844,9 @@ class EngineAPI {
       };
       socket.onerror = (err) => {
         if (onError) onError(err);
+      };
+      socket.onclose = () => {
+        if (!closed) onClose?.();
       };
     };
 

@@ -285,6 +285,8 @@ export function useChat({ engineUrl }: UseChatOptions) {
   // Load live models from DB via engine
   useEffect(() => {
     if (!engineUrl) return;
+    let cancelled = false;
+    let syncRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const load = async () => {
       try {
@@ -294,8 +296,17 @@ export function useChat({ engineUrl }: UseChatOptions) {
           name: string; common_name: string; provider: string;
           is_primary: boolean; is_premium: boolean;
           capabilities: string[]; context_window: number;
-        }>; source: string };
-        if (!data.models?.length) return;
+        }>; source: string; syncing?: boolean };
+        if (cancelled) return;
+        if (!data.models?.length) {
+          // Engine is still syncing its model catalog (fresh install) —
+          // re-poll until populated instead of leaving the picker empty
+          // until app restart (mirrors use-agents' syncing retry).
+          if (data.syncing) {
+            syncRetryTimer = setTimeout(() => void load(), 3_000);
+          }
+          return;
+        }
 
         const mapped: ModelOption[] = data.models.map((m, i) => ({
           id: m.name,
@@ -321,6 +332,7 @@ export function useChat({ engineUrl }: UseChatOptions) {
           }
         }
         const merged = mergeLocalModel(mapped, serverStatus);
+        if (cancelled) return;
         setAvailableModels(merged);
         // If current model isn't in the new list, switch to first available (or keep empty)
         setModel((prev) => merged.find((m) => m.id === prev) ? prev : (merged[0]?.id ?? ""));
@@ -330,6 +342,10 @@ export function useChat({ engineUrl }: UseChatOptions) {
     };
 
     load();
+    return () => {
+      cancelled = true;
+      if (syncRetryTimer) clearTimeout(syncRetryTimer);
+    };
   }, [engineUrl, mergeLocalModel]);
 
   // Listen for llama-server lifecycle events to dynamically add/remove local model
@@ -377,6 +393,15 @@ export function useChat({ engineUrl }: UseChatOptions) {
       unlistenPromises.forEach((p) => p.then((fn) => fn()).catch((e) => console.warn("[chat] cleanup unlisten failed:", e)));
     };
   }, [mergeLocalModel]);
+
+  // Mirror conversations into a ref for synchronous reads inside async
+  // callbacks (sendMessage). Reading via a setConversations side-effect
+  // updater is unreliable — React may defer or skip running the updater
+  // synchronously, and falling back to localStorage reads stale data.
+  const conversationsRef = useRef(conversations);
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   useEffect(() => {
     saveConversations(conversations);
@@ -459,12 +484,10 @@ export function useChat({ engineUrl }: UseChatOptions) {
       let existingMessages: ChatMessage[] = [];
       let currentConv: Conversation | undefined;
 
-      setConversations((prev) => {
-        if (!convId) return prev;
-        currentConv = prev.find((x) => x.id === convId);
+      if (convId) {
+        currentConv = conversationsRef.current.find((x) => x.id === convId);
         if (currentConv) existingMessages = currentConv.messages;
-        return prev;
-      });
+      }
 
       if (!convId) {
         const conv = createConversation();

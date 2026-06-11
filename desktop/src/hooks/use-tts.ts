@@ -217,7 +217,15 @@ export function useTts(): [UseTtsState, UseTtsActions] {
     setError(null);
     setLastError(null);
     try {
-      await downloadTtsModel();
+      const r = await downloadTtsModel();
+      // The engine returns HTTP 200 with {success:false, error} on failure —
+      // surface it instead of silently treating it as success.
+      if (!r.success && !r.already_downloaded) {
+        throw new TtsStreamError(
+          r.error_code ?? "download_failed",
+          r.error ?? "TTS model download failed",
+        );
+      }
       await refreshStatus();
     } catch (e) {
       const le = errorToLastError(e);
@@ -315,17 +323,30 @@ export function useTts(): [UseTtsState, UseTtsActions] {
   }, []);
 
   /** One-shot non-streaming playback via plain <audio>. Used by speak() and
-   *  preview() because the audio is already a complete WAV. */
-  const playBlob = useCallback((blob: Blob, onEnd?: () => void): string => {
+   *  preview() because the audio is already a complete WAV.
+   *
+   *  By default the created URL is tracked in ``prevAudioUrlRef`` and revoked
+   *  on the next play. Pass ``trackForRevocation: false`` when the URL's
+   *  lifetime is owned elsewhere (e.g. a history entry, revoked on eviction
+   *  or clearHistory) — otherwise replaying older Recent entries breaks. */
+  const playBlob = useCallback(
+    (
+      blob: Blob,
+      onEnd?: () => void,
+      opts?: { trackForRevocation?: boolean },
+    ): string => {
     if (prevAudioUrlRef.current) {
       URL.revokeObjectURL(prevAudioUrlRef.current);
+      prevAudioUrlRef.current = null;
     }
     if (audioRef.current) {
       audioRef.current.pause();
     }
 
     const url = URL.createObjectURL(blob);
-    prevAudioUrlRef.current = url;
+    if (opts?.trackForRevocation !== false) {
+      prevAudioUrlRef.current = url;
+    }
 
     const audio = new Audio(url);
     audioRef.current = audio;
@@ -344,7 +365,9 @@ export function useTts(): [UseTtsState, UseTtsActions] {
       onEnd?.();
     });
     return url;
-  }, []);
+    },
+    [],
+  );
 
   const onAllSourcesEnded = useCallback(() => {
     if (synthDoneRef.current && scheduledSourcesRef.current.length === 0) {
@@ -424,7 +447,12 @@ export function useTts(): [UseTtsState, UseTtsActions] {
           speed,
         });
 
-        const url = playBlob(result.blob);
+        // This URL goes into the history list — its lifetime is owned by
+        // history eviction (below) / clearHistory, NOT by playBlob's
+        // next-play revocation, so older Recent entries stay playable.
+        const url = playBlob(result.blob, undefined, {
+          trackForRevocation: false,
+        });
         setCurrentAudioUrl(url);
         setCurrentDuration(result.duration);
         setCurrentElapsed(result.elapsed);
@@ -441,7 +469,21 @@ export function useTts(): [UseTtsState, UseTtsActions] {
           audioUrl: url,
           createdAt: Date.now(),
         };
-        setHistory((prev) => [entry, ...prev].slice(0, MAX_HISTORY));
+        setHistory((prev) => {
+          const next = [entry, ...prev];
+          if (next.length <= MAX_HISTORY) return next;
+          // Revoke URLs of evicted entries to release the underlying blobs.
+          for (const dropped of next.slice(MAX_HISTORY)) {
+            if (dropped.audioUrl) {
+              try {
+                URL.revokeObjectURL(dropped.audioUrl);
+              } catch {
+                // ignore
+              }
+            }
+          }
+          return next.slice(0, MAX_HISTORY);
+        });
       } catch (e) {
         if ((e as Error).name !== "AbortError") {
           const le = errorToLastError(e);
@@ -631,6 +673,15 @@ export function useTts(): [UseTtsState, UseTtsActions] {
         } catch {
           // ignore
         }
+      }
+      // Resolve at PLAYBACK drain, not synthesis end. Sequential callers
+      // (chat read-aloud's chunk queue) start the next chunk when this
+      // promise settles, and the next chunk's _runStream begins with a hard
+      // stopAudio() — resolving while audio is still scheduled would cut off
+      // this chunk's tail. Poll the scheduler until all sources have ended
+      // (stopAudio clears the list, so a user Stop also exits the wait).
+      while (!signal?.aborted && scheduledSourcesRef.current.length > 0) {
+        await new Promise((r) => setTimeout(r, 100));
       }
     },
     [selectedVoice, speed, _runStream],

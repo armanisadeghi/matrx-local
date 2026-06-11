@@ -138,6 +138,7 @@ export async function* streamCompletion(
   options?: {
     temperature?: number;
     maxTokens?: number;
+    top_p?: number;
     signal?: AbortSignal;
   },
 ): AsyncGenerator<string> {
@@ -153,7 +154,7 @@ export async function* streamCompletion(
       temperature: options?.temperature ?? params.temperature,
       max_tokens: options?.maxTokens ?? s.llmStreamMaxTokens,
       stream: true,
-      top_p: params.top_p,
+      top_p: options?.top_p ?? params.top_p,
       top_k: params.top_k,
       chat_template_kwargs: params.chat_template_kwargs,
     }),
@@ -168,13 +169,19 @@ export async function* streamCompletion(
 
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
+  // Carry-over buffer: SSE `data:` lines can be split across network reads,
+  // and multi-byte UTF-8 sequences can straddle chunk boundaries. Decode in
+  // streaming mode and only process complete lines, keeping the remainder.
+  let buffer = "";
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    const chunk = decoder.decode(value);
-    const lines = chunk.split("\n").filter((line) => line.startsWith("data: "));
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n");
+    buffer = parts.pop() ?? "";
+    const lines = parts.filter((line) => line.startsWith("data: "));
 
     for (const line of lines) {
       const data = line.slice(6).trim();

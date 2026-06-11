@@ -28,7 +28,7 @@
  *   never shuts down because it thinks nothing is happening.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   TranscriptionState,
   TranscriptionActions,
@@ -447,15 +447,27 @@ export function useVoiceChat({
     sessionBaseTranscript: sessionBaseTranscriptRef.current,
   };
 
-  const actions: VoiceChatActions = {
-    activate,
-    deactivate,
-    toggleRecording,
-    sendPendingTranscript,
-    stopSpeaking,
-    setAutoMode,
-    clearTranscript,
-  };
+  // Stable actions object — see React Patterns in CLAUDE.md.
+  const actions: VoiceChatActions = useMemo(
+    () => ({
+      activate,
+      deactivate,
+      toggleRecording,
+      sendPendingTranscript,
+      stopSpeaking,
+      setAutoMode,
+      clearTranscript,
+    }),
+    [
+      activate,
+      deactivate,
+      toggleRecording,
+      sendPendingTranscript,
+      stopSpeaking,
+      setAutoMode,
+      clearTranscript,
+    ],
+  );
 
   return [state, actions];
 }

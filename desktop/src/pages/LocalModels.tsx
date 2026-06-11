@@ -383,9 +383,14 @@ function SetupTab() {
   }, []);
 
   const isModelDownloaded = hardwareResult
-    ? downloadedModels.some(
-        (m) => m.filename === hardwareResult.recommended_filename,
-      )
+    ? downloadedModels.some((m) => {
+        if (m.filename !== hardwareResult.recommended_filename) return false;
+        // Split models are only usable when every part is on disk.
+        const catalog = hardwareResult.all_models.find(
+          (c) => c.filename === m.filename,
+        );
+        return catalog?.is_split ? m.all_parts_present : true;
+      })
     : false;
 
   const handleQuickSetup = async () => {
@@ -608,6 +613,12 @@ function CustomModelRow({ onAdded }: { onAdded: () => void }) {
   const [isImporting, setIsImporting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  /** Filename of the download THIS row initiated — used to gate the
+   *  progress/cancel UI so other downloads (e.g. catalog models) aren't
+   *  hijacked by this row. */
+  const [initiatedFilename, setInitiatedFilename] = useState<string | null>(
+    null,
+  );
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -637,6 +648,7 @@ function CustomModelRow({ onAdded }: { onAdded: () => void }) {
       deriveFilenameFromUrl(trimmedUrl) ||
       "custom-model.gguf";
     if (!filename.endsWith(".gguf")) filename += ".gguf";
+    setInitiatedFilename(filename);
     try {
       await actions.downloadModel(filename, [trimmedUrl]);
       setSuccessMsg(`Downloaded: ${filename}`);
@@ -646,6 +658,8 @@ function CustomModelRow({ onAdded }: { onAdded: () => void }) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (!msg.toLowerCase().includes("cancel")) setLocalError(msg);
+    } finally {
+      setInitiatedFilename(null);
     }
   };
 
@@ -682,10 +696,12 @@ function CustomModelRow({ onAdded }: { onAdded: () => void }) {
   };
 
   const progressPercent = downloadProgress?.percent ?? 0;
+  // Only treat the active download as ours when it's the one this row started.
   const isCustomDownloading =
     isDownloading &&
     downloadProgress &&
-    !downloadProgress.filename.startsWith("ggml");
+    initiatedFilename !== null &&
+    downloadProgress.filename === initiatedFilename;
 
   return (
     <div className="rounded-lg border border-dashed bg-muted/10 p-4 space-y-3">
@@ -1378,8 +1394,8 @@ interface ModelRowProps {
   onLoad: (model: LlmModelInfo) => void;
   onDelete: (filename: string) => void;
   cancelDownload: () => void;
-  /** Per-model download error message, if the last download attempt for this model failed. */
-  downloadError?: string | null;
+  /** Per-filename download errors — the row looks up its own (variant-aware) filename. */
+  downloadErrors?: Record<string, string> | null;
   onClearDownloadError?: (filename: string) => void;
 }
 
@@ -1405,7 +1421,7 @@ function ModelRow({
   onLoad,
   onDelete,
   cancelDownload,
-  downloadError,
+  downloadErrors,
   onClearDownloadError,
   rowIndex,
 }: ModelRowProps & { rowIndex: number }) {
@@ -1419,9 +1435,21 @@ function ModelRow({
   const effectiveFilename = hasVariants
     ? model.variants[selectedVariantIdx].filename
     : model.filename;
+  const effectiveIsSplit = hasVariants
+    ? model.variants[selectedVariantIdx].is_split
+    : model.is_split;
+  // Split models only count as downloaded when every part is present —
+  // otherwise an incomplete download would show as "Downloaded" and could
+  // never be re-downloaded.
   const effectiveDownloaded = downloadedModels.some(
-    (m) => m.filename === effectiveFilename,
+    (m) =>
+      m.filename === effectiveFilename &&
+      (!effectiveIsSplit || m.all_parts_present),
   );
+
+  // Errors are stored under the filename that actually failed (which may be a
+  // variant filename) — look up by the row's effective filename.
+  const downloadError = downloadErrors?.[effectiveFilename] ?? null;
 
   // All filenames that belong to this model (default + all variants).
   // Used to detect when any variant of this model is currently downloading or
@@ -1803,7 +1831,7 @@ function ModelRow({
 function ServerGradeSection(
   props: Omit<
     ModelRowProps & { rowIndex: number },
-    "model" | "rowIndex" | "downloadError"
+    "model" | "rowIndex" | "downloadErrors"
   > & {
     models: LlmModelInfo[];
     startIndex: number;
@@ -1838,7 +1866,7 @@ function ServerGradeSection(
               key={model.filename}
               model={model}
               rowIndex={startIndex + idx}
-              downloadError={modelDownloadErrors?.[model.filename] ?? null}
+              downloadErrors={modelDownloadErrors ?? null}
               {...rowProps}
             />
           ))}
@@ -1923,13 +1951,32 @@ function ModelsTab() {
     }
   }, [downloadingFilename]);
 
-  // When a download error appears, record it against the model that was downloading.
+  // Ref mirrors of the download-in-flight state. NOTE: the error-recording
+  // effect below is declared BEFORE the mirror-update effect on purpose —
+  // effects run in declaration order, so when a failing download sets `error`
+  // and clears `isDownloading` in the same batch, the recording effect still
+  // reads the previous committed values (download WAS in flight, and which
+  // file it was).
+  const isDownloadingRef = useRef(isDownloading);
+  const downloadingFilenameRef = useRef(downloadingFilename);
+
+  // When a download error appears, record it against the model that was
+  // downloading. Only record when a download was actually in flight —
+  // otherwise unrelated hook errors (startServer/stopServer/deleteModel/
+  // detectHardware) get stamped onto the last-downloaded model row.
   useEffect(() => {
-    if (error && lastDownloadingFilenameRef.current) {
-      const failedFilename = lastDownloadingFilenameRef.current;
+    if (!error) return;
+    const failedFilename =
+      downloadingFilenameRef.current ?? lastDownloadingFilenameRef.current;
+    if (isDownloadingRef.current && failedFilename) {
       setModelDownloadErrors((prev) => ({ ...prev, [failedFilename]: error }));
     }
   }, [error]);
+
+  useEffect(() => {
+    isDownloadingRef.current = isDownloading;
+    downloadingFilenameRef.current = downloadingFilename;
+  }, [isDownloading, downloadingFilename]);
 
   useEffect(() => {
     if (!hardwareResult && !isDetecting) {
@@ -2210,7 +2257,7 @@ function ModelsTab() {
                 onLoad={handleLoad}
                 onDelete={handleDelete}
                 cancelDownload={cancelDownload}
-                downloadError={modelDownloadErrors[model.filename] ?? null}
+                downloadErrors={modelDownloadErrors}
                 onClearDownloadError={handleClearModelDownloadError}
               />
             ));
@@ -2556,14 +2603,12 @@ interface AudioChatModeProps {
   isGenerating: boolean;
   stopGeneration: () => void;
   ttsPlaybackState: import("@/hooks/use-tts").TtsPlaybackState;
-  chatTts: import("@/hooks/use-chat-tts").UseChatTtsReturn;
   messages: {
     id: string;
     role: string;
     content: string;
     isStreaming?: boolean;
   }[];
-  port: number | null;
   ttsAvailable: boolean;
 }
 
@@ -5524,9 +5569,7 @@ function InferenceTab() {
               stopRef.current = true;
             }}
             ttsPlaybackState={ttsPlaybackState}
-            chatTts={chatTts}
             messages={messages}
-            port={port}
             ttsAvailable={!!ttsActions}
           />
         )}

@@ -209,6 +209,15 @@ export function useDocuments(
         });
       }
 
+      // Merge any pending debounced partial for the same note into this
+      // update. Without this, typing content then renaming within the 1s
+      // debounce window cancels the pending {content} save and only PUTs
+      // {label} — silent data loss.
+      const pending = pendingSaveRef.current;
+      if (pending && pending.noteId === noteId) {
+        data = { ...pending.data, ...data };
+      }
+
       if (immediate) {
         // Clear any pending debounced save for this note — the immediate save
         // supersedes it (e.g. label change after content change).

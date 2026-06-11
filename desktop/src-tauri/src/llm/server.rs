@@ -94,6 +94,15 @@ impl LlmServer {
             .spawn()
             .map_err(|e| format!("Failed to spawn llama-server: {e}"))?;
 
+        // Publish the PID immediately (BEFORE the up-to-120s health wait) so
+        // graceful_shutdown_sync's prong (b) can kill a mid-start server even
+        // while our caller holds the LlmServerState tokio mutex.
+        if let Some(handle) = app.try_state::<crate::llm::commands::LlmProcessHandle>() {
+            if let Ok(mut g) = handle.lock() {
+                *g = Some(child.pid());
+            }
+        }
+
         // Shared log buffer + crash-detection flag
         let log_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let crashed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -167,6 +176,17 @@ impl LlmServer {
                         "llm-server-log",
                         serde_json::json!({ "line": line, "kind": k }),
                     );
+                }
+
+                // Kill the child before bailing: CommandChild has no Drop
+                // impl that kills, so dropping it here leaked a llama-server
+                // holding the port and GBs of RAM, invisible to status (and a
+                // retry would spawn a SECOND instance on a new port).
+                let _ = child.kill();
+                if let Some(handle) = app.try_state::<crate::llm::commands::LlmProcessHandle>() {
+                    if let Ok(mut g) = handle.lock() {
+                        *g = None;
+                    }
                 }
 
                 return Err(format!("{}\n\nServer output:\n{}", timeout_msg, output));

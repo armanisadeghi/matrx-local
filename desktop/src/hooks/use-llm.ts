@@ -171,6 +171,14 @@ export function useLlm(): [LlmState, LlmActions] {
   // Ref-based queue so the processor callback always sees latest value
   const downloadQueueRef = useRef<LlmDownloadQueueEntry[]>([]);
   const isDownloadingRef = useRef(false);
+  // Per-download generation token. cancelDownload force-clears the download
+  // state while the cancelled Tauri invoke is still pending; without a token
+  // its finally/error paths would clobber the NEXT download's state. Each
+  // downloadModel call owns a generation; stale generations no-op.
+  const downloadGenerationRef = useRef(0);
+  // Late-bound handle so downloadModel's finally can kick the queue without
+  // a circular useCallback dependency (processQueue depends on downloadModel).
+  const processQueueRef = useRef<() => Promise<void>>(async () => {});
 
   const migrateLegacyHfTokenIfNeeded = useCallback(async () => {
     if (!isTauri()) return;
@@ -400,6 +408,7 @@ export function useLlm(): [LlmState, LlmActions] {
    */
   const downloadModel = useCallback(
     async (filename: string, urls: string[], overrideHfToken?: string) => {
+      const generation = ++downloadGenerationRef.current;
       setIsDownloading(true);
       isDownloadingRef.current = true;
       setDownloadingFilename(filename);
@@ -413,7 +422,11 @@ export function useLlm(): [LlmState, LlmActions] {
       const unlisten = await tauriListen<LlmDownloadProgress>(
         "llm-download-progress",
         (event) => {
-          setDownloadProgress(event.payload);
+          // A cancelled download's invoke can still emit a trailing event —
+          // don't let it overwrite the next download's progress.
+          if (downloadGenerationRef.current === generation) {
+            setDownloadProgress(event.payload);
+          }
         },
       );
 
@@ -430,12 +443,17 @@ export function useLlm(): [LlmState, LlmActions] {
           hfToken: hfTok ?? null,
         });
         void refreshHfTokenConfigured();
-        setDownloadProgress(null);
+        if (downloadGenerationRef.current === generation) {
+          setDownloadProgress(null);
+        }
         const models =
           await tauriInvoke<DownloadedLlmModel[]>("list_llm_models");
         setDownloadedModels(models);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        // Stale generation (cancelled, or a newer download owns the state):
+        // don't touch shared UI state — just propagate.
+        if (downloadGenerationRef.current !== generation) throw e;
         if (
           msg.startsWith("XET_TOKEN_REQUIRED") ||
           msg.startsWith("XET_TOKEN_INVALID")
@@ -464,9 +482,14 @@ export function useLlm(): [LlmState, LlmActions] {
         throw e;
       } finally {
         unlisten();
-        setIsDownloading(false);
-        isDownloadingRef.current = false;
-        setDownloadingFilename(null);
+        if (downloadGenerationRef.current === generation) {
+          setIsDownloading(false);
+          isDownloadingRef.current = false;
+          setDownloadingFilename(null);
+          // Direct callers (quickSetup) bypass the queue entirely — kick the
+          // processor so queued items don't strand behind a direct download.
+          setTimeout(() => void processQueueRef.current(), 0);
+        }
       }
     },
     [migrateLegacyHfTokenIfNeeded, refreshHfTokenConfigured],
@@ -491,6 +514,7 @@ export function useLlm(): [LlmState, LlmActions] {
     // Recurse: process the next item in the queue
     void processQueue();
   }, [downloadModel]);
+  processQueueRef.current = processQueue;
 
   const queueDownload = useCallback(
     (filename: string, urls: string[]) => {
@@ -552,6 +576,10 @@ export function useLlm(): [LlmState, LlmActions] {
     // The remaining queued items will continue after the cancelled download settles.
     // Force state to idle immediately so UI unblocks even if the Tauri
     // llm-download-cancelled event never arrives.
+    // Bump the generation so the cancelled invoke's still-pending
+    // finally/error paths become no-ops instead of clobbering the state of
+    // whatever download starts next.
+    downloadGenerationRef.current++;
     setIsDownloading(false);
     isDownloadingRef.current = false;
     setDownloadingFilename(null);

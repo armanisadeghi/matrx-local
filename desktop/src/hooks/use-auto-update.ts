@@ -13,7 +13,7 @@
  *      (until a newer version appears or the app version catches up).
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { isTauri, checkForUpdates, restartApp, type UpdateStatus } from "@/lib/sidecar";
 import { loadSettings } from "@/lib/settings";
 
@@ -317,13 +317,17 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
     restarting,
   };
 
-  const actions: AutoUpdateActions = {
-    check,
-    install,
-    restart,
-    dismiss,
-    openDialog,
-  };
+  // Stable actions object — see React Patterns in CLAUDE.md.
+  const actions: AutoUpdateActions = useMemo(
+    () => ({
+      check,
+      install,
+      restart,
+      dismiss,
+      openDialog,
+    }),
+    [check, install, restart, dismiss, openDialog],
+  );
 
   return [state, actions];
 }

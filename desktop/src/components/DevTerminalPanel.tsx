@@ -134,8 +134,8 @@ const ALL_LEVELS: LogLevel[] = [
   "cmd",
 ];
 
-// Sources that live in the "Server" tab (includes syslog now)
-const SERVER_SOURCES = new Set(["server", "tauri", "syslog"]);
+// Sources that live in the "Server" tab (includes syslog and llama-server)
+const SERVER_SOURCES = new Set(["server", "tauri", "syslog", "llm"]);
 
 // Sources that live in the "Client" tab
 const CLIENT_SOURCES = new Set([
@@ -186,8 +186,6 @@ const LEVEL_PILL_INACTIVE =
 // Only these levels are eligible for grouping; warn/error always show individually
 const GROUPABLE_LEVELS = new Set<LogLevel>([
   "info",
-  "warn",
-  "error",
   "success",
   "data",
   "cmd",
@@ -728,11 +726,14 @@ function LogPane({
   const [frozenLogs, setFrozenLogs] = useState<ClientLogLine[] | null>(null);
   const activeLogs = frozenLogs ?? logs;
 
-  // Reset filters when the tab source set changes
+  // Reset filters when the tab source set changes — including any frozen
+  // snapshot, which would otherwise bleed the previous tab's log set into
+  // this one (and skew the new-log counter).
   useEffect(() => {
     setActiveFilters(new Set(ALL_LEVELS));
     setTextFilter("");
     setHiddenSources(new Set());
+    setFrozenLogs(null);
   }, [filterKey]);
 
   // Distinct sources present in the current pane's log set
@@ -1251,7 +1252,7 @@ const TABS: TabDef[] = [
     label: "Server",
     icon: <Server className="h-3 w-3" />,
     filter: (l) => SERVER_SOURCES.has(l.source ?? ""),
-    clearSources: ["server", "tauri", "syslog"],
+    clearSources: ["server", "tauri", "syslog", "llm"],
     emptyMessage: "No server logs yet — engine stdout/stderr will appear here",
   },
   {
@@ -1265,7 +1266,16 @@ const TABS: TabDef[] = [
         (!SERVER_SOURCES.has(s) && s !== HTTP_SOURCE && !CLIENT_SOURCES.has(s))
       );
     },
-    clearSources: ["engine", "auth", "voice", "setup", "bg-tasks"],
+    clearSources: [
+      "engine",
+      "auth",
+      "voice",
+      "setup",
+      "bg-tasks",
+      "react",
+      "downloads",
+      "client",
+    ],
     emptyMessage:
       "No client logs yet — engine, auth, voice, and setup events appear here",
   },
@@ -1316,12 +1326,18 @@ export function DevTerminalPanel() {
     );
   }, []);
 
-  // Toggle via DOM event
+  // Latest height for the mount-only toggle handler below
+  const heightRef = useRef(height);
+  heightRef.current = height;
+
+  // Toggle via DOM event — mount-only so the cleanup's height:0 broadcast
+  // (which collapses AppLayout's content compensation) fires only on true
+  // unmount, never after a drag-resize re-run.
   useEffect(() => {
     const handler = () =>
       setOpen((v) => {
         const next = !v;
-        broadcastHeight(next, height);
+        broadcastHeight(next, heightRef.current);
         return next;
       });
     window.addEventListener(DEV_TERMINAL_TOGGLE_EVENT, handler);
@@ -1331,8 +1347,7 @@ export function DevTerminalPanel() {
         new CustomEvent<number>(DEV_TERMINAL_HEIGHT_EVENT, { detail: 0 }),
       );
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [height]);
+  }, [broadcastHeight]);
 
   // Drag-to-resize
   const onDragStart = useCallback(

@@ -628,6 +628,7 @@ export function SystemPrompts() {
     return (
       <div className="flex h-full flex-col">
         <PromptEditor
+          key={selected?.id ?? "new"}
           initial={selected}
           isBuiltin={selected?.isBuiltin ?? false}
           onSave={handleSave}

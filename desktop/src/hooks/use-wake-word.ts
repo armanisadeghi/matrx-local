@@ -131,6 +131,16 @@ export function useWakeWord(
   // Prevent duplicate active→sleep transitions
   const isActiveRef = useRef(false);
 
+  // Keep the latest onWake/onSleep in refs (same pattern as use-voice-chat).
+  // The backend listeners are attached once and close over handleDetected at
+  // attach time — without refs, the 30s auto-sleep would run a STALE onSleep
+  // captured before the caller's session state existed (sessions were never
+  // finalized because Voice's activeSessionId was null at attach time).
+  const onWakeRef = useRef(onWake);
+  const onSleepRef = useRef(onSleep);
+  onWakeRef.current = onWake;
+  onSleepRef.current = onSleep;
+
   // ── Cleanup helpers ────────────────────────────────────────────────────
 
   const clearActiveTimeout = useCallback(() => {
@@ -225,22 +235,20 @@ export function useWakeWord(
     void showFloatingOverlay();
 
     try {
-      await onWake();
+      await onWakeRef.current();
     } catch {
       // transcription may already be running
     }
     activeTimeoutRef.current = setTimeout(async () => {
       isActiveRef.current = false;
       try {
-        await onSleep();
+        await onSleepRef.current();
       } finally {
         void hideFloatingOverlay();
         setUiMode("listening");
       }
     }, ACTIVE_TIMEOUT_MS);
   }, [
-    onWake,
-    onSleep,
     clearActiveTimeout,
     fireOsNotification,
     showFloatingOverlay,
@@ -504,6 +512,19 @@ export function useWakeWord(
       // Stop the currently running engine
       const wasListening = uiMode !== "idle";
       if (wasListening) {
+        // If a wake session is live, finish it first — teardownAll() below
+        // clears the 30s auto-sleep timer, so skipping this would leave
+        // transcription recording with nothing left to ever stop it.
+        if (uiMode === "active") {
+          clearActiveTimeout();
+          isActiveRef.current = false;
+          try {
+            await onSleepRef.current();
+          } catch {
+            /* already stopped */
+          }
+          void hideFloatingOverlay();
+        }
         try {
           if (activeEngine === "whisper") {
             await invoke("stop_wake_word");
@@ -537,7 +558,14 @@ export function useWakeWord(
         }, 200);
       }
     },
-    [activeEngine, uiMode, teardownAll, startListening],
+    [
+      activeEngine,
+      uiMode,
+      teardownAll,
+      startListening,
+      clearActiveTimeout,
+      hideFloatingOverlay,
+    ],
   );
 
   const clearError = useCallback(() => setError(null), []);

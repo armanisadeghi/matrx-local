@@ -189,6 +189,11 @@ pub async fn download_vad_model(
     let vad_filename = downloader::VAD_MODEL_FILENAME;
     let dl_id = format!("whisper-{}", vad_filename);
 
+    // Reset the shared cancel flag (download_whisper_model does this too) —
+    // a leftover true from a previous cancel made every VAD download abort
+    // instantly with "Download cancelled".
+    cancel.0.store(false, Ordering::SeqCst);
+
     if let Some(dm) = app.try_state::<DownloadManagerState>() {
         let vad_url = format!(
             "https://huggingface.co/ggml-org/whisper-vad/resolve/main/{}",
@@ -380,6 +385,17 @@ pub async fn start_transcription(
         if *is_recording {
             return Err("Already recording".to_string());
         }
+    }
+
+    // Reap any previous capture thread that hasn't fully exited yet (stop
+    // flips the flag but the loop may be mid-inference) — starting now would
+    // otherwise revive it via the shared flag.
+    let leftover = recording.thread_handle.lock().unwrap().take();
+    if let Some(handle) = leftover {
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            let _ = handle.join();
+        })
+        .await;
     }
 
     // On macOS, verify microphone TCC permission before opening the audio
@@ -617,6 +633,18 @@ fn is_hallucination(text: &str) -> bool {
 #[tauri::command]
 pub async fn stop_transcription(recording: State<'_, RecordingState>) -> Result<(), String> {
     *recording.flag.lock().unwrap() = false;
+    // Join the capture thread: the loop observes the flag only every ~50ms
+    // (or after the current Whisper inference). Without joining, an immediate
+    // restart flipped the SHARED flag back to true and revived this thread —
+    // two concurrent capture loops on one WhisperContext, and the overwritten
+    // JoinHandle could never be reaped at quit (the GGML SIGABRT hole).
+    let handle = recording.thread_handle.lock().unwrap().take();
+    if let Some(handle) = handle {
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            let _ = handle.join();
+        })
+        .await;
+    }
     Ok(())
 }
 
@@ -707,6 +735,17 @@ pub async fn start_wake_word(
         return Ok(());
     }
 
+    // Reap a previous thread that hasn't observed running=false yet —
+    // setting the SHARED flag true below would otherwise revive it and the
+    // overwritten JoinHandle could never be joined at quit.
+    let leftover = ww_state.0.thread_handle.lock().unwrap().take();
+    if let Some(handle) = leftover {
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            let _ = handle.join();
+        })
+        .await;
+    }
+
     // Configure and start the thread
     *ww_state.0.models_dir.lock().unwrap() = Some(models_dir);
     *ww_state.0.mode.lock().unwrap() = WakeWordMode::Listening;
@@ -724,6 +763,15 @@ pub async fn start_wake_word(
 pub fn stop_wake_word(app: AppHandle, ww_state: State<'_, WakeWordAppState>) -> Result<(), String> {
     *ww_state.0.running.lock().unwrap() = false;
     *ww_state.0.mode.lock().unwrap() = WakeWordMode::Muted;
+    // Reap the thread off the command path (sync command — can't await).
+    // start_wake_word also reaps as a fallback, so the handle is joined
+    // exactly once whichever runs first.
+    let handle = ww_state.0.thread_handle.lock().unwrap().take();
+    if let Some(handle) = handle {
+        tauri::async_runtime::spawn_blocking(move || {
+            let _ = handle.join();
+        });
+    }
     let _ = app.emit("wake-word-mode", WakeWordMode::Muted);
     Ok(())
 }

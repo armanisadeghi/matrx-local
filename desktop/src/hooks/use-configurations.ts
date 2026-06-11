@@ -327,15 +327,19 @@ export function useConfigurations(): [
     lastSyncResult,
   };
 
-  const actions: ConfigurationsActions = {
-    set,
-    setMany,
-    saveSection,
-    cancelSection,
-    saveAll,
-    cancelAll,
-    reload,
-  };
+  // Stable actions object — see React Patterns in CLAUDE.md.
+  const actions: ConfigurationsActions = useMemo(
+    () => ({
+      set,
+      setMany,
+      saveSection,
+      cancelSection,
+      saveAll,
+      cancelAll,
+      reload,
+    }),
+    [set, setMany, saveSection, cancelSection, saveAll, cancelAll, reload],
+  );
 
   return [state, actions];
 }

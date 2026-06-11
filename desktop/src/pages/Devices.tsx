@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useLocation } from "react-router-dom";
 import {
   Mic,
   Camera,
@@ -1742,6 +1743,9 @@ function SystemResourcesCard({ engineStatus }: { engineStatus: EngineStatus }) {
     null,
   );
   const [loading, setLoading] = useState(false);
+  // Pages are kept mounted (AppLayout keep-alive), so gate polling on the
+  // route actually being visible — otherwise this polls forever in background.
+  const isVisible = useLocation().pathname === "/devices";
 
   const load = useCallback(async () => {
     if (engineStatus !== "connected") return;
@@ -1757,10 +1761,11 @@ function SystemResourcesCard({ engineStatus }: { engineStatus: EngineStatus }) {
   }, [engineStatus]);
 
   useEffect(() => {
+    if (!isVisible) return;
     load();
     const interval = setInterval(load, 10000);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [load, isVisible]);
 
   if (!resources) return null;
 

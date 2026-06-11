@@ -174,6 +174,11 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      // Set when the stream delivers a terminal event (`complete` or
+      // `cancelled`). If the stream ends without one, the engine connection
+      // was lost mid-install and we must surface an error instead of leaving
+      // the screen stuck on "Installing..." forever.
+      let sawTerminalEvent = false;
 
       const parseEvent = (block: string) => {
         let eventType = "message";
@@ -209,6 +214,7 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
           }
 
           if (eventType === "complete") {
+            sawTerminalEvent = true;
             const allStepsReady = () =>
               setSteps((prev) => {
                 return prev.map((s) =>
@@ -229,6 +235,7 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
           }
 
           if (eventType === "cancelled") {
+            sawTerminalEvent = true;
             setPhase("error");
             setErrorMessage("Installation was cancelled");
           }
@@ -246,6 +253,11 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
         for (const block of blocks) {
           if (block.trim()) parseEvent(block);
         }
+      }
+
+      if (!sawTerminalEvent && !ctrl.signal.aborted) {
+        setPhase("error");
+        setErrorMessage("Connection to engine lost during install");
       }
     } catch (err: unknown) {
       if (ctrl.signal.aborted) return;

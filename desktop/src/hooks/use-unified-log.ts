@@ -586,8 +586,15 @@ async function startAccessStream(
   }
 
   const connect = async () => {
+    if (!active) return;
     const tok = await getToken();
-    if (!tok || !active) return;
+    if (!active) return;
+    if (!tok) {
+      // No session yet — retry after a longer delay (the user may sign in
+      // shortly after the engine connects). Mirrors the syslog stream.
+      setTimeout(connect, 10_000);
+      return;
+    }
     const url = `${engineUrl}/logs/access/stream?token=${encodeURIComponent(tok)}`;
     const es = new EventSource(url);
     esRef = es;

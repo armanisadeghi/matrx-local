@@ -389,6 +389,11 @@ impl DownloadManager {
             // Mutate entry fields first, then clone before touching other state fields.
             {
                 let Some(e) = state.entries.get_mut(id) else { return };
+                if matches!(e.status, DownloadStatus::Cancelled) {
+                    // The user cancelled while the external transfer was
+                    // finishing — keep the Cancelled record.
+                    return;
+                }
                 e.status = DownloadStatus::Completed;
                 e.bytes_done = total_bytes;
                 if total_bytes > 0 {
@@ -543,6 +548,27 @@ impl DownloadManager {
         let ev = build_event(&entry, pct, None, 0.0, &now);
         let _ = app.emit("dm-cancelled", &ev);
         let _ = app.emit("dm-progress", &ev);
+
+        // External (llm/whisper) transfer loops never read the DM's internal
+        // cancel flag — they poll their own category atomics. Without this,
+        // dm_cancel marked the entry Cancelled while the HTTP transfer kept
+        // streaming gigabytes in the background (and completion later flipped
+        // the entry back to Completed).
+        match entry.category.as_str() {
+            "llm" => {
+                if let Some(c) = app.try_state::<crate::llm::commands::LlmDownloadCancelState>() {
+                    c.0.store(true, Ordering::SeqCst);
+                }
+            }
+            "whisper" => {
+                if let Some(c) =
+                    app.try_state::<crate::transcription::commands::WhisperDownloadCancelState>()
+                {
+                    c.0.store(true, Ordering::SeqCst);
+                }
+            }
+            _ => {}
+        }
 
         if entry.category == "llm" {
             let _ = app.emit(

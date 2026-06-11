@@ -104,6 +104,23 @@ export function useChatTts(
     [],
   );
 
+  // Serialization queue for sentence chunks. Each chunk's _runStream in
+  // use-tts begins with a hard stopAudio(), so dispatching chunks
+  // concurrently cuts off the still-playing previous sentence. Chaining each
+  // chunk onto the previous one's completion (speakText resolves at playback
+  // drain) yields sequential, uncut playback.
+  const speakQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const _enqueueChunk = useCallback(
+    (text: string, signal: AbortSignal): Promise<void> => {
+      const run = speakQueueRef.current.then(() => _speakChunk(text, signal));
+      // _speakChunk swallows its own errors, but keep the chain unbreakable.
+      speakQueueRef.current = run.catch(() => {});
+      return run;
+    },
+    [_speakChunk],
+  );
+
   // Watch the streaming message content; when a sentence terminator appears
   // and the buffer is long enough, dispatch the chunk for synthesis.
   useEffect(() => {
@@ -120,12 +137,12 @@ export function useChatTts(
       pendingBufferRef.current = "";
       const abort = abortRef.current;
       if (abort && !abort.signal.aborted) {
-        void _speakChunk(buf, abort.signal);
+        void _enqueueChunk(buf, abort.signal);
       }
     } else {
       pendingBufferRef.current = buf;
     }
-  }, [activeMessage?.content, activeMessage?.isStreaming, _speakChunk]);
+  }, [activeMessage?.content, activeMessage?.isStreaming, _enqueueChunk]);
 
   // When the LLM stream ends, flush whatever short tail remains so we never
   // drop the last few words.
@@ -136,21 +153,29 @@ export function useChatTts(
     const remaining = pendingBufferRef.current;
     pendingBufferRef.current = "";
 
+    const abort = abortRef.current;
     const finalize = () => {
+      // Only reset if a newer read-aloud hasn't taken over in the meantime.
+      if (abortRef.current !== abort) return;
       readAloudActiveRef.current = false;
-      // ttsActions.playbackState will flip to "idle" when audio drains, but
-      // our local "currently dispatching chunks" flag is done now.
+      setIsReadingAloud(false);
+      setIsPaused(false);
     };
 
     if (remaining.trim()) {
-      const abort = abortRef.current;
       if (abort && !abort.signal.aborted) {
-        _speakChunk(remaining, abort.signal).finally(finalize);
+        // Queue behind any in-flight chunks, then wait for the queue to
+        // drain before flipping the UI back to "not reading".
+        _enqueueChunk(remaining, abort.signal).finally(finalize);
         return;
       }
+      finalize();
+      return;
     }
-    finalize();
-  }, [llmIsStreaming, _speakChunk]);
+    // No tail to speak — still wait for already-queued chunks to finish
+    // playing before resetting the button state.
+    speakQueueRef.current.finally(finalize);
+  }, [llmIsStreaming, _enqueueChunk]);
 
   /** Hard stop — abort outstanding fetches and tear down the audio. */
   const stopReadAloud = useCallback(() => {
@@ -158,6 +183,10 @@ export function useChatTts(
 
     abortRef.current?.abort();
     abortRef.current = null;
+
+    // Reset the chunk queue — aborted chunks settle immediately, and new
+    // read-alouds must not wait behind a stale chain.
+    speakQueueRef.current = Promise.resolve();
 
     ttsActionsRef.current?.stopAudio();
 
@@ -189,15 +218,18 @@ export function useChatTts(
 
       if (messageContent) {
         sentIndexRef.current = messageContent.length;
-        _speakChunk(messageContent, abort.signal).finally(() => {
+        _enqueueChunk(messageContent, abort.signal).finally(() => {
+          if (abortRef.current !== abort) return;
           readAloudActiveRef.current = false;
+          setIsReadingAloud(false);
+          setIsPaused(false);
         });
       } else {
         sentIndexRef.current = activeMessage?.content.length ?? 0;
         pendingBufferRef.current = "";
       }
     },
-    [activeMessage, stopReadAloud, _speakChunk],
+    [activeMessage, stopReadAloud, _enqueueChunk],
   );
 
   const readCompleteMessage = useCallback(
@@ -238,7 +270,12 @@ export function useChatTts(
           }
         })
         .finally(() => {
+          // Reset the button state too — but only if a newer read-aloud
+          // hasn't taken over while this one was playing.
+          if (abortRef.current !== abort) return;
           readAloudActiveRef.current = false;
+          setIsReadingAloud(false);
+          setIsPaused(false);
         });
     },
     [stopReadAloud],

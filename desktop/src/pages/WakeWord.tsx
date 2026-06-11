@@ -80,18 +80,24 @@ export function WakeWordPage({ wwState, wwActions }: WakeWordPageProps) {
       });
   }, []);
 
-  const saveSettings = useCallback(async (updated: WakeWordSettings) => {
-    setSettingsSaving(true);
-    setSettingsError(null);
-    try {
-      await engineAPI.saveWakeWordSettings(updated);
-      setSettings(updated);
-    } catch (e) {
-      setSettingsError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSettingsSaving(false);
-    }
-  }, []);
+  /** Returns true on success so callers can avoid acting on failed saves. */
+  const saveSettings = useCallback(
+    async (updated: WakeWordSettings): Promise<boolean> => {
+      setSettingsSaving(true);
+      setSettingsError(null);
+      try {
+        await engineAPI.saveWakeWordSettings(updated);
+        setSettings(updated);
+        return true;
+      } catch (e) {
+        setSettingsError(e instanceof Error ? e.message : String(e));
+        return false;
+      } finally {
+        setSettingsSaving(false);
+      }
+    },
+    [],
+  );
 
   const handleEngineSwitch = useCallback(
     async (e: WakeWordEngine) => {
@@ -468,7 +474,7 @@ function ConfigTab({
   engine,
 }: {
   settings: WakeWordSettings;
-  onSave: (s: WakeWordSettings) => Promise<void>;
+  onSave: (s: WakeWordSettings) => Promise<boolean>;
   saving: boolean;
   engine: WakeWordEngine;
 }) {
@@ -490,7 +496,10 @@ function ConfigTab({
   };
 
   const handleSave = async () => {
-    await onSave(local);
+    const ok = await onSave(local);
+    // On failure, keep the form dirty and skip pushing config to the engine —
+    // the parent surfaces the error banner.
+    if (!ok) return;
     setDirty(false);
     // If OWW engine is running, push new config to it
     if (engine === "oww") {
@@ -667,7 +676,11 @@ function ModelsTab({
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    if (!isTauri()) return;
+    if (!isTauri()) {
+      // Outside Tauri there is nothing to list — clear the initial spinner.
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     engineAPI
       .owwListModels()

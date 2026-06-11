@@ -22,8 +22,12 @@ pub type LlmServerState = Arc<Mutex<LlmServer>>;
 /// LlmServer also keeps its own process field for lifecycle management.
 /// When the server stops normally, both are cleared. At shutdown, we grab
 /// this handle directly and kill it even if the tokio mutex is locked.
-pub type LlmProcessHandle =
-    Arc<std::sync::Mutex<Option<tauri_plugin_shell::process::CommandChild>>>;
+/// Holds the PID (not the CommandChild — that lives in LlmServer and is not
+/// shareable) so graceful_shutdown_sync can kill llama-server even while the
+/// tokio LlmServerState mutex is held (e.g. mid health-wait during start).
+/// Previously this handle was NEVER populated, making shutdown prong (b)
+/// dead code.
+pub type LlmProcessHandle = Arc<std::sync::Mutex<Option<u32>>>;
 
 /// Shared atomic flag used to request cancellation of an in-flight download.
 /// Set to true by `cancel_llm_download`; reset to false at the start of each
@@ -114,6 +118,11 @@ pub async fn stop_llm_server(
 ) -> Result<(), String> {
     let mut server = state.lock().await;
     server.stop().await;
+    if let Some(handle) = app.try_state::<LlmProcessHandle>() {
+        if let Ok(mut g) = handle.lock() {
+            *g = None;
+        }
+    }
     let _ = app.emit("llm-server-stopped", ());
     Ok(())
 }
@@ -426,6 +435,13 @@ pub async fn download_llm_model(
                     "status": "already_complete",
                 }),
             );
+            // The DM entry was registered Active above — close it out, or it
+            // stays "active" forever and resume_incomplete flags it as
+            // "Interrupted: app was closed mid-download" on the next launch.
+            if let Some(dm) = app.try_state::<DownloadManagerState>() {
+                dm.mark_external_completed(&app, &dm_id, expected_size.unwrap_or(0))
+                    .await;
+            }
             return Ok(dest_path.to_string_lossy().to_string());
         }
 

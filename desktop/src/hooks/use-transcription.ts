@@ -132,6 +132,10 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
   const [error, setError] = useState<string | null>(null);
 
   const unlistenersRef = useRef<UnlistenFn[]>([]);
+  // True from the moment startRecording begins until the recording is
+  // stopped (or fails to start). Synchronous, unlike the isRecording state,
+  // so it reliably blocks double-starts.
+  const recordingGuardRef = useRef(false);
   // Ref-based queue so the processor callback always sees latest value
   const downloadQueueRef = useRef<TranscriptionDownloadQueueEntry[]>([]);
   const isDownloadingRef = useRef(false);
@@ -361,6 +365,11 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
   }, [refreshSetupStatus]);
 
   const startRecording = useCallback(async (deviceName?: string) => {
+    // Guard against double-start: a second call while recording (or while a
+    // start is in flight) would attach a duplicate set of listeners and
+    // double-append every whisper-segment.
+    if (recordingGuardRef.current) return;
+    recordingGuardRef.current = true;
     setError(null);
     setSegments([]);
     setLiveRms(0);
@@ -376,6 +385,7 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
 
     const errorUnlisten = await tauriListen<string>("whisper-error", (event) => {
       setError(event.payload);
+      recordingGuardRef.current = false;
       setIsRecording(false);
       setIsProcessingTail(false);
       setLiveRms(0);
@@ -422,12 +432,16 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
+      recordingGuardRef.current = false;
       segmentUnlisten();
       errorUnlisten();
       rmsUnlisten();
       calibratedUnlisten();
       stoppedUnlisten();
-      unlistenersRef.current = [];
+      // Remove ONLY the five listeners this call added — wiping the whole
+      // array would orphan any pre-existing listeners (they'd stay attached
+      // with no handle left to unlisten them → ghost double-appends).
+      unlistenersRef.current.splice(-5, 5);
     }
   }, [selectedDevice]);
 
@@ -437,6 +451,7 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
     // from mic state) until empty, then emits "whisper-stopped". We stay in
     // isProcessingTail until that event so the UI shows "Processing…" and the
     // segment listener stays alive — no audio is ever lost.
+    recordingGuardRef.current = false;
     setIsRecording(false);
     setIsCalibrating(false);
     // Keep liveRms until whisper-stopped so the meter fades naturally
@@ -505,6 +520,7 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
     unlistenersRef.current.forEach((fn) => fn());
     unlistenersRef.current = [];
     // Clear all stuck flags unconditionally
+    recordingGuardRef.current = false;
     setIsRecording(false);
     setIsProcessingTail(false);
     setIsCalibrating(false);

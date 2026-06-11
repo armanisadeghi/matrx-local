@@ -29,7 +29,6 @@ import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
 import { useNotifications } from "@/hooks/use-notifications";
 import { useAutoUpdate } from "@/hooks/use-auto-update";
-import { useTranscriptionSessions } from "@/hooks/use-transcription-sessions";
 import {
   TranscriptionProvider,
   useTranscriptionApp,
@@ -51,7 +50,10 @@ import { PermissionsProvider } from "@/contexts/PermissionsContext";
 import { AudioDevicesProvider } from "@/contexts/AudioDevicesContext";
 import { LlmProvider } from "@/contexts/LlmContext";
 import { WakeWordProvider } from "@/contexts/WakeWordContext";
-import { TranscriptionSessionsProvider } from "@/contexts/TranscriptionSessionsContext";
+import {
+  TranscriptionSessionsProvider,
+  useSessionsContext,
+} from "@/contexts/TranscriptionSessionsContext";
 import { DownloadManagerProvider } from "@/contexts/DownloadManagerContext";
 import { TtsProvider } from "@/contexts/TtsContext";
 import { DownloadManagerModal } from "@/components/downloads/DownloadManagerModal";
@@ -79,7 +81,38 @@ if (
   window.location.replace(`/#/auth/callback${search}`);
 }
 
+/**
+ * Outer App — renders the full provider stack so that AppInner (and every
+ * other consumer) reads the real context instances instead of the no-op
+ * context defaults. AppInner must stay inside these providers.
+ */
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <DevTerminalProvider>
+        <DownloadManagerProvider>
+          <TtsProvider>
+            <LlmProvider>
+              <WakeWordProvider>
+                <TranscriptionSessionsProvider>
+                  <PermissionsProvider>
+                    <AudioDevicesProvider>
+                      <TranscriptionProvider>
+                        <AppInner />
+                      </TranscriptionProvider>
+                    </AudioDevicesProvider>
+                  </PermissionsProvider>
+                </TranscriptionSessionsProvider>
+              </WakeWordProvider>
+            </LlmProvider>
+          </TtsProvider>
+        </DownloadManagerProvider>
+      </DevTerminalProvider>
+    </ErrorBoundary>
+  );
+}
+
+function AppInner() {
   const auth = useAuth();
   const themeCtx = useTheme();
   const {
@@ -103,7 +136,10 @@ export default function App() {
   const [isCompact, setIsCompact] = useState(false);
   const { state: transcriptionState, actions: transcriptionActions } =
     useTranscriptionApp();
-  const [, bgSessActions] = useTranscriptionSessions();
+  // Use the shared sessions context — a raw useTranscriptionSessions() call
+  // here would create a second store instance and clobber the provider
+  // instance's global flush callback.
+  const { actions: bgSessActions } = useSessionsContext();
 
   const [compactTranscript, setCompactTranscript] = useState("");
   useEffect(() => {
@@ -261,7 +297,7 @@ export default function App() {
     };
   }, [status, url]);
 
-  const toasts = notif.notifications.slice(0, 3);
+  const toasts = notif.toasts;
 
   // First-run detection
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
@@ -454,108 +490,67 @@ export default function App() {
   }
 
   return (
-    <ErrorBoundary>
-      <DevTerminalProvider>
-        <DownloadManagerProvider>
-          <TtsProvider>
-            <LlmProvider>
-              <WakeWordProvider>
-                <TranscriptionSessionsProvider>
-                  <PermissionsProvider>
-                    <AudioDevicesProvider>
-                      <TranscriptionProvider>
-                        <TooltipProvider delayDuration={150}>
-                          <HashRouter>
-                            <Routes>
-                              <Route
-                                path="/overlay"
-                                element={<TranscriptOverlay />}
-                              />
-                              <Route
-                                path="/auth/callback"
-                                element={<AuthCallback />}
-                              />
+    <TooltipProvider delayDuration={150}>
+      <HashRouter>
+        <Routes>
+          <Route path="/overlay" element={<TranscriptOverlay />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
 
-                              {!auth.isAuthenticated ? (
-                                <Route
-                                  path="*"
-                                  element={<Login auth={auth} />}
-                                />
-                              ) : (
-                                <>
-                                  <Route
-                                    path="/*"
-                                    element={
-                                      <AppLayout
-                                        engineStatus={status}
-                                        engineUrl={url}
-                                        engineVersion={engineVersion}
-                                        onRefresh={refresh}
-                                        user={auth.user}
-                                        onSignOut={auth.signOut}
-                                        isRecording={
-                                          transcriptionState.isRecording
-                                        }
-                                        onRecord={enterCompactMode}
-                                        onBackgroundRecord={
-                                          toggleBackgroundRecording
-                                        }
-                                        isBackgroundRecording={bgRecording}
-                                        transcriptionState={transcriptionState}
-                                        transcriptionActions={
-                                          transcriptionActions
-                                        }
-                                        tools={tools}
-                                        updateState={updateState}
-                                        updateActions={updateActions}
-                                        notifications={notif.notifications}
-                                        unreadCount={notif.unreadCount}
-                                        onMarkRead={notif.markRead}
-                                        onMarkAllRead={notif.markAllRead}
-                                        onDismissNotification={notif.dismiss}
-                                        onClearAllNotifications={notif.clearAll}
-                                        onOpenMonitor={handleOpenMonitor}
-                                        pages={appPages}
-                                      />
-                                    }
-                                  />
-                                </>
-                              )}
-                            </Routes>
-                          </HashRouter>
-                          <NotificationToastContainer
-                            toasts={toasts}
-                            onDismiss={notif.dismiss}
-                          />
-                          <EngineMonitor
-                            open={monitorOpen}
-                            onOpenChange={setMonitorOpen}
-                            engineStatus={status}
-                            engineError={engineError}
-                            onRestartEngine={restartEngine}
-                            onRefresh={refresh}
-                          />
-                          <RestartingOverlay visible={updateState.restarting} />
-                          <UpdateBanner
-                            state={updateState}
-                            actions={updateActions}
-                          />
-                          <UpdateDialog
-                            state={updateState}
-                            actions={updateActions}
-                          />
-                          <DownloadManagerModal />
-                          <DevTerminalPanel />
-                        </TooltipProvider>
-                      </TranscriptionProvider>
-                    </AudioDevicesProvider>
-                  </PermissionsProvider>
-                </TranscriptionSessionsProvider>
-              </WakeWordProvider>
-            </LlmProvider>
-          </TtsProvider>
-        </DownloadManagerProvider>
-      </DevTerminalProvider>
-    </ErrorBoundary>
+          {!auth.isAuthenticated ? (
+            <Route path="*" element={<Login auth={auth} />} />
+          ) : (
+            <>
+              <Route
+                path="/*"
+                element={
+                  <AppLayout
+                    engineStatus={status}
+                    engineUrl={url}
+                    engineVersion={engineVersion}
+                    onRefresh={refresh}
+                    user={auth.user}
+                    onSignOut={auth.signOut}
+                    isRecording={transcriptionState.isRecording}
+                    onRecord={enterCompactMode}
+                    onBackgroundRecord={toggleBackgroundRecording}
+                    isBackgroundRecording={bgRecording}
+                    transcriptionState={transcriptionState}
+                    transcriptionActions={transcriptionActions}
+                    tools={tools}
+                    updateState={updateState}
+                    updateActions={updateActions}
+                    notifications={notif.notifications}
+                    unreadCount={notif.unreadCount}
+                    onMarkRead={notif.markRead}
+                    onMarkAllRead={notif.markAllRead}
+                    onDismissNotification={notif.dismiss}
+                    onClearAllNotifications={notif.clearAll}
+                    onOpenMonitor={handleOpenMonitor}
+                    pages={appPages}
+                  />
+                }
+              />
+            </>
+          )}
+        </Routes>
+      </HashRouter>
+      <NotificationToastContainer
+        toasts={toasts}
+        onDismiss={notif.hideToast}
+      />
+      <EngineMonitor
+        open={monitorOpen}
+        onOpenChange={setMonitorOpen}
+        engineStatus={status}
+        engineError={engineError}
+        onRestartEngine={restartEngine}
+        onRefresh={refresh}
+      />
+      <RestartingOverlay visible={updateState.restarting} />
+      <UpdateBanner state={updateState} actions={updateActions} />
+      <UpdateDialog state={updateState} actions={updateActions} />
+      <DownloadManagerModal />
+      <DevTerminalPanel />
+    </TooltipProvider>
   );
 }

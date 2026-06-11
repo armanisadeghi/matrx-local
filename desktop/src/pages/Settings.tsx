@@ -90,6 +90,7 @@ import {
   syncAllSettings,
   broadcastSettingsChanged,
   settingsToCloud,
+  mergeCloudSettings,
   type AppSettings,
 } from "@/lib/settings";
 import type { StoragePath, StoragePathStats } from "@/lib/api";
@@ -135,6 +136,16 @@ export function Settings({
     return params.get("tab") ?? "general";
   });
   const [restarting, setRestarting] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
+
+  // Respond to ?tab= deep links. The page stays mounted (AppLayout keep-alive),
+  // so the useState initializer above only runs once — navigations like
+  // navigate("/settings?tab=api-keys") must be handled here.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const tab = params.get("tab");
+    if (tab) setActiveTab(tab);
+  }, [location.search]);
 
   // Proxy state
   const [proxyStatus, setProxyStatus] = useState<ProxyStatus | null>(null);
@@ -255,6 +266,7 @@ export function Settings({
     loadStoragePaths();
     loadTunnelStatus();
     loadApiKeyStatus();
+    loadForbiddenUrls();
     // Instance info depends on cloud sync being configured (JWT pushed to Python).
     // Load immediately for instance hardware info, then retry after 4s to catch
     // the case where configureCloudSync hasn't finished yet and list_instances
@@ -485,22 +497,34 @@ export function Settings({
 
   const handleRestartEngine = async () => {
     setRestarting(true);
+    setRestartError(null);
     try {
-      // onRefresh now does a proper stop → start → wait → discover cycle
-      // via restartEngine() in use-engine.ts when called from Settings.
-      // The restart logic is centralized there.
       if (isTauri()) {
-        const { stopSidecar, startSidecar } = await import("@/lib/sidecar");
-        const { waitForEngine } = await import("@/lib/sidecar");
+        const { stopSidecar, startSidecar, waitForEngine, discoverEnginePort } =
+          await import("@/lib/sidecar");
         await stopSidecar();
         // Small delay for port release
         await new Promise((r) => setTimeout(r, 500));
         await startSidecar();
-        // Wait for engine to actually be ready before refreshing
-        await waitForEngine("http://127.0.0.1:22140", 60, 1000);
+        // Wait for engine to actually be ready before refreshing. The engine
+        // auto-scans ports 22140-22159, so prefer the last-known URL and fall
+        // back to a port scan if the engine came back on a different port.
+        const baseUrl = engineUrl ?? "http://127.0.0.1:22140";
+        const ready = await waitForEngine(baseUrl, 60, 1000);
+        if (!ready) {
+          const alt = await discoverEnginePort();
+          if (!alt) {
+            setRestartError(
+              "Engine did not become reachable after restart. Try Reconnect, or check Engine Monitor for logs.",
+            );
+          }
+        }
       }
       await onRefresh();
-    } catch {
+    } catch (err) {
+      setRestartError(
+        err instanceof Error ? err.message : "Engine restart failed",
+      );
       // Still try to reconnect even if restart failed
       onRefresh();
     } finally {
@@ -732,6 +756,23 @@ export function Settings({
       setBulkResult(result);
       if (result.saved.length > 0) {
         await loadApiKeyStatus();
+        // Mirror the single-key save path: persist the HF token to llm.json
+        // via Rust so downloads work even when the engine is unreachable.
+        if (result.saved.includes("huggingface") && isTauri()) {
+          const hfEntry = toSave.find(
+            (e) =>
+              (e.provider ?? bulkCustomMapping[e.rawKey]) === "huggingface",
+          );
+          const hfKey = hfEntry
+            ? (bulkEditedValues[hfEntry.rawKey] ?? hfEntry.rawValue).trim()
+            : "";
+          if (hfKey) {
+            const { invoke } = await import("@tauri-apps/api/core");
+            await invoke("save_hf_token", { token: hfKey }).catch(() => {
+              /* non-fatal */
+            });
+          }
+        }
       }
       // Do NOT clear the form — let the user see what was saved vs errored
     } catch (err) {
@@ -807,6 +848,19 @@ export function Settings({
     }
   };
 
+  // Apply settings pulled from the cloud: merge into localStorage and notify
+  // every mounted component. Without this, the pulled blob is discarded —
+  // loadSettings() only reads the unchanged localStorage.
+  const applyPulledCloudSettings = async (
+    cloudSettings: Record<string, unknown>,
+  ) => {
+    const local = await loadSettings();
+    const merged = mergeCloudSettings(local, cloudSettings);
+    await saveSettings(merged);
+    setSettings(merged);
+    broadcastSettingsChanged();
+  };
+
   // Cloud sync handlers
   const handleSync = async () => {
     setSyncing(true);
@@ -817,8 +871,7 @@ export function Settings({
         `Sync ${result.status}${result.reason ? `: ${result.reason}` : ""}`,
       );
       if (result.settings) {
-        const updated = await loadSettings();
-        setSettings(updated);
+        await applyPulledCloudSettings(result.settings);
       }
     } catch (err) {
       setSyncStatus(`Sync failed: ${err}`);
@@ -850,8 +903,7 @@ export function Settings({
       const result = await engine.pullCloudSettings();
       setSyncStatus(`Pull ${result.status}`);
       if (result.settings) {
-        const updated = await loadSettings();
-        setSettings(updated);
+        await applyPulledCloudSettings(result.settings);
       }
     } catch (err) {
       setSyncStatus(`Pull failed: ${err}`);
@@ -970,6 +1022,12 @@ export function Settings({
                       {restarting ? "Restarting..." : "Restart Engine"}
                     </Button>
                   </div>
+                  {restartError && (
+                    <p className="text-xs text-red-400">
+                      <AlertCircle className="mr-1 inline h-3.5 w-3.5" />
+                      {restartError}
+                    </p>
+                  )}
                 </CardContent>
               </Card>
 
@@ -2378,22 +2436,32 @@ export function Settings({
                   return (
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                   );
-                if (!stats)
-                  return <span className="text-muted-foreground/40">—</span>;
-                if (!stats.exists)
-                  return (
-                    <span className="text-muted-foreground/40 text-xs">
-                      not found
-                    </span>
-                  );
+                // Header copy promises "Click the file count to refresh stats"
+                // — so every state of this cell must actually be clickable.
                 return (
-                  <span className="text-sm tabular-nums">
-                    {stats.file_count.toLocaleString()} file
-                    {stats.file_count !== 1 ? "s" : ""}
-                    <span className="text-muted-foreground ml-1.5">
-                      ({formatBytes(stats.size_bytes)})
-                    </span>
-                  </span>
+                  <button
+                    type="button"
+                    title="Refresh stats"
+                    className="cursor-pointer hover:underline disabled:cursor-default disabled:no-underline"
+                    disabled={engineStatus !== "connected"}
+                    onClick={() => void loadPathStats([name])}
+                  >
+                    {!stats ? (
+                      <span className="text-muted-foreground/40">—</span>
+                    ) : !stats.exists ? (
+                      <span className="text-muted-foreground/40 text-xs">
+                        not found
+                      </span>
+                    ) : (
+                      <span className="text-sm tabular-nums">
+                        {stats.file_count.toLocaleString()} file
+                        {stats.file_count !== 1 ? "s" : ""}
+                        <span className="text-muted-foreground ml-1.5">
+                          ({formatBytes(stats.size_bytes)})
+                        </span>
+                      </span>
+                    )}
+                  </button>
                 );
               };
 

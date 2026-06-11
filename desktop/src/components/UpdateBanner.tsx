@@ -22,7 +22,6 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
   const { status, busy, showDownloadProgress, progress, restarting } = state;
   const [visible, setVisible] = useState(false);
   const [dismissed, setDismissed] = useState(false);
-  const [restartClicked, setRestartClicked] = useState(false);
   const dismissedVersionRef = useRef<string | null>(null);
 
   const isInstalled = status?.status === "installed";
@@ -146,19 +145,16 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
         {isInstalled ? (
           <Button
             size="sm"
-            onClick={() => {
-              setRestartClicked(true);
-              void actions.restart();
-            }}
-            disabled={restarting || restartClicked}
+            onClick={() => void actions.restart()}
+            disabled={restarting}
             className="flex-1 gap-1.5 h-8 text-xs"
           >
-            {restarting || restartClicked ? (
+            {restarting ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
               <RefreshCw className="h-3.5 w-3.5" />
             )}
-            {restarting || restartClicked ? "Restarting…" : "Restart Now"}
+            {restarting ? "Restarting…" : "Restart Now"}
           </Button>
         ) : isDownloadingUi ? (
           <Button

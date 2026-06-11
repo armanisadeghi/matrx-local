@@ -35,7 +35,6 @@ import {
   Pencil,
   Upload,
   Sliders,
-  Mic,
   ExternalLink,
 } from "lucide-react";
 import { loadSettings, saveSetting } from "@/lib/settings";
@@ -54,7 +53,7 @@ const TABS = [
   { value: "speak", label: "Speak" },
   { value: "voices", label: "Voices" },
   { value: "blend", label: "Blend" },
-  { value: "clone", label: "Clone Voice" },
+  { value: "clone", label: "Clone Voice (Soon)" },
   { value: "import", label: "Import" },
   { value: "settings", label: "Settings" },
 ];
@@ -76,9 +75,7 @@ export function TextToSpeech() {
         {tab === "speak" && <SpeakTab state={state} actions={actions} />}
         {tab === "voices" && <VoicesTab state={state} actions={actions} />}
         {tab === "blend" && <BlendTab state={state} actions={actions} />}
-        {tab === "clone" && (
-          <CloneVoiceTab state={state} actions={actions} />
-        )}
+        {tab === "clone" && <CloneVoiceTab />}
         {tab === "import" && (
           <ImportVoicesTab state={state} actions={actions} />
         )}
@@ -1350,203 +1347,26 @@ function BlendTab({
 }
 
 // ── Clone Voice Tab ─────────────────────────────────────────────────────────
+//
+// Voice cloning has no server-side API yet. The previous implementation here
+// was a fake flow (sleep + clear form) that looked like success while doing
+// nothing — replaced with an honest "coming soon" state until the engine
+// actually supports cloning.
 
-function CloneVoiceTab({
-  state,
-  actions,
-}: {
-  state: ReturnType<typeof useTts>[0];
-  actions: ReturnType<typeof useTts>[1];
-}) {
-  const isReady = state.status?.model_downloaded ?? false;
-  const [cloneName, setCloneName] = useState("");
-  const [cloneId, setCloneId] = useState("");
-  const [cloneGender, setCloneGender] = useState("female");
-  const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [audioDuration, setAudioDuration] = useState<number | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  
-  const handleRecordToggle = () => {
-    setIsRecording(!isRecording);
-  };
-
-  const handleAudioSelection = (f: File | null) => {
-    setAudioFile(f);
-    setAudioDuration(null);
-    setError(null);
-    if (!f) return;
-
-    // Validate audio length
-    const audio = new Audio(URL.createObjectURL(f));
-    audio.onloadedmetadata = () => {
-      const duration = audio.duration;
-      setAudioDuration(duration);
-      if (duration < 3) {
-        setError("Audio is too short. Please provide at least 3 seconds of speech.");
-      } else if (duration > 35) {
-        setError("Audio is too long. Please trim it to under 30 seconds for best results.");
-      }
-    };
-  };
-
-  const handleClone = async () => {
-    if (audioDuration && (audioDuration < 3 || audioDuration > 35)) return;
-    setIsProcessing(true);
-    setError(null);
-    try {
-      await new Promise(r => setTimeout(r, 1500));
-      setAudioFile(null);
-      setAudioDuration(null);
-      setCloneName("");
-      setCloneId("");
-      await actions.refreshVoices();
-    } catch(e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  if (!isReady) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-4 p-12 text-center">
-        <HardDrive className="h-10 w-10 text-muted-foreground/40" />
-        <p className="text-sm text-muted-foreground">
-          Download the TTS model first to clone voices.
-        </p>
-      </div>
-    );
-  }
-
+function CloneVoiceTab() {
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-6 p-6">
+    <div className="flex flex-col items-center justify-center gap-4 p-12 text-center">
+      <AudioLines className="h-10 w-10 text-muted-foreground/40" />
       <div className="space-y-1">
-        <h2 className="text-base font-semibold">Clone a Voice</h2>
+        <h2 className="text-base font-semibold">Voice Cloning</h2>
+        <p className="text-sm text-muted-foreground">
+          Voice cloning is coming soon — not yet available in this build.
+        </p>
         <p className="text-xs text-muted-foreground">
-          Create a brand new custom voice instantly from a short audio sample.
+          In the meantime, you can create custom voices on the Blend tab or
+          import community voice files on the Import tab.
         </p>
       </div>
-
-      <div className="rounded-lg border bg-blue-500/5 p-4 border-blue-500/20">
-        <h4 className="text-sm font-medium text-blue-500 mb-2 flex items-center gap-2">
-          <Star className="h-4 w-4" /> Best Practices for Voice Cloning
-        </h4>
-        <p className="text-xs text-blue-400 leading-relaxed">
-          For the best results, use a <strong>5 to 15 second</strong> high-quality, clear audio clip of a single speaker without any background noise, echo, or overlapping speech.
-        </p>
-      </div>
-
-      {error && (
-        <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-          <p className="flex-1 text-sm text-red-400">{error}</p>
-          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
-      <section className="space-y-4 rounded-lg border p-4">
-        <h3 className="text-sm font-medium flex items-center gap-2">
-          <AudioLines className="h-4 w-4" />
-          Audio Source
-        </h3>
-        
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="flex flex-col gap-3 rounded-md border border-dashed p-4 text-center">
-            <p className="text-xs font-medium text-muted-foreground">Upload Audio File</p>
-            <input
-              type="file"
-              accept="audio/*"
-              className="mx-auto text-xs file:mr-2 file:rounded file:border-0 file:bg-primary/10 file:px-2 file:py-1 file:text-xs file:text-primary"
-              onChange={(e) => {
-                const f = e.target.files?.[0] ?? null;
-                handleAudioSelection(f);
-              }}
-            />
-          </div>
-          
-          <div className="flex flex-col gap-3 rounded-md border p-4 text-center items-center justify-center">
-            <p className="text-xs font-medium text-muted-foreground">Or Record Directly</p>
-            <Button 
-              variant={isRecording ? "destructive" : "secondary"} 
-              size="sm" 
-              className="gap-2 w-full max-w-[150px]"
-              onClick={handleRecordToggle}
-            >
-              {isRecording ? (
-                <><Square className="h-3 w-3 fill-current" /> Stop Recording</>
-              ) : (
-                <><Mic className="h-3 w-3" /> Start Recording</>
-              )}
-            </Button>
-          </div>
-        </div>
-        
-        {audioFile && (
-          <div className="flex items-center gap-2 rounded bg-muted/50 p-2 text-xs">
-            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-            <span className="truncate flex-1">Selected: {audioFile.name}</span>
-            <Button variant="ghost" size="sm" className="h-6 px-2 text-muted-foreground hover:text-destructive" onClick={() => setAudioFile(null)}>
-              Clear
-            </Button>
-          </div>
-        )}
-      </section>
-
-      <section className="space-y-4 rounded-lg border p-4">
-        <h3 className="text-sm font-medium flex items-center gap-2">
-          <Save className="h-4 w-4" />
-          Voice Details
-        </h3>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Display Name</label>
-            <input
-              value={cloneName}
-              onChange={(e) => {
-                setCloneName(e.target.value);
-                if (!cloneId) setCloneId(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/^_|_$/g, ""));
-              }}
-              placeholder="My Cloned Voice"
-              className="h-9 w-full rounded-md border bg-background px-3 text-sm focus:border-primary focus:outline-none"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Voice ID</label>
-            <input
-              value={cloneId}
-              onChange={(e) => setCloneId(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ""))}
-              placeholder="my_cloned_voice"
-              className="h-9 w-full rounded-md border bg-background px-3 font-mono text-sm focus:border-primary focus:outline-none"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Gender</label>
-            <select
-              value={cloneGender}
-              onChange={(e) => setCloneGender(e.target.value)}
-              className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-            >
-              <option value="female">Female</option>
-              <option value="male">Male</option>
-            </select>
-          </div>
-        </div>
-        <Button
-          onClick={handleClone}
-          disabled={!audioFile || !cloneName.trim() || !cloneId.trim() || isProcessing}
-          className="gap-2"
-        >
-          {isProcessing ? (
-            <><Loader2 className="h-4 w-4 animate-spin" /> Processing Audio…</>
-          ) : (
-            <><AudioLines className="h-4 w-4" /> Clone Voice</>
-          )}
-        </Button>
-      </section>
     </div>
   );
 }
@@ -1600,7 +1420,10 @@ function ImportVoicesTab({
     async (voiceId: string) => {
       if (!editName.trim()) return;
       try {
-        await renameCustomVoice(voiceId, editName);
+        // The engine returns 200 with {success:false,error} on failure —
+        // check the body like handleImport does, don't rely on the throw.
+        const result = await renameCustomVoice(voiceId, editName);
+        if (!result.success) throw new Error(result.error ?? "Rename failed");
         setEditingId(null);
         await refresh();
         await actions.refreshVoices();
@@ -1614,7 +1437,8 @@ function ImportVoicesTab({
   const handleDelete = useCallback(
     async (voiceId: string) => {
       try {
-        await deleteCustomVoice(voiceId);
+        const result = await deleteCustomVoice(voiceId);
+        if (!result.success) throw new Error(result.error ?? "Delete failed");
         await refresh();
         await actions.refreshVoices();
       } catch (e) {

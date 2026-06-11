@@ -444,10 +444,17 @@ export function useScrapeMany() {
         const urls = toScrape.map((e) => e.url);
         urls.forEach((url) => markRunning(url));
 
+        // True once stop() has run for this batch: it aborts the controller
+        // currently in abortRef and then nulls the ref. Late stream events
+        // must not overwrite the "Stopped by user" entries or add history.
+        const isStopped = () =>
+          controller.signal.aborted || abortRef.current === null;
+
         const streamController = await engine.scrapeRemotelyStream(
           urls,
           { use_cache: useCache },
           (event, data) => {
+            if (isStopped()) return;
             const d = data as Record<string, unknown>;
             if (event === "page_result") {
               const url = String(d.url ?? "");

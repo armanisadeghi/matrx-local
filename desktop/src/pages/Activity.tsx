@@ -86,10 +86,9 @@ const ALL_LEVELS: LogLevel[] = [
   "data",
   "cmd",
 ];
+// Only these levels are eligible for grouping; warn/error always show individually
 const GROUPABLE_LEVELS = new Set<LogLevel>([
   "info",
-  "warn",
-  "error",
   "success",
   "data",
   "cmd",
@@ -1574,7 +1573,16 @@ export function Activity({ engineStatus }: ActivityProps) {
           <LogTab
             logs={clientLogs}
             emptyMessage="No client logs yet — engine discovery, auth, voice, and setup events appear here"
-            clearSources={["engine", "auth", "voice", "setup", "bg-tasks"]}
+            clearSources={[
+              "engine",
+              "auth",
+              "voice",
+              "setup",
+              "bg-tasks",
+              "react",
+              "downloads",
+              "client",
+            ]}
           />
         </TabsContent>
 

@@ -62,6 +62,11 @@ let _notificationCounter = 0;
 
 export function useNotifications() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  // Toasts that have been hidden (auto-dismiss timer or toast X). Hiding a
+  // toast must NOT delete the notification — it stays in the bell history.
+  const [hiddenToastIds, setHiddenToastIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const soundEnabledRef = useRef(true);
   const soundStyleRef = useRef<AppSettings["notificationSoundStyle"]>("chime");
 
@@ -117,11 +122,26 @@ export function useNotifications() {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   }, []);
 
+  /** Hide a toast popup without deleting the notification from history. */
+  const hideToast = useCallback((id: string) => {
+    setHiddenToastIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
+
   const clearAll = useCallback(() => {
     setNotifications([]);
+    setHiddenToastIds(new Set());
   }, []);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
+
+  const toasts = useMemo(
+    () => notifications.filter((n) => !hiddenToastIds.has(n.id)).slice(0, 3),
+    [notifications, hiddenToastIds],
+  );
 
   // Listen for 'notification' events from the WebSocket
   useEffect(() => {
@@ -144,15 +164,17 @@ export function useNotifications() {
   return useMemo(
     () => ({
       notifications,
+      toasts,
       unreadCount,
       addNotification,
       markRead,
       markAllRead,
       dismiss,
+      hideToast,
       clearAll,
       setSoundEnabled,
     }),
-    [notifications, unreadCount, addNotification, markRead, markAllRead, dismiss, clearAll, setSoundEnabled],
+    [notifications, toasts, unreadCount, addNotification, markRead, markAllRead, dismiss, hideToast, clearAll, setSoundEnabled],
   );
 }
 

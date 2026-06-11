@@ -146,6 +146,13 @@ export function SetupWizard({
   const llmUnlistenRef = useRef<UnlistenFn | null>(null);
   const runInstallRef = useRef<(() => void) | null>(null);
   const autoInstallFiredRef = useRef(false);
+  // checkStatus reads `dismissed` via a ref so that dismissing the wizard
+  // doesn't change checkStatus's identity and re-trigger the status check
+  // (which would set phase back to "checking" and re-expand the wizard).
+  const dismissedRef = useRef(dismissed);
+  useEffect(() => {
+    dismissedRef.current = dismissed;
+  }, [dismissed]);
 
   // Stable log helpers — emitClientLog is a module-level singleton, no deps needed
   const logLine = useCallback(
@@ -286,7 +293,7 @@ export function SetupWizard({
       // setup (dismissed=true) will see the wizard reopen with TTS/cloudflared
       // listed as "not ready" and a manual "Set Up Now" button, so they choose
       // when to download ~370 MB rather than having it start silently.
-      if (!autoInstallFiredRef.current && !dismissed) {
+      if (!autoInstallFiredRef.current && !dismissedRef.current) {
         autoInstallFiredRef.current = true;
         setPhase("ready");
         // Small delay so the UI renders the component list before the
@@ -301,7 +308,7 @@ export function SetupWizard({
 
     // Load Tauri optional status after engine status loads
     await loadTauriStatus();
-  }, [engineStatus, logLine, loadTauriStatus, dismissed]);
+  }, [engineStatus, logLine, loadTauriStatus]);
 
   useEffect(() => {
     checkStatus();

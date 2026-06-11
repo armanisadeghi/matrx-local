@@ -71,9 +71,10 @@ import { cn } from "@/lib/utils";
 function SectionActions({
   section,
   dirty,
-  saving,
-  saveError,
-  lastSyncResult,
+  saving: savingProp,
+  saveError: saveErrorProp,
+  lastSyncResult: lastSyncResultProp,
+  activeSection,
   onSave,
   onCancel,
 }: {
@@ -82,9 +83,20 @@ function SectionActions({
   saving: boolean;
   saveError: string | null;
   lastSyncResult: SyncResult | null;
+  /** Which section's save is in flight / just completed (page-level). */
+  activeSection: ConfigSection | null;
   onSave: (s: ConfigSection) => void;
   onCancel: (s: ConfigSection) => void;
 }) {
+  // The saving flag and sync result are shared across all sections by
+  // use-configurations — only honor them for the section whose save is
+  // actually in flight / just completed, otherwise every dirty section
+  // shows "Saving…" and every section shows the post-save status row.
+  const isMine = activeSection === section;
+  const saving = savingProp && isMine;
+  const saveError = isMine ? saveErrorProp : null;
+  const lastSyncResult = isMine ? lastSyncResultProp : null;
+
   const [recentResult, setRecentResult] = useState<SyncResult | null>(null);
   const [recentError, setRecentError] = useState<string | null>(null);
   const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -469,17 +481,22 @@ function UpdateIntervalRow({
   onChange: (v: number) => void;
 }) {
   const isCustom = !PRESET_VALUES.has(value);
+  // "Custom..." doesn't change `value`, so track the user's choice explicitly
+  // — otherwise selectValue snaps back to the preset and the input never shows.
+  const [customMode, setCustomMode] = useState(isCustom);
   const [customInput, setCustomInput] = useState(isCustom ? String(value) : "");
 
   const handleSelect = (v: string) => {
     if (v === "__custom__") {
+      setCustomMode(true);
       setCustomInput(String(value));
       return;
     }
+    setCustomMode(false);
     onChange(Number(v));
   };
 
-  const selectValue = isCustom ? "__custom__" : String(value);
+  const selectValue = isCustom || customMode ? "__custom__" : String(value);
 
   return (
     <SettingRow
@@ -547,17 +564,20 @@ function GpuLayersRow({
   onChange: (v: number) => void;
 }) {
   const isCustom = !GPU_PRESET_VALUES.has(value);
+  const [customMode, setCustomMode] = useState(isCustom);
   const [customInput, setCustomInput] = useState(isCustom ? String(value) : "");
 
   const handleSelect = (v: string) => {
     if (v === "__custom__") {
+      setCustomMode(true);
       setCustomInput(String(value));
       return;
     }
+    setCustomMode(false);
     onChange(Number(v));
   };
 
-  const selectValue = isCustom ? "__custom__" : String(value);
+  const selectValue = isCustom || customMode ? "__custom__" : String(value);
 
   return (
     <div className="flex items-center gap-2">
@@ -621,19 +641,22 @@ function ProcessingTimeoutRow({
   onChange: (v: number) => void;
 }) {
   const isCustom = !TIMEOUT_PRESET_VALUES.has(value);
+  const [customMode, setCustomMode] = useState(isCustom);
   const [customInput, setCustomInput] = useState(
     isCustom ? String(Math.round(value / 1000)) : "",
   );
 
   const handleSelect = (v: string) => {
     if (v === "__custom__") {
+      setCustomMode(true);
       setCustomInput(String(Math.round(value / 1000)));
       return;
     }
+    setCustomMode(false);
     onChange(Number(v));
   };
 
-  const selectValue = isCustom ? "__custom__" : String(value);
+  const selectValue = isCustom || customMode ? "__custom__" : String(value);
 
   return (
     <SettingRow
@@ -702,17 +725,20 @@ function ScrapeDelayRow({
   onChange: (v: string) => void;
 }) {
   const isCustom = !SCRAPE_PRESET_VALUES.has(value);
+  const [customMode, setCustomMode] = useState(isCustom);
   const [customInput, setCustomInput] = useState(isCustom ? value : "");
 
   const handleSelect = (v: string) => {
     if (v === "__custom__") {
+      setCustomMode(true);
       setCustomInput(value);
       return;
     }
+    setCustomMode(false);
     onChange(v);
   };
 
-  const selectValue = isCustom ? "__custom__" : value;
+  const selectValue = isCustom || customMode ? "__custom__" : value;
 
   return (
     <SettingRow
@@ -773,8 +799,16 @@ export function Configurations() {
   const catalogs = useConfigCatalogs();
 
   const set = actions.set;
+  // Track which section's save is in flight / just completed so the shared
+  // isSaving/lastSyncResult from use-configurations only surface under the
+  // section that actually triggered the save.
+  const [activeSaveSection, setActiveSaveSection] =
+    useState<ConfigSection | null>(null);
   const handleSave = useCallback(
-    (s: ConfigSection) => actions.saveSection(s),
+    (s: ConfigSection) => {
+      setActiveSaveSection(s);
+      actions.saveSection(s);
+    },
     [actions],
   );
   const handleCancel = useCallback(
@@ -787,6 +821,7 @@ export function Configurations() {
     saving: isSaving,
     saveError,
     lastSyncResult: lastSyncResult ?? null,
+    activeSection: activeSaveSection,
     onSave: handleSave,
     onCancel: handleCancel,
   };

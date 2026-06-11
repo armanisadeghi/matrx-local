@@ -49,12 +49,12 @@ interface AppLayoutProps {
 
 /**
  * Returns true when the current pathname matches a page's registered path.
- * The root "/" only matches exactly; all others use prefix matching so that
- * sub-routes (e.g. "/browser/tauri") remain visible under their parent.
+ * Exact match only — every navigable path (including sub-pages like
+ * "/browser/tauri") is registered as its own PageEntry, so prefix matching
+ * would render parent and child pages stacked on top of each other.
  */
 function pageIsActive(pagePath: string, currentPathname: string): boolean {
-  if (pagePath === "/") return currentPathname === "/";
-  return currentPathname === pagePath || currentPathname.startsWith(pagePath + "/");
+  return currentPathname === pagePath;
 }
 
 export function AppLayout({

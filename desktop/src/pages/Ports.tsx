@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import {
   Network,
   RefreshCw,
@@ -441,6 +442,11 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
   const [killDialogOpen, setKillDialogOpen] = useState(false);
   const [processToKill, setProcessToKill] = useState<PortProcess | null>(null);
   const [isKilling, setIsKilling] = useState(false);
+  const [killError, setKillError] = useState<string | null>(null);
+  const [inlineKillError, setInlineKillError] = useState<string | null>(null);
+
+  // Pages stay mounted (AppLayout keep-alive) — only poll while visible.
+  const isVisible = useLocation().pathname === "/ports";
 
   const fetchPorts = useCallback(async () => {
     if (engineStatus !== "connected") return;
@@ -481,31 +487,39 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
   }, [engineStatus]);
 
   useEffect(() => {
+    if (!isVisible) return;
     fetchPorts();
     const iv = setInterval(fetchPorts, 10000);
     return () => clearInterval(iv);
-  }, [fetchPorts]);
+  }, [fetchPorts, isVisible]);
 
   useEffect(() => {
+    if (!isVisible) return;
     if (activeTab === "terminals") {
       fetchTerminals();
       const iv = setInterval(fetchTerminals, 15000);
       return () => clearInterval(iv);
     }
-  }, [activeTab, fetchTerminals]);
+  }, [activeTab, fetchTerminals, isVisible]);
 
   const handleKill = async (force: boolean) => {
     if (!processToKill) return;
     setIsKilling(true);
+    setKillError(null);
     try {
-      await engine.invokeToolWs("KillProcess", {
+      const result = await engine.invokeToolWs("KillProcess", {
         pid: processToKill.pid,
         force,
       });
+      if (result.type !== "success") {
+        setKillError(result.output || "Failed to kill process.");
+        return;
+      }
       fetchPorts();
       setKillDialogOpen(false);
     } catch (error) {
       console.error("Failed to kill process:", error);
+      setKillError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsKilling(false);
     }
@@ -513,11 +527,24 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
 
   const handleForceKillDirect = async (p: PortProcess) => {
     setIsKilling(true);
+    setInlineKillError(null);
     try {
-      await engine.invokeToolWs("KillProcess", { pid: p.pid, force: true });
+      const result = await engine.invokeToolWs("KillProcess", {
+        pid: p.pid,
+        force: true,
+      });
+      if (result.type !== "success") {
+        setInlineKillError(
+          `Could not kill ${p.name} (PID ${p.pid}): ${result.output || "unknown error"}`,
+        );
+        return;
+      }
       fetchPorts();
     } catch (error) {
       console.error("Failed to force kill process:", error);
+      setInlineKillError(
+        `Could not kill ${p.name} (PID ${p.pid}): ${error instanceof Error ? error.message : String(error)}`,
+      );
     } finally {
       setIsKilling(false);
     }
@@ -690,7 +717,11 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
             size="icon"
             onClick={() => {
               const data =
-                activeTab === "terminals" ? filteredTerminals : filteredPorts;
+                activeTab === "terminals"
+                  ? filteredTerminals
+                  : activeTab === "user"
+                    ? userItems
+                    : filteredPorts;
               navigator.clipboard.writeText(JSON.stringify(data, null, 2));
             }}
             title="Copy Filtered Data (JSON)"
@@ -711,6 +742,22 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
           </Button>
         </div>
       </PageHeader>
+
+      {inlineKillError && (
+        <div className="mx-6 mt-4 flex items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <span className="flex items-center gap-2 min-w-0">
+            <ShieldAlert className="h-4 w-4 shrink-0" />
+            <span className="truncate">{inlineKillError}</span>
+          </span>
+          <button
+            className="shrink-0 hover:opacity-70"
+            onClick={() => setInlineKillError(null)}
+            title="Dismiss"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 px-6 pb-6 overflow-hidden flex flex-col min-h-0">
         <Tabs
@@ -769,6 +816,7 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
               />
               <PortTable
                 ports={userItems}
+                loading={loading}
                 sortCol={portSortCol}
                 sortDir={portSortDir}
                 onSort={handlePortSort}
@@ -797,6 +845,7 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
               />
               <PortTable
                 ports={filteredPorts}
+                loading={loading}
                 sortCol={portSortCol}
                 sortDir={portSortDir}
                 onSort={handlePortSort}
@@ -837,7 +886,13 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
         </Tabs>
       </div>
 
-      <Dialog open={killDialogOpen} onOpenChange={setKillDialogOpen}>
+      <Dialog
+        open={killDialogOpen}
+        onOpenChange={(open) => {
+          setKillDialogOpen(open);
+          if (!open) setKillError(null);
+        }}
+      >
         <DialogContent className="sm:max-w-[425px] bg-background/80 backdrop-blur-2xl border-border">
           <DialogHeader>
             <DialogTitle asChild>
@@ -854,6 +909,12 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
               </p>
             </DialogDescription>
           </DialogHeader>
+          {killError && (
+            <p className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <ShieldAlert className="h-4 w-4 shrink-0" />
+              {killError}
+            </p>
+          )}
           <DialogFooter className="flex gap-2 sm:justify-start">
             <Button variant="ghost" onClick={() => setKillDialogOpen(false)}>
               Cancel
@@ -905,6 +966,7 @@ function SortIcon<T extends string>({
 
 function PortTable({
   ports,
+  loading,
   sortCol,
   sortDir,
   onSort,
@@ -913,6 +975,7 @@ function PortTable({
   onForceKill,
 }: {
   ports: PortProcess[];
+  loading: boolean;
   sortCol: PortSortCol;
   sortDir: SortDir;
   onSort: (col: PortSortCol) => void;
@@ -921,6 +984,15 @@ function PortTable({
   onForceKill: (p: PortProcess) => void;
 }) {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+
+  if (loading && ports.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3">
+        <RefreshCw className="h-8 w-8 opacity-30 animate-spin" />
+        <p className="text-sm">Discovering ports…</p>
+      </div>
+    );
+  }
 
   if (ports.length === 0) {
     return (

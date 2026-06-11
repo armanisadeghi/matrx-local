@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { SubTabBar } from "@/components/layout/SubTabBar";
@@ -80,6 +80,7 @@ import {
   Trash2 as TrashIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getSession } from "@/lib/transcription/sessions";
 import { emitClientLog } from "@/hooks/use-client-log";
 import type {
   WhisperModelTier,
@@ -134,7 +135,9 @@ export function Voice() {
       const elapsed = Math.round(
         (Date.now() - recordingStartRef.current) / 1000,
       );
-      sessionsActions.finalize(activeSessionId, elapsed);
+      // Accumulate: continued sessions keep the duration of previous legs.
+      const prior = getSession(activeSessionId)?.durationSecs ?? 0;
+      sessionsActions.finalize(activeSessionId, prior + elapsed);
     }
   }, [actions, activeSessionId, sessionsActions]);
 
@@ -180,13 +183,22 @@ export function Voice() {
 
   // ── Stream live transcript to the floating overlay window ─────────────────
   // Emits whenever the wake word session is active and transcript changes.
+  // Also emits the empty payload when a new session starts so the overlay
+  // resets instead of showing the previous session's text until the first
+  // new segment arrives.
+  const prevOverlayUiModeRef = useRef(wwState.uiMode);
   useEffect(() => {
+    const justActivated =
+      prevOverlayUiModeRef.current !== "active" && wwState.uiMode === "active";
+    prevOverlayUiModeRef.current = wwState.uiMode;
     if (wwState.uiMode !== "active") return;
     if (!isTauri()) return;
-    if (!state.fullTranscript) return;
+    // On activation the segments from the previous session may not be cleared
+    // yet — emit a reset payload instead of the stale transcript.
+    const payload = justActivated ? "" : state.fullTranscript;
     import("@tauri-apps/api/event")
       .then(({ emit }) => {
-        void emit("overlay-transcript", state.fullTranscript);
+        void emit("overlay-transcript", payload);
       })
       .catch((e) => console.warn("[voice] overlay-transcript emit failed:", e));
   }, [state.fullTranscript, wwState.uiMode]);
@@ -304,14 +316,24 @@ export function Voice() {
     [actions],
   );
 
-  const wrappedActions = {
-    ...actions,
-    detectHardware: wrappedDetectHardware,
-    downloadModel: wrappedDownloadModel,
-    initTranscription: wrappedInitTranscription,
-    quickSetup: wrappedQuickSetup,
-    deleteModel: wrappedDeleteModel,
-  };
+  const wrappedActions = useMemo(
+    () => ({
+      ...actions,
+      detectHardware: wrappedDetectHardware,
+      downloadModel: wrappedDownloadModel,
+      initTranscription: wrappedInitTranscription,
+      quickSetup: wrappedQuickSetup,
+      deleteModel: wrappedDeleteModel,
+    }),
+    [
+      actions,
+      wrappedDetectHardware,
+      wrappedDownloadModel,
+      wrappedInitTranscription,
+      wrappedQuickSetup,
+      wrappedDeleteModel,
+    ],
+  );
 
   // Session-aware recording start: always create a new session
   const handleStartNewRecording = useCallback(async () => {
@@ -341,7 +363,9 @@ export function Voice() {
       const elapsed = Math.round(
         (Date.now() - recordingStartRef.current) / 1000,
       );
-      sessionsActions.finalize(activeSessionId, elapsed);
+      // Accumulate: continued sessions keep the duration of previous legs.
+      const prior = getSession(activeSessionId)?.durationSecs ?? 0;
+      sessionsActions.finalize(activeSessionId, prior + elapsed);
     }
   }, [actions, activeSessionId, sessionsActions]);
 
@@ -794,10 +818,20 @@ function TranscribeTab({
   const [titleDraft, setTitleDraft] = useState("");
   const [pushingToNote, setPushingToNote] = useState<string | null>(null);
   const [pushSuccess, setPushSuccess] = useState<string | null>(null);
+  const [pushError, setPushError] = useState<string | null>(null);
   // Local editable draft for the transcript text — synced from viewing session
   const [textDraft, setTextDraft] = useState<string>("");
   const textDraftSessionRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirror of textDraft for effects that must read it without re-running
+  const textDraftRef = useRef(textDraft);
+  useEffect(() => {
+    textDraftRef.current = textDraft;
+  }, [textDraft]);
+  // When continuing an existing session, the live transcript only contains
+  // the NEW leg (startRecording clears segments). This holds the session's
+  // text at continue time so the draft shows base + new leg, not just the leg.
+  const continueBaseTextRef = useRef<string>("");
 
   // ── LLM Polish integration ─────────────────────────────────────────────
   const [llmState, llmActions] = useLlmApp();
@@ -925,14 +959,29 @@ function TranscribeTab({
     // If switching to a different session, load its saved text.
     if (textDraftSessionRef.current !== viewingSession.id) {
       textDraftSessionRef.current = viewingSession.id;
+      if (!isViewingActive) continueBaseTextRef.current = "";
       setTextDraft(viewingSession.fullText);
       return;
     }
-    // Same session — only update the draft while actively recording (new segments arriving).
-    // Do NOT overwrite user edits once recording stops.
+    // Same session — while actively recording, show prior text (when
+    // continuing a session) plus the live new-leg transcript.
     if (isViewingActive) {
+      const base = continueBaseTextRef.current;
       const liveText = state.fullTranscript;
-      setTextDraft(liveText);
+      setTextDraft(
+        base ? (liveText ? `${base} ${liveText}` : base) : liveText,
+      );
+      return;
+    }
+    // Not recording this session — follow the persisted text (e.g. after a
+    // stop finalizes/flushes segments) unless the user has a pending
+    // debounced edit in flight. Do NOT overwrite unsaved user edits.
+    continueBaseTextRef.current = "";
+    if (
+      !saveTimerRef.current &&
+      viewingSession.fullText !== textDraftRef.current
+    ) {
+      setTextDraft(viewingSession.fullText);
     }
   }, [
     viewingSession,
@@ -950,6 +999,7 @@ function TranscribeTab({
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       const sid = textDraftSessionRef.current;
       saveTimerRef.current = setTimeout(() => {
+        saveTimerRef.current = null;
         sessionsActions.updateText(sid, newText);
       }, 600);
     },
@@ -1005,18 +1055,23 @@ function TranscribeTab({
   const handleContinueRecording = useCallback(
     async (sessionId: string) => {
       setPermError(null);
-      const status = await check("microphone");
-      if (status === "granted") {
+      // Remember the session's existing text so the draft can show it ahead
+      // of the live new-leg transcript (startRecording clears segments).
+      const beginContinue = async () => {
+        continueBaseTextRef.current = getSession(sessionId)?.fullText ?? "";
         sessionsActions.open(sessionId);
         await onContinueSession(sessionId);
+      };
+      const status = await check("microphone");
+      if (status === "granted") {
+        await beginContinue();
         return;
       }
       if (status === "not_determined") {
         await request("microphone");
         const recheck = await check("microphone");
         if (recheck === "granted") {
-          sessionsActions.open(sessionId);
-          await onContinueSession(sessionId);
+          await beginContinue();
         } else {
           setPermError("Microphone access is required for transcription.");
         }
@@ -1041,6 +1096,9 @@ function TranscribeTab({
         console.warn(
           "[voice] push to note skipped — engine not discovered yet",
         );
+        setPushError(
+          "Engine not connected yet — cannot save the note. Try again in a moment.",
+        );
         return;
       }
       if (!currentText.trim()) {
@@ -1048,6 +1106,7 @@ function TranscribeTab({
         return;
       }
       setPushingToNote(session.id);
+      setPushError(null);
       try {
         const date = new Date(session.createdAt);
         const label = session.title
@@ -1062,6 +1121,9 @@ function TranscribeTab({
         setTimeout(() => setPushSuccess(null), 3000);
       } catch (err) {
         console.error("[voice] push to note failed:", err);
+        setPushError(
+          `Failed to save note: ${err instanceof Error ? err.message : String(err)}`,
+        );
       } finally {
         setPushingToNote(null);
       }
@@ -1624,9 +1686,6 @@ function TranscribeTab({
                               )}
                               disabled={polishing}
                               title="Choose AI Polish preset"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                              }}
                             >
                               <ChevronDown className="h-3 w-3" />
                             </button>
@@ -1764,6 +1823,22 @@ function TranscribeTab({
                       AI polished ·{" "}
                       {new Date(viewingSession.aiProcessedAt).toLocaleString()}
                     </p>
+                  </div>
+                )}
+
+                {/* Push-to-note error */}
+                {pushError && (
+                  <div className="flex items-start gap-2 px-5 py-2 border-b border-destructive/20 bg-destructive/5">
+                    <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
+                    <span className="text-xs text-destructive flex-1">
+                      {pushError}
+                    </span>
+                    <button
+                      className="text-[10px] text-destructive/70 hover:text-destructive underline"
+                      onClick={() => setPushError(null)}
+                    >
+                      Dismiss
+                    </button>
                   </div>
                 )}
 
@@ -2256,11 +2331,24 @@ function ModelsTab({
   const downloaded = state.setupStatus?.downloaded_models ?? [];
   const { isDownloading, downloadingFilename, downloadQueue } = state;
 
+  // Fire hardware detection at most once per mount — guarding with a ref
+  // prevents a self-sustaining invoke loop while hw is still null.
+  const didAutoDetect = useRef(false);
   useEffect(() => {
-    if (!hw) {
+    if (!hw && !state.isDetecting && !didAutoDetect.current) {
+      didAutoDetect.current = true;
       actions.detectHardware();
     }
-  }, [hw, actions]);
+  }, [hw, state.isDetecting, actions]);
+
+  // Live mirrors for the download-completion poll loop below — a closure
+  // captured at click time would otherwise read stale pre-download values.
+  const isDownloadingRef = useRef(isDownloading);
+  const downloadQueueRef = useRef(downloadQueue);
+  useEffect(() => {
+    isDownloadingRef.current = isDownloading;
+    downloadQueueRef.current = downloadQueue;
+  }, [isDownloading, downloadQueue]);
 
   const handleDownloadAndActivate = async (model: ModelInfo) => {
     try {
@@ -2273,7 +2361,10 @@ function ModelsTab({
           const nowExists = await actions.checkModelExists(model.filename);
           if (nowExists) {
             await actions.initTranscription(model.filename);
-          } else if (isDownloading || downloadQueue.length > 0) {
+          } else if (
+            isDownloadingRef.current ||
+            downloadQueueRef.current.length > 0
+          ) {
             setTimeout(waitAndActivate, 500);
           }
         };

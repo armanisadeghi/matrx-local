@@ -100,6 +100,9 @@ export function EngineMonitor({
   const [logsCopied, setLogsCopied] = useState(false);
   const [portScanning, setPortScanning] = useState(false);
   const logScrollRef = useRef<HTMLDivElement>(null);
+  // How many lines of the Rust ring buffer have already been ingested —
+  // prevents re-appending the whole buffer on every modal open.
+  const bufferedIngestedRef = useRef(0);
 
   const addLog = useCallback((line: string) => {
     const ts = new Date().toLocaleTimeString();
@@ -141,11 +144,16 @@ export function EngineMonitor({
       (async () => {
         if (isTauri()) {
           const buffered = await getSidecarLogs();
-          if (buffered.length > 0) {
-            setLogs((prev) => {
-              const newLines = buffered.map((line) => `[buffered] ${line}`);
-              return [...prev, ...newLines].slice(-200);
-            });
+          // Ring buffer may shrink (e.g. sidecar restart) — re-ingest from 0
+          if (buffered.length < bufferedIngestedRef.current) {
+            bufferedIngestedRef.current = 0;
+          }
+          const newLines = buffered
+            .slice(bufferedIngestedRef.current)
+            .map((line) => `[buffered] ${line}`);
+          bufferedIngestedRef.current = buffered.length;
+          if (newLines.length > 0) {
+            setLogs((prev) => [...prev, ...newLines].slice(-200));
           }
         }
         runDiagnostics();

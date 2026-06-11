@@ -342,7 +342,11 @@ def _coerce_tool_input(handler: Callable, tool_input: dict[str, Any]) -> dict[st
             # bool must be checked before int because bool is a subclass of int
             if ann is bool and not isinstance(value, bool):
                 if isinstance(value, str):
-                    coerced[key] = value.lower() not in ("false", "0", "no", "")
+                    # Explicit truthy set: the old falsy-list approach mapped
+                    # unknown strings like "off"/"n" to True.
+                    coerced[key] = value.strip().lower() in (
+                        "true", "1", "yes", "y", "on",
+                    )
                 else:
                     coerced[key] = bool(value)
             elif ann is int and not isinstance(value, int):

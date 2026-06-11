@@ -378,13 +378,27 @@ async def tool_mouse_click(
             else:
                 activate = ""
 
-            click_type = {"left": "", "right": " using {command down}", "middle": ""}[
-                button
-            ]
+            # cliclick verbs: c=left click, dc=double, tc=triple, rc=right.
+            # The old code computed a click_type and never used it — every
+            # click was a single LEFT click regardless of button/clicks.
+            if button == "right":
+                verb = "rc"
+            elif button == "middle":
+                # cliclick has no middle-click verb; surface that honestly.
+                return ToolResult(
+                    type=ToolResultType.ERROR,
+                    output="Middle-click is not supported on macOS (cliclick has no middle-button verb).",
+                )
+            elif clicks >= 3:
+                verb = "tc"
+            elif clicks == 2:
+                verb = "dc"
+            else:
+                verb = "c"
             # Use cliclick if available, otherwise AppleScript approach
             script = f"""
 {activate}
-do shell script "if command -v cliclick >/dev/null; then cliclick c:{x},{y}; else echo 'no_cliclick'; fi"
+do shell script "if command -v cliclick >/dev/null; then cliclick {verb}:{x},{y}; else echo 'no_cliclick'; fi"
 """
             proc = await asyncio.create_subprocess_exec(
                 "osascript",
@@ -422,7 +436,18 @@ Quartz.CGEventPost(Quartz.kCGHIDEventTap, event_up)
             return ToolResult(output=f"Clicked {button} at ({x}, {y})")
 
         elif PLATFORM["is_windows"]:
-            btn_map = {"left": "1", "right": "2", "middle": "4"}
+            # mouse_event flags per button: (down, up)
+            flag_map = {
+                "left": ("0x0002", "0x0004"),
+                "right": ("0x0008", "0x0010"),
+                "middle": ("0x0020", "0x0040"),
+            }
+            down_flag, up_flag = flag_map[button]
+            click_lines = "\n".join(
+                f"[MouseOps]::mouse_event({down_flag}, 0, 0, 0, [IntPtr]::Zero)\n"
+                f"[MouseOps]::mouse_event({up_flag}, 0, 0, 0, [IntPtr]::Zero)"
+                for _ in range(max(1, clicks))
+            )
             ps_script = f"""
 Add-Type @"
 using System; using System.Runtime.InteropServices;
@@ -432,8 +457,7 @@ public class MouseOps {{
 }}
 "@
 [MouseOps]::SetCursorPos({x}, {y})
-[MouseOps]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero)  # LEFTDOWN
-[MouseOps]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero)  # LEFTUP
+{click_lines}
 """
             proc = await asyncio.create_subprocess_exec(
                 CAPABILITIES["powershell_path"],

@@ -110,7 +110,7 @@ async def run_initial_detection() -> dict[str, Any]:
             logger.info("[hardware] Initial hardware detection complete")
 
             # Push to cloud in background — don't block startup
-            asyncio.create_task(_push_hardware_to_cloud(profile))
+            fire_and_forget(_push_hardware_to_cloud(profile), name="hardware-push")
 
         except Exception as exc:
             logger.warning("[hardware] Initial hardware detection failed: %s", exc)

@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app.common.background_tasks import fire_and_forget
 from app.common.system_logger import get_logger
 from app.tools.tool_schemas import (
     generate_all_tool_schemas,
@@ -45,6 +46,8 @@ from app.tools.tool_schemas import (
 )
 
 logger = get_logger()
+_agents_sync_task: "asyncio.Task | None" = None
+
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 # ---------------------------------------------------------------------------
@@ -171,7 +174,7 @@ async def list_models() -> dict[str, Any]:
                 "[chat_routes /models] SQLite empty and never synced — triggering background sync"
             )
             engine = get_sync_engine()
-            asyncio.create_task(engine.sync_models())
+            fire_and_forget(engine.sync_models(), name="models-sync")
             return {"models": [], "total": 0, "source": "sqlite", "syncing": True}
 
         logger.info("[chat_routes /models] SQLite is empty (sync ran but found no models)")
@@ -279,7 +282,7 @@ async def list_agents() -> dict[str, Any]:
                 "[chat_routes /agents] SQLite empty and never synced — triggering background sync"
             )
             engine = get_sync_engine()
-            asyncio.create_task(engine.sync_agents())
+            fire_and_forget(engine.sync_agents(), name="agents-sync")
             return {
                 "builtins": [], "user": [], "shared": [],
                 "source": "sqlite", "syncing": True,
@@ -295,8 +298,14 @@ async def list_agents() -> dict[str, Any]:
             "triggering background agent sync for user_id=%s",
             user_id,
         )
-        engine = get_sync_engine()
-        asyncio.create_task(engine.sync_agents())
+        global _agents_sync_task
+        existing = _agents_sync_task
+        if existing is None or existing.done():
+            engine = get_sync_engine()
+            # Retain the task (the loop holds only a weak ref) and reuse it
+            # while in flight — /chat/agents is polled, and each poll used to
+            # spawn ANOTHER full server sync when the user had zero agents.
+            _agents_sync_task = asyncio.create_task(engine.sync_agents())
 
     total = len(builtins) + len(user_agents)
     return {

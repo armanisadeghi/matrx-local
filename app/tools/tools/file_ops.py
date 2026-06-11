@@ -213,8 +213,8 @@ async def _grep_rg(root: str, pattern: str, include: str | None, max_results: in
     if not output:
         return ToolResult(output="No matches found.")
 
-    lines = output.split("\n")
-    return ToolResult(output="\n".join(lines[:max_results]), metadata={"count": len(lines)})
+    lines = output.split("\n")[:max_results]
+    return ToolResult(output="\n".join(lines), metadata={"count": len(lines)})
 
 
 def _grep_python(root: str, pattern: str, include: str | None, max_results: int) -> ToolResult:
@@ -225,15 +225,30 @@ def _grep_python(root: str, pattern: str, include: str | None, max_results: int)
 
     matches: list[str] = []
     root_path = Path(root)
-    glob_pattern = include or "**/*"
 
-    for file_path in root_path.glob(glob_pattern):
+    if root_path.is_file():
+        # `path` may be a single file — Path.glob on a file yields nothing,
+        # so the fallback always reported "No matches" where ripgrep matched.
+        candidates = iter([root_path])
+    else:
+        glob_pattern = include or "**/*"
+        # Recurse for bare patterns like "*.py" to match ripgrep's --glob
+        # semantics (the old top-level-only glob diverged by environment).
+        if include and "/" not in include and not include.startswith("**"):
+            glob_pattern = f"**/{include}"
+        candidates = root_path.glob(glob_pattern)
+
+    for file_path in candidates:
         if not file_path.is_file():
             continue
         try:
             for i, line in enumerate(file_path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
                 if regex.search(line):
-                    rel = file_path.relative_to(root_path)
+                    rel = (
+                        file_path.relative_to(root_path)
+                        if root_path.is_dir()
+                        else file_path.name
+                    )
                     matches.append(f"{rel}:{i}:{line}")
                     if len(matches) >= max_results:
                         break

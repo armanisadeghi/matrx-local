@@ -20,6 +20,7 @@ from typing import Any, Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app.common.background_tasks import fire_and_forget
 from app.common.system_logger import get_logger
 from app.services.local_db.repositories import TokenRepo
 from app.services.ai.engine import clear_jwt_cache, set_jwt_cache
@@ -138,7 +139,7 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            loop.create_task(_sync_after_token())
+            fire_and_forget(_sync_after_token(), name="post-token-sync")
     except Exception:
         pass
 

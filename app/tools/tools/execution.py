@@ -159,7 +159,9 @@ async def _bash_foreground(session: ToolSession, command: str, timeout_s: float)
     if timed_out:
         output = _truncate(output)
         output += f"\n\n[Command timed out after {timeout_s:.0f}s]"
-        return ToolResult(output=output)
+        # A timeout is a failure — the default SUCCESS type told the model
+        # the command worked.
+        return ToolResult(type=ToolResultType.ERROR, output=output)
 
     output = _truncate(output)
     exit_code = proc.returncode or 0
@@ -222,8 +224,10 @@ async def tool_bash_output(
             pattern = re.compile(filter)
         except re.error as e:
             return ToolResult(type=ToolResultType.ERROR, output=f"Invalid filter regex: {e}")
+        # A filtered read is a VIEW, not a consume: advancing read_offset here
+        # permanently discarded every non-matching line for later unfiltered
+        # reads.
         matched = [line for line in new_lines if pattern.search(line)]
-        shell.read_offset = len(shell.output_buffer)
         output_lines = matched
     else:
         shell.read_offset = len(shell.output_buffer)

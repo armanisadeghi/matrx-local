@@ -104,17 +104,11 @@ def _configure_sync(request: Request) -> None:
 
 
 def _fire_and_forget(coro) -> None:
-    async def _safe():
-        try:
-            await coro
-        except Exception as exc:
-            logger.debug("Background sync task failed (non-critical): %s", exc)
+    # Delegates to the shared retained helper — bare create_task results are
+    # only weakly referenced by the loop and can be GC'd mid-flight.
+    from app.common.background_tasks import fire_and_forget
 
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_safe())
-    except RuntimeError:
-        pass
+    fire_and_forget(coro, name="documents-sync")
 
 
 # ---------------------------------------------------------------------------

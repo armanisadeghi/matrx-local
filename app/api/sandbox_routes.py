@@ -304,7 +304,9 @@ async def fs_read(
         raise HTTPException(status_code=404, detail="file_not_found")
     if not p.is_file():
         raise HTTPException(status_code=400, detail="not_a_file")
-    data = p.read_bytes()
+    # Off-thread: reading + base64-encoding an arbitrary-size file blocked
+    # every other engine request for the duration.
+    data = await asyncio.to_thread(p.read_bytes)
     if encoding == "base64":
         body = base64.b64encode(data).decode("ascii")
         return Response(content=body, media_type="text/plain")
@@ -388,11 +390,16 @@ async def search_paths(
     root = _resolve_path(payload.cwd)
     if not root.exists() or not root.is_dir():
         return SearchPathsResponse(results=[])
-    hits: list[SearchPathsHit] = []
-    for match in root.rglob(payload.pattern):
-        if len(hits) >= payload.max_results:
-            break
-        hits.append(SearchPathsHit(path=str(match), kind=_kind_for(match)))
+    def _walk() -> list[SearchPathsHit]:
+        found: list[SearchPathsHit] = []
+        for match in root.rglob(payload.pattern):
+            if len(found) >= payload.max_results:
+                break
+            found.append(SearchPathsHit(path=str(match), kind=_kind_for(match)))
+        return found
+
+    # Off-thread: rglob over e.g. the user's home dir froze the event loop.
+    hits = await asyncio.to_thread(_walk)
     return SearchPathsResponse(results=hits)
 
 
@@ -489,30 +496,35 @@ async def search_content(
         regex = re.compile(pattern, flags_re)
     except re.error:
         return SearchContentResponse(results=[])
-    hits = []
-    for filepath in root.rglob("*"):
-        if len(hits) >= payload.max_results:
-            break
-        if not filepath.is_file():
-            continue
-        try:
-            for i, line in enumerate(
-                filepath.read_text(encoding="utf-8", errors="replace").splitlines(), 1
-            ):
-                m = regex.search(line)
-                if m:
-                    hits.append(
-                        SearchContentHit(
-                            path=str(filepath),
-                            line=i,
-                            column=m.start(),
-                            snippet=line,
+    def _scan() -> list[SearchContentHit]:
+        found: list[SearchContentHit] = []
+        for filepath in root.rglob("*"):
+            if len(found) >= payload.max_results:
+                break
+            if not filepath.is_file():
+                continue
+            try:
+                for i, line in enumerate(
+                    filepath.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+                ):
+                    m = regex.search(line)
+                    if m:
+                        found.append(
+                            SearchContentHit(
+                                path=str(filepath),
+                                line=i,
+                                column=m.start(),
+                                snippet=line,
+                            )
                         )
-                    )
-                    if len(hits) >= payload.max_results:
-                        break
-        except (OSError, UnicodeDecodeError):
-            continue
+                        if len(found) >= payload.max_results:
+                            break
+            except (OSError, UnicodeDecodeError):
+                continue
+        return found
+
+    # Off-thread: the pure-Python content scan walks whole trees.
+    hits = await asyncio.to_thread(_scan)
     return SearchContentResponse(results=hits)
 
 

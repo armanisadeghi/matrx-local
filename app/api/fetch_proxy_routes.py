@@ -14,6 +14,7 @@ POST /fetch-proxy/extract – Fetch a URL and return raw text for scraping
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import re
 import socket
@@ -32,7 +33,7 @@ logger = get_logger()
 router = APIRouter(prefix="/fetch-proxy", tags=["fetch-proxy"])
 
 
-def _assert_safe_fetch_url(raw_url: str) -> None:
+async def _assert_safe_fetch_url(raw_url: str) -> None:
     """Reject SSRF-prone targets before fetching.
 
     The fetch-proxy makes a server-side request to an arbitrary URL and
@@ -57,7 +58,11 @@ def _assert_safe_fetch_url(raw_url: str) -> None:
     # loopback, link-local, or otherwise not globally routable. Resolving
     # here also blunts DNS-rebinding to an internal address.
     try:
-        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+        # Resolve on the default executor — synchronous getaddrinfo blocks the
+        # whole event loop for up to the resolver timeout (~5s per nameserver).
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            host, parsed.port or (443 if parsed.scheme == "https" else 80)
+        )
     except OSError:
         raise HTTPException(status_code=400, detail="Could not resolve host.")
 
@@ -175,7 +180,7 @@ async def proxy_page(
     url: Annotated[str, Query(description="Target URL to fetch and proxy")],
 ) -> Response:
     """Fetch *url* server-side, strip blocking headers, rewrite links, return HTML."""
-    _assert_safe_fetch_url(url)
+    await _assert_safe_fetch_url(url)
     try:
         resp = await _fetch(url)
     except httpx.RequestError as exc:
@@ -233,7 +238,7 @@ async def extract_page(req: ExtractRequest) -> ExtractResult:
     same-origin / X-Frame-Options restrictions.  It does NOT execute JavaScript,
     but it will capture JS-rendered content if Playwright is available.
     """
-    _assert_safe_fetch_url(req.url)
+    await _assert_safe_fetch_url(req.url)
     try:
         resp = await _fetch(req.url)
     except httpx.RequestError as exc:

@@ -489,18 +489,38 @@ async def tool_top_processes(
     try:
         import psutil
 
+        # cpu_percent needs two samples: the first call on a fresh Process
+        # object always returns 0.0, so sorting by a single process_iter pass
+        # produced an arbitrary order. Prime, wait briefly, then read.
+        if sort_by != "memory":
+            procs = list(
+                psutil.process_iter(["pid", "name", "memory_info", "memory_percent"])
+            )
+            for proc in procs:
+                try:
+                    proc.cpu_percent(interval=None)  # prime
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            await asyncio.sleep(0.25)
+        else:
+            procs = list(
+                psutil.process_iter(["pid", "name", "memory_info", "memory_percent"])
+            )
+
         processes = []
-        for proc in psutil.process_iter(
-            ["pid", "name", "cpu_percent", "memory_info", "memory_percent"]
-        ):
+        for proc in procs:
             try:
                 info = proc.info
                 mem = info.get("memory_info")
+                try:
+                    cpu = proc.cpu_percent(interval=None) if sort_by != "memory" else 0.0
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    cpu = 0.0
                 processes.append(
                     {
                         "pid": info["pid"],
                         "name": info.get("name", "?"),
-                        "cpu_percent": info.get("cpu_percent", 0.0) or 0.0,
+                        "cpu_percent": round(cpu, 1),
                         "memory_mb": round(mem.rss / (1024 * 1024), 1) if mem else 0,
                         "memory_percent": round(
                             info.get("memory_percent", 0.0) or 0.0, 1

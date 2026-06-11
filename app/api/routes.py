@@ -263,8 +263,13 @@ async def get_logs(n: int = Query(default=100, ge=1, le=2000)):
     log_file = Path(LOG_DIR) / "system.log"
     logger.info("Logs endpoint accessed")
     try:
-        with open(log_file, "r", encoding="utf-8") as fh:
-            lines = fh.readlines()[-n:]
+        # system.log persists across runs and can be tens of MB — read it off
+        # the event loop.
+        def _tail() -> list[str]:
+            with open(log_file, "r", encoding="utf-8", errors="replace") as fh:
+                return fh.readlines()[-n:]
+
+        lines = await asyncio.to_thread(_tail)
         return {"logs": [l.rstrip("\n") for l in lines]}
     except FileNotFoundError:
         logger.warning("Log file not found: %s", log_file)

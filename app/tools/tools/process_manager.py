@@ -30,18 +30,35 @@ async def tool_list_processes(
 
     import psutil
 
+    # Prime cpu_percent across two samples — a single fresh process_iter pass
+    # reads 0.0 for every process, making the CPU sort meaningless.
+    procs = list(
+        psutil.process_iter(["pid", "name", "memory_info", "status", "username"])
+    )
+    if sort_by == "cpu":
+        for proc in procs:
+            try:
+                proc.cpu_percent(interval=None)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        await asyncio.sleep(0.25)
+
     processes = []
-    for proc in psutil.process_iter(["pid", "name", "cpu_percent", "memory_info", "status", "username"]):
+    for proc in procs:
         try:
             info = proc.info
             name = info.get("name", "")
             if filter is not None and str(filter).lower() not in str(name).lower():
                 continue
             mem = info.get("memory_info")
+            try:
+                cpu = proc.cpu_percent(interval=None) if sort_by == "cpu" else 0.0
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                cpu = 0.0
             processes.append({
                 "pid": info["pid"],
                 "name": name,
-                "cpu_percent": info.get("cpu_percent", 0.0) or 0.0,
+                "cpu_percent": round(cpu, 1),
                 "memory_mb": round(mem.rss / (1024 * 1024), 1) if mem else 0,
                 "status": info.get("status", "unknown"),
                 "user": info.get("username", ""),
@@ -49,8 +66,13 @@ async def tool_list_processes(
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
-    sort_key = "memory_mb" if sort_by == "memory" else "cpu_percent"
-    processes.sort(key=lambda p: p.get(sort_key, 0), reverse=True)
+    if sort_by == "name":
+        processes.sort(key=lambda p: str(p.get("name", "")).lower())
+    elif sort_by == "pid":
+        processes.sort(key=lambda p: p.get("pid", 0))
+    else:
+        sort_key = "memory_mb" if sort_by == "memory" else "cpu_percent"
+        processes.sort(key=lambda p: p.get(sort_key, 0), reverse=True)
     processes = processes[:limit]  # type: ignore
 
     lines: list[str] = [f"{'PID':>8}  {'CPU%':>6}  {'MEM MB':>8}  {'STATUS':>10}  NAME"]
@@ -629,21 +651,31 @@ async def tool_kill_process(
                 except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                     errors.append(f"{name}: {e}")
         else:
-            # Fallback without psutil
-            try:
-                if PLATFORM["is_windows"]:
-                    subprocess.run(
-                        ["taskkill", "/IM", name] + (["/F"] if force else []),
-                        capture_output=True, timeout=10,
-                    )
-                else:
-                    subprocess.run(
-                        ["pkill"] + (["-9"] if force else []) + [name],
-                        capture_output=True, timeout=10,
-                    )
-                killed.append(name)
-            except Exception as e:
-                errors.append(f"Kill by name failed: {e}")
+            # Fallback without psutil. pkill/taskkill match SUBSTRINGS of
+            # process names, so a request like name="server" would match
+            # llama-server — refuse any name that a protected process name
+            # contains, mirroring the per-process guard in the psutil path.
+            low = name.lower()
+            if any(low in p or p in low for p in _PROTECTED_PROCESS_NAMES):
+                errors.append(
+                    f"{name}: refusing name-based kill — pattern overlaps an "
+                    "engine-owned process name; use an explicit PID instead"
+                )
+            else:
+                try:
+                    if PLATFORM["is_windows"]:
+                        subprocess.run(
+                            ["taskkill", "/IM", name] + (["/F"] if force else []),
+                            capture_output=True, timeout=10,
+                        )
+                    else:
+                        subprocess.run(
+                            ["pkill"] + (["-9"] if force else []) + [name],
+                            capture_output=True, timeout=10,
+                        )
+                    killed.append(name)
+                except Exception as e:
+                    errors.append(f"Kill by name failed: {e}")
 
     parts = []
     if killed:

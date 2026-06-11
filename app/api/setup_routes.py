@@ -1498,8 +1498,14 @@ async def stream_logs(request: Request, lines: int = 200):
             # prevented live-follow from ever starting).
             history: list[str] = []
             try:
-                with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
-                    all_lines = fh.readlines()
+                def _read_all() -> list[str]:
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+                        return fh.readlines()
+
+                # Off-thread: this file can be tens of MB and the readlines +
+                # seek-pos encode below blocked the event loop on every open
+                # of the Activity tab.
+                all_lines = await asyncio.to_thread(_read_all)
                 cutoff = datetime.fromtimestamp(_PROCESS_START - 5.0)
                 include = False
                 for raw in all_lines:
@@ -1511,7 +1517,9 @@ async def stream_logs(request: Request, lines: int = 200):
                     raw = raw.rstrip("\n")
                     if raw:
                         yield f"event: log\ndata: {json.dumps({'line': raw, 'level': _parse_level(raw), 'timestamp': time.time()})}\n\n"
-                seek_pos = sum(len(l.encode("utf-8", errors="replace")) for l in all_lines)
+                seek_pos = await asyncio.to_thread(
+                    lambda: sum(len(l.encode("utf-8", errors="replace")) for l in all_lines)
+                )
             except Exception as exc:
                 yield f"event: log\ndata: {json.dumps({'line': f'[setup/logs] Error reading log: {exc}', 'level': 'error', 'timestamp': time.time()})}\n\n"
                 seek_pos = 0

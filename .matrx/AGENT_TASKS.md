@@ -20,6 +20,41 @@ _(none)_
 
 ## Active
 
+### Bug-hunt wave 1 — deferred items (2026-06-11 full-system audit)
+A comprehensive audit fixed ~150 verified bugs (see commits 9ca5652..ab1f3c8).
+These were found, verified, and deliberately deferred:
+
+- [ ] **Rust: LlmServerState mutex held across 120s health wait** — status
+  commands block during model load. Shutdown is now covered via the PID
+  handle; releasing the lock during the wait needs a careful refactor with
+  local cargo-check. (`llm/commands.rs:90`, `llm/server.rs:39-189`)
+- [ ] **Rust: audio capture is f32-only** — `build_input_stream` fails on
+  I16/U16-default devices (common on Linux/ALSA); match `sample_format()`
+  and convert. (`transcription/audio_capture.rs:69-102`)
+- [ ] **Rust: vulkaninfo VRAM parse order inverted** — `size =` precedes
+  `DEVICE_LOCAL` in real output, so AMD/Intel VRAM is never detected and
+  tier selection lowballs (24GB GPU → tiny model + gpu_layers=1).
+  (`transcription/hardware.rs:227-260`)
+- [ ] **Rust: floating overlay mixes physical/logical px** on scaled
+  secondary monitors; `sidecar_status` hardcodes port 22140.
+- [ ] **Unmounted tool panels carry latent bugs** (BrowserPanel runner,
+  SchedulerPanel/RecordAudio arg mismatches, TerminalPanel stale closures,
+  AutomationPanel render-loop, KeyValueField index keys) — fix before
+  re-wiring them into Tools.tsx. Only Monitoring/Process panels are live
+  (both fixed).
+- [ ] **Engine: dead stub files** (audio/player.py, tts/player.py,
+  transcription/transcribe.py, files/explorer.py, files/uploader.py,
+  audio/recorder.py) — no importers; delete or implement.
+- [ ] **use-chat-tts**: chunks are serialized but `speakText` resolves at
+  synthesis end, not playback drain — a small gap between sentences can
+  remain; gapless append-mode scheduling is the follow-up.
+- [ ] **extension_auth reject-log window** (`_REJECT_LOG_WINDOW_SECONDS`
+  dead constant, unbounded `_reject_log_state`) — logging-only.
+- [ ] **capabilities/setup pip installs break in frozen builds**
+  (`sys.executable -m pip` is the sidecar binary) — needs a packaged-build
+  strategy, not a code tweak.
+
+
 _(none)_
 
 ---

@@ -339,7 +339,10 @@ class HuggingFaceProvider(ModelRepoProvider):
             timeout=20.0,
             headers=_CLIENT_HEADERS,
         ) as client:
-            api_url = f"{self.BASE_API}/{repo_id}"
+            # blobs=true is required for the API to include per-file sizes on
+            # `siblings`; without it every size reads 0 and all RAM-fit
+            # compatibility scoring below degenerates to "fits comfortably".
+            api_url = f"{self.BASE_API}/{repo_id}?blobs=true"
             resp = await client.get(api_url)
 
         if resp.status_code == 401 or resp.status_code == 403:

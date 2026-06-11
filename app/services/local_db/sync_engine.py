@@ -318,7 +318,13 @@ class SyncEngine:
 
         builtin_ids = {a["id"] for a in builtin_agents}
         user_ids_set = {a["id"] for a in user_agents}
-        await self._agents_repo.delete_by_source("builtin", builtin_ids)
+        # Guard the empty case: delete_by_source treats an empty keep set as
+        # "delete everything for this source" (unlike PromptBuiltinsRepo.
+        # delete_missing, which no-ops). A transient empty/inactive builtins
+        # payload from the server would otherwise wipe the entire agent list
+        # until the next successful sync.
+        if builtin_ids:
+            await self._agents_repo.delete_by_source("builtin", builtin_ids)
         if user_ids_set or user_id:
             # Scope the delete to this user — don't touch other users' agents
             await self._agents_repo.delete_by_source("user", user_ids_set, user_id=user_id or None)

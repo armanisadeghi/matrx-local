@@ -7,6 +7,8 @@ JSON fields (lists, dicts) are serialized/deserialized transparently.
 
 from __future__ import annotations
 
+import asyncio
+
 import json
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -1190,6 +1192,9 @@ class AppInstanceRepo:
 _SETTINGS_KEY = "settings"
 
 
+_APP_SETTINGS_WRITE_LOCK = asyncio.Lock()
+
+
 class AppSettingsRepo:
     def __init__(self, db: LocalDatabase | None = None):
         self._db = db or get_db()
@@ -1217,14 +1222,20 @@ class AppSettingsRepo:
         return all_settings.get(key, default)
 
     async def set(self, key: str, value: Any) -> None:
-        all_settings = await self.get_all()
-        all_settings[key] = value
-        await self.save_all(all_settings)
+        # Serialize read-modify-write on the single JSON blob row: two
+        # concurrent writers would each get_all → mutate → save_all and the
+        # loser silently erases the winner's key (this blob also stores the
+        # user's API keys via ApiKeysRepo).
+        async with _APP_SETTINGS_WRITE_LOCK:
+            all_settings = await self.get_all()
+            all_settings[key] = value
+            await self.save_all(all_settings)
 
     async def set_many(self, updates: dict[str, Any]) -> None:
-        all_settings = await self.get_all()
-        all_settings.update(updates)
-        await self.save_all(all_settings)
+        async with _APP_SETTINGS_WRITE_LOCK:
+            all_settings = await self.get_all()
+            all_settings.update(updates)
+            await self.save_all(all_settings)
 
 
 # ==================================================================
@@ -1296,16 +1307,27 @@ class ApiKeysRepo:
         return all_keys.get(provider)
 
     async def set(self, provider: str, key: str) -> None:
-        """Store a key for one provider (base64-encoded)."""
-        raw: dict[str, str] = await self._settings.get(_API_KEYS_SETTINGS_KEY, {})
-        raw[provider] = _encode_key(key)
-        await self._settings.set(_API_KEYS_SETTINGS_KEY, raw)
+        """Store a key for one provider (encrypted/base64-encoded).
+
+        The whole read-modify-write runs under the shared blob lock — doing
+        the api_keys-dict read outside it let two concurrent key saves drop
+        one of the keys.
+        """
+        async with _APP_SETTINGS_WRITE_LOCK:
+            all_settings = await self._settings.get_all()
+            raw = dict(all_settings.get(_API_KEYS_SETTINGS_KEY) or {})
+            raw[provider] = _encode_key(key)
+            all_settings[_API_KEYS_SETTINGS_KEY] = raw
+            await self._settings.save_all(all_settings)
 
     async def delete(self, provider: str) -> None:
         """Remove a stored key for one provider."""
-        raw: dict[str, str] = await self._settings.get(_API_KEYS_SETTINGS_KEY, {})
-        raw.pop(provider, None)
-        await self._settings.set(_API_KEYS_SETTINGS_KEY, raw)
+        async with _APP_SETTINGS_WRITE_LOCK:
+            all_settings = await self._settings.get_all()
+            raw = dict(all_settings.get(_API_KEYS_SETTINGS_KEY) or {})
+            raw.pop(provider, None)
+            all_settings[_API_KEYS_SETTINGS_KEY] = raw
+            await self._settings.save_all(all_settings)
 
     async def is_configured(self, provider: str) -> bool:
         """Return True if a non-empty key is stored for this provider."""

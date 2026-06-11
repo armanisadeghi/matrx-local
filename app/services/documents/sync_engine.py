@@ -96,13 +96,62 @@ class SyncEngine:
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         is_new_note: bool = False,
+        file_path: str | None = None,
     ) -> dict[str, Any]:
-        """Push a single note to Supabase. Local file must already be written."""
+        """Push a single note to Supabase (public entry — serialized).
+
+        Routes fire this directly, concurrently with full_sync/push_all; all
+        of them read-modify-write the shared .sync/state.json, so the public
+        wrapper must take the same lock the bulk operations hold.
+        """
+        async with self._sync_lock:
+            return await self._push_note(
+                note_id=note_id,
+                label=label,
+                content=content,
+                folder_name=folder_name,
+                folder_id=folder_id,
+                tags=tags,
+                metadata=metadata,
+                is_new_note=is_new_note,
+                file_path=file_path,
+            )
+
+    async def _push_note(
+        self,
+        note_id: str,
+        label: str,
+        content: str,
+        folder_name: str = "General",
+        folder_id: str | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        is_new_note: bool = False,
+        file_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Push a single note to Supabase. Local file must already be written.
+
+        ``file_path`` MUST be the note's actual on-disk path when the caller
+        knows it. Rederiving the path from folder+label here silently targets
+        ``<folder>/<label>.md`` — which, for notes created with a
+        collision-suffixed path (``label_2.md``), is a DIFFERENT note's file
+        and would overwrite it on disk.
+        """
         if not self._user_id:
             logger.debug("push_note skipped — no user_id configured")
             return {"id": note_id, "label": label, "_synced_to_cloud": False}
 
-        file_path = self.fm.write_note(folder_name, label, content)
+        if file_path is None:
+            # Best effort: recover the real path from SQLite before falling
+            # back to the folder+label derivation.
+            try:
+                row = await self._get_notes_repo().get(note_id)
+                if row and row.get("file_path"):
+                    file_path = row["file_path"]
+            except Exception:
+                pass
+
+        file_path = self.fm.write_note(folder_name, label, content, file_path)
         c_hash = content_hash(content)
 
         self._last_push_hashes[file_path] = c_hash
@@ -220,6 +269,11 @@ class SyncEngine:
     # ── Pull: Supabase → local ───────────────────────────────────────────────
 
     async def pull_note(self, note_id: str) -> dict[str, Any] | None:
+        """Pull a single note (public entry — serialized, see push_note)."""
+        async with self._sync_lock:
+            return await self._pull_note(note_id)
+
+    async def _pull_note(self, note_id: str) -> dict[str, Any] | None:
         if not self._user_id:
             return None
 
@@ -231,6 +285,26 @@ class SyncEngine:
 
         if not note:
             return None
+
+        # A remote soft-delete must propagate as a deletion — writing the
+        # deleted row's content back to disk resurrected notes the user had
+        # deleted on another device.
+        if note.get("is_deleted"):
+            fp = note.get("file_path")
+            if fp:
+                try:
+                    self.fm.delete_note(fp)
+                except Exception:
+                    logger.debug("Could not remove local file for deleted note %s", note_id)
+                state = self.fm.load_sync_state()
+                state.get("note_hashes", {}).pop(fp, None)
+                self.fm.save_sync_state(state)
+                self._last_push_hashes.pop(fp, None)
+            try:
+                await self._get_notes_repo().soft_delete(note_id)
+            except Exception:
+                pass
+            return {**note, "_deleted": True}
 
         content = note.get("content", "")
         label = note.get("label", "Untitled")
@@ -325,8 +399,8 @@ class SyncEngine:
             if fp and self._last_push_hashes.get(fp) == note.get("content_hash"):
                 continue
 
-            result = await self.pull_note(note["id"])
-            if result:
+            result = await self._pull_note(note["id"])
+            if result and not result.get("_deleted"):
                 pulled += 1
                 if result.get("_conflict"):
                     conflicts += 1
@@ -365,7 +439,7 @@ class SyncEngine:
 
                 try:
                     is_new = note.get("sync_status") == "never_synced"
-                    await self.push_note(
+                    await self._push_note(
                         note_id=note["id"],
                         label=note.get("label", note.get("title", "")),
                         content=content,
@@ -374,6 +448,7 @@ class SyncEngine:
                         tags=note.get("tags", []),
                         metadata=note.get("metadata", {}),
                         is_new_note=is_new,
+                        file_path=fp,
                     )
                     stats["pushed"] += 1
                 except Exception:
@@ -406,8 +481,8 @@ class SyncEngine:
                     stats["skipped"] += 1
                     continue
 
-                result = await self.pull_note(note_id)
-                if result:
+                result = await self._pull_note(note_id)
+                if result and not result.get("_deleted"):
                     stats["pulled"] += 1
                     if result.get("_conflict"):
                         stats["conflicts"] += 1
@@ -458,29 +533,45 @@ class SyncEngine:
                 local = local_by_path.get(fp)
 
                 if local is None:
-                    await self.pull_note(remote["id"])
+                    # Local file is gone. If our SQLite row carries a delete
+                    # tombstone, the user deleted it HERE — propagate the
+                    # deletion instead of resurrecting the note from the cloud.
+                    if local_note and local_note.get("is_deleted"):
+                        try:
+                            await self.sb.soft_delete_note(note_id)
+                            stats["deleted_local"] += 1
+                        except Exception:
+                            logger.debug(
+                                "Could not propagate local delete for %s", note_id
+                            )
+                        continue
+                    await self._pull_note(remote["id"])
                     stats["pulled"] += 1
 
                 elif local["content_hash"] == remote.get("content_hash"):
                     stats["unchanged"] += 1
+                    # NOTE: must be the remote/SQLite row id — notes created via
+                    # the API use uuid4 ids, so the old path-derived uuid5 here
+                    # matched zero rows and pending_push rows never converged.
                     await repo.set_sync_status(
-                        _note_id_for_path(fp), "synced",
+                        note_id, "synced",
                         remote_hash=remote.get("content_hash")
                     )
 
                 elif known_hashes.get(fp) == local["content_hash"]:
-                    await self.pull_note(remote["id"])
+                    await self._pull_note(remote["id"])
                     stats["pulled"] += 1
 
                 elif known_hashes.get(fp) == remote.get("content_hash"):
                     content = self.fm.read_note(fp)
                     if content is not None:
-                        await self.push_note(
+                        await self._push_note(
                             note_id=remote["id"],
                             label=remote.get("label", local["label"]),
                             content=content,
                             folder_name=remote.get("folder_name", "General"),
                             folder_id=remote.get("folder_id"),
+                            file_path=fp,
                         )
                         stats["pushed"] += 1
                 else:
@@ -497,22 +588,34 @@ class SyncEngine:
 
             for fp, local in local_by_path.items():
                 if fp not in remote_by_path:
-                    note_id = _note_id_for_path(fp)
-                    local_note = await repo.get(note_id)
+                    # Resolve the REAL SQLite row for this path — API-created
+                    # notes use uuid4 ids, so deriving a fresh uuid5/uuid4 here
+                    # split the identity between SQLite and the cloud and made
+                    # push_note's set_sync_status update zero rows (the note
+                    # then re-pushed forever).
+                    local_note = await repo.get_by_file_path(fp)
+                    if local_note is None:
+                        local_note = await repo.get(_note_id_for_path(fp))
                     if local_note and not local_note.get("sync_enabled", True):
+                        continue
+                    if local_note and local_note.get("is_deleted"):
                         continue
 
                     content = self.fm.read_note(fp)
                     if content is not None:
                         parts = Path(fp).parts
                         folder = parts[0] if len(parts) > 1 else "General"
-                        new_note_id = str(uuid.uuid4())
-                        await self.push_note(
-                            note_id=new_note_id,
+                        push_id = (
+                            local_note["id"] if local_note else _note_id_for_path(fp)
+                        )
+                        await self._push_note(
+                            note_id=push_id,
                             label=local["label"],
                             content=content,
-                            folder_name=folder,
+                            folder_name=(local_note or {}).get("folder_name") or folder,
+                            folder_id=(local_note or {}).get("folder_id"),
                             is_new_note=True,
+                            file_path=fp,
                         )
                         stats["pushed"] += 1
 
@@ -604,16 +707,24 @@ class SyncEngine:
                     except ValueError:
                         continue
 
-                    if path.is_file():
-                        current_hash = content_hash(path.read_text(encoding="utf-8"))
-                        if self._last_push_hashes.get(rel_path) == current_hash:
-                            continue
-
+                    # Debounce FIRST, then read/hash — hashing before the sleep
+                    # evaluated echo-suppression against content that may have
+                    # changed again by the time we process the event.
                     await asyncio.sleep(0.5)
 
                     if change_type == watchfiles.Change.deleted:
                         logger.info("External delete detected: %s", rel_path)
+                        await self._handle_external_delete(rel_path)
                     else:
+                        if path.is_file():
+                            try:
+                                current_hash = content_hash(
+                                    path.read_text(encoding="utf-8")
+                                )
+                            except OSError:
+                                continue
+                            if self._last_push_hashes.get(rel_path) == current_hash:
+                                continue
                         logger.info("External change detected: %s", rel_path)
                         await self._handle_external_change(rel_path)
 
@@ -638,6 +749,41 @@ class SyncEngine:
         except asyncio.CancelledError:
             pass
 
+    async def _handle_external_delete(self, file_path: str) -> None:
+        """Handle an externally deleted .md file.
+
+        Records a delete tombstone in SQLite and drops the sync-state hash so
+        the next full_sync propagates the deletion instead of re-pulling the
+        note from the cloud (the old behavior only logged the event, so every
+        locally deleted file came back on the next sync).
+        """
+        async with self._sync_lock:
+            state = self.fm.load_sync_state()
+            state.get("note_hashes", {}).pop(file_path, None)
+            self.fm.save_sync_state(state)
+            self._last_push_hashes.pop(file_path, None)
+
+            repo = self._get_notes_repo()
+            row = await repo.get_by_file_path(file_path)
+            if row is None:
+                row = await repo.get(_note_id_for_path(file_path))
+            if row is None:
+                return
+            try:
+                await repo.soft_delete(row["id"])
+            except Exception:
+                logger.debug("Could not tombstone deleted note %s", file_path)
+                return
+
+            if self.is_configured and self._user_id:
+                try:
+                    await self.sb.soft_delete_note(row["id"])
+                except Exception:
+                    logger.debug(
+                        "Could not propagate delete for %s (will retry on full_sync)",
+                        file_path,
+                    )
+
     async def _handle_external_change(self, file_path: str) -> None:
         """Handle an externally modified .md file — update SQLite metadata."""
         async with self._sync_lock:
@@ -650,9 +796,14 @@ class SyncEngine:
             state["note_hashes"][file_path] = c_hash
             self.fm.save_sync_state(state)
 
-            note_id = _note_id_for_path(file_path)
+            # Resolve the existing row by PATH first — notes created through the
+            # API have uuid4 ids, so deriving a uuid5 here created a duplicate
+            # SQLite row for the same file.
             repo = self._get_notes_repo()
-            existing = await repo.get(note_id)
+            existing = await repo.get_by_file_path(file_path)
+            if existing is None:
+                existing = await repo.get(_note_id_for_path(file_path))
+            note_id = existing["id"] if existing else _note_id_for_path(file_path)
 
             parts = Path(file_path).parts
             folder = parts[0] if len(parts) > 1 else "General"
@@ -660,12 +811,12 @@ class SyncEngine:
             await repo.upsert({
                 "id": note_id,
                 "user_id": existing.get("user_id", "") if existing else "",
-                "title": Path(file_path).stem,
-                "label": Path(file_path).stem,
+                "title": existing.get("title") if existing else Path(file_path).stem,
+                "label": existing.get("label") if existing else Path(file_path).stem,
                 "content": content,
                 "content_hash": c_hash,
                 "file_path": file_path,
-                "folder_name": folder,
+                "folder_name": (existing.get("folder_name") if existing else None) or folder,
                 "sync_status": "pending_push" if (existing and existing.get("sync_status") == "synced") else (existing.get("sync_status", "never_synced") if existing else "never_synced"),
                 "sync_enabled": existing.get("sync_enabled", True) if existing else True,
                 "last_synced_at": existing.get("last_synced_at") if existing else None,
@@ -683,21 +834,25 @@ class SyncEngine:
                         note = matching[0]
                         if note.get("content_hash") == c_hash:
                             return
-                        await self.push_note(
+                        await self._push_note(
                             note_id=note["id"],
                             label=note.get("label", Path(file_path).stem),
                             content=content,
                             folder_name=note.get("folder_name", "General"),
                             folder_id=note.get("folder_id"),
+                            file_path=file_path,
                         )
                     else:
-                        new_id = str(uuid.uuid4())
-                        await self.push_note(
-                            note_id=new_id,
+                        # Push under the SAME id as the SQLite row created
+                        # above — a fresh uuid4 here split the identity and
+                        # made the post-push set_sync_status a no-op.
+                        await self._push_note(
+                            note_id=note_id,
                             label=Path(file_path).stem,
                             content=content,
                             folder_name=folder,
                             is_new_note=True,
+                            file_path=file_path,
                         )
                 except Exception:
                     logger.debug(
@@ -724,6 +879,15 @@ class SyncEngine:
           split       — Keep both as separate notes.
           exclude     — Mark this note as excluded from sync.
         """
+        async with self._sync_lock:
+            return await self._resolve_conflict(note_id, resolution, merged_content)
+
+    async def _resolve_conflict(
+        self,
+        note_id: str,
+        resolution: str,
+        merged_content: str | None,
+    ) -> dict[str, Any] | None:
         conflict_dir = self.fm.base_dir / ".sync" / "conflicts" / note_id
         if not conflict_dir.exists():
             return None
@@ -742,41 +906,44 @@ class SyncEngine:
         label = (sqlite_note.get("label") or sqlite_note.get("title", "Untitled")) if sqlite_note else "Untitled"
         folder_name = (sqlite_note.get("folder_name") or "General") if sqlite_note else "General"
         folder_id = sqlite_note.get("folder_id") if sqlite_note else None
+        note_path = sqlite_note.get("file_path") if sqlite_note else None
 
         result: dict[str, Any] = {"id": note_id, "resolution": resolution}
 
         if resolution == "keep_local":
-            self.fm.write_note(folder_name, label, local_content)
+            self.fm.write_note(folder_name, label, local_content, note_path)
             if self.is_configured and self._user_id:
                 try:
-                    await self.push_note(
+                    await self._push_note(
                         note_id=note_id,
                         label=label,
                         content=local_content,
                         folder_name=folder_name,
                         folder_id=folder_id,
+                        file_path=note_path,
                     )
                 except Exception:
                     pass
             result["content"] = local_content
 
         elif resolution == "keep_remote":
-            self.fm.write_note(folder_name, label, remote_content)
+            self.fm.write_note(folder_name, label, remote_content, note_path)
             await repo.set_sync_status(note_id, "synced", remote_hash=content_hash(remote_content))
             result["content"] = remote_content
 
         elif resolution == "merge":
             if not merged_content:
                 return None
-            self.fm.write_note(folder_name, label, merged_content)
+            self.fm.write_note(folder_name, label, merged_content, note_path)
             if self.is_configured and self._user_id:
                 try:
-                    await self.push_note(
+                    await self._push_note(
                         note_id=note_id,
                         label=label,
                         content=merged_content,
                         folder_name=folder_name,
                         folder_id=folder_id,
+                        file_path=note_path,
                     )
                 except Exception:
                     pass
@@ -786,28 +953,29 @@ class SyncEngine:
             # Combine both versions: local first, then cloud, with separator
             separator = "\n\n---\n\n*— Appended from cloud sync —*\n\n"
             combined = local_content.rstrip() + separator + remote_content.lstrip()
-            self.fm.write_note(folder_name, label, combined)
+            self.fm.write_note(folder_name, label, combined, note_path)
             if self.is_configured and self._user_id:
                 try:
-                    await self.push_note(
+                    await self._push_note(
                         note_id=note_id,
                         label=label,
                         content=combined,
                         folder_name=folder_name,
                         folder_id=folder_id,
+                        file_path=note_path,
                     )
                 except Exception:
                     pass
             result["content"] = combined
 
         elif resolution == "split":
-            self.fm.write_note(folder_name, label, local_content)
+            self.fm.write_note(folder_name, label, local_content, note_path)
             new_label = f"{label} (cloud copy)"
             self.fm.write_note(folder_name, new_label, remote_content)
             if self.is_configured and self._user_id:
                 try:
                     new_id = str(uuid.uuid4())
-                    await self.push_note(
+                    await self._push_note(
                         note_id=new_id,
                         label=new_label,
                         content=remote_content,
@@ -821,7 +989,7 @@ class SyncEngine:
             result["split_note_label"] = new_label
 
         elif resolution == "exclude":
-            self.fm.write_note(folder_name, label, local_content)
+            self.fm.write_note(folder_name, label, local_content, note_path)
             await repo.set_excluded(note_id, True)
             result["content"] = local_content
 

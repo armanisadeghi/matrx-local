@@ -15,7 +15,9 @@ logger = get_logger()
 
 
 class Connection:
-    __slots__ = ("websocket", "session", "_running_tasks", "via_tunnel")
+    __slots__ = (
+        "websocket", "session", "_running_tasks", "via_tunnel", "_user_cancelled"
+    )
 
     def __init__(
         self, websocket: WebSocket, session: ToolSession, via_tunnel: bool = False
@@ -24,11 +26,16 @@ class Connection:
         self.session = session
         self.via_tunnel = via_tunnel
         self._running_tasks: dict[str, asyncio.Task] = {}
+        # Ids cancelled via the explicit "cancel" action — those already got a
+        # success ack, so the task's CancelledError handler must not send a
+        # second response for the same id.
+        self._user_cancelled: set[str] = set()
 
     def cancel_all(self) -> int:
         count = 0
-        for task in self._running_tasks.values():
+        for req_id, task in self._running_tasks.items():
             if not task.done():
+                self._user_cancelled.add(req_id)
                 task.cancel()
                 count += 1
         self._running_tasks.clear()
@@ -94,6 +101,7 @@ class WebSocketManager:
         if action == "cancel" and request_id:
             task = conn._running_tasks.pop(request_id, None)
             if task and not task.done():
+                conn._user_cancelled.add(request_id)
                 task.cancel()
                 await self._send(conn, {
                     "type": "success",
@@ -137,9 +145,23 @@ class WebSocketManager:
             logger.info("→ WS tool=%s  id=%s", tool_name, req_id)
             logger.debug("   input: %s", input_str)
 
+        if req_id in conn._running_tasks and not conn._running_tasks[req_id].done():
+            await self._send(conn, {
+                "id": req_id,
+                "type": "error",
+                "output": f"A request with id {req_id} is already running",
+            })
+            return
+
         task = asyncio.create_task(self._run_tool(conn, req_id, tool_name, tool_input))
         conn._running_tasks[req_id] = task
-        task.add_done_callback(lambda _: conn._running_tasks.pop(req_id, None))
+
+        def _cleanup(_t: asyncio.Task, _rid: str = req_id, _task=task) -> None:
+            # Pop only OUR entry — if a newer task reused the id, leave it.
+            if conn._running_tasks.get(_rid) is _task:
+                conn._running_tasks.pop(_rid, None)
+
+        task.add_done_callback(_cleanup)
 
     async def _run_tool(
         self, conn: Connection, request_id: str, tool_name: str, tool_input: dict
@@ -179,11 +201,16 @@ class WebSocketManager:
         except asyncio.CancelledError:
             duration_ms = (_time.monotonic() - t0) * 1000
             logger.warning("← WS tool=%s  CANCELLED  (%.0fms)", tool_name, duration_ms)
-            await self._send(conn, {
-                "id": request_id,
-                "type": "error",
-                "output": f"Task {request_id} was cancelled",
-            })
+            if request_id in conn._user_cancelled:
+                # The "cancel" action already acked this id — a second response
+                # for the same id would confuse the client's pending-request map.
+                conn._user_cancelled.discard(request_id)
+            else:
+                await self._send(conn, {
+                    "id": request_id,
+                    "type": "error",
+                    "output": f"Task {request_id} was cancelled",
+                })
 
         except Exception as e:
             duration_ms = (_time.monotonic() - t0) * 1000
@@ -206,7 +233,9 @@ class WebSocketManager:
             )
 
     async def broadcast(self, message: str) -> None:
-        for conn in self.connections.values():
+        # Snapshot: connects/disconnects during the awaited sends mutate the
+        # dict and would raise "dictionary changed size during iteration".
+        for conn in list(self.connections.values()):
             await self._send(conn, {"type": "broadcast", "output": message})
 
     async def broadcast_notification(
@@ -224,7 +253,7 @@ class WebSocketManager:
             "level": level,
             "timestamp": int(_time.time() * 1000),
         }
-        for conn in self.connections.values():
+        for conn in list(self.connections.values()):
             await self._send(conn, payload)
 
     @property

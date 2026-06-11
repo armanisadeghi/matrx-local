@@ -655,6 +655,7 @@ async def create_note(req: CreateNoteRequest, request: Request) -> dict[str, Any
             tags=req.tags,
             metadata=req.metadata,
             is_new_note=True,
+            file_path=file_path,
         ))
 
     return result
@@ -778,6 +779,7 @@ async def update_note(
             folder_id=folder_id,
             tags=tags,
             metadata=metadata,
+            file_path=file_path,
         ))
 
     return result
@@ -897,8 +899,14 @@ async def revert_note(note_id: str, req: RevertRequest, request: Request) -> dic
     folder_id = existing.get("folder_id") if existing else None
     label = version.get("label") or (existing.get("label", "Untitled") if existing else "Untitled")
 
-    # Write the reverted content locally
-    file_path = file_manager.write_note(folder_name, label, version["content"])
+    # Write the reverted content locally — to the note's REAL stored path.
+    # Deriving from folder+label forked collision-suffixed notes into a new
+    # file and orphaned the original (which then reappeared as a duplicate
+    # legacy note in list_notes).
+    file_path = file_manager.write_note(
+        folder_name, label, version["content"],
+        existing.get("file_path") if existing else None,
+    )
 
     # Update SQLite (this also creates a version snapshot of the current content)
     await _sync_note_to_sqlite(
@@ -928,6 +936,7 @@ async def revert_note(note_id: str, req: RevertRequest, request: Request) -> dic
             content=version["content"],
             folder_name=folder_name,
             folder_id=folder_id,
+            file_path=file_path,
         ))
 
     return result

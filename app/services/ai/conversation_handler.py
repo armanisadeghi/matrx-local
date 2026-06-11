@@ -12,6 +12,7 @@ the single source of truth consistent with the rest of the application.
 from __future__ import annotations
 
 import json
+import sqlite3
 import uuid
 from typing import Any
 
@@ -99,31 +100,60 @@ class LocalConversationHandler:
     ) -> dict[str, Any]:
         """Persist all data from a completed AI execution to SQLite.
 
-        The `completed` object may be a dict or a dataclass-like object.
-        We extract messages, request metadata, and store them locally.
-        Returns the IDs used for tracing.
+        The `completed` object is matrx-ai's CompletedRequest dataclass (or a
+        plain dict in tests). IMPORTANT: on the dataclass, ``messages`` and
+        ``conversation_id`` are *properties* and ``request_id`` lives at
+        ``completed.request.request_id`` — none of them appear in ``__dict__``,
+        so they must be read via the typed accessors. Reading ``__dict__``
+        (the old behavior) silently persisted zero messages and updated zero
+        user_request rows.
         """
-        data: dict[str, Any] = completed if isinstance(completed, dict) else _to_dict(completed)
+        if isinstance(completed, dict):
+            conv_id: str = (
+                conversation_id or completed.get("conversation_id") or str(uuid.uuid4())
+            )
+            user_request_id: str = (
+                completed.get("user_request_id")
+                or completed.get("request_id")
+                or str(uuid.uuid4())
+            )
+            raw_messages = completed.get("messages") or []
+        else:
+            conv_id = (
+                conversation_id
+                or getattr(completed, "conversation_id", None)
+                or str(uuid.uuid4())
+            )
+            request = getattr(completed, "request", None)
+            user_request_id = getattr(request, "request_id", None) or str(uuid.uuid4())
+            raw_messages = list(getattr(completed, "messages", None) or [])
 
-        conv_id: str = conversation_id or data.get("conversation_id") or str(uuid.uuid4())
-        user_request_id: str = data.get("user_request_id") or data.get("request_id") or str(uuid.uuid4())
         message_ids: list[str] = []
         request_ids: list[str] = [user_request_id]
 
-        # Persist any messages included in the completed payload
-        messages = data.get("messages") or []
-        if isinstance(messages, list):
-            for msg in messages:
-                msg_dict = msg if isinstance(msg, dict) else _to_dict(msg)
-                if not msg_dict.get("id"):
-                    msg_dict["id"] = str(uuid.uuid4())
-                msg_dict.setdefault("conversation_id", conv_id)
-                try:
-                    await self._msgs.create(msg_dict)
-                    message_ids.append(msg_dict["id"])
-                except Exception as exc:
-                    # Duplicate key is fine — message was already persisted
-                    logger.debug("[conv_handler] Skipping duplicate message %s: %s", msg_dict.get("id"), exc)
+        # `completed.messages` is the FULL conversation history on every turn.
+        # Derive a deterministic id from (conversation, position) so re-persisting
+        # the history each turn is idempotent — only genuinely new positions insert.
+        for position, msg in enumerate(raw_messages):
+            msg_dict = _normalize_message(msg)
+            if msg_dict is None:
+                continue
+            msg_dict.setdefault(
+                "id", str(uuid.uuid5(_MSG_NAMESPACE, f"{conv_id}:{position}"))
+            )
+            msg_dict["conversation_id"] = conv_id
+            try:
+                await self._msgs.create(msg_dict)
+                message_ids.append(msg_dict["id"])
+            except sqlite3.IntegrityError:
+                # Already persisted on a previous turn — expected for history rows.
+                pass
+            except Exception:
+                logger.warning(
+                    "[conv_handler] Failed to persist message %s",
+                    msg_dict.get("id"),
+                    exc_info=True,
+                )
 
         # Update the user_request row to status=completed
         db = get_db()
@@ -135,7 +165,7 @@ class LocalConversationHandler:
         await db.commit()
 
         logger.debug(
-            "[conv_handler] Persisted request %s: %d messages",
+            "[conv_handler] Persisted request %s: %d new messages",
             user_request_id,
             len(message_ids),
         )
@@ -184,16 +214,38 @@ class LocalConversationHandler:
         self,
         conversation_id: str,
     ) -> dict[str, Any]:
-        """Return the stored conversation config for ConversationResolver."""
+        """Return the stored conversation config for ConversationResolver.
+
+        Must include ``messages`` — matrx-ai feeds this dict to
+        ``UnifiedConfig.from_dict`` on every AgentCache miss (i.e. whenever a
+        conversation is continued after an engine restart). Without them the
+        model sees only the new user input and the whole history is silently
+        dropped. ``UnifiedMessage.parse_content`` accepts plain-string content.
+        """
         conv = await self._convs.get(conversation_id)
         if not conv:
             return {}
+        messages: list[dict[str, Any]] = []
+        try:
+            for row in await self._msgs.list_by_conversation(conversation_id):
+                role = row.get("role") or "user"
+                content = row.get("content") or ""
+                if not content:
+                    continue
+                messages.append({"role": role, "content": content})
+        except Exception:
+            logger.warning(
+                "[conv_handler] Could not load history for %s",
+                conversation_id,
+                exc_info=True,
+            )
         return {
             "id": conv.get("id"),
             "mode": conv.get("mode", "chat"),
             "model": conv.get("model", ""),
             "route_mode": conv.get("route_mode", "chat"),
             "agent_id": conv.get("agent_id"),
+            "messages": messages,
         }
 
 
@@ -201,10 +253,54 @@ class LocalConversationHandler:
 # Helpers
 # ------------------------------------------------------------------
 
-def _to_dict(obj: Any) -> dict[str, Any]:
-    """Best-effort conversion of a dataclass or object to a plain dict."""
-    if hasattr(obj, "__dict__"):
-        return {k: v for k, v in obj.__dict__.items() if not k.startswith("_")}
-    if hasattr(obj, "_asdict"):
-        return obj._asdict()
-    return {}
+# Stable namespace for deriving deterministic message ids from
+# (conversation_id, position) so repeated full-history persists are idempotent.
+_MSG_NAMESPACE = uuid.UUID("7df1aa44-43e5-4dca-9c4f-3f2f6f8a1b9e")
+
+
+def _normalize_message(msg: Any) -> dict[str, Any] | None:
+    """Convert a UnifiedMessage / dict into a row for the local messages table.
+
+    UnifiedMessage.content is a list of UnifiedContent parts; the messages
+    table stores plain text. Text parts are concatenated; any non-text parts
+    are JSON-dumped so nothing is silently dropped.
+    """
+    if isinstance(msg, dict):
+        role = msg.get("role") or "user"
+        content = msg.get("content")
+        msg_id = msg.get("id")
+    else:
+        role = getattr(msg, "role", None) or "user"
+        content = getattr(msg, "content", None)
+        msg_id = getattr(msg, "id", None)
+
+    role = str(getattr(role, "value", role))
+
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            part_text = (
+                part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
+            )
+            if isinstance(part_text, str):
+                parts.append(part_text)
+            else:
+                try:
+                    raw = part if isinstance(part, dict) else dict(getattr(part, "__dict__", {}))
+                    raw = {k: v for k, v in raw.items() if v not in (None, [], {})}
+                    if raw:
+                        parts.append(json.dumps(raw, default=str))
+                except Exception:
+                    pass
+        text = "\n".join(p for p in parts if p)
+    elif content is None:
+        text = ""
+    else:
+        text = str(content)
+
+    row: dict[str, Any] = {"role": role, "content": text}
+    if msg_id:
+        row["id"] = str(msg_id)
+    return row

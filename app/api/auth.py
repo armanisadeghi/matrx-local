@@ -215,10 +215,16 @@ async def oauth_callback(request: Request):
     # code / access token to them would let any remote WS client harvest
     # another user's login. The desktop sign-in webview always connects over
     # direct loopback, so it still receives the payload.
-    for conn in websocket_manager.connections.values():
+    # Snapshot the dict — a client (dis)connecting during an awaited send
+    # would otherwise raise mid-iteration and 500 the OAuth callback, losing
+    # the sign-in broadcast.
+    for conn in list(websocket_manager.connections.values()):
         if getattr(conn, "via_tunnel", False):
             continue
-        await websocket_manager._send(conn, payload)
+        try:
+            await websocket_manager._send(conn, payload)
+        except Exception:
+            logger.warning("OAuth credential broadcast to one client failed", exc_info=True)
 
     return HTMLResponse(_SUCCESS_HTML)
 

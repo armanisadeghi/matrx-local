@@ -249,9 +249,16 @@ class SettingsSync:
         else:
             self._settings = dict(DEFAULT_SETTINGS)
 
-    def _save_local(self) -> None:
-        """Persist settings to local JSON file."""
-        self._local_updated_at = datetime.now(timezone.utc).isoformat()
+    def _save_local(self, updated_at: str | None = None) -> None:
+        """Persist settings to local JSON file.
+
+        ``updated_at`` lets pull paths record the CLOUD timestamp. Always
+        stamping now() here made every pull look like a newer local edit, so
+        the next sync() pushed, bumping the cloud timestamp, which made the
+        following sync() pull — the in_sync state was unreachable and the
+        ping-pong opened last-writer-wins windows against other devices.
+        """
+        self._local_updated_at = updated_at or datetime.now(timezone.utc).isoformat()
         payload = {
             "settings": self._settings,
             "updated_at": self._local_updated_at,
@@ -280,8 +287,7 @@ class SettingsSync:
 
             if cloud_updated > local_updated:
                 self._settings = {**DEFAULT_SETTINGS, **cloud_settings}
-                self._local_updated_at = cloud_updated
-                self._save_local()
+                self._save_local(updated_at=cloud_updated)
                 await self._update_sync_status("pull", "success")
                 return {"status": "pulled", "reason": "cloud_newer"}
             elif local_updated > cloud_updated:
@@ -324,8 +330,7 @@ class SettingsSync:
             if cloud is None:
                 return {"status": "error", "reason": "no_cloud_record"}
             self._settings = {**DEFAULT_SETTINGS, **cloud.get("settings_json", {})}
-            self._local_updated_at = cloud.get("updated_at", "")
-            self._save_local()
+            self._save_local(updated_at=cloud.get("updated_at") or None)
             await self._update_sync_status("pull", "success")
             return {"status": "pulled", "settings": self.get_all()}
         except Exception as exc:

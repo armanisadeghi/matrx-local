@@ -242,7 +242,10 @@ async def publish_to_extension(
     }
 
     try:
-        await channel.send_broadcast(event="message", payload=envelope)
+        # realtime-py signature is send_broadcast(event, data) — the old
+        # payload= kwarg raised TypeError on every call, so engine→extension
+        # publish silently failed 100% of the time.
+        await channel.send_broadcast("message", envelope)
         logger.debug(
             "[extension_broadcast] published user=%s type=%s call_id=%s",
             user_id,

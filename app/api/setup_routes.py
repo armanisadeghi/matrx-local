@@ -1493,11 +1493,14 @@ async def stream_logs(request: Request, lines: int = 200):
                 except ValueError:
                     return prev
 
+            # Pre-bind so the history_end yield below can't NameError if the
+            # read raises before assignment (which killed the generator and
+            # prevented live-follow from ever starting).
+            history: list[str] = []
             try:
                 with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
                     all_lines = fh.readlines()
                 cutoff = datetime.fromtimestamp(_PROCESS_START - 5.0)
-                history: list[str] = []
                 include = False
                 for raw in all_lines:
                     include = _line_after_boot(raw, include, cutoff)

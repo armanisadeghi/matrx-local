@@ -57,7 +57,9 @@ async def sync_status() -> dict[str, Any]:
     from app.services.scraper.scrape_store import get_sync_summary
 
     summary = await get_sync_summary()
-    has_sync_error = summary.get("failed", 0) > 0 or summary.get("pending", 0) > 0
+    # The keys exist with value None on an empty table (SUM over zero rows)
+    # — .get's default doesn't apply, so guard with `or 0`.
+    has_sync_error = (summary.get("failed") or 0) > 0 or (summary.get("pending") or 0) > 0
 
     return {
         **summary,

@@ -245,6 +245,17 @@ class ServiceRegistry:
         except Exception:
             logger.exception("[launcher] %s → diagnostic dump itself failed", name)
 
+    def current_state(self, name: str) -> str | None:
+        """Return the service's current state value, or None if unknown.
+
+        Lets shutdown code skip the STOPPING→STOPPED transition for services
+        that never started (disabled in settings) or already FAILED — driving
+        them to STOPPED erased that history from the final snapshot.
+        """
+        with self._lock:
+            r = self._services.get(name)
+            return r.state.value if r else None
+
     def stopping(self, name: str) -> None:
         """Mark the service as stopping. Idempotent."""
         with self._lock:

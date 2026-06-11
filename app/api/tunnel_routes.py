@@ -50,9 +50,22 @@ async def tunnel_start(body: TunnelStartRequest | None = None) -> TunnelStatus:
         logger.info("[tunnel] Already running at %s", tm.url)
         return TunnelStatus(**tm.get_status())
 
-    # Determine the engine port — use the stored port from a previous start,
-    # or the override from the request body, or default to 22140.
-    port = (body.port if body and body.port else None) or tm._port or 22140
+    # Determine the engine port — request override, then the stored port from
+    # a previous start, then the ACTUAL bound port from the discovery file.
+    # Hardcoding 22140 pointed the tunnel at a dead port whenever the engine
+    # bound a fallback port (22141-22159).
+    discovered_port = None
+    try:
+        from app.preflight import read_discovery_file
+        discovered_port = (read_discovery_file() or {}).get("port")
+    except Exception:
+        pass
+    port = (
+        (body.port if body and body.port else None)
+        or tm._port
+        or discovered_port
+        or 22140
+    )
 
     logger.info("[tunnel] Starting tunnel on port %d", port)
     url = await tm.start(port)
@@ -82,19 +95,14 @@ async def tunnel_start(body: TunnelStartRequest | None = None) -> TunnelStatus:
     except Exception:
         logger.debug("[tunnel] Could not push tunnel URL to Supabase", exc_info=True)
 
-    # Update the discovery file
+    # Update the discovery file through the central atomic writer (the old
+    # direct write_text bypassed preflight's tmp+replace and never updated
+    # the schema-2 services map).
     try:
-        from run import DISCOVERY_FILE  # type: ignore[import]
-        import json
-        if DISCOVERY_FILE.exists():
-            data = json.loads(DISCOVERY_FILE.read_text())
-            if url:
-                data["tunnel_url"] = url
-                data["tunnel_ws"] = url.replace("https://", "wss://") + "/ws"
-            else:
-                data.pop("tunnel_url", None)
-                data.pop("tunnel_ws", None)
-            DISCOVERY_FILE.write_text(json.dumps(data, indent=2))
+        import sys as _sys
+        _run_mod = _sys.modules.get("run") or _sys.modules.get("__main__")
+        if _run_mod is not None and hasattr(_run_mod, "update_discovery_tunnel"):
+            _run_mod.update_discovery_tunnel(url)
     except Exception:
         logger.debug("[tunnel] Could not update discovery file", exc_info=True)
 
@@ -141,15 +149,12 @@ async def tunnel_stop() -> TunnelStatus:
     except Exception:
         logger.debug("[tunnel] Could not clear tunnel URL in Supabase", exc_info=True)
 
-    # Clear from discovery file
+    # Clear from discovery file (atomic, schema-2 aware)
     try:
-        from run import DISCOVERY_FILE  # type: ignore[import]
-        import json
-        if DISCOVERY_FILE.exists():
-            data = json.loads(DISCOVERY_FILE.read_text())
-            data.pop("tunnel_url", None)
-            data.pop("tunnel_ws", None)
-            DISCOVERY_FILE.write_text(json.dumps(data, indent=2))
+        import sys as _sys
+        _run_mod = _sys.modules.get("run") or _sys.modules.get("__main__")
+        if _run_mod is not None and hasattr(_run_mod, "update_discovery_tunnel"):
+            _run_mod.update_discovery_tunnel(None)
     except Exception:
         logger.debug("[tunnel] Could not update discovery file", exc_info=True)
 

@@ -217,8 +217,26 @@ def start() -> None:
 
 
 def stop() -> None:
-    """Cancel the background poller. Call on engine shutdown."""
+    """Cancel the background poller. Call on engine shutdown.
+
+    Prefer ``stop_async`` from async contexts — fire-and-forget cancellation
+    can leave a pending task when the loop closes ("Task was destroyed but it
+    is pending") and skips the task's finally blocks.
+    """
     global _task
     if _task and not _task.done():
         _task.cancel()
         _task = None
+
+
+async def stop_async(timeout: float = 3.0) -> None:
+    """Cancel the background poller and await its completion."""
+    global _task
+    task = _task
+    _task = None
+    if task and not task.done():
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=timeout)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass

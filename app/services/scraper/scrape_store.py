@@ -426,3 +426,16 @@ def stop_sync() -> None:
     if _sync_task and not _sync_task.done():
         _sync_task.cancel()
         _sync_task = None
+
+
+async def stop_sync_async(timeout: float = 3.0) -> None:
+    """Cancel the background sync task and await its completion."""
+    global _sync_task
+    task = _sync_task
+    _sync_task = None
+    if task and not task.done():
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=timeout)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass

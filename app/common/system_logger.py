@@ -191,6 +191,12 @@ class SystemLogger:
         self.configure_logging()
 
     def configure_logging(self):
+        # Re-entry guard: a second configure_logging() (or SystemLogger())
+        # would attach duplicate console/file handlers and double every line.
+        if self.logger.handlers:
+            for h in list(self.logger.handlers):
+                self.logger.removeHandler(h)
+
         # Set the logging level dynamically
         level = getattr(logging, LOG_LEVEL.upper(), logging.DEBUG)
         self.logger.setLevel(level)

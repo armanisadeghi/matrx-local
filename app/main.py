@@ -454,12 +454,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         print("[phase:scraper] Scraper engine FAILED (scraping unavailable)", flush=True)
         _registry.failed("scraper", exc)
 
-    restored = await restore_scheduled_tasks()
-    if restored:
-        logger.info(
-            "[app/main.py] Scheduler: %d task(s) restored from previous session",
-            restored,
-        )
+    # Guarded like every other phase: an exception here would abort lifespan
+    # startup AFTER the scraper/database children are already running, and the
+    # post-yield teardown would never execute for them.
+    try:
+        restored = await restore_scheduled_tasks()
+        if restored:
+            logger.info(
+                "[app/main.py] Scheduler: %d task(s) restored from previous session",
+                restored,
+            )
+    except Exception:
+        logger.error("[app/main.py] Scheduled-task restore FAILED (non-fatal)", exc_info=True)
 
     # Read the actual port Uvicorn is going to bind (written by run.py)
     # We need this to ensure the proxy doesn't collide with it, and to point the tunnel at it.
@@ -472,8 +478,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         main_server_port = 22140
 
     # Phase 4: Start HTTP proxy if enabled in settings
-    settings_sync = get_settings_sync()
-    proxy_enabled = settings_sync.get("proxy_enabled", True)
+    try:
+        settings_sync = get_settings_sync()
+        proxy_enabled = settings_sync.get("proxy_enabled", True)
+    except Exception:
+        logger.error("[app/main.py] Settings read FAILED — proxy defaults on", exc_info=True)
+        proxy_enabled = True
     logger.info("[app/main.py] Phase 4: HTTP proxy enabled=%s", proxy_enabled)
     if proxy_enabled:
         print("[phase:proxy] Starting local HTTP proxy...", flush=True)
@@ -543,6 +553,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     await _get_im().update_tunnel_url(_tunnel_url, active=True)
                 except Exception:
                     pass
+                # Write the tunnel URL into the discovery file — this is the
+                # documented contract for matrx-extend; previously only the
+                # manual POST /tunnel/start route did it, so a normal boot
+                # left local.json without tunnel_url/tunnel_ws.
+                try:
+                    import sys as _sys
+                    _run_mod = _sys.modules.get("run") or _sys.modules.get("__main__")
+                    if _run_mod is not None and hasattr(_run_mod, "update_discovery_tunnel"):
+                        _run_mod.update_discovery_tunnel(_tunnel_url)
+                except Exception:
+                    logger.debug(
+                        "[app/main.py] Phase 5: discovery tunnel write failed",
+                        exc_info=True,
+                    )
                 # Seed the runtime introspection singleton so
                 # ``GET /extension/tunnel/status`` reports the correct
                 # state from the very first request post-boot.
@@ -582,11 +606,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
 
     # Start retry queue poller (polls remote server for failed scrapes to retry locally)
-    retry_queue.start()
+    try:
+        retry_queue.start()
+    except Exception:
+        logger.error("[app/main.py] Retry queue start FAILED (non-fatal)", exc_info=True)
 
     # Start scrape store background sync (pushes pending local scrapes to cloud,
     # retries failed ones, surfaces sync errors to the user via /scrapes/sync-status)
-    scrape_store.start_sync()
+    try:
+        scrape_store.start_sync()
+    except Exception:
+        logger.error("[app/main.py] Scrape store sync start FAILED (non-fatal)", exc_info=True)
 
     # Phase 6: Extension bridge self-check.
     # Walks /extension/* routes, JWT posture, tunnel + metrics + discovery
@@ -829,8 +859,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         _registry.stopped("sync_engine")
 
-    retry_queue.stop()
-    scrape_store.stop_sync()
+    # Await the cancellations so finally-blocks run before the loop closes
+    # (fire-and-forget cancel produced "Task was destroyed but it is pending").
+    await retry_queue.stop_async()
+    await scrape_store.stop_sync_async()
     heartbeat_task.cancel()
     try:
         await heartbeat_task
@@ -877,57 +909,78 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # process) from blocking the entire teardown sequence.  Without these
     # timeouts, a single hung stop can exhaust the entire 25-second force-exit
     # budget and cause Python to be SIGKILL'd with ports still bound.
-    _registry.stopping("proxy")
-    try:
-        proxy = get_proxy_server()
-        await asyncio.wait_for(proxy.stop(), timeout=5.0)
-        logger.info("[app/main.py] HTTP proxy stopped ✓")
-        _registry.stopped("proxy")
-    except asyncio.TimeoutError:
-        logger.warning("[app/main.py] HTTP proxy stop timed out after 5s — forcing teardown")
-        _registry.failed("proxy", "stop timed out after 5s")
-    except Exception as exc:
-        logger.error("[app/main.py] HTTP proxy failed to stop cleanly", exc_info=True)
-        _registry.failed("proxy", exc)
-
-    _registry.stopping("tunnel")
-    try:
-        tm = get_tunnel_manager()
-        if tm.running:
-            await asyncio.wait_for(tm.stop(), timeout=7.0)
-            logger.info("[app/main.py] Tunnel stopped ✓")
-            try:
-                from app.services.cloud_sync.instance_manager import get_instance_manager as _get_im
-                await asyncio.wait_for(_get_im().update_tunnel_url(None, active=False), timeout=2.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
-            # Mirror the inactive state into the runtime singleton.
-            try:
-                from app.api.tunnel_state import mark_tunnel_inactive
-                mark_tunnel_inactive()
-            except Exception:
-                pass
-        # Surface cloudflared's exit code + last lines into the registry so
-        # diagnostic dumps reveal "exit code 1" reasons instead of swallowing them.
-        _registry.stopped(
-            "tunnel",
-            cloudflared_exit_code=tm.last_exit_code,
-            cloudflared_recent_output=tm.recent_output[-30:],
-        )
-    except asyncio.TimeoutError:
-        logger.warning("[app/main.py] Tunnel stop timed out after 7s — forcing teardown")
-        _registry.failed(
-            "tunnel",
-            "stop timed out after 7s — cloudflared subprocess may be wedged",
-            cloudflared_recent_output=get_tunnel_manager().recent_output[-30:],
-        )
-    except Exception as exc:
-        logger.error("[app/main.py] Tunnel failed to stop cleanly", exc_info=True)
+    if _registry.current_state("proxy") in ("ready", "degraded", "starting"):
+        _registry.stopping("proxy")
         try:
-            tail = get_tunnel_manager().recent_output[-30:]
-        except Exception:
-            tail = []
-        _registry.failed("tunnel", exc, cloudflared_recent_output=tail)
+            proxy = get_proxy_server()
+            await asyncio.wait_for(proxy.stop(), timeout=5.0)
+            logger.info("[app/main.py] HTTP proxy stopped ✓")
+            _registry.stopped("proxy")
+        except asyncio.TimeoutError:
+            logger.warning("[app/main.py] HTTP proxy stop timed out after 5s — forcing teardown")
+            _registry.failed("proxy", "stop timed out after 5s")
+        except Exception as exc:
+            logger.error("[app/main.py] HTTP proxy failed to stop cleanly", exc_info=True)
+            _registry.failed("proxy", exc)
+    else:
+        logger.debug(
+            "[app/main.py] S5: proxy state=%s — skipping stop",
+            _registry.current_state("proxy"),
+        )
+
+    if _registry.current_state("tunnel") not in ("ready", "degraded", "starting"):
+        logger.debug(
+            "[app/main.py] S5: tunnel state=%s — skipping stop",
+            _registry.current_state("tunnel"),
+        )
+    else:
+        _registry.stopping("tunnel")
+        try:
+            tm = get_tunnel_manager()
+            if tm.running:
+                await asyncio.wait_for(tm.stop(), timeout=7.0)
+                logger.info("[app/main.py] Tunnel stopped ✓")
+                try:
+                    from app.services.cloud_sync.instance_manager import get_instance_manager as _get_im
+                    await asyncio.wait_for(_get_im().update_tunnel_url(None, active=False), timeout=2.0)
+                except (asyncio.TimeoutError, Exception):
+                    pass
+                # Mirror the inactive state into the runtime singleton.
+                try:
+                    from app.api.tunnel_state import mark_tunnel_inactive
+                    mark_tunnel_inactive()
+                except Exception:
+                    pass
+                # Clear the tunnel fields from the discovery file so
+                # matrx-extend doesn't read a dead URL after shutdown.
+                try:
+                    import sys as _sys
+                    _run_mod = _sys.modules.get("run") or _sys.modules.get("__main__")
+                    if _run_mod is not None and hasattr(_run_mod, "update_discovery_tunnel"):
+                        _run_mod.update_discovery_tunnel(None)
+                except Exception:
+                    pass
+            # Surface cloudflared's exit code + last lines into the registry so
+            # diagnostic dumps reveal "exit code 1" reasons instead of swallowing them.
+            _registry.stopped(
+                "tunnel",
+                cloudflared_exit_code=tm.last_exit_code,
+                cloudflared_recent_output=tm.recent_output[-30:],
+            )
+        except asyncio.TimeoutError:
+            logger.warning("[app/main.py] Tunnel stop timed out after 7s — forcing teardown")
+            _registry.failed(
+                "tunnel",
+                "stop timed out after 7s — cloudflared subprocess may be wedged",
+                cloudflared_recent_output=get_tunnel_manager().recent_output[-30:],
+            )
+        except Exception as exc:
+            logger.error("[app/main.py] Tunnel failed to stop cleanly", exc_info=True)
+            try:
+                tail = get_tunnel_manager().recent_output[-30:]
+            except Exception:
+                tail = []
+            _registry.failed("tunnel", exc, cloudflared_recent_output=tail)
 
     _registry.stopping("scraper")
     try:

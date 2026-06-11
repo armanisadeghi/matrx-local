@@ -656,7 +656,15 @@ def _is_port_free(port: int) -> bool:
     """Bind-test localhost:port. SO_REUSEADDR avoids false-busy from TIME_WAIT
     sockets left by a recently stopped server."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if sys.platform == "win32":
+            # On Windows SO_REUSEADDR lets the bind SUCCEED over an active
+            # foreign listener (unlike Linux where it only relaxes TIME_WAIT),
+            # so the probe reported busy ports as free and the engine could
+            # double-bind. SO_EXCLUSIVEADDRUSE gives the correct semantics.
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.settimeout(0.1)
         try:
             s.bind(("127.0.0.1", port))

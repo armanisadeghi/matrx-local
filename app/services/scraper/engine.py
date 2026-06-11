@@ -191,11 +191,14 @@ class ScraperEngine:
 
         try:
             self._settings = settings_cls()  # type: ignore[call-arg]
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "[scraper/engine.py] ScraperEngine: failed to load settings"
             )
-            return
+            # Re-raise: a silent return here let app/main.py mark the registry
+            # READY for a scraper whose orchestrator was never created —
+            # every subsequent scrape call would hit None.scrape.
+            raise RuntimeError("Scraper settings failed to load") from exc
 
         try:
             browser_pool_mod = _import_scraper("app.core.fetcher.browser_pool")

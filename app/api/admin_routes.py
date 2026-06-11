@@ -162,9 +162,33 @@ def _trigger_self_signal() -> None:
     # Tiny pause so the HTTP response flushes before we tear down the server.
     time.sleep(0.1)
 
+    def _direct_stop() -> bool:
+        """Stop uvicorn via the run module directly. Returns True on success."""
+        try:
+            import sys as _sys
+
+            # In a frozen sidecar the entry module is __main__, not "run".
+            run_mod = _sys.modules.get("run") or _sys.modules.get("__main__")
+            if run_mod is None or not hasattr(run_mod, "_uvicorn_server"):
+                import run as run_mod  # noqa: PLC0415
+
+            if run_mod._uvicorn_server is not None:
+                run_mod._uvicorn_server.should_exit = True
+                run_mod._shutdown_event.set()
+                run_mod._schedule_force_exit(25)
+                return True
+        except Exception:
+            logger.exception("[launcher] /admin/shutdown — direct uvicorn stop failed")
+        return False
+
     try:
         if os.name == "nt":
-            os.kill(os.getpid(), signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
+            # CTRL_BREAK_EVENT delivery depends on console/process-group
+            # topology and lands on SIGBREAK — historically unhandled, which
+            # made shutdown a hard kill. The direct should_exit path is
+            # deterministic, so prefer it on Windows.
+            if not _direct_stop():
+                os.kill(os.getpid(), signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
         else:
             os.kill(os.getpid(), signal.SIGTERM)
         logger.info("[launcher] /admin/shutdown — self-signal delivered")
@@ -173,12 +197,8 @@ def _trigger_self_signal() -> None:
             "[launcher] /admin/shutdown — self-signal failed, falling back to direct uvicorn stop",
             exc_info=True,
         )
-        try:
-            import run  # noqa: PLC0415 — late import: run.py imports app, circular at top level
-
-            if run._uvicorn_server is not None:
-                run._uvicorn_server.should_exit = True
-                run._shutdown_event.set()
-                run._schedule_force_exit(25)
-        except Exception:
-            logger.exception("[launcher] /admin/shutdown — fallback teardown failed")
+        if not _direct_stop():
+            # Both mechanisms failed — reset the latch so a retry can re-arm
+            # instead of returning "already_shutting_down" forever.
+            global _shutdown_requested
+            _shutdown_requested = False

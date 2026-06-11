@@ -72,7 +72,11 @@ _NAMED_URL_RE = re.compile(
 # _FALLBACK_URL_RE: broad fallback — any https URL on a line mentioning the tunnel.
 # Catches any format cloudflare might use across versions.
 _FALLBACK_URL_RE = re.compile(
-    r"(https://[a-zA-Z0-9._-]+\.trycloudflare\.com[^\s]*)"
+    # Negative lookahead: api.trycloudflare.com appears in cloudflared's own
+    # QuickTunnel ERROR lines ("Error unmarshaling QuickTunnel response" from
+    # https://api.trycloudflare.com/...) — matching it published a bogus
+    # tunnel URL and marked the tunnel READY.
+    r"(https://(?!api\.)[a-zA-Z0-9._-]+\.trycloudflare\.com[^\s]*)"
 )
 
 
@@ -423,14 +427,14 @@ class TunnelManager:
             return None
 
     async def stop(self) -> None:
-        """Stop the tunnel subprocess."""
-        if self._reader_task and not self._reader_task.done():
-            self._reader_task.cancel()
-            try:
-                await self._reader_task
-            except asyncio.CancelledError:
-                pass
+        """Stop the tunnel subprocess.
 
+        Order matters: terminate the process FIRST while the stdout reader is
+        still draining the pipe (it exits naturally on EOF). Cancelling the
+        reader first left cloudflared's shutdown output unconsumed — a full
+        pipe buffer would block it inside the SIGTERM window and force the
+        SIGKILL path.
+        """
         if self._process and self._process.returncode is None:
             try:
                 self._process.terminate()
@@ -452,6 +456,17 @@ class TunnelManager:
             # Process already dead before we got here. Capture whatever exit
             # code we have so the registry can report it.
             self._last_exit_code = self._process.returncode
+
+        if self._reader_task and not self._reader_task.done():
+            try:
+                await asyncio.wait_for(self._reader_task, timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                self._reader_task.cancel()
+                try:
+                    await self._reader_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        self._reader_task = None
 
         self._process = None
         self._url = None

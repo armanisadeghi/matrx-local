@@ -380,10 +380,16 @@ def _start_parent_watchdog() -> None:
             parent_gone = False
 
             if sys.platform == "win32":
+                # os.kill(pid, 0) is NOT a liveness probe on Windows:
+                # signal 0 == CTRL_C_EVENT, so it calls
+                # GenerateConsoleCtrlEvent — either failing for GUI parents
+                # (false "parent gone" → we'd kill a healthy engine) or
+                # actually delivering Ctrl+C to the process group.
                 try:
-                    os.kill(parent_pid, 0)
-                except (ProcessLookupError, PermissionError, OSError):
-                    parent_gone = True
+                    import psutil  # core dep
+                    parent_gone = not psutil.pid_exists(parent_pid)
+                except Exception:
+                    parent_gone = False  # fail open: never self-kill on doubt
             else:
                 current_ppid = os.getppid()
                 parent_gone = (current_ppid == 1 or current_ppid != parent_pid)
@@ -432,12 +438,16 @@ def _wait_forever() -> None:
         pass
 
     remove_discovery_file()
+    teardown_clean = True
     if _uvicorn_server is not None:
         _uvicorn_server.should_exit = True
         server_thread_ref = _server_thread
         if server_thread_ref is not None:
             server_thread_ref.join(timeout=10)
-    _kill_child_subprocesses()
+            teardown_clean = not server_thread_ref.is_alive()
+    if not teardown_clean:
+        # Lifespan teardown did not finish — clean up our own children.
+        _kill_child_subprocesses()
     os._exit(0)
 
 
@@ -475,6 +485,11 @@ def setup_tray(port: int) -> None:
     )
     icon = Icon("matrx_local", create_tray_image(), "Matrx Local", menu)
     icon.run()
+    # icon.run() returns after Quit — wait for the uvicorn thread to finish
+    # its lifespan teardown instead of letting interpreter exit kill the
+    # daemon thread mid-teardown (which orphaned cloudflared/Playwright in
+    # standalone mode).
+    _wait_forever()
 
 
 def _handle_exit(signum: int, frame: object) -> None:  # noqa: ARG001
@@ -502,25 +517,36 @@ def _handle_exit(signum: int, frame: object) -> None:  # noqa: ARG001
 
 
 def _kill_child_subprocesses() -> None:
-    """Kill known child subprocesses that we spawned (cloudflared, etc.).
+    """Kill child subprocesses WE spawned (cloudflared) — by remembered PID.
 
-    Called just before os._exit() in the force-exit watchdog to prevent
-    orphaned subprocesses when the Python lifespan teardown didn't complete.
+    Called only when the lifespan teardown timed out. Killing by PID instead
+    of pkill-by-name matters: `pkill -f "cloudflared tunnel"` matched ANY
+    cloudflared on the machine (e.g. the user's personal named tunnels),
+    violating the ownership contract.
     """
-    import subprocess as _sp
-    if sys.platform == "win32":
-        _sp.run(["taskkill", "/F", "/T", "/IM", "cloudflared.exe"],
-                capture_output=True, timeout=5)
-    else:
-        _sp.run(["pkill", "-TERM", "-f", "cloudflared tunnel"],
-                capture_output=True, timeout=5)
+    try:
+        from app.services.tunnel.manager import get_tunnel_manager
+
+        tm = get_tunnel_manager()
+        proc = getattr(tm, "_process", None)
+        pid = getattr(proc, "pid", None)
+        if pid is None:
+            return
+        import signal as _signal
+
         try:
-            import time
-            time.sleep(0.3)
-            _sp.run(["pkill", "-KILL", "-f", "cloudflared tunnel"],
-                    capture_output=True, timeout=5)
-        except Exception:
+            os.kill(pid, _signal.SIGTERM if sys.platform != "win32" else _signal.SIGTERM)
+        except (ProcessLookupError, OSError):
+            return
+        import time as _time
+
+        _time.sleep(0.3)
+        try:
+            os.kill(pid, _signal.SIGKILL if sys.platform != "win32" else _signal.SIGTERM)
+        except (ProcessLookupError, OSError):
             pass
+    except Exception:
+        logger.debug("Child-subprocess cleanup failed", exc_info=True)
 
 
 def _schedule_force_exit(timeout_seconds: int) -> None:
@@ -552,6 +578,12 @@ def main() -> None:
         signal.signal(signal.SIGTERM, _handle_exit)
     if hasattr(signal, "SIGINT"):
         signal.signal(signal.SIGINT, _handle_exit)
+    # Windows: CTRL_BREAK_EVENT maps to SIGBREAK (NOT SIGINT). Without this
+    # handler, the default disposition terminates the process immediately —
+    # /admin/shutdown then skipped the entire lifespan teardown and orphaned
+    # cloudflared/Playwright children.
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _handle_exit)
 
     if _is_tauri_sidecar():
         _start_parent_watchdog()
@@ -587,7 +619,13 @@ def main() -> None:
             for offset in range(MAX_PORT_SCAN):
                 p = DEFAULT_PORT + offset
                 with _s.socket(_s.AF_INET, _s.SOCK_STREAM) as sk:
-                    sk.setsockopt(_s.SOL_SOCKET, _s.SO_REUSEADDR, 1)
+                    # Windows: SO_REUSEADDR binds over live listeners — see
+                    # app/preflight.py _is_port_free for the full rationale.
+                    if sys.platform == "win32":
+                        if hasattr(_s, "SO_EXCLUSIVEADDRUSE"):
+                            sk.setsockopt(_s.SOL_SOCKET, _s.SO_EXCLUSIVEADDRUSE, 1)
+                    else:
+                        sk.setsockopt(_s.SOL_SOCKET, _s.SO_REUSEADDR, 1)
                     try:
                         sk.bind(("127.0.0.1", p))
                         return p

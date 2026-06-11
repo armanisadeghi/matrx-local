@@ -21,6 +21,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   Activity as ActivityIcon,
   AlertCircle,
@@ -172,6 +173,7 @@ export function BridgeTest({
     enabled: boolean;
     timestamp: number;
   } | null>(null);
+  const [broadcastError, setBroadcastError] = useState<string | null>(null);
 
   // Panel 5 — Live event log -------------------------------------------------
   const [logEvents, setLogEvents] = useState<BridgeEvent[]>([]);
@@ -204,6 +206,8 @@ export function BridgeTest({
   const [bootCheckBusy, setBootCheckBusy] = useState(false);
 
   const isEngineReady = engineStatus === "connected" && engineUrl !== null;
+  const location = useLocation();
+  const isPageVisible = location.pathname === "/bridge-test";
 
   // -------------------------------------------------------------------------
   // Stable callbacks (each defined once with useCallback so the actions
@@ -327,6 +331,7 @@ export function BridgeTest({
     if (!isEngineReady) return;
     if (!user?.id) return;
     setBroadcastBusy(true);
+    setBroadcastError(null);
     try {
       const res = await engine.extensionBroadcastTest(user.id, "bridge.test", {
         from: "desktop-bridge-test-panel",
@@ -340,7 +345,9 @@ export function BridgeTest({
         enabled: false,
         timestamp: Date.now(),
       });
-      setSessionsError(String(e));
+      // Dedicated state — routing this into sessionsError rendered the
+      // failure in the Sessions panel and the 2s session poll cleared it.
+      setBroadcastError(String(e));
     } finally {
       setBroadcastBusy(false);
     }
@@ -440,7 +447,7 @@ export function BridgeTest({
   // Metrics polling — gated on document visibility so we don't burn
   // cycles when the desktop window is minimized or the page is hidden.
   useEffect(() => {
-    if (!isEngineReady) return;
+    if (!isPageVisible || !isEngineReady) return;
     let active = !document.hidden;
     let id: ReturnType<typeof setInterval> | null = null;
 
@@ -469,14 +476,17 @@ export function BridgeTest({
       document.removeEventListener("visibilitychange", onVisibility);
       stop();
     };
-  }, [isEngineReady, refreshMetrics]);
+  }, [isPageVisible, isEngineReady, refreshMetrics]);
 
   // Sessions auto-refresh — gated on the narrow boolean, not actions
   useEffect(() => {
-    if (!isEngineReady || !autoRefreshSessions) return;
+    // Keep-alive pages stay mounted forever — gate on the route actually
+    // being visible so this 2s poll doesn't hit the engine for the whole
+    // app lifetime from a hidden page.
+    if (!isPageVisible || !isEngineReady || !autoRefreshSessions) return;
     const id = setInterval(() => void refreshSessions(), 2000);
     return () => clearInterval(id);
-  }, [isEngineReady, autoRefreshSessions, refreshSessions]);
+  }, [isPageVisible, isEngineReady, autoRefreshSessions, refreshSessions]);
 
   // Default the invoke session dropdown to the first available session
   // whenever the list changes and the current selection is no longer valid.
@@ -508,8 +518,12 @@ export function BridgeTest({
           });
         },
         () => setLogConnected(false),
+        // Drive the badge from the REAL socket lifecycle — setting it true
+        // synchronously claimed "streaming" before any connection existed,
+        // and a clean close (engine restart) left it stuck on forever.
+        () => setLogConnected(true),
+        () => setLogConnected(false),
       );
-      setLogConnected(true);
     } catch {
       setLogConnected(false);
     }
@@ -940,6 +954,12 @@ export function BridgeTest({
                   Broadcast plumb is OFF. Toggle "Enable Broadcast plumb" under
                   Settings → Remote Access → Extension Bridge to enable
                   cross-machine fallback.
+                </div>
+              )}
+
+              {broadcastError && (
+                <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-red-300" role="alert">
+                  Broadcast test failed: {broadcastError}
                 </div>
               )}
 

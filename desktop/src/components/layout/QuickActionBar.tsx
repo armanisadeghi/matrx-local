@@ -244,7 +244,11 @@ export function QuickActionBar(props: QuickActionBarProps) {
       await llmActions.stopServer();
     } else if (llmHasModels) {
       const model = llmState.downloadedModels[0];
-      await llmActions.startServer(model.filename, 0);
+      // Detected GPU layers, not hardcoded CPU-only (see QuickLocalChatModal).
+      await llmActions.startServer(
+        model.filename,
+        llmState.hardwareResult?.recommended_gpu_layers ?? 0,
+      );
     }
   }, [llmRunning, llmHasModels, llmState.downloadedModels, llmActions]);
 
@@ -561,8 +565,9 @@ export function QuickActionBar(props: QuickActionBarProps) {
         engineStatus={engineStatus}
         userId={userId}
       />
-      <QuickScrapeModal open={scrapeOpen} onOpenChange={setScrapeOpen} />
+      <QuickScrapeModal open={scrapeOpen} onOpenChange={setScrapeOpen} userId={userId} />
       <QuickTranscriptModal
+        userId={userId}
         open={transcriptOpen}
         onOpenChange={setTranscriptOpen}
         transcriptionState={transcriptionState}

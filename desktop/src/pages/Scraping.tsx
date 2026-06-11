@@ -104,6 +104,12 @@ function SingleTab({ engineStatus }: { engineStatus: EngineStatus }) {
             Engine not connected — start the Python engine to scrape
           </p>
         )}
+
+        {error && (
+          <p className="text-xs text-red-400" role="alert">
+            Scrape failed: {error}
+          </p>
+        )}
       </div>
 
       {/* Result */}
@@ -229,7 +235,7 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
     pendingCount,
     doneCount,
     progress,
-    addUrls,
+    addUrls, restoreEntry,
     removeEntry,
     clearAll,
     stop,
@@ -258,13 +264,12 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
 
   const handleRestore = useCallback(
     (h: ScrapeHistoryEntry) => {
-      // Add the URL to queue with a pre-filled result from history
-      if (!entries.find((e) => e.url === h.url)) {
-        addUrls(h.url);
-      }
+      // Pre-fill from history — addUrls created a "pending" row that dropped
+      // the saved result and rendered "No result yet".
+      restoreEntry(h);
       setSelectedUrl(h.url);
     },
-    [entries, addUrls],
+    [restoreEntry],
   );
 
   // Auto-select first completed entry
@@ -286,10 +291,12 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
   const isConnected = engineStatus === "connected";
 
   // Count new URLs that would be added
+  // Use the same normalization as addUrls — the old startsWith("http") check
+  // diverged for hosts like httpbin.org (counted as new, then deduped away).
   const newUrlCount = urlDraft
     .split(/[\n,]+/)
-    .map((u) => u.trim())
-    .filter((u) => u && !entries.find((e) => e.url === (u.startsWith("http") ? u : `https://${u}`))).length;
+    .map((u) => normalizeUrl(u.trim()))
+    .filter((u) => u && !entries.find((e) => e.url === u)).length;
 
   return (
     <div className="relative flex h-full overflow-hidden">

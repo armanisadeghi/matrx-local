@@ -88,11 +88,17 @@ export function TauriFetchBrowser() {
 
     const isInTauri = isTauri();
 
-    const revokeCurrent = () => {
-        if (currentBlobUrl.current) {
-            URL.revokeObjectURL(currentBlobUrl.current);
-            currentBlobUrl.current = null;
+    // Blob URL lifetime is owned by HISTORY, not by "current": revoking the
+    // current URL on every navigation/back/forward invalidated entries still
+    // referenced by historyRef, so traversal loaded dead blob: URLs (blank
+    // iframes). URLs are revoked only when their entries leave history
+    // (forward-truncation on navigate) or on unmount.
+    const revokeAllHistory = () => {
+        for (const entry of historyRef.current) {
+            if (entry.blobUrl) URL.revokeObjectURL(entry.blobUrl);
         }
+        historyRef.current = [];
+        currentBlobUrl.current = null;
     };
 
     const navigate = useCallback(async (target: string, addToHistory = true) => {
@@ -135,7 +141,9 @@ export function TauriFetchBrowser() {
                 blob = b64ToBlob(result.body_b64, ct);
             }
 
-            revokeCurrent();
+            // Revoke only the entry NOT in history: a reload (addToHistory
+            // false) replaces the current state, whose URL equals the history
+            // entry's — handled below by truncation semantics.
             const blobUrl = URL.createObjectURL(blob);
             currentBlobUrl.current = blobUrl;
 
@@ -149,9 +157,25 @@ export function TauriFetchBrowser() {
             };
 
             if (addToHistory) {
+                // Truncate forward entries and revoke THEIR blob URLs — they
+                // are no longer reachable.
+                const removed = historyRef.current.slice(historyIdxRef.current + 1);
+                for (const entry of removed) {
+                    if (entry.blobUrl) URL.revokeObjectURL(entry.blobUrl);
+                }
                 historyRef.current = historyRef.current.slice(0, historyIdxRef.current + 1);
                 historyRef.current.push(state);
                 historyIdxRef.current = historyRef.current.length - 1;
+            } else {
+                // Reload: replace the current history entry; revoke the old blob.
+                const idx = historyIdxRef.current;
+                const old = historyRef.current[idx];
+                if (old && old.blobUrl && old.blobUrl !== blobUrl) {
+                    URL.revokeObjectURL(old.blobUrl);
+                }
+                if (idx >= 0 && historyRef.current[idx]) {
+                    historyRef.current[idx] = state;
+                }
             }
 
             setPage(state);
@@ -171,13 +195,12 @@ export function TauriFetchBrowser() {
     }, []);
 
     // Cleanup blob URLs on unmount
-    useEffect(() => () => revokeCurrent(), []);
+    useEffect(() => () => revokeAllHistory(), []);
 
     const goBack = () => {
         if (historyIdxRef.current <= 0) return;
         historyIdxRef.current -= 1;
         const prev = historyRef.current[historyIdxRef.current];
-        revokeCurrent();
         currentBlobUrl.current = prev.blobUrl;
         setPage(prev);
         setInputUrl(prev.url);
@@ -188,7 +211,6 @@ export function TauriFetchBrowser() {
         if (historyIdxRef.current >= historyRef.current.length - 1) return;
         historyIdxRef.current += 1;
         const next = historyRef.current[historyIdxRef.current];
-        revokeCurrent();
         currentBlobUrl.current = next.blobUrl;
         setPage(next);
         setInputUrl(next.url);

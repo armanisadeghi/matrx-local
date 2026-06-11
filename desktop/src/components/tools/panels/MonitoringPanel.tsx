@@ -70,18 +70,23 @@ export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelPr
 
   const parseResult = useCallback((r: unknown) => {
     try {
-      const d = r as { output?: string; type?: string };
-      if (!d || d.type === "error" || !d.output) return;
-      const parsed = JSON.parse(d.output);
-      if (Array.isArray(parsed)) {
-        setProcesses(parsed);
-      } else if (typeof parsed === "object") {
+      const d = r as { output?: string; type?: string; metadata?: Record<string, unknown> };
+      if (!d || d.type === "error") return;
+      // The structured data lives in metadata — `output` is human-readable
+      // text ("System Resources:\n  CPU: ..."), so JSON.parse(output) always
+      // threw and the dashboard stayed empty while polling every 3s.
+      const meta = d.metadata;
+      if (!meta || typeof meta !== "object") return;
+      if (Array.isArray((meta as { processes?: unknown }).processes)) {
+        setProcesses((meta as { processes: ProcessRow[] }).processes);
+        return;
+      }
+      const parsed = meta as unknown as ResourceData;
+      if (parsed.cpu_percent != null) {
         setResources(parsed);
-        if (parsed.cpu_percent != null) {
-          setCpuHistory((h) => [...h.slice(-MAX_HISTORY + 1), parsed.cpu_percent]);
-          setMemHistory((h) => [...h.slice(-MAX_HISTORY + 1), parsed.memory_percent ?? 0]);
-          setDiskHistory((h) => [...h.slice(-MAX_HISTORY + 1), parsed.disk_percent ?? 0]);
-        }
+        setCpuHistory((h) => [...h.slice(-MAX_HISTORY + 1), parsed.cpu_percent ?? 0]);
+        setMemHistory((h) => [...h.slice(-MAX_HISTORY + 1), parsed.memory_percent ?? 0]);
+        setDiskHistory((h) => [...h.slice(-MAX_HISTORY + 1), parsed.disk_percent ?? 0]);
       }
     } catch { /* ignore */ }
   }, []);
@@ -90,8 +95,10 @@ export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelPr
     await onInvoke("SystemResources", {});
   }, [onInvoke]);
 
-  const refreshProcesses = useCallback(async () => {
-    await onInvoke("TopProcesses", { limit: 20, sort_by: processSort });
+  const refreshProcesses = useCallback(async (sortKey?: "cpu" | "memory" | "name") => {
+    // Accept the key explicitly — calling right after setProcessSort used the
+    // PREVIOUS render's value (stale closure), fetching by the wrong sort.
+    await onInvoke("TopProcesses", { limit: 20, sort_by: sortKey ?? processSort });
   }, [onInvoke, processSort]);
 
   useEffect(() => { parseResult(result); }, [result, parseResult]);
@@ -233,7 +240,7 @@ export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelPr
           {processes.length > 0 && (
             <ToolSection title="Top Processes" icon={Zap} iconColor="text-violet-400"
               actions={
-                <button onClick={refreshProcesses} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
+                <button onClick={() => refreshProcesses()} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
                   <RefreshCw className="h-3 w-3" /> Refresh
                 </button>
               } noPadding>
@@ -266,7 +273,7 @@ export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelPr
                 placeholder="Filter processes..." className="pl-8 h-8 text-xs" />
             </div>
             {(["cpu", "memory", "name"] as const).map((s) => (
-              <button key={s} onClick={() => { setProcessSort(s); refreshProcesses(); }}
+              <button key={s} onClick={() => { setProcessSort(s); refreshProcesses(s); }}
                 className={cn(
                   "rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors",
                   processSort === s
@@ -276,7 +283,7 @@ export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelPr
                 {s.toUpperCase()}
               </button>
             ))}
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={refreshProcesses} disabled={loading}>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => refreshProcesses()} disabled={loading}>
               <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
             </Button>
           </div>

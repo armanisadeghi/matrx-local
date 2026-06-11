@@ -70,17 +70,35 @@ export function QuickScrapeModal({ open, onOpenChange, userId }: QuickScrapeModa
           : { urls: [trimmed] };
       const raw = await engine.invokeTool(toolName, args);
 
+      // invokeTool returns a ToolResult envelope { type, output, metadata } —
+      // the old Array/"content" checks never matched it, so every scrape
+      // (including failures) rendered the raw envelope JSON as a "Success".
+      if (raw.type === "error") {
+        throw new Error(raw.output || "Scrape failed");
+      }
+      let payload: unknown = raw.output;
+      try {
+        payload = JSON.parse(raw.output);
+      } catch {
+        // Plain text/markdown output — use as-is.
+      }
+
       let parsed: ScrapeResultData;
-      if (Array.isArray(raw) && raw.length > 0) {
-        parsed = raw[0] as ScrapeResultData;
-      } else if (typeof raw === "object" && raw !== null && "content" in (raw as unknown as Record<string, unknown>)) {
-        parsed = raw as unknown as ScrapeResultData;
+      if (Array.isArray(payload) && payload.length > 0) {
+        parsed = payload[0] as ScrapeResultData;
+      } else if (
+        typeof payload === "object" &&
+        payload !== null &&
+        "content" in (payload as Record<string, unknown>)
+      ) {
+        parsed = payload as ScrapeResultData;
       } else {
         parsed = {
           url: trimmed,
           success: true,
           status_code: 200,
-          content: typeof raw === "string" ? raw : JSON.stringify(raw, null, 2),
+          content:
+            typeof payload === "string" ? payload : JSON.stringify(payload, null, 2),
           title: "",
           content_type: "text/plain",
           response_url: trimmed,

@@ -33,6 +33,7 @@ interface QuickTranscriptModalProps {
   transcriptionState: TranscriptionState;
   transcriptionActions: TranscriptionActions;
   onNavigateToVoice?: () => void;
+  userId?: string | null;
 }
 
 export function QuickTranscriptModal({
@@ -41,6 +42,7 @@ export function QuickTranscriptModal({
   transcriptionState,
   transcriptionActions,
   onNavigateToVoice,
+  userId,
 }: QuickTranscriptModalProps) {
   const { actions: sessionsActions } = useSessionsContext();
   const [llmState] = useLlmApp();
@@ -178,7 +180,7 @@ export function QuickTranscriptModal({
     setPushingNote(true);
     try {
       const label = `Voice Note — ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
-      await engine.createNote("local", {
+      await engine.createNote(userId ?? "local", {
         label,
         content: fullTranscript.trim(),
         folder_name: "Voice Notes",

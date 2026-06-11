@@ -275,9 +275,14 @@ export function fromEngineSchema(schema: EngineToolSchema): ToolUISchema {
     ([name, def]): ToolFieldSchema => ({
       name,
       label: toTitleCase(name),
-      type: name.toLowerCase().includes("path")
-        ? "file-path"
-        : toFieldType(def.type),
+      // Only treat *string* params as file paths — the name heuristic was
+      // overriding ARRAY types (e.g. ArchiveCreate.source_paths), so the form
+      // submitted a plain string the handler then iterated per character.
+      type:
+        name.toLowerCase().includes("path") &&
+        (def.type === "string" || def.type === undefined)
+          ? "file-path"
+          : toFieldType(def.type),
       description: def.description,
       defaultValue: def.default,
       required: required.has(name),

@@ -441,6 +441,7 @@ function VariableContent({
       }
       return (
         <GuidedSelect
+          key={variable.name}
           value={value}
           onChange={onChange}
           options={cc.options}
@@ -460,6 +461,7 @@ function VariableContent({
       }
       return (
         <GuidedCheckbox
+          key={variable.name}
           value={value}
           onChange={onChange}
           options={cc.options}
@@ -525,7 +527,11 @@ export function GuidedVariableInputs({
 
   if (total === 0) return null;
 
-  const variable = variableDefaults[activeIndex];
+  // Clamp: activeIndex survives agent switches (this component stays mounted
+  // unkeyed in ChatPanel) — switching from a 5-variable agent at question 5
+  // to a 2-variable agent indexed past the end and TypeError'd the chat page.
+  const safeIndex = Math.min(activeIndex, total - 1);
+  const variable = variableDefaults[safeIndex];
   const value = values[variable.name] ?? variable.defaultValue ?? "";
   const formattedName = formatLabel(variable.name);
   const helpText = variable.helpText;
@@ -536,12 +542,12 @@ export function GuidedVariableInputs({
   }).length;
 
   const goNext = useCallback(() => {
-    if (activeIndex < total - 1) setActiveIndex((i) => i + 1);
-  }, [activeIndex, total]);
+    if (safeIndex < total - 1) setActiveIndex(safeIndex + 1);
+  }, [safeIndex, total]);
 
   const goPrev = useCallback(() => {
-    if (activeIndex > 0) setActiveIndex((i) => i - 1);
-  }, [activeIndex]);
+    if (safeIndex > 0) setActiveIndex(safeIndex - 1);
+  }, [safeIndex]);
 
   const handleSkipAll = useCallback(() => {
     setIsCollapsed(true);
@@ -567,7 +573,7 @@ export function GuidedVariableInputs({
     <div className="flex items-center gap-1">
       {variableDefaults.map((v, i) => {
         const filled = (values[v.name] ?? v.defaultValue ?? "").trim() !== "";
-        const isCurrent = i === activeIndex;
+        const isCurrent = i === safeIndex;
         return (
           <button
             key={v.name}
@@ -678,7 +684,7 @@ export function GuidedVariableInputs({
         <button
           type="button"
           onClick={goPrev}
-          disabled={activeIndex === 0}
+          disabled={safeIndex === 0}
           className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default transition-colors px-1 py-0.5"
         >
           <ChevronLeft className="w-3.5 h-3.5" />
@@ -686,10 +692,10 @@ export function GuidedVariableInputs({
         </button>
 
         <span className="text-[11px] text-muted-foreground">
-          {activeIndex + 1} of {total} &middot; all optional
+          {safeIndex + 1} of {total} &middot; all optional
         </span>
 
-        {activeIndex < total - 1 ? (
+        {safeIndex < total - 1 ? (
           <button
             type="button"
             onClick={goNext}

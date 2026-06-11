@@ -134,7 +134,13 @@ export function NoteEditor({
     prevSegmentCountRef.current = 0;
   }, [transcriptionState.isRecording, transcriptionActions]);
 
-  // Sync state when the active note switches.
+  // Sync state when the active note switches — and also when the SAME note's
+  // content changes underneath us (a realtime remote edit pulled by
+  // Documents' reload). Ignoring same-id updates left the editor showing
+  // stale text, and the next local keystroke pushed that stale content back,
+  // clobbering the remote edit. Only resync when the user has no unsaved
+  // local divergence (lastSyncedContentRef tracks what we last loaded).
+  const lastSyncedContentRef = useRef<string>(note.content ?? "");
   useEffect(() => {
     if (note.id !== prevNoteIdRef.current) {
       // Cancel any pending label debounce from the previous note before
@@ -145,7 +151,29 @@ export function NoteEditor({
       }
       setContent(note.content ?? "");
       setLabel(note.label);
+      lastSyncedContentRef.current = note.content ?? "";
       prevNoteIdRef.current = note.id;
+      return;
+    }
+    const incoming = note.content ?? "";
+    if (incoming !== lastSyncedContentRef.current) {
+      // Remote change for the visible note. Apply it only when the local
+      // draft hasn't diverged from the last synced state — otherwise the
+      // user is mid-edit and the conflict path (or their save) wins.
+      setContent((current) => {
+        if (incoming === current) {
+          // Echo of our own debounced save round-tripping — just advance the
+          // synced marker so future remote edits are still recognized.
+          lastSyncedContentRef.current = incoming;
+          return current;
+        }
+        if (current === lastSyncedContentRef.current) {
+          lastSyncedContentRef.current = incoming;
+          return incoming;
+        }
+        return current;
+      });
+      setLabel(note.label);
     }
   }, [note.id, note.content, note.label]);
 

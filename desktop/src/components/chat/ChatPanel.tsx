@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle, X } from "lucide-react";
 import { useChat } from "@/hooks/use-chat";
@@ -51,6 +51,7 @@ export function ChatPanel({
   const [serviceState] = useServiceStatus(engineStatus);
   const thisDeviceInstanceId = serviceState.cloudDebug?.instance_id ?? null;
 
+
   useEffect(() => {
     if (compact || forceLocalModel) return;
     if (engineStatus !== "connected" || !engineUrl) return;
@@ -90,13 +91,29 @@ export function ChatPanel({
     mode,
     model,
     availableModels,
-    createConversation,
     sendMessage,
     stopStreaming,
     setMode,
     setModel,
     setToolSchemas,
   } = chat;
+
+  // "Confidential" (forceLocalModel) chats must never reach a cloud provider.
+  // The prop previously only suppressed the API-key warning — model selection
+  // could still default to a cloud model and stream the user's text off-box.
+  const localOnlyModels = useMemo(
+    () => availableModels.filter((m) => m.provider === "local"),
+    [availableModels],
+  );
+  useEffect(() => {
+    if (!forceLocalModel) return;
+    const current = availableModels.find((m) => m.id === model);
+    if (current?.provider === "local") return;
+    if (localOnlyModels.length > 0) {
+      setModel(localOnlyModels[0].id);
+    }
+  }, [forceLocalModel, model, availableModels, localOnlyModels, setModel]);
+
 
   useEffect(() => {
     if (engineStatus !== "connected" || !engineUrl) return;
@@ -178,11 +195,10 @@ export function ChatPanel({
     setVariableValues(defaults);
   }, [activeAgent?.id, hasMessages]);
 
-  useEffect(() => {
-    if (compact && !activeConversation) {
-      createConversation();
-    }
-  }, []);
+  // NOTE: compact mode no longer creates a conversation on mount — every
+  // Quick Chat open appended a permanent empty "New conversation" to the
+  // shared history (evicting real ones at the 100 cap). use-chat's
+  // sendMessage creates one lazily on first send.
 
   const handleSuggestionClick = useCallback(
     (prompt: string) => {
@@ -193,6 +209,14 @@ export function ChatPanel({
 
   const handleSend = useCallback(
     async (content: string) => {
+      if (forceLocalModel) {
+        const current = availableModels.find((m) => m.id === model);
+        if (current?.provider !== "local") {
+          // No local model connected yet — refuse rather than silently
+          // routing a confidential message to a cloud provider.
+          return;
+        }
+      }
       const submittedVars = { ...variableValues };
       setActiveVariables([]);
       setVariableValues({});
@@ -201,7 +225,7 @@ export function ChatPanel({
         variables: submittedVars,
       });
     },
-    [sendMessage, activeAgent, variableValues],
+    [sendMessage, activeAgent, variableValues, forceLocalModel, availableModels, model],
   );
 
   const handleVariableChange = (name: string, value: string) => {
@@ -306,8 +330,8 @@ export function ChatPanel({
           onStop={stopStreaming}
           isStreaming={isStreaming}
           mode={mode}
-          model={model}
-          availableModels={availableModels}
+          model={forceLocalModel ? (localOnlyModels[0]?.id ?? model) : model}
+          availableModels={forceLocalModel ? localOnlyModels : availableModels}
           onModelChange={setModel}
           onModeChange={setMode}
           engineReady={engineStatus === "connected"}

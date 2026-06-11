@@ -86,6 +86,9 @@ export function useToolExecution(): UseToolExecutionReturn {
 
         if (toolResult.type === "error") {
           setError(toolResult.output);
+          // Panels only receive `result` — without this, their error branches
+          // were unreachable and loading spinners stuck on tool failures.
+          setResult(toolResult);
           setHistory((prev) =>
             prev.map((e) =>
               e.id === entryId

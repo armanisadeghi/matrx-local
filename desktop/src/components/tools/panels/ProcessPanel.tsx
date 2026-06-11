@@ -44,7 +44,12 @@ export function ProcessPanel({ onInvoke, loading, result }: ProcessPanelProps) {
       return (a.name ?? "").localeCompare(b.name ?? "");
     });
 
-  const refresh = useCallback(() => onInvoke("ListProcesses", { sort_by: sort, limit: 50 }), [onInvoke, sort]);
+  const refresh = useCallback(
+    (sortKey?: "cpu" | "memory" | "name") =>
+      // Explicit key avoids the stale-closure fetch right after setSort.
+      onInvoke("ListProcesses", { sort_by: sortKey ?? sort, limit: 50 }),
+    [onInvoke, sort],
+  );
   const kill    = useCallback((pid: number) => onInvoke("KillProcess", { pid }), [onInvoke]);
   const launchApp = useCallback(async () => {
     if (!launch.trim()) return;
@@ -77,14 +82,14 @@ export function ProcessPanel({ onInvoke, loading, result }: ProcessPanelProps) {
             placeholder="Filter processes…" className="pl-8 h-8 text-xs" />
         </div>
         {(["cpu", "memory", "name"] as const).map((s) => (
-          <button key={s} onClick={() => { setSort(s); refresh(); }}
+          <button key={s} onClick={() => { setSort(s); refresh(s); }}
             className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
               sort === s ? "border-primary/50 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"
             }`}>
             {s.toUpperCase()}
           </button>
         ))}
-        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={refresh} disabled={loading}>
+        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => refresh()} disabled={loading}>
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
         </Button>
       </div>
@@ -135,7 +140,7 @@ export function ProcessPanel({ onInvoke, loading, result }: ProcessPanelProps) {
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
           <Cpu className="h-10 w-10 opacity-20" />
           <p className="text-sm">Click Refresh to load processes</p>
-          <Button variant="outline" onClick={refresh}>Load Processes</Button>
+          <Button variant="outline" onClick={() => refresh()}>Load Processes</Button>
         </div>
       )}
     </div>

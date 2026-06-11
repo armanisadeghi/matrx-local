@@ -379,6 +379,33 @@ export function useScrapeMany() {
     setEntries((prev) => prev.filter((e) => e.url !== url));
   }, []);
 
+  /** Restore a history item as a completed entry (used by the History panel —
+   * adding it as "pending" dropped the saved result and showed "No result yet"). */
+  const restoreEntry = useCallback((h: ScrapeHistoryEntry) => {
+    setEntries((prev) => {
+      if (prev.some((e) => e.url === h.url)) return prev;
+      const entry: ScrapeEntry = {
+        id: `${h.url}-${Date.now()}`,
+        url: h.url,
+        status: h.success ? "success" : "error",
+        result: {
+          url: h.url,
+          success: h.success,
+          status_code: h.status_code ?? (h.success ? 200 : 0),
+          content: h.content ?? "",
+          title: h.title,
+          content_type: "text/plain",
+          response_url: h.url,
+          error: h.success ? null : "Restored from history (original error not saved)",
+          elapsed_ms: h.elapsed_ms,
+        },
+        startedAt: new Date(h.savedAt),
+        completedAt: new Date(h.savedAt),
+      };
+      return [...prev, entry];
+    });
+  }, []);
+
   const clearAll = useCallback(() => {
     abortRef.current?.abort();
     setEntries([]);
@@ -578,11 +605,12 @@ export function useScrapeMany() {
       doneCount,
       progress,
       addUrls,
+      restoreEntry,
       removeEntry,
       clearAll,
       stop,
       startScrape,
     }),
-    [entries, running, pendingCount, doneCount, progress, addUrls, removeEntry, clearAll, stop, startScrape],
+    [entries, running, pendingCount, doneCount, progress, addUrls, restoreEntry, removeEntry, clearAll, stop, startScrape],
   );
 }

@@ -29,26 +29,36 @@ export function QuickNoteModal({
   const [content, setContent] = useState("");
   const [folderId, setFolderId] = useState<string>("");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const docs = useDocuments(userId, engineStatus);
   const folders = docs.tree?.folders ?? [];
 
   const handleSave = useCallback(async () => {
     if (!title.trim() && !content.trim()) return;
     setSaving(true);
+    setSaveError(null);
     try {
       const folder = folders.find((f) => f.id === folderId);
-      await docs.createNote({
+      // createNote NEVER throws — it returns null on failure (and when the
+      // engine isn't ready). Clearing the form on null silently lost the note.
+      const note = await docs.createNote({
         label: title.trim() || "Untitled Note",
         content: content.trim(),
         folder_name: folder?.name,
         folder_id: folderId || undefined,
       });
+      if (!note) {
+        setSaveError(
+          docs.error ?? "Could not save the note — the engine may still be starting.",
+        );
+        return;
+      }
       setTitle("");
       setContent("");
       setFolderId("");
       onOpenChange(false);
-    } catch {
-      /* createNote handles its own error state */
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
@@ -109,6 +119,11 @@ export function QuickNoteModal({
             className="resize-none"
           />
         </div>
+        {saveError && (
+          <p className="text-xs text-red-400" role="alert">
+            {saveError}
+          </p>
+        )}
         <DialogFooter>
           <span className="text-xs text-muted-foreground">
             {navigator.platform.includes("Mac") ? "\u2318" : "Ctrl"}+Enter to save

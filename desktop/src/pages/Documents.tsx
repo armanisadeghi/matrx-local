@@ -1,3 +1,4 @@
+import type { DocFolder } from "@/lib/api";
 /**
  * Documents page — full document management with folder tree, markdown editor,
  * sync status, version history, sharing, and directory mappings.
@@ -90,9 +91,14 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
   };
 
   const handleCreateNote = async () => {
+    // Flatten — nested folders are selectable in the tree, but a top-level
+    // find() sent folder_name "General" with the NESTED folder_id (an
+    // internally inconsistent payload).
+    const flatten = (folders: DocFolder[]): DocFolder[] =>
+      folders.flatMap((f) => [f, ...flatten(f.children ?? [])]);
     const folderName =
-      docs.tree?.folders.find((f) => f.id === docs.activeFolderId)?.name ??
-      "General";
+      flatten(docs.tree?.folders ?? []).find((f) => f.id === docs.activeFolderId)
+        ?.name ?? "General";
     await docs.createNote({
       label: "New Note",
       content: "",

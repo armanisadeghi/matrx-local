@@ -329,6 +329,7 @@ function PromptManageDialog({
                 {editing ? "Edit Prompt" : "Create New Prompt"}
               </p>
               <PromptEditor
+                key={editing?.id ?? "new"}
                 initial={editing ?? undefined}
                 onSave={editing ? handleUpdate : handleCreate}
                 onCancel={() => { setCreating(false); setEditing(null); }}

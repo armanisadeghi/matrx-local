@@ -2,12 +2,31 @@
 
 All operations use the user's JWT (forwarded from the frontend) so that
 Row Level Security policies are enforced server-side.
+
+Schema note: the remote `notes` and `note_folders` tables live in the
+`workbench` Postgres schema (NOT `public`). PostgREST targets a non-public
+schema via the `Accept-Profile` (reads) / `Content-Profile` (writes) headers —
+that is exactly what supabase-js's `.schema("workbench")` sends under the hood.
+The notes/folders methods pass `schema=_WORKBENCH`; everything else
+(`note_versions`/`note_shares` in `public`, the sync-log tables) keeps the
+default `public` profile.
+
+Column note (canonical base-entity shape on the remote side):
+    - ownership   : `created_by` (uuid)         — replaced the old `user_id`.
+    - visibility  : `visibility` (enum)         — replaced the old `is_public`.
+    - soft-delete : `deleted_at` (timestamptz)  — null = live; replaced the old
+                                                  `is_deleted` boolean.
+The LOCAL SQLite mirror keeps its own column names; only the fields sent to and
+read from Supabase are mapped here. Public method signatures still take
+`user_id` so the sync engine is unchanged — it is mapped to `created_by` at the
+wire boundary.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -17,7 +36,18 @@ from app.config import SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY
 
 logger = logging.getLogger(__name__)
 
+
+def _utcnow_iso() -> str:
+    """Current UTC time as an ISO-8601 string for `deleted_at` soft-delete marks."""
+    return datetime.now(timezone.utc).isoformat()
+
 _REST_BASE = f"{SUPABASE_URL}/rest/v1" if SUPABASE_URL else ""
+
+# The notes/note_folders tables live in this Postgres schema, reached over
+# PostgREST via the Accept-Profile / Content-Profile headers.
+_WORKBENCH = "workbench"
+# HTTP methods that mutate state use Content-Profile; reads use Accept-Profile.
+_WRITE_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
 
 
 def _content_hash(content: str) -> str:
@@ -56,6 +86,7 @@ class SupabaseDocClient:
         params: dict[str, str] | None = None,
         json_body: dict[str, Any] | list[dict[str, Any]] | None = None,
         extra_headers: dict[str, str] | None = None,
+        schema: str | None = None,
     ) -> list[dict[str, Any]]:
         if not _REST_BASE:
             raise RuntimeError("SUPABASE_URL not configured")
@@ -63,6 +94,14 @@ class SupabaseDocClient:
             raise RuntimeError("No JWT set — user must be authenticated")
 
         headers = self._headers()
+        # Target a non-public schema (e.g. `workbench`) via the PostgREST profile
+        # headers. Accept-Profile selects the schema to read from; Content-Profile
+        # selects the schema to write to.
+        if schema:
+            if method.upper() in _WRITE_METHODS:
+                headers["Content-Profile"] = schema
+            else:
+                headers["Accept-Profile"] = schema
         if extra_headers:
             headers.update(extra_headers)
 
@@ -88,10 +127,11 @@ class SupabaseDocClient:
             "GET",
             "note_folders",
             params={
-                "user_id": f"eq.{user_id}",
-                "is_deleted": "eq.false",
+                "created_by": f"eq.{user_id}",
+                "deleted_at": "is.null",
                 "order": "path.asc,position.asc",
             },
+            schema=_WORKBENCH,
         )
 
     async def create_folder(
@@ -103,12 +143,14 @@ class SupabaseDocClient:
     ) -> dict[str, Any]:
         body = {
             "id": str(uuid4()),
-            "user_id": user_id,
+            "created_by": user_id,
             "name": name,
             "parent_id": parent_id,
             "path": path,
         }
-        rows = await self._request("POST", "note_folders", json_body=body)
+        rows = await self._request(
+            "POST", "note_folders", json_body=body, schema=_WORKBENCH
+        )
         return rows[0] if rows else body
 
     async def update_folder(
@@ -119,6 +161,7 @@ class SupabaseDocClient:
             "note_folders",
             params={"id": f"eq.{folder_id}"},
             json_body=updates,
+            schema=_WORKBENCH,
         )
         return rows[0] if rows else {}
 
@@ -127,7 +170,8 @@ class SupabaseDocClient:
             "PATCH",
             "note_folders",
             params={"id": f"eq.{folder_id}"},
-            json_body={"is_deleted": True},
+            json_body={"deleted_at": _utcnow_iso()},
+            schema=_WORKBENCH,
         )
 
     # ── Notes ────────────────────────────────────────────────────────────────
@@ -140,22 +184,24 @@ class SupabaseDocClient:
         include_deleted: bool = False,
     ) -> list[dict[str, Any]]:
         params: dict[str, str] = {
-            "user_id": f"eq.{user_id}",
+            "created_by": f"eq.{user_id}",
             "order": "updated_at.desc",
             "select": "id,label,folder_name,folder_id,tags,file_path,content_hash,"
-            "sync_version,position,is_deleted,created_at,updated_at,metadata",
+            "sync_version,position,deleted_at,created_at,updated_at,metadata",
         }
         if not include_deleted:
-            params["is_deleted"] = "eq.false"
+            params["deleted_at"] = "is.null"
         if folder_id:
             params["folder_id"] = f"eq.{folder_id}"
         if search:
             params["or"] = f"(label.ilike.%{search}%,content.ilike.%{search}%)"
-        return await self._request("GET", "notes", params=params)
+        return await self._request("GET", "notes", params=params, schema=_WORKBENCH)
 
     async def get_note(self, note_id: str) -> dict[str, Any] | None:
         try:
-            rows = await self._request("GET", "notes", params={"id": f"eq.{note_id}"})
+            rows = await self._request(
+                "GET", "notes", params={"id": f"eq.{note_id}"}, schema=_WORKBENCH
+            )
             return rows[0] if rows else None
         except Exception:
             logger.debug("get_note(%s) returned no result", note_id, exc_info=True)
@@ -176,7 +222,7 @@ class SupabaseDocClient:
         note_id = str(uuid4())
         body: dict[str, Any] = {
             "id": note_id,
-            "user_id": user_id,
+            "created_by": user_id,
             "label": label,
             "content": content,
             "folder_name": folder_name,
@@ -188,7 +234,7 @@ class SupabaseDocClient:
             "sync_version": 1,
             "last_device_id": device_id,
         }
-        rows = await self._request("POST", "notes", json_body=body)
+        rows = await self._request("POST", "notes", json_body=body, schema=_WORKBENCH)
         return rows[0] if rows else body
 
     async def upsert_note(
@@ -211,7 +257,7 @@ class SupabaseDocClient:
         """
         body: dict[str, Any] = {
             "id": note_id,
-            "user_id": user_id,
+            "created_by": user_id,
             "label": label,
             "content": content,
             "folder_name": folder_name,
@@ -229,6 +275,7 @@ class SupabaseDocClient:
             extra_headers={
                 "Prefer": "return=representation,resolution=merge-duplicates"
             },
+            schema=_WORKBENCH,
         )
         return rows[0] if rows else body
 
@@ -243,7 +290,11 @@ class SupabaseDocClient:
         if device_id:
             updates["last_device_id"] = device_id
         rows = await self._request(
-            "PATCH", "notes", params={"id": f"eq.{note_id}"}, json_body=updates
+            "PATCH",
+            "notes",
+            params={"id": f"eq.{note_id}"},
+            json_body=updates,
+            schema=_WORKBENCH,
         )
         return rows[0] if rows else {}
 
@@ -252,11 +303,14 @@ class SupabaseDocClient:
             "PATCH",
             "notes",
             params={"id": f"eq.{note_id}"},
-            json_body={"is_deleted": True},
+            json_body={"deleted_at": _utcnow_iso()},
+            schema=_WORKBENCH,
         )
 
     async def hard_delete_note(self, note_id: str) -> None:
-        await self._request("DELETE", "notes", params={"id": f"eq.{note_id}"})
+        await self._request(
+            "DELETE", "notes", params={"id": f"eq.{note_id}"}, schema=_WORKBENCH
+        )
 
     # ── Versions ─────────────────────────────────────────────────────────────
 
@@ -489,10 +543,11 @@ class SupabaseDocClient:
             "GET",
             "notes",
             params={
-                "user_id": f"eq.{user_id}",
+                "created_by": f"eq.{user_id}",
                 "sync_version": f"gt.{since_version}",
                 "order": "sync_version.asc",
             },
+            schema=_WORKBENCH,
         )
 
     async def get_all_notes_with_hashes(self, user_id: str) -> list[dict[str, Any]]:
@@ -501,11 +556,12 @@ class SupabaseDocClient:
             "GET",
             "notes",
             params={
-                "user_id": f"eq.{user_id}",
-                "is_deleted": "eq.false",
+                "created_by": f"eq.{user_id}",
+                "deleted_at": "is.null",
                 "select": "id,file_path,content_hash,sync_version,label,"
                 "folder_name,folder_id,updated_at",
             },
+            schema=_WORKBENCH,
         )
 
 

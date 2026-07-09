@@ -13,7 +13,14 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 
-PipelineType = Literal["flux", "hunyuan", "stable-diffusion-xl", "stable-diffusion"]
+PipelineType = Literal[
+    "flux2-klein",          # Flux2KleinPipeline  (present since diffusers 0.37.1; fresh installs pin >=0.39)
+    "z-image",              # ZImagePipeline
+    "qwen-image",           # QwenImagePipeline
+    "flux",                 # FluxPipeline        (FLUX.1 family)
+    "stable-diffusion-xl",  # StableDiffusionXLPipeline
+    "stable-diffusion",     # StableDiffusionPipeline (legacy, no catalog entry)
+]
 
 
 @dataclass(frozen=True)
@@ -62,9 +69,17 @@ class ImageGenModel:
     default_width: int = 1024
     default_height: int = 1024
 
-    # Optional: variant/quantized version
-    variant: str | None = None
-    """Torch dtype variant string passed to from_pretrained (e.g. 'fp16')."""
+    download_size_gb: float = 0.0
+    """Approximate full-repo download size in GB (shown in the UI before the
+    exact byte total is known; the DownloadManager reports exact bytes)."""
+
+    load_variant: str | None = None
+    """diffusers weight-variant name (e.g. 'fp16') — when set, ONLY the
+    ``*.<variant>.safetensors`` weight files are downloaded (their non-variant
+    duplicates are skipped) and ``variant=<value>`` is passed to
+    ``from_pretrained`` at load time so loading matches the download. Only set
+    this when the repo actually publishes variant files (check the HF file
+    tree); requesting a nonexistent variant makes from_pretrained fail."""
 
     requires_hf_token: bool = False
     """Whether a HF token is needed to download this model."""
@@ -77,7 +92,79 @@ class ImageGenModel:
 # ─────────────────────────────────────────────────────────────────────────────
 
 IMAGE_GEN_MODELS: list[ImageGenModel] = [
-    # ── FLUX.1-schnell — fast, permissive license, excellent quality ──────────
+    # ── FLUX.2 klein 4B — DEFAULT. Few-step, fast, Apache 2.0 ─────────────────
+    # Verified against the HF model card (July 2026): Flux2KleinPipeline,
+    # torch.bfloat16, 4 steps, guidance_scale=1.0, 1024x1024.
+    ImageGenModel(
+        model_id="black-forest-labs/FLUX.2-klein-4B",
+        name="FLUX.2 Klein 4B",
+        provider="Black Forest Labs",
+        pipeline_type="flux2-klein",
+        vram_gb=13.0,
+        ram_gb=16.0,
+        description="Best default: state-of-the-art quality in 4 steps, unifies generation and editing. Apache 2.0.",
+        quality_rating=5,
+        speed_rating=5,
+        recommended_steps=4,
+        recommended_guidance=1.0,
+        supports_negative_prompt=False,
+        model_card_url="https://huggingface.co/black-forest-labs/FLUX.2-klein-4B",
+        default_width=1024,
+        default_height=1024,
+        # Verified filtered size (HfApi, July 2026): 15.98 GB — transformer
+        # 7.75 + text_encoder 8.05 + vae 0.17 (root single-file dup excluded).
+        download_size_gb=16.0,
+        tags=["default", "fast", "high-quality", "apache-2.0"],
+    ),
+    # ── Z-Image Turbo — 6B photorealism + text rendering, 8 steps ─────────────
+    # Verified: ZImagePipeline, torch.bfloat16, num_inference_steps=9
+    # (8 DiT passes), guidance_scale=0.0.
+    ImageGenModel(
+        model_id="Tongyi-MAI/Z-Image-Turbo",
+        name="Z-Image Turbo",
+        provider="Tongyi-MAI (Alibaba)",
+        pipeline_type="z-image",
+        vram_gb=13.0,
+        ram_gb=16.0,
+        description="6B turbo model with exceptional photorealism and in-image text rendering. 8-step generation. Apache 2.0.",
+        quality_rating=5,
+        speed_rating=4,
+        recommended_steps=9,
+        recommended_guidance=0.0,
+        supports_negative_prompt=False,
+        model_card_url="https://huggingface.co/Tongyi-MAI/Z-Image-Turbo",
+        default_width=1024,
+        default_height=1024,
+        # Verified filtered size (HfApi, July 2026): 32.85 GB — the repo ships
+        # a single (fp32-shard) weight format, so no variant can shrink it.
+        download_size_gb=32.9,
+        tags=["photorealism", "text-rendering", "apache-2.0"],
+    ),
+    # ── Qwen-Image — 20B flagship, heavy: gate on 48GB unified / 24GB VRAM ────
+    # Verified: QwenImagePipeline (DiffusionPipeline resolves to it),
+    # torch.bfloat16, 50 steps, true_cfg_scale=4.0 (needs a negative prompt).
+    ImageGenModel(
+        model_id="Qwen/Qwen-Image",
+        name="Qwen-Image",
+        provider="Qwen (Alibaba)",
+        pipeline_type="qwen-image",
+        vram_gb=24.0,
+        ram_gb=48.0,
+        description="20B flagship with the best complex-text rendering and precise editing. Heavy — needs 48GB+ unified memory or a 24GB+ GPU. Apache 2.0.",
+        quality_rating=5,
+        speed_rating=2,
+        recommended_steps=50,
+        recommended_guidance=4.0,
+        supports_negative_prompt=True,
+        model_card_url="https://huggingface.co/Qwen/Qwen-Image",
+        default_width=1024,
+        default_height=1024,
+        # Verified filtered size (HfApi, July 2026): 57.70 GB — single weight
+        # format (no duplicates to filter beyond docs).
+        download_size_gb=57.8,
+        tags=["flagship", "text-rendering", "heavy", "apache-2.0"],
+    ),
+    # ── FLUX.1-schnell — legacy fast option, kept for compatibility ───────────
     ImageGenModel(
         model_id="black-forest-labs/FLUX.1-schnell",
         name="FLUX.1 Schnell",
@@ -85,7 +172,7 @@ IMAGE_GEN_MODELS: list[ImageGenModel] = [
         pipeline_type="flux",
         vram_gb=8.0,
         ram_gb=16.0,
-        description="The fastest high-quality open-source image model. 4-step generation. Apache 2.0.",
+        description="Previous-generation fast model. 4-step generation. Apache 2.0.",
         quality_rating=4,
         speed_rating=5,
         recommended_steps=4,
@@ -94,50 +181,12 @@ IMAGE_GEN_MODELS: list[ImageGenModel] = [
         model_card_url="https://huggingface.co/black-forest-labs/FLUX.1-schnell",
         default_width=1024,
         default_height=1024,
-        variant="bf16",
-        tags=["fast", "high-quality", "apache-2.0"],
+        # Verified filtered size (HfApi, July 2026): 33.73 GB — root
+        # flux1-schnell.safetensors + ae.safetensors dups (24 GB) excluded.
+        download_size_gb=33.8,
+        tags=["fast", "legacy", "apache-2.0"],
     ),
-    # ── FLUX.1-dev — best quality FLUX, non-commercial OK ─────────────────────
-    ImageGenModel(
-        model_id="black-forest-labs/FLUX.1-dev",
-        name="FLUX.1 Dev",
-        provider="Black Forest Labs",
-        pipeline_type="flux",
-        vram_gb=16.0,
-        ram_gb=24.0,
-        description="Highest quality FLUX model. 20-step generation. Non-commercial license.",
-        quality_rating=5,
-        speed_rating=3,
-        recommended_steps=20,
-        recommended_guidance=3.5,
-        supports_negative_prompt=False,
-        model_card_url="https://huggingface.co/black-forest-labs/FLUX.1-dev",
-        default_width=1024,
-        default_height=1024,
-        variant="bf16",
-        requires_hf_token=True,
-        tags=["high-quality", "non-commercial"],
-    ),
-    # ── HunyuanDiT (English) — lightweight Chinese architecture ───────────────
-    ImageGenModel(
-        model_id="Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers",
-        name="HunyuanDiT v1.2",
-        provider="Tencent",
-        pipeline_type="hunyuan",
-        vram_gb=8.0,
-        ram_gb=12.0,
-        description="Tencent's high-quality bilingual (Chinese + English) image model. Strong at detailed scenes.",
-        quality_rating=3,
-        speed_rating=3,
-        recommended_steps=25,
-        recommended_guidance=6.0,
-        supports_negative_prompt=True,
-        model_card_url="https://huggingface.co/Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers",
-        default_width=1024,
-        default_height=1024,
-        tags=["bilingual", "detailed"],
-    ),
-    # ── SDXL-Turbo — fastest consumer model, good for previews ───────────────
+    # ── SDXL-Turbo — instant previews on modest hardware ──────────────────────
     ImageGenModel(
         model_id="stabilityai/sdxl-turbo",
         name="SDXL Turbo",
@@ -154,9 +203,18 @@ IMAGE_GEN_MODELS: list[ImageGenModel] = [
         model_card_url="https://huggingface.co/stabilityai/sdxl-turbo",
         default_width=512,
         default_height=512,
+        # Verified filtered size (HfApi, July 2026): 6.94 GB with the fp16
+        # variant filter (raw repo is 55.5 GB of fp32+fp16+onnx duplicates).
+        download_size_gb=7.0,
+        # The repo ships fp32 AND fp16 weights (plus onnx exports and a
+        # single-file checkpoint). fp16 halves the download and matches the
+        # bf16/fp16 dtype we load with anyway.
+        load_variant="fp16",
         tags=["fast", "preview", "1-step"],
     ),
 ]
+
+DEFAULT_IMAGE_MODEL_ID = "black-forest-labs/FLUX.2-klein-4B"
 
 # ── Workflow presets ──────────────────────────────────────────────────────────
 
@@ -187,9 +245,9 @@ WORKFLOW_PRESETS: list[WorkflowPreset] = [
             "8k uhd, high detail, bokeh background"
         ),
         negative_prompt="cartoon, illustration, painting, blurry, low quality, deformed",
-        suggested_model_id="black-forest-labs/FLUX.1-schnell",
+        suggested_model_id="black-forest-labs/FLUX.2-klein-4B",
         steps=4,
-        guidance=0.0,
+        guidance=1.0,
         width=1024,
         height=1024,
         tags=["portrait", "photo"],
@@ -203,9 +261,9 @@ WORKFLOW_PRESETS: list[WorkflowPreset] = [
             "professional lighting, sharp details, commercial photo"
         ),
         negative_prompt="cluttered, dark, blurry, low quality",
-        suggested_model_id="black-forest-labs/FLUX.1-schnell",
+        suggested_model_id="black-forest-labs/FLUX.2-klein-4B",
         steps=4,
-        guidance=0.0,
+        guidance=1.0,
         width=1024,
         height=1024,
         tags=["product", "commercial"],
@@ -219,9 +277,9 @@ WORKFLOW_PRESETS: list[WorkflowPreset] = [
             "trending on artstation, professional illustration"
         ),
         negative_prompt="photo, realistic, blurry, low quality",
-        suggested_model_id="black-forest-labs/FLUX.1-dev",
-        steps=20,
-        guidance=3.5,
+        suggested_model_id="black-forest-labs/FLUX.2-klein-4B",
+        steps=4,
+        guidance=1.0,
         width=1024,
         height=1024,
         tags=["art", "illustration"],
@@ -235,9 +293,9 @@ WORKFLOW_PRESETS: list[WorkflowPreset] = [
             "professional app interface, light theme, high resolution screenshot"
         ),
         negative_prompt="cluttered, low quality, dark, outdated",
-        suggested_model_id="black-forest-labs/FLUX.1-schnell",
+        suggested_model_id="black-forest-labs/FLUX.2-klein-4B",
         steps=4,
-        guidance=0.0,
+        guidance=1.0,
         width=1280,
         height=960,
         tags=["ui", "design"],
@@ -251,9 +309,9 @@ WORKFLOW_PRESETS: list[WorkflowPreset] = [
             "simple icon, white background, professional brand identity"
         ),
         negative_prompt="complex, cluttered, photo, realistic, dark background",
-        suggested_model_id="black-forest-labs/FLUX.1-schnell",
+        suggested_model_id="black-forest-labs/FLUX.2-klein-4B",
         steps=4,
-        guidance=0.0,
+        guidance=1.0,
         width=1024,
         height=1024,
         tags=["logo", "icon", "branding"],
@@ -267,9 +325,9 @@ WORKFLOW_PRESETS: list[WorkflowPreset] = [
             "high dynamic range, ultra detailed, 8k"
         ),
         negative_prompt="people, text, watermark, low quality",
-        suggested_model_id="black-forest-labs/FLUX.1-dev",
-        steps=20,
-        guidance=3.5,
+        suggested_model_id="black-forest-labs/FLUX.2-klein-4B",
+        steps=4,
+        guidance=1.0,
         width=1344,
         height=768,
         tags=["landscape", "scenic"],

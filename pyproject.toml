@@ -111,16 +111,22 @@ scheduler = [
     "matrx-scheduler>=0.3.0",
 ]
 image-gen = [
-    # Hugging Face diffusers-based image generation (large install ~3-10 GB)
-    # Install with: uv sync --extra image-gen
-    # Torch: CPU-only by default. For GPU support install torch with CUDA manually.
-    "torch>=2.3.0",
+    # Hugging Face diffusers-based image AND video generation (large install).
+    # Install with: uv sync --extra image-gen  (dev convenience only — end
+    # users install via the in-app installer, see
+    # app/services/image_gen/installer.py IMAGE_GEN_PACKAGES; keep these pins
+    # in sync with that list).
+    # diffusers >= 0.39 is required by the model catalogs (Flux2Klein, ZImage,
+    # QwenImage, Wan, LTX pipelines). Torch: CPU-only wheels by default; for
+    # GPU support install torch with CUDA manually.
+    "torch>=2.6",
     "torchvision>=0.18.0",
-    "diffusers>=0.32.0",
-    "transformers>=4.45.0",
-    "accelerate>=0.33.0",
+    "diffusers>=0.39.0",
+    "transformers>=4.51",
+    "accelerate>=1.0",
     "sentencepiece>=0.2.0",
     "protobuf>=3.20.0",
+    "huggingface_hub>=0.22.0",
 ]
 all = [
     "openai-whisper",

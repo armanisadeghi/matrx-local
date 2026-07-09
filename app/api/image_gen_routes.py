@@ -16,7 +16,7 @@ import asyncio
 import json
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services.image_gen.service import get_image_gen_service
@@ -26,7 +26,7 @@ from app.services.image_gen.installer import (
     get_active_progress,
     is_image_gen_installed,
     get_image_gen_packages_dir,
-    IMAGE_GEN_PACKAGES,
+    needs_upgrade,
 )
 from app.common.route_errors import safe_route
 
@@ -53,6 +53,10 @@ class ImageGenModelInfo(BaseModel):
     default_height: int
     requires_hf_token: bool
     tags: list[str]
+    download_size_gb: float
+    is_downloaded: bool
+    hardware_ok: bool
+    hardware_reason: str | None = None
 
 
 class WorkflowPresetInfo(BaseModel):
@@ -75,6 +79,23 @@ class ImageGenStatusResponse(BaseModel):
     loaded_model_id: str | None
     is_loading: bool
     load_progress: float
+    packages_version: str | None = None
+    """Installed diffusers version (None when packages are not installed)."""
+    packages_outdated: bool = False
+    """True when diffusers < the catalog minimum — the UI shows an
+    "Update AI packages" banner that re-runs POST /image-gen/install."""
+    device: str = "cpu"
+    """"mps" | "cuda" | "cpu"."""
+
+
+class DownloadModelRequest(BaseModel):
+    model_id: str
+
+
+class DownloadModelResponse(BaseModel):
+    queued: bool
+    download_id: str | None = None
+    already_downloaded: bool = False
 
 
 class LoadModelRequest(BaseModel):
@@ -131,9 +152,12 @@ async def image_gen_status() -> ImageGenStatusResponse:
 
 @router.get("/models", response_model=list[ImageGenModelInfo])
 async def list_image_gen_models() -> list[ImageGenModelInfo]:
-    """List all available image generation models."""
-    return [
-        ImageGenModelInfo(
+    """List all available image generation models with download + hardware state."""
+    svc = get_image_gen_service()
+    out: list[ImageGenModelInfo] = []
+    for m in IMAGE_GEN_MODELS:
+        hw_ok, hw_reason = svc.model_hardware_check(m)
+        out.append(ImageGenModelInfo(
             model_id=m.model_id,
             name=m.name,
             provider=m.provider,
@@ -151,9 +175,33 @@ async def list_image_gen_models() -> list[ImageGenModelInfo]:
             default_height=m.default_height,
             requires_hf_token=m.requires_hf_token,
             tags=list(m.tags),
-        )
-        for m in IMAGE_GEN_MODELS
-    ]
+            download_size_gb=m.download_size_gb,
+            is_downloaded=svc.is_downloaded(m.model_id),
+            hardware_ok=hw_ok,
+            hardware_reason=hw_reason,
+        ))
+    return out
+
+
+@router.post("/download", response_model=DownloadModelResponse)
+@safe_route("image_gen_download")
+async def download_model(req: DownloadModelRequest) -> DownloadModelResponse:
+    """Queue the model weights into the universal DownloadManager.
+
+    Progress streams over /downloads/stream (category "image_gen").
+    Downloads are resumable and land in ~/.matrx/image-models/<id>/.
+    """
+    svc = get_image_gen_service()
+    result = await svc.start_download(req.model_id)
+    if result.get("needs_hf_token"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return DownloadModelResponse(
+        queued=bool(result.get("queued")),
+        download_id=result.get("download_id"),
+        already_downloaded=bool(result.get("already_downloaded")),
+    )
 
 
 @router.get("/presets", response_model=list[WorkflowPresetInfo])
@@ -179,8 +227,12 @@ async def list_workflow_presets() -> list[WorkflowPresetInfo]:
 
 @router.post("/load", response_model=LoadModelResponse)
 @safe_route("image_gen_load")
-async def load_model(req: LoadModelRequest) -> LoadModelResponse:
-    """Load a model into memory (downloads from HF if needed)."""
+async def load_model(req: LoadModelRequest) -> LoadModelResponse | JSONResponse:
+    """Load a downloaded model into memory. NEVER downloads.
+
+    409 with {"detail": "model not downloaded", "needs_download": true} when
+    the weights are not on disk yet — call POST /image-gen/download first.
+    """
     svc = get_image_gen_service()
     if not svc.available:
         raise HTTPException(
@@ -188,6 +240,17 @@ async def load_model(req: LoadModelRequest) -> LoadModelResponse:
             detail=f"Image generation not available: {svc.unavailable_reason}",
         )
     result = await svc.load_model(req.model_id)
+    if result.get("needs_download"):
+        # Contract: flat body {"detail": "...", "needs_download": true} — a
+        # dict HTTPException detail would nest it under another "detail".
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "model not downloaded", "needs_download": True},
+        )
+    if result.get("hardware_blocked"):
+        raise HTTPException(status_code=409, detail=result.get("error"))
+    result.pop("needs_download", None)
+    result.pop("hardware_blocked", None)
     return LoadModelResponse(**result)
 
 
@@ -319,12 +382,18 @@ async def install_image_gen() -> InstallStatusResponse:
     """Start the background installation of torch + diffusers.
 
     Safe to call multiple times — returns current state if already running or done.
+
+    UPGRADE PATH: when packages are installed but diffusers is older than the
+    catalog minimum (needs_upgrade()), this re-runs pip with the upgraded pins
+    instead of short-circuiting — same SSE progress stream as a fresh install.
     """
-    if is_image_gen_installed():
+    if is_image_gen_installed() and not needs_upgrade():
         from app.services.image_gen.installer import inject_image_gen_path
         inject_image_gen_path()
         from app.services.image_gen import service as _svc
         _svc.DEPS_AVAILABLE, _svc.DEPS_REASON = _svc._check_deps()
+        from app.services.video_gen import service as _vsvc
+        _vsvc.DEPS_AVAILABLE, _vsvc.DEPS_REASON = _vsvc._check_deps()
         return _make_status(
             status="complete", stage="done", percent=100.0,
             message="Image generation is already installed.",
@@ -353,7 +422,10 @@ async def get_install_status() -> InstallStatusResponse:
 
     Call this when reconnecting after a tab switch to restore the full log.
     """
-    if is_image_gen_installed():
+    # Prefer a live run over the marker — during an in-place UPGRADE the
+    # marker briefly disappears/reappears; the running progress is the truth.
+    active = get_active_progress()
+    if is_image_gen_installed() and not (active and active.status == "running"):
         return _make_status(
             status="complete", stage="done", percent=100.0,
             message="Image generation packages are installed.",
@@ -387,7 +459,8 @@ async def stream_install_progress() -> StreamingResponse:
 
         yield f"data: {json.dumps({'status': 'connected', 'percent': 0})}\n\n"
 
-        if is_image_gen_installed():
+        _active = get_active_progress()
+        if is_image_gen_installed() and not (_active and _active.status == "running"):
             yield f"data: {json.dumps({'status': 'complete', 'percent': 100, 'message': 'Already installed'})}\n\n"
             return
 

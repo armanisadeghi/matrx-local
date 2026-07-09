@@ -3446,6 +3446,14 @@ export interface ImageGenModelInfo {
   default_height: number;
   requires_hf_token: boolean;
   tags: string[];
+  /** Approximate on-disk download size of the model weights, in GB. */
+  download_size_gb: number;
+  /** True when the weights are already present in the local model dir. */
+  is_downloaded: boolean;
+  /** True when the detected hardware can run this model. */
+  hardware_ok: boolean;
+  /** Human-readable reason when `hardware_ok` is false. */
+  hardware_reason: string | null;
 }
 
 export interface ImageGenWorkflowPreset {
@@ -3468,6 +3476,20 @@ export interface ImageGenStatus {
   loaded_model_id: string | null;
   is_loading: boolean;
   load_progress: number;
+  /** Installed diffusers version, or null when packages are not installed. */
+  packages_version: string | null;
+  /** True when the installed diffusers is older than the required minimum. */
+  packages_outdated: boolean;
+  /** Compute device the pipeline runs on. */
+  device: "mps" | "cuda" | "cpu";
+}
+
+/** Result of a model-load request that distinguishes the "not downloaded" case. */
+export interface MediaLoadResult {
+  success: boolean;
+  error?: string;
+  /** True when a 409 was returned because the weights are not on disk yet. */
+  needs_download?: boolean;
 }
 
 export interface ImageGenResult {
@@ -3554,14 +3576,69 @@ export async function listImageGenPresets(
   );
 }
 
+/**
+ * POST a model-load request to a media-gen surface (`/image-gen` or
+ * `/video-gen`).  Unlike `imageGenFetch`, this treats a 409 as a structured
+ * "not downloaded" result rather than throwing, so the UI can prompt a
+ * download instead of surfacing a raw error.
+ */
+async function mediaGenLoad(
+  baseUrl: string,
+  prefix: "/image-gen" | "/video-gen",
+  model_id: string,
+): Promise<MediaLoadResult> {
+  const auth = await engine.getEngineAuthHeaders();
+  const resp = await fetch(`${baseUrl}${prefix}/load`, {
+    method: "POST",
+    headers: new Headers({ "Content-Type": "application/json", ...auth }),
+    body: JSON.stringify({ model_id }),
+  });
+  if (resp.status === 409) {
+    const body = (await resp.json().catch(() => ({}))) as {
+      detail?: string;
+      needs_download?: boolean;
+    };
+    return {
+      success: false,
+      error: body.detail ?? "Model not downloaded",
+      needs_download: body.needs_download ?? true,
+    };
+  }
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => `HTTP ${resp.status}`);
+    emitClientLog(
+      "error",
+      `[${prefix.slice(1)}] POST ${prefix}/load → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
+      "engine",
+    );
+    throw new Error(detail || `HTTP ${resp.status}`);
+  }
+  return resp.json() as Promise<MediaLoadResult>;
+}
+
 export async function loadImageGenModel(
   baseUrl: string,
   model_id: string,
-): Promise<{ success: boolean; error?: string }> {
-  return imageGenFetch(imageGenUrl(baseUrl, "/load"), {
-    method: "POST",
-    body: JSON.stringify({ model_id }),
-  });
+): Promise<MediaLoadResult> {
+  return mediaGenLoad(baseUrl, "/image-gen", model_id);
+}
+
+/**
+ * Trigger a background weights download for an image model.  Progress is
+ * reported through the universal DownloadManager (category `image_gen`) and is
+ * observed by the frontend via the `/downloads/stream` SSE — not by this call.
+ */
+export async function downloadImageGenModel(
+  baseUrl: string,
+  model_id: string,
+): Promise<{ queued: boolean }> {
+  return imageGenFetch<{ queued: boolean }>(
+    imageGenUrl(baseUrl, "/download"),
+    {
+      method: "POST",
+      body: JSON.stringify({ model_id }),
+    },
+  );
 }
 
 export async function unloadImageGenModel(baseUrl: string): Promise<void> {
@@ -3675,4 +3752,235 @@ export function streamImageGenInstall(
     closed = true;
     es?.close();
   };
+}
+
+// ── Video Generation Types ─────────────────────────────────────────────────
+
+export interface VideoGenStatus {
+  /** True only when packages are installed AND hardware is supported. */
+  available: boolean;
+  unavailable_reason: string | null;
+  /** True when the shared image-gen package set (torch/diffusers) is present. */
+  packages_installed: boolean;
+  /** True when the detected hardware can run video generation at all. */
+  hardware_supported: boolean;
+  /** Human-readable reason when `hardware_supported` is false. */
+  hardware_reason: string | null;
+  loaded_model_id: string | null;
+  is_loading: boolean;
+  load_progress: number;
+  device: "mps" | "cuda" | "cpu";
+  /** The id of the currently-running job, if any. */
+  active_job_id: string | null;
+}
+
+export interface VideoGenModelInfo {
+  model_id: string;
+  name: string;
+  provider: string;
+  /** diffusers pipeline family, e.g. "wan" | "ltx". */
+  pipeline_type: string;
+  description: string;
+  license_name: string;
+  vram_gb: number;
+  ram_gb: number;
+  default_width: number;
+  default_height: number;
+  default_num_frames: number;
+  default_fps: number;
+  max_num_frames: number;
+  supports_image_to_video: boolean;
+  supports_negative_prompt: boolean;
+  model_card_url: string;
+  requires_hf_token: boolean;
+  quality_rating: number;
+  speed_rating: number;
+  tags: string[];
+  /** Approximate on-disk download size of the model weights, in GB. */
+  download_size_gb: number;
+  is_downloaded: boolean;
+  hardware_ok: boolean;
+  hardware_reason: string | null;
+}
+
+export type VideoGenJobStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed";
+
+export interface VideoGenJob {
+  job_id: string;
+  status: VideoGenJobStatus;
+  /** 0..1 fractional progress. */
+  progress: number;
+  current_step: number;
+  total_steps: number;
+  elapsed_seconds: number;
+  error: string | null;
+  prompt: string;
+  model_id: string;
+}
+
+export interface VideoGenRequest {
+  prompt: string;
+  negative_prompt?: string;
+  model_id?: string;
+  width?: number;
+  height?: number;
+  num_frames?: number;
+  fps?: number;
+  seed?: number;
+  /** Base64-encoded source image (no data: prefix) for image-to-video. */
+  image_base64?: string;
+}
+
+// ── Video Generation API helper ────────────────────────────────────────────
+
+function videoGenUrl(baseUrl: string, path: string): string {
+  return `${baseUrl}/video-gen${path}`;
+}
+
+async function videoGenFetch<T>(
+  url: string,
+  options?: RequestInit,
+): Promise<T> {
+  const auth = await engine.getEngineAuthHeaders();
+  const mergedHeaders = new Headers({
+    "Content-Type": "application/json",
+    ...auth,
+  });
+  if (options?.headers) {
+    const extra = new Headers(options.headers);
+    extra.forEach((value, key) => mergedHeaders.set(key, value));
+  }
+  const method = options?.method ?? "GET";
+  const resp = await fetch(url, { ...options, headers: mergedHeaders });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body) as { detail?: string };
+      if (parsed.detail) detail = parsed.detail;
+    } catch {
+      // use raw body
+    }
+    try {
+      const u = new URL(url);
+      emitClientLog(
+        "error",
+        `[video-gen] ${method} ${u.pathname}${u.search} → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
+        "engine",
+      );
+    } catch {
+      emitClientLog(
+        "error",
+        `[video-gen] ${method} request failed → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
+        "engine",
+      );
+    }
+    const err = new Error(detail || `HTTP ${resp.status}`) as Error & {
+      status?: number;
+    };
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json() as Promise<T>;
+}
+
+export async function getVideoGenStatus(
+  baseUrl: string,
+): Promise<VideoGenStatus> {
+  return videoGenFetch<VideoGenStatus>(videoGenUrl(baseUrl, "/status"));
+}
+
+export async function listVideoGenModels(
+  baseUrl: string,
+): Promise<VideoGenModelInfo[]> {
+  return videoGenFetch<VideoGenModelInfo[]>(videoGenUrl(baseUrl, "/models"));
+}
+
+/**
+ * Trigger a background weights download for a video model.  Progress is
+ * reported through the DownloadManager (category `video_gen`) and observed via
+ * the `/downloads/stream` SSE — not by this call.
+ */
+export async function downloadVideoGenModel(
+  baseUrl: string,
+  model_id: string,
+): Promise<{ queued: boolean }> {
+  return videoGenFetch<{ queued: boolean }>(
+    videoGenUrl(baseUrl, "/download"),
+    {
+      method: "POST",
+      body: JSON.stringify({ model_id }),
+    },
+  );
+}
+
+export async function loadVideoGenModel(
+  baseUrl: string,
+  model_id: string,
+): Promise<MediaLoadResult> {
+  return mediaGenLoad(baseUrl, "/video-gen", model_id);
+}
+
+export async function unloadVideoGenModel(baseUrl: string): Promise<void> {
+  await videoGenFetch(videoGenUrl(baseUrl, "/unload"), { method: "POST" });
+}
+
+/** Enqueue a video generation job. Returns the new job id (202). */
+export async function generateVideo(
+  baseUrl: string,
+  req: VideoGenRequest,
+): Promise<{ job_id: string }> {
+  return videoGenFetch<{ job_id: string }>(
+    videoGenUrl(baseUrl, "/generate"),
+    {
+      method: "POST",
+      body: JSON.stringify(req),
+    },
+  );
+}
+
+export async function getVideoGenJob(
+  baseUrl: string,
+  jobId: string,
+): Promise<VideoGenJob> {
+  return videoGenFetch<VideoGenJob>(
+    videoGenUrl(baseUrl, `/jobs/${encodeURIComponent(jobId)}`),
+  );
+}
+
+export async function listVideoGenJobs(
+  baseUrl: string,
+): Promise<VideoGenJob[]> {
+  return videoGenFetch<VideoGenJob[]>(videoGenUrl(baseUrl, "/jobs"));
+}
+
+/**
+ * Fetch the finished mp4 for a job with auth headers and return an object URL
+ * suitable for a `<video controls src=…>`.  The caller owns the returned URL
+ * and must `URL.revokeObjectURL` it when done.
+ */
+export async function fetchVideoGenResult(
+  baseUrl: string,
+  jobId: string,
+): Promise<string> {
+  const auth = await engine.getEngineAuthHeaders();
+  const resp = await fetch(
+    videoGenUrl(baseUrl, `/jobs/${encodeURIComponent(jobId)}/result`),
+    { headers: new Headers({ ...auth }) },
+  );
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => `HTTP ${resp.status}`);
+    emitClientLog(
+      "error",
+      `[video-gen] GET /jobs/${jobId}/result → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
+      "engine",
+    );
+    throw new Error(detail || `HTTP ${resp.status}`);
+  }
+  const blob = await resp.blob();
+  return URL.createObjectURL(blob);
 }

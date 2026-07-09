@@ -79,6 +79,7 @@ matrx_local/
 │   │   ├── auth.py                 # Engine auth middleware
 │   │   ├── remote_scraper_routes.py # /remote-scraper/* proxy
 │   │   ├── image_gen_routes.py     # /image-gen/* (optional diffusers)
+│   │   ├── video_gen_routes.py     # /video-gen/* (Wan/LTX, job-based)
 │   │   ├── tts_routes.py           # /tts/* (Kokoro TTS)
 │   │   ├── wake_word_routes.py     # /wake-word/* (openWakeWord)
 │   │   ├── document_routes.py      # /notes/* (local-first documents)
@@ -105,9 +106,17 @@ matrx_local/
 │   │   ├── scraper/
 │   │   │   ├── engine.py           # ScraperEngine bridge (sys.modules alias)
 │   │   │   └── remote_client.py    # HTTP client for remote scraper server
+│   │   ├── media_gen/
+│   │   │   ├── paths.py            # ~/.matrx/{image,video}-models dirs + markers
+│   │   │   └── hardware.py         # Device selection + VRAM/RAM gating
 │   │   ├── image_gen/
 │   │   │   ├── models.py           # Model catalog + workflow presets
+│   │   │   ├── installer.py        # On-demand torch/diffusers install + upgrade
 │   │   │   └── service.py          # ImageGenService singleton (lazy diffusers)
+│   │   ├── video_gen/
+│   │   │   ├── models.py           # Video catalog (Wan 2.2/2.1, LTX-Video)
+│   │   │   ├── jobs.py             # One-at-a-time job store + jobs.json history
+│   │   │   └── service.py          # VideoGenService (lazy diffusers, mp4 encode)
 │   │   ├── tts/
 │   │   │   ├── models.py           # 54 voices × 9 languages catalog
 │   │   │   └── service.py          # Kokoro ONNX singleton (~300 MB model)
@@ -232,7 +241,8 @@ matrx_local/
 | **Scraping** | httpx, curl-cffi, Playwright, BeautifulSoup, PyMuPDF | See pyproject.toml |
 | **Search** | Brave Search API | Optional |
 | **Local LLM** | llama-server (llama.cpp) sidecar | Bundled binary |
-| **Image Gen** | Hugging Face Diffusers (optional `[image-gen]` extra) | torch + diffusers |
+| **Image Gen** | Hugging Face Diffusers (installed on demand into `~/.matrx/image-gen-packages/`) | torch + diffusers >= 0.39 |
+| **Video Gen** | Diffusers Wan/LTX pipelines (same shared package install; Apple Silicon 16GB+ or CUDA 8GB+ only) | torch + diffusers >= 0.39, imageio-ffmpeg |
 | **TTS** | Kokoro ONNX (core, always installed) | kokoro-onnx |
 | **Wake Word** | openWakeWord (ONNX Runtime) | Core dep |
 | **Package Manager (JS)** | pnpm | 10.x |
@@ -248,13 +258,24 @@ matrx_local/
 |----------|--------|-------------|
 | `/tools/list` | GET | List all available tools |
 | `/tools/invoke` | POST | Invoke a tool (stateless session) |
-| `/image-gen/status` | GET | Image gen availability + loaded model |
-| `/image-gen/models` | GET | Model catalog (FLUX, HunyuanDiT, SDXL, etc.) |
+| `/image-gen/status` | GET | Availability, loaded model, packages_version/outdated, device |
+| `/image-gen/models` | GET | Model catalog (FLUX.2 Klein, Z-Image, Qwen-Image, SDXL...) + is_downloaded/hardware_ok |
 | `/image-gen/presets` | GET | Workflow presets (portrait, product, landscape, etc.) |
-| `/image-gen/load` | POST | Load a model into memory (downloads from HF) |
+| `/image-gen/download` | POST | Queue weights via DownloadManager → ~/.matrx/image-models/ |
+| `/image-gen/load` | POST | Load from local dir only (409 needs_download when absent) |
 | `/image-gen/unload` | POST | Unload model, free VRAM |
-| `/image-gen/generate` | POST | Text-to-image → base64 PNG |
+| `/image-gen/generate` | POST | Text-to-image → base64 PNG (optional seed) |
 | `/image-gen/generate-workflow` | POST | Fill preset template + generate |
+| `/image-gen/install` | POST | Install/upgrade torch+diffusers packages (SSE progress) |
+| `/video-gen/status` | GET | Availability (packages AND hardware), device, active_job_id |
+| `/video-gen/models` | GET | Video catalog (Wan 2.2 TI2V-5B, Wan 2.1 1.3B, LTX-Video) |
+| `/video-gen/download` | POST | Queue weights via DownloadManager → ~/.matrx/video-models/ |
+| `/video-gen/load` | POST | Load from local dir only (409 needs_download when absent) |
+| `/video-gen/unload` | POST | Unload model, free VRAM |
+| `/video-gen/generate` | POST | Start job → 202 {job_id}; one job at a time (409) |
+| `/video-gen/jobs` | GET | Recent jobs (persisted to jobs.json) |
+| `/video-gen/jobs/{id}` | GET | Job status + step progress |
+| `/video-gen/jobs/{id}/result` | GET | Finished mp4 (FileResponse) |
 | `/tts/status` | GET | TTS availability + loaded model |
 | `/tts/voices` | GET | Voice catalog (54 voices × 9 languages) |
 | `/tts/synthesize` | POST | Text-to-speech → WAV |

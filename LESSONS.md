@@ -270,3 +270,36 @@ Rule of thumb: any time you rename a long-running binary, audit every
 `pkill`, `pgrep`, `taskkill`, and `Get-Process` call in the repo and make
 the pattern accept both the old and new names for at least one major
 release cycle.
+
+---
+
+## Hugging Face Model Weight Downloads
+
+### `from_pretrained` downloads silently — never let it touch the network
+
+Diffusers' `from_pretrained(repo_id)` downloads multi-GB weights with no
+progress surface and leaves unresumable-looking partial caches (we found a
+dead 361 MB fragment of a ~24 GB FLUX cache on a dev machine; users assumed
+the app was frozen). The rule now enforced in image/video gen:
+
+1. Weights are fetched ONLY by the universal DownloadManager
+   (`app/services/downloads/manager.py` `_download_hf_snapshot`) into
+   `~/.matrx/{image,video}-models/<sanitized-id>/`.
+2. `from_pretrained` is always called with `local_files_only=True` against
+   that directory. A missing `.download-complete` marker == not downloaded,
+   and `/load` answers 409 `needs_download` instead of downloading.
+
+### snapshot_download has no byte-progress callback — poll the directory
+
+`huggingface_hub` exposes no per-byte callback for snapshot downloads. The
+robust pattern: `HfApi.repo_info(files_metadata=True)` gives the exact file
+list + sizes up front (→ true `total_bytes`), a worker thread runs a per-file
+`hf_hub_download` loop (each file resumable + checksum-verified), and the
+async side polls the destination directory's on-disk size once a second to
+emit real percent/speed/ETA events. Include `.incomplete` files in the size
+sum — that's the live progress.
+
+### huggingface_hub 1.x dropped the `[hf_transfer]` extra
+
+`huggingface_hub[hf_transfer]` warns (uv) or is ignored (pip) on hub >= 1.0 —
+the Rust accelerator (hf_xet) is built in now. Pin plain `huggingface_hub`.

@@ -5,7 +5,13 @@
 
 export type DownloadStatus = "queued" | "active" | "completed" | "failed" | "cancelled";
 
-export type DownloadCategory = "llm" | "whisper" | "image_gen" | "tts" | "file_sync";
+export type DownloadCategory =
+  | "llm"
+  | "whisper"
+  | "image_gen"
+  | "video_gen"
+  | "tts"
+  | "file_sync";
 
 /** Log source tag used when emitting download-specific log lines to use-unified-log */
 export const DOWNLOAD_LOG_SOURCE = "downloads" as const;

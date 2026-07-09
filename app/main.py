@@ -33,6 +33,7 @@ from app.api.wake_word_routes import router as wake_word_router
 from app.api.model_repo_routes import router as model_repo_router
 from app.api.hardware_routes import router as hardware_router, run_initial_detection as run_hardware_detection
 from app.api.image_gen_routes import router as image_gen_router
+from app.api.video_gen_routes import router as video_gen_router
 from app.api.tts_routes import router as tts_router
 from app.api.hf_token_routes import router as hf_token_router
 from app.api.scrape_routes import router as scrape_router
@@ -310,13 +311,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             try:
                 from app.services.image_gen import service as _ig_svc
                 _ig_svc.DEPS_AVAILABLE, _ig_svc.DEPS_REASON = _ig_svc._check_deps()
+                # video_gen shares the same package install and takes the same
+                # import-time snapshot — reload it too or /video-gen/status
+                # reports packages_installed=false after a fresh boot.
+                from app.services.video_gen import service as _vg_svc
+                _vg_svc.DEPS_AVAILABLE, _vg_svc.DEPS_REASON = _vg_svc._check_deps()
                 logger.info(
-                    "[app/main.py] Phase 0a: image-gen service deps reloaded: available=%s",
-                    _ig_svc.DEPS_AVAILABLE,
+                    "[app/main.py] Phase 0a: media-gen service deps reloaded: image=%s video=%s",
+                    _ig_svc.DEPS_AVAILABLE, _vg_svc.DEPS_AVAILABLE,
                 )
             except Exception as _reload_err:
                 logger.warning(
-                    "[app/main.py] Phase 0a: image-gen service deps reload failed: %s",
+                    "[app/main.py] Phase 0a: media-gen service deps reload failed: %s",
                     _reload_err,
                 )
     except Exception:
@@ -1088,6 +1094,7 @@ app.include_router(wake_word_router)
 app.include_router(model_repo_router)
 app.include_router(hardware_router)
 app.include_router(image_gen_router)
+app.include_router(video_gen_router)
 app.include_router(tts_router)
 app.include_router(hf_token_router)
 app.include_router(scrape_router)

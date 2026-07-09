@@ -20,6 +20,15 @@ _(none)_
 
 ## Active
 
+- [ ] **pytest engine fixture kills live dev engines** — `tests/conftest.py`
+  spawns a real engine whose `preflight.clean_orphans()` sweeps ALL
+  engine-pattern processes except its own ancestry, SIGKILLing any running
+  dev engine on the machine; the smoke suite's session teardown pkill is
+  similarly broad. Also the fixture's 40s boot wait exceeds the 30s pytest
+  timeout, so the spawned test engine times out anyway. Confirmed twice
+  live on 2026-07-09 during the media-gen overhaul. Fixture needs
+  ancestry-scoped cleanup + a longer/boot-aware timeout.
+
 ### Bug-hunt wave 1 — deferred items (2026-06-11 full-system audit)
 A comprehensive audit fixed ~150 verified bugs (see commits 9ca5652..ab1f3c8).
 These were found, verified, and deliberately deferred:
@@ -61,6 +70,7 @@ _(none)_
 
 ## Completed
 
+- [FEAT] Media-generation overhaul (backend) — 2026-07-09. Image gen: catalog refreshed (FLUX.2-klein-4B default, Z-Image-Turbo, Qwen-Image; FLUX.1-dev + HunyuanDiT removed); weights now download through the universal DownloadManager (per-file `hf_hub_download` + dir-size polling → real progress on `/downloads/stream`) into `~/.matrx/image-models/<id>/` with a `.download-complete` marker; new `POST /image-gen/download`; `/load` is local-only (`local_files_only=True`, 409 `needs_download` when absent); `/status` gained `packages_version`/`packages_outdated`/`device`; installer pins bumped (torch>=2.6, diffusers>=0.39, transformers>=4.51, accelerate>=1.0) with an in-place upgrade path (`needs_upgrade()` — `POST /install` re-runs pip when diffusers < 0.39). Video gen (new): `app/services/video_gen/` + `/video-gen/*` (status/models/download/load/unload/generate→202 job_id, jobs list/detail, mp4 result) — Wan 2.2 TI2V-5B default, Wan 2.1 1.3B, LTX-Video; one job at a time; diffusers step-callback progress; mp4 via imageio-ffmpeg; history in `~/.matrx/generated/videos/jobs.json`; hard hardware gate (Apple Silicon ≥16GB unified or CUDA ≥8GB, never CPU) in shared `app/services/media_gen/hardware.py`. `DownloadCategory` gained `"video_gen"`. Legacy AGENT_TASKS items (download progress / VRAM gating / `~/.matrx/image-models` / video engine) closed.
 - [BUG] /extension/* auth log noise + misleading "JWT validation DISABLED" warning. The deployed binary fired (a) "JWT validation DISABLED — neither SUPABASE_JWT_SECRET nor SUPABASE_URL is configured" *while* SUPABASE_URL was actually configured (incoming tokens were HS256 but engine had no secret, so the bypass-to-degraded path was triggered with the wrong message), and (b) per-request "JWKS validation failed: kid …" + "missing Bearer token" WARNINGs every 2s during /extension/rpc polling, completely drowning the engine log. Split `_log_degraded_mode_once` into reason-specific variants (`no_paths` vs `hs256_no_secret`), added `_debug_log_jwks_failure` that suppresses repeats by `(kid, error_type)`, and added `_log_rejection` that logs the first miss as WARNING then demotes to DEBUG with a periodic 60s rate-summary at INFO. `app/api/extension_auth.py`. 2026-05-08
 - [BUG] /devices/permissions endpoint took 21s on every page hit (cold ``check_all_permissions`` runs 15 OS probes including macOS ``system_profiler SP{Audio,Camera,Bluetooth,AirPort}DataType``, which serialise on the private cfprefsd IPC). Frontend abort timeout was 15s so the call never completed → `console.error("Failed to load permissions:", err)` → `Failed to load permissions: {}` in the captured log (Error props are non-enumerable, JSON.stringify drops them). Added a 30s TTL in-process cache with single-flight refresh in `app/api/permissions_routes.py`, exposed `force_refresh=true` query param, invalidated the cache from the Windows grant route, bumped the frontend timeout to 35s, surfaced `forceRefresh` on `engine.getDevicePermissions()`, and routed permissions/ports error logs through `logWarn` so they capture `.message` and `.stack` instead of `{}`. 2026-05-08
 - [BUG] Frontend race on page mount: `engineStatus` flips to `"connected"` the moment REST is reachable, but `connectWebSocket()` runs slightly later in `use-engine.ts` (it waits for the Supabase session token). Pages that called `engine.invokeToolWs(...)` inside an `engineStatus === "connected"` `useEffect` would throw `WebSocket not connected` on first render. Added `engine.isWsConnected()` + `engine.waitForWs(timeoutMs)` and made `invokeToolWs` wait up to 3s for the upgrade before failing; `Ports.tsx` skips the tick if WS still isn't ready. `desktop/src/lib/api.ts`, `desktop/src/pages/Ports.tsx`. 2026-05-08

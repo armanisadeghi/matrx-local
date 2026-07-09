@@ -25,6 +25,7 @@ import {
   Cpu,
   Mic,
   ImageIcon,
+  Film,
   Volume2,
   RefreshCw,
   HardDrive,
@@ -72,6 +73,8 @@ function CategoryIcon({ category }: { category: string }) {
       return <Mic className={cls} />;
     case "image_gen":
       return <ImageIcon className={cls} />;
+    case "video_gen":
+      return <Film className={cls} />;
     case "tts":
       return <Volume2 className={cls} />;
     case "file_sync":

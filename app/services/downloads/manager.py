@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import bisect
 import json
+import os
+import threading
 import time
 import uuid
 from collections import deque
@@ -38,7 +40,7 @@ from app.services.local_db.database import get_db
 logger = get_logger()
 
 DownloadStatus = Literal["queued", "active", "completed", "failed", "cancelled"]
-DownloadCategory = Literal["llm", "whisper", "image_gen", "tts", "file_sync"]
+DownloadCategory = Literal["llm", "whisper", "image_gen", "video_gen", "tts", "file_sync"]
 
 # Maximum number of simultaneous downloads.
 MAX_CONCURRENT = 3
@@ -149,6 +151,88 @@ class ProgressEvent:
         return f"data: {payload}\n\n"
 
 
+# ------------------------------------------------------------------
+# Hugging Face snapshot file filtering
+# ------------------------------------------------------------------
+#
+# A raw HF repo ships FAR more than a diffusers-format load needs: .bin AND
+# .safetensors duplicates, fp32 AND fp16 variants, onnx/openvino/flax exports,
+# root-level single-file checkpoint re-packagings, and docs/media assets.
+# Downloading everything multiplied real download sizes by up to 9x
+# (Lightricks/LTX-Video: 254 GB raw vs ~28 GB needed). This filter is the
+# single source of truth — it feeds BOTH the total_bytes computation and the
+# per-file download loop so they can never disagree.
+
+# File suffixes never needed by `from_pretrained(..., use_safetensors=True)`.
+_HF_IGNORE_SUFFIXES: tuple[str, ...] = (
+    ".bin", ".onnx", ".onnx_data", ".msgpack", ".h5", ".pt", ".ckpt", ".md",
+    # docs/media assets (model cards, sample outputs) — never loaded.
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4",
+)
+_HF_IGNORE_BASENAMES: tuple[str, ...] = (".gitattributes",)
+# Directory names whose entire subtree is skipped (alternate-framework exports
+# and documentation assets).
+_HF_IGNORE_DIRS: frozenset[str] = frozenset(
+    {"flax", "openvino", "onnx", "assets", "examples", "media",
+     "vae_decoder", "vae_encoder"}  # vae_*: onnx-only VAE exports (sdxl-turbo)
+)
+
+
+def filter_hf_repo_files(
+    files: list[Tuple[str, int]],
+    *,
+    load_variant: Optional[str] = None,
+) -> list[Tuple[str, int]]:
+    """Filter an HF repo file listing down to what a diffusers-format load needs.
+
+    Rules:
+      1. Global ignore set: alternate weight formats (.bin/.onnx/.msgpack/.h5/
+         .pt/.ckpt), docs (.md, .gitattributes, images), and whole
+         flax/openvino/onnx/assets/examples/media subfolders.
+      2. Root-level ``*.safetensors`` files are single-file checkpoint
+         re-packagings (e.g. ``sd_xl_turbo_1.0.safetensors``, the many
+         ``ltxv-*.safetensors`` in Lightricks/LTX-Video) — a diffusers-format
+         ``from_pretrained(local_dir)`` needs ``model_index.json`` + component
+         SUBFOLDERS only, never these duplicates.
+      3. When ``load_variant`` is set (e.g. "fp16"): keep variant weight files
+         (``*.fp16.safetensors``) and skip a non-variant weight file whenever
+         its variant sibling exists in the repo; files without a variant
+         sibling are kept as-is. Loading must pass ``variant=load_variant`` to
+         ``from_pretrained`` so it reads exactly what was downloaded.
+    """
+    names = {fn for fn, _ in files}
+    kept: list[Tuple[str, int]] = []
+    for fn, size in files:
+        low = fn.lower()
+        parts = low.split("/")
+        base = parts[-1]
+        if base in _HF_IGNORE_BASENAMES:
+            continue
+        if low.endswith(_HF_IGNORE_SUFFIXES):
+            continue
+        if any(d in _HF_IGNORE_DIRS for d in parts[:-1]):
+            continue
+        if "/" not in fn and low.endswith(".safetensors"):
+            continue  # root-level single-file checkpoint duplicate
+        if load_variant and low.endswith(".safetensors"):
+            token = f".{load_variant.lower()}."
+            if token not in base:
+                # Skip when the variant sibling exists (plain or sharded form).
+                stem = fn[: -len(".safetensors")]
+                sibling_plain = f"{stem}.{load_variant}.safetensors"
+                # Sharded: "X-00001-of-00005.safetensors" → "X.fp16-00001-of-00005.safetensors"
+                sibling_shard = None
+                dash = stem.rfind("-0")
+                if dash > 0 and "-of-" in stem[dash:]:
+                    sibling_shard = (
+                        f"{stem[:dash]}.{load_variant}{stem[dash:]}.safetensors"
+                    )
+                if sibling_plain in names or (sibling_shard and sibling_shard in names):
+                    continue
+        kept.append((fn, size))
+    return kept
+
+
 # SSE subscriber queue type
 _Subscriber = asyncio.Queue[str]
 
@@ -245,9 +329,17 @@ class DownloadManager:
                 if entry.status == "completed":
                     # Completed is only terminal while the file still exists —
                     # a deleted file must be re-downloadable.
-                    existing_dest = Path(
-                        (entry.metadata or {}).get("dest_dir", dest_dir)
-                    ) / entry.filename
+                    if (entry.metadata or {}).get("hf_repo_id") or (metadata or {}).get("hf_repo_id"):
+                        # HF snapshots land as many files; the marker is the
+                        # single source of truth for "still on disk".
+                        from app.services.media_gen.paths import DOWNLOAD_COMPLETE_MARKER
+                        existing_dest = Path(
+                            (entry.metadata or {}).get("dest_dir", dest_dir)
+                        ) / DOWNLOAD_COMPLETE_MARKER
+                    else:
+                        existing_dest = Path(
+                            (entry.metadata or {}).get("dest_dir", dest_dir)
+                        ) / entry.filename
                     if existing_dest.exists():
                         logger.debug("[downloads] Already completed: %s", filename)
                         return entry
@@ -262,6 +354,11 @@ class DownloadManager:
                     entry.updated_at = _now()
                     self._cancel_flags[entry.id] = asyncio.Event()
                     await self._persist(entry)
+                    # CRITICAL: without re-inserting into the pending queue the
+                    # worker never dispatches this re-queued entry and the
+                    # download hangs in "queued" forever until restart. Mirror
+                    # the fresh-entry path.
+                    self._insert_pending(entry.id, entry.priority, entry.created_at)
                     return entry
 
         dl_id = download_id or str(uuid.uuid4())
@@ -582,6 +679,13 @@ class DownloadManager:
         chunk_size: int,
     ) -> None:
         """Download all URL parts for a single entry with streaming progress."""
+        # Hugging Face snapshot downloads (image/video model weights) take a
+        # dedicated path: file list + sizes come from the HF API and bytes are
+        # fetched with hf_hub_download (resumable), not raw URL streaming.
+        if (entry.metadata or {}).get("hf_repo_id"):
+            await self._download_hf_snapshot(entry, cancel_flag)
+            return
+
         urls = entry.urls
         if not urls:
             raise ValueError("No URLs provided for download")
@@ -768,6 +872,200 @@ class DownloadManager:
 
         tmp.replace(dest)
         return part_bytes_done
+
+    # ------------------------------------------------------------------
+    # Internal: Hugging Face snapshot downloads (model weights)
+    # ------------------------------------------------------------------
+
+    async def _download_hf_snapshot(
+        self,
+        entry: DownloadEntry,
+        cancel_flag: asyncio.Event,
+    ) -> None:
+        """Download a full HF model repo into ``metadata.dest_dir`` with progress.
+
+        Strategy (spec: "snapshot_download doesn't natively emit byte progress"):
+          1. ``HfApi.repo_info(files_metadata=True)`` gives the exact file list
+             and per-file byte sizes → ``total_bytes`` is known up front.
+          2. A worker thread runs a per-file ``hf_hub_download`` loop into
+             ``local_dir=dest_dir`` — each file is individually resumable and
+             checksum-verified by huggingface_hub.
+          3. This coroutine polls the on-disk directory size once a second and
+             feeds real byte progress (percent, speed, ETA) into the normal
+             broadcast/persist pipeline, so /downloads/stream shows it exactly
+             like any other download.
+          4. On success a ``.download-complete`` marker is written into the
+             model dir — the image/video services treat a model as downloaded
+             ONLY when that marker exists.
+
+        Failures are loud: the underlying HF error propagates to the caller,
+        which marks the entry ``failed`` with the error message.
+        """
+        from app.services.media_gen.paths import DOWNLOAD_COMPLETE_MARKER
+
+        md = entry.metadata or {}
+        repo_id: str = md["hf_repo_id"]
+        dest_dir = Path(md["dest_dir"])
+
+        try:
+            from huggingface_hub import HfApi, hf_hub_download  # noqa: PLC0415
+        except ImportError as exc:
+            raise RuntimeError(
+                "huggingface_hub is not importable — the AI packages are not "
+                "installed. Run the in-app installer (POST /image-gen/install) "
+                "before downloading model weights."
+            ) from exc
+
+        token = (
+            os.environ.get("HF_TOKEN")
+            or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+            or None
+        )
+        loop = asyncio.get_running_loop()
+
+        # Phase 1: exact file list + sizes from the HF API — FILTERED down to
+        # what the diffusers-format load actually needs. The same filtered list
+        # feeds total_bytes AND the download loop below (must stay consistent).
+        api = HfApi(token=token)
+        info = await loop.run_in_executor(
+            None, lambda: api.repo_info(repo_id, files_metadata=True)
+        )
+        all_files: list[tuple[str, int]] = [
+            (s.rfilename, s.size or 0) for s in (info.siblings or [])
+        ]
+        if not all_files:
+            raise RuntimeError(f"Hugging Face repo {repo_id} lists no files")
+
+        load_variant = md.get("load_variant") or None
+        files = filter_hf_repo_files(all_files, load_variant=load_variant)
+        if not files:
+            raise RuntimeError(
+                f"Hugging Face repo {repo_id}: file filter removed every file "
+                f"(variant={load_variant!r}) — the repo layout does not match "
+                "the expected diffusers format"
+            )
+        skipped_bytes = sum(s for _, s in all_files) - sum(s for _, s in files)
+        logger.info(
+            "[downloads] HF snapshot %s: %d/%d files after filtering "
+            "(variant=%s, skipping %.2f GB of alternate formats/duplicates)",
+            repo_id, len(files), len(all_files), load_variant or "-",
+            skipped_bytes / 1e9,
+        )
+
+        entry.total_bytes = sum(size for _, size in files)
+        entry.part_total = len(files)
+        await self._persist_progress(entry)
+
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        # Phase 2: per-file download loop in a worker thread.
+        done_evt = threading.Event()
+        errors: list[BaseException] = []
+        files_done = {"count": 0}
+
+        def _worker() -> None:
+            try:
+                for fname, _size in files:
+                    if cancel_flag.is_set():
+                        return
+                    hf_hub_download(
+                        repo_id=repo_id,
+                        filename=fname,
+                        local_dir=str(dest_dir),
+                        token=token,
+                    )
+                    files_done["count"] += 1
+            except BaseException as exc:  # noqa: BLE001 — surfaced to caller
+                errors.append(exc)
+            finally:
+                done_evt.set()
+
+        worker = threading.Thread(
+            target=_worker, daemon=True, name=f"hf-snapshot-{entry.id[:8]}"
+        )
+        worker.start()
+
+        # Phase 3: poll on-disk bytes and emit progress until the worker exits.
+        # Once cancellation is requested (or the entry is otherwise terminal),
+        # stop broadcasting hard-coded "active" events — otherwise the poll loop
+        # visually reverts the UI back to "downloading" after cancel() already
+        # set the entry to cancelled. The between-files check in the worker
+        # thread still lets the in-flight file finish; this just stops emitting.
+        while not done_evt.is_set():
+            if cancel_flag.is_set() or entry.status in ("cancelled", "failed"):
+                break
+            await asyncio.sleep(1.0)
+            if cancel_flag.is_set() or entry.status in ("cancelled", "failed"):
+                break
+            bytes_now = await loop.run_in_executor(None, _dir_size_bytes, dest_dir)
+            entry.bytes_done = (
+                min(bytes_now, entry.total_bytes) if entry.total_bytes else bytes_now
+            )
+            entry.part_current = min(files_done["count"] + 1, entry.part_total)
+            entry.updated_at = _now()
+            entry.record_sample(entry.bytes_done)
+            self._update_bandwidth()
+            await self._persist_progress(entry)
+
+            speed_bps = entry.current_speed_bps()
+            remaining = entry.total_bytes - entry.bytes_done
+            await self._broadcast(ProgressEvent(
+                id=entry.id,
+                category=entry.category,
+                filename=entry.filename,
+                display_name=entry.display_name,
+                status="active",
+                bytes_done=entry.bytes_done,
+                total_bytes=entry.total_bytes,
+                percent=entry.percent,
+                part_current=entry.part_current,
+                part_total=entry.part_total,
+                speed_bps=speed_bps,
+                eta_seconds=(remaining / speed_bps) if (speed_bps > 0 and remaining > 0) else None,
+                updated_at=entry.updated_at,
+                bandwidth_bps=self._bandwidth_bps,
+            ))
+
+        if cancel_flag.is_set():
+            # cancel() already broadcast the 'cancelled' event; just record state.
+            entry.status = "cancelled"
+            entry.updated_at = _now()
+            await self._persist(entry)
+            return
+
+        if errors:
+            raise RuntimeError(
+                f"Hugging Face download failed for {repo_id}: {errors[0]}"
+            ) from errors[0]
+
+        # Phase 4: mark complete — this marker is what makes the model "downloaded".
+        (dest_dir / DOWNLOAD_COMPLETE_MARKER).write_text("ok", encoding="utf-8")
+
+        entry.status = "completed"
+        entry.bytes_done = entry.total_bytes
+        entry.part_current = entry.part_total
+        entry.completed_at = _now()
+        entry.updated_at = entry.completed_at
+        await self._persist(entry)
+        await self._broadcast(ProgressEvent(
+            id=entry.id,
+            category=entry.category,
+            filename=entry.filename,
+            display_name=entry.display_name,
+            status="completed",
+            bytes_done=entry.bytes_done,
+            total_bytes=entry.total_bytes,
+            percent=100.0,
+            part_current=entry.part_total,
+            part_total=entry.part_total,
+            updated_at=entry.completed_at,
+            bandwidth_bps=self._bandwidth_bps,
+        ))
+        logger.info(
+            "[downloads] Completed HF snapshot: %s → %s (%d files, %d bytes)",
+            repo_id, dest_dir, len(files), entry.total_bytes,
+        )
+
     # ------------------------------------------------------------------
     # Internal: periodic logging
     # ------------------------------------------------------------------
@@ -1018,6 +1316,22 @@ class DownloadManager:
 def _now() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _dir_size_bytes(root: Path) -> int:
+    """Recursive on-disk size of ``root`` (includes hf .incomplete files,
+    which is exactly what we want for live download progress)."""
+    total = 0
+    try:
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for name in filenames:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, name))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total
 
 
 async def _probe_total_bytes(urls: list[str]) -> int:

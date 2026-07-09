@@ -39,15 +39,18 @@ _TORCH_CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 
 # All packages to install (order matters — torch first so its deps land before
 # the diffusers wheel asks for them).
+# diffusers >= 0.39 is REQUIRED by the current model catalogs (Flux2Klein /
+# ZImage / QwenImage / Wan / LTX pipelines). Keep these pins in sync with
+# pyproject.toml [image-gen] and service.py MIN_DIFFUSERS_VERSION.
 IMAGE_GEN_PACKAGES = [
-    "torch",
+    "torch>=2.6",
     "torchvision",
-    "diffusers>=0.32.0",
-    "transformers>=4.45.0",
-    "accelerate>=0.33.0",
+    "diffusers>=0.39.0",
+    "transformers>=4.51",
+    "accelerate>=1.0",
     "sentencepiece>=0.2.0",
     "protobuf>=3.20.0",
-    "huggingface_hub[hf_transfer]>=0.22.0",
+    "huggingface_hub>=0.22.0",
 ]
 
 _TORCH_PACKAGES = {"torch", "torchvision", "torchaudio"}
@@ -67,6 +70,44 @@ def get_image_gen_packages_dir() -> Path:
 def is_image_gen_installed() -> bool:
     """True if the managed image-gen packages directory is complete."""
     return (get_image_gen_packages_dir() / ".install-complete").exists()
+
+
+def get_installed_package_versions() -> dict[str, str]:
+    """Versions of the managed packages, read from *.dist-info dir names.
+
+    Works without importing the packages — safe to call at any time.
+    Returns e.g. {"diffusers": "0.39.0", "torch": "2.6.0", ...}.
+    """
+    versions: dict[str, str] = {}
+    pkg_dir = get_image_gen_packages_dir()
+    if not pkg_dir.exists():
+        return versions
+    try:
+        for entry in pkg_dir.glob("*.dist-info"):
+            stem = entry.name[: -len(".dist-info")]
+            name, _, version = stem.rpartition("-")
+            if name and version:
+                versions[name.replace("_", "-").lower()] = version
+    except OSError:
+        pass
+    return versions
+
+
+def needs_upgrade() -> bool:
+    """True when the install marker exists but diffusers is older than the
+    catalog's minimum (service.py MIN_DIFFUSERS_VERSION). POST /image-gen/install
+    re-runs pip with the upgraded pins in that case instead of short-circuiting.
+    """
+    if not is_image_gen_installed():
+        return False
+    from app.services.image_gen.service import (  # noqa: PLC0415 — avoid cycle at import time
+        MIN_DIFFUSERS_VERSION,
+        _parse_version,
+    )
+    installed = get_installed_package_versions().get("diffusers")
+    if installed is None:
+        return True  # marker without diffusers on disk — reinstall
+    return _parse_version(installed) < MIN_DIFFUSERS_VERSION
 
 
 def inject_image_gen_path() -> bool:
@@ -486,17 +527,26 @@ def _do_install(progress: InstallProgress) -> None:
         _patch_transformers_filecmp(pkg_dir)
         progress.update("verifying", 97.0, "Compatibility patches applied ✓")
 
-        # ── Step 4: write marker + inject path ────────────────────────────────
-        marker.write_text(json.dumps({"packages": IMAGE_GEN_PACKAGES}))
+        # ── Step 4: write versioned marker + inject path ─────────────────────
+        # The marker records exactly what was installed so the upgrade path
+        # (needs_upgrade()) and diagnostics can reason about the install
+        # without importing the packages.
+        marker.write_text(json.dumps({
+            "packages": IMAGE_GEN_PACKAGES,
+            "versions": get_installed_package_versions(),
+        }))
         inject_image_gen_path()
 
         # Reload availability in the running service
         try:
             from app.services.image_gen import service as _svc_mod
             _svc_mod.DEPS_AVAILABLE, _svc_mod.DEPS_REASON = _svc_mod._check_deps()
+            # video_gen shares this install — refresh its snapshot too.
+            from app.services.video_gen import service as _vid_mod
+            _vid_mod.DEPS_AVAILABLE, _vid_mod.DEPS_REASON = _vid_mod._check_deps()
             logger.info(
-                "[image_gen_installer] Service deps reloaded: available=%s",
-                _svc_mod.DEPS_AVAILABLE,
+                "[image_gen_installer] Service deps reloaded: image=%s video=%s",
+                _svc_mod.DEPS_AVAILABLE, _vid_mod.DEPS_AVAILABLE,
             )
         except Exception as reload_err:
             logger.warning("[image_gen_installer] Could not reload service deps: %s", reload_err)

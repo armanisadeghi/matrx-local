@@ -55,6 +55,7 @@ import {
   useSessionsContext,
 } from "@/contexts/TranscriptionSessionsContext";
 import { DownloadManagerProvider } from "@/contexts/DownloadManagerContext";
+import { MediaGenProvider } from "@/contexts/MediaGenContext";
 import { TtsProvider } from "@/contexts/TtsContext";
 import { DownloadManagerModal } from "@/components/downloads/DownloadManagerModal";
 import { engine } from "@/lib/api";
@@ -91,21 +92,23 @@ export default function App() {
     <ErrorBoundary>
       <DevTerminalProvider>
         <DownloadManagerProvider>
-          <TtsProvider>
-            <LlmProvider>
-              <WakeWordProvider>
-                <TranscriptionSessionsProvider>
-                  <PermissionsProvider>
-                    <AudioDevicesProvider>
-                      <TranscriptionProvider>
-                        <AppInner />
-                      </TranscriptionProvider>
-                    </AudioDevicesProvider>
-                  </PermissionsProvider>
-                </TranscriptionSessionsProvider>
-              </WakeWordProvider>
-            </LlmProvider>
-          </TtsProvider>
+          <MediaGenProvider>
+            <TtsProvider>
+              <LlmProvider>
+                <WakeWordProvider>
+                  <TranscriptionSessionsProvider>
+                    <PermissionsProvider>
+                      <AudioDevicesProvider>
+                        <TranscriptionProvider>
+                          <AppInner />
+                        </TranscriptionProvider>
+                      </AudioDevicesProvider>
+                    </PermissionsProvider>
+                  </TranscriptionSessionsProvider>
+                </WakeWordProvider>
+              </LlmProvider>
+            </TtsProvider>
+          </MediaGenProvider>
         </DownloadManagerProvider>
       </DevTerminalProvider>
     </ErrorBoundary>

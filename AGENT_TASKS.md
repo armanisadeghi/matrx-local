@@ -69,9 +69,9 @@ These are gaps in committed functionality — things we said the app does but it
 
 - [ ] **Image gen: FLUX.1 Dev token gate** — FLUX.1 Dev requires a HuggingFace token AND license acceptance. Before loading the model, surface a pre-check: read the HF token from `/settings/api-keys/huggingface/value` and show a blocking warning if absent or if the license hasn't been accepted.
 
-- [ ] **Image gen: model download progress** — `from_pretrained` downloads silently. Wire up `huggingface_hub.snapshot_download` with a `tqdm` callback that streams progress events via SSE so the UI shows a real progress bar instead of a spinner.
+- [x] **Image gen: model download progress** — Done 2026-07-09 (media-gen overhaul): weights now download via the universal DownloadManager (per-file `hf_hub_download` loop + on-disk byte polling → real percent/speed/ETA on `/downloads/stream`). `POST /image-gen/download`; `from_pretrained` never downloads (`local_files_only=True`).
 
-- [ ] **Image gen: VRAM gating** — The model picker shows VRAM requirements but never cross-references the user's detected GPU VRAM (available at `/hardware`). Mark models as incompatible when detected VRAM is below the model's requirement.
+- [x] **Image gen: VRAM gating** — Done 2026-07-09: `app/services/media_gen/hardware.py` cross-references the cached `/hardware` profile (unified memory on Apple Silicon, CUDA VRAM otherwise); `/image-gen/models` and `/video-gen/models` return `hardware_ok` + `hardware_reason` per model, and `/load` refuses (409) incompatible models.
 
 - [ ] **Voice: no partial/streaming transcription results** — Whisper operates on full 5-second chunks; users see nothing until each chunk completes. Consider overlapping windows or VAD-triggered early flush to reduce perceived latency.
 
@@ -95,7 +95,7 @@ Refactors and cleanups that improve maintainability but don't change user-facing
 
 - [ ] **Zustand for shared app state** — `App.tsx` currently prop-drills auth/engine/settings state. A `desktop/src/stores/app-store.ts` with slices would clean this up. Keep `EngineAPI` singleton. Defer until active bugs are resolved.
 
-- [ ] **Image gen: move model cache to `~/.matrx/image-models/`** — Currently downloads to HF default cache (`~/.cache/huggingface`). Centralizing under `~/.matrx/` would be consistent with other matrx data paths and make the Settings "clear cache" feature easier to implement.
+- [x] **Image gen: move model cache to `~/.matrx/image-models/`** — Done 2026-07-09: weights land in `~/.matrx/image-models/<sanitized-id>/` (video: `~/.matrx/video-models/`) with a `.download-complete` marker; loaders use `local_files_only=True` against that dir. See `app/services/media_gen/paths.py`.
 
 - [ ] **API key extras** — Rotation timestamps and optional OS keychain storage (macOS Keychain, Windows Credential Manager). Currently all keys stored as SQLite plaintext blob.
 
@@ -109,7 +109,7 @@ Refactors and cleanups that improve maintainability but don't change user-facing
 
 Nice-to-haves and exploratory ideas. Not on the immediate roadmap.
 
-- [ ] **Video generation engine** — Integrate `diffusers` for Kandinsky-5.0-T2V-Pro and Wan2.2-TI2V-5B (routes at `POST /tools/video-gen`). GPU/VRAM requirements are high (24+ GB for Kandinsky, 8–12 GB for Wan2.2-5B). Similar architecture to image gen.
+- [x] **Video generation engine** — Done 2026-07-09: `app/services/video_gen/` (Wan 2.2 TI2V-5B default, Wan 2.1 1.3B, LTX-Video) + `/video-gen/*` routes (status/models/download/load/unload/generate + job polling + mp4 result). One job at a time, step-callback progress, history in `~/.matrx/generated/videos/jobs.json`, hard hardware gate (Apple Silicon 16GB+ or CUDA 8GB+).
 
 - [ ] **ComfyUI sidecar** — Evaluate embedding ComfyUI as a second optional sidecar for advanced image/video workflows. Would replace or augment the Diffusers integration. See `local-llm-inference-integration.md` for the sidecar pattern.
 

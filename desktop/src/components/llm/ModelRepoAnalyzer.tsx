@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   CheckCircle2,
   AlertCircle,
@@ -362,23 +362,86 @@ export function ModelRepoAnalyzer({
   const [result, setResult] = useState<RepoAnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);
   // Track which file is actively downloading by watching downloadProgress from the hook
   const activeDownloadFile = isDownloading && downloadProgress ? downloadProgress.filename : null;
 
   const hw = hardwareResult ? hardwarePayload(hardwareResult) : null;
 
+  // Client-side ceiling on the analyze fetch. The backend HF call has its own
+  // 20s timeout; 45s sits comfortably above it so a genuine slow-but-alive
+  // request survives while a truly hung fetch can't spin forever.
+  const ANALYZE_TIMEOUT_MS = 45_000;
+  const abortRef = useRef<AbortController | null>(null);
+  const timedOutRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Elapsed-seconds ticker — runs only while analyzing.
+  useEffect(() => {
+    if (!isAnalyzing) return;
+    const started = Date.now();
+    setElapsedSec(0);
+    const id = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - started) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [isAnalyzing]);
+
+  // Abort any in-flight request if the component unmounts.
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  const handleCancel = useCallback(() => {
+    // User-initiated abort — not a timeout, so handleAnalyze resets silently.
+    timedOutRef.current = false;
+    abortRef.current?.abort();
+  }, []);
+
   const handleAnalyze = useCallback(async () => {
     const trimmed = url.trim();
     if (!trimmed) return;
+
+    // Fresh controller + timeout for this run.
+    const controller = new AbortController();
+    abortRef.current = controller;
+    timedOutRef.current = false;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      timedOutRef.current = true;
+      controller.abort();
+    }, ANALYZE_TIMEOUT_MS);
+
     setIsAnalyzing(true);
     setError(null);
     setResult(null);
     try {
-      const res = await analyzeModelRepo(trimmed, hw);
+      const res = await analyzeModelRepo(trimmed, hw, controller.signal);
       setResult(res);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const aborted =
+        controller.signal.aborted ||
+        (e instanceof DOMException && e.name === "AbortError") ||
+        (e instanceof Error && e.name === "AbortError");
+      if (aborted && timedOutRef.current) {
+        setError(
+          `Analysis timed out after ${ANALYZE_TIMEOUT_MS / 1000}s. The engine may be busy or unreachable — check that it's running, then retry.`,
+        );
+      } else if (aborted) {
+        // User cancelled — leave the form clean for another attempt.
+        setError(null);
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      abortRef.current = null;
       setIsAnalyzing(false);
     }
   }, [url, hw]);
@@ -447,19 +510,45 @@ export function ModelRepoAnalyzer({
               className="text-xs h-8 font-mono flex-1"
               disabled={isAnalyzing}
             />
-            <Button
-              size="sm"
-              className="h-8 px-3 shrink-0"
-              onClick={handleAnalyze}
-              disabled={isAnalyzing || !url.trim()}
-            >
-              {isAnalyzing ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                "Analyze"
-              )}
-            </Button>
+            {isAnalyzing ? (
+              <>
+                <Button
+                  size="sm"
+                  className="h-8 px-3 shrink-0 gap-1.5"
+                  disabled
+                >
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span className="tabular-nums">{elapsedSec}s</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-3 shrink-0"
+                  onClick={handleCancel}
+                >
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                className="h-8 px-3 shrink-0"
+                onClick={handleAnalyze}
+                disabled={!url.trim()}
+              >
+                Analyze
+              </Button>
+            )}
           </div>
+
+          {/* Analyzing status line */}
+          {isAnalyzing && (
+            <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Analyzing repository… {elapsedSec}s elapsed (times out at{" "}
+              {ANALYZE_TIMEOUT_MS / 1000}s)
+            </p>
+          )}
 
           {/* Hardware context line */}
           {hw && !result && (
@@ -472,10 +561,19 @@ export function ModelRepoAnalyzer({
         </div>
 
         {/* Error */}
-        {error && (
+        {error && !isAnalyzing && (
           <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
             <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-            <span>{error}</span>
+            <span className="flex-1">{error}</span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[11px] shrink-0"
+              onClick={handleAnalyze}
+              disabled={!url.trim()}
+            >
+              Retry
+            </Button>
           </div>
         )}
       </div>

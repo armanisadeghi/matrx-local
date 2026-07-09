@@ -166,7 +166,7 @@ export function EngineMonitor({
 
   const updateStep = (index: number, patch: Partial<DiagnosticStep>) => {
     setSteps((prev) =>
-      prev.map((s, i) => (i === index ? { ...s, ...patch } : s))
+      prev.map((s, i) => (i === index ? { ...s, ...patch } : s)),
     );
   };
 
@@ -218,9 +218,7 @@ export function EngineMonitor({
     const engineUrl = await discoverEnginePort();
     updateStep(2, {
       status: engineUrl ? "pass" : "fail",
-      detail: engineUrl
-        ? `Found at ${engineUrl}`
-        : "No engine on any port",
+      detail: engineUrl ? `Found at ${engineUrl}` : "No engine on any port",
     });
 
     // Step 4
@@ -235,8 +233,8 @@ export function EngineMonitor({
           const n = Array.isArray(data?.tools)
             ? data.tools.length
             : Array.isArray(data)
-            ? data.length
-            : "?";
+              ? data.length
+              : "?";
           updateStep(3, { status: "pass", detail: `OK — ${n} tools` });
         } else {
           updateStep(3, {
@@ -267,8 +265,10 @@ export function EngineMonitor({
     }
   };
 
-  const isWin = typeof navigator !== "undefined" &&
-    (navigator.platform?.startsWith("Win") || navigator.userAgent.includes("Windows"));
+  const isWin =
+    typeof navigator !== "undefined" &&
+    (navigator.platform?.startsWith("Win") ||
+      navigator.userAgent.includes("Windows"));
 
   const scanPorts = async () => {
     setPortScanning(true);
@@ -298,8 +298,8 @@ export function EngineMonitor({
             const n = Array.isArray(data?.tools)
               ? data.tools.length
               : Array.isArray(data)
-              ? data.length
-              : 0;
+                ? data.length
+                : 0;
             detail = `Engine (${n} tools)`;
           } else {
             open = true;
@@ -311,14 +311,12 @@ export function EngineMonitor({
           prev.map((p) =>
             p.port === port
               ? { ...p, status: open ? "open" : "closed", detail }
-              : p
-          )
+              : p,
+          ),
         );
       } catch {
         setPorts((prev) =>
-          prev.map((p) =>
-            p.port === port ? { ...p, status: "closed" } : p
-          )
+          prev.map((p) => (p.port === port ? { ...p, status: "closed" } : p)),
         );
       }
     }
@@ -327,10 +325,7 @@ export function EngineMonitor({
 
   // ── Actions ────────────────────────────────────────────────────────
 
-  const handleAction = async (
-    name: string,
-    fn: () => Promise<void>
-  ) => {
+  const handleAction = async (name: string, fn: () => Promise<void>) => {
     setActionRunning(name);
     addLog(`Action: ${name}...`);
     try {
@@ -397,20 +392,25 @@ export function EngineMonitor({
         if (line === prev) {
           count++;
         } else {
-          if (count > 0) out.push(`  ... repeated ${count} more time${count > 1 ? "s" : ""}`);
+          if (count > 0)
+            out.push(
+              `  ... repeated ${count} more time${count > 1 ? "s" : ""}`,
+            );
           out.push(line);
           prev = line;
           count = 0;
         }
       }
-      if (count > 0) out.push(`  ... repeated ${count} more time${count > 1 ? "s" : ""}`);
+      if (count > 0)
+        out.push(`  ... repeated ${count} more time${count > 1 ? "s" : ""}`);
       return out;
     };
 
     const errorLines = logs.filter(
       (l) =>
-        /\b(error|exception|traceback|nameerror|importerror|modulenot|syntaxerror|typeerror|attributeerror|crash|failed|fatal)\b/i.test(l) ||
-        /^\s*(File "|  )/.test(l)
+        /\b(error|exception|traceback|nameerror|importerror|modulenot|syntaxerror|typeerror|attributeerror|crash|failed|fatal)\b/i.test(
+          l,
+        ) || /^\s*(File "|  )/.test(l),
     );
 
     const lines: string[] = [
@@ -420,7 +420,9 @@ export function EngineMonitor({
       ...(engineError ? [`Engine Error: ${engineError}`] : []),
       `Environment: ${isTauri() ? "Tauri Desktop" : "Browser Dev Mode"}`,
       `OS: ${p.os} ${p.os_version !== "unknown" ? p.os_version : ""} (${p.machine !== "unknown" ? p.machine : "arch unknown"})`.trim(),
-      ...(p.python_version !== "unknown" ? [`Python: ${p.python_version}`] : []),
+      ...(p.python_version !== "unknown"
+        ? [`Python: ${p.python_version}`]
+        : []),
       ...(p.hostname !== "unknown" ? [`Host: ${p.hostname}`] : []),
       "",
     ];
@@ -443,7 +445,8 @@ export function EngineMonitor({
 
     if (openPorts.length > 0) {
       lines.push("=== Open Ports ===");
-      for (const pt of openPorts) lines.push(`  ${pt.port}: ${pt.detail || "open"}`);
+      for (const pt of openPorts)
+        lines.push(`  ${pt.port}: ${pt.detail || "open"}`);
       lines.push("");
     } else if (hasFailed) {
       lines.push("=== Port Scan === No engine found on 22140–22159", "");
@@ -520,8 +523,8 @@ export function EngineMonitor({
                   engineStatus === "connected"
                     ? "success"
                     : engineStatus === "error"
-                    ? "destructive"
-                    : "secondary"
+                      ? "destructive"
+                      : "secondary"
                 }
               >
                 {engineStatus}
@@ -638,8 +641,8 @@ export function EngineMonitor({
               </div>
               {!isInTauri && (
                 <p className="text-xs text-muted-foreground">
-                  Start/Restart/Kill available in desktop app only.
-                  Dev: <code className="text-xs">uv run python run.py</code>
+                  Start/Restart/Kill available in desktop app only. Dev:{" "}
+                  <code className="text-xs">uv run python run.py</code>
                 </p>
               )}
             </div>
@@ -695,8 +698,8 @@ export function EngineMonitor({
                       p.status === "open"
                         ? "bg-emerald-500/10 border border-emerald-500/20"
                         : p.status === "scanning"
-                        ? "bg-muted/30"
-                        : "bg-transparent"
+                          ? "bg-muted/30"
+                          : "bg-transparent"
                     }`}
                   >
                     <div className="flex items-center gap-2">
@@ -713,8 +716,8 @@ export function EngineMonitor({
                       {p.status === "open"
                         ? p.detail || "Open"
                         : p.status === "scanning"
-                        ? "Scanning..."
-                        : "Closed"}
+                          ? "Scanning..."
+                          : "Closed"}
                     </span>
                   </div>
                 ))}
@@ -750,7 +753,10 @@ export function EngineMonitor({
                 Copy
               </Button>
             </div>
-            <div ref={logScrollRef} className="dark h-[380px] overflow-y-auto rounded-lg border border-zinc-700/50 bg-zinc-950 p-3 text-zinc-200">
+            <div
+              ref={logScrollRef}
+              className="dark h-[380px] overflow-y-auto rounded-lg border border-zinc-700/50 bg-zinc-950 p-3 text-zinc-200"
+            >
               <div className="font-mono text-xs text-zinc-400 space-y-0.5">
                 {logs.length === 0 && (
                   <div className="text-zinc-600 italic">
@@ -764,10 +770,10 @@ export function EngineMonitor({
                       line.includes("[stderr]") || line.includes("ERROR")
                         ? "text-red-400"
                         : line.includes("[terminated]")
-                        ? "text-amber-400"
-                        : line.includes("[pass]") || line.includes("complete")
-                        ? "text-emerald-400"
-                        : ""
+                          ? "text-amber-400"
+                          : line.includes("[pass]") || line.includes("complete")
+                            ? "text-emerald-400"
+                            : ""
                     }`}
                   >
                     {line}

@@ -38,7 +38,7 @@ export interface ServerStartProgress {
 
 export interface ServerLogLine {
   line: string;
-  kind: "loading" | "progress" | "ready" | "error" | "noise";
+  kind: "loading" | "progress" | "ready" | "error" | "noise" | "info";
 }
 
 export interface LlmDownloadQueueEntry {

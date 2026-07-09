@@ -9,7 +9,7 @@
  *   5. Training guide   — step-by-step instructions for custom model
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Mic,
   MicOff,
@@ -119,14 +119,14 @@ export function WakeWordPage({ wwState, wwActions }: WakeWordPageProps) {
       />
 
       {/* Inner sub-tabs */}
-      <div className="border-b border-border bg-muted/30">
-        <nav className="flex gap-0.5 px-4 py-1.5">
+      <div className="min-w-0 border-b border-border bg-muted/30">
+        <nav className="flex gap-0.5 overflow-x-auto px-4 py-1.5">
           {INNER_TABS.map(({ value, label, icon: Icon }) => (
             <button
               key={value}
               onClick={() => setInnerTab(value)}
               className={cn(
-                "flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium transition-colors",
+                "flex shrink-0 items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium transition-colors",
                 innerTab === value
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted",
@@ -673,7 +673,23 @@ function ModelsTab({
   const [models, setModels] = useState<OwwModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState<Set<string>>(new Set());
+  // Per-model download percent (0–100), keyed by model name. Absent = unknown.
+  const [downloadPct, setDownloadPct] = useState<Map<string, number>>(
+    new Map(),
+  );
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  // In-flight abort controllers, keyed by model name — used to cancel a
+  // download from the card and to abort everything on unmount.
+  const abortControllers = useRef<Map<string, AbortController>>(new Map());
+
+  // Abort any in-flight downloads when the tab unmounts.
+  useEffect(() => {
+    const controllers = abortControllers.current;
+    return () => {
+      for (const c of controllers.values()) c.abort();
+      controllers.clear();
+    };
+  }, []);
 
   const refresh = useCallback(() => {
     if (!isTauri()) {
@@ -693,26 +709,60 @@ function ModelsTab({
     refresh();
   }, [refresh]);
 
+  const clearDownloadState = useCallback((name: string) => {
+    abortControllers.current.delete(name);
+    setDownloading((prev) => {
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
+    setDownloadPct((prev) => {
+      const next = new Map(prev);
+      next.delete(name);
+      return next;
+    });
+  }, []);
+
+  const handleCancelDownload = useCallback((name: string) => {
+    abortControllers.current.get(name)?.abort();
+  }, []);
+
   const handleDownload = useCallback(
     async (name: string) => {
       setDownloadError(null);
+      const controller = new AbortController();
+      abortControllers.current.set(name, controller);
       setDownloading((prev) => new Set([...prev, name]));
+      setDownloadPct((prev) => new Map(prev).set(name, 0));
       try {
-        await engineAPI.owwDownloadModel(name);
-        refresh();
-      } catch (e) {
-        setDownloadError(
-          `Failed to download ${name}: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      } finally {
-        setDownloading((prev) => {
-          const next = new Set(prev);
-          next.delete(name);
-          return next;
+        await engineAPI.owwDownloadModelStream(name, {
+          onProgress: ({ percent }) => {
+            setDownloadPct((prev) => new Map(prev).set(name, percent));
+          },
+          onComplete: () => {
+            refresh();
+          },
+          onError: (msg) => {
+            setDownloadError(`Failed to download ${name}: ${msg}`);
+          },
+          signal: controller.signal,
         });
+      } catch (e) {
+        // A user-initiated cancel surfaces as an AbortError — stay silent;
+        // anything else is a real failure worth showing.
+        const aborted =
+          controller.signal.aborted ||
+          (e instanceof DOMException && e.name === "AbortError");
+        if (!aborted) {
+          setDownloadError(
+            `Failed to download ${name}: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      } finally {
+        clearDownloadState(name);
       }
     },
-    [refresh],
+    [refresh, clearDownloadState],
   );
 
   if (engine === "whisper") {
@@ -773,7 +823,9 @@ function ModelsTab({
               model={model}
               isActive={model.name === currentModel}
               isDownloading={downloading.has(model.name)}
+              downloadPct={downloadPct.get(model.name)}
               onDownload={() => void handleDownload(model.name)}
+              onCancel={() => handleCancelDownload(model.name)}
             />
           ))}
         </div>
@@ -795,13 +847,21 @@ function ModelCard({
   model,
   isActive,
   isDownloading,
+  downloadPct,
   onDownload,
+  onCancel,
 }: {
   model: OwwModelInfo;
   isActive: boolean;
   isDownloading: boolean;
+  downloadPct?: number;
   onDownload: () => void;
+  onCancel: () => void;
 }) {
+  const pct =
+    typeof downloadPct === "number"
+      ? Math.max(0, Math.min(100, Math.round(downloadPct)))
+      : null;
   return (
     <div
       className={cn(
@@ -848,28 +908,48 @@ function ModelCard({
         <p className="mt-0.5 text-xs text-muted-foreground/60">
           {model.size_mb} MB
         </p>
+        {/* Live progress bar while downloading */}
+        {isDownloading && (
+          <div className="mt-1.5">
+            <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary transition-all duration-200"
+                style={{ width: `${pct ?? 0}%` }}
+              />
+            </div>
+            <p className="mt-1 text-[10px] tabular-nums text-muted-foreground">
+              {pct === null ? "Starting…" : `${pct}%`}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Action */}
-      {!model.downloaded && (
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onDownload}
-          disabled={isDownloading}
-          className="shrink-0 gap-1.5"
-        >
-          {isDownloading ? (
-            <>
+      {!model.downloaded &&
+        (isDownloading ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" /> Downloading
-            </>
-          ) : (
-            <>
-              <Download className="h-3.5 w-3.5" /> Download
-            </>
-          )}
-        </Button>
-      )}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={onCancel}
+              className="h-7 px-2 text-xs"
+            >
+              Cancel
+            </Button>
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onDownload}
+            className="shrink-0 gap-1.5"
+          >
+            <Download className="h-3.5 w-3.5" /> Download
+          </Button>
+        ))}
     </div>
   );
 }

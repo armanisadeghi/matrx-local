@@ -3,23 +3,33 @@
 export type LlmTier =
   // Tiny / Edge
   | "LowAlt" // Phi-4-mini 2.5 GB
-  | "Low" // Qwen3-4B 2.5 GB
+  | "Qwen35_2B" // Qwen3.5-2B 1.3 GB (+ mmproj)
+  | "Phi4MiniReasoning" // Phi-4-mini-reasoning 2.5 GB
+  | "Low" // Qwen3-4B 2.5 GB (legacy)
+  | "Qwen35_4B" // Qwen3.5-4B 2.7 GB (+ mmproj; preferred tiny)
+  | "Gemma3nE2B" // Gemma-3n-E2B 2.8 GB
   | "UltraLow" // Gemma-3n-E4B 4.5 GB
-  | "Low2" // DeepSeek-R1-Distill-Llama-8B 4.9 GB
+  | "Low2" // DeepSeek-R1-0528-Qwen3-8B 5.0 GB
   | "Low3" // Llama-3.1-8B 4.9 GB
   // Mid-range
-  | "Default" // Qwen3-8B 5.1 GB (auto-selection anchor)
+  | "Default" // Qwen3-8B 5.1 GB (legacy)
+  | "Qwen35_9B" // Qwen3.5-9B 5.7 GB (+ mmproj; preferred default)
+  | "GlmZ1_9B" // GLM-Z1-9B 6.2 GB
   | "Gemma4E2B" // Gemma-4-E2B 3.1 GB (text+image; audio pending llama.cpp)
   | "Gemma4E4B" // Gemma-4-E4B 5.0 GB (text+image; audio pending llama.cpp)
-  | "Mid" // Gemma-3-12B 7.3 GB
-  | "Mid2" // Phi-4-Reasoning 9 GB
+  | "Mid" // Gemma-3-12B 7.3 GB (legacy)
+  | "Gemma4_12B" // Gemma-4-12B Unified 7.1 GB (+ mmproj)
+  | "Mid2" // Phi-4-reasoning-plus 9.1 GB
   | "High" // GPT-OSS-20B 12.1 GB
   | "HighAlt" // Mistral-Small-3.1-24B 14.4 GB
+  | "Devstral24B" // Devstral Small 2 24B 14.3 GB (coding)
+  | "Coder30B" // Qwen3-Coder-30B-A3B 18.6 GB (coding MoE)
+  | "Glm47Flash" // GLM-4.7-Flash 18.3 GB (agent MoE)
   | "Gemma4A4B" // Gemma-4-26B-A4B 17.0 GB (MoE, text+image)
   | "High2" // Qwen3.5-27B (multi-variant)
   | "Gemma4_31B" // Gemma-4-31B 18.3 GB (dense, text+image)
   | "High3" // DeepSeek-R1-Distill-32B 19.85 GB
-  | "High4" // Gemma-3-27B 16.55 GB
+  | "High4" // Gemma-3-27B 16.55 GB (legacy)
   | "VHigh" // Qwen3.5-35B-A3B (multi-variant)
   // Uncensored
   | "UncensoredCompact"
@@ -30,7 +40,9 @@ export type LlmTier =
   | "Server3" // Mistral-Small-4-119B 72.6 GB
   | "Server4" // Llama-4-Scout-17B-16E 67.5 GB
   | "Server5" // GPT-OSS-120B 88 GB
-  | "Server6"; // Qwen3.5-397B-A17B 115 GB
+  | "Server6" // Qwen3.5-397B-A17B 115 GB
+  | "Server7" // Qwen3-Next-80B-A3B 48.7 GB
+  | "Server8"; // Qwen3-Coder-Next 48.7 GB
 
 /** A single quantization variant for a model that ships in multiple sizes. */
 export interface LlmModelVariant {
@@ -261,6 +273,8 @@ export const SERVER_GRADE_TIERS = new Set<LlmTier>([
   "Server4",
   "Server5",
   "Server6",
+  "Server7",
+  "Server8",
 ]);
 
 export const UNCENSORED_TIERS = new Set<LlmTier>([

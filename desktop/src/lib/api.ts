@@ -611,7 +611,12 @@ class EngineAPI {
     return resp.json();
   }
 
-  /** Download a pre-trained OWW model (returns when download completes). */
+  /**
+   * @deprecated Blocking download with no progress feedback and no timeout.
+   * The Wake Word UI now uses {@link owwDownloadModelStream} (SSE) for real
+   * progress + cancel. The underlying route `POST /wake-word/models/download`
+   * is retained for now, but new callers should prefer the streaming variant.
+   */
   async owwDownloadModel(
     name: string,
   ): Promise<import("./transcription/types").OwwModelInfo> {
@@ -630,6 +635,91 @@ class EngineAPI {
         `OWW download failed: ${resp.status} ${await resp.text()}`,
       );
     return resp.json();
+  }
+
+  /**
+   * Download a pre-trained OWW model, streaming progress via SSE.
+   *
+   * Consumes the named events emitted by `POST /wake-word/models/download-stream`:
+   *   progress → { bytes_done, total_bytes, percent }
+   *   complete → { name, size_mb }
+   *   error    → string
+   *
+   * This is a POST-with-body SSE stream, so it uses fetch()+ReadableStream
+   * (EventSource cannot POST) and does NOT route through request() — no
+   * default timeout applies. Cancel via `callbacks.signal` (AbortController).
+   */
+  async owwDownloadModelStream(
+    name: string,
+    callbacks: {
+      onProgress?: (data: {
+        bytes_done: number;
+        total_bytes: number;
+        percent: number;
+      }) => void;
+      onComplete: (data: { name: string; size_mb: number }) => void;
+      onError: (error: string) => void;
+      signal?: AbortSignal;
+    },
+  ): Promise<void> {
+    if (!this.baseUrl) throw new Error("Engine not discovered");
+    const headers = await this.authHeaders();
+    (headers as Record<string, string>)["Content-Type"] = "application/json";
+    const resp = await fetch(
+      `${this.baseUrl}/wake-word/models/download-stream`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model_name: name }),
+        signal: callbacks.signal,
+      },
+    );
+    if (!resp.ok) {
+      callbacks.onError(
+        `OWW download failed: ${resp.status} ${await resp.text()}`,
+      );
+      return;
+    }
+    const reader = resp.body?.getReader();
+    if (!reader) {
+      callbacks.onError("No response body");
+      return;
+    }
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let eventType = "";
+    let receivedTerminal = false;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (line.startsWith("event: ")) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith("data: ")) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (eventType === "progress") {
+              callbacks.onProgress?.(data);
+            } else if (eventType === "complete") {
+              receivedTerminal = true;
+              callbacks.onComplete(data);
+            } else if (eventType === "error") {
+              receivedTerminal = true;
+              callbacks.onError(typeof data === "string" ? data : String(data));
+            }
+          } catch {
+            /* skip malformed */
+          }
+          eventType = "";
+        }
+      }
+    }
+    if (!receivedTerminal) {
+      callbacks.onError("Download stream ended without a completion event");
+    }
   }
 
   /**
@@ -1759,16 +1849,55 @@ class EngineAPI {
 
   // ---- Generic HTTP helpers ----
 
+  /**
+   * Default per-request ceiling for the generic JSON helpers. A hung engine
+   * fetch (never resolves, never rejects) would otherwise leave a caller's
+   * catch-block waiting forever. Callers that legitimately need longer (tunnel
+   * start, bulk ops) pass their own `signal` — a caller-provided signal
+   * REPLACES this default rather than stacking on top of it.
+   *
+   * Note: streaming/SSE paths (owwDownloadModelStream, runTranscriptionInstall,
+   * streamLogs, chat, tts) use raw fetch() and do NOT route through request(),
+   * so this timeout never truncates a long-lived stream.
+   */
+  private static readonly DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     if (!this.baseUrl) throw new Error("Engine not discovered");
     const authHdrs = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}${path}`, {
-      ...init,
-      headers: {
-        ...authHdrs,
-        ...(init?.headers as Record<string, string> | undefined),
-      },
-    });
+    // A caller-supplied signal takes over timeout responsibility entirely;
+    // otherwise apply the default timeout ceiling.
+    const timeoutMs = EngineAPI.DEFAULT_REQUEST_TIMEOUT_MS;
+    const signal =
+      init?.signal ??
+      (typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
+        ? AbortSignal.timeout(timeoutMs)
+        : undefined);
+    let resp: Response;
+    try {
+      resp = await fetch(`${this.baseUrl}${path}`, {
+        ...init,
+        signal,
+        headers: {
+          ...authHdrs,
+          ...(init?.headers as Record<string, string> | undefined),
+        },
+      });
+    } catch (e) {
+      // A default-timeout abort surfaces as a TimeoutError; turn it into an
+      // actionable message. A caller-signal abort is re-thrown untouched so
+      // the caller can distinguish its own cancellation.
+      if (
+        !init?.signal &&
+        e instanceof DOMException &&
+        (e.name === "TimeoutError" || e.name === "AbortError")
+      ) {
+        throw new Error(
+          `Engine request timed out after ${timeoutMs / 1000}s: ${path}`,
+        );
+      }
+      throw e;
+    }
     if (!resp.ok)
       throw new Error(
         `${init?.method ?? "GET"} ${path} failed: ${resp.status}`,
@@ -1776,28 +1905,49 @@ class EngineAPI {
     return resp.json();
   }
 
-  async get(path: string): Promise<unknown> {
-    return this.request(path);
+  async get(
+    path: string,
+    init?: Pick<RequestInit, "signal">,
+  ): Promise<unknown> {
+    return this.request(path, init);
   }
 
-  async post(path: string, body: unknown): Promise<unknown> {
+  async post(
+    path: string,
+    body: unknown,
+    // Optional extra RequestInit — only `signal` (and any future opt-in field)
+    // is honored; method/body/Content-Type are fixed by this method. Additive
+    // and backward-compatible: existing 2-arg callers are unaffected. Lets a
+    // one-shot caller attach an AbortController for timeout/cancel without
+    // changing global post() behavior.
+    init?: Pick<RequestInit, "signal">,
+  ): Promise<unknown> {
     return this.request(path, {
+      ...init,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
   }
 
-  async put(path: string, body: unknown): Promise<unknown> {
+  async put(
+    path: string,
+    body: unknown,
+    init?: Pick<RequestInit, "signal">,
+  ): Promise<unknown> {
     return this.request(path, {
+      ...init,
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
   }
 
-  async delete(path: string): Promise<unknown> {
-    return this.request(path, { method: "DELETE" });
+  async delete(
+    path: string,
+    init?: Pick<RequestInit, "signal">,
+  ): Promise<unknown> {
+    return this.request(path, { ...init, method: "DELETE" });
   }
 
   /**

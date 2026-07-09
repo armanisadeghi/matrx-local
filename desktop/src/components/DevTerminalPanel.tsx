@@ -184,12 +184,7 @@ const LEVEL_PILL_INACTIVE =
 // ---------------------------------------------------------------------------
 
 // Only these levels are eligible for grouping; warn/error always show individually
-const GROUPABLE_LEVELS = new Set<LogLevel>([
-  "info",
-  "success",
-  "data",
-  "cmd",
-]);
+const GROUPABLE_LEVELS = new Set<LogLevel>(["info", "success", "data", "cmd"]);
 
 interface GroupedLogRow {
   representative: ClientLogLine;
@@ -1513,109 +1508,109 @@ export function DevTerminalPanel() {
 
       {/* Header */}
       <div
-        className="flex items-center gap-0 border-b border-zinc-800/60 px-2 flex-shrink-0"
+        className="flex items-center gap-0 border-b border-zinc-800/60 px-2 flex-shrink-0 min-w-0"
         style={{ height: HEADER_H }}
       >
-        <span className="flex items-center gap-1.5 pr-3 text-zinc-600 select-none">
+        <span className="flex items-center gap-1.5 pr-3 text-zinc-600 select-none shrink-0">
           <Terminal className="h-3.5 w-3.5" />
         </span>
 
         {/* Tabs */}
-        {TABS.map((tab) => {
-          const isActive = activeTab === tab.id;
+        <div className="flex min-w-0 flex-1 items-center gap-0 overflow-x-auto">
+          {TABS.map((tab) => {
+            const isActive = activeTab === tab.id;
 
-          let badgeCount: number | null = null;
-          let badgeStyle = "bg-zinc-800 text-zinc-500";
-          let badgeSuffix = "";
+            let badgeCount: number | null = null;
+            let badgeStyle = "bg-zinc-800 text-zinc-500";
+            let badgeSuffix = "";
 
-          if (tab.id === "server") {
-            if (serverErrors > 0) {
-              badgeCount = serverErrors;
-              badgeStyle = "bg-red-900/50 text-red-400";
-              badgeSuffix = "e";
-            } else if (serverWarns > 0) {
-              badgeCount = serverWarns;
-              badgeStyle = "bg-amber-900/50 text-amber-400";
-              badgeSuffix = "w";
+            if (tab.id === "server") {
+              if (serverErrors > 0) {
+                badgeCount = serverErrors;
+                badgeStyle = "bg-red-900/50 text-red-400";
+                badgeSuffix = "e";
+              } else if (serverWarns > 0) {
+                badgeCount = serverWarns;
+                badgeStyle = "bg-amber-900/50 text-amber-400";
+                badgeSuffix = "w";
+              }
+            } else if (tab.id === "client") {
+              if (clientErrors > 0) {
+                badgeCount = clientErrors;
+                badgeStyle = "bg-red-900/50 text-red-400";
+                badgeSuffix = "e";
+              } else if (clientWarns > 0) {
+                badgeCount = clientWarns;
+                badgeStyle = "bg-amber-900/50 text-amber-400";
+                badgeSuffix = "w";
+              }
+            } else if (tab.id === "http") {
+              if (httpErrors > 0) {
+                badgeCount = httpErrors;
+                badgeStyle = "bg-red-900/50 text-red-400";
+                badgeSuffix = "e";
+              } else if (httpWarns > 0) {
+                badgeCount = httpWarns;
+                badgeStyle = "bg-amber-900/50 text-amber-400";
+                badgeSuffix = "w";
+              }
+            } else if (tab.id === "all") {
+              if (totalErrors > 0) {
+                badgeCount = totalErrors;
+                badgeStyle = "bg-red-900/50 text-red-400";
+                badgeSuffix = "e";
+              } else if (totalWarns > 0) {
+                badgeCount = totalWarns;
+                badgeStyle = "bg-amber-900/50 text-amber-400";
+                badgeSuffix = "w";
+              }
+            } else if (tab.id === "overview") {
+              if (totalErrors > 0) {
+                badgeCount = totalErrors;
+                badgeStyle = "bg-red-900/50 text-red-400";
+                badgeSuffix = "e";
+              } else if (totalWarns > 0) {
+                badgeCount = totalWarns;
+                badgeStyle = "bg-amber-900/50 text-amber-400";
+                badgeSuffix = "w";
+              }
             }
-          } else if (tab.id === "client") {
-            if (clientErrors > 0) {
-              badgeCount = clientErrors;
-              badgeStyle = "bg-red-900/50 text-red-400";
-              badgeSuffix = "e";
-            } else if (clientWarns > 0) {
-              badgeCount = clientWarns;
-              badgeStyle = "bg-amber-900/50 text-amber-400";
-              badgeSuffix = "w";
-            }
-          } else if (tab.id === "http") {
-            if (httpErrors > 0) {
-              badgeCount = httpErrors;
-              badgeStyle = "bg-red-900/50 text-red-400";
-              badgeSuffix = "e";
-            } else if (httpWarns > 0) {
-              badgeCount = httpWarns;
-              badgeStyle = "bg-amber-900/50 text-amber-400";
-              badgeSuffix = "w";
-            }
-          } else if (tab.id === "all") {
-            if (totalErrors > 0) {
-              badgeCount = totalErrors;
-              badgeStyle = "bg-red-900/50 text-red-400";
-              badgeSuffix = "e";
-            } else if (totalWarns > 0) {
-              badgeCount = totalWarns;
-              badgeStyle = "bg-amber-900/50 text-amber-400";
-              badgeSuffix = "w";
-            }
-          } else if (tab.id === "overview") {
-            if (totalErrors > 0) {
-              badgeCount = totalErrors;
-              badgeStyle = "bg-red-900/50 text-red-400";
-              badgeSuffix = "e";
-            } else if (totalWarns > 0) {
-              badgeCount = totalWarns;
-              badgeStyle = "bg-amber-900/50 text-amber-400";
-              badgeSuffix = "w";
-            }
-          }
 
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={cn(
-                "flex items-center gap-1.5 px-3 h-full text-[11px] font-mono border-b-2 transition-colors",
-                isActive
-                  ? "text-zinc-200 border-primary"
-                  : "text-zinc-500 border-transparent hover:text-zinc-300",
-              )}
-            >
-              {tab.icon}
-              {tab.label}
-              {badgeCount !== null && badgeCount > 0 && (
-                <span
-                  className={cn(
-                    "text-[9px] font-mono rounded px-1 py-px",
-                    badgeStyle,
-                  )}
-                >
-                  {badgeCount}
-                  {badgeSuffix}
-                </span>
-              )}
-            </button>
-          );
-        })}
-
-        <div className="flex-1" />
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  "flex shrink-0 items-center gap-1.5 px-3 h-full text-[11px] font-mono border-b-2 transition-colors",
+                  isActive
+                    ? "text-zinc-200 border-primary"
+                    : "text-zinc-500 border-transparent hover:text-zinc-300",
+                )}
+              >
+                {tab.icon}
+                {tab.label}
+                {badgeCount !== null && badgeCount > 0 && (
+                  <span
+                    className={cn(
+                      "text-[9px] font-mono rounded px-1 py-px",
+                      badgeStyle,
+                    )}
+                  >
+                    {badgeCount}
+                    {badgeSuffix}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
 
         {/* Pause/Resume — always visible */}
         <button
           onClick={() => setLogsPaused(!paused)}
           title={paused ? "Resume live log stream" : "Pause live log stream"}
           className={cn(
-            "flex items-center gap-1 px-2 py-1 text-[11px] font-mono transition-colors",
+            "flex shrink-0 items-center gap-1 px-2 py-1 text-[11px] font-mono transition-colors",
             paused
               ? "text-amber-400 hover:text-amber-300"
               : "text-zinc-500 hover:text-zinc-200",
@@ -1640,7 +1635,7 @@ export function DevTerminalPanel() {
               onClick={handleCopyAll}
               disabled={tabLogs.length === 0}
               title="Copy all — full buffer, no filters applied"
-              className="flex items-center gap-1 px-2 py-1 text-[11px] font-mono text-zinc-500 hover:text-zinc-200 transition-colors disabled:opacity-30"
+              className="flex shrink-0 items-center gap-1 px-2 py-1 text-[11px] font-mono text-zinc-500 hover:text-zinc-200 transition-colors disabled:opacity-30"
             >
               {copiedAll ? (
                 <Check className="h-3.5 w-3.5 text-emerald-400" />
@@ -1653,7 +1648,7 @@ export function DevTerminalPanel() {
               onClick={handleCopy}
               disabled={tabLogs.length === 0}
               title="Copy view — respects active filters and grouping"
-              className="flex items-center gap-1 px-2 py-1 text-[11px] font-mono text-zinc-500 hover:text-zinc-200 transition-colors disabled:opacity-30"
+              className="flex shrink-0 items-center gap-1 px-2 py-1 text-[11px] font-mono text-zinc-500 hover:text-zinc-200 transition-colors disabled:opacity-30"
             >
               {copied ? (
                 <Check className="h-3.5 w-3.5 text-emerald-400" />
@@ -1666,7 +1661,7 @@ export function DevTerminalPanel() {
               onClick={handleClear}
               disabled={tabLogs.length === 0}
               title="Clear these logs"
-              className="flex items-center gap-1 px-2 py-1 text-[11px] font-mono text-zinc-500 hover:text-zinc-200 transition-colors disabled:opacity-30"
+              className="flex shrink-0 items-center gap-1 px-2 py-1 text-[11px] font-mono text-zinc-500 hover:text-zinc-200 transition-colors disabled:opacity-30"
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>
@@ -1674,7 +1669,7 @@ export function DevTerminalPanel() {
         )}
 
         {/* Activity pulse */}
-        <span className="flex items-center gap-1 px-2 text-[10px] text-zinc-600 font-mono">
+        <span className="flex shrink-0 items-center gap-1 px-2 text-[10px] text-zinc-600 font-mono">
           <Activity className="h-3 w-3" />
           {allLogs.length.toLocaleString()}
         </span>
@@ -1685,7 +1680,7 @@ export function DevTerminalPanel() {
             setOpen(false);
             broadcastHeight(false, height);
           }}
-          className="flex h-6 w-6 items-center justify-center rounded text-zinc-600 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors ml-1"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-600 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors ml-1"
           title="Close terminal"
         >
           <X className="h-3.5 w-3.5" />

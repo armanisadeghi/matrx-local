@@ -110,13 +110,7 @@ function ProgressBar({
 
 // ── Section header ────────────────────────────────────────────────────────
 
-function SectionHeader({
-  label,
-  count,
-}: {
-  label: string;
-  count: number;
-}) {
+function SectionHeader({ label, count }: { label: string; count: number }) {
   return (
     <div className="flex items-center gap-2 border-b border-border px-4 py-2">
       <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -177,10 +171,7 @@ function ActiveRow({
 
       {/* Progress bar + percent */}
       <div className="flex flex-1 items-center gap-2">
-        <ProgressBar
-          percent={entry.percent}
-          indeterminate={indeterminate}
-        />
+        <ProgressBar percent={entry.percent} indeterminate={indeterminate} />
         <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
           {indeterminate ? "…" : formatPercent(entry.percent)}
         </span>
@@ -205,7 +196,9 @@ function ActiveRow({
 
       {/* Part info */}
       <div className="w-12 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-        {entry.part_total > 1 ? `${entry.part_current}/${entry.part_total}` : ""}
+        {entry.part_total > 1
+          ? `${entry.part_current}/${entry.part_total}`
+          : ""}
       </div>
 
       {/* Cancel */}
@@ -289,9 +282,7 @@ function HistoryRow({
     <div className="group flex h-12 items-center gap-3 border-b border-border/60 px-4 transition-colors hover:bg-muted/50">
       {/* Status icon */}
       <div className="w-5 shrink-0">
-        {isCompleted && (
-          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-        )}
+        {isCompleted && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
         {isFailed && (
           <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
         )}
@@ -329,7 +320,9 @@ function HistoryRow({
           "transition-opacity hover:text-blue-600 dark:text-blue-400",
           isFailed ? "opacity-0 group-hover:opacity-100" : "invisible",
         ].join(" ")}
-        aria-label={isFailed ? `Retry ${entry.display_name || entry.filename}` : undefined}
+        aria-label={
+          isFailed ? `Retry ${entry.display_name || entry.filename}` : undefined
+        }
         title={isFailed ? "Retry" : undefined}
         disabled={!isFailed}
       >
@@ -394,7 +387,9 @@ function LogPanel() {
           {copied ? (
             <>
               <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-              <span className="text-emerald-600 dark:text-emerald-400">Copied</span>
+              <span className="text-emerald-600 dark:text-emerald-400">
+                Copied
+              </span>
             </>
           ) : (
             <>
@@ -407,7 +402,9 @@ function LogPanel() {
 
       <div className="h-48 overflow-y-auto bg-muted/40 px-4 py-2 font-mono text-[10px] leading-relaxed">
         {logs.length === 0 ? (
-          <span className="text-muted-foreground/70">No download logs yet.</span>
+          <span className="text-muted-foreground/70">
+            No download logs yet.
+          </span>
         ) : (
           logs.map((l) => (
             <div
@@ -424,7 +421,9 @@ function LogPanel() {
               ].join(" ")}
             >
               <span className="text-muted-foreground/70">[{l.time}]</span>{" "}
-              <span className="text-muted-foreground">[{l.level.toUpperCase()}]</span>{" "}
+              <span className="text-muted-foreground">
+                [{l.level.toUpperCase()}]
+              </span>{" "}
               {l.message}
             </div>
           ))
@@ -513,7 +512,9 @@ export function DownloadManagerModal() {
         <div className="flex shrink-0 items-center justify-between border-b border-border px-6 py-4">
           <div className="flex items-center gap-3">
             <Download className="h-5 w-5 text-muted-foreground" />
-            <h2 className="text-base font-semibold text-foreground">Downloads</h2>
+            <h2 className="text-base font-semibold text-foreground">
+              Downloads
+            </h2>
             {(active.length > 0 || queued.length > 0) && (
               <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400">
                 {active.length + queued.length} pending
@@ -557,9 +558,7 @@ export function DownloadManagerModal() {
               ]}
             />
           )}
-          {active.length === 0 && (
-            <EmptyRow message="No active downloads" />
-          )}
+          {active.length === 0 && <EmptyRow message="No active downloads" />}
           {active.map((entry) => (
             <ActiveRow key={entry.id} entry={entry} onCancel={cancel} />
           ))}
@@ -577,9 +576,7 @@ export function DownloadManagerModal() {
               ]}
             />
           )}
-          {queued.length === 0 && (
-            <EmptyRow message="Queue is empty" />
-          )}
+          {queued.length === 0 && <EmptyRow message="Queue is empty" />}
           {queued.map((entry, idx) => (
             <WaitingRow
               key={entry.id}
@@ -590,10 +587,7 @@ export function DownloadManagerModal() {
           ))}
 
           {/* ── Completed & Failed ─────────────────────────────────────── */}
-          <SectionHeader
-            label="Completed & Failed"
-            count={history.length}
-          />
+          <SectionHeader label="Completed & Failed" count={history.length} />
           {history.length > 0 && (
             <TableHeader
               columns={[
@@ -605,15 +599,9 @@ export function DownloadManagerModal() {
               ]}
             />
           )}
-          {history.length === 0 && (
-            <EmptyRow message="No history" />
-          )}
+          {history.length === 0 && <EmptyRow message="No history" />}
           {history.map((entry) => (
-            <HistoryRow
-              key={entry.id}
-              entry={entry}
-              onRetry={handleRetry}
-            />
+            <HistoryRow key={entry.id} entry={entry} onRetry={handleRetry} />
           ))}
         </div>
 

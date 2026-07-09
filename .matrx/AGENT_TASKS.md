@@ -26,6 +26,11 @@ _(none)_
   defaults. Also wired mmproj auto-download + auto-attach on server start
   (fixes Gemma 4 / Qwen3.5 vision). Files: `model_selector.rs`, `commands.rs`,
   `types.ts`.
+- [x] **Gemma complete + compact GLM/distills (2026-07-09)** — added Gemma 4
+  12B Unified (+ mmproj), Gemma 3n E2B; GLM-Z1-9B; upgraded Low2 → R1-0528
+  Qwen3-8B and Mid2 → Phi-4-reasoning-plus; added Phi-4-mini-reasoning.
+  GLiNER researched: NER-only (ONNX/transformers), not GGUF/llama-server —
+  do not add to LLM catalog; optional future Python NER tool only.
 
 - [ ] **pytest engine fixture kills live dev engines** — `tests/conftest.py`
   spawns a real engine whose `preflight.clean_orphans()` sweeps ALL

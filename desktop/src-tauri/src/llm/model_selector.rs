@@ -9,23 +9,33 @@ fn is_zero(v: &u64) -> bool {
 pub enum LlmTier {
     // ── Tiny / Edge ──────────────────────────────────────────────────────
     LowAlt,            // Phi-4-mini 2.5 GB
-    Low,               // Qwen3-4B 2.5 GB
+    Qwen35_2B,         // Qwen3.5-2B 1.3 GB (+ mmproj; edge multimodal)
+    Phi4MiniReasoning, // Phi-4-mini-reasoning 2.5 GB (tiny STEM reasoner)
+    Low,               // Qwen3-4B 2.5 GB (legacy)
+    Qwen35_4B,         // Qwen3.5-4B 2.7 GB (+ mmproj; preferred tiny)
+    Gemma3nE2B,        // Gemma-3n-E2B 2.8 GB (text-only via llama.cpp)
     UltraLow,          // Gemma-3n-E4B 4.5 GB
-    Low2,              // DeepSeek-R1-Distill-Llama-8B 4.9 GB
+    Low2,              // DeepSeek-R1-0528-Qwen3-8B 5.0 GB
     Low3,              // Llama-3.1-8B 4.9 GB
     // ── Mid-range ─────────────────────────────────────────────────────────
-    Default,           // Qwen3-8B 5.1 GB (auto-selection anchor)
+    Default,           // Qwen3-8B 5.1 GB (legacy)
+    Qwen35_9B,         // Qwen3.5-9B 5.7 GB (+ mmproj; preferred default)
+    GlmZ1_9B,          // GLM-Z1-9B 6.2 GB (small GLM reasoner)
     Gemma4E2B,         // Gemma-4-E2B 3.1 GB (text+image, 2B effective; audio pending llama.cpp)
     Gemma4E4B,         // Gemma-4-E4B 5.0 GB (text+image, 4B effective; audio pending llama.cpp)
-    Mid,               // Gemma-3-12B QAT 7.3 GB
-    Mid2,              // Phi-4-Reasoning 9 GB
+    Mid,               // Gemma-3-12B QAT 7.3 GB (legacy vs Gemma 4 12B)
+    Gemma4_12B,        // Gemma-4-12B Unified 7.1 GB (+ mmproj; preferred mid multimodal)
+    Mid2,              // Phi-4-reasoning-plus 9.1 GB
     High,              // GPT-OSS-20B 12.1 GB
     HighAlt,           // Mistral-Small-3.1-24B 14.4 GB (existing)
+    Devstral24B,       // Devstral Small 2 24B 14.3 GB (coding agent)
+    Coder30B,          // Qwen3-Coder-30B-A3B 18.6 GB (coding MoE, 3B active)
+    Glm47Flash,        // GLM-4.7-Flash 18.3 GB (agent MoE, ~3B active)
     Gemma4A4B,         // Gemma-4-26B-A4B 17.0 GB (MoE, 4B active, text+image)
     High2,             // Qwen3.5-27B (multi-variant: IQ3_XXS / Q4_K_M)
     Gemma4_31B,        // Gemma-4-31B 18.3 GB (dense, text+image)
     High3,             // DeepSeek-R1-Distill-32B 19.85 GB
-    High4,             // Gemma-3-27B 16.55 GB
+    High4,             // Gemma-3-27B 16.55 GB (legacy vs Gemma 4 26B/31B)
     VHigh,             // Qwen3.5-35B-A3B (multi-variant: IQ2_M / IQ4_XS / Q4_K_M)
     // ── Uncensored ────────────────────────────────────────────────────────
     UncensoredCompact,   // Qwen3.5-35B-A3B-Uncensored IQ2_M ~11 GB
@@ -37,6 +47,8 @@ pub enum LlmTier {
     Server4,           // Llama-4-Scout-17B-16E 67.5 GB (split)
     Server5,           // GPT-OSS-120B 88 GB
     Server6,           // Qwen3.5-397B-A17B 115 GB
+    Server7,           // Qwen3-Next-80B-A3B 48.7 GB (MoE, ~3B active)
+    Server8,           // Qwen3-Coder-Next 48.7 GB (coding MoE, ~3B active)
 }
 
 /// A single quantization variant for a model that ships in multiple sizes.
@@ -194,9 +206,9 @@ static QWEN35_27B_VARIANTS: &[LlmModelVariant] = &[
         hf_parts: &[],
         expected_size_bytes: 12_344_000_000,
         hf_part_sizes: &[],
-        mmproj_filename: "",
-        mmproj_url: "",
-        mmproj_expected_size_bytes: 0,
+        mmproj_filename: "mmproj-Qwen3.5-27B-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 927_607_040,
     },
     LlmModelVariant {
         label: "Balanced",
@@ -208,9 +220,9 @@ static QWEN35_27B_VARIANTS: &[LlmModelVariant] = &[
         hf_parts: &[],
         expected_size_bytes: 17_933_000_000,
         hf_part_sizes: &[],
-        mmproj_filename: "",
-        mmproj_url: "",
-        mmproj_expected_size_bytes: 0,
+        mmproj_filename: "mmproj-Qwen3.5-27B-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 927_607_040,
     },
 ];
 
@@ -225,9 +237,9 @@ static QWEN35_35B_A3B_VARIANTS: &[LlmModelVariant] = &[
         hf_parts: &[],
         expected_size_bytes: 12_238_000_000,
         hf_part_sizes: &[],
-        mmproj_filename: "",
-        mmproj_url: "",
-        mmproj_expected_size_bytes: 0,
+        mmproj_filename: "mmproj-Qwen3.5-35B-A3B-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/Qwen3.5-35B-A3B-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 899_283_648,
     },
     LlmModelVariant {
         label: "Balanced",
@@ -239,9 +251,9 @@ static QWEN35_35B_A3B_VARIANTS: &[LlmModelVariant] = &[
         hf_parts: &[],
         expected_size_bytes: 18_790_000_000,
         hf_part_sizes: &[],
-        mmproj_filename: "",
-        mmproj_url: "",
-        mmproj_expected_size_bytes: 0,
+        mmproj_filename: "mmproj-Qwen3.5-35B-A3B-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/Qwen3.5-35B-A3B-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 899_283_648,
     },
     LlmModelVariant {
         label: "Quality",
@@ -253,9 +265,9 @@ static QWEN35_35B_A3B_VARIANTS: &[LlmModelVariant] = &[
         hf_parts: &[],
         expected_size_bytes: 23_622_000_000,
         hf_part_sizes: &[],
-        mmproj_filename: "",
-        mmproj_url: "",
-        mmproj_expected_size_bytes: 0,
+        mmproj_filename: "mmproj-Qwen3.5-35B-A3B-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/Qwen3.5-35B-A3B-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 899_283_648,
     },
 ];
 
@@ -422,6 +434,37 @@ static GEMMA4_31B_VARIANTS: &[LlmModelVariant] = &[
     },
 ];
 
+static GEMMA4_12B_VARIANTS: &[LlmModelVariant] = &[
+    LlmModelVariant {
+        label: "Compact",
+        quant: "Q4_K_M",
+        filename: "gemma-4-12b-it-Q4_K_M.gguf",
+        disk_size_gb: 7.1,
+        ram_required_gb: 9.0,
+        hf_url: "https://huggingface.co/unsloth/gemma-4-12B-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf",
+        hf_parts: &[],
+        expected_size_bytes: 7_121_860_000,
+        hf_part_sizes: &[],
+        mmproj_filename: "mmproj-gemma-4-12B-it-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/gemma-4-12B-it-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 175_115_840,
+    },
+    LlmModelVariant {
+        label: "Quality",
+        quant: "Q8_0",
+        filename: "gemma-4-12b-it-Q8_0.gguf",
+        disk_size_gb: 12.7,
+        ram_required_gb: 15.0,
+        hf_url: "https://huggingface.co/unsloth/gemma-4-12B-it-GGUF/resolve/main/gemma-4-12b-it-Q8_0.gguf",
+        hf_parts: &[],
+        expected_size_bytes: 12_669_646_240,
+        hf_part_sizes: &[],
+        mmproj_filename: "mmproj-gemma-4-12B-it-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/gemma-4-12B-it-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 175_115_840,
+    },
+];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Model catalog
 // Verified against HuggingFace API + HEAD requests where noted.
@@ -458,6 +501,62 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
     },
 
     LlmModelInfo {
+        tier: LlmTier::Phi4MiniReasoning,
+        name: "Phi 4 Mini Reasoning",
+        provider: "Microsoft",
+        filename: "Phi-4-mini-reasoning-Q4_K_M.gguf",
+        disk_size_gb: 2.5,
+        ram_required_gb: 3.5,
+        text_rating: 2,
+        code_rating: 3,
+        vision_rating: 0,
+        tool_calling_rating: 2,
+        speed: "Very fast",
+        description: "Tiny STEM/math reasoner. Same footprint as Phi 4 Mini but tuned for step-by-step reasoning.",
+        knowledge_cutoff: "Apr 2025",
+        hf_model_card_url: "https://huggingface.co/microsoft/Phi-4-mini-reasoning",
+        is_uncensored: false,
+        is_server_grade: false,
+        hf_url: "https://huggingface.co/unsloth/Phi-4-mini-reasoning-GGUF/resolve/main/Phi-4-mini-reasoning-Q4_K_M.gguf",
+        hf_parts: &[],
+        context_length: 32768,
+        expected_size_bytes: 2_491_875_232,
+        hf_part_sizes: &[],
+        mmproj_filename: "",
+        mmproj_url: "",
+        mmproj_expected_size_bytes: 0,
+        variants: &[],
+    },
+
+    LlmModelInfo {
+        tier: LlmTier::Qwen35_2B,
+        name: "Qwen 3.5 2B",
+        provider: "Alibaba",
+        filename: "Qwen3.5-2B-Q4_K_M.gguf",
+        disk_size_gb: 1.3,
+        ram_required_gb: 3.0,
+        text_rating: 2,
+        code_rating: 2,
+        vision_rating: 3,
+        tool_calling_rating: 3,
+        speed: "Very fast",
+        description: "Smallest Qwen 3.5 with native vision. Ideal for phones, old laptops, and ultra-low RAM machines.",
+        knowledge_cutoff: "Feb 2026",
+        hf_model_card_url: "https://huggingface.co/Qwen/Qwen3.5-2B",
+        is_uncensored: false,
+        is_server_grade: false,
+        hf_url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
+        hf_parts: &[],
+        context_length: 262144,
+        expected_size_bytes: 1_280_835_840,
+        hf_part_sizes: &[],
+        mmproj_filename: "mmproj-Qwen3.5-2B-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 668_227_264,
+        variants: &[],
+    },
+
+    LlmModelInfo {
         tier: LlmTier::Low,
         name: "Qwen 3 4B",
         provider: "Alibaba",
@@ -469,7 +568,7 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
         vision_rating: 0,
         tool_calling_rating: 3,
         speed: "Fast",
-        description: "Compact model with strong tool calling. Best for low-RAM machines.",
+        description: "Compact model with strong tool calling. Prefer Qwen 3.5 4B when available.",
         knowledge_cutoff: "Sep 2024",
         hf_model_card_url: "https://huggingface.co/Qwen/Qwen3-4B",
         is_uncensored: false,
@@ -478,6 +577,62 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
         hf_parts: &[],
         context_length: 8192,
         expected_size_bytes: 2_497_280_256,
+        hf_part_sizes: &[],
+        mmproj_filename: "",
+        mmproj_url: "",
+        mmproj_expected_size_bytes: 0,
+        variants: &[],
+    },
+
+    LlmModelInfo {
+        tier: LlmTier::Qwen35_4B,
+        name: "Qwen 3.5 4B",
+        provider: "Alibaba",
+        filename: "Qwen3.5-4B-Q4_K_M.gguf",
+        disk_size_gb: 2.7,
+        ram_required_gb: 4.5,
+        text_rating: 3,
+        code_rating: 3,
+        vision_rating: 3,
+        tool_calling_rating: 4,
+        speed: "Fast",
+        description: "Best tiny multimodal model. Strong tools + vision in ~2.7 GB — preferred over Qwen 3 4B.",
+        knowledge_cutoff: "Feb 2026",
+        hf_model_card_url: "https://huggingface.co/Qwen/Qwen3.5-4B",
+        is_uncensored: false,
+        is_server_grade: false,
+        hf_url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+        hf_parts: &[],
+        context_length: 262144,
+        expected_size_bytes: 2_740_937_888,
+        hf_part_sizes: &[],
+        mmproj_filename: "mmproj-Qwen3.5-4B-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 672_423_616,
+        variants: &[],
+    },
+
+    LlmModelInfo {
+        tier: LlmTier::Gemma3nE2B,
+        name: "Gemma 3n E2B",
+        provider: "Google",
+        filename: "gemma-3n-E2B-it-Q4_K_M.gguf",
+        disk_size_gb: 2.82,
+        ram_required_gb: 4.0,
+        text_rating: 2,
+        code_rating: 1,
+        vision_rating: 0,
+        tool_calling_rating: 2,
+        speed: "Very fast",
+        description: "Google's smallest on-device Gemma 3n. Text-only via llama.cpp currently. Completes the 3n edge pair with E4B.",
+        knowledge_cutoff: "Mar 2025",
+        hf_model_card_url: "https://huggingface.co/google/gemma-3n-E2B-it",
+        is_uncensored: false,
+        is_server_grade: false,
+        hf_url: "https://huggingface.co/unsloth/gemma-3n-E2B-it-GGUF/resolve/main/gemma-3n-E2B-it-Q4_K_M.gguf",
+        hf_parts: &[],
+        context_length: 32768,
+        expected_size_bytes: 3_026_881_888,
         hf_part_sizes: &[],
         mmproj_filename: "",
         mmproj_url: "",
@@ -571,25 +726,25 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
 
     LlmModelInfo {
         tier: LlmTier::Low2,
-        name: "DeepSeek R1 Distill 8B",
+        name: "DeepSeek R1 0528 Qwen3 8B",
         provider: "DeepSeek",
-        filename: "DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf",
-        disk_size_gb: 4.92,
-        ram_required_gb: 6.0,
-        text_rating: 2,
-        code_rating: 3,
+        filename: "DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf",
+        disk_size_gb: 5.0,
+        ram_required_gb: 6.5,
+        text_rating: 3,
+        code_rating: 4,
         vision_rating: 0,
-        tool_calling_rating: 2,
+        tool_calling_rating: 3,
         speed: "Fast",
-        description: "DeepSeek's reasoning model distilled into Llama-8B. Best reasoning under 5 GB. Chain-of-thought capable.",
-        knowledge_cutoff: "Jul 2024",
-        hf_model_card_url: "https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        description: "Latest R1 distill on Qwen3-8B (May 2025). Stronger reasoning than the older Llama-8B distill at the same size.",
+        knowledge_cutoff: "May 2025",
+        hf_model_card_url: "https://huggingface.co/deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         is_uncensored: false,
         is_server_grade: false,
-        hf_url: "https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF/resolve/main/DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf",
+        hf_url: "https://huggingface.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF/resolve/main/DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf",
         hf_parts: &[],
         context_length: 131072,
-        expected_size_bytes: 5_284_000_000,
+        expected_size_bytes: 5_027_785_216,
         hf_part_sizes: &[],
         mmproj_filename: "",
         mmproj_url: "",
@@ -639,7 +794,7 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
         vision_rating: 0,
         tool_calling_rating: 4,
         speed: "Medium",
-        description: "Recommended default. Best balance of quality and speed for tool calling and general use.",
+        description: "Solid mid-size generalist. Prefer Qwen 3.5 9B when available (vision + newer quality).",
         knowledge_cutoff: "Sep 2024",
         hf_model_card_url: "https://huggingface.co/Qwen/Qwen3-8B",
         is_uncensored: false,
@@ -648,6 +803,62 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
         hf_parts: &[],
         context_length: 8192,
         expected_size_bytes: 5_027_783_488,
+        hf_part_sizes: &[],
+        mmproj_filename: "",
+        mmproj_url: "",
+        mmproj_expected_size_bytes: 0,
+        variants: &[],
+    },
+
+    LlmModelInfo {
+        tier: LlmTier::Qwen35_9B,
+        name: "Qwen 3.5 9B",
+        provider: "Alibaba",
+        filename: "Qwen3.5-9B-Q4_K_M.gguf",
+        disk_size_gb: 5.7,
+        ram_required_gb: 8.0,
+        text_rating: 4,
+        code_rating: 4,
+        vision_rating: 4,
+        tool_calling_rating: 4,
+        speed: "Medium",
+        description: "Recommended default. Dense 9B with native vision, strong tools, and 262K context — best everyday local model.",
+        knowledge_cutoff: "Feb 2026",
+        hf_model_card_url: "https://huggingface.co/Qwen/Qwen3.5-9B",
+        is_uncensored: false,
+        is_server_grade: false,
+        hf_url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
+        hf_parts: &[],
+        context_length: 262144,
+        expected_size_bytes: 5_680_522_464,
+        hf_part_sizes: &[],
+        mmproj_filename: "mmproj-Qwen3.5-9B-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 918_166_080,
+        variants: &[],
+    },
+
+    LlmModelInfo {
+        tier: LlmTier::GlmZ1_9B,
+        name: "GLM Z1 9B",
+        provider: "Z.ai",
+        filename: "GLM-Z1-9B-0414-Q4_K_M.gguf",
+        disk_size_gb: 6.2,
+        ram_required_gb: 8.0,
+        text_rating: 3,
+        code_rating: 4,
+        vision_rating: 0,
+        tool_calling_rating: 4,
+        speed: "Medium",
+        description: "Compact GLM reasoner. Fits 8 GB machines — the small sibling to GLM 4.7 Flash for mid-RAM agent/reasoning workloads.",
+        knowledge_cutoff: "Apr 2025",
+        hf_model_card_url: "https://huggingface.co/THUDM/GLM-Z1-9B-0414",
+        is_uncensored: false,
+        is_server_grade: false,
+        hf_url: "https://huggingface.co/unsloth/GLM-Z1-9B-0414-GGUF/resolve/main/GLM-Z1-9B-0414-Q4_K_M.gguf",
+        hf_parts: &[],
+        context_length: 32768,
+        expected_size_bytes: 6_166_575_232,
         hf_part_sizes: &[],
         mmproj_filename: "",
         mmproj_url: "",
@@ -667,7 +878,7 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
         vision_rating: 3,
         tool_calling_rating: 3,
         speed: "Medium",
-        description: "Google's mid-size multimodal model with QAT quantization for better quality. Strong vision and text.",
+        description: "Google's mid-size multimodal model with QAT quantization. Prefer Gemma 4 12B for newer quality and Apache-2.0.",
         knowledge_cutoff: "Mar 2025",
         hf_model_card_url: "https://huggingface.co/google/gemma-3-12b-it",
         is_uncensored: false,
@@ -684,26 +895,54 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
     },
 
     LlmModelInfo {
+        tier: LlmTier::Gemma4_12B,
+        name: "Gemma 4 12B",
+        provider: "Google",
+        filename: "gemma-4-12b-it-Q4_K_M.gguf",
+        disk_size_gb: 7.1,
+        ram_required_gb: 9.0,
+        text_rating: 4,
+        code_rating: 3,
+        vision_rating: 4,
+        tool_calling_rating: 3,
+        speed: "Medium",
+        description: "Gemma 4 Unified 12B — the missing mid-size. Text + image, 256K context, compact mmproj (~167 MB). Best Gemma for 8–16 GB machines.",
+        knowledge_cutoff: "Jun 2026",
+        hf_model_card_url: "https://huggingface.co/google/gemma-4-12B-it",
+        is_uncensored: false,
+        is_server_grade: false,
+        hf_url: "https://huggingface.co/unsloth/gemma-4-12B-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf",
+        hf_parts: &[],
+        context_length: 262144,
+        expected_size_bytes: 7_121_860_000,
+        hf_part_sizes: &[],
+        mmproj_filename: "mmproj-gemma-4-12B-it-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/gemma-4-12B-it-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 175_115_840,
+        variants: GEMMA4_12B_VARIANTS,
+    },
+
+    LlmModelInfo {
         tier: LlmTier::Mid2,
-        name: "Phi 4 Reasoning",
+        name: "Phi 4 Reasoning Plus",
         provider: "Microsoft",
-        filename: "microsoft_Phi-4-reasoning-Q4_K_M.gguf",
-        disk_size_gb: 9.0,
+        filename: "Phi-4-reasoning-plus-Q4_K_M.gguf",
+        disk_size_gb: 9.1,
         ram_required_gb: 12.0,
-        text_rating: 3,
+        text_rating: 4,
         code_rating: 4,
         vision_rating: 0,
         tool_calling_rating: 3,
         speed: "Medium",
-        description: "Microsoft's reasoning-optimized 14B model. Exceptional at STEM and code for its size.",
+        description: "Microsoft's upgraded 14B reasoner. Stronger STEM/code than the original Phi-4-reasoning at the same size class.",
         knowledge_cutoff: "Apr 2025",
-        hf_model_card_url: "https://huggingface.co/microsoft/Phi-4-reasoning",
+        hf_model_card_url: "https://huggingface.co/microsoft/Phi-4-reasoning-plus",
         is_uncensored: false,
         is_server_grade: false,
-        hf_url: "https://huggingface.co/bartowski/microsoft_Phi-4-reasoning-GGUF/resolve/main/microsoft_Phi-4-reasoning-Q4_K_M.gguf",
+        hf_url: "https://huggingface.co/unsloth/Phi-4-reasoning-plus-GGUF/resolve/main/Phi-4-reasoning-plus-Q4_K_M.gguf",
         hf_parts: &[],
         context_length: 32768,
-        expected_size_bytes: 9_664_000_000,
+        expected_size_bytes: 9_053_117_120,
         hf_part_sizes: &[],
         mmproj_filename: "",
         mmproj_url: "",
@@ -768,6 +1007,90 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
     },
 
     LlmModelInfo {
+        tier: LlmTier::Devstral24B,
+        name: "Devstral Small 2 24B",
+        provider: "Mistral",
+        filename: "mistralai_Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf",
+        disk_size_gb: 14.3,
+        ram_required_gb: 16.0,
+        text_rating: 3,
+        code_rating: 5,
+        vision_rating: 0,
+        tool_calling_rating: 4,
+        speed: "GPU recommended",
+        description: "Mistral's agentic coding specialist. Dense 24B tuned for software engineering and tool use.",
+        knowledge_cutoff: "Nov 2025",
+        hf_model_card_url: "https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512",
+        is_uncensored: false,
+        is_server_grade: false,
+        hf_url: "https://huggingface.co/bartowski/mistralai_Devstral-Small-2-24B-Instruct-2512-GGUF/resolve/main/mistralai_Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf",
+        hf_parts: &[],
+        context_length: 131072,
+        expected_size_bytes: 14_334_438_272,
+        hf_part_sizes: &[],
+        mmproj_filename: "",
+        mmproj_url: "",
+        mmproj_expected_size_bytes: 0,
+        variants: &[],
+    },
+
+    LlmModelInfo {
+        tier: LlmTier::Coder30B,
+        name: "Qwen 3 Coder 30B A3B",
+        provider: "Alibaba",
+        filename: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+        disk_size_gb: 18.6,
+        ram_required_gb: 22.0,
+        text_rating: 3,
+        code_rating: 5,
+        vision_rating: 0,
+        tool_calling_rating: 5,
+        speed: "GPU recommended",
+        description: "Coding MoE: 30B total / 3B active. Best agentic coding model in the 16–24 GB band. 256K context.",
+        knowledge_cutoff: "Jul 2025",
+        hf_model_card_url: "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct",
+        is_uncensored: false,
+        is_server_grade: false,
+        hf_url: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+        hf_parts: &[],
+        context_length: 262144,
+        expected_size_bytes: 18_556_689_568,
+        hf_part_sizes: &[],
+        mmproj_filename: "",
+        mmproj_url: "",
+        mmproj_expected_size_bytes: 0,
+        variants: &[],
+    },
+
+    LlmModelInfo {
+        tier: LlmTier::Glm47Flash,
+        name: "GLM 4.7 Flash",
+        provider: "Z.ai",
+        filename: "GLM-4.7-Flash-Q4_K_M.gguf",
+        disk_size_gb: 18.3,
+        ram_required_gb: 22.0,
+        text_rating: 4,
+        code_rating: 4,
+        vision_rating: 0,
+        tool_calling_rating: 5,
+        speed: "GPU recommended",
+        description: "Z.ai agent MoE (~30B / ~3B active). Strong tool calling and SWE-style agent workloads — non-Qwen alternative to 35B-A3B.",
+        knowledge_cutoff: "Jan 2026",
+        hf_model_card_url: "https://huggingface.co/zai-org/GLM-4.7-Flash",
+        is_uncensored: false,
+        is_server_grade: false,
+        hf_url: "https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF/resolve/main/GLM-4.7-Flash-Q4_K_M.gguf",
+        hf_parts: &[],
+        context_length: 202752,
+        expected_size_bytes: 18_312_339_808,
+        hf_part_sizes: &[],
+        mmproj_filename: "",
+        mmproj_url: "",
+        mmproj_expected_size_bytes: 0,
+        variants: &[],
+    },
+
+    LlmModelInfo {
         tier: LlmTier::Gemma4A4B,
         name: "Gemma 4 26B A4B",
         provider: "Google",
@@ -818,9 +1141,9 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
         context_length: 262144,
         expected_size_bytes: 12_344_000_000,
         hf_part_sizes: &[],
-        mmproj_filename: "",
-        mmproj_url: "",
-        mmproj_expected_size_bytes: 0,
+        mmproj_filename: "mmproj-Qwen3.5-27B-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 927_607_040,
         variants: QWEN35_27B_VARIANTS,
     },
 
@@ -892,7 +1215,7 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
         vision_rating: 4,
         tool_calling_rating: 3,
         speed: "GPU recommended",
-        description: "Google's best open multimodal model. Top-tier vision + text. 128k context.",
+        description: "Google's best open multimodal model from the Gemma 3 line. Prefer Gemma 4 26B A4B / 31B for newer quality.",
         knowledge_cutoff: "Mar 2025",
         hf_model_card_url: "https://huggingface.co/google/gemma-3-27b-it",
         is_uncensored: false,
@@ -931,9 +1254,9 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
         context_length: 262144,
         expected_size_bytes: 18_790_000_000,
         hf_part_sizes: &[],
-        mmproj_filename: "",
-        mmproj_url: "",
-        mmproj_expected_size_bytes: 0,
+        mmproj_filename: "mmproj-Qwen3.5-35B-A3B-F16.gguf",
+        mmproj_url: "https://huggingface.co/unsloth/Qwen3.5-35B-A3B-GGUF/resolve/main/mmproj-F16.gguf",
+        mmproj_expected_size_bytes: 899_283_648,
         variants: QWEN35_35B_A3B_VARIANTS,
     },
 
@@ -1167,6 +1490,62 @@ pub const LLM_MODELS: &[LlmModelInfo] = &[
         mmproj_expected_size_bytes: 0,
         variants: &[],
     },
+
+    LlmModelInfo {
+        tier: LlmTier::Server7,
+        name: "Qwen 3 Next 80B A3B",
+        provider: "Alibaba",
+        filename: "Qwen_Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+        disk_size_gb: 48.7,
+        ram_required_gb: 56.0,
+        text_rating: 5,
+        code_rating: 4,
+        vision_rating: 0,
+        tool_calling_rating: 5,
+        speed: "Server GPU",
+        description: "80B MoE with only ~3B active. Fast long-context server model — sits between Scout and Qwen 3.5 122B A10B.",
+        knowledge_cutoff: "Sep 2025",
+        hf_model_card_url: "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
+        is_uncensored: false,
+        is_server_grade: true,
+        hf_url: "https://huggingface.co/bartowski/Qwen_Qwen3-Next-80B-A3B-Instruct-GGUF/resolve/main/Qwen_Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+        hf_parts: &[],
+        context_length: 262144,
+        expected_size_bytes: 48_727_677_408,
+        hf_part_sizes: &[],
+        mmproj_filename: "",
+        mmproj_url: "",
+        mmproj_expected_size_bytes: 0,
+        variants: &[],
+    },
+
+    LlmModelInfo {
+        tier: LlmTier::Server8,
+        name: "Qwen 3 Coder Next",
+        provider: "Alibaba",
+        filename: "Qwen_Qwen3-Coder-Next-Q4_K_M.gguf",
+        disk_size_gb: 48.7,
+        ram_required_gb: 56.0,
+        text_rating: 4,
+        code_rating: 5,
+        vision_rating: 0,
+        tool_calling_rating: 5,
+        speed: "Server GPU",
+        description: "Server-grade coding MoE (~80B / ~3B active). Best practical coding beast for Mac Studio / 64GB+ boxes.",
+        knowledge_cutoff: "Jan 2026",
+        hf_model_card_url: "https://huggingface.co/Qwen/Qwen3-Coder-Next",
+        is_uncensored: false,
+        is_server_grade: true,
+        hf_url: "https://huggingface.co/bartowski/Qwen_Qwen3-Coder-Next-GGUF/resolve/main/Qwen_Qwen3-Coder-Next-Q4_K_M.gguf",
+        hf_parts: &[],
+        context_length: 262144,
+        expected_size_bytes: 48_727_680_704,
+        hf_part_sizes: &[],
+        mmproj_filename: "",
+        mmproj_url: "",
+        mmproj_expected_size_bytes: 0,
+        variants: &[],
+    },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1235,21 +1614,30 @@ fn select_tier(hw: &HardwareProfile, total_ram_gb: f32, gpu_vram_gb: f32) -> (Ll
         }
         if total_ram_gb >= 10.0 {
             return (
-                LlmTier::Mid,
-                "Apple Silicon with 10GB+ RAM — Gemma 3 12B recommended with Metal".to_string(),
+                LlmTier::Qwen35_9B,
+                "Apple Silicon with 10GB+ RAM — Qwen 3.5 9B recommended (vision + tools, Metal)".to_string(),
             );
         }
         if total_ram_gb >= 8.0 {
             return (
-                LlmTier::Default,
-                "Apple Silicon with 8GB RAM — Qwen 3 8B recommended with Metal acceleration".to_string(),
+                LlmTier::Qwen35_9B,
+                "Apple Silicon with 8GB RAM — Qwen 3.5 9B recommended with Metal acceleration".to_string(),
             );
         }
         if total_ram_gb >= 6.0 {
             return (
-                LlmTier::Low,
+                LlmTier::Qwen35_4B,
                 format!(
-                    "Apple Silicon with {:.0}GB RAM — Qwen 3 4B recommended",
+                    "Apple Silicon with {:.0}GB RAM — Qwen 3.5 4B recommended (vision + tools)",
+                    total_ram_gb
+                ),
+            );
+        }
+        if total_ram_gb >= 4.0 {
+            return (
+                LlmTier::Qwen35_2B,
+                format!(
+                    "Apple Silicon with {:.0}GB RAM — Qwen 3.5 2B recommended for edge devices",
                     total_ram_gb
                 ),
             );
@@ -1296,82 +1684,91 @@ fn select_tier(hw: &HardwareProfile, total_ram_gb: f32, gpu_vram_gb: f32) -> (Ll
         }
         if gpu_vram_gb >= 8.0 {
             return (
-                LlmTier::Mid,
+                LlmTier::Qwen35_9B,
                 format!(
-                    "{} GPU with {:.0}GB VRAM — Gemma 3 12B recommended with full GPU offload",
+                    "{} GPU with {:.0}GB VRAM — Qwen 3.5 9B recommended with full GPU offload",
                     backend, gpu_vram_gb
                 ),
             );
         }
         if gpu_vram_gb >= 5.0 {
             return (
-                LlmTier::Default,
+                LlmTier::Qwen35_9B,
                 format!(
-                    "{} GPU with {:.0}GB VRAM — Qwen 3 8B fits with full GPU offload",
+                    "{} GPU with {:.0}GB VRAM — Qwen 3.5 9B fits with full GPU offload",
                     backend, gpu_vram_gb
                 ),
             );
         }
         if gpu_vram_gb >= 2.0 {
             return (
-                LlmTier::Default,
+                LlmTier::Qwen35_4B,
                 format!(
-                    "{} GPU with {:.0}GB VRAM — Qwen 3 8B with partial GPU offload (faster than pure CPU)",
+                    "{} GPU with {:.0}GB VRAM — Qwen 3.5 4B with partial GPU offload (faster than pure CPU)",
                     backend, gpu_vram_gb
                 ),
             );
         }
         return (
-            LlmTier::Low,
+            LlmTier::Qwen35_4B,
             format!(
-                "{} GPU detected — using compact Qwen 3 4B model; GPU acceleration active",
+                "{} GPU detected — using compact Qwen 3.5 4B model; GPU acceleration active",
                 backend
             ),
         );
     }
 
     // ── CPU-only path ─────────────────────────────────────────────────────────
+    if total_ram_gb < 3.5 {
+        return (
+            LlmTier::Qwen35_2B,
+            format!(
+                "Limited RAM ({:.0}GB) — Qwen 3.5 2B is the smallest multimodal option",
+                total_ram_gb
+            ),
+        );
+    }
     if total_ram_gb < 4.0 {
         return (
             LlmTier::LowAlt,
             format!(
-                "Limited RAM ({:.0}GB) — Phi 4 Mini is the smallest supported model",
+                "Limited RAM ({:.0}GB) — Phi 4 Mini is a fast text-only fallback",
                 total_ram_gb
             ),
         );
     }
     if total_ram_gb < 6.0 {
         return (
-            LlmTier::UltraLow,
+            LlmTier::Qwen35_4B,
             format!(
-                "{:.0}GB RAM — Gemma 3n E4B recommended for CPU inference",
+                "{:.0}GB RAM — Qwen 3.5 4B recommended for CPU inference",
                 total_ram_gb
             ),
         );
     }
     if total_ram_gb < 8.0 {
         return (
-            LlmTier::Low,
+            LlmTier::Qwen35_4B,
             format!(
-                "{:.0}GB RAM — Qwen 3 4B recommended; CPU inference is slower but functional",
+                "{:.0}GB RAM — Qwen 3.5 4B recommended; CPU inference is slower but functional",
                 total_ram_gb
             ),
         );
     }
     if total_ram_gb < 12.0 {
         return (
-            LlmTier::Default,
+            LlmTier::Qwen35_9B,
             format!(
-                "{:.0}GB RAM — Qwen 3 8B recommended (CPU inference; expect ~3–8 tokens/sec)",
+                "{:.0}GB RAM — Qwen 3.5 9B recommended (CPU inference; expect ~3–8 tokens/sec)",
                 total_ram_gb
             ),
         );
     }
 
     (
-        LlmTier::Mid,
+        LlmTier::Qwen35_9B,
         format!(
-            "{:.0}GB RAM — Gemma 3 12B recommended for balanced CPU performance",
+            "{:.0}GB RAM — Qwen 3.5 9B recommended for balanced CPU performance",
             total_ram_gb
         ),
     )
@@ -1408,19 +1805,29 @@ fn can_upgrade_tier(
     is_apple_silicon: bool,
 ) -> bool {
     match tier {
-        LlmTier::LowAlt => total_ram_gb >= 4.0,
-        LlmTier::UltraLow => total_ram_gb >= 6.0 || gpu_vram_gb >= 4.0,
+        LlmTier::LowAlt | LlmTier::Qwen35_2B | LlmTier::Phi4MiniReasoning => {
+            total_ram_gb >= 4.0
+        }
+        LlmTier::UltraLow
+        | LlmTier::Qwen35_4B
+        | LlmTier::Gemma3nE2B => total_ram_gb >= 6.0 || gpu_vram_gb >= 4.0,
         LlmTier::Low | LlmTier::Low2 | LlmTier::Low3 => {
             total_ram_gb >= 6.5 || gpu_vram_gb >= 4.0
         }
-        LlmTier::Default => total_ram_gb >= 10.0 || gpu_vram_gb >= 8.0,
-        LlmTier::Mid | LlmTier::Mid2 => {
+        LlmTier::Default | LlmTier::Qwen35_9B | LlmTier::GlmZ1_9B => {
+            total_ram_gb >= 10.0 || gpu_vram_gb >= 8.0
+        }
+        LlmTier::Mid | LlmTier::Mid2 | LlmTier::Gemma4_12B => {
             total_ram_gb >= 16.0 || gpu_vram_gb >= 12.0 || (is_apple_silicon && total_ram_gb >= 16.0)
         }
-        LlmTier::High | LlmTier::HighAlt => {
+        LlmTier::High | LlmTier::HighAlt | LlmTier::Devstral24B => {
             total_ram_gb >= 24.0 || gpu_vram_gb >= 16.0 || (is_apple_silicon && total_ram_gb >= 24.0)
         }
-        LlmTier::High2 | LlmTier::High3 | LlmTier::High4 => {
+        LlmTier::High2
+        | LlmTier::High3
+        | LlmTier::High4
+        | LlmTier::Coder30B
+        | LlmTier::Glm47Flash => {
             total_ram_gb >= 36.0 || gpu_vram_gb >= 36.0 || (is_apple_silicon && total_ram_gb >= 36.0)
         }
         LlmTier::VHigh => false, // top consumer tier

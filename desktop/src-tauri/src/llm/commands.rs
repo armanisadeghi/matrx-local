@@ -74,10 +74,49 @@ pub async fn start_llm_server(
         ));
     }
 
-    let mmproj_path = mmproj_filename
+    // Prefer an explicit mmproj from the caller; otherwise look it up in the
+    // catalog so vision models (Gemma 4 / Qwen 3.5) auto-attach their projector.
+    let resolved_mmproj = mmproj_filename
         .filter(|f| !f.is_empty())
-        .map(|f| resolve_model_path(&app, &f))
-        .transpose()?;
+        .or_else(|| {
+            model_selector::LLM_MODELS
+                .iter()
+                .find(|m| m.filename == model_filename)
+                .filter(|m| !m.mmproj_filename.is_empty())
+                .map(|m| m.mmproj_filename.to_string())
+                .or_else(|| {
+                    // Variant filenames (e.g. Q8_0) share the parent entry's mmproj.
+                    model_selector::LLM_MODELS.iter().find_map(|m| {
+                        m.variants
+                            .iter()
+                            .find(|v| v.filename == model_filename)
+                            .and_then(|v| {
+                                if !v.mmproj_filename.is_empty() {
+                                    Some(v.mmproj_filename.to_string())
+                                } else if !m.mmproj_filename.is_empty() {
+                                    Some(m.mmproj_filename.to_string())
+                                } else {
+                                    None
+                                }
+                            })
+                    })
+                })
+        });
+
+    let mmproj_path = resolved_mmproj
+        .as_ref()
+        .map(|f| resolve_model_path(&app, f))
+        .transpose()?
+        .filter(|p| std::path::Path::new(p).exists());
+
+    if let Some(ref name) = resolved_mmproj {
+        if mmproj_path.is_none() {
+            eprintln!(
+                "[llm-cmd] mmproj '{}' listed for '{}' but not on disk — starting text-only",
+                name, model_filename
+            );
+        }
+    }
 
     let port = find_free_port(11434)?;
     let ctx = context_length.unwrap_or(8192);
@@ -442,6 +481,15 @@ pub async fn download_llm_model(
                 dm.mark_external_completed(&app, &dm_id, expected_size.unwrap_or(0))
                     .await;
             }
+            let _ = ensure_mmproj_downloaded(
+                &client,
+                &app,
+                &dest_dir,
+                &filename,
+                &cancel_ref,
+                hf_token.as_deref(),
+            )
+            .await;
             return Ok(dest_path.to_string_lossy().to_string());
         }
 
@@ -475,6 +523,7 @@ pub async fn download_llm_model(
                 &app,
                 &cancel_ref,
                 hf_token.as_deref(),
+                Some(&dm_id),
             )
             .await
             {
@@ -485,6 +534,15 @@ pub async fn download_llm_model(
                         if let Some(ref dm) = dm_arc {
                             dm.mark_external_completed(&app, &dm_id, expected_size.unwrap_or(0)).await;
                         }
+                        let _ = ensure_mmproj_downloaded(
+                            &client,
+                            &app,
+                            &dest_dir,
+                            &filename,
+                            &cancel_ref,
+                            hf_token.as_deref(),
+                        )
+                        .await;
                         return Ok(dest_path.to_string_lossy().to_string());
                     }
                     // is_valid_gguf already logged the specific reason
@@ -630,6 +688,7 @@ pub async fn download_llm_model(
                 &app,
                 &cancel_ref,
                 hf_token.as_deref(),
+                Some(&dm_id),
             )
             .await
             {
@@ -675,7 +734,179 @@ pub async fn download_llm_model(
     if let Some(ref dm) = dm_arc {
         dm.mark_external_completed(&app, &dm_id, grand_total).await;
     }
+    let _ = ensure_mmproj_downloaded(
+        &client,
+        &app,
+        &dest_dir,
+        &filename,
+        &cancel_ref,
+        hf_token.as_deref(),
+    )
+    .await;
     Ok(first_part_path.to_string_lossy().to_string())
+}
+
+/// Look up the multimodal projector for a catalog model (or one of its variants).
+fn catalog_mmproj_for(filename: &str) -> Option<(&'static str, &'static str, u64)> {
+    for m in model_selector::LLM_MODELS {
+        if m.filename == filename {
+            if m.mmproj_filename.is_empty() {
+                return None;
+            }
+            return Some((m.mmproj_filename, m.mmproj_url, m.mmproj_expected_size_bytes));
+        }
+        for v in m.variants {
+            if v.filename == filename {
+                if !v.mmproj_filename.is_empty() {
+                    return Some((
+                        v.mmproj_filename,
+                        v.mmproj_url,
+                        v.mmproj_expected_size_bytes,
+                    ));
+                }
+                if !m.mmproj_filename.is_empty() {
+                    return Some((
+                        m.mmproj_filename,
+                        m.mmproj_url,
+                        m.mmproj_expected_size_bytes,
+                    ));
+                }
+                return None;
+            }
+        }
+    }
+    None
+}
+
+/// Download the catalog mmproj for a model if one is listed and missing on disk.
+/// Saves under the catalog's local `mmproj_filename` (not the HF URL basename),
+/// so Gemma/Qwen projectors don't collide as bare `mmproj-F16.gguf`.
+async fn ensure_mmproj_downloaded(
+    client: &reqwest::Client,
+    app: &AppHandle,
+    dest_dir: &std::path::Path,
+    model_filename: &str,
+    cancel_ref: &Arc<AtomicBool>,
+    hf_token: Option<&str>,
+) -> Result<(), String> {
+    use crate::downloads::commands::DownloadManagerState;
+
+    let Some((mmproj_filename, mmproj_url, expected_size)) = catalog_mmproj_for(model_filename)
+    else {
+        return Ok(());
+    };
+    if mmproj_url.is_empty() {
+        return Ok(());
+    }
+
+    let dest_path = dest_dir.join(mmproj_filename);
+    let expected = if expected_size > 0 {
+        Some(expected_size)
+    } else {
+        None
+    };
+
+    if is_valid_gguf(&dest_path, expected) {
+        eprintln!(
+            "[llm] mmproj '{}' for '{}' already on disk — skipping",
+            mmproj_filename, model_filename
+        );
+        return Ok(());
+    }
+
+    eprintln!(
+        "[llm] downloading mmproj '{}' for '{}' from '{}'",
+        mmproj_filename, model_filename, mmproj_url
+    );
+
+    if dest_path.exists() {
+        let _ = tokio::fs::remove_file(&dest_path).await;
+    }
+
+    // A 1-2 GB projector download must be visible in the Downloads UI, not
+    // invisible. Register a distinct DM entry (id namespaced with `mmproj`
+    // so it never collides with the parent model's `llm-<file>` entry).
+    let dm_id = format!("llm-mmproj-{}", mmproj_filename);
+    let dm_arc = app
+        .try_state::<DownloadManagerState>()
+        .map(|s| s.inner().clone());
+    if let Some(ref dm) = dm_arc {
+        dm.register_external(
+            app,
+            dm_id.clone(),
+            "llm".to_string(),
+            mmproj_filename.to_string(),
+            format!("Projector: {}", mmproj_filename),
+            vec![mmproj_url.to_string()],
+        )
+        .await;
+    }
+
+    let mut last_error = String::new();
+    for attempt in 0..3u32 {
+        if cancel_ref.load(Ordering::SeqCst) {
+            if let Some(ref dm) = dm_arc {
+                dm.mark_external_failed(app, &dm_id, "Download cancelled by user").await;
+            }
+            return Err("Download cancelled by user".to_string());
+        }
+        if attempt > 0 {
+            let wait = 2u64.pow(attempt);
+            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+        }
+
+        match try_download_part(
+            client,
+            mmproj_url,
+            &dest_path,
+            mmproj_filename,
+            1,
+            1,
+            0,
+            0,
+            app,
+            cancel_ref,
+            hf_token,
+            Some(&dm_id),
+        )
+        .await
+        {
+            Ok(_) => {
+                if is_valid_gguf(&dest_path, expected) {
+                    eprintln!(
+                        "[llm] mmproj '{}' for '{}' downloaded successfully",
+                        mmproj_filename, model_filename
+                    );
+                    if let Some(ref dm) = dm_arc {
+                        dm.mark_external_completed(app, &dm_id, expected_size).await;
+                    }
+                    return Ok(());
+                }
+                last_error = "mmproj failed GGUF validation".to_string();
+                let _ = tokio::fs::remove_file(&dest_path).await;
+            }
+            Err(e) if e.contains("cancelled") => {
+                let _ = tokio::fs::remove_file(&dest_path).await;
+                if let Some(ref dm) = dm_arc {
+                    dm.mark_external_failed(app, &dm_id, "Download cancelled by user").await;
+                }
+                return Err("Download cancelled by user".to_string());
+            }
+            Err(e) => {
+                last_error = e;
+                let _ = tokio::fs::remove_file(&dest_path).await;
+            }
+        }
+    }
+
+    let err_msg = format!(
+        "Failed to download mmproj '{}' after 3 attempts: {}",
+        mmproj_filename, last_error
+    );
+    if let Some(ref dm) = dm_arc {
+        dm.mark_external_failed(app, &dm_id, &err_msg).await;
+    }
+    Err(err_msg)
 }
 
 /// List all downloaded LLM models (GGUF files) in the models directory.
@@ -1154,6 +1385,10 @@ async fn try_download_part(
     app: &AppHandle,
     cancel: &Arc<AtomicBool>,
     hf_token: Option<&str>,
+    // When Some, also feed live progress to the universal Download Manager under
+    // this id (the same id register_external used) so the Downloads UI tracks
+    // the transfer instead of sitting at 0% for a multi-GB LLM/mmproj download.
+    dm_id: Option<&str>,
 ) -> Result<(), String> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
@@ -1190,6 +1425,14 @@ async fn try_download_part(
 
     // 60-second idle timeout: if no chunk arrives in this window, treat as stall
     let idle_timeout = std::time::Duration::from_secs(60);
+
+    // dm-progress throttle — mirror the Download Manager's own cadence
+    // (256 KB or 1s) so multi-GB transfers don't flood the IPC bus. The
+    // legacy `llm-download-progress` emission below stays per-chunk (the
+    // Model Repo Analyzer inline progress relies on it).
+    let dm_throttle_bytes: u64 = 256 * 1024;
+    let mut dm_last_bytes: u64 = 0;
+    let mut dm_last_emit = std::time::Instant::now();
 
     loop {
         if cancel.load(Ordering::SeqCst) {
@@ -1250,6 +1493,40 @@ async fn try_download_part(
                         "status": "downloading",
                     }),
                 );
+
+                // Universal Download Manager feed (throttled). Payload shape
+                // mirrors the Whisper path exactly so DownloadManagerContext
+                // merges it into the entry register_external created.
+                if let Some(id) = dm_id {
+                    let now = std::time::Instant::now();
+                    if overall_downloaded.saturating_sub(dm_last_bytes) >= dm_throttle_bytes
+                        || now.duration_since(dm_last_emit).as_secs() >= 1
+                    {
+                        dm_last_bytes = overall_downloaded;
+                        dm_last_emit = now;
+                        let dm_total = if grand_total > 0 { grand_total } else { part_total };
+                        let _ = app.emit(
+                            "dm-progress",
+                            serde_json::json!({
+                                // display_name intentionally omitted — the entry
+                                // registered via register_external already holds the
+                                // catalog name; mergeEntry preserves it when omitted.
+                                "id": id,
+                                "category": "llm",
+                                "filename": filename,
+                                "status": "active",
+                                "bytes_done": overall_downloaded,
+                                "total_bytes": dm_total,
+                                "percent": overall_percent,
+                                "part_current": part,
+                                "part_total": total_parts,
+                                "speed_bps": 0.0,
+                                "eta_seconds": null,
+                                "error_msg": null,
+                            }),
+                        );
+                    }
+                }
             }
         }
     }

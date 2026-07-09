@@ -87,12 +87,7 @@ const ALL_LEVELS: LogLevel[] = [
   "cmd",
 ];
 // Only these levels are eligible for grouping; warn/error always show individually
-const GROUPABLE_LEVELS = new Set<LogLevel>([
-  "info",
-  "success",
-  "data",
-  "cmd",
-]);
+const GROUPABLE_LEVELS = new Set<LogLevel>(["info", "success", "data", "cmd"]);
 
 const SERVER_SOURCES = new Set(["server", "tauri", "syslog", "llm"]);
 const CLIENT_SOURCES = new Set([

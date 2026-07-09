@@ -92,7 +92,11 @@ function SingleTab({ engineStatus }: { engineStatus: EngineStatus }) {
         <div className="flex items-center gap-3 flex-wrap">
           <MethodSelector value={method} onChange={setMethod} />
           <div className="flex items-center gap-2 ml-auto">
-            <Switch id="single-cache" checked={useCache} onCheckedChange={setUseCache} />
+            <Switch
+              id="single-cache"
+              checked={useCache}
+              onCheckedChange={setUseCache}
+            />
             <Label htmlFor="single-cache" className="text-xs cursor-pointer">
               Cache
             </Label>
@@ -150,7 +154,9 @@ function HistoryDrawer({
   return (
     <div className="absolute inset-y-0 right-0 z-20 flex w-80 flex-col border-l bg-background shadow-xl">
       <div className="flex items-center justify-between border-b px-4 py-3">
-        <span className="text-sm font-semibold">History ({history.length})</span>
+        <span className="text-sm font-semibold">
+          History ({history.length})
+        </span>
         <div className="flex items-center gap-1">
           {history.length > 0 && (
             <Button
@@ -163,7 +169,12 @@ function HistoryDrawer({
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
           )}
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={onClose}
+          >
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -192,23 +203,36 @@ function HistoryDrawer({
                       h.success ? "bg-emerald-500" : "bg-red-400",
                     )}
                   />
-                  <span className="flex-1 truncate font-mono text-xs" title={h.url}>
+                  <span
+                    className="flex-1 truncate font-mono text-xs"
+                    title={h.url}
+                  >
                     {h.url.replace(/^https?:\/\//, "").replace(/\/$/, "")}
                   </span>
                   {h.status_code && h.status_code > 0 && (
-                    <Badge variant="secondary" className="text-[10px] font-mono shrink-0">
+                    <Badge
+                      variant="secondary"
+                      className="text-[10px] font-mono shrink-0"
+                    >
                       {h.status_code}
                     </Badge>
                   )}
                 </div>
                 {h.title && (
-                  <p className="truncate pl-4 text-[10px] text-muted-foreground">{h.title}</p>
+                  <p className="truncate pl-4 text-[10px] text-muted-foreground">
+                    {h.title}
+                  </p>
                 )}
                 <div className="flex items-center gap-2 pl-4 text-[10px] text-muted-foreground/60">
                   <span>{new Date(h.savedAt).toLocaleDateString()}</span>
                   {h.method && <span>· {h.method}</span>}
                   {h.elapsed_ms > 0 && (
-                    <span>· {h.elapsed_ms < 1000 ? `${h.elapsed_ms}ms` : `${(h.elapsed_ms / 1000).toFixed(1)}s`}</span>
+                    <span>
+                      ·{" "}
+                      {h.elapsed_ms < 1000
+                        ? `${h.elapsed_ms}ms`
+                        : `${(h.elapsed_ms / 1000).toFixed(1)}s`}
+                    </span>
                   )}
                 </div>
               </button>
@@ -235,7 +259,8 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
     pendingCount,
     doneCount,
     progress,
-    addUrls, restoreEntry,
+    addUrls,
+    restoreEntry,
     removeEntry,
     clearAll,
     stop,
@@ -273,17 +298,16 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
   );
 
   // Auto-select first completed entry
-  const handleSelect = useCallback(
-    (url: string) => {
-      setSelectedUrl((prev) => (prev === url ? null : url));
-    },
-    [],
-  );
+  const handleSelect = useCallback((url: string) => {
+    setSelectedUrl((prev) => (prev === url ? null : url));
+  }, []);
 
   // When a new entry becomes success/error, auto-select if nothing selected
   useEffect(() => {
     if (!selectedUrl) {
-      const done = entries.find((e) => e.status === "success" || e.status === "error");
+      const done = entries.find(
+        (e) => e.status === "success" || e.status === "error",
+      );
       if (done) setSelectedUrl(done.url);
     }
   }, [entries, selectedUrl]);
@@ -305,7 +329,9 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
         {/* URL input */}
         <div className="shrink-0 space-y-2 p-3">
           <textarea
-            placeholder={"Paste URLs — one per line or comma-separated\n\nexample.com\nhttps://site.org"}
+            placeholder={
+              "Paste URLs — one per line or comma-separated\n\nexample.com\nhttps://site.org"
+            }
             value={urlDraft}
             onChange={(e) => setUrlDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -327,16 +353,29 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
               <Plus className="h-3.5 w-3.5" />
               Add{newUrlCount > 0 ? ` ${newUrlCount}` : ""}
             </Button>
-            <MethodSelector value={method} onChange={setMethod} className="ml-auto" />
+            <MethodSelector
+              value={method}
+              onChange={setMethod}
+              className="ml-auto"
+            />
           </div>
           <div className="flex items-center gap-2">
-            <Switch id="bulk-cache" checked={useCache} onCheckedChange={setUseCache} />
+            <Switch
+              id="bulk-cache"
+              checked={useCache}
+              onCheckedChange={setUseCache}
+            />
             <Label htmlFor="bulk-cache" className="text-xs cursor-pointer">
               Cache
             </Label>
             <div className="ml-auto flex items-center gap-1.5">
               {running ? (
-                <Button size="sm" variant="destructive" className="gap-1.5 text-xs h-7" onClick={stop}>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="gap-1.5 text-xs h-7"
+                  onClick={stop}
+                >
                   <StopCircle className="h-3.5 w-3.5" />
                   Stop
                 </Button>
@@ -354,9 +393,7 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
             </div>
           </div>
 
-          {running && (
-            <Progress value={progress} className="h-1" />
-          )}
+          {running && <Progress value={progress} className="h-1" />}
         </div>
 
         <Separator />
@@ -387,7 +424,9 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
             </button>
             {entries.length > 0 && (
               <>
-                <span className="text-muted-foreground/30 text-[10px] mx-0.5">|</span>
+                <span className="text-muted-foreground/30 text-[10px] mx-0.5">
+                  |
+                </span>
                 <button
                   onClick={handleClearAll}
                   className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-destructive transition-colors"
@@ -427,7 +466,9 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
             </div>
             <div className="text-center">
               <p className="text-sm font-medium">
-                {entries.length === 0 ? "Add URLs to get started" : "Select a URL to view result"}
+                {entries.length === 0
+                  ? "Add URLs to get started"
+                  : "Select a URL to view result"}
               </p>
               <p className="mt-1 text-xs opacity-60">
                 {entries.length === 0
@@ -460,18 +501,22 @@ function SiteTab() {
       <div className="text-center max-w-sm">
         <p className="text-base font-semibold text-foreground">Coming Soon</p>
         <p className="mt-2 text-sm opacity-70 leading-relaxed">
-          Site Scrape will crawl and scrape an entire website — following internal
-          links, respecting robots.txt, and extracting structured content from
-          every page.
+          Site Scrape will crawl and scrape an entire website — following
+          internal links, respecting robots.txt, and extracting structured
+          content from every page.
         </p>
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-          {["Full site crawl", "Sitemap discovery", "Link graph", "Depth control", "Rate limiting"].map(
-            (f) => (
-              <Badge key={f} variant="outline" className="text-xs opacity-60">
-                {f}
-              </Badge>
-            ),
-          )}
+          {[
+            "Full site crawl",
+            "Sitemap discovery",
+            "Link graph",
+            "Depth control",
+            "Rate limiting",
+          ].map((f) => (
+            <Badge key={f} variant="outline" className="text-xs opacity-60">
+              {f}
+            </Badge>
+          ))}
         </div>
       </div>
     </div>
@@ -489,42 +534,57 @@ export function Scraping({ engineStatus }: ScrapingProps) {
       />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-0">
-        <Tabs defaultValue="single" className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <div className="shrink-0 border-b px-4">
-            <TabsList className="h-9 rounded-none bg-transparent p-0 gap-0">
+        <Tabs
+          defaultValue="single"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+        >
+          <div className="shrink-0 min-w-0 overflow-x-auto border-b px-4">
+            <TabsList className="h-9 w-max justify-start rounded-none bg-transparent p-0 gap-0">
               <TabsTrigger
                 value="single"
-                className="rounded-none border-b-2 border-transparent px-4 py-2 text-sm font-medium data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                className="shrink-0 rounded-none border-b-2 border-transparent px-4 py-2 text-sm font-medium data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
               >
                 Single
               </TabsTrigger>
               <TabsTrigger
                 value="bulk"
-                className="rounded-none border-b-2 border-transparent px-4 py-2 text-sm font-medium data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                className="shrink-0 rounded-none border-b-2 border-transparent px-4 py-2 text-sm font-medium data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
               >
                 Bulk Scrape
               </TabsTrigger>
               <TabsTrigger
                 value="site"
-                className="rounded-none border-b-2 border-transparent px-4 py-2 text-sm font-medium data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                className="shrink-0 rounded-none border-b-2 border-transparent px-4 py-2 text-sm font-medium data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
               >
                 Site Scrape
-                <Badge variant="secondary" className="ml-1.5 text-[10px] py-0 px-1">
+                <Badge
+                  variant="secondary"
+                  className="ml-1.5 text-[10px] py-0 px-1"
+                >
                   Soon
                 </Badge>
               </TabsTrigger>
             </TabsList>
           </div>
 
-          <TabsContent value="single" className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+          <TabsContent
+            value="single"
+            className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden"
+          >
             <SingleTab engineStatus={engineStatus} />
           </TabsContent>
 
-          <TabsContent value="bulk" className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+          <TabsContent
+            value="bulk"
+            className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden"
+          >
             <BulkTab engineStatus={engineStatus} />
           </TabsContent>
 
-          <TabsContent value="site" className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+          <TabsContent
+            value="site"
+            className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden"
+          >
             <SiteTab />
           </TabsContent>
         </Tabs>

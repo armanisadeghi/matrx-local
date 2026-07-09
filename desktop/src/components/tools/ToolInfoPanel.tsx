@@ -23,16 +23,16 @@ interface ToolInfoPanelProps {
 type Tab = "params" | "schema" | "examples";
 
 const FIELD_TYPE_COLORS: Record<string, string> = {
-  text:      "bg-sky-500/15 text-sky-400 border-sky-500/30",
-  textarea:  "bg-indigo-500/15 text-indigo-400 border-indigo-500/30",
-  code:      "bg-violet-500/15 text-violet-400 border-violet-500/30",
-  number:    "bg-amber-500/15 text-amber-400 border-amber-500/30",
-  boolean:   "bg-teal-500/15 text-teal-400 border-teal-500/30",
-  select:    "bg-orange-500/15 text-orange-400 border-orange-500/30",
+  text: "bg-sky-500/15 text-sky-400 border-sky-500/30",
+  textarea: "bg-indigo-500/15 text-indigo-400 border-indigo-500/30",
+  code: "bg-violet-500/15 text-violet-400 border-violet-500/30",
+  number: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  boolean: "bg-teal-500/15 text-teal-400 border-teal-500/30",
+  select: "bg-orange-500/15 text-orange-400 border-orange-500/30",
   "file-path": "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-  tags:      "bg-rose-500/15 text-rose-400 border-rose-500/30",
+  tags: "bg-rose-500/15 text-rose-400 border-rose-500/30",
   "key-value": "bg-purple-500/15 text-purple-400 border-purple-500/30",
-  json:      "bg-slate-500/15 text-slate-400 border-slate-500/30",
+  json: "bg-slate-500/15 text-slate-400 border-slate-500/30",
 };
 
 function CopyButton({ text }: { text: string }) {
@@ -64,7 +64,12 @@ function ParamRow({ field }: { field: ToolFieldSchema }) {
         <code className="text-xs font-mono font-semibold text-foreground bg-muted/60 px-1.5 py-0.5 rounded">
           {field.name}
         </code>
-        <span className={cn("text-[10px] font-medium px-1.5 py-0.5 rounded border", typeStyle)}>
+        <span
+          className={cn(
+            "text-[10px] font-medium px-1.5 py-0.5 rounded border",
+            typeStyle,
+          )}
+        >
           {field.type}
         </span>
         {field.required ? (
@@ -84,15 +89,21 @@ function ParamRow({ field }: { field: ToolFieldSchema }) {
       </div>
 
       {field.description && (
-        <p className="text-xs text-muted-foreground leading-relaxed">{field.description}</p>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          {field.description}
+        </p>
       )}
 
       {(field.min !== undefined || field.max !== undefined) && (
         <p className="text-[10px] text-muted-foreground">
           Range:{" "}
-          {field.min !== undefined && <span className="font-mono">{field.min}</span>}
+          {field.min !== undefined && (
+            <span className="font-mono">{field.min}</span>
+          )}
           {field.min !== undefined && field.max !== undefined && " – "}
-          {field.max !== undefined && <span className="font-mono">{field.max}</span>}
+          {field.max !== undefined && (
+            <span className="font-mono">{field.max}</span>
+          )}
         </p>
       )}
 
@@ -129,13 +140,20 @@ function SchemaTab({ schema }: { schema: ToolUISchema }) {
         schema.fields.map((f) => [
           f.name,
           {
-            type: f.type === "number" ? "integer" : f.type === "boolean" ? "boolean" : "string",
+            type:
+              f.type === "number"
+                ? "integer"
+                : f.type === "boolean"
+                  ? "boolean"
+                  : "string",
             description: f.description,
-            ...(f.defaultValue !== undefined ? { default: f.defaultValue } : {}),
+            ...(f.defaultValue !== undefined
+              ? { default: f.defaultValue }
+              : {}),
             ...(f.min !== undefined ? { minimum: f.min } : {}),
             ...(f.max !== undefined ? { maximum: f.max } : {}),
           },
-        ])
+        ]),
       ),
       required: schema.fields.filter((f) => f.required).map((f) => f.name),
     },
@@ -162,7 +180,8 @@ function ExamplesTab({ schema }: { schema: ToolUISchema }) {
     const exampleValues: Record<string, unknown> = {};
     for (const field of schema.fields) {
       if (field.required) {
-        if (field.type === "number") exampleValues[field.name] = field.defaultValue ?? 0;
+        if (field.type === "number")
+          exampleValues[field.name] = field.defaultValue ?? 0;
         else if (field.type === "boolean") exampleValues[field.name] = false;
         else if (field.type === "tags") exampleValues[field.name] = [];
         else exampleValues[field.name] = field.placeholder ?? `<${field.name}>`;
@@ -196,7 +215,9 @@ function ExamplesTab({ schema }: { schema: ToolUISchema }) {
           const text = JSON.stringify(ex.values, null, 2);
           return (
             <div key={i} className="space-y-1.5">
-              <p className="text-[11px] font-medium text-foreground">{ex.label}</p>
+              <p className="text-[11px] font-medium text-foreground">
+                {ex.label}
+              </p>
               <div className="relative rounded-lg border bg-muted/20">
                 <div className="absolute top-2 right-2">
                   <CopyButton text={text} />
@@ -218,9 +239,21 @@ export function ToolInfoPanel({ schema }: ToolInfoPanelProps) {
   const [tab, setTab] = useState<Tab>("params");
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: "params",   label: "Parameters",   icon: <List className="h-3.5 w-3.5" /> },
-    { id: "schema",   label: "JSON Schema",  icon: <Code2 className="h-3.5 w-3.5" /> },
-    { id: "examples", label: "Examples",     icon: <Zap className="h-3.5 w-3.5" /> },
+    {
+      id: "params",
+      label: "Parameters",
+      icon: <List className="h-3.5 w-3.5" />,
+    },
+    {
+      id: "schema",
+      label: "JSON Schema",
+      icon: <Code2 className="h-3.5 w-3.5" />,
+    },
+    {
+      id: "examples",
+      label: "Examples",
+      icon: <Zap className="h-3.5 w-3.5" />,
+    },
   ];
 
   return (
@@ -237,8 +270,12 @@ export function ToolInfoPanel({ schema }: ToolInfoPanelProps) {
             Tool Reference
           </span>
           {schema.fields.length > 0 && (
-            <Badge variant="secondary" className="text-[10px] h-4 px-1.5 tabular-nums">
-              {schema.fields.length} param{schema.fields.length !== 1 ? "s" : ""}
+            <Badge
+              variant="secondary"
+              className="text-[10px] h-4 px-1.5 tabular-nums"
+            >
+              {schema.fields.length} param
+              {schema.fields.length !== 1 ? "s" : ""}
             </Badge>
           )}
         </div>
@@ -252,17 +289,17 @@ export function ToolInfoPanel({ schema }: ToolInfoPanelProps) {
       {open && (
         <div className="border-t">
           {/* Tab bar */}
-          <div className="flex border-b bg-muted/10 px-2 pt-1">
+          <div className="flex min-w-0 overflow-x-auto border-b bg-muted/10 px-2 pt-1">
             {tabs.map((t) => (
               <button
                 key={t.id}
                 type="button"
                 onClick={() => setTab(t.id)}
                 className={cn(
-                  "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border-b-2 transition-all -mb-px",
+                  "flex shrink-0 items-center gap-1.5 px-3 py-1.5 text-xs font-medium border-b-2 transition-all -mb-px",
                   tab === t.id
                     ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
                 )}
               >
                 {t.icon}

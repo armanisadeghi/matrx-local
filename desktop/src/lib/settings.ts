@@ -288,7 +288,14 @@ async function syncSetting<K extends keyof AppSettings>(
       case "tunnelEnabled":
         if (engine.engineUrl) {
           if (all.tunnelEnabled) {
-            await engine.post("/tunnel/start", {});
+            // Tunnel start can take up to ~63s server-side (two 30s
+            // cloudflared URL-wait attempts + a 3s backoff), which exceeds
+            // the generic 60s request timeout — give it explicit headroom.
+            await engine.post(
+              "/tunnel/start",
+              {},
+              { signal: AbortSignal.timeout(90_000) },
+            );
           } else {
             await engine.post("/tunnel/stop", {});
           }

@@ -157,6 +157,31 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
     };
   }, []);
 
+  // Mirror the LLM download-cancelled handler (use-llm.ts): when Rust emits
+  // `whisper-download-cancelled` (transcription/commands.rs), immediately clear
+  // the downloading flags so the UI drops the in-flight spinner/progress
+  // without waiting for the download loop's own finally-block to unwind.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let mounted = true;
+    let unlisten: UnlistenFn | undefined;
+    tauriListen<{ reason?: string }>("whisper-download-cancelled", () => {
+      if (!mounted) return;
+      setIsDownloading(false);
+      isDownloadingRef.current = false;
+      setDownloadProgress(null);
+      setDownloadingFilename(null);
+      downloadingFilenameRef.current = null;
+    }).then((fn) => {
+      if (mounted) unlisten = fn;
+      else fn();
+    });
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
+
   // Load initial setup status
   useEffect(() => {
     if (!isTauri()) return;

@@ -16,8 +16,14 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  CheckCircle2, Circle, Loader2, AlertCircle,
-  ChevronDown, ChevronUp, Copy, Check,
+  CheckCircle2,
+  Circle,
+  Loader2,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Check,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -51,7 +57,8 @@ const INITIAL_STEPS: InstallStep[] = [
   {
     id: "storage_dirs",
     label: "Storage directories",
-    description: "Creating local folders for your notes, files, code, and workspaces",
+    description:
+      "Creating local folders for your notes, files, code, and workspaces",
     status: "pending",
     percent: 0,
   },
@@ -65,7 +72,8 @@ const INITIAL_STEPS: InstallStep[] = [
   {
     id: "browser_engine",
     label: "Browser engine",
-    description: "Installing Playwright Chromium for web automation and scraping",
+    description:
+      "Installing Playwright Chromium for web automation and scraping",
     sizeHint: "~280 MB",
     status: "pending",
     percent: 0,
@@ -89,11 +97,11 @@ const INITIAL_STEPS: InstallStep[] = [
 
 // Weight each step for the grand progress bar (must sum to 100)
 const STEP_WEIGHTS: Record<string, number> = {
-  storage_dirs:   2,
-  core_packages:  3,
+  storage_dirs: 2,
+  core_packages: 3,
   browser_engine: 60,
-  transcription:  30,
-  permissions:    5,
+  transcription: 30,
+  permissions: 5,
 };
 
 function computeTotalPercent(steps: InstallStep[]): number {
@@ -111,7 +119,9 @@ function computeTotalPercent(steps: InstallStep[]): number {
 
 export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
   const [steps, setSteps] = useState<InstallStep[]>(INITIAL_STEPS);
-  const [phase, setPhase] = useState<"idle" | "installing" | "complete" | "error">("idle");
+  const [phase, setPhase] = useState<
+    "idle" | "installing" | "complete" | "error"
+  >("idle");
   const [serverTotalPercent, setServerTotalPercent] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [rawLogs, setRawLogs] = useState<string[]>([]);
@@ -126,7 +136,7 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
     return () => {
       abortRef.current?.abort();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Auto-scroll logs
@@ -153,7 +163,9 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
       // We use fetch + ReadableStream rather than EventSource so we can POST
       // and pass auth headers. The existing SetupWizard uses EventSource with
       // GET semantics — here we do a POST with proper auth.
-      const { data: { session } } = await supabase.auth.getSession();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       const token = session?.access_token ?? null;
       const requestHeaders: Record<string, string> = {
         Accept: "text/event-stream",
@@ -202,14 +214,21 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
             const { component, status, message, percent } = payload;
             if (component && component !== "_system") {
               updateStep(component, {
-                status: status === "ready" ? "ready" : status === "error" ? "error" : "installing",
+                status:
+                  status === "ready"
+                    ? "ready"
+                    : status === "error"
+                      ? "error"
+                      : "installing",
                 percent: percent ?? 0,
                 message: message,
               });
             }
             // If component is storage_dirs finishing quickly, push server total
             if (status === "error") {
-              setErrorMessage((prev) => prev ?? message ?? "An installation step failed");
+              setErrorMessage(
+                (prev) => prev ?? message ?? "An installation step failed",
+              );
             }
           }
 
@@ -218,7 +237,9 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
             const allStepsReady = () =>
               setSteps((prev) => {
                 return prev.map((s) =>
-                  s.status === "installing" ? { ...s, status: "ready", percent: 100 } : s
+                  s.status === "installing"
+                    ? { ...s, status: "ready", percent: 100 }
+                    : s,
                 );
               });
             allStepsReady();
@@ -226,7 +247,10 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
 
             if (payload.had_errors) {
               setPhase("error");
-              setErrorMessage(payload.errors?.join("; ") ?? "Some components failed to install");
+              setErrorMessage(
+                payload.errors?.join("; ") ??
+                  "Some components failed to install",
+              );
             } else {
               setPhase("complete");
               // Auto-transition after a short celebration pause
@@ -277,7 +301,8 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
 
   // Use server-driven total if available, else compute from steps
   const computedTotal = computeTotalPercent(steps);
-  const displayTotal = serverTotalPercent > 0 ? serverTotalPercent : computedTotal;
+  const displayTotal =
+    serverTotalPercent > 0 ? serverTotalPercent : computedTotal;
 
   return (
     <div className="flex h-screen w-screen flex-col items-center justify-center bg-background px-6 overflow-y-auto">
@@ -302,8 +327,8 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
               {phase === "complete"
                 ? "All done!"
                 : phase === "error"
-                ? "Finished with errors"
-                : "Installing..."}
+                  ? "Finished with errors"
+                  : "Installing..."}
             </span>
             <span className="tabular-nums">{displayTotal}%</span>
           </div>
@@ -311,9 +336,11 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
             value={displayTotal}
             className={cn(
               "h-2",
-              phase === "complete" ? "[&>div]:bg-emerald-500" :
-              phase === "error" ? "[&>div]:bg-red-500" :
-              "[&>div]:bg-primary"
+              phase === "complete"
+                ? "[&>div]:bg-emerald-500"
+                : phase === "error"
+                  ? "[&>div]:bg-red-500"
+                  : "[&>div]:bg-primary",
             )}
           />
         </div>
@@ -331,8 +358,12 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
             <div className="flex items-start gap-2">
               <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-700 dark:text-red-400" />
               <div>
-                <p className="text-sm font-medium text-red-700 dark:text-red-400">Some steps failed</p>
-                <p className="mt-0.5 text-xs text-red-700/80 dark:text-red-400/80">{errorMessage}</p>
+                <p className="text-sm font-medium text-red-700 dark:text-red-400">
+                  Some steps failed
+                </p>
+                <p className="mt-0.5 text-xs text-red-700/80 dark:text-red-400/80">
+                  {errorMessage}
+                </p>
               </div>
             </div>
             <div className="mt-3 flex gap-2">
@@ -360,7 +391,9 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
         {phase === "complete" && (
           <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 dark:border-emerald-800/40 dark:bg-emerald-950/20 px-4 py-3 text-center">
             <CheckCircle2 className="mx-auto mb-1 h-6 w-6 text-emerald-500" />
-            <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">All done! Launching Matrx Local...</p>
+            <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">
+              All done! Launching Matrx Local...
+            </p>
           </div>
         )}
 
@@ -377,7 +410,11 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
                   {rawLogs.length}
                 </span>
               )}
-              {logsOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+              {logsOpen ? (
+                <ChevronUp className="h-3 w-3" />
+              ) : (
+                <ChevronDown className="h-3 w-3" />
+              )}
             </div>
           </button>
           {logsOpen && (
@@ -388,7 +425,11 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
                   disabled={rawLogs.length === 0}
                   className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-zinc-500 hover:text-zinc-200 transition-colors disabled:opacity-40"
                 >
-                  {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                  {copied ? (
+                    <Check className="h-3 w-3 text-emerald-400" />
+                  ) : (
+                    <Copy className="h-3 w-3" />
+                  )}
                   {copied ? "Copied!" : "Copy"}
                 </button>
               </div>
@@ -404,11 +445,12 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
                       key={i}
                       className={cn(
                         "break-all whitespace-pre-wrap",
-                        line.includes('"status":"error"') || line.includes("FAILED")
+                        line.includes('"status":"error"') ||
+                          line.includes("FAILED")
                           ? "text-red-400"
                           : line.includes('"status":"ready"')
-                          ? "text-emerald-400"
-                          : "text-zinc-500"
+                            ? "text-emerald-400"
+                            : "text-zinc-500",
                       )}
                     >
                       {line}
@@ -434,52 +476,79 @@ function StepCard({ step }: { step: InstallStep }) {
   const isError = step.status === "error";
 
   return (
-    <div className={cn(
-      "rounded-lg border px-4 py-3 transition-colors",
-      isActive ? "border-primary/30 bg-primary/5" :
-      isDone   ? "border-emerald-300/60 bg-emerald-50 dark:border-emerald-800/30 dark:bg-emerald-950/10" :
-      isError  ? "border-red-300/60 bg-red-50 dark:border-red-800/30 dark:bg-red-950/10" :
-      "border-border bg-muted/20"
-    )}>
+    <div
+      className={cn(
+        "rounded-lg border px-4 py-3 transition-colors",
+        isActive
+          ? "border-primary/30 bg-primary/5"
+          : isDone
+            ? "border-emerald-300/60 bg-emerald-50 dark:border-emerald-800/30 dark:bg-emerald-950/10"
+            : isError
+              ? "border-red-300/60 bg-red-50 dark:border-red-800/30 dark:bg-red-950/10"
+              : "border-border bg-muted/20",
+      )}
+    >
       <div className="flex items-start gap-3">
         {/* Status icon */}
         <div className="mt-0.5 flex-shrink-0">
-          {isDone  && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
-          {isActive && <Loader2 className="h-4 w-4 text-primary animate-spin" />}
-          {isError && <AlertCircle className="h-4 w-4 text-red-700 dark:text-red-400" />}
-          {step.status === "pending" && <Circle className="h-4 w-4 text-muted-foreground" />}
+          {isDone && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
+          {isActive && (
+            <Loader2 className="h-4 w-4 text-primary animate-spin" />
+          )}
+          {isError && (
+            <AlertCircle className="h-4 w-4 text-red-700 dark:text-red-400" />
+          )}
+          {step.status === "pending" && (
+            <Circle className="h-4 w-4 text-muted-foreground" />
+          )}
         </div>
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <span className={cn(
-              "text-sm font-medium",
-              isDone   ? "text-foreground" :
-              isActive ? "text-foreground" :
-              isError  ? "text-red-700 dark:text-red-400" :
-              "text-muted-foreground"
-            )}>
+            <span
+              className={cn(
+                "text-sm font-medium",
+                isDone
+                  ? "text-foreground"
+                  : isActive
+                    ? "text-foreground"
+                    : isError
+                      ? "text-red-700 dark:text-red-400"
+                      : "text-muted-foreground",
+              )}
+            >
               {step.label}
             </span>
             {step.sizeHint && step.status !== "ready" && (
-              <span className="text-[11px] text-muted-foreground flex-shrink-0">{step.sizeHint}</span>
+              <span className="text-[11px] text-muted-foreground flex-shrink-0">
+                {step.sizeHint}
+              </span>
             )}
             {isDone && (
-              <span className="text-[11px] text-emerald-500 flex-shrink-0">Done</span>
+              <span className="text-[11px] text-emerald-500 flex-shrink-0">
+                Done
+              </span>
             )}
           </div>
 
-          <p className={cn(
-            "mt-0.5 text-[11px]",
-            isError ? "text-red-700/80 dark:text-red-400/80" : "text-muted-foreground/70"
-          )}>
+          <p
+            className={cn(
+              "mt-0.5 text-[11px]",
+              isError
+                ? "text-red-700/80 dark:text-red-400/80"
+                : "text-muted-foreground/70",
+            )}
+          >
             {step.message ?? step.description}
           </p>
 
           {/* Sub-progress bar */}
           {isActive && (
             <div className="mt-2">
-              <Progress value={step.percent} className="h-1 [&>div]:bg-primary" />
+              <Progress
+                value={step.percent}
+                className="h-1 [&>div]:bg-primary"
+              />
               <p className="mt-0.5 text-[10px] text-muted-foreground tabular-nums text-right">
                 {step.percent}%
               </p>

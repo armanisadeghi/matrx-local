@@ -15,7 +15,15 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { isTauri, getSidecarLogs } from "@/lib/sidecar";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { CheckCircle2, XCircle, Circle, Loader2, Copy, Check, AlertTriangle } from "lucide-react";
+import {
+  CheckCircle2,
+  XCircle,
+  Circle,
+  Loader2,
+  Copy,
+  Check,
+  AlertTriangle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { EngineStatus } from "@/hooks/use-engine";
 
@@ -38,28 +46,93 @@ const AUTH_PHASE: PhaseStep = {
 };
 
 const ENGINE_PHASES: PhaseStep[] = [
-  { id: "starting",  label: "Starting engine",         detail: "Initializing binary...",       status: "pending" },
-  { id: "port",      label: "Selecting port",          detail: "Finding available port...",    status: "pending" },
-  { id: "server",    label: "Starting server",         detail: "Launching FastAPI server...",  status: "pending" },
-  { id: "database",  label: "Opening local database",  detail: "Connecting to SQLite...",      status: "pending" },
-  { id: "browsers",  label: "Checking browser engine", detail: "Verifying Playwright...",      status: "pending" },
-  { id: "ai",        label: "Initializing AI engine",  detail: "Loading AI configuration...", status: "pending" },
-  { id: "tools",     label: "Loading tool registry",   detail: "Registering tools...",         status: "pending" },
-  { id: "scraper",   label: "Starting scraper",        detail: "Launching browser engine...", status: "pending" },
-  { id: "proxy",     label: "Starting HTTP proxy",     detail: "Binding local proxy...",       status: "pending" },
-  { id: "tunnel",    label: "Setting up tunnel",       detail: "Connecting Cloudflare...",     status: "pending" },
-  { id: "ready",     label: "Engine ready",            detail: "Connecting...",                status: "pending" },
+  {
+    id: "starting",
+    label: "Starting engine",
+    detail: "Initializing binary...",
+    status: "pending",
+  },
+  {
+    id: "port",
+    label: "Selecting port",
+    detail: "Finding available port...",
+    status: "pending",
+  },
+  {
+    id: "server",
+    label: "Starting server",
+    detail: "Launching FastAPI server...",
+    status: "pending",
+  },
+  {
+    id: "database",
+    label: "Opening local database",
+    detail: "Connecting to SQLite...",
+    status: "pending",
+  },
+  {
+    id: "browsers",
+    label: "Checking browser engine",
+    detail: "Verifying Playwright...",
+    status: "pending",
+  },
+  {
+    id: "ai",
+    label: "Initializing AI engine",
+    detail: "Loading AI configuration...",
+    status: "pending",
+  },
+  {
+    id: "tools",
+    label: "Loading tool registry",
+    detail: "Registering tools...",
+    status: "pending",
+  },
+  {
+    id: "scraper",
+    label: "Starting scraper",
+    detail: "Launching browser engine...",
+    status: "pending",
+  },
+  {
+    id: "proxy",
+    label: "Starting HTTP proxy",
+    detail: "Binding local proxy...",
+    status: "pending",
+  },
+  {
+    id: "tunnel",
+    label: "Setting up tunnel",
+    detail: "Connecting Cloudflare...",
+    status: "pending",
+  },
+  {
+    id: "ready",
+    label: "Engine ready",
+    detail: "Connecting...",
+    status: "pending",
+  },
 ];
 
 const PHASE_MAP: Record<string, string> = {
-  starting: "starting", port: "port", server: "server", database: "database",
-  browsers: "browsers", ai: "ai", tools: "tools", scraper: "scraper",
-  proxy: "proxy", tunnel: "tunnel", ready: "ready",
+  starting: "starting",
+  port: "port",
+  server: "server",
+  database: "database",
+  browsers: "browsers",
+  ai: "ai",
+  tools: "tools",
+  scraper: "scraper",
+  proxy: "proxy",
+  tunnel: "tunnel",
+  ready: "ready",
 };
 
 // ANSI escape stripper so log lines display cleanly
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
-function stripAnsi(s: string): string { return s.replace(ANSI_RE, ""); }
+function stripAnsi(s: string): string {
+  return s.replace(ANSI_RE, "");
+}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -76,9 +149,26 @@ interface StartupScreenProps {
 
 function classifyLog(raw: string): "error" | "warn" | "success" | "info" {
   const t = stripAnsi(raw).toLowerCase();
-  if (t.includes("error") || t.includes("failed") || t.includes("traceback") || t.includes("exception") || t.includes("terminated") || t.includes("sigkill") || t.includes("signal: some(9)")) return "error";
+  if (
+    t.includes("error") ||
+    t.includes("failed") ||
+    t.includes("traceback") ||
+    t.includes("exception") ||
+    t.includes("terminated") ||
+    t.includes("sigkill") ||
+    t.includes("signal: some(9)")
+  )
+    return "error";
   if (t.includes("warning") || t.includes("warn")) return "warn";
-  if (t.includes("ready") || t.includes("✓") || t.includes("started") || t.includes("loaded") || t.includes("initialized") || t.includes("complete")) return "success";
+  if (
+    t.includes("ready") ||
+    t.includes("✓") ||
+    t.includes("started") ||
+    t.includes("loaded") ||
+    t.includes("initialized") ||
+    t.includes("complete")
+  )
+    return "success";
   return "info";
 }
 
@@ -94,20 +184,26 @@ function applyLogToSteps(steps: PhaseStep[], line: string): PhaseStep[] {
 
   const detail = clean.replace(/^\[[^\]]+\]\s*/, "").trim() || undefined;
   const isError = classifyLog(clean) === "error";
-  const isDone = !isError && (
-    clean.toLowerCase().includes("ready") ||
-    clean.toLowerCase().includes("complete") ||
-    clean.toLowerCase().includes("started") ||
-    clean.toLowerCase().includes("loaded") ||
-    clean.toLowerCase().includes("initialized")
-  );
+  const isDone =
+    !isError &&
+    (clean.toLowerCase().includes("ready") ||
+      clean.toLowerCase().includes("complete") ||
+      clean.toLowerCase().includes("started") ||
+      clean.toLowerCase().includes("loaded") ||
+      clean.toLowerCase().includes("initialized"));
 
   return steps.map((s, i) => {
     const idx = steps.findIndex((x) => x.id === stepId);
-    if (i < idx && s.status === "active") return { ...s, status: "done" as const };
+    if (i < idx && s.status === "active")
+      return { ...s, status: "done" as const };
     if (s.id === stepId) {
-      if (isError) return { ...s, status: "error" as const, detail: detail ?? s.detail };
-      return { ...s, status: isDone ? "done" as const : "active" as const, detail: detail ?? s.detail };
+      if (isError)
+        return { ...s, status: "error" as const, detail: detail ?? s.detail };
+      return {
+        ...s,
+        status: isDone ? ("done" as const) : ("active" as const),
+        detail: detail ?? s.detail,
+      };
     }
     return s;
   });
@@ -117,7 +213,10 @@ function applyLogToSteps(steps: PhaseStep[], line: string): PhaseStep[] {
 // Component
 // ---------------------------------------------------------------------------
 
-export function StartupScreen({ authLoading, engineStatus }: StartupScreenProps) {
+export function StartupScreen({
+  authLoading,
+  engineStatus,
+}: StartupScreenProps) {
   const [steps, setSteps] = useState<PhaseStep[]>(() => [
     { ...AUTH_PHASE },
     ...ENGINE_PHASES.map((p) => ({ ...p })),
@@ -131,29 +230,38 @@ export function StartupScreen({ authLoading, engineStatus }: StartupScreenProps)
 
   // ── Auth step ──────────────────────────────────────────────────────────────
   useEffect(() => {
-    setSteps((prev) => prev.map((s) => {
-      if (s.id !== "auth") return s;
-      if (authLoading) return { ...s, status: "active" };
-      return { ...s, status: "done", detail: "Session verified" };
-    }));
+    setSteps((prev) =>
+      prev.map((s) => {
+        if (s.id !== "auth") return s;
+        if (authLoading) return { ...s, status: "active" };
+        return { ...s, status: "done", detail: "Session verified" };
+      }),
+    );
   }, [authLoading]);
 
   // ── Mark "starting" active when engine status changes ──────────────────────
   useEffect(() => {
     if (engineStatus === "starting" || engineStatus === "discovering") {
-      setSteps((prev) => prev.map((s) =>
-        s.id === "starting" && s.status === "pending" ? { ...s, status: "active" } : s
-      ));
+      setSteps((prev) =>
+        prev.map((s) =>
+          s.id === "starting" && s.status === "pending"
+            ? { ...s, status: "active" }
+            : s,
+        ),
+      );
     }
   }, [engineStatus]);
 
   // ── Mark all remaining steps done when engine connects ────────────────────
   useEffect(() => {
     if (engineStatus === "connected") {
-      setSteps((prev) => prev.map((s) => ({
-        ...s,
-        status: s.status === "pending" || s.status === "active" ? "done" : s.status,
-      })));
+      setSteps((prev) =>
+        prev.map((s) => ({
+          ...s,
+          status:
+            s.status === "pending" || s.status === "active" ? "done" : s.status,
+        })),
+      );
     }
   }, [engineStatus]);
 
@@ -199,7 +307,10 @@ export function StartupScreen({ authLoading, engineStatus }: StartupScreenProps)
         const { listen } = await import("@tauri-apps/api/event");
         const unlisten = await listen<string>("sidecar-log", (event) => {
           if (cancelled) return;
-          const line = typeof event.payload === "string" ? event.payload : String(event.payload);
+          const line =
+            typeof event.payload === "string"
+              ? event.payload
+              : String(event.payload);
           processLine(line);
         });
         unlistenRef.current = unlisten;
@@ -224,7 +335,7 @@ export function StartupScreen({ authLoading, engineStatus }: StartupScreenProps)
   const copyLogs = useCallback(async () => {
     if (logs.length === 0) return;
     await navigator.clipboard.writeText(
-      `=== Matrx Startup Log — ${new Date().toLocaleString()} ===\n${logs.join("\n")}\n=== END ===`
+      `=== Matrx Startup Log — ${new Date().toLocaleString()} ===\n${logs.join("\n")}\n=== END ===`,
     );
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -244,26 +355,40 @@ export function StartupScreen({ authLoading, engineStatus }: StartupScreenProps)
             <span className="text-3xl font-bold text-primary">M</span>
           </div>
           <div className="text-center">
-            <h1 className="text-2xl font-semibold tracking-tight text-foreground">Matrx Local</h1>
-            <p className="mt-1 text-sm text-muted-foreground">AI-powered local engine</p>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+              Matrx Local
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              AI-powered local engine
+            </p>
           </div>
         </div>
 
         {/* Steps */}
         <div className="w-full max-w-xs space-y-2">
-          {steps.map((step) => <StepRow key={step.id} step={step} />)}
+          {steps.map((step) => (
+            <StepRow key={step.id} step={step} />
+          ))}
         </div>
 
         {/* Animated subtitle */}
-        <p className="mt-6 text-sm text-muted-foreground animate-pulse">{subtitle}</p>
+        <p className="mt-6 text-sm text-muted-foreground animate-pulse">
+          {subtitle}
+        </p>
 
         {/* Error summary */}
         {errorSteps.length > 0 && (
           <div className="mt-4 w-full max-w-xs rounded-lg border border-red-500/30 bg-red-500/5 p-3 space-y-1">
             {errorSteps.map((s) => (
-              <div key={s.id} className="flex items-start gap-2 text-xs text-red-600 dark:text-red-400">
+              <div
+                key={s.id}
+                className="flex items-start gap-2 text-xs text-red-600 dark:text-red-400"
+              >
                 <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
-                <span><span className="font-medium">{s.label}:</span> {s.detail ?? "Failed"}</span>
+                <span>
+                  <span className="font-medium">{s.label}:</span>{" "}
+                  {s.detail ?? "Failed"}
+                </span>
               </div>
             ))}
           </div>
@@ -275,7 +400,9 @@ export function StartupScreen({ authLoading, engineStatus }: StartupScreenProps)
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800 bg-zinc-900/60">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-mono font-medium text-zinc-300">Engine Output</span>
+            <span className="text-xs font-mono font-medium text-zinc-300">
+              Engine Output
+            </span>
             {logs.length > 0 && (
               <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-500 font-mono">
                 {logs.length}
@@ -288,7 +415,11 @@ export function StartupScreen({ authLoading, engineStatus }: StartupScreenProps)
             className="flex items-center gap-1 rounded px-2 py-1 text-[10px] font-mono text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-40"
             title="Copy all logs"
           >
-            {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+            {copied ? (
+              <Check className="h-3 w-3 text-emerald-400" />
+            ) : (
+              <Copy className="h-3 w-3" />
+            )}
             {copied ? "Copied!" : "Copy"}
           </button>
         </div>
@@ -308,10 +439,13 @@ export function StartupScreen({ authLoading, engineStatus }: StartupScreenProps)
                   key={i}
                   className={cn(
                     "break-all whitespace-pre-wrap",
-                    cls === "error" ? "text-red-400" :
-                    cls === "warn"  ? "text-amber-400" :
-                    cls === "success" ? "text-emerald-400" :
-                    "text-zinc-400"
+                    cls === "error"
+                      ? "text-red-400"
+                      : cls === "warn"
+                        ? "text-amber-400"
+                        : cls === "success"
+                          ? "text-emerald-400"
+                          : "text-zinc-400",
                   )}
                 >
                   {line}
@@ -333,29 +467,47 @@ function StepRow({ step }: { step: PhaseStep }) {
   return (
     <div className="flex items-center gap-3 px-1">
       <div className="flex-shrink-0">
-        {step.status === "done"    && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
-        {step.status === "active"  && <Loader2      className="h-4 w-4 text-primary animate-spin" />}
-        {step.status === "error"   && <XCircle      className="h-4 w-4 text-red-500" />}
-        {step.status === "pending" && <Circle       className="h-4 w-4 text-muted-foreground" />}
+        {step.status === "done" && (
+          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+        )}
+        {step.status === "active" && (
+          <Loader2 className="h-4 w-4 text-primary animate-spin" />
+        )}
+        {step.status === "error" && (
+          <XCircle className="h-4 w-4 text-red-500" />
+        )}
+        {step.status === "pending" && (
+          <Circle className="h-4 w-4 text-muted-foreground" />
+        )}
       </div>
       <div className="min-w-0 flex-1">
-        <span className={cn(
-          "text-sm",
-          step.status === "done"    ? "text-foreground" :
-          step.status === "active"  ? "text-foreground font-medium" :
-          step.status === "error"   ? "text-red-600 dark:text-red-400" :
-          "text-muted-foreground"
-        )}>
+        <span
+          className={cn(
+            "text-sm",
+            step.status === "done"
+              ? "text-foreground"
+              : step.status === "active"
+                ? "text-foreground font-medium"
+                : step.status === "error"
+                  ? "text-red-600 dark:text-red-400"
+                  : "text-muted-foreground",
+          )}
+        >
           {step.label}
         </span>
-        {(step.status === "active" || step.status === "error") && step.detail && (
-          <p className={cn(
-            "text-[11px] truncate",
-            step.status === "error" ? "text-red-400" : "text-muted-foreground"
-          )}>
-            {step.detail}
-          </p>
-        )}
+        {(step.status === "active" || step.status === "error") &&
+          step.detail && (
+            <p
+              className={cn(
+                "text-[11px] truncate",
+                step.status === "error"
+                  ? "text-red-400"
+                  : "text-muted-foreground",
+              )}
+            >
+              {step.detail}
+            </p>
+          )}
       </div>
     </div>
   );

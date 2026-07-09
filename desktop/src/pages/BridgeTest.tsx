@@ -132,11 +132,7 @@ function levelClassFor(direction: BridgeEvent["direction"]): string {
 // Page
 // ---------------------------------------------------------------------------
 
-export function BridgeTest({
-  engineStatus,
-  engineUrl,
-  user,
-}: BridgeTestProps) {
+export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
   // Panel 1 — Engine self-check ---------------------------------------------
   const [healthResult, setHealthResult] = useState<ExtensionRpcResponse | null>(
     null,
@@ -728,8 +724,8 @@ export function BridgeTest({
 
               {sessions.length === 0 ? (
                 <div className="rounded border border-dashed border-muted-foreground/30 px-3 py-6 text-center text-xs text-muted-foreground">
-                  No extension sessions. Load the matrx-extend Chrome
-                  extension and confirm it is reaching this engine.
+                  No extension sessions. Load the matrx-extend Chrome extension
+                  and confirm it is reaching this engine.
                 </div>
               ) : (
                 <div className="overflow-hidden rounded border">
@@ -958,7 +954,10 @@ export function BridgeTest({
               )}
 
               {broadcastError && (
-                <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-red-300" role="alert">
+                <div
+                  className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-red-300"
+                  role="alert"
+                >
                   Broadcast test failed: {broadcastError}
                 </div>
               )}
@@ -1070,8 +1069,8 @@ export function BridgeTest({
               <div className="dark h-72 overflow-auto rounded border border-zinc-700/50 bg-zinc-950/80 p-2 font-mono text-[11px] text-zinc-200">
                 {logEvents.length === 0 ? (
                   <div className="px-2 py-6 text-center text-muted-foreground">
-                    No events yet. Trigger an action above to see live
-                    bridge traffic.
+                    No events yet. Trigger an action above to see live bridge
+                    traffic.
                   </div>
                 ) : (
                   logEvents.map((evt, idx) => (
@@ -1157,10 +1156,7 @@ function RpcResultCard({
 // single source of truth.
 // ---------------------------------------------------------------------------
 
-function percentileFromSamples(
-  samples: number[],
-  p: number,
-): number | null {
+function percentileFromSamples(samples: number[], p: number): number | null {
   if (!samples.length) return null;
   // Simple nearest-rank — adequate for a debug surface, doesn't need
   // interpolation. p in [0, 100].
@@ -1213,9 +1209,7 @@ function MetricsSection({
   // surface at the top. Skip the synthetic _overflow row — it gets its
   // own warning banner.
   const rows = useMemo(() => {
-    const entries = Object.entries(metrics).filter(
-      ([k]) => k !== "_overflow",
-    );
+    const entries = Object.entries(metrics).filter(([k]) => k !== "_overflow");
     return entries
       .map(([command, m]) => {
         const samples = Array.isArray(m.last_n_latencies_ms)
@@ -1291,9 +1285,8 @@ function MetricsSection({
       </div>
 
       <p className="text-[11px] text-muted-foreground">
-        In-memory only — resets on engine restart. Latencies sampled from
-        the last 100 calls per command. Polls every 2s while this page is
-        visible.
+        In-memory only — resets on engine restart. Latencies sampled from the
+        last 100 calls per command. Polls every 2s while this page is visible.
       </p>
 
       {error && (
@@ -1306,15 +1299,15 @@ function MetricsSection({
       {overflow && (
         <div className="flex items-center gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
           <AlertCircle className="h-3.5 w-3.5" />
-          Distinct-command cap reached. Newer command names are being
-          dropped from metrics ({overflow.count} skipped). Reset to recover.
+          Distinct-command cap reached. Newer command names are being dropped
+          from metrics ({overflow.count} skipped). Reset to recover.
         </div>
       )}
 
       {rows.length === 0 ? (
         <div className="rounded border border-dashed border-muted-foreground/30 px-3 py-6 text-center text-xs text-muted-foreground">
-          No metrics yet. Drive the bridge above (Health, Capabilities,
-          Invoke) to populate this table.
+          No metrics yet. Drive the bridge above (Health, Capabilities, Invoke)
+          to populate this table.
         </div>
       ) : (
         <div className="overflow-hidden rounded border">
@@ -1334,14 +1327,8 @@ function MetricsSection({
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr
-                  key={r.command}
-                  className="border-t hover:bg-muted/30"
-                >
-                  <td
-                    className="px-3 py-2 font-mono"
-                    title={r.command}
-                  >
+                <tr key={r.command} className="border-t hover:bg-muted/30">
+                  <td className="px-3 py-2 font-mono" title={r.command}>
                     {r.command}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
@@ -1487,10 +1474,7 @@ function TunnelStatusSection({
           onClick={onRefresh}
         >
           <RefreshCw
-            className={cn(
-              "mr-2 h-3.5 w-3.5",
-              busy && "animate-spin",
-            )}
+            className={cn("mr-2 h-3.5 w-3.5", busy && "animate-spin")}
           />
           Refresh
         </Button>
@@ -1549,7 +1533,9 @@ function TunnelStatusSection({
             <div className="mb-1 flex items-center gap-1.5 text-muted-foreground">
               <span>Preferred mode</span>
               <Badge
-                variant={status.preferred === "tunnel" ? "default" : "secondary"}
+                variant={
+                  status.preferred === "tunnel" ? "default" : "secondary"
+                }
                 className="text-[10px]"
               >
                 {status.preferred}
@@ -1564,8 +1550,8 @@ function TunnelStatusSection({
               <div className="mt-1 flex items-start gap-1.5 text-[11px] text-amber-300">
                 <AlertCircle className="mt-0.5 h-3 w-3 flex-shrink-0" />
                 <span>
-                  Engine prefers tunnel — the extension may need to be
-                  re-paired to pick up the latest tunnel URL.
+                  Engine prefers tunnel — the extension may need to be re-paired
+                  to pick up the latest tunnel URL.
                 </span>
               </div>
             ) : (
@@ -1630,8 +1616,8 @@ function BootCheckSection({
     !summary || !hasChecks
       ? "secondary"
       : overallOk
-      ? "default"
-      : "destructive";
+        ? "default"
+        : "destructive";
 
   return (
     <div className="space-y-3">
@@ -1675,9 +1661,9 @@ function BootCheckSection({
 
       <p className="text-[11px] text-muted-foreground">
         Verifies /extension/* routes registered, JWT validation posture,
-        tunnel-state singleton, metrics module, and ~/.matrx/local.json.
-        Runs once at engine startup; rerun here to refresh after changing
-        config without restarting.
+        tunnel-state singleton, metrics module, and ~/.matrx/local.json. Runs
+        once at engine startup; rerun here to refresh after changing config
+        without restarting.
       </p>
 
       {error && (

@@ -38,23 +38,24 @@ interface WakeWordControlsProps {
 
 function StatusDot({ uiMode, rms }: { uiMode: WakeWordUIMode; rms: number }) {
   const colors: Record<WakeWordUIMode, string> = {
-    idle:      "bg-muted-foreground",
-    setup:     "bg-amber-500",
+    idle: "bg-muted-foreground",
+    setup: "bg-amber-500",
     listening: "bg-emerald-400",
-    muted:     "bg-muted-foreground/70",
+    muted: "bg-muted-foreground/70",
     dismissed: "bg-red-400",
-    active:    "bg-sky-400",
+    active: "bg-sky-400",
   };
 
   const pulseClass =
-    uiMode === "listening" || uiMode === "active"
-      ? "animate-pulse"
-      : "";
+    uiMode === "listening" || uiMode === "active" ? "animate-pulse" : "";
 
   // Scale the dot slightly with RMS when listening/active
   const scaleStyle =
     (uiMode === "listening" || uiMode === "active") && rms > 0.02
-      ? { transform: `scale(${1 + rms * 0.8})`, transition: "transform 80ms linear" }
+      ? {
+          transform: `scale(${1 + rms * 0.8})`,
+          transition: "transform 80ms linear",
+        }
       : {};
 
   return (
@@ -67,20 +68,20 @@ function StatusDot({ uiMode, rms }: { uiMode: WakeWordUIMode; rms: number }) {
 
 function StatusLabel({ uiMode }: { uiMode: WakeWordUIMode }) {
   const labels: Record<WakeWordUIMode, string> = {
-    idle:      "Wake word off",
-    setup:     "Downloading…",
+    idle: "Wake word off",
+    setup: "Downloading…",
     listening: "Listening",
-    muted:     "Muted",
+    muted: "Muted",
     dismissed: "Dismissed (10 s)",
-    active:    "Awake",
+    active: "Awake",
   };
   const textColors: Record<WakeWordUIMode, string> = {
-    idle:      "text-muted-foreground",
-    setup:     "text-amber-600 dark:text-yellow-400",
+    idle: "text-muted-foreground",
+    setup: "text-amber-600 dark:text-yellow-400",
     listening: "text-emerald-600 dark:text-emerald-400",
-    muted:     "text-muted-foreground",
+    muted: "text-muted-foreground",
     dismissed: "text-red-600 dark:text-red-400",
-    active:    "text-sky-700 dark:text-sky-400",
+    active: "text-sky-700 dark:text-sky-400",
   };
   return (
     <span className={`text-xs font-medium tabular-nums ${textColors[uiMode]}`}>
@@ -100,14 +101,24 @@ interface CtrlBtnProps {
   disabled?: boolean;
 }
 
-function CtrlBtn({ icon, label, title, onClick, variant = "default", disabled }: CtrlBtnProps) {
+function CtrlBtn({
+  icon,
+  label,
+  title,
+  onClick,
+  variant = "default",
+  disabled,
+}: CtrlBtnProps) {
   const base =
     "inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-all select-none disabled:opacity-40 disabled:cursor-not-allowed";
 
   const variants = {
-    default: "text-foreground/80 hover:text-foreground hover:bg-muted active:bg-muted/80",
-    danger:  "text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-500/10 active:bg-red-500/20",
-    accent:  "text-sky-700 dark:text-sky-400 hover:text-sky-800 dark:hover:text-sky-300 hover:bg-sky-500/10 active:bg-sky-500/20",
+    default:
+      "text-foreground/80 hover:text-foreground hover:bg-muted active:bg-muted/80",
+    danger:
+      "text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-500/10 active:bg-red-500/20",
+    accent:
+      "text-sky-700 dark:text-sky-400 hover:text-sky-800 dark:hover:text-sky-300 hover:bg-sky-500/10 active:bg-sky-500/20",
   };
 
   return (
@@ -185,13 +196,16 @@ export function WakeWordControls({
       {/* Controls */}
       {!isSetupRunning && (
         <div className="flex items-center gap-0.5">
-
           {/* Listen / Stop */}
           {isIdle && (
             <CtrlBtn
               icon={<Mic size={12} />}
               label={kmsModelReady ? "Listen" : "Setup"}
-              title={kmsModelReady ? "Start wake-word detection" : "Download model and start"}
+              title={
+                kmsModelReady
+                  ? "Start wake-word detection"
+                  : "Download model and start"
+              }
               onClick={onSetup}
               variant="accent"
               disabled={disabled}

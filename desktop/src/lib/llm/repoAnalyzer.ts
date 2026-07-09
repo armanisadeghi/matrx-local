@@ -114,10 +114,13 @@ export const QUANT_DESCRIPTIONS: Record<string, string> = {
  */
 export async function analyzeModelRepo(
   url: string,
-  hardware: HardwarePayload | null
+  hardware: HardwarePayload | null,
+  // Optional abort signal — the analyzer UI passes one wired to a 45s timeout
+  // and a Cancel button so a hung engine fetch can't spin forever.
+  signal?: AbortSignal
 ): Promise<RepoAnalysisResult> {
   const body: AnalyzeRequest = { url, hardware };
-  return engine.post("/model-repo/analyze", body) as Promise<RepoAnalysisResult>;
+  return engine.post("/model-repo/analyze", body, { signal }) as Promise<RepoAnalysisResult>;
 }
 
 // ── UI helpers ─────────────────────────────────────────────────────────────

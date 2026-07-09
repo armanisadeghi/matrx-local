@@ -549,9 +549,7 @@ function HistoryItem({ entry }: { entry: TtsHistoryEntry }) {
       .then(() => setIsPlaying(true))
       .catch((e) => {
         setIsPlaying(false);
-        setPlayError(
-          e instanceof Error ? e.message : "Playback was blocked",
-        );
+        setPlayError(e instanceof Error ? e.message : "Playback was blocked");
         audioRef.current = null;
       });
   }, [hasAudio, isPlaying, entry.audioUrl]);
@@ -1034,7 +1032,7 @@ function BlendTab({
       );
       setPreviewUrl(null);
     },
-    []
+    [],
   );
 
   const totalWeight = components.reduce((s, c) => s + c.weight, 0);
@@ -1723,7 +1721,9 @@ function ImportVoicesTab({
           Find Great Voices
         </h3>
         <p className="text-xs text-muted-foreground leading-relaxed">
-          Looking for more voices? The Kokoro TTS community has created thousands of high-quality voice packs (.npy / .bin) that you can import directly.
+          Looking for more voices? The Kokoro TTS community has created
+          thousands of high-quality voice packs (.npy / .bin) that you can
+          import directly.
         </p>
         <div className="flex flex-col gap-2 pt-2">
           <a

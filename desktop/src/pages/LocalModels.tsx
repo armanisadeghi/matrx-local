@@ -360,7 +360,9 @@ function SetupTab() {
 
   useEffect(() => {
     if (!hardwareResult && !isDetecting) {
-      detectHardware().catch((e) => console.warn("[local-models] detectHardware failed:", e));
+      detectHardware().catch((e) =>
+        console.warn("[local-models] detectHardware failed:", e),
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1963,7 +1965,9 @@ function ModelsTab() {
 
   useEffect(() => {
     if (!hardwareResult && !isDetecting) {
-      detectHardware().catch((e) => console.warn("[local-models] detectHardware failed:", e));
+      detectHardware().catch((e) =>
+        console.warn("[local-models] detectHardware failed:", e),
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -2930,7 +2934,7 @@ function ModelSwitcher() {
   }, [listModels]);
 
   const matchedModel = downloadedModels.find((m) =>
-    serverStatus?.model_path?.includes(m.filename)
+    serverStatus?.model_path?.includes(m.filename),
   );
 
   const currentModel =
@@ -4407,7 +4411,7 @@ function InferenceTab() {
     allPrompts.find((p) => p.content === systemPrompt)?.name ?? null;
 
   const matchedModel = downloadedModels.find((m) =>
-    serverStatus?.model_path?.includes(m.filename)
+    serverStatus?.model_path?.includes(m.filename),
   );
   const currentModelName =
     matchedModel?.name ??
@@ -4937,7 +4941,6 @@ function InferenceTab() {
             >
               <Settings className="h-3.5 w-3.5" />
             </Button>
-
           </div>
         </div>
 
@@ -6536,7 +6539,9 @@ function HardwareTab() {
   useEffect(() => {
     listModels();
     if (!hardwareResult && !isDetecting) {
-      detectHardware().catch((e) => console.warn("[local-models] detectHardware failed:", e));
+      detectHardware().catch((e) =>
+        console.warn("[local-models] detectHardware failed:", e),
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listModels]);
@@ -6784,32 +6789,34 @@ function LocalModelsInner() {
         onValueChange={setActiveTab}
         className="flex-1 flex flex-col min-h-0 px-6"
       >
-        <TabsList className="w-fit shrink-0">
-          <TabsTrigger value="inference" className="gap-1.5">
-            <MessageSquare className="h-3.5 w-3.5" />
-            Inference
-          </TabsTrigger>
-          <TabsTrigger value="setup" className="gap-1.5">
-            <Zap className="h-3.5 w-3.5" />
-            Setup
-          </TabsTrigger>
-          <TabsTrigger value="models" className="gap-1.5">
-            <HardDrive className="h-3.5 w-3.5" />
-            Models
-          </TabsTrigger>
-          <TabsTrigger value="server" className="gap-1.5">
-            <Server className="h-3.5 w-3.5" />
-            Server
-          </TabsTrigger>
-          <TabsTrigger value="hardware" className="gap-1.5">
-            <Cpu className="h-3.5 w-3.5" />
-            Hardware
-          </TabsTrigger>
-          <TabsTrigger value="media" className="gap-1.5">
-            <Image className="h-3.5 w-3.5" />
-            Image & Video
-          </TabsTrigger>
-        </TabsList>
+        <div className="min-w-0 shrink-0 overflow-x-auto">
+          <TabsList className="w-max justify-start">
+            <TabsTrigger value="inference" className="gap-1.5 shrink-0">
+              <MessageSquare className="h-3.5 w-3.5" />
+              Inference
+            </TabsTrigger>
+            <TabsTrigger value="setup" className="gap-1.5 shrink-0">
+              <Zap className="h-3.5 w-3.5" />
+              Setup
+            </TabsTrigger>
+            <TabsTrigger value="models" className="gap-1.5 shrink-0">
+              <HardDrive className="h-3.5 w-3.5" />
+              Models
+            </TabsTrigger>
+            <TabsTrigger value="server" className="gap-1.5 shrink-0">
+              <Server className="h-3.5 w-3.5" />
+              Server
+            </TabsTrigger>
+            <TabsTrigger value="hardware" className="gap-1.5 shrink-0">
+              <Cpu className="h-3.5 w-3.5" />
+              Hardware
+            </TabsTrigger>
+            <TabsTrigger value="media" className="gap-1.5 shrink-0">
+              <Image className="h-3.5 w-3.5" />
+              Image & Video
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         <div className="flex-1 min-h-0 pt-6 overflow-hidden">
           <TabsContent value="setup" className="m-0 h-full overflow-auto">

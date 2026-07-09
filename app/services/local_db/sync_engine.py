@@ -57,6 +57,20 @@ _instance: Optional["SyncEngine"] = None
 DEFAULT_SYNC_INTERVAL = 600  # 10 minutes
 
 
+def _log_sync_task_result(task: "asyncio.Task") -> None:
+    """Done-callback for the background sync loop.
+
+    A bare ``lambda _: None`` swallowed a crashing sync loop entirely — the
+    task would die and never sync again with zero trace. Surface any real
+    exception loudly (cancellation is normal on stop()).
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("[sync_engine] Background sync loop crashed", exc_info=exc)
+
+
 class SyncEngine:
     """Pulls cloud data into the local SQLite database."""
 
@@ -88,7 +102,7 @@ class SyncEngine:
             self._interval = interval
         self._running = True
         self._task = asyncio.create_task(self._sync_loop())
-        self._task.add_done_callback(lambda _: None)
+        self._task.add_done_callback(_log_sync_task_result)
         logger.info("[sync_engine] Background sync started (interval=%ds)", self._interval)
 
     def stop(self) -> None:

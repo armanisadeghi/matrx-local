@@ -63,11 +63,17 @@ const suggestions = [
 interface ChatWelcomeProps {
   onSuggestionClick: (prompt: string) => void;
   toolCount: number;
+  /** When false, suggestion cards are disabled (engine not connected). */
+  disabled?: boolean;
+  /** Tooltip/explanation shown on the disabled cards. */
+  disabledReason?: string;
 }
 
 export function ChatWelcome({
   onSuggestionClick,
   toolCount,
+  disabled = false,
+  disabledReason,
 }: ChatWelcomeProps) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-4">
@@ -97,12 +103,18 @@ export function ChatWelcome({
         </p>
       </div>
 
+      {disabled && disabledReason && (
+        <p className="mb-3 text-xs text-amber-500">{disabledReason}</p>
+      )}
+
       <div className="grid w-full max-w-xl grid-cols-2 gap-2.5">
         {suggestions.map(({ icon: Icon, label, description, prompt }) => (
           <button
             key={label}
             onClick={() => onSuggestionClick(prompt)}
-            className="glass-subtle group flex items-start gap-3 rounded-lg px-4 py-3.5 text-left transition-all duration-200 hover:shadow-md active:scale-[0.98]"
+            disabled={disabled}
+            title={disabled ? disabledReason : undefined}
+            className="glass-subtle group flex items-start gap-3 rounded-lg px-4 py-3.5 text-left transition-all duration-200 hover:shadow-md active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:shadow-none disabled:active:scale-100"
           >
             <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-colors duration-200 group-hover:text-primary" />
             <div>

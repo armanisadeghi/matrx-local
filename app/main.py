@@ -568,7 +568,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     from app.services.cloud_sync.instance_manager import get_instance_manager as _get_im
                     await _get_im().update_tunnel_url(_tunnel_url, active=True)
                 except Exception:
-                    pass
+                    logger.warning(
+                        "[app/main.py] Phase 5: failed to publish tunnel URL to Supabase",
+                        exc_info=True,
+                    )
                 # Write the tunnel URL into the discovery file — this is the
                 # documented contract for matrx-extend; previously only the
                 # manual POST /tunnel/start route did it, so a normal boot
@@ -609,6 +612,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Background heartbeat: updates last_seen and retries failed syncs
     async def _heartbeat_loop() -> None:
+        consecutive_failures = 0
         while True:
             await asyncio.sleep(300)  # 5 minutes
             sync = get_settings_sync()
@@ -616,8 +620,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 continue
             try:
                 await sync.heartbeat()
+                consecutive_failures = 0
             except Exception:
-                logger.debug("Heartbeat failed", exc_info=True)
+                consecutive_failures += 1
+                # Loud on the first failure, then every 10th, so a persistent
+                # outage stays visible without flooding the log every 5 min.
+                if consecutive_failures == 1 or consecutive_failures % 10 == 0:
+                    logger.warning(
+                        "Heartbeat failed (%d consecutive failure%s)",
+                        consecutive_failures,
+                        "" if consecutive_failures == 1 else "s",
+                        exc_info=True,
+                    )
 
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
 
@@ -960,7 +974,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     from app.services.cloud_sync.instance_manager import get_instance_manager as _get_im
                     await asyncio.wait_for(_get_im().update_tunnel_url(None, active=False), timeout=2.0)
                 except (asyncio.TimeoutError, Exception):
-                    pass
+                    logger.warning(
+                        "[app/main.py] Shutdown: failed to clear tunnel URL in Supabase",
+                        exc_info=True,
+                    )
                 # Mirror the inactive state into the runtime singleton.
                 try:
                     from app.api.tunnel_state import mark_tunnel_inactive
@@ -1072,6 +1089,27 @@ app = FastAPI(
     version=_app_version(),
     lifespan=lifespan,
 )
+
+# NotesAccessError → clean 503. On macOS without Full Disk Access, notes
+# writes (state.json rename, note files) raise NotesAccessError; without this
+# handler that surfaced as an unhandled ASGI 500 to the client. Return the
+# actionable message and the degraded reason so the UI can guide the user.
+from fastapi.responses import JSONResponse as _JSONResponse
+from app.services.documents.file_manager import NotesAccessError as _NotesAccessError
+
+
+@app.exception_handler(_NotesAccessError)
+async def _notes_access_error_handler(_request: Request, exc: _NotesAccessError):
+    return _JSONResponse(
+        status_code=exc.http_status,
+        content={
+            "detail": str(exc),
+            "reason": exc.reason,
+            "notes_access_degraded": True,
+            "op": exc.op,
+        },
+    )
+
 
 app.include_router(auth_router)  # OAuth callback — must be before AuthMiddleware
 app.include_router(token_router)  # Token sync — React pushes JWT to Python

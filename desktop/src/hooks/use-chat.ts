@@ -473,7 +473,11 @@ export function useChat({ engineUrl }: UseChatOptions) {
       const selectedModelEntry = availableModels.find((m) => m.id === model);
       const isLocalModel = model.startsWith(LOCAL_MODEL_PREFIX) && selectedModelEntry?.local_port;
 
-      if (!isLocalModel && !engineUrl) return;
+      // NOTE: the engine-not-connected case is NOT dropped here. We continue so
+      // the conversation/user-message/assistant-message are created, then set a
+      // visible error on the assistant bubble below (see the guard right after
+      // `updateAssistant` is defined). Silently returning here made every
+      // ungated caller (e.g. ChatWelcome suggestion cards) do nothing.
 
       abortRef.current?.abort();
       const abort = new AbortController();
@@ -589,6 +593,19 @@ export function useChat({ engineUrl }: UseChatOptions) {
           prev.map((c) => (c.id === convId ? { ...c, ...patch } : c))
         );
       };
+
+      // Engine required but not connected (and this isn't a local model) —
+      // surface a visible assistant error instead of silently dropping the
+      // message. Reuses the standard message-error rendering infra.
+      if (!isLocalModel && !engineUrl) {
+        updateAssistant({
+          content: "Engine not connected — the message was not sent. Reconnect to the engine and try again.",
+          isStreaming: false,
+          error: "Engine not connected",
+        });
+        setIsStreaming(false);
+        return;
+      }
 
       let accumulated = "";
 

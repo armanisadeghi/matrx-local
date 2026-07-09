@@ -85,7 +85,7 @@ async def tunnel_start(body: TunnelStartRequest | None = None) -> TunnelStatus:
         from app.services.cloud_sync.settings_sync import get_settings_sync
         get_settings_sync().set("tunnel_enabled", True)
     except Exception:
-        logger.debug("[tunnel] Could not persist tunnel_enabled=True", exc_info=True)
+        logger.warning("[tunnel] Could not persist tunnel_enabled=True", exc_info=True)
 
     # Push the new URL to Supabase asynchronously (best-effort)
     try:
@@ -93,7 +93,7 @@ async def tunnel_start(body: TunnelStartRequest | None = None) -> TunnelStatus:
         mgr = get_instance_manager()
         await mgr.update_tunnel_url(url, active=True)
     except Exception:
-        logger.debug("[tunnel] Could not push tunnel URL to Supabase", exc_info=True)
+        logger.warning("[tunnel] Could not push tunnel URL to Supabase", exc_info=True)
 
     # Update the discovery file through the central atomic writer (the old
     # direct write_text bypassed preflight's tmp+replace and never updated
@@ -104,7 +104,7 @@ async def tunnel_start(body: TunnelStartRequest | None = None) -> TunnelStatus:
         if _run_mod is not None and hasattr(_run_mod, "update_discovery_tunnel"):
             _run_mod.update_discovery_tunnel(url)
     except Exception:
-        logger.debug("[tunnel] Could not update discovery file", exc_info=True)
+        logger.warning("[tunnel] Could not update discovery file", exc_info=True)
 
     # Keep the runtime singleton in sync — desktop UI / extension polls
     # ``GET /extension/tunnel/status`` instead of re-reading the disk file.
@@ -119,7 +119,7 @@ async def tunnel_start(body: TunnelStartRequest | None = None) -> TunnelStatus:
         else:
             mark_tunnel_inactive()
     except Exception:
-        logger.debug("[tunnel] Could not update tunnel state singleton", exc_info=True)
+        logger.warning("[tunnel] Could not update tunnel state singleton", exc_info=True)
 
     return TunnelStatus(**tm.get_status())
 
@@ -139,7 +139,7 @@ async def tunnel_stop() -> TunnelStatus:
         from app.services.cloud_sync.settings_sync import get_settings_sync
         get_settings_sync().set("tunnel_enabled", False)
     except Exception:
-        logger.debug("[tunnel] Could not persist tunnel_enabled=False", exc_info=True)
+        logger.warning("[tunnel] Could not persist tunnel_enabled=False", exc_info=True)
 
     # Clear tunnel URL in Supabase (best-effort)
     try:
@@ -147,7 +147,7 @@ async def tunnel_stop() -> TunnelStatus:
         mgr = get_instance_manager()
         await mgr.update_tunnel_url(None, active=False)
     except Exception:
-        logger.debug("[tunnel] Could not clear tunnel URL in Supabase", exc_info=True)
+        logger.warning("[tunnel] Could not clear tunnel URL in Supabase", exc_info=True)
 
     # Clear from discovery file (atomic, schema-2 aware)
     try:
@@ -156,13 +156,13 @@ async def tunnel_stop() -> TunnelStatus:
         if _run_mod is not None and hasattr(_run_mod, "update_discovery_tunnel"):
             _run_mod.update_discovery_tunnel(None)
     except Exception:
-        logger.debug("[tunnel] Could not update discovery file", exc_info=True)
+        logger.warning("[tunnel] Could not update discovery file", exc_info=True)
 
     # Mirror the inactive state into the runtime singleton.
     try:
         from app.api.tunnel_state import mark_tunnel_inactive
         mark_tunnel_inactive()
     except Exception:
-        logger.debug("[tunnel] Could not update tunnel state singleton", exc_info=True)
+        logger.warning("[tunnel] Could not update tunnel state singleton", exc_info=True)
 
     return TunnelStatus(**tm.get_status())

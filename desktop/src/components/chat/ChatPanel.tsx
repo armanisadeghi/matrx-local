@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, X } from "lucide-react";
+import { AlertTriangle, AlertCircle, X } from "lucide-react";
 import { useChat } from "@/hooks/use-chat";
 import { useAgents } from "@/hooks/use-agents";
 import { useChatTts } from "@/hooks/use-chat-tts";
@@ -145,9 +145,11 @@ export function ChatPanel({
   }, []);
 
   let ttsActions = null;
+  let ttsState: ReturnType<typeof useTtsApp>[0] | null = null;
   try {
-    const [, actions] = useTtsApp();
+    const [state, actions] = useTtsApp();
     ttsActions = actions;
+    ttsState = state;
   } catch {
     // TtsProvider not mounted — read-aloud unavailable
   }
@@ -299,6 +301,8 @@ export function ChatPanel({
           <ChatWelcome
             onSuggestionClick={handleSuggestionClick}
             toolCount={tools.length}
+            disabled={engineStatus !== "connected"}
+            disabledReason="Engine not connected — reconnect to the engine to send a message."
           />
         ) : (
           <ChatMessages
@@ -321,6 +325,32 @@ export function ChatPanel({
             disabled={isStreaming}
             seamless
           />
+        </div>
+      )}
+
+      {chatTts.readAloudError && (
+        <div className="shrink-0 px-4 pt-1">
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          >
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span className="flex-1">
+              {chatTts.readAloudError.code === "model_not_downloaded" &&
+              ttsState?.status?.is_downloading
+                ? `TTS voice model is downloading (${Math.round(
+                    ttsState.status.download_progress,
+                  )}%)…`
+                : chatTts.readAloudError.message}
+            </span>
+            <button
+              className="shrink-0 text-destructive/70 underline hover:text-destructive"
+              onClick={() => chatTts.clearReadAloudError()}
+              title="Dismiss"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 

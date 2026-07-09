@@ -927,7 +927,7 @@ class NotesRepo:
 
     async def list_pending_push(self) -> list[dict[str, Any]]:
         rows = await self._db.fetchall(
-            "SELECT * FROM notes WHERE sync_status IN ('never_synced', 'pending_push') "
+            "SELECT * FROM notes WHERE sync_status IN ('never_synced', 'pending_push', 'failed') "
             "AND sync_enabled = 1 AND is_deleted = 0 ORDER BY updated_at DESC"
         )
         return [self._deserialize(r) for r in rows]

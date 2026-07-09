@@ -299,6 +299,7 @@ export function VideoGenSection() {
     generateVideo,
     fetchVideoResult,
     clearActiveJob,
+    clearVideoGenError,
   } = actions;
 
   // Transient form state
@@ -470,6 +471,10 @@ export function VideoGenSection() {
       : null;
 
   const genError = videoGenError ?? localError;
+  const dismissGenError = useCallback(() => {
+    setLocalError(null);
+    clearVideoGenError();
+  }, [clearVideoGenError]);
 
   // ── Loading / error / gates ─────────────────────────────────────────────
   if (videoStatusLoading && !videoStatus) {
@@ -816,7 +821,7 @@ export function VideoGenSection() {
             </div>
           )}
 
-          {genError && <ErrorNote message={genError} />}
+          {genError && <ErrorNote message={genError} onDismiss={dismissGenError} />}
           {jobIsActive && (
             <p className="text-[11px] text-muted-foreground">
               One video at a time — the current job must finish before starting
@@ -881,7 +886,7 @@ export function VideoGenSection() {
             <Film className="h-4 w-4 text-violet-500" />
             Select a video model
           </h3>
-          {genError && <ErrorNote message={genError} />}
+          {genError && <ErrorNote message={genError} onDismiss={dismissGenError} />}
           <div className="grid gap-3 sm:grid-cols-2">
             {videoModels.map((m) => (
               <VideoModelCard

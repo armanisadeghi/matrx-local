@@ -240,6 +240,7 @@ export function ImageGenSection() {
     generateImageWorkflow,
     setSelectedImageModelId,
     clearImageResult,
+    clearImageGenError,
   } = actions;
 
   // Transient UI state — intentionally local (form fields / current view)
@@ -346,13 +347,16 @@ export function ImageGenSection() {
 
   const handleWorkflowGenerate = useCallback(async () => {
     if (!workflowPresetId || !workflowSubject.trim()) return;
-    await generateImageWorkflow({
+    const ok = await generateImageWorkflow({
       preset_id: workflowPresetId,
       subject: workflowSubject.trim(),
       model_id: selectedModel?.model_id,
       seed: parseSeed(),
     });
-    setView("generate"); // switch to show the image
+    // Only switch to the generate view when a result was actually produced.
+    // On failure, stay put so the error banner (rendered here) stays visible —
+    // never navigate to an empty "generating forever" screen.
+    if (ok) setView("generate");
   }, [
     workflowPresetId,
     workflowSubject,
@@ -370,6 +374,10 @@ export function ImageGenSection() {
   }, [imageResult]);
 
   const genError = imageGenError ?? localError;
+  const dismissGenError = useCallback(() => {
+    setLocalError(null);
+    clearImageGenError();
+  }, [clearImageGenError]);
 
   // ── Loading / error / installer states ─────────────────────────────────
   if (imageStatusLoading && !imageStatus) {
@@ -559,7 +567,7 @@ export function ImageGenSection() {
             <ImageIcon className="h-4 w-4 text-violet-500" />
             Select a model
           </h3>
-          {genError && <ErrorNote message={genError} />}
+          {genError && <ErrorNote message={genError} onDismiss={dismissGenError} />}
           <div className="grid gap-3 sm:grid-cols-2">
             {imageModels.map((m) => (
               <ImageModelCard
@@ -658,7 +666,7 @@ export function ImageGenSection() {
             </div>
           )}
 
-          {genError && <ErrorNote message={genError} />}
+          {genError && <ErrorNote message={genError} onDismiss={dismissGenError} />}
 
           <Button
             className="w-full"
@@ -817,7 +825,7 @@ export function ImageGenSection() {
             />
           </div>
 
-          {genError && <ErrorNote message={genError} />}
+          {genError && <ErrorNote message={genError} onDismiss={dismissGenError} />}
 
           <Button
             className="w-full"

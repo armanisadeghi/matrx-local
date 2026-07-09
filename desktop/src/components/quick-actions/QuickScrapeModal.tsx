@@ -131,7 +131,12 @@ export function QuickScrapeModal({ open, onOpenChange, userId }: QuickScrapeModa
   }, [result]);
 
   const handleSaveToNote = useCallback(async () => {
-    if (!result?.content || !engine.engineUrl) return;
+    if (!result?.content) return;
+    setError(null);
+    if (!engine.engineUrl) {
+      setError("Engine not connected — cannot save the note. Try again in a moment.");
+      return;
+    }
     setSavingNote(true);
     try {
       const label = result.title || new URL(result.url || url).hostname;
@@ -142,8 +147,10 @@ export function QuickScrapeModal({ open, onOpenChange, userId }: QuickScrapeModa
       });
       setSavedNote(true);
       setTimeout(() => setSavedNote(false), 3000);
-    } catch {
-      /* engine handles error */
+    } catch (e) {
+      setError(
+        `Failed to save note: ${e instanceof Error ? e.message : String(e)}`,
+      );
     } finally {
       setSavingNote(false);
     }

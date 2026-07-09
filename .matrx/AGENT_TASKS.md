@@ -20,6 +20,13 @@ _(none)_
 
 ## Active
 
+- [x] **Local LLM catalog expanded (2026-07-09)** — added Qwen3.5-2B/4B/9B
+  (vision+mmproj), Devstral Small 2 24B, Qwen3-Coder-30B-A3B, GLM-4.7-Flash,
+  Qwen3-Next-80B-A3B, Qwen3-Coder-Next. Auto-recommend now prefers Qwen3.5
+  defaults. Also wired mmproj auto-download + auto-attach on server start
+  (fixes Gemma 4 / Qwen3.5 vision). Files: `model_selector.rs`, `commands.rs`,
+  `types.ts`.
+
 - [ ] **pytest engine fixture kills live dev engines** — `tests/conftest.py`
   spawns a real engine whose `preflight.clean_orphans()` sweeps ALL
   engine-pattern processes except its own ancestry, SIGKILLing any running
@@ -50,7 +57,13 @@ These were found, verified, and deliberately deferred:
   SchedulerPanel/RecordAudio arg mismatches, TerminalPanel stale closures,
   AutomationPanel render-loop, KeyValueField index keys) — fix before
   re-wiring them into Tools.tsx. Only Monitoring/Process panels are live
-  (both fixed).
+  (both fixed). ALSO: these orphaned panels
+  (ClipboardPanel/ProcessPanel/TerminalPanel/NotifyPanel/BrowserPanel/
+  AudioMediaPanel/NetworkPanel/FilesPanel/SchedulerPanel/AutomationPanel/
+  InstalledAppsPanel/AudioPanel) carry latent silent-failure bugs and are
+  unreachable (Tools.tsx routes only Monitoring/Generic via panelType) —
+  either wire them into the registry's panelType routing or delete them;
+  don't leave them to rot with swallowed errors.
 - [ ] **Engine: dead stub files** (audio/player.py, tts/player.py,
   transcription/transcribe.py, files/explorer.py, files/uploader.py,
   audio/recorder.py) — no importers; delete or implement.

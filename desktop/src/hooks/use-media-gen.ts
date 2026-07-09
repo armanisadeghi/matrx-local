@@ -47,6 +47,23 @@ import type {
 import { emitClientLog } from "@/hooks/use-unified-log";
 
 const ENGINE_NOT_CONNECTED = "Engine not connected";
+// User-facing message for ACTION paths (download/load/generate/…) that cannot
+// run because the engine URL is null. Distinct from ENGINE_NOT_CONNECTED, which
+// is the status-error sentinel the reconnect effect matches on — do NOT reuse
+// that here or you would trip the retry loop for a one-shot action failure.
+const ENGINE_NOT_CONNECTED_ACTION =
+  "Engine not connected — check the engine status and try again";
+
+/**
+ * Log an action that was blocked because the engine URL is null. console.error
+ * survives an engine outage; emitClientLog does NOT (it needs the engine), so a
+ * silent no-op here is exactly the invisible failure we are killing.
+ */
+function logEngineNotConnected(action: string): void {
+  console.error(
+    `[media-gen] ${action} blocked — engine not connected (engine.engineUrl is null)`,
+  );
+}
 
 export interface GeneratedImageResult {
   /** Base64-encoded PNG (no data: prefix). */
@@ -110,8 +127,10 @@ export interface MediaGenActions {
   loadImageModel: (modelId: string) => Promise<MediaLoadResult>;
   unloadImageModel: () => Promise<void>;
   downloadImageModel: (modelId: string) => Promise<boolean>;
-  generateImage: (input: ImageGenerateInput) => Promise<void>;
-  generateImageWorkflow: (input: ImageWorkflowInput) => Promise<void>;
+  /** Resolves true only when a result was produced; false on any failure. */
+  generateImage: (input: ImageGenerateInput) => Promise<boolean>;
+  /** Resolves true only when a result was produced; false on any failure. */
+  generateImageWorkflow: (input: ImageWorkflowInput) => Promise<boolean>;
   setSelectedImageModelId: (modelId: string | null) => void;
   clearImageResult: () => void;
   clearImageGenError: () => void;
@@ -205,7 +224,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const loadImageModel = useCallback(
     async (modelId: string): Promise<MediaLoadResult> => {
       const base = engine.engineUrl;
-      if (!base) return { success: false, error: ENGINE_NOT_CONNECTED };
+      if (!base) {
+        logEngineNotConnected("load image model");
+        setImageGenError(ENGINE_NOT_CONNECTED_ACTION);
+        return { success: false, error: ENGINE_NOT_CONNECTED_ACTION };
+      }
       setImageModelLoading(true);
       setImageGenError(null);
       try {
@@ -228,7 +251,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
 
   const unloadImageModel = useCallback(async () => {
     const base = engine.engineUrl;
-    if (!base) return;
+    if (!base) {
+      logEngineNotConnected("unload image model");
+      setImageGenError(ENGINE_NOT_CONNECTED_ACTION);
+      return;
+    }
     await apiUnloadImageGenModel(base).catch(() => null);
     setSelectedImageModelIdState(null);
     setImageResult(null);
@@ -238,7 +265,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const downloadImageModel = useCallback(
     async (modelId: string): Promise<boolean> => {
       const base = engine.engineUrl;
-      if (!base) return false;
+      if (!base) {
+        logEngineNotConnected("image download");
+        setImageGenError(ENGINE_NOT_CONNECTED_ACTION);
+        return false;
+      }
       try {
         await apiDownloadImageGenModel(base, modelId);
         return true;
@@ -257,35 +288,48 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     [],
   );
 
-  const generateImage = useCallback(async (input: ImageGenerateInput) => {
-    const base = engine.engineUrl;
-    if (!base) return;
-    setImageGenerating(true);
-    setImageGenError(null);
-    setImageResult(null);
-    try {
-      const result = await apiGenerateImage(base, input);
-      if (result.success && result.image_b64) {
-        setImageResult({
-          b64: result.image_b64,
-          elapsed: result.elapsed_seconds,
-          width: result.width,
-          height: result.height,
-        });
-      } else {
-        setImageGenError(result.error ?? "Generation failed");
+  const generateImage = useCallback(
+    async (input: ImageGenerateInput): Promise<boolean> => {
+      const base = engine.engineUrl;
+      if (!base) {
+        logEngineNotConnected("generate image");
+        setImageGenError(ENGINE_NOT_CONNECTED_ACTION);
+        return false;
       }
-    } catch (e) {
-      setImageGenError(e instanceof Error ? e.message : "Generation failed");
-    } finally {
-      setImageGenerating(false);
-    }
-  }, []);
+      setImageGenerating(true);
+      setImageGenError(null);
+      setImageResult(null);
+      try {
+        const result = await apiGenerateImage(base, input);
+        if (result.success && result.image_b64) {
+          setImageResult({
+            b64: result.image_b64,
+            elapsed: result.elapsed_seconds,
+            width: result.width,
+            height: result.height,
+          });
+          return true;
+        }
+        setImageGenError(result.error ?? "Generation failed");
+        return false;
+      } catch (e) {
+        setImageGenError(e instanceof Error ? e.message : "Generation failed");
+        return false;
+      } finally {
+        setImageGenerating(false);
+      }
+    },
+    [],
+  );
 
   const generateImageWorkflow = useCallback(
-    async (input: ImageWorkflowInput) => {
+    async (input: ImageWorkflowInput): Promise<boolean> => {
       const base = engine.engineUrl;
-      if (!base) return;
+      if (!base) {
+        logEngineNotConnected("generate image workflow");
+        setImageGenError(ENGINE_NOT_CONNECTED_ACTION);
+        return false;
+      }
       setImageGenerating(true);
       setImageGenError(null);
       setImageResult(null);
@@ -298,11 +342,13 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
             width: result.width,
             height: result.height,
           });
-        } else {
-          setImageGenError(result.error ?? "Generation failed");
+          return true;
         }
+        setImageGenError(result.error ?? "Generation failed");
+        return false;
       } catch (e) {
         setImageGenError(e instanceof Error ? e.message : "Generation failed");
+        return false;
       } finally {
         setImageGenerating(false);
       }
@@ -369,7 +415,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       const existing = videoResultsRef.current[jobId];
       if (existing) return existing;
       const base = engine.engineUrl;
-      if (!base) return null;
+      if (!base) {
+        logEngineNotConnected("fetch video result");
+        setVideoGenError(ENGINE_NOT_CONNECTED_ACTION);
+        return null;
+      }
       try {
         const url = await apiFetchVideoGenResult(base, jobId);
         // Bound the blob-URL cache to the 5 most recent jobs; revoke the URLs
@@ -456,7 +506,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const loadVideoModel = useCallback(
     async (modelId: string): Promise<MediaLoadResult> => {
       const base = engine.engineUrl;
-      if (!base) return { success: false, error: ENGINE_NOT_CONNECTED };
+      if (!base) {
+        logEngineNotConnected("load video model");
+        setVideoGenError(ENGINE_NOT_CONNECTED_ACTION);
+        return { success: false, error: ENGINE_NOT_CONNECTED_ACTION };
+      }
       setVideoModelLoading(true);
       setVideoGenError(null);
       try {
@@ -476,7 +530,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
 
   const unloadVideoModel = useCallback(async () => {
     const base = engine.engineUrl;
-    if (!base) return;
+    if (!base) {
+      logEngineNotConnected("unload video model");
+      setVideoGenError(ENGINE_NOT_CONNECTED_ACTION);
+      return;
+    }
     await apiUnloadVideoGenModel(base).catch(() => null);
     await refreshVideo();
   }, [refreshVideo]);
@@ -484,7 +542,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const downloadVideoModel = useCallback(
     async (modelId: string): Promise<boolean> => {
       const base = engine.engineUrl;
-      if (!base) return false;
+      if (!base) {
+        logEngineNotConnected("video download");
+        setVideoGenError(ENGINE_NOT_CONNECTED_ACTION);
+        return false;
+      }
       try {
         await apiDownloadVideoGenModel(base, modelId);
         return true;
@@ -506,7 +568,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const generateVideo = useCallback(
     async (req: VideoGenRequest): Promise<{ ok: boolean; error?: string }> => {
       const base = engine.engineUrl;
-      if (!base) return { ok: false, error: ENGINE_NOT_CONNECTED };
+      if (!base) {
+        logEngineNotConnected("generate video");
+        setVideoGenError(ENGINE_NOT_CONNECTED_ACTION);
+        return { ok: false, error: ENGINE_NOT_CONNECTED_ACTION };
+      }
       setVideoGenerating(true);
       setVideoGenError(null);
       try {

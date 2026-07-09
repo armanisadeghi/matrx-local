@@ -1067,7 +1067,14 @@ async def list_shares(request: Request) -> list[dict[str, Any]]:
             *[{**s, "_direction": "shared_with_me"} for s in shared_with_me],
         ]
     except Exception:
-        return []
+        # Previously returned an empty 200, which is indistinguishable from
+        # "no shares" and silently hid Supabase/network failures. The desktop
+        # caller (use-documents loadShares) wraps this in try/catch and treats
+        # a non-200 as non-critical, so surface the real failure as a 502.
+        logger.warning("Failed to list shares from Supabase", exc_info=True)
+        raise HTTPException(
+            status_code=502, detail="Failed to list shares from Supabase"
+        )
 
 
 @router.post("/shares")

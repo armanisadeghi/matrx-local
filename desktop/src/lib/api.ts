@@ -6,6 +6,7 @@
  */
 
 import { emitClientLog } from "@/hooks/use-client-log";
+import { getOwnedEngineUrl, discoverEnginePort } from "@/lib/sidecar";
 
 const DEFAULT_PORT = 22140;
 const DISCOVERY_PORTS = Array.from({ length: 20 }, (_, i) => DEFAULT_PORT + i);
@@ -143,6 +144,11 @@ class EngineAPI {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private requestIdCounter = 0;
   private _getAccessToken: (() => Promise<string | null>) | null = null;
+  // Self-healing re-discovery guards: prevent concurrent scans and rate-limit
+  // how often we re-run discovery when the engine URL goes null or stale.
+  private rediscovering = false;
+  private lastRediscoverAt = 0;
+  private static readonly REDISCOVER_BACKOFF_MS = 2000;
 
   /** Register a function that provides the current Supabase JWT. */
   setTokenProvider(fn: () => Promise<string | null>) {
@@ -176,8 +182,7 @@ class EngineAPI {
    */
   async discover(knownUrl?: string): Promise<string | null> {
     if (knownUrl) {
-      this.baseUrl = knownUrl;
-      this.wsUrl = knownUrl.replace("http://", "ws://") + "/ws";
+      this.setBase(knownUrl);
       return knownUrl;
     }
 
@@ -187,8 +192,7 @@ class EngineAPI {
           signal: AbortSignal.timeout(500),
         });
         if (resp.ok) {
-          this.baseUrl = `http://127.0.0.1:${port}`;
-          this.wsUrl = `ws://127.0.0.1:${port}/ws`;
+          this.setBase(`http://127.0.0.1:${port}`);
           return this.baseUrl;
         }
       } catch {
@@ -199,17 +203,89 @@ class EngineAPI {
     return null;
   }
 
-  /** Check if the engine is reachable. */
-  async isHealthy(): Promise<boolean> {
-    if (!this.baseUrl) return false;
-    try {
-      const resp = await fetch(`${this.baseUrl}/tools/list`, {
-        signal: AbortSignal.timeout(2000),
-      });
-      return resp.ok;
-    } catch {
-      return false;
+  /** Point the REST base URL and its derived WS URL at a single engine origin. */
+  private setBase(url: string) {
+    this.baseUrl = url;
+    this.wsUrl = url.replace("http://", "ws://") + "/ws";
+  }
+
+  /**
+   * Self-healing re-discovery.
+   *
+   * Runs when the current base URL is null (discovery never succeeded) or stale
+   * (the engine moved ports — e.g. a rogue instance overwrote ~/.matrx/local.json,
+   * or our own child engine rebound). Prefers the Rust-owned sidecar's port,
+   * which is authoritative for THIS app, then falls back to a port scan.
+   *
+   * Guarded against concurrent runs and rate-limited, so the various callers
+   * (the useEngine health interval, the WS reconnect loop) can all invoke it
+   * freely without hammering discovery. Returns a CONFIRMED-healthy URL on
+   * success, or null when no live engine could be located this attempt.
+   */
+  async rediscover(): Promise<string | null> {
+    if (this.rediscovering) return null;
+    const now = Date.now();
+    if (now - this.lastRediscoverAt < EngineAPI.REDISCOVER_BACKOFF_MS) {
+      return null;
     }
+    this.rediscovering = true;
+    this.lastRediscoverAt = now;
+    try {
+      // 1. Prefer the app's own Rust-owned sidecar (health-confirmed natively).
+      const ownedUrl = await getOwnedEngineUrl();
+      if (ownedUrl) {
+        if (ownedUrl !== this.baseUrl) {
+          emitClientLog(
+            "info",
+            `Engine URL re-discovered (Rust-owned sidecar): ${ownedUrl}`,
+            "engine",
+          );
+        }
+        this.setBase(ownedUrl);
+        return ownedUrl;
+      }
+      // 2. Fall back to a port scan (dev / browser, or Rust IPC unavailable).
+      const scanned = await discoverEnginePort();
+      if (scanned) {
+        if (scanned !== this.baseUrl) {
+          emitClientLog(
+            "info",
+            `Engine URL re-discovered (port scan): ${scanned}`,
+            "engine",
+          );
+        }
+        this.setBase(scanned);
+        return scanned;
+      }
+      return null;
+    } finally {
+      this.rediscovering = false;
+    }
+  }
+
+  /**
+   * Check if the engine is reachable — and self-heal a null/stale base URL.
+   *
+   * A plain probe of the current base URL is the fast path. When that probe
+   * fails (or there is no base URL at all), the engine may simply have moved
+   * ports; rather than reporting "unreachable" forever, we re-run discovery
+   * (preferring the Rust-owned sidecar) and treat a confirmed re-discovery as
+   * healthy. This is what unwedges `engine.engineUrl` after an engine flap —
+   * the useEngine health interval calls this every 10s.
+   */
+  async isHealthy(): Promise<boolean> {
+    if (this.baseUrl) {
+      try {
+        const resp = await fetch(`${this.baseUrl}/tools/list`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        if (resp.ok) return true;
+      } catch {
+        // Current URL is null/stale — fall through to self-healing discovery.
+      }
+    }
+    const healed = await this.rediscover();
+    return healed !== null;
   }
 
   /** Get the engine version string from the root endpoint. */
@@ -1455,6 +1531,11 @@ class EngineAPI {
         this.reconnectDelay = 3000; // reset backoff
         return;
       }
+      // The socket dropped — the engine may have moved ports (a rogue instance
+      // overwrote discovery, or our child rebound). Re-point baseUrl/wsUrl at
+      // the live (preferably Rust-owned) engine before reconnecting, so the WS
+      // and every subsequent REST call target the correct origin.
+      await this.rediscover().catch(() => null);
       try {
         await this.connectWebSocket();
         this.reconnectDelay = 3000; // reset on success

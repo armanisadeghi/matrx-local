@@ -83,6 +83,18 @@ if hasattr(sys, "_MEIPASS"):
     if os.path.isdir(ffmpeg_bin_dir):
         os.environ["PATH"] = ffmpeg_bin_dir + os.pathsep + os.environ.get("PATH", "")
 
+# ── HF Hub: disable Xet in the frozen binary ──────────────────────────────────
+#
+# hf_xet (native Rust extension shipped with user-installed huggingface_hub)
+# spawns helper processes during Xet-backed downloads.  In a frozen PyInstaller
+# binary a process spawn re-executes THIS binary, which booted a complete rogue
+# second engine (observed live 2026-07-09: first model download → duplicate
+# engine on 22141 stole ~/.matrx/local.json and killed the UI's connection).
+# run.py's freeze_support() intercepts multiprocessing spawns, but Xet is not
+# needed at all — plain HTTP downloads work at full speed — so disable it
+# outright in frozen builds.  Respect an explicit user override if already set.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 # ── Image generation packages (user-installed on demand) ──────────────────────
 #
 # torch + diffusers are NOT bundled in the frozen binary (they are ~1 GB+).

@@ -2,7 +2,7 @@
  * Shared building blocks for the media-gen UI (Images + Video sections).
  */
 
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, X } from "lucide-react";
 import type { DownloadEntry } from "@/lib/downloads/types";
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
@@ -72,11 +72,26 @@ export function StarRating({ value, max = 5 }: { value: number; max?: number }) 
   );
 }
 
-export function ErrorNote({ message }: { message: string }) {
+export function ErrorNote({
+  message,
+  onDismiss,
+}: {
+  message: string;
+  onDismiss?: () => void;
+}) {
   return (
     <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive flex items-center gap-2">
       <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-      <span className="break-words min-w-0">{message}</span>
+      <span className="break-words min-w-0 flex-1">{message}</span>
+      {onDismiss && (
+        <button
+          onClick={onDismiss}
+          className="shrink-0 text-destructive/70 hover:text-destructive"
+          aria-label="Dismiss error"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
     </div>
   );
 }

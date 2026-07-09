@@ -78,6 +78,7 @@ import signal
 import socket
 import sys
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Literal
@@ -961,6 +962,17 @@ def _maybe_remove_stale_discovery_file() -> bool:
         # or an unrelated reuse. Either way, leave the file alone.
         return False
 
+    # The recorded PID is DEAD but a discovery file remained — the previous
+    # engine never ran its clean-shutdown path (which unlinks the file). That
+    # is a crash / OOM / kill signature. Scream about it and drop a breadcrumb
+    # so the post-mortem is not silent, then still remove the stale file.
+    _warn(
+        "discovery",
+        f"previous engine (pid {pid}) exited WITHOUT clean shutdown — "
+        f"likely crash/OOM/kill (stale {DISCOVERY_FILE} left behind)",
+    )
+    _write_crash_breadcrumb(dead_pid=pid, version=data.get("version"))
+
     try:
         DISCOVERY_FILE.unlink()
         _ok("discovery", f"removed stale {DISCOVERY_FILE} (pid {pid} gone)")
@@ -968,6 +980,33 @@ def _maybe_remove_stale_discovery_file() -> bool:
     except OSError as exc:
         _warn("discovery", f"could not remove stale file: {exc}")
         return False
+
+
+def _write_crash_breadcrumb(dead_pid: object, version: object) -> None:
+    """Drop a small JSON breadcrumb when a dead-pid discovery file is found.
+
+    The previous engine crashed without cleaning up. Record when we noticed,
+    which pid was dead, and the version it reported, so ~/.matrx/diagnostics/
+    carries a durable trail even though the crashing process wrote nothing.
+    """
+    try:
+        diag_dir = _MATRX_HOME / "diagnostics"
+        diag_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc)
+        crumb = {
+            "event": "unclean_shutdown_detected",
+            "detected_at": ts.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "dead_pid": dead_pid,
+            "version": version,
+            "note": (
+                "discovery file with a dead pid was found on boot — previous "
+                "engine exited without clean shutdown (crash/OOM/kill)"
+            ),
+        }
+        fname = f"crash-{ts.strftime('%Y%m%dT%H%M%S')}-pid{dead_pid}.json"
+        (diag_dir / fname).write_text(json.dumps(crumb, indent=2))
+    except Exception as exc:
+        _warn("discovery", f"could not write crash breadcrumb: {exc}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

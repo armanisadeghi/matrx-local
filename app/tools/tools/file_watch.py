@@ -128,6 +128,12 @@ async def tool_watch_directory(
                         ))
             except asyncio.CancelledError:
                 pass
+            except Exception:
+                # watchfiles.awatch died unexpectedly — surface it instead of
+                # letting the watch go quietly inactive.
+                logger.warning(
+                    "File watcher %s failed", watch_id, exc_info=True
+                )
             finally:
                 watch.is_active = False
 
@@ -155,45 +161,57 @@ async def tool_watch_directory(
                     except OSError:
                         pass
 
-            while not watch._stop_event.is_set():
-                await asyncio.sleep(2)  # Poll every 2 seconds
-                current: dict[str, float] = {}
-                walker = os.walk(resolved) if recursive else [(resolved, [], os.listdir(resolved))]
-                for root, dirs, files in walker:
-                    if not recursive:
-                        root = resolved
-                        files = [f for f in files if os.path.isfile(os.path.join(resolved, f))]
-                    for f in files:
-                        fp = os.path.join(root, f)
-                        try:
-                            current[fp] = os.path.getmtime(fp)
-                        except OSError:
-                            pass
+            try:
+                while not watch._stop_event.is_set():
+                    try:
+                        await asyncio.sleep(2)  # Poll every 2 seconds
+                        current: dict[str, float] = {}
+                        walker = os.walk(resolved) if recursive else [(resolved, [], os.listdir(resolved))]
+                        for root, dirs, files in walker:
+                            if not recursive:
+                                root = resolved
+                                files = [f for f in files if os.path.isfile(os.path.join(resolved, f))]
+                            for f in files:
+                                fp = os.path.join(root, f)
+                                try:
+                                    current[fp] = os.path.getmtime(fp)
+                                except OSError:
+                                    pass
 
-                # Check for new/modified files
-                for fp, mtime in current.items():
-                    if fp not in snapshot:
-                        watch.add_event(FileEvent(
-                            timestamp=time.time(), event_type="created",
-                            path=fp, is_directory=False,
-                        ))
-                    elif mtime != snapshot[fp]:
-                        watch.add_event(FileEvent(
-                            timestamp=time.time(), event_type="modified",
-                            path=fp, is_directory=False,
-                        ))
+                        # Check for new/modified files
+                        for fp, mtime in current.items():
+                            if fp not in snapshot:
+                                watch.add_event(FileEvent(
+                                    timestamp=time.time(), event_type="created",
+                                    path=fp, is_directory=False,
+                                ))
+                            elif mtime != snapshot[fp]:
+                                watch.add_event(FileEvent(
+                                    timestamp=time.time(), event_type="modified",
+                                    path=fp, is_directory=False,
+                                ))
 
-                # Check for deleted files
-                for fp in snapshot:
-                    if fp not in current:
-                        watch.add_event(FileEvent(
-                            timestamp=time.time(), event_type="deleted",
-                            path=fp, is_directory=False,
-                        ))
+                        # Check for deleted files
+                        for fp in snapshot:
+                            if fp not in current:
+                                watch.add_event(FileEvent(
+                                    timestamp=time.time(), event_type="deleted",
+                                    path=fp, is_directory=False,
+                                ))
 
-                snapshot = current
-
-            watch.is_active = False
+                        snapshot = current
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        # A transient walk/stat error must not silently kill the
+                        # watcher — log it and keep polling.
+                        logger.warning(
+                            "Polling watcher %s hit an error; continuing",
+                            watch_id,
+                            exc_info=True,
+                        )
+            finally:
+                watch.is_active = False
 
         watch._task = asyncio.create_task(_poll_watcher())
         _watches[watch_id] = watch

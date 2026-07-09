@@ -172,13 +172,39 @@ export function Voice() {
 
   // ── Publish transcript from the overlay directly to a note ───────────────
   const handleOverlayPublishToNote = useCallback(async (text: string) => {
-    if (!engine.engineUrl) return;
+    // The overlay lives in its own floating Tauri window, so status is
+    // communicated back to it over the event bus (same channel the transcript
+    // stream uses) rather than via a main-window state banner.
+    const emitStatus = (payload: { ok: boolean; error?: string }) => {
+      if (!isTauri()) return;
+      import("@tauri-apps/api/event")
+        .then(({ emit }) => {
+          void emit("overlay-publish-status", payload);
+        })
+        .catch((e) =>
+          console.warn("[voice] overlay-publish-status emit failed:", e),
+        );
+    };
+    if (!engine.engineUrl) {
+      console.warn("[voice] overlay publish skipped — engine not connected");
+      emitStatus({ ok: false, error: "Engine not connected — note not saved." });
+      return;
+    }
     const date = new Date();
-    await engine.createNote("local", {
-      label: `Voice Note — ${date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`,
-      content: text,
-      folder_name: "Voice Notes",
-    });
+    try {
+      await engine.createNote("local", {
+        label: `Voice Note — ${date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`,
+        content: text,
+        folder_name: "Voice Notes",
+      });
+      emitStatus({ ok: true });
+    } catch (e) {
+      console.error("[voice] overlay publish to note failed:", e);
+      emitStatus({
+        ok: false,
+        error: `Failed to save note: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
   }, []);
 
   // ── Stream live transcript to the floating overlay window ─────────────────

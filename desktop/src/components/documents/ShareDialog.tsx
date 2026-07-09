@@ -42,6 +42,7 @@ export function ShareDialog({
   const [isPublic, setIsPublic] = useState(false);
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
 
   // Filter shares relevant to this note/folder
   const relevantShares = shares.filter((s) =>
@@ -52,6 +53,7 @@ export function ShareDialog({
   const handleShare = async () => {
     if (!email.trim()) return;
     setLoading(true);
+    setShareError(null);
     try {
       await engine.createShare(userId, {
         note_id: noteId ?? undefined,
@@ -63,6 +65,9 @@ export function ShareDialog({
       onUpdate();
     } catch (err) {
       console.error("Share failed:", err);
+      setShareError(
+        `Failed to share: ${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       setLoading(false);
     }
@@ -70,6 +75,7 @@ export function ShareDialog({
 
   const handleTogglePublic = async () => {
     setLoading(true);
+    setShareError(null);
     try {
       if (publicShare) {
         await engine.deleteShare(publicShare.id, userId);
@@ -85,6 +91,9 @@ export function ShareDialog({
       onUpdate();
     } catch (err) {
       console.error("Toggle public failed:", err);
+      setShareError(
+        `Failed to update public access: ${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       setLoading(false);
     }
@@ -101,11 +110,15 @@ export function ShareDialog({
   };
 
   const handleDeleteShare = async (shareId: string) => {
+    setShareError(null);
     try {
       await engine.deleteShare(shareId, userId);
       onUpdate();
     } catch (err) {
       console.error("Delete share failed:", err);
+      setShareError(
+        `Failed to remove share: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   };
 
@@ -113,11 +126,15 @@ export function ShareDialog({
     shareId: string,
     newPermission: string,
   ) => {
+    setShareError(null);
     try {
       await engine.updateShare(shareId, userId, { permission: newPermission });
       onUpdate();
     } catch (err) {
       console.error("Update permission failed:", err);
+      setShareError(
+        `Failed to update permission: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   };
 
@@ -137,6 +154,22 @@ export function ShareDialog({
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        {/* Error */}
+        {shareError && (
+          <div
+            role="alert"
+            className="mb-4 flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          >
+            <span className="flex-1">{shareError}</span>
+            <button
+              onClick={() => setShareError(null)}
+              className="shrink-0 text-destructive/70 underline hover:text-destructive"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
 
         {/* Add person */}
         <div className="flex items-center gap-2 mb-4">

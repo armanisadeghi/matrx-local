@@ -21,6 +21,16 @@ can discover it without configuration.
 
 from __future__ import annotations
 
+# ── PyInstaller multiprocessing guard — MUST run before anything else ─────────
+# In the frozen binary, any multiprocessing spawn re-executes THIS binary.
+# Without freeze_support(), the child skips the multiprocessing bootstrap and
+# boots a complete second engine: it steals the next port, overwrites
+# ~/.matrx/local.json, and the desktop UI's engine connection goes dead —
+# observed live on 2026-07-09 when the first HF model download (hf_xet)
+# spawned a child and a rogue duplicate engine appeared on 22141.
+import multiprocessing as _mp
+_mp.freeze_support()
+
 # ── Windows UTF-8 fix — before every other import ────────────────────────────
 # Windows defaults to CP1252 for stdout/stderr. Our log messages contain
 # Unicode symbols (✓ → ← ─ ⚠) that CP1252 cannot encode, causing
@@ -254,7 +264,28 @@ def update_discovery_tunnel(tunnel_url: str | None) -> None:
 
 
 def remove_discovery_file() -> None:
+    """Remove the discovery file — but ONLY if this process owns it.
+
+    Multi-instance coexistence is now allowed, so ~/.matrx/local.json may
+    belong to a DIFFERENT live engine (observed live: a test engine's clean
+    shutdown deleted the production app's local.json). Only unlink when the
+    recorded pid is ours; otherwise leave the primary engine's file in place.
+    """
     try:
+        if not DISCOVERY_FILE.exists():
+            return
+        owner_pid = None
+        try:
+            owner_pid = json.loads(DISCOVERY_FILE.read_text()).get("pid")
+        except (OSError, json.JSONDecodeError, ValueError):
+            # Unreadable/corrupt file we can't attribute — treat as ours to
+            # clean up (a corrupt local.json is not another engine's live state).
+            owner_pid = os.getpid()
+        if owner_pid != os.getpid():
+            logger.info(
+                "Discovery file owned by pid %s — leaving in place", owner_pid
+            )
+            return
         DISCOVERY_FILE.unlink(missing_ok=True)
     except Exception:
         pass

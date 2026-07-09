@@ -319,6 +319,15 @@ class ProxyServer:
                     await dst.drain()
             except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
                 pass
+            except Exception:
+                # Catch-all so a _pipe task exception is always retrieved
+                # (an unretrieved task exception logs a scary asyncio warning
+                # at GC time with no context). Peer info makes it debuggable.
+                try:
+                    peer = dst.get_extra_info("peername")
+                except Exception:
+                    peer = None
+                logger.debug("Proxy _pipe failed (peer=%s)", peer, exc_info=True)
 
         task1 = asyncio.create_task(_pipe(client_reader, remote_writer))
         task2 = asyncio.create_task(_pipe(remote_reader, client_writer))

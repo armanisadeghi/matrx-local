@@ -342,7 +342,8 @@ CREATE INDEX IF NOT EXISTS idx_agents_category ON agents(category);
 
 _V6_NOTES_SYNC_METADATA = """
 -- Per-note sync status for offline-first architecture.
--- sync_status: never_synced | synced | pending_push | excluded
+-- sync_status: never_synced | synced | pending_push | failed | excluded
+--   failed → the last cloud push raised; note is retried by list_pending_push
 -- last_synced_at: timestamp of last successful sync for this note
 ALTER TABLE notes ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'never_synced';
 ALTER TABLE notes ADD COLUMN last_synced_at TEXT;

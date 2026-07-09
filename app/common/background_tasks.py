@@ -17,16 +17,34 @@ logger = logging.getLogger(__name__)
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
-def fire_and_forget(coro: Coroutine[Any, Any, Any], *, name: str | None = None) -> None:
-    """Schedule ``coro`` as a retained background task; log (never raise) failures."""
+def fire_and_forget(
+    coro: Coroutine[Any, Any, Any],
+    *,
+    name: str | None = None,
+    quiet: bool = False,
+) -> None:
+    """Schedule ``coro`` as a retained background task; log (never raise) failures.
+
+    Failures are LOUD by default (WARNING with a traceback) — a silently
+    swallowed background exception is exactly the class of defect this helper
+    exists to make visible. Genuinely best-effort callers may pass
+    ``quiet=True`` to drop the failure log to DEBUG.
+    """
 
     async def _safe() -> None:
         try:
             await coro
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            logger.debug("Background task %s failed (non-critical): %s", name or "?", exc)
+        except Exception:
+            if quiet:
+                logger.debug(
+                    "Background task %s failed (quiet)", name or "?", exc_info=True
+                )
+            else:
+                logger.warning(
+                    "Background task %s failed", name or "?", exc_info=True
+                )
 
     try:
         loop = asyncio.get_running_loop()

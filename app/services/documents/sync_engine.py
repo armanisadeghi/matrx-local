@@ -10,7 +10,7 @@ Architecture: LOCAL FIRST. Always.
 - Conflict resolution supports: keep_local, keep_remote, merge, split, exclude.
 
 SQLite tracks per-note sync status:
-  never_synced | synced | pending_push | excluded
+  never_synced | synced | pending_push | failed | excluded
 """
 
 from __future__ import annotations
@@ -27,8 +27,10 @@ from app.common.platform_ctx import PLATFORM
 
 from app.services.documents.file_manager import (
     DocumentFileManager,
+    NotesAccessError,
     content_hash,
     file_manager,
+    notes_access_guard,
 )
 from app.services.documents.supabase_client import SupabaseDocClient, supabase_docs
 
@@ -69,7 +71,16 @@ class SyncEngine:
             else:
                 self._device_id = str(uuid.uuid4())[:12]
                 state["device_id"] = self._device_id
-                self.fm.save_sync_state(state)
+                try:
+                    self.fm.save_sync_state(state)
+                except NotesAccessError:
+                    # Notes dir not writable (e.g. macOS Full Disk Access not
+                    # granted). Use an ephemeral device id for this run rather
+                    # than crashing the caller (the /sync/status 500).
+                    logger.debug(
+                        "Could not persist device_id — notes dir not accessible; "
+                        "using ephemeral id this run"
+                    )
         return self._device_id
 
     def configure(self, user_id: str, jwt: str) -> None:
@@ -83,6 +94,24 @@ class SyncEngine:
     def _get_notes_repo(self):
         from app.services.local_db.repositories import NotesRepo
         return NotesRepo()
+
+    @staticmethod
+    def _access_skipped() -> dict[str, Any] | None:
+        """Return a structured 'skipped' result if the notes dir is access-degraded.
+
+        Every bulk sync cycle scans local files and rewrites .sync/state.json;
+        while the OS is denying access those all fail. Rather than re-hit the
+        wall (and re-spam) on each trigger, short-circuit with a structured
+        result carrying the actionable reason. The guard lets one probe op
+        through every recheck interval so restored access clears the state.
+        """
+        if notes_access_guard.should_skip_sync():
+            return {
+                "sync_skipped": True,
+                "reason": notes_access_guard.reason,
+                "notes_access_degraded": True,
+            }
+        return None
 
     # ── Push: local → Supabase ───────────────────────────────────────────────
 
@@ -257,11 +286,23 @@ class SyncEngine:
                 await repo.set_sync_status(note_id, "synced", remote_hash=c_hash)
 
             except Exception:
-                logger.debug(
-                    "Supabase push failed for note %s — saved locally only (non-critical).",
+                logger.warning(
+                    "Supabase push failed for note %s — saved locally only; "
+                    "marking sync_status=failed (will retry on next push).",
                     note_id,
                     exc_info=True,
                 )
+                # Make the failure visible in state, not just the logs, so the
+                # note is picked up again by list_pending_push. Best-effort —
+                # a failing status write must not mask the original push error.
+                try:
+                    await self._get_notes_repo().set_sync_status(note_id, "failed")
+                except Exception:
+                    logger.warning(
+                        "Could not record sync_status=failed for note %s",
+                        note_id,
+                        exc_info=True,
+                    )
 
         await self._sync_mappings(file_path, folder_id)
         return result
@@ -280,7 +321,9 @@ class SyncEngine:
         try:
             note = await self.sb.get_note(note_id)
         except Exception:
-            logger.debug("Failed to pull note %s from Supabase (non-critical)", note_id)
+            logger.warning(
+                "Failed to pull note %s from Supabase", note_id, exc_info=True
+            )
             return None
 
         if not note:
@@ -383,13 +426,17 @@ class SyncEngine:
         if not self._user_id:
             return {"pulled": 0, "conflicts": 0}
 
+        skipped = self._access_skipped()
+        if skipped is not None:
+            return {"pulled": 0, "conflicts": 0, **skipped}
+
         state = self.fm.load_sync_state()
         last_version = state.get("last_sync_version", 0)
 
         try:
             notes = await self.sb.get_notes_since(self._user_id, last_version)
         except Exception:
-            logger.debug("Failed to pull changes from Supabase (non-critical)")
+            logger.warning("Failed to pull changes from Supabase", exc_info=True)
             return {"pulled": 0, "conflicts": 0, "error": "network_error"}
 
         pulled = 0
@@ -414,6 +461,10 @@ class SyncEngine:
         async with self._sync_lock:
             if not self._user_id:
                 return {"error": "Not configured"}
+
+            skipped = self._access_skipped()
+            if skipped is not None:
+                return {"pushed": 0, "failed": 0, "skipped": 0, **skipped}
 
             repo = self._get_notes_repo()
             pending = await repo.list_pending_push()
@@ -464,6 +515,10 @@ class SyncEngine:
             if not self._user_id:
                 return {"error": "Not configured"}
 
+            skipped = self._access_skipped()
+            if skipped is not None:
+                return {"pulled": 0, "conflicts": 0, "skipped": 0, **skipped}
+
             try:
                 remote_notes = await self.sb.get_all_notes_with_hashes(self._user_id)
             except Exception:
@@ -504,6 +559,10 @@ class SyncEngine:
                 "unchanged": 0,
                 "deleted_local": 0,
             }
+
+            skipped = self._access_skipped()
+            if skipped is not None:
+                return {**stats, **skipped}
 
             try:
                 remote_notes = await self.sb.get_all_notes_with_hashes(self._user_id)
@@ -1028,6 +1087,11 @@ class SyncEngine:
             "watcher_active": self._watch_task is not None
             and not self._watch_task.done(),
             "base_dir": str(self.fm.base_dir),
+            # Surface the macOS Full Disk Access / permission-denied condition
+            # so the UI can prompt the user with an actionable message instead
+            # of silently showing an empty, non-syncing notes list.
+            "notes_access_degraded": notes_access_guard.is_degraded,
+            "notes_access_reason": notes_access_guard.reason,
         }
 
 

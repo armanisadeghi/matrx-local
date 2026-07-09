@@ -73,6 +73,11 @@ export function QuickLocalChatModal({
               Starting confidential chat…
             </DialogDescription>
           )}
+          {!llmState.isStarting && !serverRunning && llmState.error && (
+            <DialogDescription className="text-destructive">
+              Couldn’t start confidential chat: {llmState.error}
+            </DialogDescription>
+          )}
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-hidden">
           <ChatPanel

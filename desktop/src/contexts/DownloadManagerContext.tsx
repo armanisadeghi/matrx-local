@@ -454,10 +454,26 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
         await tauriInvoke("dm_cancel", { id });
       } else {
         const engineUrl = engine.engineUrl;
-        if (!engineUrl) return;
-        await fetch(`${engineUrl}/downloads/${id}`, { method: "DELETE" });
+        if (!engineUrl) {
+          emitClientLog(
+            "error",
+            `[downloads] cancel FAILED for id=${id}: engine not connected`,
+            DOWNLOAD_LOG_SOURCE,
+          );
+          throw new Error("Engine not connected — could not cancel download.");
+        }
+        const resp = await fetch(`${engineUrl}/downloads/${id}`, {
+          method: "DELETE",
+        });
+        if (!resp.ok) {
+          const detail = await resp.text().catch(() => `HTTP ${resp.status}`);
+          throw new Error(
+            `Cancel request failed (HTTP ${resp.status}): ${detail}`,
+          );
+        }
       }
-      // Optimistically update UI
+      // Optimistically update UI — only reached when the cancel actually
+      // succeeded (Tauri invoke resolved or the DELETE returned ok).
       setEntriesMap((prev) => {
         const next = new Map(prev);
         const entry = next.get(id);

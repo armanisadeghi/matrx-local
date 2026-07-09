@@ -414,9 +414,17 @@ export function useEngine(authenticated = true) {
           update({ status: "disconnected" });
         }
         // Within grace period: engine is still booting, stay "connected"
-      } else if (healthy && statusRef.current === "disconnected") {
+      } else if (
+        healthy &&
+        (statusRef.current === "disconnected" || statusRef.current === "error")
+      ) {
+        // isHealthy() self-heals a null/stale base URL via re-discovery, so by
+        // the time it returns true, engine.engineUrl points at the live engine.
+        // Propagate that URL into state (it may have changed ports) and lift the
+        // status back to "connected" — this is what recovers a permanently
+        // null-locked engine URL after a flap, WITHOUT a manual restart.
         connectedAtRef.current = Date.now();
-        update({ status: "connected" });
+        update({ status: "connected", url: engine.engineUrl, error: null });
       }
     }, 10000);
 

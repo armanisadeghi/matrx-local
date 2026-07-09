@@ -103,6 +103,40 @@ export async function getSidecarStatus(): Promise<{ running: boolean; port: numb
   }
 }
 
+/**
+ * Ask the Rust layer for the app-owned sidecar's port and confirm it is
+ * healthy.
+ *
+ * Rust owns the sidecar process, so this is the AUTHORITATIVE source of the
+ * engine URL for this app — unlike ~/.matrx/local.json, which is a shared
+ * mutable global that any other engine instance on the machine can overwrite.
+ * When the app's own child engine is alive, we must always prefer its port.
+ *
+ * The health probe goes through the Rust `check_engine_health` command (a
+ * native HTTP request) rather than a JS fetch(), so it also works on Windows
+ * where WebView2 loopback isolation blocks fetch() to 127.0.0.1.
+ *
+ * Returns the confirmed base URL (e.g. "http://127.0.0.1:22140") if the owned
+ * engine is running and healthy, otherwise null.
+ */
+export async function getOwnedEngineUrl(): Promise<string | null> {
+  const inv = await loadTauriInvoke();
+  if (!inv) return null; // dev / browser — no Rust-owned sidecar
+  try {
+    const status = (await inv("sidecar_status")) as {
+      running: boolean;
+      port: number;
+    } | null;
+    if (!status?.running) return null;
+    const port = status.port ?? 22140;
+    const healthy = (await inv("check_engine_health", { port })) as boolean;
+    if (healthy) return `http://127.0.0.1:${port}`;
+  } catch {
+    // Rust command unavailable or errored — caller falls back to a port scan.
+  }
+  return null;
+}
+
 /** Get buffered sidecar stdout/stderr lines from Rust (Tauri only). */
 export async function getSidecarLogs(): Promise<string[]> {
   const inv = await loadTauriInvoke();

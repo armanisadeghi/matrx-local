@@ -13,6 +13,7 @@ import {
   Loader2,
   Check,
   ExternalLink,
+  AlertCircle,
 } from "lucide-react";
 import { RecordingMicButton } from "@/components/recording/RecordingMicButton";
 import { RmsLevelBar } from "@/components/recording/RmsLevelBar";
@@ -61,6 +62,8 @@ export function QuickTranscriptModal({
   const [pushingNote, setPushingNote] = useState(false);
   const [pushSuccess, setPushSuccess] = useState(false);
   const [polishSuccess, setPolishSuccess] = useState(false);
+  const [pushError, setPushError] = useState<string | null>(null);
+  const [polishError, setPolishError] = useState<string | null>(null);
 
   const {
     isRecording,
@@ -162,6 +165,8 @@ export function QuickTranscriptModal({
         setCopiedId(false);
         setPushSuccess(false);
         setPolishSuccess(false);
+        setPushError(null);
+        setPolishError(null);
       }
       onOpenChange(v);
     },
@@ -176,7 +181,14 @@ export function QuickTranscriptModal({
   }, [hasText, fullTranscript]);
 
   const handlePushToNote = useCallback(async () => {
-    if (!hasText || !sessionId || !engine.engineUrl) return;
+    if (!hasText || !sessionId) return;
+    setPushError(null);
+    if (!engine.engineUrl) {
+      setPushError(
+        "Engine not connected — cannot save the note. Try again in a moment.",
+      );
+      return;
+    }
     setPushingNote(true);
     try {
       const label = `Voice Note — ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
@@ -187,15 +199,18 @@ export function QuickTranscriptModal({
       });
       setPushSuccess(true);
       setTimeout(() => setPushSuccess(false), 3000);
-    } catch {
-      /* engine handles error state */
+    } catch (e) {
+      setPushError(
+        `Failed to save note: ${e instanceof Error ? e.message : String(e)}`,
+      );
     } finally {
       setPushingNote(false);
     }
-  }, [hasText, sessionId, fullTranscript]);
+  }, [hasText, sessionId, fullTranscript, userId]);
 
   const handlePolish = useCallback(async () => {
     if (!hasText || !sessionId || !llmRunning) return;
+    setPolishError(null);
     try {
       const raw = await runPipeline<TranscriptPolishOutput>(
         "polish_transcript",
@@ -210,8 +225,10 @@ export function QuickTranscriptModal({
       });
       setPolishSuccess(true);
       setTimeout(() => setPolishSuccess(false), 4000);
-    } catch {
-      /* pipeline handles its own errors */
+    } catch (e) {
+      setPolishError(
+        `AI polish failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
   }, [
     hasText,
@@ -355,6 +372,41 @@ export function QuickTranscriptModal({
                 <ExternalLink className="h-3 w-3" />
                 Open in Speech to Text tab
               </Button>
+            )}
+          </div>
+        )}
+
+        {(pushError || polishError) && (
+          <div className="flex flex-col gap-1.5">
+            {pushError && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              >
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span className="flex-1">{pushError}</span>
+                <button
+                  className="shrink-0 text-destructive/70 underline hover:text-destructive"
+                  onClick={() => setPushError(null)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+            {polishError && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              >
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span className="flex-1">{polishError}</span>
+                <button
+                  className="shrink-0 text-destructive/70 underline hover:text-destructive"
+                  onClick={() => setPolishError(null)}
+                >
+                  Dismiss
+                </button>
+              </div>
             )}
           </div>
         )}

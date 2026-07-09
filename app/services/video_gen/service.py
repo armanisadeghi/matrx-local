@@ -52,6 +52,43 @@ from app.services.video_gen.models import VIDEO_GEN_MODELS, VideoGenModel
 logger = get_logger()
 
 
+def _missing_module_from_chain(exc: BaseException) -> str | None:
+    """Walk an exception's cause/context chain and return the name of the first
+    missing module if the failure is (or was caused by) an ImportError.
+
+    diffusers/transformers/torchvision lazily import stdlib modules the frozen
+    engine's own import graph never references, so PyInstaller omits them and the
+    package raises ModuleNotFoundError at load time. We surface the module name
+    so the user gets an actionable message instead of a raw multi-line traceback.
+    """
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, ModuleNotFoundError) and cur.name:
+            return cur.name
+        if isinstance(cur, ImportError):
+            return getattr(cur, "name", None) or "a required component"
+        cur = cur.__cause__ or cur.__context__
+    return None
+
+
+def friendly_load_error(exc: BaseException) -> str | None:
+    """Map an ImportError/ModuleNotFoundError load failure to an actionable,
+    single-line message for the UI. Returns None for non-import failures so the
+    caller keeps its existing (already reasonable) error text. The full
+    traceback is always logged separately — this only shapes the API field.
+    """
+    module = _missing_module_from_chain(exc)
+    if module is None:
+        return None
+    return (
+        f"The AI engine build is missing a component required by this model "
+        f"({module}). Update the app to the latest version; if the problem "
+        f"persists, use 'Update AI packages' in the Video tab."
+    )
+
+
 def _check_deps() -> tuple[bool, str]:
     """Return (available, reason). Fast — no heavy imports."""
     missing = []
@@ -61,6 +98,22 @@ def _check_deps() -> tuple[bool, str]:
         except Exception as exc:  # noqa: BLE001 — a corrupt install (e.g. OSError
             # on a dylib load) must NOT crash `import app.main`; surface it as a
             # normal "unavailable" reason instead.
+            # Loud recovery (mirrors image_gen._check_deps): a plain
+            # "No module named '<pkg>'" is the benign not-installed case (quiet);
+            # a different missing module while importing an installed package —
+            # e.g. "No module named 'timeit'" during `import torch` — is a
+            # frozen-build gap (PyInstaller omitted a stdlib module the package
+            # lazily imports) and gets a loud traceback.
+            benign_missing = (
+                isinstance(exc, ModuleNotFoundError)
+                and exc.name in (pkg, pkg.split(".", 1)[0])
+            )
+            if not benign_missing:
+                logger.warning(
+                    "[video_gen] optional package %r is present but failed to import "
+                    "(likely a frozen-build gap — a missing stdlib module it lazily "
+                    "imports): %s", pkg, exc, exc_info=True,
+                )
             missing.append(f"{pkg} ({exc})" if not isinstance(exc, ImportError) else pkg)
     if missing:
         return False, (
@@ -182,8 +235,9 @@ class VideoGenService:
             return {
                 "queued": False,
                 "error": (
-                    f"{model.name} is a gated model — set your Hugging Face token "
-                    "in Settings before downloading it."
+                    f"{model.name} is a gated model. Add your Hugging Face read "
+                    "token under Settings → API Keys → Hugging Face, then start "
+                    "the download again."
                 ),
                 "needs_hf_token": True,
             }
@@ -373,7 +427,7 @@ class VideoGenService:
                 self._pipeline = None
                 self._i2v_pipeline = None
                 self._loaded_model_id = None
-                return {"success": False, "error": str(exc)}
+                return {"success": False, "error": friendly_load_error(exc) or str(exc)}
             finally:
                 self._is_loading = False
 

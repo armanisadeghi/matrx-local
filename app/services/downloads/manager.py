@@ -901,7 +901,7 @@ class DownloadManager:
         Failures are loud: the underlying HF error propagates to the caller,
         which marks the entry ``failed`` with the error message.
         """
-        from app.services.media_gen.paths import DOWNLOAD_COMPLETE_MARKER
+        from app.services.media_gen.paths import DOWNLOAD_COMPLETE_MARKER, read_hf_token
 
         md = entry.metadata or {}
         repo_id: str = md["hf_repo_id"]
@@ -916,11 +916,13 @@ class DownloadManager:
                 "before downloading model weights."
             ) from exc
 
-        token = (
-            os.environ.get("HF_TOKEN")
-            or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-            or None
-        )
+        # Single source of truth for the token — env (app-stored key injected
+        # by key_manager, or a user-set HF_TOKEN) with a fallback to
+        # huggingface_hub's own cached token store. Passing the resolved token
+        # explicitly to HfApi/hf_hub_download avoids the "You are sending
+        # unauthenticated requests to the HF Hub" warning whenever a token
+        # exists anywhere the hub can see it.
+        token = read_hf_token()
         loop = asyncio.get_running_loop()
 
         # Phase 1: exact file list + sizes from the HF API — FILTERED down to

@@ -382,9 +382,24 @@ args = [
     "--hidden-import", "cryptography",
     "--hidden-import", "cryptography.fernet",
     # stdlib modules missed by PyInstaller auto-analysis; required by
-    # user-installed image-gen packages (transformers imports filecmp at top level)
+    # user-installed image-gen packages. transformers imports filecmp/doctest;
+    # torchvision/__init__ does "from modulefinder import Module"; torch>=2.11
+    # _strobelight does "from timeit import default_timer" at import. These fail
+    # with ModuleNotFoundError at model-load time — verified by loading
+    # FLUX.2-klein-4B in the frozen engine (see LESSONS.md).
     "--hidden-import", "filecmp",
     "--hidden-import", "doctest",
+    "--hidden-import", "modulefinder",
+    "--hidden-import", "timeit",
+    "--hidden-import", "runpy",
+    "--hidden-import", "pdb",
+    "--hidden-import", "cProfile",
+    "--hidden-import", "pstats",
+    "--hidden-import", "pickletools",
+    "--hidden-import", "pkgutil",
+    "--hidden-import", "linecache",
+    "--hidden-import", "selectors",
+    "--hidden-import", "faulthandler",
     "--add-data", "app:app",
     "--add-data", "scraper-service/app:scraper-service/app",
 ]

@@ -12,7 +12,40 @@ Active worklist managed by agents. **See `AGENT_INSTRUCTIONS.md` for rules** —
 
 ## Needs Clarification
 
-_(none)_
+### TASK-001: Local GLiNER NER subsystem (URGENT)
+- **Status:** needs-clarification
+- **Created:** 2026-07-09
+- **Priority:** URGENT — cloud NER API volume is a major cost driver
+- **Source:** User: NER is critical; API costs are killing us at volume; need
+  local GLiNER including small through largest; must run through Arman first
+
+**Goal**
+Ship a first-class local NER stack in the Python sidecar so high-volume entity
+extraction stops hitting paid cloud APIs. Support small always-on models and
+optional large/XXL downloads on powerful machines.
+
+**Why**
+NER is a core product path. Cloud API cost scales with volume. GLiNER is the
+right local runtime (encoder NER) — not llama-server / GGUF.
+
+**Plan doc**
+[`docs/GLINER_NER_INTEGRATION_PLAN.md`](../docs/GLINER_NER_INTEGRATION_PLAN.md)
+
+**Subtasks** (do not start coding until Arman approves)
+- [ ] Arman reviews plan + answers decision checklist in the doc
+- [ ] P1: NER service + `/ner/extract[/batch]` + small/medium download + `local_extract_entities`
+- [ ] P2: queue/batching, DownloadManager `"ner"`, registry, capability probe
+- [ ] P3: GLiNER2 + PII presets + large/XXL gating + optional desktop UI
+- [ ] P4 (optional): ONNX/ORT fast path for default small model
+
+**Notes**
+**BLOCKED ON ARMAN — do not implement until reviewed.** Exact questions in the
+plan doc "Decisions needed from Arman" section. Key constraint already decided
+by research: Python sidecar subsystem, NOT LLM catalog / llama-server.
+
+Also filed for Arman in `.arman/ARMAN_TASKS.md`.
+
+---
 
 ## Blocked
 
@@ -29,8 +62,7 @@ _(none)_
 - [x] **Gemma complete + compact GLM/distills (2026-07-09)** — added Gemma 4
   12B Unified (+ mmproj), Gemma 3n E2B; GLM-Z1-9B; upgraded Low2 → R1-0528
   Qwen3-8B and Mid2 → Phi-4-reasoning-plus; added Phi-4-mini-reasoning.
-  GLiNER researched: NER-only (ONNX/transformers), not GGUF/llama-server —
-  do not add to LLM catalog; optional future Python NER tool only.
+  Full NER plan: `docs/GLINER_NER_INTEGRATION_PLAN.md` + TASK-001 (Arman gate).
 
 - [ ] **pytest engine fixture kills live dev engines** — `tests/conftest.py`
   spawns a real engine whose `preflight.clean_orphans()` sweeps ALL

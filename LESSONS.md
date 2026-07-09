@@ -89,10 +89,35 @@ The installer lives in `app/services/image_gen/installer.py`. The UI is `ImageGe
 7. **PyInstaller may not collect stdlib modules unused by the engine itself.** The installed packages run inside the frozen binary's Python interpreter. If they need a stdlib module (e.g. `filecmp`) that PyInstaller didn't bundle — because the engine never imports it — they'll fail with `ModuleNotFoundError` at runtime even though it's a stdlib module that "always exists" in normal Python.
 
    **Fix in two ways:**
-   - Add to `hiddenimports` in all 4 `.spec` files and in `build-sidecar.sh` so the next build includes it.
-   - Patch the installed package source at install time (and on every `inject_image_gen_path()` call) to handle the missing module gracefully. This fixes existing installs without a rebuild.
+   - Add to `hiddenimports` in all **8** `.spec` files (`matrx-engine-*` and `aimatrx-engine-*` × 4 platforms) and in `build-sidecar.sh`'s fallback list (rule 6 — both places, Python import names) so the next build includes it.
+   - Patch the installed package source at install time (and on every `inject_image_gen_path()` call) to handle the missing module gracefully. This fixes existing installs without a rebuild. (Only viable for a package we already patch, e.g. transformers `filecmp` — not for a torch/torchvision top-level import.)
 
-   Known case: `transformers/dynamic_module_utils.py` imports `filecmp` at the top level. The patch in `_patch_transformers_filecmp()` makes it fall back to an always-copy stub.
+   **Known cases (all verified live by loading a model in the frozen engine):**
+   - `transformers/dynamic_module_utils.py` imports `filecmp` at the top level. The runtime-hook patch `_patch_transformers_filecmp()` also makes it fall back to an always-copy stub.
+   - `transformers` also pulls `doctest`.
+   - `torchvision/__init__.py` line 1: `from modulefinder import Module` → needs `modulefinder`.
+   - **`torch >= 2.11`** `torch/_strobelight/cli_function_profiler.py`: `from timeit import default_timer` runs at **`import torch`** time → needs `timeit`. This one blocks `_check_deps()` entirely (image gen shows "packages not installed" even though they are). A torch upgrade is exactly the kind of change that introduces a new import-time stdlib dependency.
+
+   **Current stdlib hiddenimports for the image-gen packages** (specs + build-sidecar.sh): `filecmp`, `doctest`, `modulefinder`, `timeit`, plus torch/torchvision profiling+loader stdlib that can be pulled during import or `from_pretrained` (`runpy`, `pdb`, `cProfile`, `pstats`, `pickletools`, `pkgutil`, `linecache`, `selectors`, `faulthandler`). Harmless if unused, fatal if missing.
+
+   **How to sweep for more (do this whenever torch/diffusers/transformers/accelerate is upgraded or a new diffusers/transformers feature is used):**
+   1. Static hint — grep the installed packages for stdlib imports:
+      ```
+      cd ~/.matrx/image-gen-packages
+      python3 -c "import sys,re,pathlib; std=set(sys.stdlib_module_names); \
+      [print(m,f) for f in pathlib.Path('.').rglob('*.py') \
+       for m in re.findall(r'(?:^|\n)\s*(?:import|from)\s+([a-zA-Z_][a-zA-Z0-9_]*)', f.read_text('utf-8','ignore')) \
+       if m in std]"
+      ```
+      (Grep alone is not authoritative — imports can be deeply transitive, e.g. `AutoImageProcessor` → torchvision → `modulefinder`.)
+   2. **Empirical (authoritative) — the frozen-build image-load test:**
+      - `./scripts/build-sidecar.sh` (~3–4 min).
+      - Boot on a test port: `MATRX_PORT=22156 TAURI_SIDECAR=1 nohup "./dist/Matrx Engine" > /tmp/frozen-test.log 2>&1 &` (health at `http://127.0.0.1:22156/health`; ~45s to ready).
+      - With Bearer `API_KEY` from root `.env`: `POST /image-gen/load {"model_id":"black-forest-labs/FLUX.2-klein-4B"}` (weights already local under `~/.matrx/image-models/`). Success = `GET /image-gen/status` shows `loaded_model_id` set and `load_progress: 100.0`.
+      - Each `ModuleNotFoundError` (visible because `image_gen/service.py::_check_deps()` now logs the full traceback via `exc_info=True`, and `load_model()` maps import failures to a friendly message while logging the traceback) → add the module → rebuild → retry until the model loads.
+      - Cleanup: `POST /admin/shutdown` (Bearer) then `pkill -f "dist/Matrx Engine"`; the engine only deletes its **own** pid-guarded `~/.matrx/local.json`, but a custom-port boot still rewrites it — back it up first and restore afterward.
+
+   The image-gen `service.py`/`video_gen` `service.py` `friendly_load_error()` helper turns any ImportError/ModuleNotFoundError load-failure chain into an actionable UI message naming the missing module ("Update the app... use 'Update AI packages'"), while the raw traceback stays in the log. That is a fallback UX, **not** a fix — a shipped build missing one of these modules is still broken; the hiddenimports list is the fix.
 
 ---
 

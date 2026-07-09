@@ -73,14 +73,38 @@ def mark_model_downloaded(base: Path, model_id: str) -> None:
 def read_hf_token() -> str | None:
     """The configured Hugging Face token, or None.
 
-    Reads the same env vars the key_manager injects stored keys into and that
-    the DownloadManager's HF snapshot path consumes — the single source of truth
-    for "is an HF token configured". Gated (private) model downloads pre-check
-    this so the user gets a clean "set your HF token" message instead of a deep
-    401 RuntimeError buried in the download worker.
+    Resolution order (highest → lowest precedence):
+      1. ``HF_TOKEN`` / ``HUGGING_FACE_HUB_TOKEN`` env vars. The key_manager
+         injects the app-stored token (SQLite ``huggingface`` API key) into
+         these at startup AND on save, and an explicitly user-set env var
+         beats everything else — this is the primary source of truth.
+      2. huggingface_hub's own token store via ``get_token()`` — this picks up
+         a token written to the standard cache locations
+         (``~/.cache/huggingface/token`` / ``~/.huggingface/token``) by a prior
+         ``huggingface-cli login`` or by any hub call that cached credentials.
+         This is what restores a token the user "already had" but that only
+         ever lived in the HF cache, never in the app's own store.
+
+    Gated (private) model downloads pre-check this so the user gets a clean
+    "set your HF token" message instead of a deep 401 RuntimeError buried in
+    the download worker. Because huggingface_hub itself falls back to the same
+    ``get_token()`` store, checking it here keeps the pre-check consistent with
+    what the actual download will resolve.
     """
-    return (
-        os.environ.get("HF_TOKEN")
-        or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-        or None
-    )
+    for var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+        val = os.environ.get(var)
+        if val and val.strip():
+            return val.strip()
+
+    # Lazy import — huggingface_hub is only present once the AI packages are
+    # installed (in-app installer). Never let its absence break this call.
+    try:
+        from huggingface_hub import get_token  # noqa: PLC0415
+
+        cached = get_token()
+    except Exception:  # noqa: BLE001 — import missing or hub internal error
+        cached = None
+    if cached and cached.strip():
+        return cached.strip()
+
+    return None

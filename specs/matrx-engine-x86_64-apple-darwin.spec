@@ -69,7 +69,17 @@ a = Analysis(
         'keyring.backends.fail', 'keyring.backends.null',
         'keyring.backends.macOS',
         'cryptography', 'cryptography.fernet',
-        'filecmp', 'doctest',
+        # torch/torchvision/transformers lazily import stdlib modules the engine's
+        # own import graph never references, so PyInstaller omits them and the
+        # user-installed packages raise ModuleNotFoundError at load time. Verified
+        # by booting the frozen engine and loading FLUX.2-klein-4B (see LESSONS.md).
+        #   filecmp,doctest  <- transformers    modulefinder <- torchvision/__init__
+        #   timeit           <- torch _strobelight (torch>=2.11 imports it at import)
+        'filecmp', 'doctest', 'modulefinder', 'timeit',
+        # torch/torchvision profiling+loader stdlib that can be pulled during import
+        # or pipeline load; harmless if unused, fatal if missing:
+        'runpy', 'pdb', 'cProfile', 'pstats', 'pickletools',
+        'pkgutil', 'linecache', 'selectors', 'faulthandler',
     ],
     hookspath=[],
     hooksconfig={},

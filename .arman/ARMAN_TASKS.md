@@ -1,6 +1,6 @@
 # Arman Tasks — Matrx Local
 
-_Last updated: 2026-03-25_
+_Last updated: 2026-07-09_
 
 > Secrets, accounts, CDN, OS-only steps. Code work → `AGENT_TASKS.md`.
 
@@ -8,6 +8,12 @@ _Last updated: 2026-03-25_
 
 ## Active
 
+- [ ] **URGENT: Review local GLiNER NER plan before agents build** —
+  Cloud NER API volume is a major cost driver; local NER is required.
+  Read [`docs/GLINER_NER_INTEGRATION_PLAN.md`](../docs/GLINER_NER_INTEGRATION_PLAN.md)
+  and answer the decision checklist (default model, PII/relations in P1 vs P3,
+  desktop UI for P1, whether to offer XXL in-app). Tracked as TASK-001 in
+  `.matrx/AGENT_TASKS.md` — agents must not start coding until you approve.
 - [ ] **Reconcile AIDream server ↔ matrx-ai tool registry (aidream repo)** — The
   deployed server 404s `GET /api/ai-tools/app/matrx_local` (the endpoint
   matrx-ai 0.1.26 from PyPI calls); the DB has migrated to the surface-based

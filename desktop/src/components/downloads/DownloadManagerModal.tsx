@@ -65,7 +65,7 @@ function formatPercent(pct: number): string {
 }
 
 function CategoryIcon({ category }: { category: string }) {
-  const cls = "h-3.5 w-3.5 shrink-0 text-zinc-400";
+  const cls = "h-3.5 w-3.5 shrink-0 text-muted-foreground";
   switch (category) {
     case "llm":
       return <Cpu className={cls} />;
@@ -95,7 +95,7 @@ function ProgressBar({
 }) {
   const clamped = Math.min(100, Math.max(0, percent));
   return (
-    <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-zinc-700">
+    <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-muted">
       {indeterminate ? (
         <div className="absolute inset-y-0 left-0 w-1/3 animate-[slide_1.5s_ease-in-out_infinite] rounded-full bg-blue-500" />
       ) : (
@@ -118,11 +118,11 @@ function SectionHeader({
   count: number;
 }) {
   return (
-    <div className="flex items-center gap-2 border-b border-zinc-700/50 px-4 py-2">
-      <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+    <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
         {label}
       </span>
-      <span className="rounded-full bg-zinc-700 px-1.5 py-0.5 text-xs font-medium text-zinc-300">
+      <span className="rounded-full bg-muted px-1.5 py-0.5 text-xs font-medium text-foreground">
         {count}
       </span>
     </div>
@@ -137,11 +137,11 @@ function TableHeader({
   columns: Array<{ label: string; className?: string }>;
 }) {
   return (
-    <div className="flex items-center gap-3 border-b border-zinc-800 bg-zinc-900/50 px-4 py-1.5">
+    <div className="flex items-center gap-3 border-b border-border bg-muted/50 px-4 py-1.5">
       {columns.map((col) => (
         <span
           key={col.label}
-          className={`text-[10px] font-semibold uppercase tracking-wider text-zinc-500 ${col.className ?? ""}`}
+          className={`text-[10px] font-semibold uppercase tracking-wider text-muted-foreground ${col.className ?? ""}`}
         >
           {col.label}
         </span>
@@ -163,12 +163,12 @@ function ActiveRow({
     entry.percent <= 0 && entry.bytes_done <= 0 && entry.status === "active";
 
   return (
-    <div className="group flex h-14 items-center gap-3 border-b border-zinc-800/50 px-4 transition-colors hover:bg-zinc-800/30">
+    <div className="group flex h-14 items-center gap-3 border-b border-border/60 px-4 transition-colors hover:bg-muted/50">
       {/* Category icon + name */}
       <div className="flex w-52 min-w-0 items-center gap-2">
         <CategoryIcon category={entry.category} />
         <span
-          className="truncate text-sm text-zinc-200"
+          className="truncate text-sm text-foreground"
           title={entry.display_name || entry.filename}
         >
           {entry.display_name || entry.filename}
@@ -181,37 +181,37 @@ function ActiveRow({
           percent={entry.percent}
           indeterminate={indeterminate}
         />
-        <span className="w-10 shrink-0 text-right text-xs tabular-nums text-zinc-400">
+        <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
           {indeterminate ? "…" : formatPercent(entry.percent)}
         </span>
       </div>
 
       {/* Bytes */}
-      <div className="w-32 shrink-0 text-right text-xs tabular-nums text-zinc-400">
+      <div className="w-32 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
         {entry.total_bytes > 0
           ? `${formatBytes(entry.bytes_done)} / ${formatBytes(entry.total_bytes)}`
           : formatBytes(entry.bytes_done)}
       </div>
 
       {/* Speed */}
-      <div className="w-20 shrink-0 text-right text-xs tabular-nums text-zinc-400">
+      <div className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
         {formatSpeed(entry.speed_bps)}
       </div>
 
       {/* ETA */}
-      <div className="w-16 shrink-0 text-right text-xs tabular-nums text-zinc-400">
+      <div className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
         {formatEta(entry.eta_seconds)}
       </div>
 
       {/* Part info */}
-      <div className="w-12 shrink-0 text-right text-xs tabular-nums text-zinc-500">
+      <div className="w-12 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
         {entry.part_total > 1 ? `${entry.part_current}/${entry.part_total}` : ""}
       </div>
 
       {/* Cancel */}
       <button
         onClick={() => onCancel(entry.id)}
-        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-500 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-red-600 dark:hover:text-red-600 dark:text-red-400 group-hover:opacity-100"
         aria-label={`Cancel ${entry.display_name || entry.filename}`}
         title="Cancel"
       >
@@ -233,9 +233,9 @@ function WaitingRow({
   onCancel: (id: string) => void;
 }) {
   return (
-    <div className="group flex h-12 items-center gap-3 border-b border-zinc-800/50 px-4 transition-colors hover:bg-zinc-800/30">
+    <div className="group flex h-12 items-center gap-3 border-b border-border/60 px-4 transition-colors hover:bg-muted/50">
       {/* Position badge */}
-      <div className="w-6 shrink-0 text-center text-xs text-zinc-500">
+      <div className="w-6 shrink-0 text-center text-xs text-muted-foreground">
         {position}
       </div>
 
@@ -243,7 +243,7 @@ function WaitingRow({
       <div className="flex flex-1 min-w-0 items-center gap-2">
         <CategoryIcon category={entry.category} />
         <span
-          className="truncate text-sm text-zinc-300"
+          className="truncate text-sm text-foreground"
           title={entry.display_name || entry.filename}
         >
           {entry.display_name || entry.filename}
@@ -251,19 +251,19 @@ function WaitingRow({
       </div>
 
       {/* Size */}
-      <div className="w-24 shrink-0 text-right text-xs text-zinc-500">
+      <div className="w-24 shrink-0 text-right text-xs text-muted-foreground">
         {entry.total_bytes > 0 ? formatBytes(entry.total_bytes) : "—"}
       </div>
 
       {/* Priority */}
-      <div className="w-16 shrink-0 text-right text-xs tabular-nums text-zinc-500">
+      <div className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
         {entry.priority !== 0 ? `p${entry.priority}` : "—"}
       </div>
 
       {/* Cancel */}
       <button
         onClick={() => onCancel(entry.id)}
-        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-500 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-red-600 dark:hover:text-red-600 dark:text-red-400 group-hover:opacity-100"
         aria-label={`Remove ${entry.display_name || entry.filename} from queue`}
         title="Remove from queue"
       >
@@ -286,17 +286,17 @@ function HistoryRow({
   const isFailed = entry.status === "failed";
 
   return (
-    <div className="group flex h-12 items-center gap-3 border-b border-zinc-800/50 px-4 transition-colors hover:bg-zinc-800/30">
+    <div className="group flex h-12 items-center gap-3 border-b border-border/60 px-4 transition-colors hover:bg-muted/50">
       {/* Status icon */}
       <div className="w-5 shrink-0">
         {isCompleted && (
           <CheckCircle2 className="h-4 w-4 text-emerald-500" />
         )}
         {isFailed && (
-          <AlertCircle className="h-4 w-4 text-red-400" />
+          <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
         )}
         {entry.status === "cancelled" && (
-          <XCircle className="h-4 w-4 text-zinc-500" />
+          <XCircle className="h-4 w-4 text-muted-foreground" />
         )}
       </div>
 
@@ -304,7 +304,7 @@ function HistoryRow({
       <div className="flex flex-1 min-w-0 items-center gap-2">
         <CategoryIcon category={entry.category} />
         <span
-          className="truncate text-sm text-zinc-400"
+          className="truncate text-sm text-muted-foreground"
           title={entry.display_name || entry.filename}
         >
           {entry.display_name || entry.filename}
@@ -312,12 +312,12 @@ function HistoryRow({
       </div>
 
       {/* Error message (only for failed) */}
-      <div className="w-48 shrink-0 truncate text-xs text-red-400">
+      <div className="w-48 shrink-0 truncate text-xs text-red-600 dark:text-red-400">
         {isFailed ? (entry.error_msg ?? "Unknown error") : ""}
       </div>
 
       {/* Size */}
-      <div className="w-24 shrink-0 text-right text-xs text-zinc-500">
+      <div className="w-24 shrink-0 text-right text-xs text-muted-foreground">
         {entry.total_bytes > 0 ? formatBytes(entry.total_bytes) : "—"}
       </div>
 
@@ -325,8 +325,8 @@ function HistoryRow({
       <button
         onClick={() => isFailed && onRetry?.(entry)}
         className={[
-          "flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-500",
-          "transition-opacity hover:text-blue-400",
+          "flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground",
+          "transition-opacity hover:text-blue-600 dark:text-blue-400",
           isFailed ? "opacity-0 group-hover:opacity-100" : "invisible",
         ].join(" ")}
         aria-label={isFailed ? `Retry ${entry.display_name || entry.filename}` : undefined}
@@ -343,7 +343,7 @@ function HistoryRow({
 
 function EmptyRow({ message }: { message: string }) {
   return (
-    <div className="flex h-10 items-center justify-center px-4 text-xs text-zinc-600">
+    <div className="flex h-10 items-center justify-center px-4 text-xs text-muted-foreground/70">
       {message}
     </div>
   );
@@ -381,20 +381,20 @@ function LogPanel() {
   }, [logs]);
 
   return (
-    <div className="flex flex-col border-t border-zinc-700/50">
+    <div className="flex flex-col border-t border-border">
       <div className="flex items-center justify-between px-4 py-2">
-        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Download Logs
         </span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-zinc-500 transition-colors hover:bg-zinc-700/50 hover:text-zinc-300"
+          className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
           title="Copy all log lines to clipboard"
         >
           {copied ? (
             <>
-              <Check className="h-3 w-3 text-emerald-400" />
-              <span className="text-emerald-400">Copied</span>
+              <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+              <span className="text-emerald-600 dark:text-emerald-400">Copied</span>
             </>
           ) : (
             <>
@@ -405,9 +405,9 @@ function LogPanel() {
         </button>
       </div>
 
-      <div className="h-48 overflow-y-auto bg-zinc-950/60 px-4 py-2 font-mono text-[10px] leading-relaxed">
+      <div className="h-48 overflow-y-auto bg-muted/40 px-4 py-2 font-mono text-[10px] leading-relaxed">
         {logs.length === 0 ? (
-          <span className="text-zinc-600">No download logs yet.</span>
+          <span className="text-muted-foreground/70">No download logs yet.</span>
         ) : (
           logs.map((l) => (
             <div
@@ -415,16 +415,16 @@ function LogPanel() {
               className={[
                 "mb-0.5",
                 l.level === "error"
-                  ? "text-red-400"
+                  ? "text-red-600 dark:text-red-400"
                   : l.level === "warn"
-                    ? "text-amber-400"
+                    ? "text-amber-600 dark:text-amber-400"
                     : l.level === "success"
-                      ? "text-emerald-400"
-                      : "text-zinc-400",
+                      ? "text-emerald-600 dark:text-emerald-400"
+                      : "text-muted-foreground",
               ].join(" ")}
             >
-              <span className="text-zinc-600">[{l.time}]</span>{" "}
-              <span className="text-zinc-500">[{l.level.toUpperCase()}]</span>{" "}
+              <span className="text-muted-foreground/70">[{l.time}]</span>{" "}
+              <span className="text-muted-foreground">[{l.level.toUpperCase()}]</span>{" "}
               {l.message}
             </div>
           ))
@@ -508,14 +508,14 @@ export function DownloadManagerModal() {
       />
 
       {/* Panel */}
-      <div className="relative z-10 flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-zinc-700/60 bg-zinc-900 shadow-2xl">
+      <div className="relative z-10 flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
         {/* Header */}
-        <div className="flex shrink-0 items-center justify-between border-b border-zinc-700/50 px-6 py-4">
+        <div className="flex shrink-0 items-center justify-between border-b border-border px-6 py-4">
           <div className="flex items-center gap-3">
-            <Download className="h-5 w-5 text-zinc-400" />
-            <h2 className="text-base font-semibold text-zinc-100">Downloads</h2>
+            <Download className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-semibold text-foreground">Downloads</h2>
             {(active.length > 0 || queued.length > 0) && (
-              <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-xs font-medium text-blue-400">
+              <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400">
                 {active.length + queued.length} pending
               </span>
             )}
@@ -524,14 +524,14 @@ export function DownloadManagerModal() {
             {(active.length > 0 || queued.length > 0) && (
               <button
                 onClick={handleCancelAll}
-                className="rounded px-3 py-1 text-xs text-zinc-400 transition-colors hover:bg-red-900/30 hover:text-red-400"
+                className="rounded px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-600 dark:text-red-400"
               >
                 Cancel All
               </button>
             )}
             <button
               onClick={closeModal}
-              className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 transition-colors hover:bg-zinc-700/50 hover:text-zinc-200"
+              className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
               aria-label="Close downloads panel"
             >
               <X className="h-4 w-4" />
@@ -618,10 +618,10 @@ export function DownloadManagerModal() {
         </div>
 
         {/* ── Log panel (collapsible) ─────────────────────────────────── */}
-        <div className="shrink-0 border-t border-zinc-700/50">
+        <div className="shrink-0 border-t border-border">
           <button
             onClick={() => setLogsExpanded((v) => !v)}
-            className="flex w-full items-center justify-between px-4 py-2 text-xs text-zinc-500 transition-colors hover:bg-zinc-800/30 hover:text-zinc-300"
+            className="flex w-full items-center justify-between px-4 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
             aria-expanded={logsExpanded}
             aria-controls="download-log-panel"
           >

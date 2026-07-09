@@ -1067,7 +1067,7 @@ export function BridgeTest({
 
               <Separator />
 
-              <div className="h-72 overflow-auto rounded border bg-zinc-950/50 p-2 font-mono text-[11px]">
+              <div className="dark h-72 overflow-auto rounded border border-zinc-700/50 bg-zinc-950/80 p-2 font-mono text-[11px] text-zinc-200">
                 {logEvents.length === 0 ? (
                   <div className="px-2 py-6 text-center text-muted-foreground">
                     No events yet. Trigger an action above to see live
@@ -1424,7 +1424,7 @@ function CapabilitiesCard({
         </Badge>
       </div>
       <ScrollArea className="h-40 pr-2">
-        <ul className="space-y-0.5 font-mono text-[10px] text-zinc-300">
+        <ul className="space-y-0.5 font-mono text-[10px] text-foreground/80">
           {names.map((n) => (
             <li key={n}>{n}</li>
           ))}

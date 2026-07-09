@@ -186,7 +186,7 @@ export function DebugTerminal({
   const hasWarns = logs.some((l) => l.level === "warn");
 
   return (
-    <div className={cn("rounded-lg border border-zinc-700/60 bg-zinc-950/80", className)}>
+    <div className={cn("dark rounded-lg border border-zinc-700/60 bg-zinc-950/80 text-zinc-200", className)}>
       {/* Header bar */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-700/60">
         <button

@@ -457,7 +457,7 @@ export function BrowserPanel({ onInvoke, loading, result }: BrowserPanelProps) {
           <ToolSection title="JavaScript Console" icon={Code2} iconColor="text-cyan-400">
             <div className="space-y-3">
               <Textarea value={evalCode} onChange={(e) => setEvalCode(e.target.value)}
-                rows={6} className="resize-none font-mono text-xs bg-zinc-950/50 text-emerald-400"
+                rows={6} className="dark resize-none font-mono text-xs bg-zinc-950/80 text-emerald-400 border-zinc-700/50"
                 placeholder="// JavaScript to evaluate in page context..." />
               <div className="flex gap-2">
                 <div className="flex flex-wrap gap-1.5 flex-1">

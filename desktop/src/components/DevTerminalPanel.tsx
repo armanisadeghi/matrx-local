@@ -1496,9 +1496,11 @@ export function DevTerminalPanel() {
   const FILTER_H = HAS_FILTER_BAR ? 30 : 0;
   const contentH = height - HEADER_H - FILTER_H;
 
+  // Intentionally always-dark: a fixed terminal chrome that does not follow
+  // the app light/dark theme (same pattern as shell emulators).
   return (
     <div
-      className="fixed bottom-0 left-0 right-0 z-50 flex flex-col border-t border-zinc-700/60 bg-zinc-950 shadow-2xl"
+      className="dark fixed bottom-0 left-0 right-0 z-50 flex flex-col border-t border-zinc-700/60 bg-zinc-950 text-zinc-200 shadow-2xl"
       style={{ height }}
     >
       {/* Drag handle */}
@@ -1726,7 +1728,7 @@ export function TerminalToggleButton({ className }: TerminalToggleButtonProps) {
       onClick={toggleDevTerminal}
       title="Toggle debug terminal"
       className={cn(
-        "flex items-center gap-1.5 rounded px-2 py-1 text-xs font-mono text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors",
+        "flex items-center gap-1.5 rounded px-2 py-1 text-xs font-mono text-muted-foreground hover:text-foreground hover:bg-muted transition-colors",
         className,
       )}
     >

@@ -107,12 +107,12 @@ const CLIENT_SOURCES = new Set([
 const HTTP_SOURCE = "access";
 
 const LEVEL_COLOR: Record<LogLevel, string> = {
-  info: "text-zinc-400",
-  success: "text-emerald-400",
-  warn: "text-amber-400",
-  error: "text-red-400",
-  data: "text-sky-400",
-  cmd: "text-cyan-400",
+  info: "text-zinc-600 dark:text-zinc-400",
+  success: "text-emerald-700 dark:text-emerald-400",
+  warn: "text-amber-700 dark:text-amber-400",
+  error: "text-red-700 dark:text-red-400",
+  data: "text-sky-700 dark:text-sky-400",
+  cmd: "text-cyan-700 dark:text-cyan-400",
 };
 
 const LEVEL_LABEL: Record<LogLevel, string> = {
@@ -125,12 +125,14 @@ const LEVEL_LABEL: Record<LogLevel, string> = {
 };
 
 const LEVEL_PILL_ACTIVE: Record<LogLevel, string> = {
-  info: "bg-zinc-700 text-zinc-200 border-zinc-500",
-  success: "bg-emerald-900/50 text-emerald-300 border-emerald-700",
-  warn: "bg-amber-900/50 text-amber-300 border-amber-700",
-  error: "bg-red-900/50 text-red-300 border-red-700",
-  data: "bg-sky-900/50 text-sky-300 border-sky-700",
-  cmd: "bg-cyan-900/50 text-cyan-300 border-cyan-700",
+  info: "bg-zinc-200 text-zinc-800 border-zinc-300 dark:bg-zinc-700 dark:text-zinc-200 dark:border-zinc-500",
+  success:
+    "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-900/50 dark:text-emerald-300 dark:border-emerald-700",
+  warn: "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/50 dark:text-amber-300 dark:border-amber-700",
+  error:
+    "bg-red-100 text-red-800 border-red-300 dark:bg-red-900/50 dark:text-red-300 dark:border-red-700",
+  data: "bg-sky-100 text-sky-800 border-sky-300 dark:bg-sky-900/50 dark:text-sky-300 dark:border-sky-700",
+  cmd: "bg-cyan-100 text-cyan-800 border-cyan-300 dark:bg-cyan-900/50 dark:text-cyan-300 dark:border-cyan-700",
 };
 
 const LEVEL_PILL_INACTIVE =
@@ -155,24 +157,24 @@ const SOURCE_LABELS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 function statusColor(code: number): string {
-  if (code < 300) return "text-emerald-400";
-  if (code < 400) return "text-amber-400";
-  if (code < 500) return "text-orange-400";
-  return "text-red-400";
+  if (code < 300) return "text-emerald-700 dark:text-emerald-400";
+  if (code < 400) return "text-amber-700 dark:text-amber-400";
+  if (code < 500) return "text-orange-700 dark:text-orange-400";
+  return "text-red-700 dark:text-red-400";
 }
 
 function methodColor(method: string): string {
   switch (method.toUpperCase()) {
     case "GET":
-      return "text-sky-400";
+      return "text-sky-700 dark:text-sky-400";
     case "POST":
-      return "text-violet-400";
+      return "text-violet-700 dark:text-violet-400";
     case "PUT":
-      return "text-amber-400";
+      return "text-amber-700 dark:text-amber-400";
     case "DELETE":
-      return "text-red-400";
+      return "text-red-700 dark:text-red-400";
     case "PATCH":
-      return "text-orange-400";
+      return "text-orange-700 dark:text-orange-400";
     default:
       return "text-muted-foreground";
   }
@@ -410,13 +412,13 @@ function buildIssueReport(logs: ClientLogLine[]): string {
 function TabBadge({ errors, warns }: { errors: number; warns: number }) {
   if (errors > 0)
     return (
-      <span className="text-[9px] bg-red-900/50 text-red-400 rounded px-1 py-px font-mono">
+      <span className="text-[9px] bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400 rounded px-1 py-px font-mono">
         {errors}e
       </span>
     );
   if (warns > 0)
     return (
-      <span className="text-[9px] bg-amber-900/50 text-amber-400 rounded px-1 py-px font-mono">
+      <span className="text-[9px] bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400 rounded px-1 py-px font-mono">
         {warns}w
       </span>
     );
@@ -550,7 +552,7 @@ function LogFilterBar({
                   className={cn(
                     "inline-flex items-center gap-1 text-[10px] font-mono px-1.5 h-[18px] rounded border transition-colors select-none",
                     grouped
-                      ? "bg-violet-900/50 text-violet-300 border-violet-700"
+                      ? "bg-violet-100 text-violet-800 border-violet-300 dark:bg-violet-900/50 dark:text-violet-300 dark:border-violet-700"
                       : LEVEL_PILL_INACTIVE,
                   )}
                 >
@@ -573,7 +575,7 @@ function LogFilterBar({
           className={cn(
             "inline-flex items-center gap-1 text-[10px] font-mono px-1.5 h-[18px] rounded border transition-colors select-none",
             autoScroll
-              ? "bg-zinc-700 text-zinc-200 border-zinc-500"
+              ? "bg-zinc-200 text-zinc-800 border-zinc-300 dark:bg-zinc-700 dark:text-zinc-200 dark:border-zinc-500"
               : LEVEL_PILL_INACTIVE,
           )}
         >
@@ -782,7 +784,7 @@ function LogTab({
           title="Copy all — full buffer, no filters applied"
         >
           {copiedAll ? (
-            <Check className="h-3.5 w-3.5 text-emerald-400" />
+            <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
           ) : (
             <Copy className="h-3.5 w-3.5" />
           )}
@@ -796,7 +798,7 @@ function LogTab({
           title="Copy view — respects active filters and grouping"
         >
           {copiedView ? (
-            <Check className="h-3.5 w-3.5 text-emerald-400" />
+            <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
           ) : (
             <ClipboardList className="h-3.5 w-3.5" />
           )}
@@ -810,7 +812,7 @@ function LogTab({
           title="Copy AI issue report — deduplicated errors and warnings with counts"
         >
           {copiedReport ? (
-            <Check className="h-3.5 w-3.5 text-emerald-400" />
+            <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
           ) : (
             <AlertTriangle className="h-3.5 w-3.5" />
           )}
@@ -851,13 +853,13 @@ function LogTab({
           {filtered.length !== 1 ? "s" : ""}
         </span>
         {errCount > 0 && (
-          <span className="flex items-center gap-1 text-red-400">
+          <span className="flex items-center gap-1 text-red-700 dark:text-red-400">
             <AlertCircle className="h-3 w-3" />
             {errCount} error{errCount !== 1 ? "s" : ""}
           </span>
         )}
         {warnCount > 0 && (
-          <span className="flex items-center gap-1 text-amber-400">
+          <span className="flex items-center gap-1 text-amber-700 dark:text-amber-400">
             <AlertTriangle className="h-3 w-3" />
             {warnCount} warning{warnCount !== 1 ? "s" : ""}
           </span>
@@ -865,7 +867,7 @@ function LogTab({
       </div>
 
       {/* Rows */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto bg-zinc-950/40">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto bg-muted/40">
         <div className="px-4 py-2 font-mono text-[11px] space-y-0.5">
           {filtered.length === 0 ? (
             <p className="text-muted-foreground py-8 text-center">
@@ -878,18 +880,18 @@ function LogTab({
               <div
                 key={key}
                 className={cn(
-                  "flex gap-2 items-start hover:bg-zinc-900/60 px-1 rounded",
+                  "flex gap-2 items-start hover:bg-muted/80 px-1 rounded",
                   LEVEL_COLOR[l.level],
                 )}
               >
-                <span className="text-zinc-600 shrink-0 tabular-nums select-none">
+                <span className="text-muted-foreground/70 shrink-0 tabular-nums select-none">
                   {l.time}
                 </span>
                 <span className="font-semibold shrink-0 w-8 select-none">
                   {LEVEL_LABEL[l.level]}
                 </span>
                 {l.source && (
-                  <span className="text-zinc-600 shrink-0 select-none">
+                  <span className="text-muted-foreground/70 shrink-0 select-none">
                     [{l.source}]
                   </span>
                 )}
@@ -897,7 +899,7 @@ function LogTab({
                   {l.message}
                 </span>
                 {count > 1 && (
-                  <span className="shrink-0 self-center text-[9px] font-bold bg-zinc-700 text-zinc-300 rounded-full px-1.5 py-px tabular-nums select-none">
+                  <span className="shrink-0 self-center text-[9px] font-bold bg-muted text-foreground border border-border rounded-full px-1.5 py-px tabular-nums select-none">
                     {count}
                   </span>
                 )}
@@ -908,18 +910,18 @@ function LogTab({
               <div
                 key={l.id}
                 className={cn(
-                  "flex gap-2 items-start hover:bg-zinc-900/60 px-1 rounded",
+                  "flex gap-2 items-start hover:bg-muted/80 px-1 rounded",
                   LEVEL_COLOR[l.level],
                 )}
               >
-                <span className="text-zinc-600 shrink-0 tabular-nums select-none">
+                <span className="text-muted-foreground/70 shrink-0 tabular-nums select-none">
                   {l.time}
                 </span>
                 <span className="font-semibold shrink-0 w-8 select-none">
                   {LEVEL_LABEL[l.level]}
                 </span>
                 {l.source && (
-                  <span className="text-zinc-600 shrink-0 select-none">
+                  <span className="text-muted-foreground/70 shrink-0 select-none">
                     [{l.source}]
                   </span>
                 )}
@@ -931,10 +933,10 @@ function LogTab({
           )}
         </div>
         {!autoScroll && newLogCount > 0 && (
-          <div className="sticky bottom-0 flex items-center justify-center px-4 py-2 border-t border-zinc-700/60 bg-zinc-900/95 backdrop-blur-sm">
+          <div className="sticky bottom-0 flex items-center justify-center px-4 py-2 border-t border-border bg-background/95 backdrop-blur-sm">
             <button
               onClick={handleToggleAutoScroll}
-              className="text-xs font-mono text-zinc-400 hover:text-zinc-200 transition-colors"
+              className="text-xs font-mono text-muted-foreground hover:text-foreground transition-colors"
             >
               ↓ {newLogCount} new log{newLogCount !== 1 ? "s" : ""} — click to
               resume
@@ -1065,7 +1067,7 @@ function HttpTab({ logs }: { logs: ClientLogLine[] }) {
           title="Copy all — full buffer, no filter applied"
         >
           {copiedAll ? (
-            <Check className="h-3.5 w-3.5 text-emerald-400" />
+            <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
           ) : (
             <Copy className="h-3.5 w-3.5" />
           )}
@@ -1079,7 +1081,7 @@ function HttpTab({ logs }: { logs: ClientLogLine[] }) {
           title="Copy view — respects active text filter"
         >
           {copiedView ? (
-            <Check className="h-3.5 w-3.5 text-emerald-400" />
+            <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
           ) : (
             <ClipboardList className="h-3.5 w-3.5" />
           )}
@@ -1112,13 +1114,13 @@ function HttpTab({ logs }: { logs: ClientLogLine[] }) {
           {filtered.length} request{filtered.length !== 1 ? "s" : ""}
         </span>
         <span className="flex items-center gap-1">
-          <CheckCircle className="h-3 w-3 text-emerald-400" />
+          <CheckCircle className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
           {successCount} success
         </span>
         <span
           className={cn(
             "flex items-center gap-1",
-            errorCount > 0 ? "text-red-400" : "",
+            errorCount > 0 ? "text-red-700 dark:text-red-400" : "",
           )}
         >
           <AlertCircle className="h-3 w-3" />
@@ -1133,7 +1135,7 @@ function HttpTab({ logs }: { logs: ClientLogLine[] }) {
       </div>
 
       {/* Rows */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto bg-zinc-950/40">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto bg-muted/40">
         <div className="px-4 py-2 font-mono">
           {filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
@@ -1147,10 +1149,10 @@ function HttpTab({ logs }: { logs: ClientLogLine[] }) {
             filtered.map((e, i) => (
               <div
                 key={i}
-                className="grid gap-2 rounded px-1 py-0.5 text-[11px] hover:bg-zinc-900/60 transition-colors"
+                className="grid gap-2 rounded px-1 py-0.5 text-[11px] hover:bg-muted/80 transition-colors"
                 style={{ gridTemplateColumns: "5rem 3.5rem 1fr auto auto" }}
               >
-                <span className="text-zinc-600 tabular-nums">
+                <span className="text-muted-foreground/70 tabular-nums">
                   {formatTime(e.timestamp)}
                 </span>
                 <span className={cn("font-bold", methodColor(e.method))}>
@@ -1178,10 +1180,10 @@ function HttpTab({ logs }: { logs: ClientLogLine[] }) {
           )}
         </div>
         {!autoScroll && newLogCount > 0 && (
-          <div className="sticky bottom-0 flex items-center justify-center px-4 py-2 border-t border-zinc-700/60 bg-zinc-900/95 backdrop-blur-sm">
+          <div className="sticky bottom-0 flex items-center justify-center px-4 py-2 border-t border-border bg-background/95 backdrop-blur-sm">
             <button
               onClick={handleToggleAutoScroll}
-              className="text-xs font-mono text-zinc-400 hover:text-zinc-200 transition-colors"
+              className="text-xs font-mono text-muted-foreground hover:text-foreground transition-colors"
             >
               ↓ {newLogCount} new request{newLogCount !== 1 ? "s" : ""} — click
               to resume
@@ -1306,7 +1308,7 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
           className={cn(
             "rounded-lg border px-4 py-3 flex flex-col gap-0.5 min-w-[80px]",
             totalErrors > 0
-              ? "border-red-900 bg-red-950/50"
+              ? "border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/50"
               : "border-border bg-muted/20",
           )}
         >
@@ -1317,7 +1319,9 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
           <span
             className={cn(
               "text-xl font-mono",
-              totalErrors > 0 ? "text-red-400" : "text-muted-foreground",
+              totalErrors > 0
+                ? "text-red-700 dark:text-red-400"
+                : "text-muted-foreground",
             )}
           >
             {totalErrors}
@@ -1327,7 +1331,7 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
           className={cn(
             "rounded-lg border px-4 py-3 flex flex-col gap-0.5 min-w-[80px]",
             totalWarns > 0
-              ? "border-amber-900 bg-amber-950/50"
+              ? "border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/50"
               : "border-border bg-muted/20",
           )}
         >
@@ -1338,7 +1342,9 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
           <span
             className={cn(
               "text-xl font-mono",
-              totalWarns > 0 ? "text-amber-400" : "text-muted-foreground",
+              totalWarns > 0
+                ? "text-amber-700 dark:text-amber-400"
+                : "text-muted-foreground",
             )}
           >
             {totalWarns}
@@ -1366,8 +1372,10 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
         >
           {copiedReport ? (
             <>
-              <Check className="h-4 w-4 text-emerald-400" />
-              <span className="text-emerald-400">Copied!</span>
+              <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              <span className="text-emerald-600 dark:text-emerald-400">
+                Copied!
+              </span>
             </>
           ) : (
             <>
@@ -1401,9 +1409,9 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
               className={cn(
                 "rounded-lg border bg-muted/10 p-3",
                 counts.error > 0
-                  ? "border-red-900"
+                  ? "border-red-300 dark:border-red-900"
                   : counts.warn > 0
-                    ? "border-amber-900"
+                    ? "border-amber-300 dark:border-amber-900"
                     : "border-border",
               )}
             >
@@ -1442,12 +1450,12 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
                 })}
               </div>
               {counts.lastErr && (
-                <p className="mt-1.5 text-[10px] text-red-400 font-mono truncate">
+                <p className="mt-1.5 text-[10px] text-red-700 dark:text-red-400 font-mono truncate">
                   ↳ {counts.lastErr}
                 </p>
               )}
               {!counts.lastErr && counts.lastWarn && (
-                <p className="mt-1.5 text-[10px] text-amber-400 font-mono truncate">
+                <p className="mt-1.5 text-[10px] text-amber-700 dark:text-amber-400 font-mono truncate">
                   ↳ {counts.lastWarn}
                 </p>
               )}

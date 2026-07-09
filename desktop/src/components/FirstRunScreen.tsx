@@ -327,19 +327,19 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
 
         {/* Error notice */}
         {phase === "error" && errorMessage && (
-          <div className="mb-4 rounded-lg border border-red-800/50 bg-red-950/30 px-4 py-3">
+          <div className="mb-4 rounded-lg border border-red-300 bg-red-50 dark:border-red-800/50 dark:bg-red-950/30 px-4 py-3">
             <div className="flex items-start gap-2">
-              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-400" />
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-700 dark:text-red-400" />
               <div>
-                <p className="text-sm font-medium text-red-400">Some steps failed</p>
-                <p className="mt-0.5 text-xs text-red-400/80">{errorMessage}</p>
+                <p className="text-sm font-medium text-red-700 dark:text-red-400">Some steps failed</p>
+                <p className="mt-0.5 text-xs text-red-700/80 dark:text-red-400/80">{errorMessage}</p>
               </div>
             </div>
             <div className="mt-3 flex gap-2">
               <Button
                 size="sm"
                 variant="outline"
-                className="border-red-800 text-red-400 hover:bg-red-950/50"
+                className="border-red-300 text-red-700 hover:bg-red-100 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/50"
                 onClick={runInstall}
               >
                 Retry
@@ -358,14 +358,14 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
 
         {/* Success message */}
         {phase === "complete" && (
-          <div className="mb-4 rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-4 py-3 text-center">
+          <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 dark:border-emerald-800/40 dark:bg-emerald-950/20 px-4 py-3 text-center">
             <CheckCircle2 className="mx-auto mb-1 h-6 w-6 text-emerald-500" />
-            <p className="text-sm font-medium text-emerald-400">All done! Launching Matrx Local...</p>
+            <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">All done! Launching Matrx Local...</p>
           </div>
         )}
 
         {/* Raw log toggle */}
-        <div className="rounded-lg border border-zinc-700/50 bg-zinc-950/60">
+        <div className="dark rounded-lg border border-zinc-700/50 bg-zinc-950/60 text-zinc-200">
           <button
             onClick={() => setLogsOpen((v) => !v)}
             className="flex w-full items-center justify-between px-3 py-2 text-xs font-mono text-zinc-400 hover:text-zinc-200 transition-colors"
@@ -437,17 +437,17 @@ function StepCard({ step }: { step: InstallStep }) {
     <div className={cn(
       "rounded-lg border px-4 py-3 transition-colors",
       isActive ? "border-primary/30 bg-primary/5" :
-      isDone   ? "border-emerald-800/30 bg-emerald-950/10" :
-      isError  ? "border-red-800/30 bg-red-950/10" :
-      "border-zinc-800/50 bg-zinc-950/20"
+      isDone   ? "border-emerald-300/60 bg-emerald-50 dark:border-emerald-800/30 dark:bg-emerald-950/10" :
+      isError  ? "border-red-300/60 bg-red-50 dark:border-red-800/30 dark:bg-red-950/10" :
+      "border-border bg-muted/20"
     )}>
       <div className="flex items-start gap-3">
         {/* Status icon */}
         <div className="mt-0.5 flex-shrink-0">
           {isDone  && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
           {isActive && <Loader2 className="h-4 w-4 text-primary animate-spin" />}
-          {isError && <AlertCircle className="h-4 w-4 text-red-400" />}
-          {step.status === "pending" && <Circle className="h-4 w-4 text-zinc-600" />}
+          {isError && <AlertCircle className="h-4 w-4 text-red-700 dark:text-red-400" />}
+          {step.status === "pending" && <Circle className="h-4 w-4 text-muted-foreground" />}
         </div>
 
         <div className="min-w-0 flex-1">
@@ -456,13 +456,13 @@ function StepCard({ step }: { step: InstallStep }) {
               "text-sm font-medium",
               isDone   ? "text-foreground" :
               isActive ? "text-foreground" :
-              isError  ? "text-red-400" :
+              isError  ? "text-red-700 dark:text-red-400" :
               "text-muted-foreground"
             )}>
               {step.label}
             </span>
             {step.sizeHint && step.status !== "ready" && (
-              <span className="text-[11px] text-zinc-500 flex-shrink-0">{step.sizeHint}</span>
+              <span className="text-[11px] text-muted-foreground flex-shrink-0">{step.sizeHint}</span>
             )}
             {isDone && (
               <span className="text-[11px] text-emerald-500 flex-shrink-0">Done</span>
@@ -471,7 +471,7 @@ function StepCard({ step }: { step: InstallStep }) {
 
           <p className={cn(
             "mt-0.5 text-[11px]",
-            isError ? "text-red-400/80" : "text-muted-foreground/70"
+            isError ? "text-red-700/80 dark:text-red-400/80" : "text-muted-foreground/70"
           )}>
             {step.message ?? step.description}
           </p>

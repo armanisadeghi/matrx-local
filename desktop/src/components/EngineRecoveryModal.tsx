@@ -489,9 +489,9 @@ export function EngineMonitor({
       case "fail":
         return <XCircle className="h-4 w-4 text-red-500" />;
       case "skip":
-        return <Circle className="h-4 w-4 text-zinc-500" />;
+        return <Circle className="h-4 w-4 text-muted-foreground" />;
       default:
-        return <Circle className="h-4 w-4 text-zinc-600" />;
+        return <Circle className="h-4 w-4 text-muted-foreground/70" />;
     }
   };
 
@@ -705,7 +705,7 @@ export function EngineMonitor({
                       ) : p.status === "scanning" ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />
                       ) : (
-                        <XCircle className="h-3.5 w-3.5 text-zinc-600" />
+                        <XCircle className="h-3.5 w-3.5 text-muted-foreground" />
                       )}
                       <span className="font-mono text-xs">{p.port}</span>
                     </div>
@@ -750,7 +750,7 @@ export function EngineMonitor({
                 Copy
               </Button>
             </div>
-            <div ref={logScrollRef} className="h-[380px] overflow-y-auto rounded-lg border border-border/50 bg-zinc-950 p-3">
+            <div ref={logScrollRef} className="dark h-[380px] overflow-y-auto rounded-lg border border-zinc-700/50 bg-zinc-950 p-3 text-zinc-200">
               <div className="font-mono text-xs text-zinc-400 space-y-0.5">
                 {logs.length === 0 && (
                   <div className="text-zinc-600 italic">

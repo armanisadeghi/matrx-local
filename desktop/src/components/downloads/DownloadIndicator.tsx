@@ -37,7 +37,7 @@ export function DownloadIndicator() {
       className={[
         "relative flex h-8 items-center gap-1.5 rounded px-2",
         "transition-all duration-200",
-        "hover:bg-zinc-700/50",
+        "hover:bg-muted",
         isIdle
           ? "pointer-events-none opacity-0"
           : "pointer-events-auto opacity-100",
@@ -45,10 +45,10 @@ export function DownloadIndicator() {
       tabIndex={isIdle ? -1 : 0}
     >
       {/* Icon */}
-      <Download className="h-4 w-4 shrink-0 text-blue-400" />
+      <Download className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
 
       {/* Count badge */}
-      <span className="min-w-[1.25rem] rounded-full bg-blue-500/20 px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums leading-none text-blue-400">
+      <span className="min-w-[1.25rem] rounded-full bg-blue-500/20 px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums leading-none text-blue-600 dark:text-blue-400">
         {activeCount}
       </span>
 
@@ -62,7 +62,7 @@ export function DownloadIndicator() {
         aria-hidden="true"
       >
         {/* Track */}
-        <div className="absolute inset-0 bg-zinc-700/50" />
+        <div className="absolute inset-0 bg-muted" />
         {/* Fill */}
         <div
           className="absolute inset-y-0 left-0 bg-blue-500 transition-[width] duration-300"

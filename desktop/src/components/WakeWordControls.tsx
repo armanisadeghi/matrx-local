@@ -38,10 +38,10 @@ interface WakeWordControlsProps {
 
 function StatusDot({ uiMode, rms }: { uiMode: WakeWordUIMode; rms: number }) {
   const colors: Record<WakeWordUIMode, string> = {
-    idle:      "bg-zinc-600",
-    setup:     "bg-yellow-400",
+    idle:      "bg-muted-foreground",
+    setup:     "bg-amber-500",
     listening: "bg-emerald-400",
-    muted:     "bg-zinc-500",
+    muted:     "bg-muted-foreground/70",
     dismissed: "bg-red-400",
     active:    "bg-sky-400",
   };
@@ -75,12 +75,12 @@ function StatusLabel({ uiMode }: { uiMode: WakeWordUIMode }) {
     active:    "Awake",
   };
   const textColors: Record<WakeWordUIMode, string> = {
-    idle:      "text-zinc-500",
-    setup:     "text-yellow-400",
-    listening: "text-emerald-400",
-    muted:     "text-zinc-400",
-    dismissed: "text-red-400",
-    active:    "text-sky-400",
+    idle:      "text-muted-foreground",
+    setup:     "text-amber-600 dark:text-yellow-400",
+    listening: "text-emerald-600 dark:text-emerald-400",
+    muted:     "text-muted-foreground",
+    dismissed: "text-red-600 dark:text-red-400",
+    active:    "text-sky-700 dark:text-sky-400",
   };
   return (
     <span className={`text-xs font-medium tabular-nums ${textColors[uiMode]}`}>
@@ -105,9 +105,9 @@ function CtrlBtn({ icon, label, title, onClick, variant = "default", disabled }:
     "inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-all select-none disabled:opacity-40 disabled:cursor-not-allowed";
 
   const variants = {
-    default: "text-zinc-300 hover:text-zinc-100 hover:bg-zinc-700/60 active:bg-zinc-700",
-    danger:  "text-red-400   hover:text-red-300   hover:bg-red-900/30  active:bg-red-900/50",
-    accent:  "text-sky-400   hover:text-sky-300   hover:bg-sky-900/30  active:bg-sky-900/50",
+    default: "text-foreground/80 hover:text-foreground hover:bg-muted active:bg-muted/80",
+    danger:  "text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-500/10 active:bg-red-500/20",
+    accent:  "text-sky-700 dark:text-sky-400 hover:text-sky-800 dark:hover:text-sky-300 hover:bg-sky-500/10 active:bg-sky-500/20",
   };
 
   return (
@@ -129,11 +129,11 @@ function CtrlBtn({ icon, label, title, onClick, variant = "default", disabled }:
 function DownloadBar({ progress }: { progress: DownloadProgress }) {
   const pct = Math.round(progress.percent);
   return (
-    <div className="flex items-center gap-2 text-xs text-yellow-400">
+    <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-yellow-400">
       <Loader2 size={12} className="animate-spin flex-shrink-0" />
-      <div className="w-20 h-1 rounded-full bg-zinc-700 overflow-hidden">
+      <div className="w-20 h-1 rounded-full bg-muted overflow-hidden">
         <div
-          className="h-full bg-yellow-400 rounded-full transition-all duration-200"
+          className="h-full bg-amber-500 rounded-full transition-all duration-200"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -165,7 +165,7 @@ export function WakeWordControls({
 
   return (
     <div
-      className="flex items-center gap-1 px-3 py-1.5 rounded-md border border-zinc-700/60 bg-zinc-900/80 backdrop-blur-sm"
+      className="flex items-center gap-1 px-3 py-1.5 rounded-md border border-border bg-card/90 backdrop-blur-sm"
       style={{ minHeight: 34 }}
     >
       {/* Status */}
@@ -180,7 +180,7 @@ export function WakeWordControls({
       )}
 
       {/* Separator */}
-      <div className="w-px h-4 bg-zinc-700 mx-1" />
+      <div className="w-px h-4 bg-muted mx-1" />
 
       {/* Controls */}
       {!isSetupRunning && (
@@ -247,7 +247,7 @@ export function WakeWordControls({
 
       {/* Setup spinner label */}
       {isSetupRunning && !downloadProgress && (
-        <div className="flex items-center gap-1.5 text-xs text-yellow-400">
+        <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-yellow-400">
           <Loader2 size={12} className="animate-spin" />
           <span>Preparing…</span>
         </div>

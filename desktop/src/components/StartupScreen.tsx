@@ -261,7 +261,7 @@ export function StartupScreen({ authLoading, engineStatus }: StartupScreenProps)
         {errorSteps.length > 0 && (
           <div className="mt-4 w-full max-w-xs rounded-lg border border-red-500/30 bg-red-500/5 p-3 space-y-1">
             {errorSteps.map((s) => (
-              <div key={s.id} className="flex items-start gap-2 text-xs text-red-400">
+              <div key={s.id} className="flex items-start gap-2 text-xs text-red-600 dark:text-red-400">
                 <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
                 <span><span className="font-medium">{s.label}:</span> {s.detail ?? "Failed"}</span>
               </div>
@@ -270,8 +270,8 @@ export function StartupScreen({ authLoading, engineStatus }: StartupScreenProps)
         )}
       </div>
 
-      {/* ── RIGHT: Live log panel ─────────────────────────────────────────── */}
-      <div className="flex flex-col flex-1 min-w-0 bg-zinc-950">
+      {/* ── RIGHT: Live log panel (always-dark terminal chrome) ───────────── */}
+      <div className="dark flex flex-col flex-1 min-w-0 bg-zinc-950 text-zinc-200">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800 bg-zinc-900/60">
           <div className="flex items-center gap-2">
@@ -336,14 +336,14 @@ function StepRow({ step }: { step: PhaseStep }) {
         {step.status === "done"    && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
         {step.status === "active"  && <Loader2      className="h-4 w-4 text-primary animate-spin" />}
         {step.status === "error"   && <XCircle      className="h-4 w-4 text-red-500" />}
-        {step.status === "pending" && <Circle       className="h-4 w-4 text-zinc-600" />}
+        {step.status === "pending" && <Circle       className="h-4 w-4 text-muted-foreground" />}
       </div>
       <div className="min-w-0 flex-1">
         <span className={cn(
           "text-sm",
           step.status === "done"    ? "text-foreground" :
           step.status === "active"  ? "text-foreground font-medium" :
-          step.status === "error"   ? "text-red-400" :
+          step.status === "error"   ? "text-red-600 dark:text-red-400" :
           "text-muted-foreground"
         )}>
           {step.label}

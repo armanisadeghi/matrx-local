@@ -334,9 +334,9 @@ export function Dashboard({
                             ) : p.status === "denied" ? (
                               <XCircle className="h-3.5 w-3.5 text-red-500" />
                             ) : p.status === "loading" ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                             ) : (
-                              <HelpCircle className="h-3.5 w-3.5 text-zinc-400" />
+                              <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
                             )}
                           </span>
                           <span className="flex-1 text-sm">{p.label}</span>
@@ -442,7 +442,7 @@ function DeviceStatusRow({ perm }: { perm: PermissionInfo }) {
     ) : perm.status === "denied" ? (
       <XCircle className="h-3.5 w-3.5 text-red-500" />
     ) : (
-      <HelpCircle className="h-3.5 w-3.5 text-zinc-400" />
+      <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
     );
 
   return (

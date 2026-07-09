@@ -112,7 +112,7 @@ export function TerminalPanel({ onInvoke, loading, result }: TerminalPanelProps)
       {view === "shell" && (
         <>
           {/* Command input */}
-          <div className="rounded-2xl border bg-zinc-900/50 overflow-hidden">
+          <div className="dark rounded-2xl border border-zinc-700/50 bg-zinc-900/90 overflow-hidden text-zinc-200">
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-zinc-700/50">
               <div className="flex gap-1.5">
                 <div className="h-2.5 w-2.5 rounded-full bg-red-500/80" />
@@ -157,7 +157,7 @@ export function TerminalPanel({ onInvoke, loading, result }: TerminalPanelProps)
           </div>
 
           {/* Background tasks */}
-          <ToolSection title="Background Tasks" icon={Terminal} iconColor="text-zinc-400">
+          <ToolSection title="Background Tasks" icon={Terminal} iconColor="text-muted-foreground">
             <div className="space-y-2">
               <div className="flex gap-2">
                 <Input value={command} onChange={(e) => setCommand(e.target.value)}
@@ -192,7 +192,7 @@ export function TerminalPanel({ onInvoke, loading, result }: TerminalPanelProps)
 
           {/* Command history */}
           {commandHistory.length > 0 && (
-            <ToolSection title="History" icon={Terminal} iconColor="text-zinc-400" noPadding>
+            <ToolSection title="History" icon={Terminal} iconColor="text-muted-foreground" noPadding>
               <div className="divide-y divide-border/30 max-h-48 overflow-auto">
                 {commandHistory.slice(0, 10).map((entry, i) => (
                   <button key={i} onClick={() => { setCommand(entry.command); inputRef.current?.focus(); }}
@@ -213,7 +213,7 @@ export function TerminalPanel({ onInvoke, loading, result }: TerminalPanelProps)
       {/* ── SCRIPTS ── */}
       {view === "scripts" && (
         <>
-          <ToolSection title="Run Script" icon={FileCode} iconColor="text-zinc-400">
+          <ToolSection title="Run Script" icon={FileCode} iconColor="text-muted-foreground">
             <div className="space-y-3">
               <div className="flex gap-1 rounded-lg border bg-muted/20 p-0.5">
                 {(["applescript", "powershell"] as const).map((t) => (

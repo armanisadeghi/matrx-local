@@ -93,7 +93,7 @@ function StatusBadge({
   if (!status) return null;
   if (!status.model_downloaded) {
     return (
-      <span className="flex items-center gap-1.5 rounded-full bg-zinc-500/10 px-3 py-1 text-xs font-medium text-zinc-400">
+      <span className="flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">
         <Download className="h-3 w-3" />
         Model Required
       </span>

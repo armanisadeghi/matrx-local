@@ -48,7 +48,7 @@ class AIDreamClient:
         models = await client.get("/ai-models")
 
         # authenticated endpoint — pass user JWT
-        prompts = await client.get("/prompts", jwt=user_jwt)
+        agents = await client.get("/agents", jwt=user_jwt)
     """
 
     def __init__(self, base_url: str) -> None:
@@ -104,19 +104,18 @@ class AIDreamClient:
         data = await self.get("/ai-models")
         return data.get("models", [])
 
-    async def fetch_prompt_builtins(self) -> list[dict[str, Any]]:
-        """GET /api/prompts/builtins — public, no auth needed."""
-        data = await self.get("/prompts/builtins")
-        return data.get("builtins", [])
+    async def fetch_agents(self, jwt: str) -> list[dict[str, Any]]:
+        """GET /api/agents — requires user JWT.
 
-    async def fetch_user_prompts(self, jwt: str) -> list[dict[str, Any]]:
-        """GET /api/prompts — requires user JWT."""
-        data = await self.get("/prompts", jwt=jwt)
-        return data.get("prompts", [])
-
-    async def fetch_all_prompts(self, jwt: str) -> dict[str, Any]:
-        """GET /api/prompts/all — requires user JWT. Returns {prompts, builtins}."""
-        return await self.get("/prompts/all", jwt=jwt)
+        Returns the unified agent catalog: platform agents (formerly prompt
+        builtins, now rows in the ``agent.definition`` table) plus the
+        authenticated user's own agents. There is no public/anonymous variant;
+        the old /api/prompts/builtins, /api/prompts and /api/prompts/all
+        endpoints are unmounted. Each item is shaped as
+        ``{id, name, description, category, tags, type, variables}``.
+        """
+        data = await self.get("/agents", jwt=jwt)
+        return data.get("agents", [])
 
     async def fetch_tools(self) -> list[dict[str, Any]]:
         """GET /api/ai-tools — public, no auth needed."""

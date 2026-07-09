@@ -24,3 +24,13 @@ export function useTtsApp(): [UseTtsState, UseTtsActions] {
   if (!ctx) throw new Error("useTtsApp must be used within TtsProvider");
   return ctx;
 }
+
+/**
+ * Non-throwing variant: returns the shared TTS state, or null when there is no
+ * TtsProvider in the tree. Use this in surfaces where TTS is optional so the
+ * hook is still called unconditionally (rules-of-hooks safe) instead of being
+ * wrapped in a try/catch, which silently hides the missing provider.
+ */
+export function useTtsAppOptional(): [UseTtsState, UseTtsActions] | null {
+  return useContext(TtsAppContext);
+}

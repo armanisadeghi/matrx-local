@@ -44,6 +44,8 @@ class TtsStatusResponse(BaseModel):
     download_progress: float
     model_dir: str
     voice_count: int
+    needs_download: bool = False
+    auto_download: bool = False
 
 
 class TtsVoiceInfo(BaseModel):
@@ -64,6 +66,13 @@ class SynthesizeRequest(BaseModel):
     voice_id: str = Field(default="af_heart")
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     lang: str | None = Field(default=None, description="Override espeak language code (e.g. 'en-us')")
+    streaming_threshold: int | None = Field(
+        default=None,
+        ge=1,
+        le=50_000,
+        description="Optional override of the short/long streaming cutoff (chars). "
+                    "When omitted, the server's tts_streaming_threshold setting is used.",
+    )
 
     @field_validator("text")
     @classmethod
@@ -132,11 +141,34 @@ def _raise_for_result(result, default_status: int = 500) -> None:
         "bad_shape": 400,
         "voice_not_found": 404,
         "in_progress": 409,
+        "model_not_downloaded": 409,
         "invalid_blend": 422,
         "model_missing": 503,
     }
     status = status_map.get(code, default_status)
     raise HTTPException(status_code=status, detail={"detail": msg, "code": code})
+
+
+def _raise_if_not_downloaded(svc) -> None:
+    """Fail fast with a structured 409 when the Kokoro model is not on disk.
+
+    This is what prevents a synth request from silently triggering a 330 MB
+    download and timing out the client. When ``tts_auto_download_model`` is
+    enabled, the download is kicked off in the background here (never blocks).
+    """
+    if svc.model_downloaded:
+        return
+    svc.maybe_start_background_download()
+    st = svc.get_status()
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "detail": "tts model not downloaded",
+            "code": "model_not_downloaded",
+            "needs_download": True,
+            "downloading": bool(st.get("is_downloading")),
+        },
+    )
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -172,6 +204,7 @@ async def download_model() -> DownloadResponse:
 async def synthesize(req: SynthesizeRequest) -> Response:
     """Generate speech and return audio/wav bytes."""
     svc = get_tts_service()
+    _raise_if_not_downloaded(svc)
     result = await svc.synthesize(
         text=req.text, voice_id=req.voice_id, speed=req.speed, lang=req.lang,
     )
@@ -208,6 +241,9 @@ async def synthesize_stream(req: SynthesizeRequest, request: Request) -> Streami
     yielding promptly when the client aborts.
     """
     svc = get_tts_service()
+    # Pre-check before opening the stream so the client gets a clean 409 instead
+    # of waiting on a 330 MB download behind the streaming socket (30s timeout).
+    _raise_if_not_downloaded(svc)
 
     async def _gen() -> AsyncIterator[bytes]:
         async for frame in svc.synthesize_stream(
@@ -216,6 +252,7 @@ async def synthesize_stream(req: SynthesizeRequest, request: Request) -> Streami
             speed=req.speed,
             lang=req.lang,
             is_disconnected=request.is_disconnected,
+            streaming_threshold=req.streaming_threshold,
         ):
             yield frame
 
@@ -236,6 +273,7 @@ async def synthesize_stream(req: SynthesizeRequest, request: Request) -> Streami
 async def preview_voice(req: PreviewVoiceRequest) -> Response:
     """Generate a short preview clip for a given voice."""
     svc = get_tts_service()
+    _raise_if_not_downloaded(svc)
     result = await svc.preview_voice(req.voice_id)
     if not result.success or result.audio_bytes is None:
         _raise_for_result(result)

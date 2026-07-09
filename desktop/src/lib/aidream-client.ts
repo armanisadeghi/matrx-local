@@ -9,8 +9,10 @@
  *   - All available URLs (for debug picker): getAllAIDreamUrls()
  *
  * Auth:
- *   - Public endpoints (models, builtins, tools): no token needed
- *   - Authenticated endpoints (user prompts): pass Supabase JWT as Bearer token
+ *   - Public endpoints (models, tools): no token needed
+ *   - Authenticated endpoints (agents): pass Supabase JWT as Bearer token.
+ *     There is no public/anonymous agent listing anymore — /api/agents
+ *     requires a JWT. Callers must skip the fetch when logged out.
  */
 
 // ---------------------------------------------------------------------------
@@ -104,34 +106,24 @@ export interface AIDreamModelsResponse {
   count: number;
 }
 
-export interface AIDreamPrompt {
+/**
+ * A platform or user agent, as returned by GET /api/agents.
+ * Prompt builtins now live in the `agent.definition` table and are served
+ * from this single unified endpoint alongside the user's own agents.
+ */
+export interface AIDreamAgent {
   id: string;
   name: string;
   description?: string;
   category?: string;
   tags?: string[];
-  variable_defaults?: unknown[];
-  model_id?: string | null;
-  temperature?: number | null;
-  max_tokens?: number | null;
-  is_favorite?: boolean;
-  settings?: Record<string, unknown>;
+  type?: string;
+  variables?: unknown[];
 }
 
-export interface AIDreamPromptsResponse {
-  prompts: AIDreamPrompt[];
+export interface AIDreamAgentsResponse {
+  agents: AIDreamAgent[];
   count: number;
-}
-
-export interface AIDreamBuiltinsResponse {
-  builtins: AIDreamPrompt[];
-  count: number;
-}
-
-export interface AIDreamAllPromptsResponse {
-  prompts: AIDreamPrompt[];
-  builtins: AIDreamPrompt[];
-  total_count: number;
 }
 
 // ── Compute targets ────────────────────────────────────────────────────────
@@ -237,35 +229,17 @@ export async function fetchAIDreamModels(
 }
 
 /**
- * Fetch all prompt builtins. Public — no auth needed.
- * Corresponds to GET /api/prompts/builtins
+ * Fetch the unified agent catalog (platform agents + the user's own agents).
+ * Requires a JWT — there is no public/anonymous variant. The old
+ * /api/prompts/builtins, /api/prompts and /api/prompts/all endpoints are
+ * gone; builtins moved into the `agent.definition` table and are served here.
+ * Corresponds to GET /api/agents
  */
-export async function fetchAIDreamBuiltins(
-  opts: RequestOptions = {},
-): Promise<AIDreamBuiltinsResponse> {
-  return aidreamGet<AIDreamBuiltinsResponse>("/prompts/builtins", opts);
-}
-
-/**
- * Fetch the authenticated user's prompts. Requires JWT.
- * Corresponds to GET /api/prompts
- */
-export async function fetchAIDreamUserPrompts(
+export async function fetchAIDreamAgents(
   jwt: string,
   opts: RequestOptions = {},
-): Promise<AIDreamPromptsResponse> {
-  return aidreamGet<AIDreamPromptsResponse>("/prompts", { ...opts, jwt });
-}
-
-/**
- * Fetch user prompts AND builtins in one call. Requires JWT.
- * Corresponds to GET /api/prompts/all
- */
-export async function fetchAIDreamAllPrompts(
-  jwt: string,
-  opts: RequestOptions = {},
-): Promise<AIDreamAllPromptsResponse> {
-  return aidreamGet<AIDreamAllPromptsResponse>("/prompts/all", { ...opts, jwt });
+): Promise<AIDreamAgentsResponse> {
+  return aidreamGet<AIDreamAgentsResponse>("/agents", { ...opts, jwt });
 }
 
 /**

@@ -9,6 +9,7 @@ import {
   type SynthesizeRequest,
   type DownloadResponse,
   type TtsStreamErrorPayload,
+  type TtsModelNotDownloadedPayload,
 } from "./types";
 
 /** Typed error thrown by synthesizeStream when the server emits an error frame
@@ -19,6 +20,44 @@ export class TtsStreamError extends Error {
     super(message);
     this.name = "TtsStreamError";
     this.code = code;
+  }
+}
+
+/**
+ * Thrown when a synth/stream call returns HTTP 409 because the TTS model isn't
+ * downloaded yet. Extends TtsStreamError (code `model_not_downloaded`) so the
+ * existing `instanceof TtsStreamError` handling in the hooks still routes it,
+ * while carrying the `downloading` flag so callers can distinguish
+ * "download in progress" from "never downloaded".
+ */
+export class TtsModelNotDownloadedError extends TtsStreamError {
+  needsDownload = true;
+  downloading: boolean;
+  constructor(message: string, downloading: boolean) {
+    super("model_not_downloaded", message);
+    this.name = "TtsModelNotDownloadedError";
+    this.downloading = downloading;
+  }
+}
+
+/**
+ * If `resp` is the backend's 409 "model not downloaded" contract, throw a
+ * typed TtsModelNotDownloadedError. Uses a cloned body so the caller can still
+ * read `resp.text()` for any other non-ok status. No-op otherwise.
+ */
+async function throwIfModelMissing(resp: Response): Promise<void> {
+  if (resp.status !== 409) return;
+  let payload: Partial<TtsModelNotDownloadedPayload> = {};
+  try {
+    payload = (await resp.clone().json()) as Partial<TtsModelNotDownloadedPayload>;
+  } catch {
+    // Not the JSON contract we expect — fall through to generic handling.
+  }
+  if (payload?.needs_download) {
+    throw new TtsModelNotDownloadedError(
+      payload.detail ?? "tts model not downloaded",
+      Boolean(payload.downloading),
+    );
   }
 }
 
@@ -103,6 +142,7 @@ export async function synthesize(
   });
 
   if (!resp.ok) {
+    await throwIfModelMissing(resp);
     const detail = await resp.text().catch(() => resp.statusText);
     throw new Error(`TTS synthesis failed (${resp.status}): ${detail}`);
   }
@@ -132,6 +172,7 @@ export async function previewVoice(
   });
 
   if (!resp.ok) {
+    await throwIfModelMissing(resp);
     const detail = await resp.text().catch(() => resp.statusText);
     throw new Error(`TTS preview failed (${resp.status}): ${detail}`);
   }
@@ -175,6 +216,7 @@ export async function* synthesizeStream(
   });
 
   if (!resp.ok) {
+    await throwIfModelMissing(resp);
     const detail = await resp.text().catch(() => resp.statusText);
     throw new TtsStreamError(
       "http_" + resp.status,

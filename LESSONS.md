@@ -303,3 +303,56 @@ sum — that's the live progress.
 
 `huggingface_hub[hf_transfer]` warns (uv) or is ignored (pip) on hub >= 1.0 —
 the Rust accelerator (hf_xet) is built in now. Pin plain `huggingface_hub`.
+
+---
+
+## Process Lifecycle — Playwright Leaks & Sibling Engines
+
+### Leaked Playwright browsers survive a crash — reap only true orphans, tightly scoped
+
+The scraper's browser pool (`chrome-headless-shell` × pool_size + the
+Playwright driver node) are **children of the Python engine**. A clean
+lifespan teardown closes them, but a crash or force-exit leaves them
+reparented to PID 1, each holding hundreds of MB of RAM — the classic
+"why is chrome-headless-shell still running" leak.
+
+Two independent backstops, both in-repo (never touch the read-only
+`scraper-service/` subtree):
+
+1. **Startup reclamation** — `app/preflight.py` has `playwright_driver` and
+   `playwright_browser` `ManagedService` entries. They are safe because they
+   fire ONLY when the process is a true orphan (`orphan_only`: parent dead /
+   reparented to PID 1) AND scoped to **our** `PLAYWRIGHT_BROWSERS_PATH`:
+   - the driver's argv (`node cli.js run-driver`) carries no path, so it is
+     matched by its inherited `PLAYWRIGHT_BROWSERS_PATH` **env var**
+     (`env_markers`) — validated with `psutil.Process.environ()`;
+   - the browser's executable path literally contains the browsers path, so
+     the browsers-path `safety_keyword` is an airtight scope.
+   This can never match the user's real Chrome or an unrelated Playwright
+   (different browsers path / no env marker). `kill_tree` reaps the driver's
+   browser children with it.
+
+2. **In-session force-exit** — `run.py::_kill_child_subprocesses` (the
+   parachute after graceful teardown times out) calls
+   `scraper/engine.py::terminate_playwright_tree(driver_pid)`. The driver PID
+   is captured at `browser_pool.start()` from the Playwright transport
+   (`pw._impl_obj._connection._transport._proc.pid`, psutil-children
+   fallback). Kill by **remembered PID**, never `pkill -f run-driver` — other
+   apps run Playwright too.
+
+**Do not** broadly match `run-driver` or `chrome-headless-shell` without both
+the orphan gate and the browsers-path scope: the machine routinely has other
+Playwright drivers (verified live: unrelated `run-driver` PIDs with a
+different / absent `PLAYWRIGHT_BROWSERS_PATH`).
+
+### Preflight must not kill a live sibling engine
+
+`clean_orphans()` used to kill every process matching the engine pattern
+except self/ancestors — so a packaged app and a dev `uv run run.py` killed
+each other at startup. The `engine` service is now `protect_live_owner=True`:
+a matched engine (and its **ancestor chain** — the packaged app has an outer
+"Matrx Engine" launcher that parents the real one) is spared when it is the
+discovery-file owner answering `/health`, or listens on a scan-range port
+(22140–22159) answering `/health` as Matrx. True-orphan reclamation is
+unchanged. `assign_engine_port()` names a live incumbent on 22140 loudly and
+binds the next free port.

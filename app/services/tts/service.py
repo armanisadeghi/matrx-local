@@ -68,6 +68,39 @@ CUSTOM_VOICES_DIR = TTS_DIR / "custom-voices"
 
 PREVIEW_TEXT = "Hello! This is a preview of my voice. I hope you enjoy how I sound."
 
+# Registry service name — TTS load/download is now a first-class managed service
+# (app/launcher.py) so /admin/status and the diagnostic snapshots see it.
+_REGISTRY_NAME = "tts"
+
+
+def _auto_download_enabled() -> bool:
+    """Read the ``tts_auto_download_model`` setting (default False).
+
+    Best-effort: any failure to read settings is treated as "disabled" so a
+    settings hiccup can never trigger an unexpected 330 MB background download.
+    """
+    try:
+        from app.services.cloud_sync.settings_sync import get_settings_sync
+        return bool(get_settings_sync().get("tts_auto_download_model", False))
+    except Exception:
+        return False
+
+
+def _configured_stream_threshold() -> int:
+    """Resolve the streaming chunker threshold from settings.
+
+    Server-side default source of truth for the ``streaming_threshold`` synth
+    request field (see app/api/tts_routes.py). Falls back to
+    ``STREAM_THRESHOLD_CHARS`` (280) if the setting is absent or invalid.
+    """
+    try:
+        from app.services.cloud_sync.settings_sync import get_settings_sync
+        raw = get_settings_sync().get("tts_streaming_threshold", STREAM_THRESHOLD_CHARS)
+        val = int(raw)
+        return val if val > 0 else STREAM_THRESHOLD_CHARS
+    except Exception:
+        return STREAM_THRESHOLD_CHARS
+
 _SAFE_ID_RE = re.compile(r"[^a-z0-9_-]")
 
 
@@ -191,7 +224,49 @@ class TtsService:
             "download_progress": self._download_progress,
             "model_dir": str(TTS_DIR),
             "voice_count": len(BUILTIN_VOICES),
+            # Download state surfaced so the UI can distinguish "not downloaded
+            # yet" from "downloading now" and know whether a background auto-
+            # download will kick off on the next synth request.
+            "needs_download": not self.model_downloaded,
+            "auto_download": _auto_download_enabled(),
         }
+
+    def maybe_start_background_download(self) -> None:
+        """Kick off a background model download IFF ``tts_auto_download_model``
+        is enabled and nothing is already in flight.
+
+        Never blocks — the caller (a synth request) fast-fails immediately and
+        the download proceeds out-of-band. Must be called from an async context
+        (a running event loop) so the fire-and-forget task can be scheduled.
+        """
+        if self.model_downloaded or self._is_downloading:
+            return
+        if not _auto_download_enabled():
+            return
+        try:
+            from app.common.background_tasks import fire_and_forget
+            fire_and_forget(self._auto_download_task(), name="tts-auto-download")
+            logger.info("[tts] auto-download enabled — starting model download in background")
+        except Exception as exc:
+            logger.warning("[tts] could not start background auto-download: %s", exc)
+
+    async def _auto_download_task(self) -> None:
+        from app.launcher import get_registry
+        registry = get_registry()
+        registry.starting(_REGISTRY_NAME, phase="auto-download")
+        try:
+            result = await self.download_model()
+        except Exception as exc:
+            registry.failed(_REGISTRY_NAME, exc)
+            return
+        if result.get("success"):
+            # Downloaded but not yet loaded — a subsequent synth call loads it.
+            registry.degraded(_REGISTRY_NAME, reason="model downloaded; not yet loaded")
+        else:
+            registry.degraded(
+                _REGISTRY_NAME,
+                reason=f"auto-download failed: {result.get('error', 'unknown error')}",
+            )
 
     def list_voices(self) -> list[dict[str, Any]]:
         voices: list[dict[str, Any]] = []
@@ -359,7 +434,7 @@ class TtsService:
             if loop is not None and loop.is_running():
                 asyncio.run_coroutine_threadsafe(_push(), loop)
         except Exception as exc:
-            logger.debug("[tts] download progress emit failed: %s", exc)
+            logger.warning("[tts] download progress emit failed: %s", exc)
 
     def _sha256_of_file(self, path) -> str:
         h = hashlib.sha256()
@@ -491,14 +566,20 @@ class TtsService:
         if self._model_loaded and self._kokoro is not None:
             return {"success": True, "already_loaded": True}
 
+        from app.launcher import get_registry
+        registry = get_registry()
+        registry.starting(_REGISTRY_NAME)
+
         if not self.model_downloaded:
             dl = await self.download_model()
             if not dl.get("success"):
+                registry.failed(_REGISTRY_NAME, dl.get("error", "model download failed"))
                 return dl
 
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, self._load_model_sync)
         if result.get("success"):
+            registry.ready(_REGISTRY_NAME)
             return result
 
         # Self-heal: delete files and retry once — but ONLY for failures that
@@ -510,6 +591,10 @@ class TtsService:
                 "[tts] load failed (%s) — not a file problem; skipping re-download",
                 result.get("error"),
             )
+            registry.degraded(
+                _REGISTRY_NAME,
+                reason=f"load failed ({result.get('error')}) — not a file problem",
+            )
             return result
 
         logger.warning("[tts] load failed (%s); deleting files and re-downloading",
@@ -518,8 +603,14 @@ class TtsService:
             (TTS_DIR / fn).unlink(missing_ok=True)
         dl = await self.download_model()
         if not dl.get("success"):
+            registry.failed(_REGISTRY_NAME, dl.get("error", "re-download failed"))
             return dl
-        return await loop.run_in_executor(None, self._load_model_sync)
+        final = await loop.run_in_executor(None, self._load_model_sync)
+        if final.get("success"):
+            registry.ready(_REGISTRY_NAME)
+        else:
+            registry.failed(_REGISTRY_NAME, final.get("error", "load failed after re-download"))
+        return final
 
     def _load_model_sync(self) -> dict[str, Any]:
         with self._lock:
@@ -685,6 +776,17 @@ class TtsService:
         except TtsError as exc:
             return SynthesisResult(success=False, error=exc.message, error_code=exc.code)
 
+        # Fast-fail if the model isn't on disk yet — NEVER block a synth call on
+        # a 330 MB download (that timed out the frontend stream at 30s). Kick off
+        # the background auto-download if the user opted in.
+        if not self.model_downloaded:
+            self.maybe_start_background_download()
+            return SynthesisResult(
+                success=False,
+                error="tts model not downloaded",
+                error_code="model_not_downloaded",
+            )
+
         load_result = await self.ensure_loaded()
         if not load_result.get("success"):
             return SynthesisResult(
@@ -753,14 +855,19 @@ class TtsService:
         speed: float = 1.0,
         lang: str | None = None,
         is_disconnected=None,
+        streaming_threshold: int | None = None,
     ) -> AsyncIterator[bytes]:
         """Yield framed v2 bytes for the streaming endpoint.
 
         Hybrid strategy:
-          - Text shorter than ``STREAM_THRESHOLD_CHARS`` → one ``create()`` call,
+          - Text shorter than the resolved threshold → one ``create()`` call,
             one CHUNK frame, one END frame.
           - Longer text → ``kokoro.create_stream()`` wrapped with per-chunk
             watchdog and explicit error capture.
+
+        ``streaming_threshold``: optional per-request override of the short/long
+        cutoff. When None, the ``tts_streaming_threshold`` setting is used,
+        falling back to ``STREAM_THRESHOLD_CHARS`` (280).
 
         Always emits exactly one terminating frame: END on success, ERROR on
         failure. The client can rely on this to detect truncation.
@@ -775,6 +882,20 @@ class TtsService:
             yield frame_error(exc.code, exc.message)
             yield frame_end()
             return
+
+        # Fast-fail (defense-in-depth; the route also pre-checks and returns a
+        # 409). NEVER trigger a blocking 330 MB download from inside the stream.
+        if not self.model_downloaded:
+            self.maybe_start_background_download()
+            yield frame_error("model_not_downloaded", "tts model not downloaded")
+            yield frame_end()
+            return
+
+        resolved_threshold = (
+            streaming_threshold
+            if (streaming_threshold is not None and streaming_threshold > 0)
+            else _configured_stream_threshold()
+        )
 
         load_result = await self.ensure_loaded()
         if not load_result.get("success"):
@@ -809,7 +930,7 @@ class TtsService:
                 return False
 
         # ── Short path: single create() call ──────────────────────────────
-        if len(text) < STREAM_THRESHOLD_CHARS:
+        if len(text) < resolved_threshold:
             loop = asyncio.get_running_loop()
             try:
                 samples, sr = await loop.run_in_executor(

@@ -19,7 +19,7 @@ async def _broadcast_notification(title: str, message: str, level: str = "info")
         from app.main import websocket_manager
         await websocket_manager.broadcast_notification(title, message, level)
     except Exception as e:
-        logger.debug("Failed to broadcast notification to WS clients: %s", e)
+        logger.warning("Failed to broadcast notification to WS clients: %s", e)
 
 
 async def send_notification(
@@ -49,7 +49,7 @@ async def send_notification(
     except ImportError:
         pass
     except Exception as e:
-        logger.debug("plyer notification failed: %s", e)
+        logger.warning("plyer notification failed: %s", e)
 
     # Platform-specific fallbacks
     if not os_fired:

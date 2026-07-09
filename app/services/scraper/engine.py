@@ -136,6 +136,96 @@ def _import_scraper(module_path: str) -> Any:
     return mod
 
 
+def _extract_driver_pid(browser_pool: Any) -> int | None:
+    """Best-effort: return the PID of the Playwright driver node process.
+
+    Tries the Playwright object's internal transport (fast, exact); falls back
+    to scanning our own child processes for the `run-driver` node. Any failure
+    returns None — the preflight orphan sweep is the backstop, so a missing PID
+    here is not fatal.
+    """
+    # 1) Internal transport (async_playwright().start() → driver subprocess).
+    try:
+        pw = getattr(browser_pool, "_playwright", None)
+        proc = (
+            getattr(
+                getattr(
+                    getattr(getattr(pw, "_impl_obj", None), "_connection", None),
+                    "_transport",
+                    None,
+                ),
+                "_proc",
+                None,
+            )
+        )
+        pid = getattr(proc, "pid", None)
+        if isinstance(pid, int) and pid > 0:
+            return pid
+    except Exception:
+        pass
+
+    # 2) Fallback: find a `run-driver` node among our own descendants.
+    try:
+        import os as _os
+        import psutil
+
+        me = psutil.Process(_os.getpid())
+        for child in me.children(recursive=True):
+            try:
+                cmd = " ".join(child.cmdline())
+            except psutil.Error:
+                continue
+            if "run-driver" in cmd:
+                return child.pid
+    except Exception:
+        pass
+    return None
+
+
+def terminate_playwright_tree(driver_pid: int | None) -> None:
+    """Force-terminate the Playwright driver + its browser tree by PID.
+
+    Called from run.py's force-exit path (``_kill_child_subprocesses``) when the
+    graceful lifespan teardown did not run. Killing by remembered PID (never
+    ``pkill -f``) honors the ownership contract — we only ever touch the driver
+    tree WE spawned, never an unrelated Playwright on the machine.
+    """
+    if not driver_pid:
+        return
+    try:
+        import psutil
+    except Exception:
+        return
+    try:
+        driver = psutil.Process(driver_pid)
+    except psutil.Error:
+        return
+
+    # Collect the tree (children reparent after the driver dies, but their PIDs
+    # stay valid) then TERM the driver and every descendant.
+    try:
+        targets = driver.children(recursive=True)
+    except psutil.Error:
+        targets = []
+    targets.append(driver)
+
+    for proc in targets:
+        try:
+            proc.terminate()
+        except psutil.Error:
+            pass
+    _gone, alive = psutil.wait_procs(targets, timeout=2.0)
+    for proc in alive:
+        try:
+            proc.kill()
+        except psutil.Error:
+            pass
+    logger.info(
+        "[scraper/engine.py] terminate_playwright_tree: reaped driver_pid=%s (+%d children)",
+        driver_pid, len(targets) - 1,
+    )
+
+
 class ScraperEngine:
     """Manages the scraper-service orchestrator and its dependencies.
 
@@ -153,10 +243,25 @@ class ScraperEngine:
         self._search_client: Any = None
         self._settings: Any = None
         self._started = False
+        # PID of the Playwright driver node process (parent of the
+        # chrome-headless-shell tree). Captured at start() so the force-exit
+        # path in run.py can reap the whole browser tree we own if the graceful
+        # lifespan teardown never runs (crash / hung shutdown). See
+        # `driver_pid` and app/preflight.py's playwright orphan reclamation.
+        self._driver_pid: int | None = None
 
     @property
     def is_ready(self) -> bool:
         return self._started and self._orchestrator is not None
+
+    @property
+    def driver_pid(self) -> int | None:
+        """PID of the Playwright driver node we spawned, or None.
+
+        The driver owns the chrome-headless-shell processes, so terminating its
+        tree cleans up every browser this engine started.
+        """
+        return self._driver_pid
 
     @property
     def orchestrator(self) -> Any:
@@ -207,9 +312,11 @@ class ScraperEngine:
             )
             await browser_pool.start()
             self._browser_pool = browser_pool
+            self._driver_pid = _extract_driver_pid(browser_pool)
             logger.info(
-                "[scraper/engine.py] ScraperEngine: browser pool started ✓ (size=%d)",
+                "[scraper/engine.py] ScraperEngine: browser pool started ✓ (size=%d, driver_pid=%s)",
                 self._settings.PLAYWRIGHT_POOL_SIZE,
+                self._driver_pid,
             )
         except Exception as pw_exc:
             logger.warning(
@@ -329,6 +436,7 @@ class ScraperEngine:
                 _bp_logger.setLevel(_orig_level)
 
         self._started = False
+        self._driver_pid = None
         logger.info("[scraper/engine.py] ScraperEngine: stopped")
 
 

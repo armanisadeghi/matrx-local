@@ -9,6 +9,7 @@ import {
   previewVoice,
   unloadTts,
   TtsStreamError,
+  TtsModelNotDownloadedError,
 } from "@/lib/tts/api";
 import { loadSettings, saveSetting } from "@/lib/settings";
 import { catchAndLog, logError, logWarn } from "@/lib/error-reporting";
@@ -71,7 +72,7 @@ export interface UseTtsActions {
     voiceId?: string,
     speed?: number,
     signal?: AbortSignal,
-  ) => Promise<void>;
+  ) => Promise<TtsLastError | null>;
   preview: (voiceId: string) => Promise<void>;
   stopAudio: () => void;
   pauseAudio: () => void;
@@ -98,6 +99,17 @@ function groupVoicesByLanguage(voices: TtsVoice[]): TtsLanguageGroup[] {
 }
 
 function errorToLastError(e: unknown): TtsLastError {
+  if (e instanceof TtsModelNotDownloadedError) {
+    // Friendly, action-oriented copy. The live download percentage (when
+    // downloading) is composed by the UI from `status.download_progress`,
+    // which stays current as the download progresses.
+    return {
+      code: "model_not_downloaded",
+      message: e.downloading
+        ? "TTS voice model is downloading…"
+        : "TTS model not downloaded — download it in Settings ▸ Text-to-Speech.",
+    };
+  }
   if (e instanceof TtsStreamError) return { code: e.code, message: e.message };
   if (e instanceof Error) return { code: "client_error", message: e.message };
   return { code: "client_error", message: String(e) };
@@ -110,11 +122,32 @@ export function useTts(): [UseTtsState, UseTtsActions] {
   const [selectedVoice, setSelectedVoiceState] = useState("af_heart");
   const [speed, setSpeedState] = useState(1.0);
 
+  // User's tts_streaming_threshold setting, forwarded on every synth/stream
+  // request so the Configurations control actually takes effect. Held in a ref
+  // so reading it inside synth callbacks doesn't churn their identities (which
+  // would ripple through the memoized `actions` object). null → omit the field
+  // and let the server use its own default.
+  const streamingThresholdRef = useRef<number | null>(null);
+
   useEffect(() => {
-    loadSettings().then((s) => {
+    const apply = (s: Awaited<ReturnType<typeof loadSettings>>) => {
       if (s.ttsDefaultVoice) setSelectedVoiceState(s.ttsDefaultVoice);
       if (s.ttsDefaultSpeed != null) setSpeedState(s.ttsDefaultSpeed);
-    });
+      if (s.ttsStreamingThreshold != null)
+        streamingThresholdRef.current = s.ttsStreamingThreshold;
+    };
+    loadSettings().then(apply);
+    // Keep the threshold live when the user changes it in Configurations —
+    // otherwise the control would only take effect after an app restart.
+    const onChanged = () => {
+      loadSettings().then((s) => {
+        if (s.ttsStreamingThreshold != null)
+          streamingThresholdRef.current = s.ttsStreamingThreshold;
+      });
+    };
+    window.addEventListener("matrx-settings-changed", onChanged);
+    return () =>
+      window.removeEventListener("matrx-settings-changed", onChanged);
   }, []);
 
   const [playbackState, setPlaybackState] = useState<TtsPlaybackState>("idle");
@@ -445,6 +478,9 @@ export function useTts(): [UseTtsState, UseTtsActions] {
           text,
           voice_id: selectedVoice,
           speed,
+          ...(streamingThresholdRef.current != null
+            ? { streaming_threshold: streamingThresholdRef.current }
+            : {}),
         });
 
         // This URL goes into the history list — its lifetime is owned by
@@ -516,6 +552,10 @@ export function useTts(): [UseTtsState, UseTtsActions] {
       audioUrl: string | null;
       duration: number;
       elapsed: number;
+      /** Non-null when synthesis failed (not on user abort). Lets sequential
+       *  callers such as chat read-aloud surface the failure without the error
+       *  being swallowed here. */
+      error: TtsLastError | null;
     }> => {
       stopAudio();
 
@@ -537,10 +577,18 @@ export function useTts(): [UseTtsState, UseTtsActions] {
       let firstChunk = true;
       let elapsed = 0;
       let succeeded = false;
+      let runError: TtsLastError | null = null;
 
       try {
         const gen = synthesizeStream(
-          { text, voice_id: voiceId, speed: spd },
+          {
+            text,
+            voice_id: voiceId,
+            speed: spd,
+            ...(streamingThresholdRef.current != null
+              ? { streaming_threshold: streamingThresholdRef.current }
+              : {}),
+          },
           abort.signal,
         );
         for await (const wavBlob of gen) {
@@ -572,6 +620,7 @@ export function useTts(): [UseTtsState, UseTtsActions] {
       } catch (e) {
         if ((e as Error).name !== "AbortError") {
           const le = errorToLastError(e);
+          runError = le;
           setError(le.message);
           setLastError(le);
           logError("tts", "stream", e);
@@ -589,7 +638,7 @@ export function useTts(): [UseTtsState, UseTtsActions] {
       // ``decodedBuffersRef`` is cleared by ``stopAudio`` (start-of-run), so
       // it only contains the buffers produced by this run.
       if (!succeeded || decodedBuffersRef.current.length === 0) {
-        return { audioUrl: null, duration: 0, elapsed };
+        return { audioUrl: null, duration: 0, elapsed, error: runError };
       }
       try {
         const wavBlob = audioBuffersToWavBlob(decodedBuffersRef.current);
@@ -598,10 +647,10 @@ export function useTts(): [UseTtsState, UseTtsActions] {
           (s, b) => s + b.duration,
           0,
         );
-        return { audioUrl, duration, elapsed };
+        return { audioUrl, duration, elapsed, error: runError };
       } catch (e) {
         logWarn("tts", "wav encode for history failed", e);
-        return { audioUrl: null, duration: 0, elapsed };
+        return { audioUrl: null, duration: 0, elapsed, error: runError };
       }
     },
     [scheduleChunk, stopAudio],
@@ -656,8 +705,8 @@ export function useTts(): [UseTtsState, UseTtsActions] {
       voiceId?: string,
       spd?: number,
       signal?: AbortSignal,
-    ) => {
-      if (!text.trim()) return;
+    ): Promise<TtsLastError | null> => {
+      if (!text.trim()) return null;
       const result = await _runStream(
         text,
         voiceId ?? selectedVoice,
@@ -683,6 +732,9 @@ export function useTts(): [UseTtsState, UseTtsActions] {
       while (!signal?.aborted && scheduledSourcesRef.current.length > 0) {
         await new Promise((r) => setTimeout(r, 100));
       }
+      // Return the synthesis error (if any) so read-aloud callers can make the
+      // failure visible instead of it being swallowed here.
+      return result.error;
     },
     [selectedVoice, speed, _runStream],
   );

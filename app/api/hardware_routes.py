@@ -23,6 +23,8 @@ from typing import Any, Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app.common.background_tasks import fire_and_forget
+from app.launcher import get_registry
 from app.services.hardware.detector import detect_all
 
 logger = logging.getLogger(__name__)
@@ -100,19 +102,27 @@ async def run_initial_detection() -> dict[str, Any]:
     """
     global _cached_profile
 
+    registry = get_registry()
+
     async with _detection_lock:
         if _cached_profile is not None:
             return _cached_profile
 
+        registry.starting("hardware")
         try:
             profile = await detect_all()
             _cached_profile = profile
             logger.info("[hardware] Initial hardware detection complete")
+            registry.ready("hardware")
 
             # Push to cloud in background — don't block startup
             fire_and_forget(_push_hardware_to_cloud(profile), name="hardware-push")
 
         except Exception as exc:
+            # DEGRADED (not a bare warning): detection failed, so hardware-aware
+            # features run on an empty/error profile until /hardware/refresh. The
+            # registry.degraded call also drops a diagnostic breadcrumb.
+            registry.degraded("hardware", reason=f"initial detection failed: {exc}")
             logger.warning("[hardware] Initial hardware detection failed: %s", exc)
             _cached_profile = {
                 "detected_at": datetime.now(timezone.utc).isoformat(),

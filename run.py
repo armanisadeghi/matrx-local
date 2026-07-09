@@ -517,36 +517,51 @@ def _handle_exit(signum: int, frame: object) -> None:  # noqa: ARG001
 
 
 def _kill_child_subprocesses() -> None:
-    """Kill child subprocesses WE spawned (cloudflared) — by remembered PID.
+    """Kill child subprocesses WE spawned — by remembered PID.
 
     Called only when the lifespan teardown timed out. Killing by PID instead
     of pkill-by-name matters: `pkill -f "cloudflared tunnel"` matched ANY
     cloudflared on the machine (e.g. the user's personal named tunnels),
     violating the ownership contract.
+
+    Covers two engine-owned trees that otherwise leak on a hung/crashed
+    shutdown:
+      1. the cloudflared tunnel process, and
+      2. the Playwright driver + its chrome-headless-shell browser tree
+         (tracked by app/services/scraper/engine.py; see terminate_playwright_tree).
     """
+    # 1) cloudflared tunnel — by remembered PID.
     try:
         from app.services.tunnel.manager import get_tunnel_manager
 
         tm = get_tunnel_manager()
         proc = getattr(tm, "_process", None)
         pid = getattr(proc, "pid", None)
-        if pid is None:
-            return
-        import signal as _signal
+        if pid is not None:
+            import signal as _signal
 
-        try:
-            os.kill(pid, _signal.SIGTERM if sys.platform != "win32" else _signal.SIGTERM)
-        except (ProcessLookupError, OSError):
-            return
-        import time as _time
+            try:
+                os.kill(pid, _signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+            else:
+                import time as _time
 
-        _time.sleep(0.3)
-        try:
-            os.kill(pid, _signal.SIGKILL if sys.platform != "win32" else _signal.SIGTERM)
-        except (ProcessLookupError, OSError):
-            pass
+                _time.sleep(0.3)
+                try:
+                    os.kill(pid, _signal.SIGKILL if sys.platform != "win32" else _signal.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    pass
     except Exception:
-        logger.debug("Child-subprocess cleanup failed", exc_info=True)
+        logger.debug("cloudflared cleanup failed", exc_info=True)
+
+    # 2) Playwright driver + browser tree — by remembered driver PID.
+    try:
+        from app.services.scraper.engine import get_scraper_engine, terminate_playwright_tree
+
+        terminate_playwright_tree(get_scraper_engine().driver_pid)
+    except Exception:
+        logger.debug("Playwright tree cleanup failed", exc_info=True)
 
 
 def _schedule_force_exit(timeout_seconds: int) -> None:

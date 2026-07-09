@@ -121,8 +121,9 @@ import { engine } from "@/lib/api";
 import type { DocFolder, DocTree } from "@/lib/api";
 import { MediaGenTab } from "@/components/media-gen/MediaGenTab";
 import { useAuth } from "@/hooks/use-auth";
-import { useTtsApp } from "@/contexts/TtsContext";
+import { useTtsApp, useTtsAppOptional } from "@/contexts/TtsContext";
 import { useChatTts } from "@/hooks/use-chat-tts";
+import { logError } from "@/lib/error-reporting";
 import { useTranscriptionApp } from "@/contexts/TranscriptionContext";
 import { useWakeWordContext } from "@/contexts/WakeWordContext";
 import { useVoiceChat } from "@/hooks/use-voice-chat";
@@ -3463,15 +3464,28 @@ function InferenceTab() {
   // Tracks whether the standalone mic button (in the toolbar) started recording
   const dictationActiveRef = useRef(false);
   const dictationBaseTranscriptRef = useRef("");
-  let ttsState = null as ReturnType<typeof useTtsApp>[0] | null;
-  let ttsActions = null as ReturnType<typeof useTtsApp>[1] | null;
-  try {
-    const [_state, _actions] = useTtsApp();
-    ttsState = _state;
-    ttsActions = _actions;
-  } catch {
-    // TtsProvider not in tree — read-aloud silently unavailable
-  }
+  // Read-aloud is optional here. Use the non-throwing accessor so the hook is
+  // always called unconditionally (rules-of-hooks safe) — the previous
+  // try/catch around useTtsApp() both risked a rules-of-hooks violation and
+  // hid a missing provider silently. When TTS is unavailable we log loudly
+  // once and render the read-aloud controls disabled with a tooltip.
+  const ttsCtx = useTtsAppOptional();
+  const ttsState: ReturnType<typeof useTtsApp>[0] | null = ttsCtx?.[0] ?? null;
+  const ttsActions: ReturnType<typeof useTtsApp>[1] | null =
+    ttsCtx?.[1] ?? null;
+  const ttsUnavailableLoggedRef = useRef(false);
+  useEffect(() => {
+    if (!ttsCtx && !ttsUnavailableLoggedRef.current) {
+      ttsUnavailableLoggedRef.current = true;
+      logError(
+        "local-models",
+        "read-aloud unavailable",
+        new Error(
+          "TtsProvider is not mounted — chat read-aloud controls are disabled.",
+        ),
+      );
+    }
+  }, [ttsCtx]);
   // The currently-streaming assistant message (for real-time TTS sentence chunking)
   const streamingMsg =
     messages.find((m) => m.role === "assistant" && m.isStreaming) ?? null;
@@ -5097,7 +5111,15 @@ function InferenceTab() {
                               </button>
 
                               {/* Read aloud — play / pause / stop */}
-                              {ttsActions && (
+                              {!ttsActions ? (
+                                <button
+                                  disabled
+                                  className="rounded-md p-1.5 text-muted-foreground/40 cursor-not-allowed"
+                                  title="TTS unavailable"
+                                >
+                                  <Volume2 className="h-3.5 w-3.5" />
+                                </button>
+                              ) : (
                                 <>
                                   {readingMsgId === msg.id ? (
                                     <>
@@ -5265,6 +5287,29 @@ function InferenceTab() {
                   <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2 px-1">
                     <Loader2 className="h-3 w-3 animate-spin" />
                     Switching model…
+                  </div>
+                )}
+                {chatTts.readAloudError && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded px-3 py-2 mb-2"
+                  >
+                    <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    <span className="flex-1">
+                      {chatTts.readAloudError.code === "model_not_downloaded" &&
+                      ttsState?.status?.is_downloading
+                        ? `TTS voice model is downloading (${Math.round(
+                            ttsState.status.download_progress,
+                          )}%)…`
+                        : chatTts.readAloudError.message}
+                    </span>
+                    <button
+                      className="shrink-0 text-destructive/70 hover:text-destructive underline"
+                      onClick={() => chatTts.clearReadAloudError()}
+                      title="Dismiss"
+                    >
+                      Dismiss
+                    </button>
                   </div>
                 )}
                 <div className="glass relative rounded-xl transition-shadow focus-within:shadow-md">
@@ -5471,7 +5516,7 @@ function InferenceTab() {
                       </button>
 
                       {/* Auto-read-aloud toggle */}
-                      {ttsActions && (
+                      {ttsActions ? (
                         <button
                           onClick={() => setAutoReadAloud((v) => !v)}
                           className={`flex h-7 w-7 items-center justify-center rounded-full transition-colors ${
@@ -5490,6 +5535,14 @@ function InferenceTab() {
                           ) : (
                             <VolumeX className="h-3.5 w-3.5" />
                           )}
+                        </button>
+                      ) : (
+                        <button
+                          disabled
+                          className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground/40 cursor-not-allowed"
+                          title="TTS unavailable"
+                        >
+                          <VolumeX className="h-3.5 w-3.5" />
                         </button>
                       )}
 

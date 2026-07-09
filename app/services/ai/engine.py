@@ -40,6 +40,7 @@ logger = get_logger()
 
 _ai_initialized = False
 _tools_loaded = False
+_registered_tool_count = 0
 _client_mode_active = False
 
 
@@ -192,15 +193,19 @@ def has_db() -> bool:
     return False
 
 
-async def load_tools_and_register() -> None:
+async def load_tools_and_register() -> int:
     """Async startup phase: load tool registry from DB, register local tools, start executor.
 
     Call this from the FastAPI lifespan handler AFTER ``initialize_matrx_ai()``.
     Safe to call multiple times (idempotent after first call).
+
+    Returns the number of local OS tools registered into the matrx-ai registry.
+    A return of 0 means tool calls will fail — the caller should mark the
+    "tools" service DEGRADED rather than READY.
     """
-    global _tools_loaded
+    global _tools_loaded, _registered_tool_count
     if _tools_loaded:
-        return
+        return _registered_tool_count
 
     import matrx_ai
 
@@ -209,7 +214,7 @@ async def load_tools_and_register() -> None:
             "[engine] matrx-ai not initialized — skipping tool registry load. "
             "Call initialize_matrx_ai() first."
         )
-        return
+        return 0
 
     # Track whether the load actually succeeded. We must NOT latch
     # _tools_loaded=True on failure — doing so makes this idempotent guard
@@ -291,11 +296,12 @@ async def load_tools_and_register() -> None:
         )
 
     # --- Phase B: register all local OS tools via the ExternalToolAdapter bridge ---
+    registered_count = 0
     try:
         from app.services.ai.local_tool_bridge import register_local_tools
-        n = register_local_tools()
+        registered_count = register_local_tools()
         local_tools_ok = True
-        logger.info("[engine] matrx-ai: registered %d local OS tools ✓", n)
+        logger.info("[engine] matrx-ai: registered %d local OS tools ✓", registered_count)
     except Exception:
         logger.error(
             "[engine] matrx-ai: local tool registration FAILED — "
@@ -315,6 +321,8 @@ async def load_tools_and_register() -> None:
     # Only mark loaded when the critical local-tool registration succeeded, so
     # a transient failure doesn't permanently wedge the registry as "loaded".
     _tools_loaded = local_tools_ok
+    _registered_tool_count = registered_count
+    return registered_count
 
 
 def is_initialized() -> bool:

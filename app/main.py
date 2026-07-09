@@ -413,10 +413,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("[app/main.py] Phase 2: Loading tool registry...")
     _registry.starting("tools")
     try:
-        await load_tools_and_register()
+        tool_count = await load_tools_and_register()
         logger.info("[app/main.py] Phase 2: Tool registry loaded ✓")
         print("[phase:tools] Tool registry loaded", flush=True)
-        _registry.ready("tools")
+        if tool_count and tool_count > 0:
+            _registry.ready("tools", tool_count=tool_count)
+        else:
+            # matrx-ai reported 0 registered tools — the registry is "up" but
+            # every AI tool call will fail. Report the truth (DEGRADED), don't
+            # cheerfully claim READY.
+            _registry.degraded(
+                "tools",
+                reason="0 tools registered — AI tool calls will fail",
+                tool_count=0,
+            )
     except Exception as exc:
         logger.error(
             "[app/main.py] Phase 2: Tool registration FAILED — AI may not have tool access",

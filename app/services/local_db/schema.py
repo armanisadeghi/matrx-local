@@ -134,7 +134,9 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
     updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Prompt builtins: system-wide prompts from AIDream /api/prompts/builtins (no auth needed)
+-- Agent catalog: platform + user agents from AIDream /api/agents (JWT required).
+-- Formerly "prompt builtins" from the now-removed /api/prompts/builtins endpoint;
+-- table name kept for backward compatibility with existing local caches.
 CREATE TABLE IF NOT EXISTS prompt_builtins (
     id                TEXT PRIMARY KEY,
     name              TEXT NOT NULL DEFAULT '',
@@ -151,7 +153,9 @@ CREATE TABLE IF NOT EXISTS prompt_builtins (
 CREATE INDEX IF NOT EXISTS idx_prompt_builtins_name ON prompt_builtins(name);
 CREATE INDEX IF NOT EXISTS idx_prompt_builtins_category ON prompt_builtins(category);
 
--- User prompts: the authenticated user's own prompts from AIDream /api/prompts
+-- Legacy user-prompts table. The unified /api/agents catalog now includes the
+-- user's own agents, so this table is no longer written by the sync engine;
+-- retained for schema/back-compat and diagnostic counts.
 CREATE TABLE IF NOT EXISTS prompts (
     id                TEXT PRIMARY KEY,
     user_id           TEXT NOT NULL DEFAULT '',

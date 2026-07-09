@@ -48,6 +48,23 @@ Self-protection invariants:
       runs as a Tauri sidecar, calling clean_orphans() does not kill the Tauri
       shell that spawned us).
     • Only processes owned by the current user are killed (no sudo escalation).
+    • A LIVE, HEALTHY sibling engine is NEVER killed (services with
+      protect_live_owner=True). A matched engine process is protected — along
+      with its whole ancestor chain — when it is the discovery-file owner (pid
+      match) answering /health as a Matrx engine, OR when it is listening on a
+      port in the 22140–22159 scan range and answers /health as a Matrx engine.
+      This is what lets two intentional instances coexist: the packaged app and
+      a dev `uv run run.py`, in either order, no longer kill each other at
+      startup. True orphan reclamation (dead parent / stale discovery file) is
+      unaffected — only the live, health-confirmed owner is spared. See
+      assign_engine_port() for the matching port-fallback behavior (a live
+      incumbent on 22140 is named loudly and we bind the next free port).
+    • Leaked Playwright trees (the scraper's chrome-headless-shell browsers and
+      the driver node — children of the engine) are reclaimed ONLY when truly
+      orphaned (orphan_only) and ONLY when scoped to OUR
+      PLAYWRIGHT_BROWSERS_PATH, so the user's real Chrome or an unrelated
+      Playwright is never touched. The in-session force-exit path lives in
+      run.py (_kill_child_subprocesses → scraper engine terminate_playwright_tree).
 """
 
 from __future__ import annotations
@@ -76,9 +93,32 @@ logger = logging.getLogger(__name__)
 DEFAULT_ENGINE_PORT = 22140
 ENGINE_PORT_SCAN = 20
 
-DISCOVERY_FILE = Path(
-    os.environ.get("MATRX_HOME_DIR", str(Path.home() / ".matrx"))
-) / "local.json"
+_MATRX_HOME = Path(os.environ.get("MATRX_HOME_DIR", str(Path.home() / ".matrx")))
+
+DISCOVERY_FILE = _MATRX_HOME / "local.json"
+
+
+def _playwright_browsers_path() -> str:
+    """Absolute path where the engine keeps its Playwright browsers.
+
+    This is the tight scope that lets us reclaim leaked ``chrome-headless-shell``
+    and the Playwright driver WITHOUT ever touching the user's real Chrome or an
+    unrelated Playwright install: our browsers/driver carry this exact path (in
+    the browser executable's cmdline and in the driver's PLAYWRIGHT_BROWSERS_PATH
+    env), and nobody else's do.
+
+    Honors an explicit PLAYWRIGHT_BROWSERS_PATH override if already set;
+    otherwise mirrors the default computed in app/main.py
+    (``MATRX_HOME_DIR/playwright-browsers``). Note this runs at import time,
+    before app/main.py sets the env var, so the default branch is the norm.
+    """
+    override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if override:
+        return str(Path(override))
+    return str(_MATRX_HOME / "playwright-browsers")
+
+
+PLAYWRIGHT_BROWSERS_PATH = _playwright_browsers_path()
 
 # Discovery-file schema version. Bump this when the shape of `services` changes
 # in a way that consumers must be aware of. Top-level fields stay frozen.
@@ -137,6 +177,31 @@ class ManagedService:
     # directory. Set to None to skip the check (e.g. binary names like
     # "matrx-engine" are already unambiguous on their own). Case-insensitive.
     safety_keyword: str | None = None
+    # Additional environment-variable markers: a tuple of (ENV_KEY, substring).
+    # A candidate matches ONLY if ALL markers are present in its environment
+    # (case-insensitive substring). Used to tightly scope processes whose
+    # cmdline is generic (e.g. the Playwright driver `cli.js run-driver`, which
+    # carries no path in argv but inherits our PLAYWRIGHT_BROWSERS_PATH). If the
+    # environment can't be read, the candidate FAILS the check — we never kill
+    # something we can't positively identify as ours.
+    env_markers: tuple[tuple[str, str], ...] = ()
+    # When True, only reap this process if it is a TRUE ORPHAN — its owning
+    # parent is dead (reparented to PID 1, or the parent PID no longer exists).
+    # This is what makes it safe to sweep leaked Playwright browsers: a browser
+    # whose engine is still alive (e.g. a second intentional instance — see the
+    # engine service's protect_live_owner) is left untouched; only the trees
+    # orphaned by a crashed/force-killed engine are reclaimed.
+    orphan_only: bool = False
+    # When True, terminate the entire descendant process tree, not just the
+    # matched PID. The Playwright driver owns the chrome-headless-shell tree,
+    # so killing the driver alone would leak its browsers.
+    kill_tree: bool = False
+    # When True, never kill this process if it is a live, healthy Matrx engine
+    # (the discovery-file owner, or any instance answering /health on a port in
+    # the scan range) — its whole ancestor chain is protected too. Lets two
+    # intentional instances (e.g. the packaged app + a dev engine) coexist
+    # instead of one killing the other at startup.
+    protect_live_owner: bool = False
 
 
 SERVICES: tuple[ManagedService, ...] = (
@@ -163,6 +228,46 @@ SERVICES: tuple[ManagedService, ...] = (
         # match against the bare `run.py` pattern needs the additional
         # "matrx" keyword in cmdline / exe path / cwd to confirm it is ours.
         safety_keyword="matrx",
+        # Never kill a live, healthy sibling engine (packaged app vs dev engine).
+        protect_live_owner=True,
+    ),
+    # ── Playwright leak reclamation (L1) ──────────────────────────────────────
+    # The scraper's browser pool (chrome-headless-shell × pool_size + helper
+    # processes) and the Playwright driver node are CHILDREN OF THE ENGINE. In a
+    # clean shutdown the lifespan teardown closes them. But on a crash or a
+    # force-exit they get reparented to PID 1 and linger forever, holding
+    # hundreds of MB of RAM. These two entries reclaim exactly those orphans and
+    # NOTHING ELSE:
+    #   • orphan_only    → only trees whose owning engine already died.
+    #   • env_markers /  → scoped to OUR PLAYWRIGHT_BROWSERS_PATH so the user's
+    #     safety_keyword    real Chrome or an unrelated Playwright is never hit.
+    #   • kill_tree      → the driver owns the browser processes; reap the tree.
+    ManagedService(
+        name="playwright_driver",
+        # `node .../playwright/driver/package/cli.js run-driver`. argv carries
+        # no browsers path, so scope purely by the inherited env marker.
+        cmdline_patterns=(r"\brun-driver\b",),
+        port=None,
+        port_scan_count=0,
+        discovery_key=None,
+        spawned_by="python",
+        orphan_only=True,
+        kill_tree=True,
+        env_markers=(("PLAYWRIGHT_BROWSERS_PATH", PLAYWRIGHT_BROWSERS_PATH),),
+    ),
+    ManagedService(
+        name="playwright_browser",
+        # The chrome-headless-shell executable path literally contains our
+        # browsers path (…/.matrx/playwright-browsers/chromium_headless_shell-*/…),
+        # so the browsers-path safety_keyword is an airtight scope on its own.
+        cmdline_patterns=(r"chrome[-_]headless[-_]shell", r"\bheadless_shell\b"),
+        port=None,
+        port_scan_count=0,
+        discovery_key=None,
+        spawned_by="python",
+        orphan_only=True,
+        kill_tree=True,
+        safety_keyword=PLAYWRIGHT_BROWSERS_PATH,
     ),
     # NOTE: llama-server is INTENTIONALLY OMITTED from this registry.
     #
@@ -295,6 +400,159 @@ def _safe_proc_attr(proc: psutil.Process, attr: str) -> str:
     return value or ""
 
 
+def _env_markers_ok(proc: psutil.Process, markers: tuple[tuple[str, str], ...]) -> bool:
+    """True IFF every (key, substring) marker is present in the process's env.
+
+    Reading another process's environment can fail (permission, gone, platform).
+    Any failure returns False — we must NOT kill a process we cannot positively
+    fingerprint as ours.
+    """
+    try:
+        env = proc.environ()
+    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+    except Exception:
+        return False
+    for key, needle in markers:
+        value = env.get(key) or ""
+        if needle.lower() not in value.lower():
+            return False
+    return True
+
+
+def _is_orphaned(proc: psutil.Process) -> bool:
+    """True IFF the process's owning parent is gone (reparented to init / dead).
+
+    Unix reparents orphans to PID 1; Windows leaves a dangling ppid. Either way,
+    a live parent means the tree is still owned by a running engine and must be
+    left alone. If we can't read the ppid, return False (conservative).
+    """
+    try:
+        ppid = proc.ppid()
+    except psutil.Error:
+        return False
+    if ppid <= 1:
+        return True
+    try:
+        return not psutil.pid_exists(ppid)
+    except Exception:
+        return False
+
+
+def _ancestor_pids(pid: int) -> set[int]:
+    """All ancestor PIDs of ``pid`` up to (but excluding) PID 1."""
+    out: set[int] = set()
+    try:
+        proc: psutil.Process | None = psutil.Process(pid)
+        proc = proc.parent()
+        while proc is not None and proc.pid > 1:
+            out.add(proc.pid)
+            proc = proc.parent()
+    except psutil.Error:
+        pass
+    return out
+
+
+def _descendant_pids(pid: int) -> list[int]:
+    """Descendant PIDs of ``pid`` (captured before we start killing)."""
+    try:
+        return [c.pid for c in psutil.Process(pid).children(recursive=True)]
+    except psutil.Error:
+        return []
+
+
+def _probe_matrx_health(base_url: str, *, timeout: float = 1.0) -> bool:
+    """True IFF ``{base_url}/health`` answers as a live Matrx engine.
+
+    Uses only the stdlib so preflight stays import-light. Any error (connection
+    refused, timeout, wrong body) returns False.
+    """
+    import json as _json
+    import urllib.request
+
+    url = base_url.rstrip("/") + "/health"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 (loopback only)
+            body = resp.read(2048)
+    except Exception:
+        return False
+    try:
+        data = _json.loads(body)
+    except Exception:
+        return False
+    return str(data.get("service", "")).lower().startswith("matrx")
+
+
+def _is_scan_range_port(port: int) -> bool:
+    return DEFAULT_ENGINE_PORT <= port < DEFAULT_ENGINE_PORT + ENGINE_PORT_SCAN
+
+
+def _pid_listening_on(port: int) -> int | None:
+    """PID of the process listening on ``port`` (loopback), or None.
+
+    Prefers the discovery-file PID when its recorded port matches (cheap and
+    reliable), then falls back to scanning psutil's listening sockets.
+    """
+    data = read_discovery_file() or {}
+    if data.get("port") == port and isinstance(data.get("pid"), int):
+        return data["pid"]
+    try:
+        for c in psutil.net_connections(kind="inet"):
+            if (
+                c.status == psutil.CONN_LISTEN
+                and c.laddr
+                and c.laddr.port == port
+                and c.pid
+            ):
+                return c.pid
+    except (psutil.AccessDenied, Exception):
+        return None
+    return None
+
+
+def _protected_engine_pids(found: list[FoundProcess]) -> set[int]:
+    """PIDs of live, healthy Matrx engines (and their ancestor chains) that
+    ``protect_live_owner`` services must never kill.
+
+    A matched engine process is protected when either:
+      (a) it is the discovery-file owner (pid match) AND that URL answers
+          /health as a Matrx engine, or
+      (b) it is listening on a port in the engine scan range AND that port
+          answers /health as a Matrx engine.
+
+    The healthy engine's ancestor chain is protected too, so a parent/launcher
+    process that also matches the engine pattern (e.g. the packaged app's outer
+    "Matrx Engine" wrapper) isn't reaped out from under the live child.
+    """
+    protected: set[int] = set()
+    discovery = read_discovery_file() or {}
+    disc_pid = discovery.get("pid")
+    disc_url = discovery.get("url")
+
+    for fp in found:
+        if not fp.service.protect_live_owner:
+            continue
+        healthy = False
+        if (
+            isinstance(disc_pid, int)
+            and disc_pid == fp.pid
+            and isinstance(disc_url, str)
+            and _probe_matrx_health(disc_url)
+        ):
+            healthy = True
+        if not healthy:
+            for port in fp.listening_ports:
+                if _is_scan_range_port(port) and _probe_matrx_health(
+                    f"http://127.0.0.1:{port}"
+                ):
+                    healthy = True
+                    break
+        if healthy:
+            protected.add(fp.pid)
+            protected |= _ancestor_pids(fp.pid)
+    return protected
+
+
 def _scan_processes(
     services: Iterable[ManagedService],
     *,
@@ -354,6 +612,17 @@ def _scan_processes(
                         # Looks like our pattern but lacks the keyword — not ours.
                         break
 
+            # Environment-marker check (only when defined). The candidate must
+            # carry ALL declared env markers; if we can't read its environment
+            # we treat it as NOT ours (conservative — never kill the unknown).
+            if svc.env_markers and not _env_markers_ok(proc, svc.env_markers):
+                break
+
+            # Orphan gate (only when defined). Reap solely trees whose owning
+            # parent is dead — a live engine's browsers/driver are left alone.
+            if svc.orphan_only and not _is_orphaned(proc):
+                break
+
             found.append(
                 FoundProcess(pid=pid, name=name, cmdline=cmdline, service=svc)
             )
@@ -407,14 +676,42 @@ def _resolve_listening_ports(found: list[FoundProcess]) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _terminate_pid(pid: int, *, label: str) -> bool:
+def _terminate_pid(pid: int, *, label: str, kill_tree: bool = False) -> bool:
     """Try graceful termination. Returns True if the process is gone after.
 
     On Unix: SIGTERM, wait up to GRACE_SECONDS, SIGKILL if needed.
     On Windows: SIGTERM equivalent then SIGKILL via psutil; we ALSO invoke
     `taskkill /F /T /PID` so the entire child tree dies (uvicorn workers,
     Playwright, etc.).
+
+    ``kill_tree`` (Unix): capture the descendant PIDs first, then terminate them
+    after the parent — needed for the Playwright driver, which owns the
+    chrome-headless-shell processes (killing the driver alone leaks them). On
+    Windows the taskkill /T below already covers the tree.
     """
+    # Capture the descendant PIDs BEFORE we start killing — once the parent
+    # dies the children reparent, but their PIDs remain valid kill targets.
+    tree_pids: list[int] = []
+    if kill_tree and sys.platform != "win32":
+        tree_pids = _descendant_pids(pid)
+
+    result = _terminate_single_pid(pid, label=label)
+
+    # Reap the (Unix) descendant tree after the parent, whatever its outcome.
+    if tree_pids:
+        for child_pid in tree_pids:
+            _terminate_single_pid(child_pid, label=f"{label}-child")
+
+    return result
+
+
+def _terminate_tree_pids(pids: list[int], *, label: str) -> None:
+    for child_pid in pids:
+        _terminate_single_pid(child_pid, label=f"{label}-child")
+
+
+def _terminate_single_pid(pid: int, *, label: str) -> bool:
+    """Graceful TERM→KILL of a SINGLE pid (no tree handling)."""
     try:
         proc = psutil.Process(pid)
     except psutil.NoSuchProcess:
@@ -487,6 +784,9 @@ class CleanReport:
     orphans_found: int = 0
     orphans_killed: int = 0
     orphans_survived: int = 0
+    # Live, healthy sibling engines we deliberately DID NOT kill (L2). A non-
+    # zero value is normal now that two intentional instances can coexist.
+    protected: int = 0
     by_service: dict[str, int] = field(default_factory=dict)
     discovery_file_removed: bool = False
 
@@ -496,6 +796,7 @@ class CleanReport:
             f"orphans_found={self.orphans_found} "
             f"killed={self.orphans_killed} "
             f"survived={self.orphans_survived} "
+            f"protected={self.protected} "
             f"by_service={self.by_service}"
         )
 
@@ -540,11 +841,32 @@ def clean_orphans(*, services: Iterable[ManagedService] | None = None) -> CleanR
     report.inspected = sum(
         1 for _ in psutil.process_iter()  # cheap re-iter for the count
     )
-    report.orphans_found = len(found)
 
     # Resolve TCP listening ports for matched processes BEFORE we report.
     # See `_resolve_listening_ports` — best-effort, never fails the sweep.
     _resolve_listening_ports(found)
+
+    # L2: protect live, healthy sibling engines (the packaged app vs a dev
+    # engine, etc.) — including their ancestor chains — from being reaped.
+    # These are removed from `found` so they're neither reported as orphans nor
+    # killed. Two intentional instances now coexist instead of one killing the
+    # other at startup.
+    protected_engine_pids = _protected_engine_pids(found)
+    if protected_engine_pids:
+        survivors: list[FoundProcess] = []
+        for fp in found:
+            if fp.pid in protected_engine_pids:
+                report.protected += 1
+                _ok(
+                    fp.service.name,
+                    f"pid {fp.pid} is a LIVE healthy engine (discovery/health "
+                    f"confirmed) — leaving it running",
+                )
+            else:
+                survivors.append(fp)
+        found = survivors
+
+    report.orphans_found = len(found)
 
     # Group by service so every managed service gets exactly one summary line,
     # even when it's clean. Without this the user can't tell whether a service
@@ -596,7 +918,8 @@ def clean_orphans(*, services: Iterable[ManagedService] | None = None) -> CleanR
 
             # _terminate_pid waits up to GRACE_SECONDS, then escalates to
             # SIGKILL (with its own _warn line so the escalation is visible).
-            killed = _terminate_pid(fp.pid, label=label)
+            # kill_tree reaps the Playwright driver's browser children too.
+            killed = _terminate_pid(fp.pid, label=label, kill_tree=fp.service.kill_tree)
             if killed:
                 report.orphans_killed += 1
                 _ok(label, f"pid {fp.pid} terminated")
@@ -696,14 +1019,33 @@ def assign_engine_port(*, env_override: str | None = None) -> int:
         _ok("engine", f"port {DEFAULT_ENGINE_PORT} (default)")
         return DEFAULT_ENGINE_PORT
 
+    # L3: the default port is taken. Probe the incumbent so the log says WHY we
+    # fell back. A live Matrx engine there is now expected (two intentional
+    # instances are allowed — see clean_orphans protect_live_owner); name its
+    # PID loudly. A non-Matrx listener keeps the original "foreign process"
+    # wording.
+    incumbent_is_matrx = _probe_matrx_health(
+        f"http://127.0.0.1:{DEFAULT_ENGINE_PORT}"
+    )
+    incumbent_pid = _pid_listening_on(DEFAULT_ENGINE_PORT)
+    pid_str = f"pid {incumbent_pid}" if incumbent_pid is not None else "pid unknown"
+
     for offset in range(1, ENGINE_PORT_SCAN):
         candidate = DEFAULT_ENGINE_PORT + offset
         if _is_port_free(candidate):
-            _warn(
-                "engine",
-                f"default port {DEFAULT_ENGINE_PORT} held by foreign process — "
-                f"falling back to {candidate}",
-            )
+            if incumbent_is_matrx:
+                _warn(
+                    "engine",
+                    f"default port {DEFAULT_ENGINE_PORT} already served by a LIVE "
+                    f"Matrx engine ({pid_str}) — running a SECOND instance on "
+                    f"{candidate}. This is allowed; both instances coexist.",
+                )
+            else:
+                _warn(
+                    "engine",
+                    f"default port {DEFAULT_ENGINE_PORT} held by foreign process "
+                    f"({pid_str}) — falling back to {candidate}",
+                )
             return candidate
 
     raise SystemExit(

@@ -15,7 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { parseMarkdownToText } from "@/lib/parse-markdown-for-speech";
 import { loadSettings } from "@/lib/settings";
 import { logError } from "@/lib/error-reporting";
-import type { UseTtsActions } from "./use-tts";
+import type { UseTtsActions, TtsLastError } from "./use-tts";
 
 interface ChatMessage {
   id: string;
@@ -29,6 +29,14 @@ const MIN_CHUNK_LEN = 30;
 export interface UseChatTtsReturn {
   isReadingAloud: boolean;
   isPaused: boolean;
+  /**
+   * Last read-aloud synthesis failure, or null. Set when a sentence chunk
+   * fails to synthesize (e.g. TTS model not downloaded); cleared on the next
+   * successful chunk or new read-aloud attempt. Consumed by the chat UI so the
+   * failure is visible instead of silently logged.
+   */
+  readAloudError: TtsLastError | null;
+  clearReadAloudError: () => void;
   startReadAloud: (messageContent?: string) => void;
   stopReadAloud: () => void;
   pauseReadAloud: () => void;
@@ -43,6 +51,11 @@ export function useChatTts(
 ): UseChatTtsReturn {
   const [isReadingAloud, setIsReadingAloud] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [readAloudError, setReadAloudError] = useState<TtsLastError | null>(
+    null,
+  );
+
+  const clearReadAloudError = useCallback(() => setReadAloudError(null), []);
 
   const abortRef = useRef<AbortController | null>(null);
   const readAloudActiveRef = useRef(false);
@@ -77,7 +90,11 @@ export function useChatTts(
 
   /**
    * Speak a single chunk via the shared TTS actions.
-   * Errors are logged but not propagated; the streaming UI continues to flow.
+   *
+   * The queue is kept unbreakable: a failed sentence never rejects, so one
+   * bad chunk can't kill the rest of the read-aloud. But the failure is no
+   * longer invisible — it's surfaced via ``readAloudError`` so the chat UI can
+   * show it. A subsequent successful chunk clears the error.
    */
   const _speakChunk = useCallback(
     async (text: string, signal: AbortSignal) => {
@@ -89,14 +106,29 @@ export function useChatTts(
       if (!actions) return;
 
       try {
-        await actions.speakText(
+        const err = await actions.speakText(
           speechText,
           chatVoiceRef.current || undefined,
           chatSpeedRef.current || undefined,
           signal,
         );
+        if (err) {
+          setReadAloudError(err);
+          logError(
+            "chat-tts",
+            "speak chunk",
+            new Error(`${err.code}: ${err.message}`),
+          );
+        } else if (!signal.aborted) {
+          // Clean playback — clear any prior failure.
+          setReadAloudError(null);
+        }
       } catch (e) {
         if ((e as Error).name !== "AbortError") {
+          setReadAloudError({
+            code: "client_error",
+            message: (e as Error).message,
+          });
           logError("chat-tts", "speak chunk", e);
         }
       }
@@ -209,6 +241,7 @@ export function useChatTts(
   const startReadAloud = useCallback(
     (messageContent?: string) => {
       stopReadAloud();
+      setReadAloudError(null);
 
       const abort = new AbortController();
       abortRef.current = abort;
@@ -236,6 +269,7 @@ export function useChatTts(
     (content: string) => {
       if (!content.trim()) return;
       stopReadAloud();
+      setReadAloudError(null);
 
       const abort = new AbortController();
       abortRef.current = abort;
@@ -264,8 +298,16 @@ export function useChatTts(
           chatSpeedRef.current || undefined,
           abort.signal,
         )
+        .then((err) => {
+          // speakText resolves with a non-null error on synthesis failure.
+          if (err) setReadAloudError(err);
+        })
         .catch((e) => {
           if ((e as Error).name !== "AbortError") {
+            setReadAloudError({
+              code: "client_error",
+              message: (e as Error).message,
+            });
             logError("chat-tts", "readCompleteMessage", e);
           }
         })
@@ -291,6 +333,8 @@ export function useChatTts(
   return {
     isReadingAloud,
     isPaused,
+    readAloudError,
+    clearReadAloudError,
     startReadAloud,
     stopReadAloud,
     pauseReadAloud,

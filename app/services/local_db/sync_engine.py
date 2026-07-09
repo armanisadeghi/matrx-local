@@ -7,8 +7,8 @@ component allowed to write cloud data into SQLite.  All other components read
 from SQLite only.
 
 Sync sources:
-  - AIDream server (/api/ai-models, /api/prompts/builtins, /api/prompts)
-    → ai_models, prompt_builtins, prompts, agents tables
+  - AIDream server (/api/ai-models, /api/agents)
+    → ai_models, prompt_builtins, agents tables
   - Local tool manifest (LOCAL_TOOL_MANIFEST)
     → tools table
 
@@ -23,9 +23,11 @@ Offline behaviour:
   and the app continues to work normally.
 
 User JWT:
-  For user-specific data (prompts), the engine reads the JWT from the
-  auth_tokens SQLite table (written by React via POST /auth/token).
-  If no token is stored, user prompts sync is skipped (builtins still sync).
+  The agent catalog (/api/agents) now REQUIRES a JWT — there is no public
+  builtins variant anymore. The engine reads the JWT from the auth_tokens
+  SQLite table (written by React via POST /auth/token). If no valid token is
+  stored, the agent sync is skipped entirely, the previously cached agents are
+  kept, and the skip is logged loudly (never silently swallowed).
 """
 
 from __future__ import annotations
@@ -209,12 +211,20 @@ class SyncEngine:
     # ------------------------------------------------------------------
 
     async def sync_agents(self) -> None:
-        """Pull prompt builtins and user prompts from AIDream server.
+        """Pull the unified agent catalog from AIDream's GET /api/agents.
 
-        Writes to three tables:
-          - prompt_builtins: the canonical builtin records
-          - prompts: the authenticated user's own prompts (if JWT available)
-          - agents: merged view of builtins + user prompts (backward-compat)
+        /api/agents requires a JWT and returns platform agents (formerly prompt
+        builtins, now rows in ``agent.definition``) plus the user's own agents,
+        as one list with no ownership field. We therefore treat the whole
+        catalog as the ``builtin`` source of the local cache.
+
+        Writes to two tables:
+          - prompt_builtins: the canonical catalog records (diagnostics count)
+          - agents: merged view consumed by the /chat/agents read route
+
+        If no valid JWT is stored (logged out / expired token), the fetch is
+        SKIPPED, the previously cached catalog is KEPT, and the skip is logged
+        loudly — never a silent swallow, never a crash.
         """
         client = get_aidream_client()
         if client is None:
@@ -224,118 +234,87 @@ class SyncEngine:
             )
             return
 
-        # ── Builtins (public) ──────────────────────────────────────────
-        builtins_raw = await client.fetch_prompt_builtins()
-
-        builtins_to_save: list[dict[str, Any]] = []
-        for b in builtins_raw:
-            if not b.get("is_active", True):
-                continue
-            builtins_to_save.append({
-                "id": b.get("id", ""),
-                "name": b.get("name", ""),
-                "description": b.get("description", ""),
-                "category": b.get("category", ""),
-                "tags": b.get("tags") or [],
-                "variable_defaults": b.get("variable_defaults") or [],
-                "settings": _extract_settings(b),
-                "is_active": True,
-            })
-
-        await self._builtins_repo.upsert_many(builtins_to_save)
-        builtin_keep = {b["id"] for b in builtins_to_save}
-        await self._builtins_repo.delete_missing(builtin_keep)
-
-        # ── User prompts (requires JWT) ────────────────────────────────
-        user_prompts_to_save: list[dict[str, Any]] = []
+        # ── Auth gate — /api/agents has no anonymous variant ───────────
         token_row = await self._token_repo.get()
         jwt: str | None = None
-
+        user_id = ""
         if token_row and not self._token_repo.is_expired(token_row):
             jwt = token_row.get("access_token")
             user_id = token_row.get("user_id", "")
-        else:
-            user_id = ""
-            if token_row:
-                logger.debug("[sync_engine] Stored JWT is expired — skipping user prompt sync")
-            else:
-                logger.debug("[sync_engine] No stored JWT — skipping user prompt sync")
 
-        if jwt and user_id:
-            prompts_raw = await client.fetch_user_prompts(jwt)
-            for p in prompts_raw:
-                user_prompts_to_save.append({
-                    "id": p.get("id", ""),
-                    "user_id": user_id,
-                    "name": p.get("name", ""),
-                    "description": p.get("description", ""),
-                    "category": p.get("category", ""),
-                    "tags": p.get("tags") or [],
-                    "variable_defaults": p.get("variable_defaults") or [],
-                    "settings": _extract_settings(p),
-                    "is_favorite": bool(p.get("is_favorite", False)),
-                })
+        if not jwt:
+            reason = "stored JWT is expired" if token_row else "no stored JWT"
+            logger.warning(
+                "[sync_engine] Agent sync SKIPPED — %s. /api/agents requires "
+                "authentication (no public builtins endpoint anymore). Keeping "
+                "the previously cached agent catalog; sign in to refresh it.",
+                reason,
+            )
+            await self._sync_meta.set_last_sync(
+                "agents",
+                status="skipped",
+                error_message=f"/api/agents requires auth — {reason}",
+            )
+            return
 
-            await self._prompts_repo.upsert_many(user_prompts_to_save)
-            user_keep = {p["id"] for p in user_prompts_to_save}
-            await self._prompts_repo.delete_for_user(user_id, user_keep)
+        # ── Fetch the unified catalog (platform + user agents) ─────────
+        agents_raw = await client.fetch_agents(jwt)
 
-        # ── Populate agents table (merged, backward-compat) ───────────
-        builtin_agents: list[dict[str, Any]] = []
-        for b in builtins_to_save:
-            builtin_agents.append({
-                "id": b["id"],
-                "name": b["name"],
-                "description": b["description"],
+        catalog_to_save: list[dict[str, Any]] = []
+        for a in agents_raw:
+            catalog_to_save.append({
+                "id": a.get("id", ""),
+                "name": a.get("name", ""),
+                "description": a.get("description", ""),
+                "category": a.get("category", ""),
+                "tags": a.get("tags") or [],
+                # New endpoint calls the variable list "variables"; the old
+                # builtins endpoint called it "variable_defaults".
+                "variable_defaults": a.get("variables") or a.get("variable_defaults") or [],
+                "settings": _extract_settings(a),
+                "is_active": True,
+            })
+
+        await self._builtins_repo.upsert_many(catalog_to_save)
+        catalog_keep = {a["id"] for a in catalog_to_save}
+        await self._builtins_repo.delete_missing(catalog_keep)
+
+        # ── Populate the merged agents table (read by /chat/agents) ────
+        catalog_agents: list[dict[str, Any]] = []
+        for a in catalog_to_save:
+            catalog_agents.append({
+                "id": a["id"],
+                "name": a["name"],
+                "description": a["description"],
                 "source": "builtin",
                 "user_id": "",
-                "category": b.get("category", ""),
-                "tags": b.get("tags") or [],
+                "category": a.get("category", ""),
+                "tags": a.get("tags") or [],
                 "is_favorite": False,
-                "variable_defaults": b["variable_defaults"],
-                "settings": b["settings"],
+                "variable_defaults": a["variable_defaults"],
+                "settings": a["settings"],
                 "is_active": True,
             })
 
-        user_agents: list[dict[str, Any]] = []
-        for p in user_prompts_to_save:
-            user_agents.append({
-                "id": p["id"],
-                "name": p["name"],
-                "description": p["description"],
-                "source": "user",
-                "user_id": user_id,
-                "category": p.get("category", ""),
-                "tags": p.get("tags") or [],
-                "is_favorite": bool(p.get("is_favorite", False)),
-                "variable_defaults": p["variable_defaults"],
-                "settings": p["settings"],
-                "is_active": True,
-            })
+        await self._agents_repo.upsert_many(catalog_agents)
 
-        await self._agents_repo.upsert_many(builtin_agents)
-        await self._agents_repo.upsert_many(user_agents)
-
-        builtin_ids = {a["id"] for a in builtin_agents}
-        user_ids_set = {a["id"] for a in user_agents}
         # Guard the empty case: delete_by_source treats an empty keep set as
-        # "delete everything for this source" (unlike PromptBuiltinsRepo.
-        # delete_missing, which no-ops). A transient empty/inactive builtins
-        # payload from the server would otherwise wipe the entire agent list
-        # until the next successful sync.
-        if builtin_ids:
-            await self._agents_repo.delete_by_source("builtin", builtin_ids)
-        if user_ids_set or user_id:
-            # Scope the delete to this user — don't touch other users' agents
-            await self._agents_repo.delete_by_source("user", user_ids_set, user_id=user_id or None)
+        # "delete everything for this source". A transient empty payload from
+        # the server would otherwise wipe the entire agent list until the next
+        # successful sync — keep the cache instead.
+        if catalog_keep:
+            await self._agents_repo.delete_by_source("builtin", catalog_keep)
+            # The unified catalog now includes the user's own agents, so the
+            # legacy per-user "user" source is retired. Clear any stale rows
+            # left from the old two-endpoint sync so they don't linger.
+            await self._agents_repo.delete_by_source("user", set())
 
-        data_hash = _hash_list(builtins_to_save + user_prompts_to_save)
+        data_hash = _hash_list(catalog_to_save)
         await self._sync_meta.set_last_sync("agents", last_hash=data_hash)
 
         logger.info(
-            "[sync_engine] Agents synced: %d builtins, %d user prompts",
-            len(builtins_to_save),
-            len(user_prompts_to_save),
+            "[sync_engine] Agents synced: %d agents in unified catalog",
+            len(catalog_to_save),
         )
 
     # ------------------------------------------------------------------

@@ -32,9 +32,17 @@ logger = logging.getLogger(__name__)
 # Stable client ID for this machine (generates once per engine run)
 _CLIENT_ID = str(uuid.uuid4())
 
-_POLL_INTERVAL = 30          # seconds between polls
+_POLL_INTERVAL = 30          # seconds between polls (healthy cadence)
+_MAX_BACKOFF   = 600         # 10 min — cap for exponential backoff on failure
+_DEGRADE_AFTER = 3           # consecutive remote failures before DEGRADED
 _BATCH_LIMIT   = 5           # max items to claim per poll
 _CLAIM_TIMEOUT = 9 * 60      # 9 min — safely inside the server's 10-min TTL
+
+# Registry service name. Deliberately NOT "scraper" — local scraping keeps
+# working when the REMOTE retry-queue endpoint (scraper.app.matrxserver.com) is
+# unreachable, so flipping the local "scraper" service to DEGRADED would itself
+# be an untruthful registry state. This tracks the remote retry pipeline only.
+_REGISTRY_NAME = "scraper_retry_queue"
 
 _task: asyncio.Task[None] | None = None
 _running = False
@@ -96,11 +104,19 @@ async def _scrape_locally(url: str) -> dict[str, Any] | None:
         return None
 
 
-async def _poll_once() -> None:
-    """Single poll cycle: fetch → claim → scrape → submit/fail."""
+async def _poll_once() -> str | None:
+    """Single poll cycle: fetch → claim → scrape → submit/fail.
+
+    Returns ``None`` when the cycle completed (or was a legitimate no-op:
+    unconfigured, no signed-in user, no pending items) and a short error
+    string when a REMOTE call failed — the loop uses that to drive exponential
+    backoff and the DEGRADED registry state. Per-item submit/report failures
+    are NOT treated as cycle-level failures (they don't indicate the remote
+    queue endpoint is down).
+    """
     client = get_remote_scraper()
     if not client.is_configured:
-        return
+        return None
 
     # Fetch the active user's JWT once per cycle. Without it the server
     # can't attribute writes to a real user (and once auth is enforced
@@ -109,7 +125,7 @@ async def _poll_once() -> None:
     auth_token = await get_active_user_token()
     if not auth_token:
         logger.debug("RetryQueue: no active user token; skipping cycle")
-        return
+        return None
 
     try:
         resp = await client.get_pending(
@@ -117,11 +133,14 @@ async def _poll_once() -> None:
         )
         items: list[dict[str, Any]] = resp.get("items", [])
     except Exception as exc:
-        logger.warning("RetryQueue: get_pending failed: %s", exc)
-        return
+        # Logged at DEBUG here; the loop escalates to a single WARNING +
+        # DEGRADED after sustained failures so we don't flood the log with an
+        # ERROR every 30s when the remote server is down.
+        logger.debug("RetryQueue: get_pending failed: %s", exc)
+        return f"get_pending failed: {exc}"
 
     if not items:
-        return
+        return None
 
     _stats["polled"] += len(items)
     ids = [item["id"] for item in items]
@@ -135,8 +154,8 @@ async def _poll_once() -> None:
         )
         _stats["claimed"] += len(ids)
     except Exception as exc:
-        logger.warning("RetryQueue: claim_items failed: %s", exc)
-        return
+        logger.debug("RetryQueue: claim_items failed: %s", exc)
+        return f"claim_items failed: {exc}"
 
     for item in items:
         item_id: str = item["id"]
@@ -195,13 +214,50 @@ async def _loop() -> None:
     global _running
     _running = True
     logger.info("RetryQueue: background poller started (interval=%ds)", _POLL_INTERVAL)
+
+    from app.launcher import get_registry
+    registry = get_registry()
+    # Baseline state so the retry pipeline shows up in /admin/status.
+    registry.ready(_REGISTRY_NAME)
+
+    delay = _POLL_INTERVAL
+    consecutive_failures = 0
+    degraded = False
+
     try:
         while True:
             try:
-                await _poll_once()
-            except Exception:
-                logger.exception("RetryQueue: unexpected error in poll cycle")
-            await asyncio.sleep(_POLL_INTERVAL)
+                failure = await _poll_once()
+            except Exception as exc:
+                logger.debug("RetryQueue: unexpected error in poll cycle: %s", exc)
+                failure = f"unexpected error: {exc}"
+
+            if failure:
+                consecutive_failures += 1
+                # Exponential backoff: 30s → 60 → 120 … capped at 10 min so a
+                # sustained remote outage stops hammering the server (and the
+                # log) every 30s.
+                delay = min(_POLL_INTERVAL * (2 ** consecutive_failures), _MAX_BACKOFF)
+                if consecutive_failures == _DEGRADE_AFTER:
+                    logger.warning(
+                        "RetryQueue: remote queue unreachable %d times in a row "
+                        "(%s) — backing off to %ds and marking degraded",
+                        consecutive_failures, failure, delay,
+                    )
+                    registry.degraded(
+                        _REGISTRY_NAME,
+                        reason=f"remote retry queue unreachable: {failure}",
+                    )
+                    degraded = True
+            else:
+                if degraded:
+                    logger.info("RetryQueue: remote queue reachable again — recovered")
+                    registry.ready(_REGISTRY_NAME)
+                    degraded = False
+                consecutive_failures = 0
+                delay = _POLL_INTERVAL
+
+            await asyncio.sleep(delay)
     except asyncio.CancelledError:
         logger.info("RetryQueue: poller stopped")
     finally:

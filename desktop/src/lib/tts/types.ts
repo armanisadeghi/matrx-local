@@ -25,6 +25,23 @@ export interface SynthesizeRequest {
   voice_id?: string;
   speed?: number;
   lang?: string;
+  /**
+   * Character count above which the server switches to streaming synthesis.
+   * Mirrors the user's `ttsStreamingThreshold` configuration (0 = always
+   * stream). Omitted → the server falls back to its own default.
+   */
+  streaming_threshold?: number;
+}
+
+/**
+ * Backend 409 contract for a synth/stream call when the TTS model is not on
+ * disk yet. Matches `{"detail","needs_download","downloading"}` emitted by the
+ * engine's TTS routes. `downloading` is true while a download is in flight.
+ */
+export interface TtsModelNotDownloadedPayload {
+  detail: string;
+  needs_download: boolean;
+  downloading: boolean;
 }
 
 export interface DownloadResponse {

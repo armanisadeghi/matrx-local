@@ -773,6 +773,33 @@ Tauri Rust process            (owned by: the OS)
    is the engine reclaiming its own previous-life children, not Rust
    reaching across.
 
+   - **Leaked Playwright trees are reclaimed, but ONLY when truly orphaned
+     and tightly scoped to us.** The scraper's `chrome-headless-shell`
+     browser pool and the Playwright driver node are engine children; on a
+     clean shutdown the lifespan teardown closes them, but a crash/force-exit
+     leaves them reparented to PID 1 holding hundreds of MB. `preflight.py`
+     has two `ManagedService` entries (`playwright_driver`,
+     `playwright_browser`) that reap exactly these, gated by:
+     `orphan_only` (parent must be dead — a live instance's browsers are
+     never touched), and a scope to **our** `PLAYWRIGHT_BROWSERS_PATH`
+     (the driver via its inherited env marker; the browser via the browsers
+     path baked into its executable cmdline). The user's real Chrome or an
+     unrelated Playwright is never matched. `kill_tree` reaps the driver's
+     browser children with it. The in-session force-exit backstop lives in
+     `run.py::_kill_child_subprocesses` → `scraper/engine.py`
+     `terminate_playwright_tree(driver_pid)` (by remembered PID, never
+     `pkill -f`).
+
+   - **A live, healthy sibling engine is NEVER killed (two instances may
+     coexist).** The `engine` service is `protect_live_owner=True`: a matched
+     engine process — and its whole ancestor chain — is spared when it is the
+     discovery-file owner answering `/health` as Matrx, or is listening on a
+     port in the 22140–22159 scan range and answers `/health` as Matrx. This
+     lets the packaged app and a dev `uv run run.py` run side by side without
+     one killing the other at startup. `assign_engine_port()` names a live
+     incumbent on 22140 loudly and binds the next free port. True-orphan
+     reclamation (dead parent / stale discovery file) is unchanged.
+
 5. **Every state transition flows through `app/launcher.py`.** Every service
    the engine owns calls `registry.starting(name)` / `ready(name)` /
    `degraded(name, reason)` / `failed(name, error)` / `stopping(name)` /

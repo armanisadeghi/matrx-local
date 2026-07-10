@@ -9,7 +9,7 @@ from SQLite only.
 Sync sources:
   - AIDream server (/api/ai-models, /api/agents)
     → ai_models, prompt_builtins, agents tables
-  - Local tool manifest (LOCAL_TOOL_MANIFEST)
+  - Local tool catalog (app.tools.catalog.get_catalog)
     → tools table
 
 Lifecycle:

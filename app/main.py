@@ -18,7 +18,7 @@ from app.api.settings_routes import router as settings_router
 from app.api.document_routes import router as document_router  # notes — local-first
 from app.api.proxy_routes import router as proxy_router
 from app.api.cloud_sync_routes import router as cloud_sync_router
-from app.api.chat_routes import router as chat_router, build_ai_sub_app
+from app.api.chat_routes import router as chat_router
 from app.api.data_routes import router as data_router
 from app.api.permissions_routes import router as permissions_router
 from app.api.capabilities_routes import router as capabilities_router
@@ -375,9 +375,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             exc_info=True,
         )
 
-    # Phase 1: Initialize matrx-ai (loads env, registers DB if credentials present)
-    # This MUST run before build_ai_sub_app() is called — the matrx_ai imports
-    # inside that function try to access the DB config registered here.
+    # Phase 1: Initialize matrx-ai (wires the client-host seams).
+    # This MUST run before build_ai_app() is called — the /ai surface prep
+    # path reads the seam registry configured here.
     print("[phase:ai] Initializing AI engine...", flush=True)
     logger.info("[app/main.py] Phase 1: Initializing matrx-ai engine...")
     _registry.starting("ai_engine")
@@ -395,18 +395,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         print("[phase:ai] AI engine init FAILED", flush=True)
         _registry.failed("ai_engine", exc)
 
-    # Phase 1b: Mount the matrx-ai sub-app now that the DB config is registered.
-    # This must happen after initialize_matrx_ai() because the matrx_ai module-level
-    # imports (agent router → resolver → cache → definition → executor → persistence →
-    # ai_model_manager_instance) trigger an auto-fetch that requires 'supabase_automation_matrix'
-    # to already be registered in the ORM config registry.
-    logger.info("[app/main.py] Phase 1b: Mounting matrx-ai sub-app...")
+    # Phase 1b: Mount the host-owned AI surface (app/api/ai_routes.py) now
+    # that matrx-ai's client-host seams are configured. ONE app, TWO mounts:
+    # /ai is the aidream-compatible canonical surface (what matrx-frontend's
+    # local-runtime mode targets); /chat/ai is the desktop UI's historical
+    # path. Must run after initialize_matrx_ai() — the prep path reads the
+    # seam registry (conversation store / model catalog / key resolver).
+    logger.info("[app/main.py] Phase 1b: Mounting host-owned /ai surface...")
     try:
-        app.mount("/chat/ai", build_ai_sub_app())
-        logger.info("[app/main.py] Phase 1b: matrx-ai sub-app mounted at /chat/ai ✓")
+        from app.api.ai_routes import build_ai_app
+
+        _ai_surface = build_ai_app()
+        app.mount("/ai", _ai_surface)
+        app.mount("/chat/ai", _ai_surface)
+        logger.info(
+            "[app/main.py] Phase 1b: /ai surface mounted at /ai and /chat/ai ✓"
+        )
     except Exception:
         logger.error(
-            "[app/main.py] Phase 1b: matrx-ai sub-app mount FAILED — AI chat/agent endpoints will be unavailable",
+            "[app/main.py] Phase 1b: /ai surface mount FAILED — AI chat/agent endpoints will be unavailable",
             exc_info=True,
         )
 
@@ -1158,10 +1165,9 @@ app.include_router(extension_router)
 app.include_router(extension_bridge_router)
 app.include_router(downloads_router)
 
-# NOTE: app.mount("/chat/ai", build_ai_sub_app()) is called in the lifespan handler
-# (Phase 1b) AFTER initialize_matrx_ai() registers the DB config. Calling it here
-# at module level would crash because matrx_ai imports trigger an ORM auto-fetch
-# before the 'supabase_automation_matrix' config is registered.
+# NOTE: the host-owned AI surface (app/api/ai_routes.py build_ai_app) is
+# mounted at /ai AND /chat/ai in the lifespan handler (Phase 1b) AFTER
+# initialize_matrx_ai() wires the client-host seams the prep path reads.
 
 # ── Middleware registration ────────────────────────────────────────────────────
 #
@@ -1315,6 +1321,10 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-User-Id", "X-API-Key", "Accept"],
     allow_private_network=True,
+    # The AI streaming surface's response headers the browser must be able to
+    # read cross-origin (matrx-frontend asserts X-Conversation-ID on every
+    # /ai stream open — see run-ai-stream.ts).
+    expose_headers=["X-Conversation-ID", "X-Request-ID"],
     max_age=600,
 )
 

@@ -11,10 +11,8 @@ Provides:
   POST /chat/local-llm/disconnect    — deregister local LLM (server stopped)
   GET  /chat/local-llm/status        — current local LLM registration status
 
-  POST /chat/ai/chat                 — streaming chat completions (matrx-ai)
-  POST /chat/ai/agents/{agent_id}    — start agent conversation (matrx-ai)
-  POST /chat/ai/conversations/{id}   — continue conversation (matrx-ai)
-  POST /chat/ai/cancel/{request_id}  — cancel in-flight request (matrx-ai)
+Streaming AI endpoints (POST /chat/ai/* == POST /ai/*) live in
+app/api/ai_routes.py — the host-owned AI surface mounted at both paths.
 
 Data access strategy
 --------------------
@@ -29,10 +27,7 @@ sync and return an empty list with syncing=True so the UI can show a spinner.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from fastapi import FastAPI
+from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -388,14 +383,10 @@ async def trigger_chat_sync() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# AI streaming endpoints (matrx-ai engine)
-# These are mounted as a sub-application with matrx-ai's AuthMiddleware so
-# that AppContext / StreamEmitter are properly set for every request.
-# See main.py for how ai_app is constructed and mounted.
+# AI streaming endpoints live in app/api/ai_routes.py (the host-owned /ai
+# surface, mounted at /ai AND /chat/ai — see main.py Phase 1b). This router
+# keeps only the non-streaming chat metadata endpoints below.
 # ---------------------------------------------------------------------------
-# matrx-ai 0.3.0 dropped its packaged HTTP routers; the handlers below are
-# host-owned. /chat/ai itself is a 503 stub until the /ai-surface phase
-# builds the host-owned orchestration routes (see build_ai_sub_app).
 
 @router.get("/ai-status")
 async def ai_provider_status() -> dict[str, Any]:
@@ -514,78 +505,3 @@ async def local_llm_status() -> dict[str, Any]:
 
     return get_local_llm_status()
 
-
-def build_ai_sub_app() -> "FastAPI":  # noqa: F821  (imported inside to avoid circular at module level)
-    """Build the FastAPI sub-application mounted at /chat/ai.
-
-    ██ MIGRATION GAP — /ai-surface phase must replace this stub ██
-
-    matrx-ai 0.3.0 removed the packaged HTTP surface (``matrx_ai.app.*`` —
-    AuthMiddleware + chat/agent/conversation routers moved into aidream's
-    server app and are NOT shipped in the library). The desktop must now own
-    its AI HTTP surface: host-side routes that set AppContext + a stream
-    emitter per request and drive ``execute_until_complete`` directly, the
-    way aidream's ``api/routers/chat.py`` does.
-
-    Until that phase lands, every /chat/ai/* request gets an explicit 503
-    with this explanation — loud and diagnosable, never a silent hang. The
-    engine still boots, and every non-/chat/ai feature (tools, models,
-    agents lists, local LLM registration, TTS, transcription…) is unaffected.
-    """
-    from fastapi import FastAPI
-    from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse
-
-    from app.config import ALLOWED_ORIGINS
-
-    logger.error(
-        "[chat_routes] /chat/ai is a 503 STUB in this build: matrx-ai 0.3.0 "
-        "dropped matrx_ai.app.* (the packaged HTTP routers). The host-owned "
-        "AI surface is the next migration phase (/ai-surface). AI chat via "
-        "the desktop UI is unavailable until it lands."
-    )
-
-    ai_app = FastAPI(
-        title="Matrx AI Engine (surface migration pending)",
-        description=(
-            "Placeholder for the host-owned AI orchestration surface — "
-            "matrx-ai 0.3.0 no longer ships HTTP routers"
-        ),
-        version="0.3.0-stub",
-    )
-
-    ai_app.add_middleware(
-        CORSMiddleware,
-        allow_origins=ALLOWED_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        allow_private_network=True,
-        expose_headers=["X-Conversation-ID", "X-Request-ID"],
-    )
-
-    @ai_app.api_route(
-        "/{path:path}",
-        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-        include_in_schema=False,
-    )
-    async def _ai_surface_pending(path: str) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
-        logger.error(
-            "[chat_routes] /chat/ai/%s rejected (503): host-owned AI surface "
-            "not yet built for matrx-ai 0.3.0 (/ai-surface phase)",
-            path,
-        )
-        return JSONResponse(
-            status_code=503,
-            content={
-                "error": "ai_surface_migration_pending",
-                "detail": (
-                    "matrx-ai 0.3.0 removed the packaged HTTP chat/agent/"
-                    "conversation routers; the desktop's host-owned AI surface "
-                    "is being built in the /ai-surface migration phase. "
-                    "This endpoint will return once that lands."
-                ),
-            },
-        )
-
-    return ai_app

@@ -203,6 +203,7 @@ def initialize_matrx_ai() -> None:
         server_url=server_url or None,
         source_app="matrx_local",
     )
+    install_client_host_coordinator_guard()
     _client_mode_active = True
     _ai_initialized = True
     logger.info(
@@ -210,6 +211,77 @@ def initialize_matrx_ai() -> None:
         "(keys → SQLite resolver, conversations → SQLite store, "
         "models → SQLite catalog%s)",
         ", identity → JWT cache" if server_url else "; NO server identity",
+    )
+
+
+def install_client_host_coordinator_guard() -> None:
+    """Force matrx-ai's WriteCoordinator OFF in a client host.
+
+    KNOWN UPSTREAM DEFECT (matrx-ai 0.3.0): the client-host contract says
+    "no client-host write ever reaches persistence/queue_helpers.py — the
+    coordinator is always None in a client host", but
+    ``queue_helpers.get_coordinator()`` only returns None when there is NO
+    RequestLane. matrx-connect's ``create_streaming_response`` (the /ai
+    surface) ALWAYS opens a lane, so the coordinator lazily constructs and
+    ``_ensure_cx_registered()`` imports the ORM cx managers →
+    ``DBNotConfiguredError`` mid-request. Until upstream short-circuits on a
+    configured conversation_store, this guard wraps ``get_coordinator`` to
+    return None whenever the store seam is set — which routes every write
+    through the store dispatch exactly as documented. Idempotent. Tracked
+    in .matrx/AGENT_TASKS.md; delete when matrx-ai fixes it.
+    """
+    from matrx_ai.persistence import queue_helpers
+
+    if getattr(queue_helpers, "_matrx_local_client_host_guard", False):
+        return
+    _orig_get_coordinator = queue_helpers.get_coordinator
+
+    def _guarded_get_coordinator():  # type: ignore[no-untyped-def]
+        from matrx_ai.client_host import get_conversation_store
+
+        if get_conversation_store() is not None:
+            return None
+        return _orig_get_coordinator()
+
+    queue_helpers.get_coordinator = _guarded_get_coordinator  # type: ignore[assignment]
+
+    # Same defect class, second site: the Turn-Boundary Inbox drain
+    # (matrx_ai.tools.dynamic_drain.drain_pending_injections) reads
+    # cx_pending_injection through cxm with no store-first dispatch, so every
+    # tool-loop iteration in a client host raised DBNotConfiguredError at the
+    # turn boundary. There is no local inbox (no producer can queue into a
+    # desktop conversation), so the drain is a documented no-op here.
+    from matrx_ai.tools import dynamic_drain
+
+    _orig_drain_injections = dynamic_drain.drain_pending_injections
+
+    async def _guarded_drain_pending_injections(config, ctx):  # type: ignore[no-untyped-def]
+        from matrx_ai.client_host import get_conversation_store
+
+        if get_conversation_store() is not None:
+            return ctx
+        return await _orig_drain_injections(config, ctx)
+
+    dynamic_drain.drain_pending_injections = _guarded_drain_pending_injections  # type: ignore[assignment]
+
+    _orig_drain_pending = dynamic_drain.drain_pending
+
+    async def _guarded_drain_pending(config, ctx):  # type: ignore[no-untyped-def]
+        from matrx_ai.client_host import get_conversation_store
+
+        if get_conversation_store() is not None:
+            # Tool mutations are in-memory and still valid locally; only the
+            # cx_pending_injection read is skipped.
+            return await dynamic_drain.drain_tool_mutations(config, ctx)
+        return await _orig_drain_pending(config, ctx)
+
+    dynamic_drain.drain_pending = _guarded_drain_pending  # type: ignore[assignment]
+
+    queue_helpers._matrx_local_client_host_guard = True  # type: ignore[attr-defined]
+    logger.info(
+        "[engine] client-host coordinator guard installed "
+        "(WriteCoordinator forced off, inbox drain no-op — store dispatch "
+        "owns all writes)"
     )
 
 

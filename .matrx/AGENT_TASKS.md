@@ -329,17 +329,46 @@ _(none)_
 
 ## Active (added 2026-07-10, matrx-ai 0.3.0 migration — Phase 3)
 
-- [ ] **/ai-surface: rebuild the /chat/ai HTTP surface host-side (NEXT PHASE,
-  blocks AI chat in the next release)** — matrx-ai 0.3.0 removed
-  `matrx_ai.app.*` (AuthMiddleware + chat/agent/conversation/cancel routers
-  moved into aidream's server app, not shipped in the library).
-  `app/api/chat_routes.py::build_ai_sub_app` is now an explicit 503 stub
-  (`error: ai_surface_migration_pending`). Build host-owned routes that set
-  `matrx_connect` AppContext + a stream emitter per request and drive
-  `matrx_ai.orchestrator.execute_until_complete` directly (reference:
-  aidream `aidream/api/routers/chat.py` + middleware/auth.py). The seams
-  (store/catalog/keys/jwt) are already wired and proven by
-  `tests/smoke/test_ai_client_host.py` — only the HTTP layer is missing.
+- [x] **/ai-surface: rebuild the /chat/ai HTTP surface host-side** — DONE
+  2026-07-10 (Phase 5). Host-owned `/ai` surface built: `app/api/ai_routes.py`
+  (POST /ai/agents/{id}, /ai/conversations/{id}, /ai/conversations/{id}/resume,
+  /ai/chat — byte-compatible with aidream's /ai wire contract) +
+  `app/services/ai/local_ai_task.py` (prep + run task over
+  `execute_ai_request`) + `app/api/error_envelope.py` (aidream
+  `{error,message,details}` envelope; additive `EnvelopeRoute` on
+  image-gen/video-gen). Mounted at BOTH `/ai` and `/chat/ai` (main.py Phase
+  1b); the 503 stub is deleted. Smoke: `tests/smoke/test_ai_surface.py`.
+  Remaining contract gaps recorded in the follow-up tasks below.
+- [ ] **/ai-surface follow-up: agent authored system prompt is not available
+  locally** — the local agent cache (SQLite `agents`, from aidream `GET
+  /api/agents`) carries settings/variables but NOT the agent's authored
+  messages; aidream exposes NO non-admin REST endpoint returning them
+  (`/agent-service/agents/{id}` is admin-only and still omits messages). A
+  NEW conversation started on the local runtime therefore runs with the
+  agent's model+tools only (loud WARNING log + a stream `warning` event
+  `agent_prompt_unavailable_locally`); continue-mode turns are unaffected
+  (persisted conversation state is the source of truth). Fix belongs in
+  aidream: a user-scoped full-definition endpoint (or sync the messages
+  column into `GET /api/agents`); then extend sync_engine + `_load_local_agent`.
+- [ ] **/ai-surface follow-up: no local /ai/cancel/{request_id}** — aidream's
+  cancel router isn't mirrored; the FE cancels via fetch-abort, and
+  matrx-connect's detach-on-disconnect keeps the local turn running to
+  completion (burning local compute). Wire emitter.cancel via a small
+  request registry when needed.
+- [ ] **Upstream (matrx-ai 0.3.0): client-host writes reach the
+  WriteCoordinator + Turn-Boundary Inbox reads cxm** — the client-host
+  contract says the coordinator is "always None in a client host", but
+  `persistence/queue_helpers.get_coordinator()` only short-circuits when no
+  RequestLane exists — and matrx-connect's `create_streaming_response`
+  ALWAYS opens a lane, so `_ensure_cx_registered()` → cxm →
+  `DBNotConfiguredError` mid-request. Same class:
+  `tools/dynamic_drain.drain_pending_injections` reads cx_pending_injection
+  with no store-first dispatch (crashed every tool-loop turn boundary).
+  Worked around host-side in
+  `engine.install_client_host_coordinator_guard()` (wraps get_coordinator +
+  the two drain fns to no-op when a conversation_store is configured).
+  Upstream fix: store-first checks at both choke points; then delete the
+  guard.
 - [ ] **Upstream (aidream/packages/matrx-ai): providers ↔ orchestrator circular
   import still present in 0.3.0** — a COLD `import matrx_ai.providers...`
   dies (`providers/__init__` → `unified_client` → `orchestrator/__init__` →

@@ -871,7 +871,7 @@ export function VideoGenSection() {
               value={videoForm.prompt}
               onChange={(e) => setVideoForm({ prompt: e.target.value })}
               placeholder="Describe the video you want to generate…"
-              className="text-sm min-h-[80px] resize-none"
+              className="text-sm min-h-[80px] max-h-[320px] resize-y"
             />
           </div>
 

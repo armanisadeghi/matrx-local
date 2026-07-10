@@ -118,7 +118,10 @@ class LoadModelResponse(BaseModel):
 
 
 class GenerateVideoRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, max_length=2000)
+    # 10k chars is an API sanity bound, NOT a model limit — the model's own
+    # text encoder decides how much it reads (T5-based video models ~512
+    # tokens). Never reintroduce a short arbitrary cap here.
+    prompt: str = Field(..., min_length=1, max_length=10000)
     negative_prompt: str = ""
     model_id: str | None = None
     """Defaults to the currently loaded model."""

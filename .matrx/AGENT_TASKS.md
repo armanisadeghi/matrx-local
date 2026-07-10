@@ -53,6 +53,34 @@ _(none)_
 
 ## Active
 
+- [x] **Media-gen: Generate while queue busy corrupted everything → generation
+  gate + queue-first UX + queue-row lightbox + prompt caps (2026-07-09)** —
+  Root cause: `POST /image-gen/generate` called `ImageGenService.generate`
+  directly while the job runner was mid-generation → two concurrent `pipe()`
+  calls on the same (non-reentrant) diffusers pipeline, and a differing
+  `model_id` triggered `load_model → _unload_sync_locked()` which unloaded the
+  pipeline out from under the running job. Fixes: (1) engine `asyncio.Lock`
+  generation gate in `ImageGenService.generate` (one generation ever; cancel
+  registration scoped INSIDE the gate so a cancel only hits the owner, never a
+  waiter); (2) `POST /image-gen/jobs` accepts `priority:"next"` (front of
+  pending queue, persisted, `ImageJobResponse.priority`); (3) frontend
+  queue-first: Generate while anything is queued/running/in-flight enqueues as
+  next + violet `QueueNotice` + "Up next" badge (all 6 image surfaces; video
+  already busy-safe — Cancel-state button + "One video at a time" note);
+  (4) completed queue rows/chips/cards open in MediaLightbox on click
+  (shared `useImageJobLightbox` in `shared.tsx`, fetch-then-open, prev/next
+  across the panel's completed jobs, stopPropagation on X/seed controls);
+  (5) prompt textareas `resize-y` everywhere + honest per-family
+  `PromptCapacityHint`; API prompt caps raised 1000→10000 (image), 2000→10000
+  (video), workflow subject 500→2000 — no truncation anywhere on our side.
+  Tests: `tests/smoke/test_media_gen_queue.py` (gate overlap, cancel-frees-
+  waiter, A/C/B priority ordering, persistence, HTTP priority + long-prompt
+  round-trip). Follow-ups (minor): the workflow queue-first path materializes
+  the preset template client-side (duplicate of the server's `{subject}`
+  substitution — consider a jobs-side `preset_id` field later); a one-shot
+  WAITING on the gate (raw API users only; UI can't reach it) has no cancel
+  handle until it starts.
+
 - [x] **Media-gen: download one model → all downloaded cards spin (2026-07-09)** —
   Shared `anyLoading`/`busy` (`imageModelLoading || status.is_loading`) drove
   the Load spinner on every downloaded model card. Fixed: track

@@ -43,6 +43,7 @@ from app.services.media_gen.paths import generated_images_dir
 logger = get_logger()
 
 ImageJobStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
+ImageJobPriority = Literal["normal", "next"]
 
 _HISTORY_LIMIT = 100
 
@@ -74,6 +75,12 @@ class ImageJob:
     cancel_requested: bool = False
     """True the instant a cancel lands on a running job — the abort itself
     takes effect at the next denoising step, so the UI shows "Cancelling…"."""
+    priority: ImageJobPriority = "normal"
+    """"next" = the job was inserted at the FRONT of the pending queue (right
+    after the currently-running job, before all other queued ones). Used by
+    the queue-first Generate flow: clicking Generate while something is
+    already running enqueues as "next" instead of firing a concurrent
+    one-shot. The flag persists so the UI can label the job "Up next"."""
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
     finished_at: float | None = None
@@ -141,11 +148,31 @@ class ImageJobStore:
     # ── public API ────────────────────────────────────────────────────────────
 
     def create(self, **kwargs: Any) -> ImageJob:
-        """Enqueue a job (no one-at-a-time limit — this is a real queue)."""
+        """Enqueue a job (no one-at-a-time limit — this is a real queue).
+
+        ``priority="next"`` inserts the job at the FRONT of the pending queue:
+        it becomes the first still-queued job in FIFO order (the currently
+        running job is unaffected; every other queued job runs after it).
+        Persisted like any other job, so the ordering survives a restart.
+        """
         with self._lock:
             job = ImageJob(job_id=str(uuid.uuid4()), **kwargs)
             self._jobs[job.job_id] = job
-            self._order.append(job.job_id)
+            if job.priority == "next":
+                # Insert before the OLDEST still-queued job — next_queued()
+                # scans _order front-to-back, so this runs immediately after
+                # the current generation finishes.
+                insert_at = next(
+                    (
+                        i
+                        for i, jid in enumerate(self._order)
+                        if self._jobs[jid].status == "queued"
+                    ),
+                    len(self._order),
+                )
+                self._order.insert(insert_at, job.job_id)
+            else:
+                self._order.append(job.job_id)
             self._persist_locked()
             return job
 

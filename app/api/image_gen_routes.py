@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -122,7 +122,12 @@ class LoadModelResponse(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, max_length=1000)
+    # 10k chars is an API sanity bound, NOT a model limit. Real limits are per
+    # model family and enforced by the model itself (SD/SDXL CLIP truncates at
+    # 77 tokens; FLUX/T5 reads ~512 tokens ≈ 2000+ chars; Qwen/Z-Image accept
+    # long prompts). The old 1000-char cap was an arbitrary API restriction
+    # that blocked legitimate FLUX/Qwen prompts — never reintroduce it.
+    prompt: str = Field(..., min_length=1, max_length=10000)
     model_id: str
     negative_prompt: str = ""
     steps: int | None = Field(None, ge=1, le=150)
@@ -136,6 +141,15 @@ class GenerateRequest(BaseModel):
     overridden here (use the top-level field); an unknown kwarg fails loudly
     with success=false naming the parameter. See GET /image-gen/params/{model_id}
     for the full effective defaults per model."""
+
+
+class EnqueueImageJobRequest(GenerateRequest):
+    priority: Literal["normal", "next"] = "normal"
+    """"next" inserts the job at the FRONT of the pending queue — it runs
+    immediately after the currently-running generation, before every other
+    queued job. Used by the UI's queue-first Generate flow (clicking Generate
+    while a generation is running queues as up-next instead of firing a
+    concurrent one-shot). "normal" (default) appends FIFO as before."""
 
 
 class GenerateResponse(BaseModel):
@@ -218,6 +232,9 @@ class ImageJobResponse(BaseModel):
     """True the instant a cancel lands on this running job; the abort takes
     effect at the next denoising step (status then becomes "cancelled" with
     partial progress preserved). Poll this to show "Cancelling…"."""
+    priority: str = "normal"
+    """"next" when the job was enqueued at the front of the pending queue
+    (queue-first Generate). The UI labels such queued jobs "Up next"."""
     created_at: float = 0.0
 
 
@@ -243,13 +260,14 @@ def _image_job_response(job) -> ImageJobResponse:
         item_id=d["item_id"],
         file_path=d["file_path"],
         cancel_requested=d["cancel_requested"],
+        priority=d.get("priority", "normal"),
         created_at=d["created_at"],
     )
 
 
 class WorkflowGenerateRequest(BaseModel):
     preset_id: str
-    subject: str = Field(..., min_length=1, max_length=500, description="Fills the {subject} placeholder in the prompt template.")
+    subject: str = Field(..., min_length=1, max_length=2000, description="Fills the {subject} placeholder in the prompt template.")
     model_id: str | None = None
     """Override model. Defaults to the preset's suggested model."""
     seed: int | None = None
@@ -441,11 +459,13 @@ async def cancel_generation() -> CancelGenerationResponse:
 
 @router.post("/jobs", response_model=ImageJobEnqueuedResponse, status_code=202)
 @safe_route("image_gen_enqueue_job")
-async def enqueue_image_job(req: GenerateRequest) -> ImageJobEnqueuedResponse:
+async def enqueue_image_job(req: EnqueueImageJobRequest) -> ImageJobEnqueuedResponse:
     """Enqueue a generation job → 202 {job_id} immediately.
 
     Unlike video, image jobs QUEUE: keep submitting prompts and they run
-    strictly one at a time in submission order. Poll GET /image-gen/jobs/{id}
+    strictly one at a time in submission order. ``priority: "next"`` inserts
+    the job at the front of the pending queue (right after the running one,
+    before all other queued jobs). Poll GET /image-gen/jobs/{id}
     for per-step progress; on completion the job carries the media-library
     ``item_id`` (fetch the PNG via GET /media-library/file/{item_id}) and the
     concrete ``seed`` used. The model must be downloaded (409 otherwise) —
@@ -490,6 +510,7 @@ async def enqueue_image_job(req: GenerateRequest) -> ImageJobEnqueuedResponse:
         height=req.height,
         seed=req.seed,
         extra_params=dict(req.extra_params),
+        priority=req.priority,
     )
     get_image_job_runner().ensure_running()
     return ImageJobEnqueuedResponse(job_id=job.job_id)

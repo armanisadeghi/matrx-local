@@ -235,6 +235,13 @@ export interface MediaGenState {
   /** Epoch ms when the in-flight image model load started (elapsed readout). */
   imageLoadStartedAt: number | null;
   imageGenError: string | null;
+  /**
+   * Informational (non-error) notice set when a Generate click was
+   * transparently redirected into the job queue because another generation
+   * was already running ("queued as next"). Dismissible; cleared
+   * automatically when a fresh one-shot actually starts.
+   */
+  imageQueueNotice: string | null;
   imageResult: GeneratedImageResult | null;
   /** The model the user is currently working with (survives tab switches). */
   selectedImageModelId: string | null;
@@ -290,6 +297,8 @@ export interface MediaGenActions {
   setSelectedImageModelId: (modelId: string | null) => void;
   clearImageResult: () => void;
   clearImageGenError: () => void;
+  /** Dismiss the "queued as next" informational notice. */
+  clearImageQueueNotice: () => void;
   /** Patch the persistent image generate-form state. */
   setImageForm: (patch: Partial<ImageFormState>) => void;
   /**
@@ -307,8 +316,14 @@ export interface MediaGenActions {
   resetImageAll: () => void;
   // Image queue
   refreshImageJobs: () => Promise<void>;
-  /** Enqueue a job (same body as generate). True when accepted. */
-  enqueueImageJob: (input: ImageGenerateInput) => Promise<boolean>;
+  /**
+   * Enqueue a job (same body as generate). True when accepted.
+   * `priority: "next"` puts the job at the FRONT of the pending queue.
+   */
+  enqueueImageJob: (
+    input: ImageGenerateInput,
+    priority?: "normal" | "next",
+  ) => Promise<boolean>;
   /** Cancel a queued job / remove a finished one. */
   cancelImageJob: (jobId: string) => Promise<void>;
   // Video
@@ -367,6 +382,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     null,
   );
   const [imageGenError, setImageGenError] = useState<string | null>(null);
+  const [imageQueueNotice, setImageQueueNotice] = useState<string | null>(null);
   const [imageResult, setImageResult] = useState<GeneratedImageResult | null>(
     null,
   );
@@ -414,6 +430,14 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   // force-resolve the local awaiting state; the original await then sees a
   // stale id and must NOT touch state (a newer run may already be in flight).
   const imageRunRef = useRef(0);
+  // True while a one-shot image request is awaited — read inside the stable
+  // generate callbacks (state would be a stale closure there).  Together with
+  // imageJobsRef this drives the queue-first decision: Generate while ANY
+  // image generation is queued/running/in flight becomes an enqueue-as-next,
+  // never a concurrent one-shot against the engine.
+  const imageOneShotInFlightRef = useRef(false);
+  const imageJobsRef = useRef<ImageGenJob[]>([]);
+  const imagePresetsRef = useRef<ImageGenWorkflowPreset[]>([]);
   // Video enqueue run id — guards the brief "Starting…" phase so a cancel
   // issued before the job id exists doesn't get resurrected by a late 202.
   const videoRunRef = useRef(0);
@@ -426,6 +450,12 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   useEffect(() => {
     imageJobThumbsRef.current = imageJobThumbs;
   }, [imageJobThumbs]);
+  useEffect(() => {
+    imageJobsRef.current = imageJobs;
+  }, [imageJobs]);
+  useEffect(() => {
+    imagePresetsRef.current = imagePresets;
+  }, [imagePresets]);
 
   // ── Shared actions ────────────────────────────────────────────────────────
   const fetchParams = useCallback(
@@ -671,6 +701,49 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     [],
   );
 
+  /**
+   * True when firing a one-shot right now would collide with an in-flight
+   * generation (a queued/running job, or another one-shot still awaited).
+   * Read from refs so the stable generate callbacks never see stale state.
+   */
+  const isImageEngineBusy = useCallback((): boolean => {
+    return (
+      imageOneShotInFlightRef.current ||
+      imageJobsRef.current.some(
+        (j) => j.status === "queued" || j.status === "running",
+      )
+    );
+  }, []);
+
+  /**
+   * Queue-first redirect: instead of firing a one-shot against a busy
+   * engine (which used to corrupt the running generation AND the queue),
+   * enqueue the request with priority "next" so it runs right after the
+   * current generation, before the rest of the queue.
+   */
+  const enqueueImageAsNext = useCallback(
+    async (base: string, input: ImageGenerateInput): Promise<void> => {
+      try {
+        await apiEnqueueImageGenJob(base, { ...input, priority: "next" });
+        setImageGenError(null);
+        setImageQueueNotice(
+          "A generation is already running — added to the queue as next.",
+        );
+        emitClientLog(
+          "info",
+          "[media-gen] Generate clicked while a generation is in flight — enqueued as next (priority queue) instead of a concurrent one-shot",
+          "engine",
+        );
+        await refreshImageJobs();
+      } catch (e) {
+        setImageGenError(
+          e instanceof Error ? e.message : "Failed to queue the generation",
+        );
+      }
+    },
+    [refreshImageJobs],
+  );
+
   const generateImage = useCallback(
     async (input: ImageGenerateInput): Promise<boolean> => {
       const base = engine.engineUrl;
@@ -679,7 +752,15 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setImageGenError(ENGINE_NOT_CONNECTED_ACTION);
         return false;
       }
+      if (isImageEngineBusy()) {
+        // Never fire a one-shot while anything is generating — queue it as
+        // up-next instead. No result is produced now, so resolve false.
+        await enqueueImageAsNext(base, input);
+        return false;
+      }
       const runId = ++imageRunRef.current;
+      imageOneShotInFlightRef.current = true;
+      setImageQueueNotice(null);
       setImageGenerating(true);
       setImageCancelling(false);
       setImageGenStartedAt(Date.now());
@@ -714,13 +795,14 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         // Guarded: after a cancel (or a newer run) this stale run must not
         // clobber the fresh state.
         if (imageRunRef.current === runId) {
+          imageOneShotInFlightRef.current = false;
           setImageGenerating(false);
           setImageCancelling(false);
           setImageGenStartedAt(null);
         }
       }
     },
-    [],
+    [isImageEngineBusy, enqueueImageAsNext],
   );
 
   const generateImageWorkflow = useCallback(
@@ -731,7 +813,32 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setImageGenError(ENGINE_NOT_CONNECTED_ACTION);
         return false;
       }
+      if (isImageEngineBusy()) {
+        // Queue-first: materialize the preset into a plain generate request
+        // (exactly what the engine's /generate-workflow route does) and
+        // enqueue it as up-next.  Presets are loaded with the section; if
+        // this one is somehow unknown we fall through to the one-shot — the
+        // engine's generation gate serializes it safely either way.
+        const preset = imagePresetsRef.current.find(
+          (p) => p.preset_id === input.preset_id,
+        );
+        if (preset) {
+          await enqueueImageAsNext(base, {
+            prompt: preset.prompt_template.replace("{subject}", input.subject),
+            model_id: input.model_id ?? preset.suggested_model_id,
+            negative_prompt: preset.negative_prompt || undefined,
+            steps: preset.steps,
+            guidance: preset.guidance,
+            width: preset.width,
+            height: preset.height,
+            seed: input.seed,
+          });
+          return false;
+        }
+      }
       const runId = ++imageRunRef.current;
+      imageOneShotInFlightRef.current = true;
+      setImageQueueNotice(null);
       setImageGenerating(true);
       setImageCancelling(false);
       setImageGenStartedAt(Date.now());
@@ -764,13 +871,14 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         return false;
       } finally {
         if (imageRunRef.current === runId) {
+          imageOneShotInFlightRef.current = false;
           setImageGenerating(false);
           setImageCancelling(false);
           setImageGenStartedAt(null);
         }
       }
     },
-    [],
+    [isImageEngineBusy, enqueueImageAsNext],
   );
 
   /**
@@ -807,6 +915,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     } finally {
       // Force-resolve the local awaiting state unconditionally.
       imageRunRef.current++;
+      imageOneShotInFlightRef.current = false;
       setImageGenerating(false);
       setImageCancelling(false);
       setImageGenStartedAt(null);
@@ -816,7 +925,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   }, [refreshImageJobs]);
 
   const enqueueImageJob = useCallback(
-    async (input: ImageGenerateInput): Promise<boolean> => {
+    async (
+      input: ImageGenerateInput,
+      priority: "normal" | "next" = "normal",
+    ): Promise<boolean> => {
       const base = engine.engineUrl;
       if (!base) {
         logEngineNotConnected("enqueue image job");
@@ -824,7 +936,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         return false;
       }
       try {
-        await apiEnqueueImageGenJob(base, input);
+        await apiEnqueueImageGenJob(
+          base,
+          priority === "next" ? { ...input, priority } : input,
+        );
         await refreshImageJobs();
         return true;
       } catch (e) {
@@ -968,6 +1083,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   }, []);
   const clearImageResult = useCallback(() => setImageResult(null), []);
   const clearImageGenError = useCallback(() => setImageGenError(null), []);
+  const clearImageQueueNotice = useCallback(
+    () => setImageQueueNotice(null),
+    [],
+  );
 
   // ── Video actions ─────────────────────────────────────────────────────────
   const refreshVideo = useCallback(async () => {
@@ -1492,6 +1611,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     imageGenStartedAt,
     imageLoadStartedAt,
     imageGenError,
+    imageQueueNotice,
     imageResult,
     selectedImageModelId,
     imageForm,
@@ -1526,6 +1646,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       setSelectedImageModelId,
       clearImageResult,
       clearImageGenError,
+      clearImageQueueNotice,
       setImageForm,
       prepareImageGenerate,
       resetImageCommon,
@@ -1562,6 +1683,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       setSelectedImageModelId,
       clearImageResult,
       clearImageGenError,
+      clearImageQueueNotice,
       setImageForm,
       prepareImageGenerate,
       resetImageCommon,

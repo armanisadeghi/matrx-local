@@ -217,6 +217,18 @@ class ImageGenService:
         # requests can't both pass the "already loaded?" check and each spawn
         # a full model load (which would double VRAM use / OOM).
         self._load_lock = asyncio.Lock()
+        # THE generation gate: exactly one generation (load + pipe()) may run
+        # at a time, ever. Both the one-shot path (POST /image-gen/generate)
+        # and the job runner acquire it around the whole critical section. A
+        # diffusers pipeline is NOT re-entrant — two concurrent pipe() calls
+        # on the same object corrupt each other's scheduler state, and a
+        # concurrent load_model() can unload the pipeline mid-generation.
+        # This was the shipped "clicking Generate breaks all queued items and
+        # the current one" bug (July 2026). Cancel registration lives INSIDE
+        # the gate so a cancel always targets the generation that owns the
+        # pipeline — a waiter parked on the gate is untouched and proceeds
+        # after the cancelled run releases it.
+        self._gen_gate = asyncio.Lock()
         self._pipeline: Any = None
         self._loaded_model_id: str | None = None
         self._is_loading = False
@@ -467,6 +479,11 @@ class ImageGenService:
         ``job_id`` marks this generation as belonging to a queue job (for
         cancellation bookkeeping); None means a one-shot request.
 
+        Serialized by the generation gate: when another generation (job or
+        one-shot) is in flight, this call WAITS its turn instead of running
+        concurrently against the same pipeline. Cancelling the running
+        generation never cancels a waiter — the waiter simply runs next.
+
         Cancellable at any point via request_cancel()/request_cancel_job():
         during the model load (checked right after), before the pipeline
         call, at every denoising step, and after the pipeline call.
@@ -479,54 +496,64 @@ class ImageGenService:
         if model is None:
             return GenerationResult(success=False, error=f"Unknown model: {model_id}")
 
-        cancel_event = threading.Event()
-        token = self._register_generation(
-            "job" if job_id else "oneshot", job_id, cancel_event
-        )
-        try:
-            # Load if needed
-            if self._loaded_model_id != model_id or self._pipeline is None:
-                load_result = await self.load_model(model_id)
-                if not load_result.get("success"):
-                    return GenerationResult(
-                        success=False,
-                        error=load_result.get("error", "Failed to load model"),
-                    )
-            # A cancel that arrived during the (minutes-long) model load lands
-            # here — the load itself is not abortable, the generation is.
-            if cancel_event.is_set():
-                logger.info("[image_gen] Generation cancelled during model load")
-                return GenerationResult(
-                    success=False, error="Cancelled", cancelled=True,
-                    model_id=model_id,
-                )
-
-            # Resolve defaults from model catalog
-            resolved_steps = steps if steps is not None else model.recommended_steps
-            resolved_guidance = guidance if guidance is not None else model.recommended_guidance
-            resolved_width = width if width is not None else model.default_width
-            resolved_height = height if height is not None else model.default_height
-            used_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
-
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(
-                None,
-                self._generate_sync,
-                prompt,
-                negative_prompt if model.supports_negative_prompt else "",
-                resolved_steps,
-                resolved_guidance,
-                resolved_width,
-                resolved_height,
-                used_seed,
-                model,
-                extra_params or {},
-                progress_callback,
-                cancel_event,
-                token,
+        if self._gen_gate.locked():
+            logger.info(
+                "[image_gen] Generation request (%s) waiting for the in-flight "
+                "generation to finish — the gate serializes all pipeline use",
+                f"job {job_id[:8]}" if job_id else "one-shot",
             )
-        finally:
-            self._unregister_generation(token)
+        async with self._gen_gate:
+            # Registered INSIDE the gate (and before the potentially
+            # minutes-long model load) so a cancel always has exactly the
+            # generation that owns the pipeline to grab — never a waiter.
+            cancel_event = threading.Event()
+            token = self._register_generation(
+                "job" if job_id else "oneshot", job_id, cancel_event
+            )
+            try:
+                # Load if needed
+                if self._loaded_model_id != model_id or self._pipeline is None:
+                    load_result = await self.load_model(model_id)
+                    if not load_result.get("success"):
+                        return GenerationResult(
+                            success=False,
+                            error=load_result.get("error", "Failed to load model"),
+                        )
+                # A cancel that arrived during the (minutes-long) model load lands
+                # here — the load itself is not abortable, the generation is.
+                if cancel_event.is_set():
+                    logger.info("[image_gen] Generation cancelled during model load")
+                    return GenerationResult(
+                        success=False, error="Cancelled", cancelled=True,
+                        model_id=model_id,
+                    )
+
+                # Resolve defaults from model catalog
+                resolved_steps = steps if steps is not None else model.recommended_steps
+                resolved_guidance = guidance if guidance is not None else model.recommended_guidance
+                resolved_width = width if width is not None else model.default_width
+                resolved_height = height if height is not None else model.default_height
+                used_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
+
+                loop = asyncio.get_running_loop()
+                return await loop.run_in_executor(
+                    None,
+                    self._generate_sync,
+                    prompt,
+                    negative_prompt if model.supports_negative_prompt else "",
+                    resolved_steps,
+                    resolved_guidance,
+                    resolved_width,
+                    resolved_height,
+                    used_seed,
+                    model,
+                    extra_params or {},
+                    progress_callback,
+                    cancel_event,
+                    token,
+                )
+            finally:
+                self._unregister_generation(token)
 
     # ── sync internals (run in thread pool) ──────────────────────────────────
 

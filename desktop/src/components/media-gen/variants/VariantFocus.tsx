@@ -81,6 +81,11 @@ import {
   openExternalUrl,
   parseSeedText,
   randomSeed,
+  QueueNotice,
+  UpNextBadge,
+  isUpNextJob,
+  useImageJobLightbox,
+  PromptCapacityHint,
 } from "@/components/media-gen/shared";
 import type { SizePreset } from "@/components/media-gen/shared";
 
@@ -489,7 +494,7 @@ function NegativePromptReveal({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="blurry, low quality, deformed…"
-        className="min-h-[56px] resize-none bg-card text-sm"
+        className="min-h-[56px] max-h-[240px] resize-y bg-card text-sm"
       />
     </div>
   );
@@ -544,18 +549,33 @@ function ImageJobFeedCard({
   thumbUrl,
   onCancel,
   onReuseSeed,
+  onOpen,
+  opening,
 }: {
   job: ImageGenJob;
   thumbUrl: string | null;
   onCancel: () => void;
   onReuseSeed: (seed: number) => void;
+  /** Opens a COMPLETED job's image in the lightbox. */
+  onOpen: (job: ImageGenJob) => void;
+  /** True while this job's image bytes are being fetched before opening. */
+  opening: boolean;
 }) {
   const active = job.status === "queued" || job.status === "running";
+  const viewable = job.status === "completed" && !!job.item_id;
 
   if (job.status === "completed" && thumbUrl) {
     return (
       <figure className="overflow-hidden rounded-xl border bg-card">
-        <img src={thumbUrl} alt={job.prompt || "Generated image"} className="w-full object-contain" />
+        <button
+          type="button"
+          onClick={viewable ? () => onOpen(job) : undefined}
+          className={`block w-full ${viewable ? "cursor-zoom-in" : "cursor-default"}`}
+          aria-label="View image"
+          title={viewable ? "Click to view the image" : undefined}
+        >
+          <img src={thumbUrl} alt={job.prompt || "Generated image"} className="w-full object-contain" />
+        </button>
         <figcaption className="space-y-1.5 px-4 py-3">
           <p className="text-xs leading-relaxed text-muted-foreground" title={job.prompt}>
             {job.prompt || "(no prompt)"}
@@ -584,10 +604,30 @@ function ImageJobFeedCard({
 
   // Slim card: queued / running / failed / cancelled / completed-sans-thumb.
   return (
-    <div className="space-y-2 rounded-xl border bg-card px-4 py-3">
+    <div
+      className={`space-y-2 rounded-xl border bg-card px-4 py-3 ${
+        viewable ? "cursor-pointer transition-colors hover:bg-muted/20" : ""
+      }`}
+      onClick={viewable ? () => onOpen(job) : undefined}
+      role={viewable ? "button" : undefined}
+      tabIndex={viewable ? 0 : undefined}
+      onKeyDown={
+        viewable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpen(job);
+              }
+            }
+          : undefined
+      }
+      title={viewable ? "Click to view the image" : undefined}
+    >
       <div className="flex items-center gap-3">
         <span className="shrink-0">
-          {active ? (
+          {opening ? (
+            <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
+          ) : active ? (
             <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
           ) : job.status === "failed" ? (
             <AlertCircle className="h-4 w-4 text-destructive" />
@@ -609,7 +649,12 @@ function ImageJobFeedCard({
                 : job.status}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        {/* Controls: clicks here must never bubble into the card's open. */}
+        <div
+          className="flex shrink-0 items-center gap-2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {isUpNextJob(job) && <UpNextBadge />}
           {typeof job.seed === "number" && !active && (
             <SeedChip seed={job.seed} onReuse={onReuseSeed} />
           )}
@@ -740,6 +785,7 @@ function ImageFocusFlow() {
     imageCancelling,
     imageGenStartedAt,
     imageGenError,
+    imageQueueNotice,
     imageResult,
     selectedImageModelId,
     imageForm,
@@ -755,6 +801,7 @@ function ImageFocusFlow() {
     cancelImageGeneration,
     clearImageResult,
     clearImageGenError,
+    clearImageQueueNotice,
     setImageForm,
     prepareImageGenerate,
     resetImageAdvanced,
@@ -863,6 +910,13 @@ function ImageFocusFlow() {
     if (!input) return;
     await enqueueImageJob(input);
   }, [buildInput, enqueueImageJob]);
+
+  // Click-to-open for completed queue jobs (shared lightbox behavior).
+  const { openJob, openingJobId, lightboxElement } = useImageJobLightbox({
+    jobs: imageJobs,
+    thumbs: imageJobThumbs,
+    onReuseSeed: (seed: number) => setImageForm({ seedText: String(seed) }),
+  });
 
   const reuseSeed = useCallback(
     (seed: number) => setImageForm({ seedText: String(seed) }),
@@ -992,8 +1046,9 @@ function ImageFocusFlow() {
           value={imageForm.prompt}
           onChange={(e) => setImageForm({ prompt: e.target.value })}
           placeholder="Describe the image you want to see…"
-          className="min-h-[110px] resize-none rounded-xl bg-card px-4 py-3 text-[15px] leading-relaxed shadow-sm"
+          className="min-h-[110px] max-h-[400px] resize-y rounded-xl bg-card px-4 py-3 text-[15px] leading-relaxed shadow-sm"
         />
+        <PromptCapacityHint pipelineType={currentModel?.pipeline_type} />
         <NegativePromptReveal
           supported={defaults?.supportsNegativePrompt ?? true}
           value={imageForm.negativePrompt}
@@ -1080,6 +1135,12 @@ function ImageFocusFlow() {
       {/* 5 · Generate */}
       <section className="space-y-3">
         {genError && <ErrorNote message={genError} onDismiss={dismissGenError} />}
+        {imageQueueNotice && (
+          <QueueNotice
+            message={imageQueueNotice}
+            onDismiss={clearImageQueueNotice}
+          />
+        )}
         {!currentModel && (
           <p className="text-center text-[11px] text-muted-foreground">
             Choose a model above to enable generation.
@@ -1155,10 +1216,13 @@ function ImageFocusFlow() {
               thumbUrl={imageJobThumbs[j.job_id] ?? null}
               onCancel={() => void cancelImageJob(j.job_id)}
               onReuseSeed={reuseSeed}
+              onOpen={openJob}
+              opening={openingJobId === j.job_id}
             />
           ))}
         </section>
       )}
+      {lightboxElement}
     </div>
   );
 }
@@ -1464,7 +1528,7 @@ function VideoFocusFlow() {
           value={videoForm.prompt}
           onChange={(e) => setVideoForm({ prompt: e.target.value })}
           placeholder="Describe the video you want to see…"
-          className="min-h-[110px] resize-none rounded-xl bg-card px-4 py-3 text-[15px] leading-relaxed shadow-sm"
+          className="min-h-[110px] max-h-[400px] resize-y rounded-xl bg-card px-4 py-3 text-[15px] leading-relaxed shadow-sm"
         />
         <NegativePromptReveal
           supported={defaults?.supportsNegativePrompt ?? true}

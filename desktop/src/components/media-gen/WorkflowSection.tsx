@@ -27,6 +27,7 @@ import {
   CancelableGenerateButton,
   ErrorNote,
   GeneratedImageView,
+  QueueNotice,
   SeedInput,
   parseSeedText,
   randomSeed,
@@ -87,6 +88,7 @@ export function WorkflowSection() {
     imageCancelling,
     imageGenStartedAt,
     imageGenError,
+    imageQueueNotice,
     imageResult,
   } = state;
   const {
@@ -95,6 +97,7 @@ export function WorkflowSection() {
     cancelImageGeneration,
     clearImageResult,
     clearImageGenError,
+    clearImageQueueNotice,
   } = actions;
 
   // Transient form state — intentionally local.
@@ -280,6 +283,13 @@ export function WorkflowSection() {
 
           {imageGenError && (
             <ErrorNote message={imageGenError} onDismiss={clearImageGenError} />
+          )}
+
+          {imageQueueNotice && (
+            <QueueNotice
+              message={`${imageQueueNotice} Track it in the Images tab queue.`}
+              onDismiss={clearImageQueueNotice}
+            />
           )}
 
           <CancelableGenerateButton

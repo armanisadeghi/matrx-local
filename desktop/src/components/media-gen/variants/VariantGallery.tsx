@@ -95,6 +95,11 @@ import {
   parseSeedText,
   randomSeed,
   formatGb,
+  QueueNotice,
+  UpNextBadge,
+  isUpNextJob,
+  useImageJobLightbox,
+  PromptCapacityHint,
 } from "../shared";
 import type { SizePreset } from "../shared";
 
@@ -229,15 +234,40 @@ function ImageJobChip({
   thumbUrl,
   onCancel,
   onReuseSeed,
+  onOpen,
+  opening,
 }: {
   job: ImageGenJob;
   thumbUrl: string | null;
   onCancel: (jobId: string) => void;
   onReuseSeed: (seed: number) => void;
+  /** Opens a COMPLETED job's image in the lightbox. */
+  onOpen: (job: ImageGenJob) => void;
+  /** True while this job's image bytes are being fetched before opening. */
+  opening: boolean;
 }) {
   const active = job.status === "queued" || job.status === "running";
+  const viewable = job.status === "completed" && !!job.item_id;
   return (
-    <div className="flex w-64 shrink-0 flex-col gap-1.5 rounded-lg border bg-card px-2.5 py-2">
+    <div
+      className={`flex w-64 shrink-0 flex-col gap-1.5 rounded-lg border bg-card px-2.5 py-2 ${
+        viewable ? "cursor-pointer transition-colors hover:bg-muted/20" : ""
+      }`}
+      onClick={viewable ? () => onOpen(job) : undefined}
+      role={viewable ? "button" : undefined}
+      tabIndex={viewable ? 0 : undefined}
+      onKeyDown={
+        viewable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpen(job);
+              }
+            }
+          : undefined
+      }
+      title={viewable ? "Click to view the image" : undefined}
+    >
       <div className="flex items-center gap-2">
         {thumbUrl ? (
           <img
@@ -247,7 +277,9 @@ function ImageJobChip({
           />
         ) : (
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded border bg-muted/30">
-            {job.status === "failed" ? (
+            {opening ? (
+              <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
+            ) : job.status === "failed" ? (
               <AlertCircle className="h-4 w-4 text-destructive" />
             ) : job.status === "cancelled" ? (
               <X className="h-4 w-4 text-muted-foreground" />
@@ -267,6 +299,7 @@ function ImageJobChip({
             {job.status === "failed" && job.error ? ` — ${job.error}` : ""}
           </p>
         </div>
+        {isUpNextJob(job) && <UpNextBadge />}
         {active && job.cancel_requested ? (
           <span
             className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground"
@@ -278,7 +311,10 @@ function ImageJobChip({
         ) : (
           <button
             type="button"
-            onClick={() => onCancel(job.job_id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onCancel(job.job_id);
+            }}
             className="shrink-0 text-muted-foreground hover:text-foreground"
             aria-label={active ? "Cancel job" : "Remove job"}
             title={active ? "Cancel this job" : "Remove from the queue"}
@@ -294,7 +330,7 @@ function ImageJobChip({
         />
       )}
       {job.status === "completed" && typeof job.seed === "number" && (
-        <div>
+        <div onClick={(e) => e.stopPropagation()}>
           <SeedChip seed={job.seed} onReuse={onReuseSeed} />
         </div>
       )}
@@ -711,6 +747,7 @@ export function VariantGallery() {
     imageCancelling,
     imageGenStartedAt,
     imageGenError,
+    imageQueueNotice,
     imageResult,
     selectedImageModelId,
     imageForm,
@@ -736,6 +773,7 @@ export function VariantGallery() {
     cancelImageGeneration,
     clearImageResult,
     clearImageGenError,
+    clearImageQueueNotice,
     setImageForm,
     prepareImageGenerate,
     resetImageCommon,
@@ -1025,6 +1063,13 @@ export function VariantGallery() {
     (seed: number) => setImageForm({ seedText: String(seed) }),
     [setImageForm],
   );
+
+  // Click-to-open for completed queue jobs (shared lightbox behavior).
+  const { openJob, openingJobId, lightboxElement } = useImageJobLightbox({
+    jobs: imageJobs,
+    thumbs: imageJobThumbs,
+    onReuseSeed: reuseImageSeed,
+  });
   const reuseSeedFromLibrary = useCallback(
     (item: MediaLibraryItem, seed: number) => {
       if (item.media_type === "video") {
@@ -1154,7 +1199,7 @@ export function VariantGallery() {
                       : "Describe the video you want to create…"
                   }
                   rows={1}
-                  className="min-h-[38px] flex-1 resize-none text-sm"
+                  className="min-h-[38px] max-h-40 flex-1 resize-y text-sm"
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
@@ -1574,10 +1619,24 @@ export function VariantGallery() {
                     {mode === "image" ? imageDimError : videoDimError}
                   </span>
                 )}
+
+                {mode === "image" && (
+                  <PromptCapacityHint
+                    pipelineType={currentImageModel?.pipeline_type}
+                    className="w-full"
+                  />
+                )}
               </div>
 
               {genError && (
                 <ErrorNote message={genError} onDismiss={dismissGenError} />
+              )}
+
+              {mode === "image" && imageQueueNotice && (
+                <QueueNotice
+                  message={imageQueueNotice}
+                  onDismiss={clearImageQueueNotice}
+                />
               )}
             </>
           )}
@@ -1631,6 +1690,8 @@ export function VariantGallery() {
                     thumbUrl={imageJobThumbs[j.job_id] ?? null}
                     onCancel={(id) => void cancelImageJob(id)}
                     onReuseSeed={reuseImageSeed}
+                    onOpen={openJob}
+                    opening={openingJobId === j.job_id}
                   />
                 ))}
               </div>
@@ -1760,6 +1821,8 @@ export function VariantGallery() {
           )}
         </DialogContent>
       </Dialog>
+
+      {lightboxElement}
     </div>
   );
 }

@@ -84,6 +84,11 @@ import {
   computeAdvancedOverrides,
   parseSeedText,
   randomSeed,
+  QueueNotice,
+  UpNextBadge,
+  isUpNextJob,
+  useImageJobLightbox,
+  PromptCapacityHint,
 } from "../shared";
 import type { SizePreset } from "../shared";
 
@@ -665,18 +670,45 @@ function WorkspaceImageJobRow({
   thumbUrl,
   onCancel,
   onReuseSeed,
+  onOpen,
+  opening,
 }: {
   job: ImageGenJob;
   thumbUrl: string | null;
   onCancel: (jobId: string) => void;
   onReuseSeed: (seed: number) => void;
+  /** Opens a COMPLETED job's image in the lightbox. */
+  onOpen: (job: ImageGenJob) => void;
+  /** True while this job's image bytes are being fetched before opening. */
+  opening: boolean;
 }) {
   const active = job.status === "queued" || job.status === "running";
+  const viewable = job.status === "completed" && !!job.item_id;
   return (
-    <div className="rounded-lg border bg-card px-3 py-2.5 space-y-1.5">
+    <div
+      className={`rounded-lg border bg-card px-3 py-2.5 space-y-1.5 ${
+        viewable ? "cursor-pointer transition-colors hover:bg-muted/20" : ""
+      }`}
+      onClick={viewable ? () => onOpen(job) : undefined}
+      role={viewable ? "button" : undefined}
+      tabIndex={viewable ? 0 : undefined}
+      onKeyDown={
+        viewable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpen(job);
+              }
+            }
+          : undefined
+      }
+      title={viewable ? "Click to view the image" : undefined}
+    >
       <div className="flex items-center gap-3">
         <div className="w-5 shrink-0">
-          {job.status === "completed" ? (
+          {opening ? (
+            <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
+          ) : job.status === "completed" ? (
             <CheckCircle2 className="h-4 w-4 text-green-500" />
           ) : job.status === "failed" ? (
             <AlertCircle className="h-4 w-4 text-destructive" />
@@ -703,7 +735,12 @@ function WorkspaceImageJobRow({
             {job.status === "failed" && job.error ? ` — ${job.error}` : ""}
           </p>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        {/* Controls: clicks here must never bubble into the row's open. */}
+        <div
+          className="flex items-center gap-2 shrink-0"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {isUpNextJob(job) && <UpNextBadge />}
           {typeof job.seed === "number" && (
             <SeedChip seed={job.seed} onReuse={onReuseSeed} />
           )}
@@ -750,6 +787,7 @@ function ImageGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
     imageCancelling,
     imageGenStartedAt,
     imageGenError,
+    imageQueueNotice,
     imageResult,
     selectedImageModelId,
     imageForm,
@@ -764,6 +802,7 @@ function ImageGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
     cancelImageGeneration,
     clearImageResult,
     clearImageGenError,
+    clearImageQueueNotice,
     setImageForm,
     prepareImageGenerate,
     resetImageCommon,
@@ -850,6 +889,13 @@ function ImageGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
     (seed: number) => setImageForm({ seedText: String(seed) }),
     [setImageForm],
   );
+
+  // Click-to-open for completed queue jobs (shared lightbox behavior).
+  const { openJob, openingJobId, lightboxElement } = useImageJobLightbox({
+    jobs: imageJobs,
+    thumbs: imageJobThumbs,
+    onReuseSeed: reuseSeed,
+  });
 
   const sizePresets = useMemo<SizePreset[]>(() => {
     const base: SizePreset[] = defaults
@@ -979,7 +1025,10 @@ function ImageGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
                   value={imageForm.prompt}
                   onChange={(e) => setImageForm({ prompt: e.target.value })}
                   placeholder="Describe the image you want to generate…"
-                  className="text-sm min-h-[100px] resize-none"
+                  className="text-sm min-h-[100px] max-h-[320px] resize-y"
+                />
+                <PromptCapacityHint
+                  pipelineType={selectedModel.pipeline_type}
                 />
               </div>
 
@@ -1050,6 +1099,13 @@ function ImageGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
                 <ErrorNote
                   message={imageGenError}
                   onDismiss={clearImageGenError}
+                />
+              )}
+
+              {imageQueueNotice && (
+                <QueueNotice
+                  message={imageQueueNotice}
+                  onDismiss={clearImageQueueNotice}
                 />
               )}
 
@@ -1131,11 +1187,14 @@ function ImageGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
                     thumbUrl={imageJobThumbs[j.job_id] ?? null}
                     onCancel={(id) => void cancelImageJob(id)}
                     onReuseSeed={reuseSeed}
+                    onOpen={openJob}
+                    opening={openingJobId === j.job_id}
                   />
                 ))}
               </div>
             </div>
           )}
+          {lightboxElement}
         </div>
       )}
     </div>
@@ -1522,7 +1581,7 @@ function VideoGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
               value={videoForm.prompt}
               onChange={(e) => setVideoForm({ prompt: e.target.value })}
               placeholder="Describe the video you want to generate…"
-              className="text-sm min-h-[80px] resize-none"
+              className="text-sm min-h-[80px] max-h-[320px] resize-y"
             />
           </div>
 

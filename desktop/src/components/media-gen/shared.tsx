@@ -9,7 +9,7 @@
  * defaults, and every control has an obvious way back to the model default.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   AlertCircle,
@@ -19,6 +19,7 @@ import {
   Copy,
   Dices,
   Download,
+  ListPlus,
   Loader2,
   Maximize2,
   RotateCcw,
@@ -32,6 +33,9 @@ import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import type { DownloadEntry } from "@/lib/downloads/types";
 import type { GeneratedImageResult } from "@/hooks/use-media-gen";
+import type { ImageGenJob } from "@/lib/api";
+import { engine, fetchMediaLibraryFile } from "@/lib/api";
+import { emitClientLog } from "@/hooks/use-unified-log";
 import { MediaLightbox } from "@/components/media-gen/MediaLightbox";
 import type { LightboxItem } from "@/components/media-gen/MediaLightbox";
 
@@ -131,6 +135,49 @@ export function ErrorNote({
       )}
     </div>
   );
+}
+
+/**
+ * Informational (NON-error) banner for the queue-first Generate flow:
+ * "A generation is already running — added to the queue as next."
+ * Violet styling so it never reads as a failure.
+ */
+export function QueueNotice({
+  message,
+  onDismiss,
+}: {
+  message: string;
+  onDismiss?: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-violet-500/40 bg-violet-500/5 px-3 py-2 text-xs text-violet-700 dark:text-violet-300 flex items-center gap-2">
+      <ListPlus className="h-3.5 w-3.5 shrink-0" />
+      <span className="break-words min-w-0 flex-1">{message}</span>
+      {onDismiss && (
+        <button
+          onClick={onDismiss}
+          className="shrink-0 opacity-70 hover:opacity-100"
+          aria-label="Dismiss notice"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** "Up next" badge for a queued job enqueued with priority="next". */
+export function UpNextBadge() {
+  return (
+    <span className="rounded-full bg-violet-500/15 text-violet-600 dark:text-violet-400 px-1.5 py-0.5 text-[10px] font-medium shrink-0">
+      Up next
+    </span>
+  );
+}
+
+/** True when this queued job should carry the "Up next" label. */
+export function isUpNextJob(job: ImageGenJob): boolean {
+  return job.status === "queued" && job.priority === "next";
 }
 
 export function InlineProgressBar({
@@ -582,6 +629,50 @@ export function DimensionPicker({
   );
 }
 
+// ── Prompt capacity (honest, per model family) ──────────────────────────────
+
+/**
+ * The user-facing truth about how much prompt a model family actually reads.
+ * The API accepts long prompts (10k chars); what the MODEL does with them
+ * differs per family — SD/SDXL's CLIP encoder truncates at 77 tokens, FLUX's
+ * T5 reads ~512 tokens, Qwen/Z-Image accept long prompts. Informational
+ * only: never block typing, never truncate client-side.
+ */
+export function promptCapacityHint(
+  pipelineType: string | null | undefined,
+): string | null {
+  switch (pipelineType) {
+    case "stable-diffusion":
+    case "stable-diffusion-xl":
+      return "This model reads ~77 tokens (~300 characters) — longer prompts are truncated by the model itself.";
+    case "flux":
+    case "flux2-klein":
+      return "This model reads up to ~512 tokens (~2,000 characters) of prompt.";
+    case "z-image":
+    case "qwen-image":
+      return "This model accepts long, detailed prompts (hundreds of tokens).";
+    default:
+      return null;
+  }
+}
+
+/** Subtle hint line under a prompt field — renders nothing for unknown families. */
+export function PromptCapacityHint({
+  pipelineType,
+  className = "",
+}: {
+  pipelineType: string | null | undefined;
+  className?: string;
+}) {
+  const hint = promptCapacityHint(pipelineType);
+  if (!hint) return null;
+  return (
+    <p className={`text-[10px] text-muted-foreground/80 ${className}`}>
+      {hint}
+    </p>
+  );
+}
+
 // ── Negative prompt (never silently hidden) ──────────────────────────────────
 
 /**
@@ -612,7 +703,7 @@ export function NegativePromptField({
           onChange={(e) => onChange(e.target.value)}
           placeholder="blurry, low quality, deformed…"
           disabled={disabled}
-          className="text-sm min-h-[60px] resize-none"
+          className="text-sm min-h-[60px] max-h-[240px] resize-y"
         />
       ) : (
         <p className="rounded-md border border-dashed px-3 py-2 text-[11px] text-muted-foreground">
@@ -1009,6 +1100,156 @@ export function GeneratedImageView({
       )}
     </div>
   );
+}
+
+// ── Completed queue-job lightbox (shared across every queue panel) ───────────
+
+/** Build the lightbox metadata panel for a completed image job. */
+function jobLightboxItem(job: ImageGenJob, url: string): LightboxItem {
+  const meta: Record<string, unknown> = { model_id: job.model_id };
+  if (typeof job.elapsed_seconds === "number") {
+    meta.elapsed_seconds = job.elapsed_seconds;
+  }
+  if (job.file_path) meta.file_path = job.file_path;
+  if (job.params && Object.keys(job.params).length > 0) {
+    Object.assign(meta, job.params);
+  }
+  return {
+    id: job.job_id,
+    kind: "image",
+    url,
+    prompt: job.prompt,
+    seed: typeof job.seed === "number" ? job.seed : null,
+    meta,
+  };
+}
+
+/**
+ * THE click-to-open behavior for completed image-queue jobs, shared by every
+ * queue panel (Images tab, Studio rail, Focus feed, Workspace list, Gallery
+ * strip).  Clicking a completed job opens it in the MediaLightbox with the
+ * panel's OTHER completed jobs as the prev/next set.
+ *
+ * URL resolution: completed thumbnails are normally already cached in
+ * `thumbs` (the media-gen hook fetches them). When one is missing the hook
+ * fetches the bytes on demand — `openingJobId` is set while that fetch runs
+ * so the row can show a brief loading state; a click is NEVER silently dead.
+ *
+ * Render `lightboxElement` once in the panel, call `openJob(job)` from the
+ * row click handler (completed jobs only).
+ */
+export function useImageJobLightbox({
+  jobs,
+  thumbs,
+  onReuseSeed,
+}: {
+  /** The panel's job list (any statuses — only completed ones are viewable). */
+  jobs: ImageGenJob[];
+  /** jobId → object URL cache (imageJobThumbs from the media-gen context). */
+  thumbs: Record<string, string>;
+  onReuseSeed?: (seed: number) => void;
+}): {
+  /** Open this (completed) job in the lightbox. No-op for other statuses. */
+  openJob: (job: ImageGenJob) => void;
+  /** Job id whose bytes are being fetched before opening, else null. */
+  openingJobId: string | null;
+  /** Mount once in the panel. */
+  lightboxElement: ReactNode;
+} {
+  const [fetchedUrls, setFetchedUrls] = useState<Record<string, string>>({});
+  const [openingJobId, setOpeningJobId] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{
+    items: LightboxItem[];
+    index: number;
+  } | null>(null);
+
+  // Revoke only the object URLs THIS hook created (thumbs belong to the
+  // media-gen context, which revokes its own).
+  const fetchedUrlsRef = useRef(fetchedUrls);
+  useEffect(() => {
+    fetchedUrlsRef.current = fetchedUrls;
+  }, [fetchedUrls]);
+  useEffect(() => {
+    return () => {
+      for (const url of Object.values(fetchedUrlsRef.current)) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, []);
+
+  const openJob = useCallback(
+    (job: ImageGenJob) => {
+      if (job.status !== "completed" || !job.item_id) return;
+      const urlOf = (j: ImageGenJob): string | null =>
+        thumbs[j.job_id] ?? fetchedUrls[j.job_id] ?? null;
+
+      const openWith = (targetUrl: string, extra?: [string, string]) => {
+        const urls: Record<string, string> = {};
+        for (const j of jobs) {
+          if (j.status !== "completed" || !j.item_id) continue;
+          const u = j.job_id === job.job_id ? targetUrl : urlOf(j);
+          if (u) urls[j.job_id] = u;
+        }
+        if (extra) urls[extra[0]] = extra[1];
+        const viewable = jobs.filter(
+          (j) => j.status === "completed" && j.item_id && urls[j.job_id],
+        );
+        const items = viewable.map((j) => jobLightboxItem(j, urls[j.job_id]));
+        const index = Math.max(
+          0,
+          viewable.findIndex((j) => j.job_id === job.job_id),
+        );
+        setLightbox({ items, index });
+      };
+
+      const known = urlOf(job);
+      if (known) {
+        openWith(known);
+        return;
+      }
+      // Bytes not cached yet — fetch, then open. Never a dead click.
+      const base = engine.engineUrl;
+      if (!base) {
+        emitClientLog(
+          "error",
+          `[media-gen] cannot open job ${job.job_id} — engine not connected`,
+          "engine",
+        );
+        return;
+      }
+      setOpeningJobId(job.job_id);
+      void fetchMediaLibraryFile(base, job.item_id)
+        .then((url) => {
+          setFetchedUrls((prev) =>
+            prev[job.job_id] ? prev : { ...prev, [job.job_id]: url },
+          );
+          openWith(url, [job.job_id, url]);
+        })
+        .catch((e) => {
+          emitClientLog(
+            "error",
+            `[media-gen] could not load the image for job ${job.job_id}: ${String(e)}`,
+            "engine",
+          );
+        })
+        .finally(() => setOpeningJobId(null));
+    },
+    [jobs, thumbs, fetchedUrls],
+  );
+
+  const closeLightbox = useCallback(() => setLightbox(null), []);
+
+  const lightboxElement = (
+    <MediaLightbox
+      open={lightbox !== null}
+      items={lightbox?.items ?? []}
+      startIndex={lightbox?.index ?? 0}
+      onClose={closeLightbox}
+      onReuseSeed={onReuseSeed}
+    />
+  );
+
+  return { openJob, openingJobId, lightboxElement };
 }
 
 /** Open an external URL via the Tauri shell when available, else a new tab. */

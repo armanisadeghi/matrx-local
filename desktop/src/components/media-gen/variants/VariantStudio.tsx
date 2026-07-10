@@ -94,6 +94,10 @@ import {
   openExternalUrl,
   parseSeedText,
   randomSeed,
+  QueueNotice,
+  UpNextBadge,
+  isUpNextJob,
+  PromptCapacityHint,
 } from "@/components/media-gen/shared";
 import type { SizePreset } from "@/components/media-gen/shared";
 
@@ -320,8 +324,27 @@ function ImageJobChip({
 }) {
   const active = job.status === "queued" || job.status === "running";
   const cancelling = active && !!job.cancel_requested;
+  const viewable = job.status === "completed" && !!job.item_id && !!onExpand;
   return (
-    <div className="flex w-56 shrink-0 flex-col gap-1 rounded-lg border bg-card px-2.5 py-2">
+    <div
+      className={`flex w-56 shrink-0 flex-col gap-1 rounded-lg border bg-card px-2.5 py-2 ${
+        viewable ? "cursor-pointer transition-colors hover:bg-muted/20" : ""
+      }`}
+      onClick={viewable ? () => onExpand?.(job) : undefined}
+      role={viewable ? "button" : undefined}
+      tabIndex={viewable ? 0 : undefined}
+      onKeyDown={
+        viewable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onExpand?.(job);
+              }
+            }
+          : undefined
+      }
+      title={viewable ? "Click to view the image" : undefined}
+    >
       <div className="flex items-center gap-2">
         {job.status === "completed" ? (
           <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-500" />
@@ -335,6 +358,7 @@ function ImageJobChip({
         <span className="min-w-0 flex-1 truncate text-[11px]" title={job.prompt}>
           {job.prompt || "(no prompt)"}
         </span>
+        {isUpNextJob(job) && <UpNextBadge />}
         {cancelling ? (
           <span
             className="flex shrink-0 items-center gap-1 text-[9px] text-muted-foreground"
@@ -346,7 +370,10 @@ function ImageJobChip({
         ) : (
           <button
             type="button"
-            onClick={() => onCancel(job.job_id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onCancel(job.job_id);
+            }}
             className="shrink-0 text-muted-foreground hover:text-foreground"
             aria-label={active ? "Cancel job" : "Remove job"}
             title={active ? "Cancel this job" : "Remove from the queue"}
@@ -371,7 +398,10 @@ function ImageJobChip({
           {typeof job.seed === "number" && job.status === "completed" && (
             <button
               type="button"
-              onClick={() => onReuseSeed(job.seed as number)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onReuseSeed(job.seed as number);
+              }}
               className="ml-auto shrink-0 text-violet-500 hover:underline"
               title="Reuse this seed"
             >
@@ -381,7 +411,10 @@ function ImageJobChip({
           {job.status === "completed" && job.item_id && onExpand && (
             <button
               type="button"
-              onClick={() => onExpand(job)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onExpand(job);
+              }}
               className={`shrink-0 text-muted-foreground hover:text-foreground ${
                 typeof job.seed === "number" ? "" : "ml-auto"
               }`}
@@ -460,6 +493,7 @@ export function VariantStudio() {
     imageCancelling,
     imageGenStartedAt,
     imageGenError,
+    imageQueueNotice,
     imageResult,
     selectedImageModelId,
     imageForm,
@@ -487,6 +521,7 @@ export function VariantStudio() {
     cancelImageGeneration,
     clearImageResult,
     clearImageGenError,
+    clearImageQueueNotice,
     setImageForm,
     prepareImageGenerate,
     resetImageCommon,
@@ -1144,8 +1179,9 @@ export function VariantStudio() {
             value={imageForm.prompt}
             onChange={(e) => setImageForm({ prompt: e.target.value })}
             placeholder="Describe the image you want to generate…"
-            className="text-sm min-h-[96px] resize-none"
+            className="text-sm min-h-[96px] max-h-[280px] resize-y"
           />
+          <PromptCapacityHint pipelineType={imageModel?.pipeline_type} />
         </div>
 
         <NegativePromptField
@@ -1248,7 +1284,7 @@ export function VariantStudio() {
             value={videoForm.prompt}
             onChange={(e) => setVideoForm({ prompt: e.target.value })}
             placeholder="Describe the video you want to generate…"
-            className="text-sm min-h-[96px] resize-none"
+            className="text-sm min-h-[96px] max-h-[280px] resize-y"
           />
         </div>
 
@@ -1804,6 +1840,12 @@ export function VariantStudio() {
         <div className="shrink-0 space-y-2 border-t bg-background/95 p-3">
           {genError && (
             <ErrorNote message={genError} onDismiss={dismissGenError} />
+          )}
+          {isImage && imageQueueNotice && (
+            <QueueNotice
+              message={imageQueueNotice}
+              onDismiss={clearImageQueueNotice}
+            />
           )}
           {isImage ? (
             <div className="flex gap-2">

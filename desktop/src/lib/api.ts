@@ -3806,6 +3806,41 @@ function isAbortTimeout(e: unknown): boolean {
   );
 }
 
+/**
+ * FastAPI's `detail` is NOT always a string: 422 validation errors carry an
+ * array of `{loc, msg, type}` objects, and some routes return object details.
+ * Coercing those with template literals / new Error() renders the dreaded
+ * "[object Object]". This flattens any detail shape into a readable string.
+ */
+function stringifyErrorDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((d) => {
+        if (typeof d === "string") return d;
+        if (d && typeof d === "object") {
+          const rec = d as { loc?: unknown[]; msg?: unknown };
+          const loc = Array.isArray(rec.loc)
+            ? rec.loc.filter((p) => p !== "body").join(".")
+            : "";
+          const msg = typeof rec.msg === "string" ? rec.msg : JSON.stringify(d);
+          return loc ? `${loc}: ${msg}` : msg;
+        }
+        return String(d);
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      // fall through
+    }
+  }
+  return fallback;
+}
+
 function mediaGenTimeoutError(
   surface: "image-gen" | "video-gen",
   method: string,
@@ -3856,8 +3891,8 @@ async function imageGenFetch<T>(
     const body = await resp.text().catch(() => "");
     let detail = body;
     try {
-      const parsed = JSON.parse(body) as { detail?: string };
-      if (parsed.detail) detail = parsed.detail;
+      const parsed = JSON.parse(body) as { detail?: unknown };
+      if (parsed.detail) detail = stringifyErrorDetail(parsed.detail, body);
     } catch {
       // use raw body
     }
@@ -3950,12 +3985,12 @@ async function mediaGenLoad(
   }
   if (resp.status === 409) {
     const body = (await resp.json().catch(() => ({}))) as {
-      detail?: string;
+      detail?: unknown;
       needs_download?: boolean;
     };
     return {
       success: false,
-      error: body.detail ?? "Model not downloaded",
+      error: stringifyErrorDetail(body.detail, "Model not downloaded"),
       needs_download: body.needs_download ?? true,
     };
   }
@@ -4092,6 +4127,12 @@ export interface ImageGenJob {
    * step can take tens of seconds to actually stop.
    */
   cancel_requested?: boolean;
+  /**
+   * "next" when the job was enqueued at the FRONT of the pending queue
+   * (queue-first Generate while another generation was running). The queue
+   * UI labels such still-queued jobs "Up next".
+   */
+  priority?: "normal" | "next";
   prompt: string;
   model_id: string;
   /** 0..1 fractional progress while running. */
@@ -4108,10 +4149,15 @@ export interface ImageGenJob {
   created_at?: string;
 }
 
-/** Enqueue an image generation job (same body as /generate). Returns job id. */
+/**
+ * Enqueue an image generation job (same body as /generate). Returns job id.
+ * `priority: "next"` inserts the job at the FRONT of the pending queue — it
+ * runs right after the currently-running generation, before every other
+ * queued job (queue-first Generate).
+ */
 export async function enqueueImageGenJob(
   baseUrl: string,
-  req: Parameters<typeof generateImage>[1],
+  req: Parameters<typeof generateImage>[1] & { priority?: "normal" | "next" },
 ): Promise<{ job_id: string }> {
   return imageGenFetch<{ job_id: string }>(imageGenUrl(baseUrl, "/jobs"), {
     method: "POST",
@@ -4348,8 +4394,8 @@ async function videoGenFetch<T>(
     const body = await resp.text().catch(() => "");
     let detail = body;
     try {
-      const parsed = JSON.parse(body) as { detail?: string };
-      if (parsed.detail) detail = parsed.detail;
+      const parsed = JSON.parse(body) as { detail?: unknown };
+      if (parsed.detail) detail = stringifyErrorDetail(parsed.detail, body);
     } catch {
       // use raw body
     }
@@ -4570,8 +4616,8 @@ async function mediaLibraryFetch<T>(
     const body = await resp.text().catch(() => "");
     let detail = body;
     try {
-      const parsed = JSON.parse(body) as { detail?: string };
-      if (parsed.detail) detail = parsed.detail;
+      const parsed = JSON.parse(body) as { detail?: unknown };
+      if (parsed.detail) detail = stringifyErrorDetail(parsed.detail, body);
     } catch {
       // use raw body
     }
@@ -4713,8 +4759,8 @@ async function mediaVaultFetch<T>(
     const body = await resp.text().catch(() => "");
     let detail = body;
     try {
-      const parsed = JSON.parse(body) as { detail?: string };
-      if (parsed.detail) detail = parsed.detail;
+      const parsed = JSON.parse(body) as { detail?: unknown };
+      if (parsed.detail) detail = stringifyErrorDetail(parsed.detail, body);
     } catch {
       // use raw body
     }

@@ -215,8 +215,13 @@ def engine_process(
         "TAURI_SIDECAR": "1",
     }
 
+    # --no-sync: run against the venv AS-IS. During the matrx-ai 0.3.0
+    # pre-PyPI interim the venv deliberately diverges from uv.lock (wheels
+    # built from aidream main are installed by hand — see the pyproject
+    # matrx-* pin comment); a plain `uv run --frozen` would silently re-sync
+    # the venv back to the stale lock and boot the OLD matrx-ai.
     proc = subprocess.Popen(
-        ["uv", "run", "--frozen", "python", "run.py"],
+        ["uv", "run", "--frozen", "--no-sync", "python", "run.py"],
         cwd=str(PROJECT_ROOT),
         env=env,
         stdout=subprocess.PIPE,

@@ -3732,6 +3732,37 @@ export interface ImageGenResult {
   model_id: string;
   elapsed_seconds: number;
   error?: string;
+  /** The concrete seed used — always returned, even when it was random. */
+  seed?: number | null;
+  /** Media-library item id, when the engine persisted the result. */
+  item_id?: string | null;
+  /** On-disk path of the saved image, when the engine persisted the result. */
+  file_path?: string | null;
+}
+
+// ── Media-gen parameter schema (params endpoints) ───────────────────────────
+
+/**
+ * The "common" (beautifully-rendered) parameter defaults for a model, as
+ * returned by `GET /image-gen/params/{model_id}` and
+ * `GET /video-gen/params/{model_id}`.  `num_frames`/`fps` are video-only.
+ */
+export interface MediaGenCommonParams {
+  steps?: number;
+  guidance?: number;
+  width?: number;
+  height?: number;
+  negative_prompt?: string | null;
+  seed?: number | null;
+  num_frames?: number;
+  fps?: number;
+}
+
+export interface MediaGenParams {
+  common: MediaGenCommonParams;
+  /** Every remaining pipeline kwarg with its default value. */
+  advanced: Record<string, unknown>;
+  supports_negative_prompt: boolean;
 }
 
 // ── Image Generation API helper ────────────────────────────────────────────
@@ -3804,6 +3835,19 @@ export async function listImageGenPresets(
 ): Promise<ImageGenWorkflowPreset[]> {
   return imageGenFetch<ImageGenWorkflowPreset[]>(
     imageGenUrl(baseUrl, "/presets"),
+  );
+}
+
+/**
+ * Full parameter schema (common defaults + every advanced pipeline kwarg)
+ * for one image model.  404s throw with the engine's detail message.
+ */
+export async function getImageGenParams(
+  baseUrl: string,
+  model_id: string,
+): Promise<MediaGenParams> {
+  return imageGenFetch<MediaGenParams>(
+    imageGenUrl(baseUrl, `/params/${encodeURIComponent(model_id)}`),
   );
 }
 
@@ -3887,6 +3931,8 @@ export async function generateImage(
     width?: number;
     height?: number;
     seed?: number;
+    /** Extra pipeline kwargs merged into the diffusers call (user wins). */
+    extra_params?: Record<string, unknown>;
   },
 ): Promise<ImageGenResult> {
   return imageGenFetch<ImageGenResult>(imageGenUrl(baseUrl, "/generate"), {
@@ -3910,6 +3956,71 @@ export async function generateImageFromWorkflow(
       method: "POST",
       body: JSON.stringify(req),
     },
+  );
+}
+
+// ── Image generation job queue ───────────────────────────────────────────────
+
+export type ImageGenJobStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface ImageGenJob {
+  job_id: string;
+  status: ImageGenJobStatus;
+  prompt: string;
+  model_id: string;
+  /** 0..1 fractional progress while running. */
+  progress?: number;
+  elapsed_seconds?: number;
+  error?: string | null;
+  /** The concrete seed used (or queued to be used). */
+  seed?: number | null;
+  /** The full generation parameters the job was enqueued with. */
+  params?: Record<string, unknown>;
+  /** Media-library item id, set on completion. */
+  item_id?: string | null;
+  file_path?: string | null;
+  created_at?: string;
+}
+
+/** Enqueue an image generation job (same body as /generate). Returns job id. */
+export async function enqueueImageGenJob(
+  baseUrl: string,
+  req: Parameters<typeof generateImage>[1],
+): Promise<{ job_id: string }> {
+  return imageGenFetch<{ job_id: string }>(imageGenUrl(baseUrl, "/jobs"), {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export async function listImageGenJobs(
+  baseUrl: string,
+): Promise<ImageGenJob[]> {
+  return imageGenFetch<ImageGenJob[]>(imageGenUrl(baseUrl, "/jobs"));
+}
+
+export async function getImageGenJob(
+  baseUrl: string,
+  jobId: string,
+): Promise<ImageGenJob> {
+  return imageGenFetch<ImageGenJob>(
+    imageGenUrl(baseUrl, `/jobs/${encodeURIComponent(jobId)}`),
+  );
+}
+
+/** Cancel a queued job / remove a finished one from the queue. */
+export async function cancelImageGenJob(
+  baseUrl: string,
+  jobId: string,
+): Promise<void> {
+  await imageGenFetch<unknown>(
+    imageGenUrl(baseUrl, `/jobs/${encodeURIComponent(jobId)}`),
+    { method: "DELETE" },
   );
 }
 
@@ -4061,9 +4172,13 @@ export interface VideoGenRequest {
   height?: number;
   num_frames?: number;
   fps?: number;
+  steps?: number;
+  guidance?: number;
   seed?: number;
   /** Base64-encoded source image (no data: prefix) for image-to-video. */
   image_base64?: string;
+  /** Extra pipeline kwargs merged into the diffusers call (user wins). */
+  extra_params?: Record<string, unknown>;
 }
 
 // ── Video Generation API helper ────────────────────────────────────────────
@@ -4129,6 +4244,19 @@ export async function listVideoGenModels(
   baseUrl: string,
 ): Promise<VideoGenModelInfo[]> {
   return videoGenFetch<VideoGenModelInfo[]>(videoGenUrl(baseUrl, "/models"));
+}
+
+/**
+ * Full parameter schema (common defaults + every advanced pipeline kwarg)
+ * for one video model.  404s throw with the engine's detail message.
+ */
+export async function getVideoGenParams(
+  baseUrl: string,
+  model_id: string,
+): Promise<MediaGenParams> {
+  return videoGenFetch<MediaGenParams>(
+    videoGenUrl(baseUrl, `/params/${encodeURIComponent(model_id)}`),
+  );
 }
 
 /**
@@ -4214,4 +4342,134 @@ export async function fetchVideoGenResult(
   }
   const blob = await resp.blob();
   return URL.createObjectURL(blob);
+}
+
+// ── Media Library API ────────────────────────────────────────────────────────
+
+export interface MediaLibraryItem {
+  id: string;
+  media_type: "image" | "video";
+  model_id: string;
+  prompt: string;
+  negative_prompt: string | null;
+  params: Record<string, unknown>;
+  seed: number | null;
+  width: number;
+  height: number;
+  num_frames?: number | null;
+  fps?: number | null;
+  elapsed_seconds: number;
+  created_at: string;
+  file_name: string;
+  file_size_bytes: number;
+  file_path: string;
+}
+
+export interface MediaLibraryListResponse {
+  items: MediaLibraryItem[];
+  /** Total matching items (before limit/offset) — for pagination. */
+  total: number;
+}
+
+function mediaLibraryUrl(baseUrl: string, path: string): string {
+  return `${baseUrl}/media-library${path}`;
+}
+
+async function mediaLibraryFetch<T>(
+  url: string,
+  options?: RequestInit,
+): Promise<T> {
+  const auth = await engine.getEngineAuthHeaders();
+  const mergedHeaders = new Headers({
+    "Content-Type": "application/json",
+    ...auth,
+  });
+  if (options?.headers) {
+    const extra = new Headers(options.headers);
+    extra.forEach((value, key) => mergedHeaders.set(key, value));
+  }
+  const method = options?.method ?? "GET";
+  const resp = await fetch(url, { ...options, headers: mergedHeaders });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body) as { detail?: string };
+      if (parsed.detail) detail = parsed.detail;
+    } catch {
+      // use raw body
+    }
+    try {
+      const u = new URL(url);
+      emitClientLog(
+        "error",
+        `[media-library] ${method} ${u.pathname}${u.search} → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
+        "engine",
+      );
+    } catch {
+      emitClientLog(
+        "error",
+        `[media-library] ${method} request failed → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
+        "engine",
+      );
+    }
+    throw new Error(detail || `HTTP ${resp.status}`);
+  }
+  return resp.json() as Promise<T>;
+}
+
+export async function listMediaLibraryItems(
+  baseUrl: string,
+  opts?: {
+    media_type?: "image" | "video";
+    limit?: number;
+    offset?: number;
+  },
+): Promise<MediaLibraryListResponse> {
+  const params = new URLSearchParams();
+  if (opts?.media_type) params.set("media_type", opts.media_type);
+  if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+  if (opts?.offset !== undefined) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  return mediaLibraryFetch<MediaLibraryListResponse>(
+    mediaLibraryUrl(baseUrl, `/items${qs ? `?${qs}` : ""}`),
+  );
+}
+
+/**
+ * Fetch the raw bytes of a library item with auth headers and return an
+ * object URL suitable for `<img src=…>` / `<video src=…>` (a plain src
+ * attribute cannot carry the Authorization header).  The caller owns the
+ * returned URL and must `URL.revokeObjectURL` it when done.
+ */
+export async function fetchMediaLibraryFile(
+  baseUrl: string,
+  itemId: string,
+): Promise<string> {
+  const auth = await engine.getEngineAuthHeaders();
+  const resp = await fetch(
+    mediaLibraryUrl(baseUrl, `/file/${encodeURIComponent(itemId)}`),
+    { headers: new Headers({ ...auth }) },
+  );
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => `HTTP ${resp.status}`);
+    emitClientLog(
+      "error",
+      `[media-library] GET /file/${itemId} → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
+      "engine",
+    );
+    throw new Error(detail || `HTTP ${resp.status}`);
+  }
+  const blob = await resp.blob();
+  return URL.createObjectURL(blob);
+}
+
+export async function deleteMediaLibraryItem(
+  baseUrl: string,
+  itemId: string,
+): Promise<void> {
+  await mediaLibraryFetch<unknown>(
+    mediaLibraryUrl(baseUrl, `/items/${encodeURIComponent(itemId)}`),
+    { method: "DELETE" },
+  );
 }

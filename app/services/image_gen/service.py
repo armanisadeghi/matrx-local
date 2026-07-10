@@ -30,11 +30,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import inspect
 import io
+import random
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from app.common.system_logger import get_logger
 from app.services.image_gen.models import IMAGE_GEN_MODELS, ImageGenModel
@@ -177,6 +179,15 @@ class GenerationResult:
     model_id: str = ""
     elapsed_seconds: float = 0.0
     error: str | None = None
+    item_id: str | None = None
+    """Media-library item id — every successful generation is persisted to
+    ~/.matrx/media/generated/images/ (see app/services/media_gen/library.py)."""
+    file_path: str | None = None
+    """Absolute path of the persisted PNG."""
+    seed: int | None = None
+    """The CONCRETE seed used. When the request omitted a seed the service
+    generates one server-side (never lets diffusers pick invisibly) so every
+    image is reproducible."""
 
 
 # ── service class ─────────────────────────────────────────────────────────────
@@ -348,8 +359,20 @@ class ImageGenService:
         width: int | None = None,
         height: int | None = None,
         seed: int | None = None,
+        extra_params: dict[str, Any] | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> GenerationResult:
-        """Generate an image. Loads the model if not already loaded."""
+        """Generate an image. Loads the model if not already loaded.
+
+        ``extra_params`` are arbitrary pipeline kwargs merged LAST over the
+        computed call kwargs — the user's values override every default, but
+        may never override ``prompt`` (loud ValueError → success=False).
+
+        A null ``seed`` becomes a concrete server-generated one — the used
+        seed is always reported back (result + media-library sidecar).
+
+        ``progress_callback(step, total_steps)`` fires per denoising step
+        when the pipeline supports callback_on_step_end (job queue progress)."""
         if not self.available:
             return GenerationResult(success=False, error=self.unavailable_reason)
 
@@ -370,6 +393,7 @@ class ImageGenService:
         resolved_guidance = guidance if guidance is not None else model.recommended_guidance
         resolved_width = width if width is not None else model.default_width
         resolved_height = height if height is not None else model.default_height
+        used_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -381,8 +405,10 @@ class ImageGenService:
             resolved_guidance,
             resolved_width,
             resolved_height,
-            seed,
+            used_seed,
             model,
+            extra_params or {},
+            progress_callback,
         )
 
     # ── sync internals (run in thread pool) ──────────────────────────────────
@@ -531,8 +557,10 @@ class ImageGenService:
         guidance: float,
         width: int,
         height: int,
-        seed: int | None,
+        seed: int,
         model: ImageGenModel,
+        extra_params: dict[str, Any],
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> GenerationResult:
         with self._lock:
             if self._pipeline is None:
@@ -542,10 +570,10 @@ class ImageGenService:
         try:
             import torch  # noqa: PLC0415
 
-            generator = None
-            if seed is not None:
-                device = self._device or "cpu"
-                generator = torch.Generator(device=device).manual_seed(seed)
+            # seed is always concrete here (generate() manufactures one when
+            # the caller omitted it) — every image is reproducible.
+            device = self._device or "cpu"
+            generator = torch.Generator(device=device).manual_seed(seed)
 
             call_kwargs: dict = {
                 "prompt": prompt,
@@ -554,8 +582,7 @@ class ImageGenService:
                 "height": height,
             }
 
-            if generator is not None:
-                call_kwargs["generator"] = generator
+            call_kwargs["generator"] = generator
 
             # Guidance / negative prompt only for applicable models.
             if model.pipeline_type == "qwen-image":
@@ -575,8 +602,45 @@ class ImageGenService:
                 # the MPS black-image path (July 2026).
                 call_kwargs["guidance_scale"] = guidance
 
+            # Step progress for the job queue — only when the pipeline
+            # supports the modern callback (all catalog pipelines do).
+            if progress_callback is not None:
+                sig_params = inspect.signature(pipe.__call__).parameters
+                if "callback_on_step_end" in sig_params:
+                    def _on_step_end(
+                        p: Any, step: int, timestep: Any, cb_kwargs: dict
+                    ) -> dict:
+                        progress_callback(step + 1, steps)
+                        return cb_kwargs
+                    call_kwargs["callback_on_step_end"] = _on_step_end
+                else:
+                    logger.warning(
+                        "[image_gen] %s pipeline has no callback_on_step_end — "
+                        "job progress will jump 0→100", model.pipeline_type,
+                    )
+
+            # User-supplied extra_params merge LAST (they override every
+            # computed default except the protected `prompt`) and are
+            # validated against the pipeline signature BEFORE burning compute.
+            from app.services.media_gen.params import (  # noqa: PLC0415
+                merge_extra_params,
+                validate_pipeline_kwargs,
+            )
+            validate_pipeline_kwargs(pipe, extra_params.keys())
+            call_kwargs = merge_extra_params(call_kwargs, extra_params)
+
             t0 = time.monotonic()
-            output = pipe(**call_kwargs)
+            try:
+                output = pipe(**call_kwargs)
+            except (TypeError, ValueError) as exc:
+                if extra_params:
+                    # Loud recovery: name the user's parameters instead of
+                    # silently stripping them or surfacing a bare traceback.
+                    raise RuntimeError(
+                        "The pipeline rejected the generation parameters "
+                        f"(extra_params: {', '.join(sorted(extra_params))}) — {exc}"
+                    ) from exc
+                raise
             elapsed = time.monotonic() - t0
 
             image = output.images[0]
@@ -601,7 +665,31 @@ class ImageGenService:
             # Encode to base64 PNG
             buf = io.BytesIO()
             image.save(buf, format="PNG")
-            b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            png_bytes = buf.getvalue()
+            b64 = base64.b64encode(png_bytes).decode("utf-8")
+
+            # Persist into the media library. A save failure is a real
+            # failure (disk full / permissions) — it propagates to the
+            # except below and returns success=False with the reason; the
+            # library is part of the generation contract, not best-effort.
+            from app.services.media_gen.library import (  # noqa: PLC0415
+                save_generated_image,
+            )
+            record_params = {
+                k: v for k, v in call_kwargs.items()
+                if k not in ("generator", "callback_on_step_end")
+            }
+            item = save_generated_image(
+                png_bytes,
+                model_id=model.model_id,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                params=record_params,
+                seed=seed,
+                width=image.width,
+                height=image.height,
+                elapsed_seconds=elapsed,
+            )
 
             return GenerationResult(
                 success=True,
@@ -610,6 +698,9 @@ class ImageGenService:
                 height=image.height,
                 model_id=model.model_id,
                 elapsed_seconds=elapsed,
+                item_id=item["id"],
+                file_path=item["file_path"],
+                seed=seed,
             )
 
         except Exception as exc:

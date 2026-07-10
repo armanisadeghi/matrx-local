@@ -18,6 +18,7 @@ import { AiMatrx } from "@/pages/AiMatrx";
 import { BrowserLab } from "@/pages/BrowserLab";
 import { Voice } from "@/pages/Voice";
 import { LocalModels } from "@/pages/LocalModels";
+import { MediaGeneration } from "@/pages/MediaGeneration";
 import { TextToSpeech } from "@/pages/TextToSpeech";
 import { TranscriptOverlay } from "@/components/TranscriptOverlay";
 import { SystemPrompts } from "@/pages/SystemPrompts";
@@ -399,6 +400,7 @@ function AppInner() {
       { path: "/voice", element: <Voice /> },
       { path: "/tts", element: <TextToSpeech /> },
       { path: "/local-models", element: <LocalModels /> },
+      { path: "/media-generation", element: <MediaGeneration /> },
       { path: "/system-prompts", element: <SystemPrompts /> },
       { path: "/aimatrx", element: <AiMatrx /> },
       { path: "/browser", element: <BrowserLab /> },

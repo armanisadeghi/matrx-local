@@ -1,13 +1,18 @@
 /**
  * ImageGenSection — the "Images" experience of the media-gen tab.
  *
- * Extracted from LocalModels.tsx (formerly MediaModelsTab).  All persistent
- * state (status, models, generated result, selected model) lives in
- * MediaGenContext so it survives tab switches; only transient form fields are
- * local to this component.
+ * Structure: two always-visible sub-tabs — **Generate** (form + queue +
+ * results) and **Models** (catalog: download / load).  ALL form state lives in
+ * MediaGenContext (imageForm), so navigating anywhere and back restores the
+ * exact working state (prompt, params, results, sub-tab).
+ *
+ * Settings doctrine: every parameter the engine accepts is visible.  Common
+ * controls are rendered beautifully with the model's defaults labeled; every
+ * remaining pipeline kwarg lives in the editable advanced-JSON editor.  Reset
+ * affordances exist per group and as a master reset.
  */
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useEffect, useMemo, useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
@@ -16,22 +21,23 @@ import {
   ExternalLink,
   Image as ImageIcon,
   KeyRound,
+  ListPlus,
   Loader2,
   PackagePlus,
   RefreshCw,
   UserPlus,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
-import type { ImageGenModelInfo } from "@/lib/api";
+import type { ImageGenModelInfo, ImageGenJob } from "@/lib/api";
 import { engine } from "@/lib/api";
+import type { ImageGenerateInput } from "@/hooks/use-media-gen";
 import { ImageGenInstaller } from "./ImageGenInstaller";
 import {
   StarRating,
@@ -40,9 +46,22 @@ import {
   findModelDownload,
   formatGb,
   openExternalUrl,
+  SubTabBar,
+  SeedInput,
+  SeedChip,
+  ResetButton,
+  NumberSliderField,
+  DimensionPicker,
+  dimensionError,
+  NegativePromptField,
+  AdvancedParamsEditor,
+  ParamsErrorBanner,
+  GeneratedImageView,
+  computeAdvancedOverrides,
+  parseSeedText,
+  randomSeed,
 } from "./shared";
-
-type ImageGenView = "picker" | "generate" | "workflow";
+import type { SizePreset } from "./shared";
 
 function classifyImageGenLoadError(
   message: string,
@@ -214,6 +233,74 @@ function ImageModelCard({
   );
 }
 
+// ── Queue panel ───────────────────────────────────────────────────────────────
+
+function ImageJobRow({
+  job,
+  thumbUrl,
+  onCancel,
+  onReuseSeed,
+}: {
+  job: ImageGenJob;
+  thumbUrl: string | null;
+  onCancel: (jobId: string) => void;
+  onReuseSeed: (seed: number) => void;
+}) {
+  const active = job.status === "queued" || job.status === "running";
+  return (
+    <div className="rounded-lg border bg-card px-3 py-2.5 space-y-1.5">
+      <div className="flex items-center gap-3">
+        <div className="w-5 shrink-0">
+          {job.status === "completed" ? (
+            <CheckCircle2 className="h-4 w-4 text-green-500" />
+          ) : job.status === "failed" ? (
+            <AlertCircle className="h-4 w-4 text-destructive" />
+          ) : job.status === "cancelled" ? (
+            <X className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
+          )}
+        </div>
+        {thumbUrl && (
+          <img
+            src={thumbUrl}
+            alt="Generated"
+            className="h-10 w-10 rounded object-cover border shrink-0"
+          />
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-xs" title={job.prompt}>
+            {job.prompt || "(no prompt)"}
+          </p>
+          <p className="text-[10px] text-muted-foreground">
+            {job.model_id || "—"} · {job.status}
+            {job.status === "failed" && job.error ? ` — ${job.error}` : ""}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {typeof job.seed === "number" && (
+            <SeedChip seed={job.seed} onReuse={onReuseSeed} />
+          )}
+          <button
+            onClick={() => onCancel(job.job_id)}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label={active ? "Cancel job" : "Remove job"}
+            title={active ? "Cancel this job" : "Remove from the queue"}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+      {job.status === "running" && (
+        <InlineProgressBar
+          percent={(job.progress ?? 0) * 100}
+          indeterminate={(job.progress ?? 0) <= 0}
+        />
+      )}
+    </div>
+  );
+}
+
 // ── Section ───────────────────────────────────────────────────────────────────
 
 export function ImageGenSection() {
@@ -223,13 +310,17 @@ export function ImageGenSection() {
   const {
     imageStatus,
     imageModels,
-    imagePresets,
     imageStatusLoading,
     imageStatusError,
     imageModelLoading,
     imageGenerating,
     imageGenError,
     imageResult,
+    selectedImageModelId,
+    imageForm,
+    imageJobs,
+    imageJobsError,
+    imageJobThumbs,
   } = state;
   const {
     refreshImage,
@@ -237,24 +328,19 @@ export function ImageGenSection() {
     unloadImageModel,
     downloadImageModel,
     generateImage,
-    generateImageWorkflow,
-    setSelectedImageModelId,
     clearImageResult,
     clearImageGenError,
+    setImageForm,
+    prepareImageGenerate,
+    resetImageCommon,
+    resetImageAdvanced,
+    resetImageAll,
+    enqueueImageJob,
+    cancelImageJob,
   } = actions;
 
-  // Transient UI state — intentionally local (form fields / current view)
-  const [view, setView] = useState<ImageGenView>("picker");
-  const [selectedModel, setSelectedModel] = useState<ImageGenModelInfo | null>(
-    null,
-  );
-  const [prompt, setPrompt] = useState("");
-  const [negPrompt, setNegPrompt] = useState("");
-  const [steps, setSteps] = useState<number | null>(null);
-  const [guidance, setGuidance] = useState<number | null>(null);
-  const [seedText, setSeedText] = useState("");
-  const [workflowSubject, setWorkflowSubject] = useState("");
-  const [workflowPresetId, setWorkflowPresetId] = useState<string>("");
+  // Only the load-error banner is component-local; ALL form state is in
+  // context so it survives navigating away and back.
   const [localError, setLocalError] = useState<string | null>(null);
 
   // When an image_gen download completes, refresh the catalog so
@@ -273,22 +359,41 @@ export function ImageGenSection() {
     void refreshImage();
   }, [completedImageDownloads, refreshImage]);
 
-  const parseSeed = useCallback((): number | undefined => {
-    const trimmed = seedText.trim();
-    if (!trimmed) return undefined;
-    const n = Number(trimmed);
-    return Number.isFinite(n) ? Math.floor(n) : undefined;
-  }, [seedText]);
+  // The model the Generate tab works with.
+  const generateModelId =
+    imageForm.defaults?.modelId ??
+    selectedImageModelId ??
+    imageStatus?.loaded_model_id ??
+    null;
+  const selectedModel = useMemo(
+    () => imageModels.find((m) => m.model_id === generateModelId) ?? null,
+    [imageModels, generateModelId],
+  );
+
+  // If the Generate tab is open but the form defaults belong to a different
+  // model (or none — e.g. a model was already loaded when the app started),
+  // fetch that model's full parameter schema.  Guarded so it runs once per
+  // model change, never in a loop.
+  useEffect(() => {
+    if (imageForm.view !== "generate") return;
+    if (imageForm.paramsLoading) return;
+    if (!selectedModel) return;
+    if (imageForm.defaults?.modelId === selectedModel.model_id) return;
+    void prepareImageGenerate(selectedModel);
+  }, [
+    imageForm.view,
+    imageForm.paramsLoading,
+    imageForm.defaults?.modelId,
+    selectedModel,
+    prepareImageGenerate,
+  ]);
 
   const handleLoadModel = useCallback(
     async (model: ImageGenModelInfo) => {
       setLocalError(null);
       const result = await loadImageModel(model.model_id);
       if (result.success) {
-        setSelectedModel(model);
-        setSteps(model.recommended_steps);
-        setGuidance(model.recommended_guidance);
-        setView("generate");
+        await prepareImageGenerate(model);
       } else if (result.needs_download) {
         setLocalError(
           `${model.name} is not downloaded yet. Use the Download button first.`,
@@ -297,7 +402,7 @@ export function ImageGenSection() {
         setLocalError(result.error);
       }
     },
-    [loadImageModel],
+    [loadImageModel, prepareImageGenerate],
   );
 
   const handleDownloadModel = useCallback(
@@ -310,74 +415,108 @@ export function ImageGenSection() {
 
   const handleOpenGenerate = useCallback(
     (model: ImageGenModelInfo) => {
-      setSelectedModel(model);
-      setSelectedImageModelId(model.model_id);
-      setSteps(model.recommended_steps);
-      setGuidance(model.recommended_guidance);
-      setView("generate");
+      if (imageForm.defaults?.modelId === model.model_id) {
+        // Same model — keep the user's tweaked settings, just switch tabs.
+        setImageForm({ view: "generate" });
+      } else {
+        void prepareImageGenerate(model);
+      }
     },
-    [setSelectedImageModelId],
+    [imageForm.defaults?.modelId, setImageForm, prepareImageGenerate],
   );
 
   const handleUnload = useCallback(async () => {
     await unloadImageModel();
-    setSelectedModel(null);
-    setView("picker");
   }, [unloadImageModel]);
 
+  // ── Validation + request building ────────────────────────────────────────
+  const defaults = imageForm.defaults;
+  const advanced = useMemo(
+    () => computeAdvancedOverrides(imageForm.advancedText, defaults?.advanced ?? {}),
+    [imageForm.advancedText, defaults?.advanced],
+  );
+  const dimError = dimensionError(imageForm.width, imageForm.height);
+  const formInvalid =
+    !imageForm.prompt.trim() || !defaults || !advanced.ok || dimError !== null;
+
+  const buildInput = useCallback((): ImageGenerateInput | null => {
+    const d = imageForm.defaults;
+    if (!d) return null;
+    const adv = computeAdvancedOverrides(imageForm.advancedText, d.advanced);
+    if (!adv.ok) return null;
+    // Resolve a concrete seed even for "random" so every result is
+    // reproducible — the used seed is shown on the result and in the queue.
+    const seed = parseSeedText(imageForm.seedText) ?? randomSeed();
+    return {
+      prompt: imageForm.prompt.trim(),
+      model_id: d.modelId,
+      negative_prompt: d.supportsNegativePrompt
+        ? imageForm.negativePrompt.trim() || undefined
+        : undefined,
+      steps: imageForm.steps,
+      guidance: imageForm.guidance,
+      width: imageForm.width,
+      height: imageForm.height,
+      seed,
+      extra_params: adv.count > 0 ? adv.overrides : undefined,
+    };
+  }, [imageForm]);
+
   const handleGenerate = useCallback(async () => {
-    if (!selectedModel || !prompt.trim()) return;
-    await generateImage({
-      prompt: prompt.trim(),
-      model_id: selectedModel.model_id,
-      negative_prompt: negPrompt.trim() || undefined,
-      steps: steps ?? undefined,
-      guidance: guidance ?? undefined,
-      seed: parseSeed(),
-    });
-  }, [
-    selectedModel,
-    prompt,
-    negPrompt,
-    steps,
-    guidance,
-    parseSeed,
-    generateImage,
-  ]);
+    const input = buildInput();
+    if (!input) return;
+    await generateImage(input);
+  }, [buildInput, generateImage]);
 
-  const handleWorkflowGenerate = useCallback(async () => {
-    if (!workflowPresetId || !workflowSubject.trim()) return;
-    const ok = await generateImageWorkflow({
-      preset_id: workflowPresetId,
-      subject: workflowSubject.trim(),
-      model_id: selectedModel?.model_id,
-      seed: parseSeed(),
-    });
-    // Only switch to the generate view when a result was actually produced.
-    // On failure, stay put so the error banner (rendered here) stays visible —
-    // never navigate to an empty "generating forever" screen.
-    if (ok) setView("generate");
-  }, [
-    workflowPresetId,
-    workflowSubject,
-    selectedModel?.model_id,
-    parseSeed,
-    generateImageWorkflow,
-  ]);
+  const handleEnqueue = useCallback(async () => {
+    const input = buildInput();
+    if (!input) return;
+    // Queue and clear NOTHING — the prompt stays editable so the user can
+    // immediately write the next one.
+    await enqueueImageJob(input);
+  }, [buildInput, enqueueImageJob]);
 
-  const handleSavePng = useCallback(() => {
-    if (!imageResult) return;
-    const a = document.createElement("a");
-    a.href = `data:image/png;base64,${imageResult.b64}`;
-    a.download = `matrx-image-${Date.now()}.png`;
-    a.click();
-  }, [imageResult]);
+  const reuseSeed = useCallback(
+    (seed: number) => setImageForm({ seedText: String(seed) }),
+    [setImageForm],
+  );
 
   const genError = imageGenError ?? localError;
   const dismissGenError = useCallback(() => {
     setLocalError(null);
     clearImageGenError();
   }, [clearImageGenError]);
+
+  const sizePresets = useMemo<SizePreset[]>(() => {
+    const base: SizePreset[] = defaults
+      ? [
+          {
+            label: `Default ${defaults.width}×${defaults.height}`,
+            width: defaults.width,
+            height: defaults.height,
+          },
+        ]
+      : [];
+    const fixed: SizePreset[] = [
+      { label: "512", width: 512, height: 512 },
+      { label: "768", width: 768, height: 768 },
+      { label: "1024", width: 1024, height: 1024 },
+      { label: "1536", width: 1536, height: 1536 },
+      { label: "Portrait 832×1216", width: 832, height: 1216 },
+      { label: "Landscape 1216×832", width: 1216, height: 832 },
+    ];
+    return [
+      ...base,
+      ...fixed.filter(
+        (p) =>
+          !defaults || p.width !== defaults.width || p.height !== defaults.height,
+      ),
+    ];
+  }, [defaults]);
+
+  const activeJobCount = imageJobs.filter(
+    (j) => j.status === "queued" || j.status === "running",
+  ).length;
 
   // ── Loading / error / installer states ─────────────────────────────────
   if (imageStatusLoading && !imageStatus) {
@@ -483,7 +622,7 @@ export function ImageGenSection() {
       </div>
     ) : null;
 
-  if (imageStatus?.packages_outdated && view === "picker") {
+  if (imageStatus?.packages_outdated && imageForm.view === "models") {
     return (
       <div className="space-y-4 pb-8">
         {outdatedBanner}
@@ -496,412 +635,299 @@ export function ImageGenSection() {
     );
   }
 
-  // ── Model picker ────────────────────────────────────────────────────────
-  if (view === "picker") {
-    return (
-      <div className="space-y-6 pb-8">
-        {/* Quick workflow strip */}
-        {imagePresets.length > 0 && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold">Quick workflows</h3>
-              <button
-                onClick={() => setView("workflow")}
-                className="text-xs text-violet-500 hover:underline"
-              >
-                Run a workflow →
-              </button>
-            </div>
-            <div className="flex gap-2 flex-wrap">
-              {imagePresets.map((p) => (
-                <button
-                  key={p.preset_id}
-                  onClick={() => {
-                    setWorkflowPresetId(p.preset_id);
-                    setView("workflow");
-                  }}
-                  className="rounded-full border px-3 py-1 text-xs hover:bg-muted/30 transition-colors"
-                >
-                  {p.name}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Currently loaded indicator */}
-        {imageStatus?.loaded_model_id && (
-          <div className="flex items-center justify-between rounded-lg border border-green-500/30 bg-green-500/5 px-4 py-3">
-            <div className="flex items-center gap-2 text-sm">
-              <CheckCircle2 className="h-4 w-4 text-green-500" />
-              <span>
-                Model loaded:{" "}
-                <span className="font-medium">
-                  {imageStatus.loaded_model_id}
-                </span>
-              </span>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  const m = imageModels.find(
-                    (x) => x.model_id === imageStatus.loaded_model_id,
-                  );
-                  if (m) handleOpenGenerate(m);
-                }}
-              >
-                Generate
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => void handleUnload()}>
-                Unload
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* Model grid */}
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold flex items-center gap-2">
-            <ImageIcon className="h-4 w-4 text-violet-500" />
-            Select a model
-          </h3>
-          {genError && <ErrorNote message={genError} onDismiss={dismissGenError} />}
-          <div className="grid gap-3 sm:grid-cols-2">
-            {imageModels.map((m) => (
-              <ImageModelCard
-                key={m.model_id}
-                model={m}
-                isLoaded={imageStatus?.loaded_model_id === m.model_id}
-                anyLoading={imageModelLoading || !!imageStatus?.is_loading}
-                onLoad={(model) => void handleLoadModel(model)}
-                onDownload={handleDownloadModel}
-                onGenerate={handleOpenGenerate}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Workflow view ────────────────────────────────────────────────────────
-  if (view === "workflow") {
-    const preset = imagePresets.find((p) => p.preset_id === workflowPresetId);
-    const resolvedPrompt = preset
-      ? preset.prompt_template.replace("{subject}", workflowSubject || "…")
-      : "";
-
-    return (
-      <div className="space-y-5 pb-8 max-w-xl">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setView("picker")}
-            className="text-xs text-muted-foreground hover:text-foreground"
-          >
-            ← Back
-          </button>
-          <span className="text-sm font-semibold">Quick Workflow</span>
-        </div>
-
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label className="text-xs">Workflow</Label>
-            <div className="flex gap-2 flex-wrap">
-              {imagePresets.map((p) => (
-                <button
-                  key={p.preset_id}
-                  onClick={() => setWorkflowPresetId(p.preset_id)}
-                  className={`rounded-full border px-3 py-1 text-xs transition-colors ${workflowPresetId === p.preset_id ? "border-violet-500 bg-violet-500/10 text-violet-600 dark:text-violet-400" : "hover:bg-muted/30"}`}
-                >
-                  {p.name}
-                </button>
-              ))}
-            </div>
-            {preset && (
-              <p className="text-xs text-muted-foreground">
-                {preset.description}
-              </p>
-            )}
-          </div>
-
-          {workflowPresetId && (
-            <div className="space-y-1.5">
-              <Label className="text-xs">Subject / Topic</Label>
-              <Input
-                value={workflowSubject}
-                onChange={(e) => setWorkflowSubject(e.target.value)}
-                placeholder={
-                  preset?.name === "Photorealistic Portrait"
-                    ? "a smiling woman in business attire"
-                    : "describe your subject…"
-                }
-                className="text-sm"
-              />
-            </div>
-          )}
-
-          {workflowSubject && preset && (
-            <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-              <span className="font-medium text-foreground">
-                Generated prompt:{" "}
-              </span>
-              {resolvedPrompt}
-            </div>
-          )}
-
-          {imageStatus?.loaded_model_id && (
-            <div className="text-xs text-muted-foreground">
-              Model:{" "}
-              <span className="font-medium text-foreground">
-                {imageStatus.loaded_model_id}
-              </span>
-              <button
-                onClick={() => setView("picker")}
-                className="ml-2 text-violet-500 hover:underline"
-              >
-                change
-              </button>
-            </div>
-          )}
-
-          {genError && <ErrorNote message={genError} onDismiss={dismissGenError} />}
-
-          <Button
-            className="w-full"
-            disabled={
-              imageGenerating || !workflowPresetId || !workflowSubject.trim()
-            }
-            onClick={() => {
-              void handleWorkflowGenerate();
-            }}
-          >
-            {imageGenerating ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                Generating…
-              </>
-            ) : (
-              "Generate Image"
-            )}
-          </Button>
-        </div>
-
-        {imageResult && (
-          <div className="space-y-2">
-            <img
-              src={`data:image/png;base64,${imageResult.b64}`}
-              alt="Generated"
-              className="w-full rounded-lg border"
-            />
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>
-                {imageResult.width}×{imageResult.height} ·{" "}
-                {imageResult.elapsed.toFixed(1)}s
-              </span>
-              <Button size="sm" variant="outline" onClick={handleSavePng}>
-                <Download className="h-3.5 w-3.5 mr-1.5" />
-                Download
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // ── Generate view ────────────────────────────────────────────────────────
   return (
     <div className="space-y-5 pb-8">
       {outdatedBanner}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setView("picker")}
-            className="text-xs text-muted-foreground hover:text-foreground"
-          >
-            ← Models
-          </button>
-          <span className="text-sm font-semibold">
-            {selectedModel?.name ?? "Image Generation"}
-          </span>
-          {selectedModel && (
-            <Badge variant="outline" className="text-[10px]">
-              {selectedModel.provider}
-            </Badge>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <Button size="sm" variant="ghost" onClick={() => setView("workflow")}>
-            Workflows
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => void handleUnload()}>
-            Unload model
-          </Button>
-        </div>
-      </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Controls */}
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label className="text-xs">Prompt</Label>
-            <Textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Describe the image you want to generate…"
-              className="text-sm min-h-[100px] resize-none"
-            />
+      <SubTabBar
+        tabs={[
+          { id: "generate" as const, label: "Generate", badge: activeJobCount },
+          { id: "models" as const, label: "Models" },
+        ]}
+        active={imageForm.view}
+        onSelect={(view) => setImageForm({ view })}
+      />
+
+      {imageForm.view === "models" ? (
+        /* ── Models sub-tab ──────────────────────────────────────────────── */
+        <div className="space-y-6">
+          {imageStatus?.loaded_model_id && (
+            <div className="flex items-center justify-between rounded-lg border border-green-500/30 bg-green-500/5 px-4 py-3">
+              <div className="flex items-center gap-2 text-sm">
+                <CheckCircle2 className="h-4 w-4 text-green-500" />
+                <span>
+                  Model loaded:{" "}
+                  <span className="font-medium">
+                    {imageStatus.loaded_model_id}
+                  </span>
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    const m = imageModels.find(
+                      (x) => x.model_id === imageStatus.loaded_model_id,
+                    );
+                    if (m) handleOpenGenerate(m);
+                  }}
+                >
+                  Generate
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void handleUnload()}
+                >
+                  Unload
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <ImageIcon className="h-4 w-4 text-violet-500" />
+              Select a model
+            </h3>
+            {genError && (
+              <ErrorNote message={genError} onDismiss={dismissGenError} />
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
+              {imageModels.map((m) => (
+                <ImageModelCard
+                  key={m.model_id}
+                  model={m}
+                  isLoaded={imageStatus?.loaded_model_id === m.model_id}
+                  anyLoading={imageModelLoading || !!imageStatus?.is_loading}
+                  onLoad={(model) => void handleLoadModel(model)}
+                  onDownload={handleDownloadModel}
+                  onGenerate={handleOpenGenerate}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : !selectedModel ? (
+        /* ── Generate sub-tab, no model yet ─────────────────────────────── */
+        <div className="rounded-xl border border-dashed px-5 py-10 flex flex-col items-center text-center gap-3">
+          <ImageIcon className="h-8 w-8 text-muted-foreground/40" />
+          <p className="text-sm font-medium">No model selected</p>
+          <p className="text-xs text-muted-foreground max-w-sm">
+            Pick a model in the Models tab — its full settings will appear
+            here.
+          </p>
+          <Button size="sm" onClick={() => setImageForm({ view: "models" })}>
+            Choose a model
+          </Button>
+        </div>
+      ) : imageForm.paramsLoading || !defaults ? (
+        <div className="flex items-center justify-center py-16 gap-3 text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          <span className="text-sm">
+            Loading {selectedModel.name}'s parameters…
+          </span>
+        </div>
+      ) : (
+        /* ── Generate sub-tab ───────────────────────────────────────────── */
+        <div className="space-y-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold">
+                {selectedModel.name}
+              </span>
+              <Badge variant="outline" className="text-[10px]">
+                {selectedModel.provider}
+              </Badge>
+            </div>
+            <div className="flex gap-2 items-center">
+              <ResetButton onClick={resetImageAll} label="Reset all settings" />
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void handleUnload()}
+              >
+                Unload model
+              </Button>
+            </div>
           </div>
 
-          {selectedModel?.supports_negative_prompt && (
-            <div className="space-y-1.5">
-              <Label className="text-xs">
-                Negative prompt{" "}
-                <span className="text-muted-foreground">(what to avoid)</span>
-              </Label>
-              <Textarea
-                value={negPrompt}
-                onChange={(e) => setNegPrompt(e.target.value)}
-                placeholder="blurry, low quality, deformed…"
-                className="text-sm min-h-[60px] resize-none"
-              />
-            </div>
+          {imageForm.paramsError && (
+            <ParamsErrorBanner
+              error={imageForm.paramsError}
+              onRetry={() => void prepareImageGenerate(selectedModel)}
+            />
           )}
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs">
-                Steps{" "}
-                <span className="text-muted-foreground">
-                  ({steps ?? selectedModel?.recommended_steps})
-                </span>
-              </Label>
-              <Slider
-                min={1}
-                max={selectedModel?.pipeline_type.startsWith("flux") ? 50 : 100}
-                step={1}
-                value={[steps ?? selectedModel?.recommended_steps ?? 20]}
-                onValueChange={([v]) => setSteps(v)}
-              />
-            </div>
-            {selectedModel && selectedModel.recommended_guidance > 0 && (
+          <div className="grid gap-6 lg:grid-cols-2">
+            {/* Controls */}
+            <div className="space-y-4">
               <div className="space-y-1.5">
-                <Label className="text-xs">
-                  Guidance{" "}
-                  <span className="text-muted-foreground">
-                    (
-                    {(guidance ?? selectedModel.recommended_guidance).toFixed(
-                      1,
-                    )}
-                    )
-                  </span>
-                </Label>
-                <Slider
+                <Label className="text-xs">Prompt</Label>
+                <Textarea
+                  value={imageForm.prompt}
+                  onChange={(e) => setImageForm({ prompt: e.target.value })}
+                  placeholder="Describe the image you want to generate…"
+                  className="text-sm min-h-[100px] resize-none"
+                />
+              </div>
+
+              <NegativePromptField
+                supported={defaults.supportsNegativePrompt}
+                value={imageForm.negativePrompt}
+                onChange={(v) => setImageForm({ negativePrompt: v })}
+              />
+
+              <div className="grid grid-cols-2 gap-3">
+                <NumberSliderField
+                  label="Steps"
+                  value={imageForm.steps}
+                  onChange={(v) => setImageForm({ steps: v })}
+                  min={1}
+                  max={
+                    selectedModel.pipeline_type.startsWith("flux") ? 50 : 100
+                  }
+                  step={1}
+                  defaultValue={defaults.steps}
+                />
+                <NumberSliderField
+                  label="Guidance"
+                  value={imageForm.guidance}
+                  onChange={(v) => setImageForm({ guidance: v })}
                   min={0}
                   max={20}
                   step={0.5}
-                  value={[guidance ?? selectedModel.recommended_guidance]}
-                  onValueChange={([v]) => setGuidance(v)}
+                  defaultValue={defaults.guidance}
                 />
               </div>
-            )}
-          </div>
 
-          <div className="space-y-1.5">
-            <Label className="text-xs">
-              Seed{" "}
-              <span className="text-muted-foreground">
-                (optional — same seed reproduces an image)
-              </span>
-            </Label>
-            <Input
-              value={seedText}
-              onChange={(e) => setSeedText(e.target.value)}
-              inputMode="numeric"
-              placeholder="random"
-              className="text-sm"
-            />
-          </div>
-
-          {genError && <ErrorNote message={genError} onDismiss={dismissGenError} />}
-
-          <Button
-            className="w-full"
-            disabled={imageGenerating || !prompt.trim()}
-            onClick={() => {
-              void handleGenerate();
-            }}
-          >
-            {imageGenerating ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                Generating…
-              </>
-            ) : (
-              <>
-                <ImageIcon className="h-4 w-4 mr-2" />
-                Generate
-              </>
-            )}
-          </Button>
-
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="flex-1 text-xs"
-              onClick={() => setView("workflow")}
-            >
-              Use a workflow preset
-            </Button>
-          </div>
-        </div>
-
-        {/* Output */}
-        <div className="space-y-3">
-          {imageResult ? (
-            <>
-              <img
-                src={`data:image/png;base64,${imageResult.b64}`}
-                alt="Generated image"
-                className="w-full rounded-lg border object-contain"
+              <DimensionPicker
+                width={imageForm.width}
+                height={imageForm.height}
+                onChange={(w, h) => setImageForm({ width: w, height: h })}
+                presets={sizePresets}
               />
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>
-                  {imageResult.width}×{imageResult.height} ·{" "}
-                  {imageResult.elapsed.toFixed(1)}s
-                </span>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="ghost" onClick={clearImageResult}>
-                    Clear
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={handleSavePng}>
-                    <Download className="h-3.5 w-3.5 mr-1.5" />
-                    Download PNG
-                  </Button>
-                </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs">
+                  Seed{" "}
+                  <span className="text-muted-foreground">
+                    (blank = random — the used seed is shown on the result)
+                  </span>
+                </Label>
+                <SeedInput
+                  value={imageForm.seedText}
+                  onChange={(seedText) => setImageForm({ seedText })}
+                />
               </div>
-            </>
-          ) : imageGenerating ? (
-            <div className="flex flex-col items-center justify-center rounded-lg border border-dashed aspect-square gap-3 text-muted-foreground">
-              <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
-              <span className="text-sm">Generating image…</span>
-              <span className="text-xs">
-                This may take 5–60 seconds depending on your hardware
-              </span>
+
+              <div className="flex justify-end">
+                <ResetButton
+                  onClick={resetImageCommon}
+                  label="Reset settings to model defaults"
+                />
+              </div>
+
+              <AdvancedParamsEditor
+                defaults={defaults.advanced}
+                text={imageForm.advancedText}
+                onChange={(advancedText) => setImageForm({ advancedText })}
+                onReset={resetImageAdvanced}
+              />
+
+              {genError && (
+                <ErrorNote message={genError} onDismiss={dismissGenError} />
+              )}
+
+              <div className="flex gap-2">
+                <Button
+                  className="flex-1"
+                  disabled={imageGenerating || formInvalid}
+                  onClick={() => {
+                    void handleGenerate();
+                  }}
+                >
+                  {imageGenerating ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      Generating…
+                    </>
+                  ) : (
+                    <>
+                      <ImageIcon className="h-4 w-4 mr-2" />
+                      Generate
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={formInvalid}
+                  onClick={() => {
+                    void handleEnqueue();
+                  }}
+                  title="Queue this generation and keep editing — write the next prompt right away"
+                >
+                  <ListPlus className="h-4 w-4 mr-2" />
+                  Add to queue
+                </Button>
+              </div>
             </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center rounded-lg border border-dashed aspect-square gap-3 text-muted-foreground">
-              <ImageIcon className="h-10 w-10 opacity-20" />
-              <span className="text-sm">
-                Your generated image will appear here
-              </span>
+
+            {/* Output */}
+            <div className="space-y-3">
+              {imageResult ? (
+                <GeneratedImageView
+                  result={imageResult}
+                  onClear={clearImageResult}
+                  onReuseSeed={reuseSeed}
+                />
+              ) : imageGenerating ? (
+                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed aspect-square gap-3 text-muted-foreground">
+                  <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
+                  <span className="text-sm">Generating image…</span>
+                  <span className="text-xs">
+                    This may take 5–60 seconds depending on your hardware
+                  </span>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed aspect-square gap-3 text-muted-foreground">
+                  <ImageIcon className="h-10 w-10 opacity-20" />
+                  <span className="text-sm">
+                    Your generated image will appear here
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Queue ────────────────────────────────────────────────────── */}
+          {(imageJobs.length > 0 || imageJobsError) && (
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold">
+                Queue
+                {activeJobCount > 0 && (
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">
+                    {activeJobCount} active
+                  </span>
+                )}
+              </h3>
+              {imageJobsError && <ErrorNote message={imageJobsError} />}
+              <div className="space-y-2">
+                {imageJobs.map((j) => (
+                  <ImageJobRow
+                    key={j.job_id}
+                    job={j}
+                    thumbUrl={imageJobThumbs[j.job_id] ?? null}
+                    onCancel={(id) => void cancelImageJob(id)}
+                    onReuseSeed={reuseSeed}
+                  />
+                ))}
+              </div>
             </div>
           )}
         </div>
-      </div>
+      )}
     </div>
   );
 }

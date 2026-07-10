@@ -52,7 +52,6 @@ import {
   ThumbsUp,
   ThumbsDown,
   GitFork,
-  Image,
   KeyRound,
   UserCheck,
   UserPlus,
@@ -114,12 +113,19 @@ import type { EngineToolSchema } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 import { systemPrompts, BUILTIN_PROMPTS } from "@/lib/system-prompts";
 import { loadSettings } from "@/lib/settings";
+import {
+  CONTEXT_LENGTH_OPTIONS,
+  clearModelContextOverride,
+  formatContextLength,
+  getModelContextOverride,
+  resolveContextLength,
+  setModelContextOverride,
+} from "@/lib/llm/contextLength";
 import type { SystemPrompt } from "@/lib/system-prompts";
 import { usePageRefreshHandler } from "@/hooks/use-page-refresh";
 import { ModelRepoAnalyzer } from "@/components/llm/ModelRepoAnalyzer";
 import { engine } from "@/lib/api";
 import type { DocFolder, DocTree } from "@/lib/api";
-import { MediaGenTab } from "@/components/media-gen/MediaGenTab";
 import { useAuth } from "@/hooks/use-auth";
 import { useTtsApp, useTtsAppOptional } from "@/contexts/TtsContext";
 import { useChatTts } from "@/hooks/use-chat-tts";
@@ -1927,6 +1933,8 @@ function ModelsTab() {
       return {};
     }
   });
+  // Bump to re-read per-model context overrides from localStorage after edits.
+  const [contextOverrideTick, setContextOverrideTick] = useState(0);
 
   // Track last known downloading filename so we can attribute errors to the right model.
   const lastDownloadingFilenameRef = useRef<string | null>(null);
@@ -2082,7 +2090,8 @@ function ModelsTab() {
     setLocalError(null);
     try {
       const hw = await ensureHardware();
-      await startServer(filename, hw.recommended_gpu_layers, 4096);
+      // Never hardcode 4096 — resolve override → Settings → 8192.
+      await startServer(filename, hw.recommended_gpu_layers);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setLocalError(msg);
@@ -2100,6 +2109,11 @@ function ModelsTab() {
     } catch {
       // storage full — ignore
     }
+  };
+
+  const saveCustomModelContext = (filename: string, contextLength: number) => {
+    setModelContextOverride(filename, contextLength);
+    setContextOverrideTick((t) => t + 1);
   };
 
   const allModels = hardwareResult?.all_models ?? [];
@@ -2454,15 +2468,52 @@ function ModelsTab() {
                       </span>{" "}
                       {dm.size_gb} GB
                     </p>
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <span className="text-xs font-medium text-foreground/80 shrink-0">
+                        Context:
+                      </span>
+                      <select
+                        key={`ctx-${dm.filename}-${contextOverrideTick}`}
+                        className="rounded-md border bg-background px-2 py-1 text-xs max-w-[11rem]"
+                        defaultValue={
+                          getModelContextOverride(dm.filename)?.toString() ?? ""
+                        }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (!v) {
+                            clearModelContextOverride(dm.filename);
+                            setContextOverrideTick((t) => t + 1);
+                          } else {
+                            saveCustomModelContext(
+                              dm.filename,
+                              parseInt(v, 10),
+                            );
+                          }
+                        }}
+                      >
+                        <option value="">Use Settings default</option>
+                        {CONTEXT_LENGTH_OPTIONS.map((n) => (
+                          <option key={n} value={n}>
+                            {formatContextLength(n)}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-[10px] text-muted-foreground">
+                        Per-model override (Play / switch / auto-start)
+                      </span>
+                    </div>
                     {isThisRunning && (
                       <p className="text-xs text-green-400 flex items-center gap-1">
                         <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
                         Currently running
+                        {serverStatus?.context_length
+                          ? ` · ${formatContextLength(serverStatus.context_length)} context`
+                          : ""}
                       </p>
                     )}
                     <p className="text-xs text-muted-foreground">
-                      Custom model — no metadata available. Use the rename
-                      button to give it a friendly name.
+                      Custom model — set context above if the default is too
+                      small. Rename with the pencil button.
                     </p>
                   </div>
                 )}
@@ -2948,9 +2999,8 @@ function ModelSwitcher() {
     setSwitching(true);
     try {
       const hw = hardwareResult ?? (await detectHardware());
-      const ctx = 8192;
       await stopServer();
-      await startServer(filename, hw.recommended_gpu_layers, ctx);
+      await startServer(filename, hw.recommended_gpu_layers);
     } catch {
       // error surfaced by server tab
     } finally {
@@ -4013,6 +4063,26 @@ function InferenceTab() {
     }
   }, [hardwareResult?.recommended_gpu_layers]);
 
+  // Seed context from Settings / per-model override
+  useEffect(() => {
+    const filename =
+      selectedModel ||
+      downloadedModels.find((m) =>
+        serverStatus?.model_path?.includes(m.filename),
+      )?.filename ||
+      downloadedModels[0]?.filename;
+    if (!filename) return;
+    void resolveContextLength(filename, {
+      catalogContext: hardwareResult?.all_models.find(
+        (m) =>
+          m.filename === filename ||
+          m.variants?.some((v) => v.filename === filename),
+      )?.context_length,
+    }).then(setContextLengthOverride);
+    // Re-seed when model selection changes, not on every hardware refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedModel, serverStatus?.model_path]);
+
   // Sync system prompt when switching conversations
   useEffect(() => {
     setSystemPrompt(activeConv?.systemPrompt ?? "");
@@ -4395,9 +4465,8 @@ function InferenceTab() {
     setSwitchingModel(true);
     try {
       const hw = hardwareResult ?? (await detectHardware());
-      const ctx = 8192;
       await stopServer();
-      await startServer(filename, hw.recommended_gpu_layers, ctx);
+      await startServer(filename, hw.recommended_gpu_layers);
     } catch {
       // error surfaced elsewhere
     } finally {
@@ -4666,6 +4735,8 @@ function InferenceTab() {
     }
     try {
       if (!hardwareResult) await detectHardware();
+      // Remember this choice for Play / switch / auto-start on this model.
+      setModelContextOverride(modelToLoad, contextLengthOverride);
       await startServer(modelToLoad, gpuLayersOverride, contextLengthOverride);
       setError(null);
     } catch (e) {
@@ -4754,9 +4825,9 @@ function InferenceTab() {
                         setContextLengthOverride(parseInt(e.target.value))
                       }
                     >
-                      {[2048, 4096, 8192, 16384, 32768].map((n) => (
+                      {[...CONTEXT_LENGTH_OPTIONS].map((n) => (
                         <option key={n} value={n}>
-                          {n.toLocaleString()}
+                          {formatContextLength(n)}
                         </option>
                       ))}
                     </select>
@@ -6205,6 +6276,15 @@ function ServerTab() {
   const [selectedModel, setSelectedModel] = useState(
     downloadedModels[0]?.filename ?? "",
   );
+
+  // Seed context from Settings / per-model override when model selection changes
+  useEffect(() => {
+    const filename = selectedModel || downloadedModels[0]?.filename;
+    if (!filename) return;
+    void resolveContextLength(filename).then(setContextLen);
+    // Only re-seed when the selected model changes — not on every list refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedModel]);
   // Persisted logs shown after a failed start attempt
   const [failureLogs, setFailureLogs] = useState<ServerLogLine[]>([]);
   const [showFailureLogs, setShowFailureLogs] = useState(true);
@@ -6243,6 +6323,8 @@ function ServerTab() {
     if (!model) return;
     try {
       if (!hardwareResult) await detectHardware();
+      // Remember this choice for Play / switch / auto-start on this model.
+      setModelContextOverride(model, contextLen);
       await startServer(model, effectiveGpuLayers, contextLen);
     } catch (e) {
       setLocalError(e instanceof Error ? e.message : String(e));
@@ -6505,11 +6587,12 @@ function ServerTab() {
                       value={contextLen}
                       onChange={(e) => setContextLen(parseInt(e.target.value))}
                     >
-                      <option value={2048}>2048</option>
-                      <option value={4096}>4096</option>
-                      <option value={8192}>8192 (recommended)</option>
-                      <option value={16384}>16384</option>
-                      <option value={32768}>32768</option>
+                      {CONTEXT_LENGTH_OPTIONS.map((n) => (
+                        <option key={n} value={n}>
+                          {formatContextLength(n)}
+                          {n === 8192 ? " (default)" : ""}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -6811,10 +6894,6 @@ function LocalModelsInner() {
               <Cpu className="h-3.5 w-3.5" />
               Hardware
             </TabsTrigger>
-            <TabsTrigger value="media" className="gap-1.5 shrink-0">
-              <Image className="h-3.5 w-3.5" />
-              Image & Video
-            </TabsTrigger>
           </TabsList>
         </div>
 
@@ -6833,9 +6912,6 @@ function LocalModelsInner() {
           </TabsContent>
           <TabsContent value="hardware" className="m-0 h-full overflow-auto">
             <HardwareTab />
-          </TabsContent>
-          <TabsContent value="media" className="m-0 h-full overflow-auto">
-            <MediaGenTab />
           </TabsContent>
         </div>
       </Tabs>

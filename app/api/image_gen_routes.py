@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -119,6 +120,12 @@ class GenerateRequest(BaseModel):
     width: int | None = Field(None, ge=64, le=2048, multiple_of=8)
     height: int | None = Field(None, ge=64, le=2048, multiple_of=8)
     seed: int | None = None
+    extra_params: dict[str, Any] = Field(default_factory=dict)
+    """Arbitrary diffusers pipeline kwargs, merged LAST over the computed call
+    kwargs — your values override every default. ``prompt`` can never be
+    overridden here (use the top-level field); an unknown kwarg fails loudly
+    with success=false naming the parameter. See GET /image-gen/params/{model_id}
+    for the full effective defaults per model."""
 
 
 class GenerateResponse(BaseModel):
@@ -130,6 +137,79 @@ class GenerateResponse(BaseModel):
     model_id: str = ""
     elapsed_seconds: float = 0.0
     error: str | None = None
+    item_id: str | None = None
+    """Media-library id — fetch the file via GET /media-library/file/{item_id}."""
+    file_path: str | None = None
+    """Absolute path of the persisted PNG on this machine."""
+    seed: int | None = None
+    """The CONCRETE seed used — server-generated when the request omitted it,
+    so every image is reproducible."""
+
+
+class ModelParamsResponse(BaseModel):
+    common: dict[str, Any]
+    """Effective defaults for the first-class request fields (steps, guidance,
+    width, height, negative_prompt, seed)."""
+    advanced: dict[str, Any]
+    """Every other kwarg the service passes to the pipeline for this model
+    (with its effective default) plus verified-safe diffusers knobs — all
+    overridable via extra_params."""
+    supports_negative_prompt: bool
+
+
+class ImageJobEnqueuedResponse(BaseModel):
+    job_id: str
+
+
+class ImageJobResponse(BaseModel):
+    job_id: str
+    status: str
+    """queued | running | completed | failed | cancelled."""
+    prompt: str
+    model_id: str
+    negative_prompt: str = ""
+    steps: int | None = None
+    guidance: float | None = None
+    width: int | None = None
+    height: int | None = None
+    seed: int | None = None
+    """Requested seed while queued; the CONCRETE seed used once running."""
+    extra_params: dict[str, Any] = {}
+    progress: float = 0.0
+    """0..1 per denoising step."""
+    current_step: int = 0
+    total_steps: int = 0
+    elapsed_seconds: float = 0.0
+    error: str | None = None
+    item_id: str | None = None
+    """Media-library id once completed — GET /media-library/file/{item_id}."""
+    file_path: str | None = None
+    created_at: float = 0.0
+
+
+def _image_job_response(job) -> ImageJobResponse:
+    d = job.to_dict()
+    return ImageJobResponse(
+        job_id=d["job_id"],
+        status=d["status"],
+        prompt=d["prompt"],
+        model_id=d["model_id"],
+        negative_prompt=d["negative_prompt"],
+        steps=d["steps"],
+        guidance=d["guidance"],
+        width=d["width"],
+        height=d["height"],
+        seed=d["seed"],
+        extra_params=d["extra_params"],
+        progress=d["progress"],
+        current_step=d["current_step"],
+        total_steps=d["total_steps"],
+        elapsed_seconds=d["elapsed_seconds"],
+        error=d["error"],
+        item_id=d["item_id"],
+        file_path=d["file_path"],
+        created_at=d["created_at"],
+    )
 
 
 class WorkflowGenerateRequest(BaseModel):
@@ -285,6 +365,7 @@ async def generate_image(req: GenerateRequest) -> GenerateResponse:
         width=req.width,
         height=req.height,
         seed=req.seed,
+        extra_params=req.extra_params,
     )
     return GenerateResponse(
         success=result.success,
@@ -294,7 +375,115 @@ async def generate_image(req: GenerateRequest) -> GenerateResponse:
         model_id=result.model_id,
         elapsed_seconds=result.elapsed_seconds,
         error=result.error,
+        item_id=result.item_id,
+        file_path=result.file_path,
+        seed=result.seed,
     )
+
+
+# ── Job queue (async generation) ─────────────────────────────────────────────
+
+@router.post("/jobs", response_model=ImageJobEnqueuedResponse, status_code=202)
+@safe_route("image_gen_enqueue_job")
+async def enqueue_image_job(req: GenerateRequest) -> ImageJobEnqueuedResponse:
+    """Enqueue a generation job → 202 {job_id} immediately.
+
+    Unlike video, image jobs QUEUE: keep submitting prompts and they run
+    strictly one at a time in submission order. Poll GET /image-gen/jobs/{id}
+    for per-step progress; on completion the job carries the media-library
+    ``item_id`` (fetch the PNG via GET /media-library/file/{item_id}) and the
+    concrete ``seed`` used. The model must be downloaded (409 otherwise) —
+    loading happens automatically when the job runs.
+    """
+    svc = get_image_gen_service()
+    if not svc.available:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Image generation not available: {svc.unavailable_reason}",
+        )
+    if svc.get_model(req.model_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown model: {req.model_id}")
+    if not svc.is_downloaded(req.model_id):
+        # Never queue a job that can only fail — the weights must exist first.
+        return JSONResponse(  # type: ignore[return-value]
+            status_code=409,
+            content={"detail": "model not downloaded", "needs_download": True},
+        )
+    if "prompt" in req.extra_params:
+        raise HTTPException(
+            status_code=400,
+            detail="extra_params may not override protected parameter(s): prompt. "
+                   "Use the top-level request field instead.",
+        )
+
+    from app.services.image_gen.jobs import (  # noqa: PLC0415
+        get_image_job_runner,
+        get_image_job_store,
+    )
+    job = get_image_job_store().create(
+        prompt=req.prompt,
+        model_id=req.model_id,
+        negative_prompt=req.negative_prompt,
+        steps=req.steps,
+        guidance=req.guidance,
+        width=req.width,
+        height=req.height,
+        seed=req.seed,
+        extra_params=dict(req.extra_params),
+    )
+    get_image_job_runner().ensure_running()
+    return ImageJobEnqueuedResponse(job_id=job.job_id)
+
+
+@router.get("/jobs", response_model=list[ImageJobResponse])
+async def list_image_jobs(limit: int = 50) -> list[ImageJobResponse]:
+    """Recent jobs, newest first (history survives restarts via jobs.json)."""
+    from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+    return [_image_job_response(j) for j in get_image_job_store().recent(limit=limit)]
+
+
+@router.get("/jobs/{job_id}", response_model=ImageJobResponse)
+async def get_image_job(job_id: str) -> ImageJobResponse:
+    """Job status + per-step progress (poll every ~1-2s while running)."""
+    from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+    job = get_image_job_store().get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _image_job_response(job)
+
+
+@router.delete("/jobs/{job_id}")
+async def cancel_image_job(job_id: str) -> dict:
+    """Cancel a QUEUED job (record kept, status=cancelled) or remove a
+    finished job's record. 409 while running — there is no mid-flight abort.
+    Removing a completed job does NOT delete its media-library item."""
+    from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+    outcome = get_image_job_store().cancel(job_id)
+    if outcome == "not_found":
+        raise HTTPException(status_code=404, detail="Job not found")
+    if outcome == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="Job is running — a generation in flight cannot be aborted",
+        )
+    return {"job_id": job_id, "outcome": outcome}
+
+
+@router.get("/params/{model_id:path}", response_model=ModelParamsResponse)
+async def get_image_model_params(model_id: str) -> ModelParamsResponse:
+    """COMPLETE effective default parameters for a model — everything the
+    service would pass to the pipeline, so the UI can expose every setting.
+
+    ``model_id`` contains a slash (HF repo id) — the path converter accepts it
+    URL-encoded or raw (/image-gen/params/stabilityai/sdxl-turbo).
+    Anything in ``advanced`` can be overridden via ``extra_params`` on
+    POST /image-gen/generate.
+    """
+    from app.services.media_gen.params import image_effective_params  # noqa: PLC0415
+    model = get_image_gen_service().get_model(model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail=f"Unknown model: {model_id}")
+    return ModelParamsResponse(**image_effective_params(model))
 
 
 @router.post("/generate-workflow", response_model=GenerateResponse)
@@ -332,6 +521,9 @@ async def generate_from_workflow(req: WorkflowGenerateRequest) -> GenerateRespon
         model_id=result.model_id,
         elapsed_seconds=result.elapsed_seconds,
         error=result.error,
+        item_id=result.item_id,
+        file_path=result.file_path,
+        seed=result.seed,
     )
 
 

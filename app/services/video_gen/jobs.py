@@ -43,6 +43,9 @@ class VideoJob:
     elapsed_seconds: float = 0.0
     error: str | None = None
     output_path: str | None = None
+    item_id: str | None = None
+    """Media-library item id — completed jobs are persisted to
+    ~/.matrx/media/generated/videos/ (see app/services/media_gen/library.py)."""
     width: int = 0
     height: int = 0
     num_frames: int = 0
@@ -165,12 +168,15 @@ class VideoJobStore:
             if job.started_at:
                 job.elapsed_seconds = round(time.time() - job.started_at, 1)
 
-    def mark_completed(self, job_id: str, output_path: str) -> None:
+    def mark_completed(
+        self, job_id: str, output_path: str, item_id: str | None = None
+    ) -> None:
         with self._lock:
             job = self._jobs[job_id]
             job.status = "completed"
             job.progress = 1.0
             job.output_path = output_path
+            job.item_id = item_id
             job.finished_at = time.time()
             if job.started_at:
                 job.elapsed_seconds = round(job.finished_at - job.started_at, 1)

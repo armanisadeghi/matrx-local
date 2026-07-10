@@ -27,6 +27,7 @@ import asyncio
 import base64
 import inspect
 import io
+import random
 import threading
 import time
 from datetime import datetime
@@ -468,17 +469,31 @@ class VideoGenService:
         guidance: float | None = None,
         seed: int | None = None,
         image_base64: str | None = None,
+        extra_params: dict[str, Any] | None = None,
     ) -> VideoJob:
         """Create a job and kick off the worker thread. Caller must have
         validated availability + downloaded/loaded state (the route does).
 
-        Raises RuntimeError when a job is already running.
+        ``extra_params`` are arbitrary pipeline kwargs merged LAST over the
+        computed call kwargs in the worker — user values override every
+        default, but may never override ``prompt``.
+
+        Raises RuntimeError when a job is already running, ValueError for a
+        bad request (unknown model, protected extra_params key, …).
         """
         model = self.get_model(model_id)
         if model is None:
             raise ValueError(f"Unknown model: {model_id}")
         if image_base64 and not model.supports_image_to_video:
             raise ValueError(f"{model.name} does not support image-to-video")
+        # Fail the request NOW (400) instead of inside the worker thread.
+        from app.services.media_gen.params import PROTECTED_PARAMS  # noqa: PLC0415
+        blocked = PROTECTED_PARAMS & set(extra_params or {})
+        if blocked:
+            raise ValueError(
+                f"extra_params may not override protected parameter(s): "
+                f"{', '.join(sorted(blocked))}. Use the top-level request field instead."
+            )
 
         req_w = width or model.default_width
         req_h = height or model.default_height
@@ -493,6 +508,13 @@ class VideoGenService:
                 model.pipeline_type, req_w, req_h, req_frames,
                 snap_w, snap_h, snap_frames,
             )
+
+        # A null seed becomes a CONCRETE server-generated seed before the job
+        # record is created — the used seed is always reported back (job +
+        # media-library sidecar) so any result can be reproduced. Never let
+        # diffusers pick one invisibly.
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
 
         store = get_video_job_store()
         job = store.create(
@@ -517,6 +539,7 @@ class VideoGenService:
                 "steps": resolved_steps,
                 "guidance": resolved_guidance,
                 "image_base64": image_base64,
+                "extra_params": dict(extra_params or {}),
             },
             daemon=True,
             name=f"video-gen-{job.job_id[:8]}",
@@ -552,6 +575,7 @@ class VideoGenService:
         steps: int,
         guidance: float,
         image_base64: str | None,
+        extra_params: dict[str, Any],
     ) -> None:
         """Worker thread: full generation → encode → job record updates."""
         store = get_video_job_store()
@@ -610,13 +634,33 @@ class VideoGenService:
                     "progress will jump 0→100", model.pipeline_type,
                 )
 
+            # User-supplied extra_params merge LAST (they override every
+            # computed default except the protected `prompt`) and are
+            # validated against the pipeline signature BEFORE burning compute.
+            from app.services.media_gen.params import (  # noqa: PLC0415
+                merge_extra_params,
+                validate_pipeline_kwargs,
+            )
+            validate_pipeline_kwargs(pipe, extra_params.keys())
+            call_kwargs = merge_extra_params(call_kwargs, extra_params)
+
             t0 = time.monotonic()
             logger.info(
                 "[video_gen] Job %s: generating %dx%d x%d frames, %d steps (%s)",
                 job_id[:8], job.width, job.height, job.num_frames, steps,
                 "i2v" if image_base64 else "t2v",
             )
-            output = pipe(**call_kwargs)
+            try:
+                output = pipe(**call_kwargs)
+            except (TypeError, ValueError) as exc:
+                if extra_params:
+                    # Loud recovery: name the user's parameters instead of a
+                    # bare traceback or silent stripping.
+                    raise RuntimeError(
+                        "The pipeline rejected the generation parameters "
+                        f"(extra_params: {', '.join(sorted(extra_params))}) — {exc}"
+                    ) from exc
+                raise
             frames = output.frames[0]
             gen_seconds = time.monotonic() - t0
             logger.info(
@@ -625,8 +669,40 @@ class VideoGenService:
             )
 
             out_path = self._encode_mp4(frames, fps=job.fps, job_id=job_id)
-            store.mark_completed(job_id, output_path=str(out_path))
-            logger.info("[video_gen] Job %s: completed → %s", job_id[:8], out_path)
+
+            # Persist into the media library: MOVE the mp4 into
+            # ~/.matrx/media/generated/videos/ + write the JSON sidecar. The
+            # job's output_path is updated to the library location so
+            # GET /video-gen/jobs/{id}/result keeps serving the file. A save
+            # failure fails the job loudly — the library is part of the
+            # contract, not best-effort.
+            from app.services.media_gen.library import (  # noqa: PLC0415
+                save_generated_video,
+            )
+            record_params = {
+                k: v for k, v in call_kwargs.items()
+                if k not in ("generator", "image", "callback_on_step_end")
+            }
+            item = save_generated_video(
+                out_path,
+                model_id=model.model_id,
+                prompt=job.prompt,
+                negative_prompt=negative_prompt,
+                params=record_params,
+                seed=job.seed,
+                width=job.width,
+                height=job.height,
+                num_frames=job.num_frames,
+                fps=job.fps,
+                elapsed_seconds=time.monotonic() - t0,
+            )
+            store.mark_completed(
+                job_id, output_path=item["file_path"], item_id=item["id"]
+            )
+            logger.info(
+                "[video_gen] Job %s: completed → %s (library item %s)",
+                job_id[:8], item["file_path"], item["id"],
+            )
 
         except Exception as exc:
             logger.error("[video_gen] Job %s FAILED: %s", job_id[:8], exc, exc_info=True)

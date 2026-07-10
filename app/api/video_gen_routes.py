@@ -13,14 +13,20 @@ Contract (media-gen spec, July 2026 — the frontend is built against this):
   POST /video-gen/load {model_id}        — load from local dir (409 if absent)
   POST /video-gen/unload
   POST /video-gen/generate {...}         — 202 {job_id}; ONE job at a time (409)
+  GET  /video-gen/params/{model_id}      — complete effective defaults (common
+                                           + advanced, extra_params-overridable)
   GET  /video-gen/jobs                   — recent jobs
-  GET  /video-gen/jobs/{job_id}          — job status/progress
+  GET  /video-gen/jobs/{job_id}          — job status/progress (+item_id, seed)
   GET  /video-gen/jobs/{job_id}/result   — the mp4 (FileResponse)
+
+Completed jobs persist into the media library (~/.matrx/media/generated/videos/
++ JSON sidecar); the job's item_id links to GET /media-library/file/{item_id}.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -112,12 +118,29 @@ class GenerateVideoRequest(BaseModel):
     steps: int | None = Field(None, ge=1, le=100)
     guidance: float | None = Field(None, ge=0.0, le=20.0)
     seed: int | None = None
+    """Omit/null for a random seed — the CONCRETE seed used is always reported
+    back on the job record so any result can be reproduced."""
     image_base64: str | None = None
     """Optional source image (base64, no data: prefix) for image-to-video."""
+    extra_params: dict[str, Any] = Field(default_factory=dict)
+    """Arbitrary diffusers pipeline kwargs, merged LAST over the computed call
+    kwargs — your values override every default. ``prompt`` can never be
+    overridden here (400); an unknown kwarg fails the job loudly naming the
+    parameter. See GET /video-gen/params/{model_id} for effective defaults."""
 
 
 class GenerateVideoResponse(BaseModel):
     job_id: str
+
+
+class ModelParamsResponse(BaseModel):
+    common: dict[str, Any]
+    """Effective defaults for the first-class request fields (steps, guidance,
+    width, height, num_frames, fps, negative_prompt, seed)."""
+    advanced: dict[str, Any]
+    """Every other kwarg the service passes to the pipeline for this model
+    (with its effective default) — overridable via extra_params."""
+    supports_negative_prompt: bool
 
 
 class VideoJobResponse(BaseModel):
@@ -135,7 +158,10 @@ class VideoJobResponse(BaseModel):
     num_frames: int = 0
     fps: int = 0
     seed: int | None = None
+    """The CONCRETE seed used (server-generated when the request omitted it)."""
     created_at: float = 0.0
+    item_id: str | None = None
+    """Media-library id once completed — GET /media-library/file/{item_id}."""
 
 
 def _job_response(job) -> VideoJobResponse:
@@ -156,6 +182,7 @@ def _job_response(job) -> VideoJobResponse:
         fps=d["fps"],
         seed=d["seed"],
         created_at=d["created_at"],
+        item_id=d.get("item_id"),
     )
 
 
@@ -321,6 +348,7 @@ async def generate_video(req: GenerateVideoRequest) -> GenerateVideoResponse | J
             guidance=req.guidance,
             seed=req.seed,
             image_base64=req.image_base64,
+            extra_params=req.extra_params,
         )
     except RuntimeError as exc:
         # One-job-at-a-time guard
@@ -329,6 +357,20 @@ async def generate_video(req: GenerateVideoRequest) -> GenerateVideoResponse | J
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return GenerateVideoResponse(job_id=job.job_id)
+
+
+@router.get("/params/{model_id:path}", response_model=ModelParamsResponse)
+async def get_video_model_params(model_id: str) -> ModelParamsResponse:
+    """COMPLETE effective default parameters for a video model — everything
+    the service would pass to the pipeline, so the UI can expose every
+    setting. ``model_id`` contains a slash (HF repo id) — the path converter
+    accepts it raw or URL-encoded. Anything in ``advanced`` can be overridden
+    via ``extra_params`` on POST /video-gen/generate."""
+    from app.services.media_gen.params import video_effective_params  # noqa: PLC0415
+    model = get_video_gen_service().get_model(model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail=f"Unknown model: {model_id}")
+    return ModelParamsResponse(**video_effective_params(model))
 
 
 @router.get("/jobs", response_model=list[VideoJobResponse])

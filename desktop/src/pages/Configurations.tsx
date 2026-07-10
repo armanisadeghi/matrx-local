@@ -1177,7 +1177,7 @@ export function Configurations() {
                 </SettingRow>
                 <SettingRow
                   label="Context length"
-                  description="Max tokens per conversation"
+                  description="Default max tokens when starting a model (override per custom model on the Models tab)"
                 >
                   <Select
                     value={String(draft.llmDefaultContextLength)}
@@ -1185,7 +1185,7 @@ export function Configurations() {
                       set("llmDefaultContextLength", Number(v))
                     }
                   >
-                    <SelectTrigger className="w-28">
+                    <SelectTrigger className="w-32">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1196,6 +1196,7 @@ export function Configurations() {
                       <SelectItem value="32768">32,768</SelectItem>
                       <SelectItem value="65536">65,536</SelectItem>
                       <SelectItem value="131072">131,072</SelectItem>
+                      <SelectItem value="262144">262,144</SelectItem>
                     </SelectContent>
                   </Select>
                 </SettingRow>

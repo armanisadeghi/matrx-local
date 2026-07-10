@@ -1637,7 +1637,25 @@ pub fn run() {
                     let hw = HardwareProfile::detect();
                     let gpu_vram_gb = hw.gpu_vram_mb.map(|v| v as f32 / 1024.0).unwrap_or(0.0);
                     let gpu_layers = compute_gpu_layers_for_hw(&hw, gpu_vram_gb);
-                    let ctx = 8192u32;
+                    // Prefer last successful start context (custom models often need
+                    // >>8192). Fall back to catalog value, then 8192.
+                    let catalog_ctx = llm::model_selector::LLM_MODELS
+                        .iter()
+                        .find(|m| m.filename == filename)
+                        .map(|m| m.context_length)
+                        .or_else(|| {
+                            llm::model_selector::LLM_MODELS.iter().find_map(|m| {
+                                m.variants
+                                    .iter()
+                                    .find(|v| v.filename == filename)
+                                    .map(|_| m.context_length)
+                            })
+                        });
+                    let ctx = config
+                        .last_context_length
+                        .filter(|&c| c > 0)
+                        .or(catalog_ctx)
+                        .unwrap_or(8192);
 
                     let port = match find_free_port(11434) {
                         Ok(p) => p,
@@ -1677,10 +1695,11 @@ pub fn run() {
                         .await
                     {
                         Ok(()) => {
-                            // Persist last_port update — reload config to preserve hf_token and
-                            // any other fields added in the future, then update only last_port.
+                            // Persist last_port / last_context_length — reload to preserve
+                            // hf_token and any other fields, then update only these.
                             let mut updated = LlmConfig::load(&config_dir);
                             updated.last_port = Some(port);
+                            updated.last_context_length = Some(ctx);
                             let _ = updated.save(&config_dir);
                             let _ = handle.emit("llm-server-ready", &server.status);
                             println!(

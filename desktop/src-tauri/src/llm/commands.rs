@@ -142,6 +142,7 @@ pub async fn start_llm_server(
         config.selected_model = Some(model_filename);
         config.setup_complete = true;
         config.last_port = Some(port);
+        config.last_context_length = Some(ctx);
         let _ = config.save(&config_dir);
     }
 

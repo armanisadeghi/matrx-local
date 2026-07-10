@@ -17,9 +17,13 @@ of bug this overhaul exists to kill.
 
 Generated outputs:
 
-    ~/.matrx/generated/videos/    — encoded .mp4 files + jobs.json history
+    ~/.matrx/generated/videos/           — video job scratch dir + jobs.json history
+    ~/.matrx/media/generated/images/     — media library: <uuid>.png + <uuid>.json
+    ~/.matrx/media/generated/videos/     — media library: <uuid>.mp4 + <uuid>.json
 
-Images are returned inline as base64 and are not persisted here.
+Every successful generation is persisted into the media library
+(app/services/media_gen/library.py): the media file plus a JSON sidecar with
+the full resolved generation parameters. /media-library/* serves it.
 """
 
 from __future__ import annotations
@@ -44,6 +48,16 @@ def video_models_dir() -> Path:
 
 def generated_videos_dir() -> Path:
     return MATRX_HOME_DIR / "generated" / "videos"
+
+
+def generated_images_dir() -> Path:
+    """Image job history dir (jobs.json) — mirrors generated_videos_dir()."""
+    return MATRX_HOME_DIR / "generated" / "images"
+
+
+def generated_media_dir() -> Path:
+    """Root of the persistent media library (images/ and videos/ subdirs)."""
+    return MATRX_HOME_DIR / "media" / "generated"
 
 
 def sanitize_model_id(model_id: str) -> str:

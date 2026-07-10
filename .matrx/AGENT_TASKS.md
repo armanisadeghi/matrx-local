@@ -53,6 +53,47 @@ _(none)_
 
 ## Active
 
+- [x] **Media-gen backend: params exposure + media library + image job queue
+  (2026-07-09)** — (1) `extra_params` passthrough on image/video generate
+  (merged LAST, `prompt` protected, unknown kwargs fail loudly naming the
+  parameter) + `GET /image-gen/params/{model_id}` and
+  `GET /video-gen/params/{model_id}` (complete effective defaults, common +
+  advanced). (2) Persistent media library `~/.matrx/media/generated/{images,videos}/`
+  (`<uuid>.png|.mp4` + JSON sidecar with full resolved pipeline kwargs) +
+  `/media-library/items|file/{id}` API; image generate auto-saves, video jobs
+  move the mp4 into the library on completion. (3) Image job QUEUE
+  (`/image-gen/jobs` POST/GET/GET-id/DELETE) — FIFO, one at a time, per-step
+  progress, history in `~/.matrx/generated/images/jobs.json`. (4) Seeds are
+  always concrete: a null seed becomes a server-generated one, reported in
+  responses/jobs/sidecars for reproducibility. Files:
+  `app/services/media_gen/{params,library,paths}.py`,
+  `app/services/image_gen/{service,jobs}.py`,
+  `app/services/video_gen/{service,jobs}.py`,
+  `app/api/{image_gen_routes,video_gen_routes,media_library_routes}.py`,
+  `app/main.py`, `tests/smoke/test_media_gen_params_library.py`.
+
+- [ ] **No mid-flight cancel for image OR video generation jobs** — DELETE
+  /image-gen/jobs/{id} cancels queued jobs and removes finished records but
+  returns 409 for a running job; video has no cancel at all. Aborting an
+  in-flight diffusers pipe() needs a cooperative interrupt via
+  callback_on_step_end (raise → mark cancelled) — same mechanism would work
+  for both. Discovered 2026-07-09 while building the image job queue.
+
+- [ ] **`num_images_per_prompt` > 1 generates N images but only images[0] is
+  returned/persisted** — exposed in /image-gen/params advanced for
+  completeness; the service should either persist all N to the media library
+  or reject >1 loudly. Discovered 2026-07-09.
+
+- [x] **Custom LLM context hard-capped at 4096 (2026-07-09)** — Models-tab
+  Play for custom GGUFs passed hardcoded `4096`; Settings `llmDefaultContextLength`
+  was never wired into `startServer`; Server/Inference dropdowns topped out at
+  32k; auto-start always used 8192. Fixed: shared `resolveContextLength`
+  (per-model override → explicit → catalog → Settings → 8192), per-model
+  override UI on custom model expand, dropdowns through 262k, persist
+  `last_context_length` in `llm.json` for auto-start. Files:
+  `desktop/src/lib/llm/contextLength.ts`, `use-llm.ts`, `LocalModels.tsx`,
+  `Configurations.tsx`, `llm/config.rs`, `llm/commands.rs`, `lib.rs`.
+
 - [x] **Local LLM catalog expanded (2026-07-09)** — added Qwen3.5-2B/4B/9B
   (vision+mmproj), Devstral Small 2 24B, Qwen3-Coder-30B-A3B, GLM-4.7-Flash,
   Qwen3-Next-80B-A3B, Qwen3-Coder-Next. Auto-recommend now prefers Qwen3.5

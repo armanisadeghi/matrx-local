@@ -6,6 +6,10 @@ pub struct LlmConfig {
     pub selected_model: Option<String>,
     pub setup_complete: bool,
     pub last_port: Option<u16>,
+    /// Context length (`-c`) from the last successful start. Used by auto-start
+    /// so custom/large-context models are not silently clamped to 8192.
+    #[serde(default)]
+    pub last_context_length: Option<u32>,
     /// Legacy HuggingFace token fallback only. Prefer engine Settings → API Keys.
     pub hf_token: Option<String>,
 }

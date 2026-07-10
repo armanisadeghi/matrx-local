@@ -171,6 +171,9 @@ export function useLlm(): [LlmState, LlmActions] {
   // Ref-based queue so the processor callback always sees latest value
   const downloadQueueRef = useRef<LlmDownloadQueueEntry[]>([]);
   const isDownloadingRef = useRef(false);
+  // Stable snapshot for startServer so the callback need not depend on hardwareResult
+  const hardwareResultRef = useRef<LlmHardwareResult | null>(null);
+  hardwareResultRef.current = hardwareResult;
   // Per-download generation token. cancelDownload force-clears the download
   // state while the cancelled Tauri invoke is still pending; without a token
   // its finally/error paths would clobber the NEXT download's state. Each
@@ -629,10 +632,22 @@ export function useLlm(): [LlmState, LlmActions] {
       setServerLogs([]);
       setError(null);
       try {
+        const hw = hardwareResultRef.current;
+        const catalogCtx = hw?.all_models.find(
+          (m) =>
+            m.filename === modelFilename ||
+            m.variants?.some((v) => v.filename === modelFilename),
+        )?.context_length;
+        const { resolveContextLength } =
+          await import("@/lib/llm/contextLength");
+        const resolvedCtx = await resolveContextLength(modelFilename, {
+          explicit: contextLength,
+          catalogContext: catalogCtx,
+        });
         const status = await tauriInvoke<LlmServerStatus>("start_llm_server", {
           modelFilename,
           gpuLayers,
-          contextLength,
+          contextLength: resolvedCtx,
         });
         setServerStatus(status);
         return status;
@@ -779,11 +794,7 @@ export function useLlm(): [LlmState, LlmActions] {
         await downloadModel(hw.recommended_filename, modelInfo.all_part_urls);
       }
 
-      await startServer(
-        hw.recommended_filename,
-        hw.recommended_gpu_layers,
-        8192,
-      );
+      await startServer(hw.recommended_filename, hw.recommended_gpu_layers);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (!msg.toLowerCase().includes("cancel")) {

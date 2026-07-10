@@ -1,9 +1,23 @@
 ---
 status: active
-updated: 2026-07-09
+updated: 2026-07-10
 repos: [matrx-local, aidream]
 vision: [CURRENT_ERRORS.md]
 ---
+
+> **2026-07-10 update — v1.3.95–v1.3.98 all shipped.** Image gen works
+> end-to-end in the installed app. Shipped since the note below: Media
+> Generation page (Studio split-pane default; bake-off variants pending
+> Arman's word to delete), full param exposure + advanced JSON, image job
+> queue with priority-next + single-generation gate (one-shot during a
+> running job used to unload the pipeline mid-job — fixed in .98),
+> mid-flight cancel, media library, MediaLightbox (zoom/fullscreen),
+> encrypted Private vault (escrow backdoor: scripts/vault-recover.py;
+> PRIVATE key at ~/.matrx-escrow/ — Arman must back it up), real prompt
+> limits, readable errors. NEXT UP (assessed, awaiting go): image-to-image
+> + LoRA support. Still open below: video E2E on real hardware (#3),
+> packaged smoke gate (#4), aidream-side errors (#5), grants UX (#6),
+> model-LOAD-phase cancel.
 
 # Image & video generation — finish the last mile
 

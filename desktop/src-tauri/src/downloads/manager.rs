@@ -95,6 +95,12 @@ pub struct DownloadEntry {
     pub created_at: String,
     pub updated_at: String,
     pub completed_at: Option<String>,
+    /// Arbitrary per-download metadata passed at enqueue time.
+    /// The internal downloader REQUIRES `metadata.dest_dir` — it is where the
+    /// bytes land on disk. Entries without it fail loudly instead of
+    /// "completing" with the bytes discarded (the pre-2026-07 bug).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 impl DownloadEntry {
@@ -365,9 +371,10 @@ impl DownloadManager {
             created_at: now.clone(),
             updated_at: now.clone(),
             completed_at: None,
+            metadata: None,
         };
 
-        if let Err(e) = db_upsert(&self.db_path, &entry, None) {
+        if let Err(e) = db_upsert(&self.db_path, &entry) {
             error!("[downloads] DB upsert (external) failed for {}: {}", entry.filename, e);
         }
         {
@@ -474,6 +481,15 @@ impl DownloadManager {
             }
         }
 
+        // Parse metadata up front — a malformed JSON string is a caller bug and
+        // must fail loudly, not be silently dropped.
+        let metadata_value: Option<serde_json::Value> = match metadata.as_deref() {
+            Some(raw) => Some(serde_json::from_str(raw).map_err(|e| {
+                format!("Invalid metadata JSON for download '{}': {}", filename, e)
+            })?),
+            None => None,
+        };
+
         let now = now_str();
         let part_total = urls.len().max(1);
         let entry = DownloadEntry {
@@ -492,9 +508,10 @@ impl DownloadManager {
             created_at: now.clone(),
             updated_at: now.clone(),
             completed_at: None,
+            metadata: metadata_value,
         };
 
-        if let Err(e) = db_upsert(&self.db_path, &entry, metadata) {
+        if let Err(e) = db_upsert(&self.db_path, &entry) {
             error!("[downloads] DB upsert failed for {}: {}", filename, e);
         }
 
@@ -847,6 +864,28 @@ impl DownloadSlotHandle {
             return Err("No URLs provided".to_string());
         }
 
+        // Resolve where the bytes land BEFORE any network I/O. The internal
+        // downloader requires metadata.dest_dir; without it we would have
+        // nowhere to write and the download would "complete" with the data
+        // discarded — the exact data-integrity bug this guard exists to kill.
+        let dest_dir: PathBuf = entry
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("dest_dir"))
+            .and_then(|d| d.as_str())
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                format!(
+                    "Download '{}' (category '{}') has no metadata.dest_dir — refusing to \
+                     download with nowhere to write. Enqueue with metadata {{\"dest_dir\": \"…\"}} \
+                     or use an externally-managed download path.",
+                    entry.filename, entry.category
+                )
+            })?;
+        std::fs::create_dir_all(&dest_dir).map_err(|e| {
+            format!("Cannot create dest_dir {}: {}", dest_dir.display(), e)
+        })?;
+
         let hf_token = get_hf_token_from_app(app);
 
         let client = reqwest::Client::builder()
@@ -881,6 +920,25 @@ impl DownloadSlotHandle {
                 }
             }
 
+            // Multi-part downloads (e.g. split GGUF) are distinct files — use
+            // each URL's basename; single-part downloads use the entry filename.
+            // Mirrors the Python manager's _part_dest().
+            let dest: PathBuf = if part_total > 1 {
+                let base = url
+                    .split('?')
+                    .next()
+                    .unwrap_or(url)
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("{}.part{}", entry.filename, part_num));
+                dest_dir.join(base)
+            } else {
+                dest_dir.join(&entry.filename)
+            };
+
             let mut last_error = String::new();
             let mut success = false;
 
@@ -909,6 +967,7 @@ impl DownloadSlotHandle {
                         &id,
                         &client,
                         url,
+                        &dest,
                         part_num,
                         part_total,
                         bytes_before,
@@ -1015,6 +1074,9 @@ impl DownloadSlotHandle {
         Ok(())
     }
 
+    /// Stream a single URL to `dest` (tmp `.part` file → rename), updating
+    /// progress. Every network chunk is written to disk BEFORE it is counted —
+    /// progress can never report bytes that did not land in the file.
     #[allow(clippy::too_many_arguments)]
     async fn download_part(
         &self,
@@ -1022,6 +1084,7 @@ impl DownloadSlotHandle {
         id: &str,
         client: &reqwest::Client,
         url: &str,
+        dest: &Path,
         part_num: usize,
         part_total: usize,
         bytes_before: u64,
@@ -1033,6 +1096,51 @@ impl DownloadSlotHandle {
         cancel_flag: &Arc<AtomicBool>,
         chunk_size: usize,
     ) -> Result<u64, String> {
+        let tmp = dest.with_file_name(format!(
+            "{}.part",
+            dest.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("download")
+        ));
+
+        let result = self
+            .download_part_to(
+                app, id, client, url, dest, &tmp, part_num, part_total, bytes_before,
+                grand_total, filename, display_name, category, hf_token, cancel_flag,
+                chunk_size,
+            )
+            .await;
+
+        if result.is_err() {
+            // Failed/cancelled part: drop the partial temp file. The retry
+            // loop in download() restarts the part from scratch.
+            let _ = tokio::fs::remove_file(&tmp).await;
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn download_part_to(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        client: &reqwest::Client,
+        url: &str,
+        dest: &Path,
+        tmp: &Path,
+        part_num: usize,
+        part_total: usize,
+        bytes_before: u64,
+        grand_total: u64,
+        filename: &str,
+        display_name: &str,
+        category: &str,
+        hf_token: Option<&str>,
+        cancel_flag: &Arc<AtomicBool>,
+        chunk_size: usize,
+    ) -> Result<u64, String> {
+        use tokio::io::AsyncWriteExt;
+
         let mut req = client.get(url);
         if let Some(tok) = hf_token {
             req = req.header("Authorization", format!("Bearer {}", tok));
@@ -1045,14 +1153,19 @@ impl DownloadSlotHandle {
 
         let part_total_bytes = response.content_length().unwrap_or(0);
 
+        let mut file = tokio::fs::File::create(tmp)
+            .await
+            .map_err(|e| format!("Cannot create {}: {}", tmp.display(), e))?;
+
         let mut stream = response.bytes_stream();
         let mut part_bytes_done: u64 = 0;
         let mut last_db_update = std::time::Instant::now();
         let mut last_emit_bytes: u64 = 0;
         let mut last_emit_time = std::time::Instant::now();
 
-        // Read in configurable chunk sizes
-        let mut buf = Vec::with_capacity(chunk_size);
+        // Throttle the state-lock/progress bookkeeping to roughly once per
+        // `chunk_size` bytes; the disk write itself happens on EVERY chunk.
+        let mut bytes_since_update: u64 = 0;
 
         loop {
             if cancel_flag.load(Ordering::SeqCst) {
@@ -1065,17 +1178,19 @@ impl DownloadSlotHandle {
                 Ok(None) => break,
                 Ok(Some(Err(e))) => return Err(e.to_string()),
                 Ok(Some(Ok(chunk))) => {
-                    buf.extend_from_slice(&chunk);
+                    file.write_all(&chunk)
+                        .await
+                        .map_err(|e| format!("Write failed for {}: {}", tmp.display(), e))?;
 
-                    // Only process when we've accumulated chunk_size bytes or stream ended
-                    if buf.len() < chunk_size {
+                    part_bytes_done += chunk.len() as u64;
+                    bytes_since_update += chunk.len() as u64;
+
+                    // Only run the bookkeeping once per accumulated chunk_size
+                    if bytes_since_update < chunk_size as u64 {
                         continue;
                     }
+                    bytes_since_update = 0;
 
-                    let consumed = buf.len() as u64;
-                    buf.clear();
-
-                    part_bytes_done += consumed;
                     let overall_bytes = bytes_before + part_bytes_done;
 
                     // Update in-memory state and speed tracker
@@ -1194,11 +1309,22 @@ impl DownloadSlotHandle {
             }
         }
 
-        // Flush remaining buffer bytes
-        if !buf.is_empty() {
-            part_bytes_done += buf.len() as u64;
-            buf.clear();
+        // All bytes are already on disk (written per-chunk). Flush + fsync,
+        // then atomically move the temp file into place.
+        file.flush()
+            .await
+            .map_err(|e| format!("Flush failed for {}: {}", tmp.display(), e))?;
+        file.sync_all()
+            .await
+            .map_err(|e| format!("fsync failed for {}: {}", tmp.display(), e))?;
+        drop(file);
+        // Windows cannot rename over an existing file — clear any stale dest.
+        if tokio::fs::metadata(dest).await.is_ok() {
+            let _ = tokio::fs::remove_file(dest).await;
         }
+        tokio::fs::rename(tmp, dest)
+            .await
+            .map_err(|e| format!("Rename {} → {} failed: {}", tmp.display(), dest.display(), e))?;
 
         // Final DB progress write
         let overall = bytes_before + part_bytes_done;
@@ -1371,9 +1497,10 @@ fn init_db(path: &Path) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn db_upsert(path: &Path, entry: &DownloadEntry, metadata: Option<String>) -> rusqlite::Result<()> {
+fn db_upsert(path: &Path, entry: &DownloadEntry) -> rusqlite::Result<()> {
     let conn = Connection::open(path)?;
     let urls_json = serde_json::to_string(&entry.urls).unwrap_or_default();
+    let metadata: Option<String> = entry.metadata.as_ref().map(|v| v.to_string());
     conn.execute(
         "INSERT INTO downloads
              (id, category, filename, display_name, urls, total_bytes, bytes_done,
@@ -1453,7 +1580,7 @@ fn db_load_incomplete(path: &Path) -> rusqlite::Result<Vec<DownloadEntry>> {
     let mut stmt = conn.prepare(
         "SELECT id, category, filename, display_name, urls, total_bytes, bytes_done,
                 status, error_msg, priority, part_current, part_total,
-                created_at, updated_at, completed_at
+                created_at, updated_at, completed_at, metadata
          FROM downloads
          WHERE status IN ('queued','active')
          ORDER BY priority DESC, created_at ASC",
@@ -1462,6 +1589,9 @@ fn db_load_incomplete(path: &Path) -> rusqlite::Result<Vec<DownloadEntry>> {
     let rows = stmt.query_map([], |row| {
         let urls_json: String = row.get(4)?;
         let urls: Vec<String> = serde_json::from_str(&urls_json).unwrap_or_default();
+        let metadata_raw: Option<String> = row.get(15)?;
+        let metadata: Option<serde_json::Value> =
+            metadata_raw.and_then(|m| serde_json::from_str(&m).ok());
         Ok(DownloadEntry {
             id: row.get(0)?,
             category: row.get(1)?,
@@ -1478,6 +1608,7 @@ fn db_load_incomplete(path: &Path) -> rusqlite::Result<Vec<DownloadEntry>> {
             created_at: row.get(12)?,
             updated_at: row.get(13)?,
             completed_at: row.get(14)?,
+            metadata,
         })
     })?;
 

@@ -12,14 +12,17 @@ Each local tool handler has the signature::
 The bridge:
   1. Maintains a per-conversation ``ToolSession`` (tracks cwd, background shells, etc.)
   2. For each tool call, gets or creates the session for the conversation
-  3. Validates args through the Pydantic arg model (from the manifest)
+  3. Validates args through the Pydantic arg model (from the catalog) when one exists
   4. Calls the real handler with unpacked validated args
   5. Converts matrx-local's ``ToolResult`` → matrx-ai's ``ToolResult``
 
-The adapter auto-discovers all 79 local tools from ``LOCAL_TOOL_MANIFEST`` at startup
-and registers them as individual per-tool handlers (highest priority in the resolution
-chain).  Any tool from ``source_app="matrx_local"`` not covered by the manifest falls
-through to ``dispatch()``, which surfaces a clear "not implemented" error to the model.
+The adapter auto-discovers ALL local tools from the canonical catalog
+(``app.tools.catalog.get_catalog()`` — built from the dispatcher, one entry
+per dispatched tool) and registers them as individual per-tool handlers under
+their canonical cloud names (highest priority in the resolution chain). Any
+tool from ``source_app="matrx_local"`` not covered by the catalog falls
+through to ``dispatch()``, which surfaces a clear "not implemented" error to
+the model.
 
 Conversation lifecycle
 ----------------------
@@ -29,9 +32,9 @@ when matrx-ai's ``ToolLifecycleManager`` detects a conversation has ended or idl
 
 Schema generation
 -----------------
-When a manifest entry carries an ``arg_model`` (a Pydantic BaseModel subclass),
-the bridge generates the JSON Schema from it — keeping the DB schema in sync with
-the code automatically.
+Schemas come from the catalog entry's ``input_schema`` — the Pydantic arg
+model's JSON Schema when one exists, signature introspection otherwise —
+keeping the advertised schema in sync with the code automatically.
 
 Registration
 ------------
@@ -41,7 +44,6 @@ first AI request.  This replaces the old ``register_local_tools(registry)`` call
 
 from __future__ import annotations
 
-import importlib
 import inspect
 import logging
 import time
@@ -58,11 +60,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class LocalToolBridge(ExternalToolAdapter):
-    """ExternalToolAdapter that exposes all 79 matrx-local OS tools to matrx-ai.
+    """ExternalToolAdapter that exposes every matrx-local OS tool to matrx-ai.
 
-    At startup, the manifest is scanned and every tool is registered as a per-tool
-    handler (highest priority).  ``dispatch()`` handles any tool that slips through
-    (e.g. a new tool added to the DB but not yet in the manifest).
+    At startup, the catalog is scanned and every tool is registered as a per-tool
+    handler under its canonical cloud name (highest priority).  ``dispatch()``
+    handles any tool that slips through (e.g. a new tool added to the DB but not
+    yet implemented here).
 
     ``on_conversation_end()`` evicts the ``ToolSession`` when matrx-ai's lifecycle
     manager signals that a conversation has ended or timed out.
@@ -109,13 +112,14 @@ class LocalToolBridge(ExternalToolAdapter):
     # ------------------------------------------------------------------
 
     def register(self, registry: Any = None) -> None:
-        """Register all manifest tools + lifecycle cleanup.
+        """Register all catalog tools + lifecycle cleanup.
 
         Overrides ``ExternalToolAdapter.register()`` to dynamically build per-tool
-        handlers from ``LOCAL_TOOL_MANIFEST`` instead of relying on the ``@external_tool``
-        decorator (which would require 79 explicit method definitions).
+        handlers from the canonical catalog instead of relying on the
+        ``@external_tool`` decorator (which would require 100+ explicit method
+        definitions).
         """
-        from app.tools.local_tool_manifest import LOCAL_TOOL_MANIFEST
+        from app.tools.catalog import get_catalog
         from matrx_ai.tools.external_handlers import ExternalHandlerRegistry
 
         reg = registry or ExternalHandlerRegistry.get_instance()
@@ -132,20 +136,16 @@ class LocalToolBridge(ExternalToolAdapter):
 
         reg.__class__.register = _silent_register  # type: ignore[method-assign]
         try:
-            for entry in LOCAL_TOOL_MANIFEST:
+            for entry in get_catalog():
                 try:
-                    handler = _resolve_handler(entry.function_path)
-                    tool_handler = self._make_tool_handler(handler, entry.name, entry.arg_model)
-                    reg.register(entry.name, tool_handler)
-                    registered_names.append(entry.name)
-                except ImportError as exc:
-                    # Module not available on this platform (e.g. applescript on Linux)
-                    logger.debug("Skipping local tool %s — import error: %s", entry.name, exc)
-                except AttributeError as exc:
-                    logger.warning("Skipping local tool %s — handler not found: %s", entry.name, exc)
+                    tool_handler = self._make_tool_handler(
+                        entry.handler, entry.cloud_name, entry.arg_model
+                    )
+                    reg.register(entry.cloud_name, tool_handler)
+                    registered_names.append(entry.cloud_name)
                 except Exception as exc:
-                    failed.append(entry.name)
-                    logger.error("Failed to register local tool %s: %s", entry.name, exc)
+                    failed.append(entry.cloud_name)
+                    logger.error("Failed to register local tool %s: %s", entry.cloud_name, exc)
         finally:
             reg.__class__.register = _orig_register  # type: ignore[method-assign]
 
@@ -179,7 +179,7 @@ class LocalToolBridge(ExternalToolAdapter):
             "[ExternalHandlerRegistry] Registered %d/%d local tool handlers "
             "(app: %s): %s",
             len(registered_names),
-            len(LOCAL_TOOL_MANIFEST),
+            len(get_catalog()),
             self.source_app,
             names_list,
         )
@@ -269,7 +269,7 @@ class LocalToolBridge(ExternalToolAdapter):
         """Handle any ``matrx_local`` tool that has no registered handler.
 
         This fires only when the DB contains a tool with ``source_app="matrx_local"``
-        that isn't in ``LOCAL_TOOL_MANIFEST``.  The model receives a clear error so it
+        that isn't in the local tool catalog.  The model receives a clear error so it
         can inform the user rather than silently failing.
         """
         return ToolResult(
@@ -277,8 +277,9 @@ class LocalToolBridge(ExternalToolAdapter):
             error=ToolError(
                 error_type="not_implemented",
                 message=(
-                    f"Local tool '{ctx.tool_name}' is not in the LOCAL_TOOL_MANIFEST. "
-                    "Either the tool hasn't been implemented yet or the manifest is out of date. "
+                    f"Local tool '{ctx.tool_name}' is not in this desktop's tool catalog. "
+                    "Either the tool hasn't been implemented yet or the cloud registry "
+                    "is ahead of this app version. "
                     "Run: uv run python -m app.tools.tool_sync status"
                 ),
                 is_retryable=False,
@@ -297,13 +298,6 @@ class LocalToolBridge(ExternalToolAdapter):
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
-
-def _resolve_handler(function_path: str) -> Any:
-    """Import and return the callable at the given dotted path."""
-    module_path, func_name = function_path.rsplit(".", 1)
-    module = importlib.import_module(module_path)
-    return getattr(module, func_name)
-
 
 def _convert_result(
     local_result: Any,
@@ -374,22 +368,22 @@ def register_local_tools(registry: Any | None = None) -> int:
     Called from ``engine.py``.  Creates and registers the ``LocalToolBridge``
     singleton, then returns the count of successfully registered tools.
     """
-    from app.tools.local_tool_manifest import LOCAL_TOOL_MANIFEST
+    from app.tools.catalog import get_catalog
 
     bridge = get_bridge()
     bridge.register(registry)
 
-    # Return count of tools that were registered (those in the manifest that
+    # Return count of tools that were registered (those in the catalog that
     # succeeded — the bridge logs failures internally).
     from matrx_ai.tools.external_handlers import ExternalHandlerRegistry
     reg = ExternalHandlerRegistry.get_instance()
-    return sum(1 for e in LOCAL_TOOL_MANIFEST if reg.has_handler(e.name, "matrx_local"))
+    return sum(1 for e in get_catalog() if reg.has_handler(e.cloud_name, "matrx_local"))
 
 
 def registered_local_tool_names() -> list[str]:
-    """Return the names of all local tools defined in the manifest."""
-    from app.tools.local_tool_manifest import LOCAL_TOOL_MANIFEST
-    return [e.name for e in LOCAL_TOOL_MANIFEST]
+    """Return the canonical cloud names of all local tools in the catalog."""
+    from app.tools.catalog import get_catalog
+    return [e.cloud_name for e in get_catalog()]
 
 
 def evict_session(conversation_id: str) -> None:
@@ -420,13 +414,13 @@ def session_count() -> int:
 
 # ---------------------------------------------------------------------------
 # Local tool definitions — registry fallback when the server registry is
-# unavailable. The manifest (arg models included) is the single source of
-# truth for the desktop's own tools, so the engine can synthesize full
+# unavailable. The catalog (arg models + introspection) is the single source
+# of truth for the desktop's own tools, so the engine can synthesize full
 # ToolDefinitions without any server round-trip.
 # ---------------------------------------------------------------------------
 
-def _entry_param_dict(entry: Any) -> dict[str, Any]:
-    """Convert a manifest entry's schema into matrx-ai's internal param dict.
+def _schema_to_param_dict(input_schema: dict[str, Any]) -> dict[str, Any]:
+    """Convert a catalog entry's JSON Schema into matrx-ai's internal param dict.
 
     matrx-ai's own ``_pydantic_to_param_dict`` drops ``required`` flags and
     mishandles ``Optional[...]`` fields (pydantic emits ``anyOf`` with no top
@@ -434,14 +428,10 @@ def _entry_param_dict(entry: Any) -> dict[str, Any]:
     ``required: True`` markers, picking the first non-null branch for
     optionals — matching what ``ToolDefinition._build_json_schema`` expects.
     """
-    if entry.arg_model is None:
-        return dict(entry.parameters or {})
-
-    schema = entry.arg_model.model_json_schema()
-    required = set(schema.get("required", []))
+    required = set(input_schema.get("required", []))
     params: dict[str, Any] = {}
 
-    for fname, fs in (schema.get("properties") or {}).items():
+    for fname, fs in (input_schema.get("properties") or {}).items():
         fs = dict(fs)
         if "type" not in fs and "anyOf" in fs:
             branches = [b for b in fs["anyOf"] if b.get("type") != "null"]
@@ -466,35 +456,37 @@ def _entry_param_dict(entry: Any) -> dict[str, Any]:
 
 
 def build_local_tool_definitions() -> list[Any]:
-    """Build a ToolDefinition for every manifest tool.
+    """Build a ToolDefinition for every catalog tool.
 
     ``tool_type=EXTERNAL_HANDLER`` + ``source_app="matrx_local"`` routes
     execution to the LocalToolBridge handlers registered in ``register()`` —
-    the same path a server-provided definition would take.
+    the same path a server-provided definition would take. Descriptions here
+    are the code-side fallback; when the server registry is reachable its
+    (DB-canonical) definitions win and this backfill only fills gaps.
     """
     from matrx_ai.tools.models import ToolDefinition, ToolType
 
-    from app.tools.local_tool_manifest import LOCAL_TOOL_MANIFEST
+    from app.tools.catalog import get_catalog
 
     defs: list[Any] = []
-    for entry in LOCAL_TOOL_MANIFEST:
+    for entry in get_catalog():
         try:
             defs.append(
                 ToolDefinition(
-                    name=entry.name,
+                    name=entry.cloud_name,
                     description=entry.description,
-                    parameters=_entry_param_dict(entry),
+                    parameters=_schema_to_param_dict(entry.input_schema),
                     tool_type=ToolType.EXTERNAL_HANDLER,
-                    source_app=entry.source_app,
+                    source_app="matrx_local",
                     category=entry.category,
-                    tags=list(entry.tags or []),
-                    version=str(entry.version or "1.0.0"),
-                    timeout_seconds=float(entry.timeout_seconds or 120.0),
+                    tags=list(entry.tags),
+                    version=entry.version,
+                    timeout_seconds=float(entry.timeout_seconds),
                 )
             )
         except Exception:
             logger.warning(
-                "Could not build ToolDefinition for local tool %s", entry.name,
+                "Could not build ToolDefinition for local tool %s", entry.cloud_name,
                 exc_info=True,
             )
     return defs

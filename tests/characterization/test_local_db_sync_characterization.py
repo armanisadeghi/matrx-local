@@ -37,7 +37,7 @@ from app.services.local_db.sync_engine import (
     _hash_list,
 )
 from app.services.aidream.client import AIDreamOfflineError
-from app.tools.local_tool_manifest import LOCAL_TOOL_MANIFEST
+from app.tools.catalog import get_catalog
 
 
 # ---------------------------------------------------------------------------
@@ -102,11 +102,11 @@ async def _sync_status(db: LocalDatabase, entity: str) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
-# Tools sync — LOCAL_TOOL_MANIFEST -> tools table
+# Tools sync — canonical catalog -> tools table
 # ---------------------------------------------------------------------------
 
 
-def test_sync_tools_caches_full_manifest(
+def test_sync_tools_caches_full_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def scenario(engine: SyncEngine, db: LocalDatabase) -> None:
@@ -114,10 +114,10 @@ def test_sync_tools_caches_full_manifest(
 
         rows = await db.fetchall("SELECT id, name, source, version FROM tools")
         by_id = {r["id"]: dict(r) for r in rows}
-        assert sorted(by_id) == sorted(e.name for e in LOCAL_TOOL_MANIFEST), (
-            "tools table does not mirror LOCAL_TOOL_MANIFEST exactly"
+        assert sorted(by_id) == sorted(e.cloud_name for e in get_catalog()), (
+            "tools table does not mirror the tool catalog exactly"
         )
-        assert len(rows) == 62  # manifest size pinned by the registry gate too
+        assert len(rows) == 108  # catalog size pinned by the registry gate too
         assert all(r["source"] == "local" for r in by_id.values())
         # id == name for local tools (current behavior).
         assert all(r["id"] == r["name"] for r in by_id.values())
@@ -140,7 +140,7 @@ def test_sync_tools_is_idempotent(
         assert first is not None and second is not None
         assert first["last_hash"] == second["last_hash"]
         row = await db.fetchone("SELECT COUNT(*) AS cnt FROM tools")
-        assert row["cnt"] == 62
+        assert row["cnt"] == 108
 
     run_scenario(tmp_path, monkeypatch, scenario)
 

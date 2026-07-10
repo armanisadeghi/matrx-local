@@ -336,20 +336,20 @@ class SyncEngine:
     # ------------------------------------------------------------------
 
     async def sync_tools(self) -> None:
-        """Cache the local tool manifest into SQLite for fast access."""
-        from app.tools.local_tool_manifest import LOCAL_TOOL_MANIFEST
+        """Cache the local tool catalog into SQLite for fast access."""
+        from app.tools.catalog import get_catalog
 
         tools_to_save = []
-        for entry in LOCAL_TOOL_MANIFEST:
+        for entry in get_catalog():
             tools_to_save.append({
-                "id": entry.name,
-                "name": entry.name,
+                "id": entry.cloud_name,
+                "name": entry.cloud_name,
                 "description": entry.description,
                 "category": entry.category,
-                "tags": entry.tags,
-                "parameters": entry.parameters,
+                "tags": list(entry.tags),
+                "parameters": entry.input_schema,
                 "source": "local",
-                "version": str(entry.version),
+                "version": entry.version,
             })
 
         await self._tools_repo.upsert_many(tools_to_save)

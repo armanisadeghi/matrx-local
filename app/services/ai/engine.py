@@ -254,7 +254,7 @@ async def load_tools_and_register() -> int:
         else:
             logger.warning(
                 "[engine] matrx-ai: server tool registry returned 0 tools — "
-                "falling back to the local manifest"
+                "falling back to the local tool catalog"
             )
     except Exception:
         logger.warning(
@@ -263,13 +263,14 @@ async def load_tools_and_register() -> int:
             exc_info=True,
         )
 
-    # --- Phase A½: backfill local tool definitions from the manifest ---
+    # --- Phase A½: backfill local tool definitions from the catalog ---
     # The server's tool registry endpoint may be unavailable or may not carry
     # this app's tools (the deployed server 404s /api/ai-tools/app/matrx_local
     # for matrx-ai 0.1.x clients). The desktop owns its OS tools end-to-end —
-    # the manifest has the schemas and Phase B registers the executors — so
-    # synthesize definitions for any manifest tool the server didn't provide.
-    # Server-provided definitions win; we only fill gaps.
+    # the catalog (app/tools/catalog.py) has the schemas and Phase B registers
+    # the executors — so synthesize definitions for any catalog tool the
+    # server didn't provide. Server-provided definitions win (descriptions are
+    # DB-canonical); we only fill gaps.
     try:
         from matrx_ai.tools.registry import ToolRegistryV2
 
@@ -283,7 +284,7 @@ async def load_tools_and_register() -> int:
             n = registry.load_from_definitions(missing)
             logger.info(
                 "[engine] matrx-ai: backfilled %d/%d local tool definitions from "
-                "manifest (server registry %s) ✓",
+                "catalog (server registry %s) ✓",
                 n,
                 len(missing),
                 "empty" if registry.count == n else "incomplete",

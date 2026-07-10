@@ -110,23 +110,24 @@ async def list_anthropic_tool_schemas() -> dict:
 async def list_local_tools() -> dict[str, Any]:
     """Return all local OS tools registered in the matrx-ai ToolRegistry."""
     try:
-        from app.tools.local_tool_manifest import LOCAL_TOOL_MANIFEST
+        from app.tools.catalog import get_catalog
         from matrx_ai.tools.registry import ToolRegistryV2
         from app.services.ai.engine import tools_loaded
 
         registry = ToolRegistryV2.get_instance()
         tools_out = []
 
-        for entry in LOCAL_TOOL_MANIFEST:
-            tool_def = registry.get(entry.name)
+        for entry in get_catalog():
+            tool_def = registry.get(entry.cloud_name)
             tools_out.append({
-                "name": entry.name,
+                "name": entry.cloud_name,
+                "dispatcher_name": entry.dispatcher_name,
                 "description": entry.description,
                 "category": entry.category,
-                "tags": entry.tags,
-                "parameters": entry.parameters,
+                "tags": list(entry.tags),
+                "parameters": entry.input_schema,
                 "version": entry.version,
-                "function_path": entry.function_path,
+                "platforms": list(entry.platforms) if entry.platforms else None,
                 "registered": tool_def is not None,
                 "timeout_seconds": entry.timeout_seconds,
             })

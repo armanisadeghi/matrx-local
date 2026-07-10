@@ -146,7 +146,8 @@ function ModelPickerRow({
   requiresToken,
   hardwareOk,
   hardwareReason,
-  busy,
+  isLoadingThis,
+  anyLoadInFlight,
   onLoad,
   onDownload,
 }: {
@@ -158,7 +159,8 @@ function ModelPickerRow({
   requiresToken: boolean;
   hardwareOk: boolean;
   hardwareReason: string | null;
-  busy: boolean;
+  isLoadingThis: boolean;
+  anyLoadInFlight: boolean;
   onLoad: () => void;
   onDownload: () => void;
 }) {
@@ -187,7 +189,7 @@ function ModelPickerRow({
               size="sm"
               variant="outline"
               className="h-6 px-2 text-[11px]"
-              disabled={!hardwareOk || busy}
+              disabled={!hardwareOk || anyLoadInFlight}
               onClick={onDownload}
             >
               <Download className="mr-1 h-3 w-3" />
@@ -197,10 +199,10 @@ function ModelPickerRow({
             <Button
               size="sm"
               className="h-6 px-2 text-[11px]"
-              disabled={!hardwareOk || busy}
+              disabled={!hardwareOk || anyLoadInFlight}
               onClick={onLoad}
             >
-              {busy ? (
+              {isLoadingThis ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
               ) : (
                 "Load"
@@ -669,6 +671,7 @@ export function VariantGallery() {
     imageStatusLoading,
     imageStatusError,
     imageModelLoading,
+    loadingImageModelId,
     imageGenerating,
     imageGenError,
     imageResult,
@@ -681,6 +684,7 @@ export function VariantGallery() {
     videoModels,
     videoStatusError,
     videoModelLoading,
+    loadingVideoModelId,
     videoGenerating,
     videoGenError,
     activeJob,
@@ -1212,7 +1216,8 @@ export function VariantGallery() {
                                 requiresToken={m.requires_hf_token}
                                 hardwareOk={m.hardware_ok}
                                 hardwareReason={m.hardware_reason}
-                                busy={
+                                isLoadingThis={loadingImageModelId === m.model_id}
+                                anyLoadInFlight={
                                   imageModelLoading ||
                                   !!imageStatus?.is_loading
                                 }
@@ -1235,7 +1240,8 @@ export function VariantGallery() {
                                 requiresToken={m.requires_hf_token}
                                 hardwareOk={m.hardware_ok}
                                 hardwareReason={m.hardware_reason}
-                                busy={
+                                isLoadingThis={loadingVideoModelId === m.model_id}
+                                anyLoadInFlight={
                                   videoModelLoading ||
                                   !!videoStatus?.is_loading
                                 }

@@ -38,7 +38,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
-import type { VideoGenModelInfo, VideoGenJob, VideoGenRequest } from "@/lib/api";
+import type {
+  VideoGenModelInfo,
+  VideoGenJob,
+  VideoGenRequest,
+} from "@/lib/api";
 import { ImageGenInstaller } from "./ImageGenInstaller";
 import {
   StarRating,
@@ -67,14 +71,16 @@ import type { SizePreset } from "./shared";
 function VideoModelCard({
   model,
   isLoaded,
-  anyLoading,
+  isLoadingThis,
+  anyLoadInFlight,
   onLoad,
   onDownload,
   onGenerate,
 }: {
   model: VideoGenModelInfo;
   isLoaded: boolean;
-  anyLoading: boolean;
+  isLoadingThis: boolean;
+  anyLoadInFlight: boolean;
   onLoad: (m: VideoGenModelInfo) => void;
   onDownload: (m: VideoGenModelInfo) => void;
   onGenerate: (m: VideoGenModelInfo) => void;
@@ -188,10 +194,10 @@ function VideoModelCard({
           size="sm"
           className="w-full"
           variant={isLoaded ? "default" : "outline"}
-          disabled={anyLoading || hardwareBlocked}
+          disabled={anyLoadInFlight || hardwareBlocked}
           onClick={() => (isLoaded ? onGenerate(model) : onLoad(model))}
         >
-          {anyLoading ? (
+          {isLoadingThis ? (
             <>
               <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
               Loading…
@@ -266,6 +272,7 @@ export function VideoGenSection() {
     videoStatusLoading,
     videoStatusError,
     videoModelLoading,
+    loadingVideoModelId,
     videoGenerating,
     videoGenError,
     activeJob,
@@ -416,7 +423,10 @@ export function VideoGenSection() {
   const defaults = videoForm.defaults;
   const advanced = useMemo(
     () =>
-      computeAdvancedOverrides(videoForm.advancedText, defaults?.advanced ?? {}),
+      computeAdvancedOverrides(
+        videoForm.advancedText,
+        defaults?.advanced ?? {},
+      ),
     [videoForm.advancedText, defaults?.advanced],
   );
   const dimError = dimensionError(videoForm.width, videoForm.height);
@@ -738,7 +748,8 @@ export function VideoGenSection() {
                 key={m.model_id}
                 model={m}
                 isLoaded={videoStatus?.loaded_model_id === m.model_id}
-                anyLoading={videoModelLoading || !!videoStatus?.is_loading}
+                isLoadingThis={loadingVideoModelId === m.model_id}
+                anyLoadInFlight={videoModelLoading || !!videoStatus?.is_loading}
                 onLoad={(model) => void handleLoadModel(model)}
                 onDownload={(model) => void downloadVideoModel(model.model_id)}
                 onGenerate={handleOpenGenerate}
@@ -757,8 +768,7 @@ export function VideoGenSection() {
           <Film className="h-8 w-8 text-muted-foreground/40" />
           <p className="text-sm font-medium">No model selected</p>
           <p className="text-xs text-muted-foreground max-w-sm">
-            Pick a model in the Models tab — its full settings will appear
-            here.
+            Pick a model in the Models tab — its full settings will appear here.
           </p>
           <Button size="sm" onClick={() => setVideoForm({ view: "models" })}>
             Choose a model

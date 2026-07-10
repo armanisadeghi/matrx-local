@@ -98,14 +98,18 @@ function classifyImageGenLoadError(
 function ImageModelCard({
   model,
   isLoaded,
-  anyLoading,
+  isLoadingThis,
+  anyLoadInFlight,
   onLoad,
   onDownload,
   onGenerate,
 }: {
   model: ImageGenModelInfo;
   isLoaded: boolean;
-  anyLoading: boolean;
+  /** True only for the card whose model is currently loading into memory. */
+  isLoadingThis: boolean;
+  /** True while any model load is in flight — disables sibling Load buttons. */
+  anyLoadInFlight: boolean;
   onLoad: (m: ImageGenModelInfo) => void;
   onDownload: (m: ImageGenModelInfo) => void;
   onGenerate: (m: ImageGenModelInfo) => void;
@@ -214,10 +218,10 @@ function ImageModelCard({
           size="sm"
           className="w-full"
           variant={isLoaded ? "default" : "outline"}
-          disabled={anyLoading || hardwareBlocked}
+          disabled={anyLoadInFlight || hardwareBlocked}
           onClick={() => (isLoaded ? onGenerate(model) : onLoad(model))}
         >
-          {anyLoading ? (
+          {isLoadingThis ? (
             <>
               <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
               Loading…
@@ -313,6 +317,7 @@ export function ImageGenSection() {
     imageStatusLoading,
     imageStatusError,
     imageModelLoading,
+    loadingImageModelId,
     imageGenerating,
     imageGenError,
     imageResult,
@@ -432,7 +437,11 @@ export function ImageGenSection() {
   // ── Validation + request building ────────────────────────────────────────
   const defaults = imageForm.defaults;
   const advanced = useMemo(
-    () => computeAdvancedOverrides(imageForm.advancedText, defaults?.advanced ?? {}),
+    () =>
+      computeAdvancedOverrides(
+        imageForm.advancedText,
+        defaults?.advanced ?? {},
+      ),
     [imageForm.advancedText, defaults?.advanced],
   );
   const dimError = dimensionError(imageForm.width, imageForm.height);
@@ -509,7 +518,9 @@ export function ImageGenSection() {
       ...base,
       ...fixed.filter(
         (p) =>
-          !defaults || p.width !== defaults.width || p.height !== defaults.height,
+          !defaults ||
+          p.width !== defaults.width ||
+          p.height !== defaults.height,
       ),
     ];
   }, [defaults]);
@@ -700,7 +711,10 @@ export function ImageGenSection() {
                   key={m.model_id}
                   model={m}
                   isLoaded={imageStatus?.loaded_model_id === m.model_id}
-                  anyLoading={imageModelLoading || !!imageStatus?.is_loading}
+                  isLoadingThis={loadingImageModelId === m.model_id}
+                  anyLoadInFlight={
+                    imageModelLoading || !!imageStatus?.is_loading
+                  }
                   onLoad={(model) => void handleLoadModel(model)}
                   onDownload={handleDownloadModel}
                   onGenerate={handleOpenGenerate}
@@ -715,8 +729,7 @@ export function ImageGenSection() {
           <ImageIcon className="h-8 w-8 text-muted-foreground/40" />
           <p className="text-sm font-medium">No model selected</p>
           <p className="text-xs text-muted-foreground max-w-sm">
-            Pick a model in the Models tab — its full settings will appear
-            here.
+            Pick a model in the Models tab — its full settings will appear here.
           </p>
           <Button size="sm" onClick={() => setImageForm({ view: "models" })}>
             Choose a model

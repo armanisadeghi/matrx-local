@@ -72,8 +72,12 @@ dependencies = [
     "supabase>=2.28.0",
     # OS keychain access for encrypting credentials at rest in matrx.db
     # (macOS Keychain / Windows Credential Manager / Linux Secret Service).
-    # cryptography (the Fernet backend) is already present transitively.
     "keyring>=25.0.0",
+    # AES-256-GCM + scrypt + RSA-OAEP for the Private Media Vault
+    # (app/services/media_vault/) and keyring's Fernet backend. Declared
+    # explicitly per Hard Rule 5 — "present transitively" is not a
+    # dependency declaration.
+    "cryptography>=43.0.0",
     "screeninfo>=0.8.1",
     # Media downloading & video processing
     "yt-dlp>=2024.1.0",

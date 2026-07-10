@@ -217,7 +217,14 @@ export interface MediaGenState {
   imagePresets: ImageGenWorkflowPreset[];
   imageStatusLoading: boolean;
   imageStatusError: string | null;
+  /**
+   * True while ANY image model load is in flight. Prefer
+   * `loadingImageModelId === model.model_id` for per-card spinners — a shared
+   * boolean spun every downloaded card's Load button (media-gen bug, 2026-07-09).
+   */
   imageModelLoading: boolean;
+  /** Model id currently being loaded into memory, or null. */
+  loadingImageModelId: string | null;
   imageGenerating: boolean;
   imageGenError: string | null;
   imageResult: GeneratedImageResult | null;
@@ -236,7 +243,10 @@ export interface MediaGenState {
   videoModels: VideoGenModelInfo[];
   videoStatusLoading: boolean;
   videoStatusError: string | null;
+  /** True while ANY video model load is in flight. Prefer `loadingVideoModelId`. */
   videoModelLoading: boolean;
+  /** Model id currently being loaded into memory, or null. */
+  loadingVideoModelId: string | null;
   videoGenerating: boolean;
   videoGenError: string | null;
   /** The job currently being watched (running, or the most recent one). */
@@ -323,7 +333,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   );
   const [imageStatusLoading, setImageStatusLoading] = useState(true);
   const [imageStatusError, setImageStatusError] = useState<string | null>(null);
-  const [imageModelLoading, setImageModelLoading] = useState(false);
+  const [loadingImageModelId, setLoadingImageModelId] = useState<string | null>(
+    null,
+  );
   const [imageGenerating, setImageGenerating] = useState(false);
   const [imageGenError, setImageGenError] = useState<string | null>(null);
   const [imageResult, setImageResult] = useState<GeneratedImageResult | null>(
@@ -345,7 +357,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const [videoModels, setVideoModels] = useState<VideoGenModelInfo[]>([]);
   const [videoStatusLoading, setVideoStatusLoading] = useState(true);
   const [videoStatusError, setVideoStatusError] = useState<string | null>(null);
-  const [videoModelLoading, setVideoModelLoading] = useState(false);
+  const [loadingVideoModelId, setLoadingVideoModelId] = useState<string | null>(
+    null,
+  );
   const [videoGenerating, setVideoGenerating] = useState(false);
   const [videoGenError, setVideoGenError] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<VideoGenJob | null>(null);
@@ -557,7 +571,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setImageGenError(ENGINE_NOT_CONNECTED_ACTION);
         return { success: false, error: ENGINE_NOT_CONNECTED_ACTION };
       }
-      setImageModelLoading(true);
+      setLoadingImageModelId(modelId);
       setImageGenError(null);
       try {
         const result = await apiLoadImageGenModel(base, modelId);
@@ -571,7 +585,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setImageGenError(msg);
         return { success: false, error: msg };
       } finally {
-        setImageModelLoading(false);
+        setLoadingImageModelId(null);
       }
     },
     [refreshImage],
@@ -826,10 +840,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
           jobList.find((j) => j.job_id === status.active_job_id) ?? null;
         if (found) setActiveJob(found);
         else {
-          const job = await apiGetVideoGenJob(
-            base,
-            status.active_job_id,
-          ).catch(() => null);
+          const job = await apiGetVideoGenJob(base, status.active_job_id).catch(
+            () => null,
+          );
           if (job) setActiveJob(job);
         }
       }
@@ -1055,7 +1068,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setVideoGenError(ENGINE_NOT_CONNECTED_ACTION);
         return { success: false, error: ENGINE_NOT_CONNECTED_ACTION };
       }
-      setVideoModelLoading(true);
+      setLoadingVideoModelId(modelId);
       setVideoGenError(null);
       try {
         const result = await apiLoadVideoGenModel(base, modelId);
@@ -1066,7 +1079,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setVideoGenError(msg);
         return { success: false, error: msg };
       } finally {
-        setVideoModelLoading(false);
+        setLoadingVideoModelId(null);
       }
     },
     [refreshVideo],
@@ -1193,7 +1206,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     imagePresets,
     imageStatusLoading,
     imageStatusError,
-    imageModelLoading,
+    imageModelLoading: loadingImageModelId !== null,
+    loadingImageModelId,
     imageGenerating,
     imageGenError,
     imageResult,
@@ -1206,7 +1220,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     videoModels,
     videoStatusLoading,
     videoStatusError,
-    videoModelLoading,
+    videoModelLoading: loadingVideoModelId !== null,
+    loadingVideoModelId,
     videoGenerating,
     videoGenError,
     activeJob,

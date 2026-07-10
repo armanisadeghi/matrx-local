@@ -49,7 +49,7 @@ function readVariant(): VariantId {
   } catch {
     // fall through to default
   }
-  return "classic";
+  return "studio";
 }
 
 export function MediaGeneration() {

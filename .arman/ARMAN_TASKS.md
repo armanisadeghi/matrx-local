@@ -8,6 +8,21 @@ _Last updated: 2026-07-09_
 
 ## Active
 
+- [ ] **CRITICAL: Secure the Media Vault escrow PRIVATE key** — The Private
+  media vault's recovery backdoor is an RSA-4096 keypair generated
+  2026-07-09. The PUBLIC key is embedded in the app
+  (`app/services/media_vault/escrow.py`); the PRIVATE key lives ONLY at
+  `~/.matrx-escrow/matrx-media-escrow-private.pem` on this machine (mode
+  600, outside every repo). Do now: (1) copy it into your password manager
+  AND one offline backup — if this file is lost before you back it up, the
+  backdoor is gone for every vault created meanwhile; (2) NEVER commit it
+  anywhere. Recovery usage:
+  `uv run python scripts/vault-recover.py --private-key <pem> --vault-dir ~/.matrx/media/vault --new-password <pw>`
+  (rewraps the user slot without exposing contents) or `--out <dir>` to
+  decrypt everything. Optional upgrade later: create an asymmetric KMS key
+  (RSA-4096, `alias/matrx-media-escrow` — do NOT reuse the redaction
+  escrow key), and we swap the embedded public key + import this private
+  key or re-wrap vaults on next unlock.
 - [ ] **URGENT: Review local GLiNER NER plan before agents build** —
   Cloud NER API volume is a major cost driver; local NER is required.
   Read [`docs/GLINER_NER_INTEGRATION_PLAN.md`](../docs/GLINER_NER_INTEGRATION_PLAN.md)

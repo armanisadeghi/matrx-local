@@ -207,6 +207,7 @@ function ModelRow({
   category,
   isCurrent,
   busy,
+  anyLoadInFlight,
   onSelect,
   onDownload,
 }: {
@@ -214,6 +215,7 @@ function ModelRow({
   category: "image_gen" | "video_gen";
   isCurrent: boolean;
   busy: boolean;
+  anyLoadInFlight: boolean;
   onSelect: () => void;
   onDownload: () => void;
 }) {
@@ -290,7 +292,7 @@ function ModelRow({
               size="sm"
               variant={isCurrent ? "secondary" : "outline"}
               className="h-7 px-3 text-xs"
-              disabled={busy || blocked || isCurrent}
+              disabled={busy || anyLoadInFlight || blocked || isCurrent}
               onClick={onSelect}
             >
               {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : isCurrent ? "In use" : "Use"}
@@ -318,7 +320,8 @@ function ModelStep<M extends ModelRowShape>({
   models,
   current,
   loadedId,
-  busy,
+  loadingModelId,
+  anyLoadInFlight,
   onSelect,
   onDownload,
   emptyLabel,
@@ -327,7 +330,8 @@ function ModelStep<M extends ModelRowShape>({
   models: M[];
   current: M | null;
   loadedId: string | null;
-  busy: boolean;
+  loadingModelId: string | null;
+  anyLoadInFlight: boolean;
   onSelect: (m: M) => void;
   onDownload: (m: M) => void;
   emptyLabel: string;
@@ -410,7 +414,8 @@ function ModelStep<M extends ModelRowShape>({
                   model={m}
                   category={category}
                   isCurrent={current?.model_id === m.model_id}
-                  busy={busy}
+                  busy={loadingModelId === m.model_id}
+                  anyLoadInFlight={anyLoadInFlight}
                   onSelect={() => {
                     onSelect(m);
                     setOpen(false);
@@ -714,6 +719,7 @@ function ImageFocusFlow() {
     imageStatusLoading,
     imageStatusError,
     imageModelLoading,
+    loadingImageModelId,
     imageGenerating,
     imageGenError,
     imageResult,
@@ -945,7 +951,8 @@ function ImageFocusFlow() {
         models={imageModels}
         current={currentModel}
         loadedId={imageStatus?.loaded_model_id ?? null}
-        busy={imageModelLoading || !!imageStatus?.is_loading}
+        loadingModelId={loadingImageModelId}
+        anyLoadInFlight={imageModelLoading || !!imageStatus?.is_loading}
         onSelect={(m) => void handleSelectModel(m)}
         onDownload={(m) => void downloadImageModel(m.model_id)}
         emptyLabel="No image models available yet."
@@ -1146,6 +1153,7 @@ function VideoFocusFlow() {
     videoStatusLoading,
     videoStatusError,
     videoModelLoading,
+    loadingVideoModelId,
     videoGenerating,
     videoGenError,
     activeJob,
@@ -1412,7 +1420,8 @@ function VideoFocusFlow() {
         models={videoModels}
         current={currentModel}
         loadedId={videoStatus?.loaded_model_id ?? null}
-        busy={videoModelLoading || !!videoStatus?.is_loading}
+        loadingModelId={loadingVideoModelId}
+        anyLoadInFlight={videoModelLoading || !!videoStatus?.is_loading}
         onSelect={(m) => void handleSelectModel(m)}
         onDownload={(m) => void downloadVideoModel(m.model_id)}
         emptyLabel="No video models available yet."

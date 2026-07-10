@@ -38,6 +38,7 @@ import {
   Layers,
   ListPlus,
   Loader2,
+  Maximize2,
   MonitorX,
   Play,
   RefreshCw,
@@ -68,6 +69,8 @@ import type {
 } from "@/lib/api";
 import type { ImageGenerateInput } from "@/hooks/use-media-gen";
 import { ImageGenInstaller } from "@/components/media-gen/ImageGenInstaller";
+import { MediaLightbox } from "@/components/media-gen/MediaLightbox";
+import type { LightboxItem } from "@/components/media-gen/MediaLightbox";
 import { WorkflowSection } from "@/components/media-gen/WorkflowSection";
 import { MediaLibrarySection } from "@/components/media-gen/MediaLibrarySection";
 import {
@@ -160,7 +163,8 @@ function PickerModelRow({
   hardwareReason,
   requiresHfToken,
   modelCardUrl,
-  anyLoading,
+  isLoadingThis,
+  anyLoadInFlight,
   onLoad,
   onUse,
   onDownload,
@@ -178,7 +182,8 @@ function PickerModelRow({
   hardwareReason: string | null;
   requiresHfToken: boolean;
   modelCardUrl: string;
-  anyLoading: boolean;
+  isLoadingThis: boolean;
+  anyLoadInFlight: boolean;
   onLoad: () => void;
   onUse: () => void;
   onDownload: () => void;
@@ -280,10 +285,10 @@ function PickerModelRow({
           size="sm"
           variant="outline"
           className="w-full h-7 text-xs"
-          disabled={anyLoading || !hardwareOk}
+          disabled={anyLoadInFlight || !hardwareOk}
           onClick={onLoad}
         >
-          {anyLoading ? (
+          {isLoadingThis ? (
             <>
               <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
               Loading…
@@ -303,10 +308,13 @@ function ImageJobChip({
   job,
   onCancel,
   onReuseSeed,
+  onExpand,
 }: {
   job: ImageGenJob;
   onCancel: (jobId: string) => void;
   onReuseSeed: (seed: number) => void;
+  /** Opens the completed job's image in the lightbox. */
+  onExpand?: (job: ImageGenJob) => void;
 }) {
   const active = job.status === "queued" || job.status === "running";
   return (
@@ -355,6 +363,19 @@ function ImageJobChip({
               title="Reuse this seed"
             >
               seed {job.seed}
+            </button>
+          )}
+          {job.status === "completed" && job.item_id && onExpand && (
+            <button
+              type="button"
+              onClick={() => onExpand(job)}
+              className={`shrink-0 text-muted-foreground hover:text-foreground ${
+                typeof job.seed === "number" ? "" : "ml-auto"
+              }`}
+              aria-label="View image"
+              title="View this job's image"
+            >
+              <Maximize2 className="h-3 w-3" />
             </button>
           )}
         </div>
@@ -421,6 +442,7 @@ export function VariantStudio() {
     imageStatusLoading,
     imageStatusError,
     imageModelLoading,
+    loadingImageModelId,
     imageGenerating,
     imageGenError,
     imageResult,
@@ -433,6 +455,7 @@ export function VariantStudio() {
     videoStatusLoading,
     videoStatusError,
     videoModelLoading,
+    loadingVideoModelId,
     videoGenerating,
     videoGenError,
     activeJob,
@@ -474,6 +497,14 @@ export function VariantStudio() {
   const [localError, setLocalError] = useState<string | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [playbackJobId, setPlaybackJobId] = useState<string | null>(null);
+  // Lightbox viewing set, snapshotted at open time (URLs are cached blob/data
+  // URLs, so a snapshot stays valid; live-mutating the list under the viewer
+  // would shift indices mid-browse).
+  const [lightbox, setLightbox] = useState<{
+    items: LightboxItem[];
+    index: number;
+    forVideo: boolean;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── Library filmstrip (own hook instance, images only, first 20) ─────────
@@ -698,6 +729,114 @@ export function VariantStudio() {
     [setImageForm],
   );
 
+  // ── Lightbox plumbing ────────────────────────────────────────────────────
+  const libraryItemToLightbox = useCallback(
+    (item: MediaLibraryItem, url: string): LightboxItem => ({
+      id: item.id,
+      kind: item.media_type,
+      url,
+      prompt: item.prompt,
+      seed: item.seed,
+      meta: {
+        model_id: item.model_id,
+        width: item.width,
+        height: item.height,
+        elapsed_seconds: item.elapsed_seconds,
+        created_at: item.created_at,
+        ...(item.negative_prompt
+          ? { negative_prompt: item.negative_prompt }
+          : {}),
+        ...(Object.keys(item.params ?? {}).length > 0
+          ? { params: item.params }
+          : {}),
+      },
+    }),
+    [],
+  );
+
+  /**
+   * The full image viewing set: the fresh result (when shown) followed by the
+   * filmstrip's recent generations, so prev/next flows through everything.
+   */
+  const buildImageLightboxItems = useCallback((): LightboxItem[] => {
+    const arr: LightboxItem[] = [];
+    if (imageResult) {
+      arr.push({
+        id: imageResult.itemId ?? "fresh-result",
+        kind: "image",
+        url: `data:image/png;base64,${imageResult.b64}`,
+        prompt: imageForm.prompt.trim() || undefined,
+        seed: imageResult.seed,
+        meta: {
+          width: imageResult.width,
+          height: imageResult.height,
+          elapsed_seconds: imageResult.elapsed,
+          ...(imageResult.filePath ? { file_path: imageResult.filePath } : {}),
+        },
+        title: "Latest result",
+      });
+    }
+    for (const item of filmstripItems) {
+      // The fresh result may already be persisted as a library item — don't
+      // show it twice in the browse order.
+      if (imageResult?.itemId && item.id === imageResult.itemId) continue;
+      const url = libState.fileUrls[item.id];
+      if (!url) continue;
+      arr.push(libraryItemToLightbox(item, url));
+    }
+    return arr;
+  }, [
+    imageResult,
+    imageForm.prompt,
+    filmstripItems,
+    libState.fileUrls,
+    libraryItemToLightbox,
+  ]);
+
+  /** Open the image lightbox at the given item id (null → first item). */
+  const openImageLightboxAt = useCallback(
+    (id: string | null) => {
+      const arr = buildImageLightboxItems();
+      if (arr.length === 0) return;
+      const idx = id ? arr.findIndex((x) => x.id === id) : 0;
+      setLightbox({ items: arr, index: idx >= 0 ? idx : 0, forVideo: false });
+    },
+    [buildImageLightboxItems],
+  );
+
+  /** Open a completed queue job's image (fetches its file URL if needed). */
+  const openJobLightbox = useCallback(
+    async (job: ImageGenJob) => {
+      const itemId = job.item_id;
+      if (!itemId) return;
+      const url = libState.fileUrls[itemId] ?? (await getFileUrl(itemId));
+      if (!url) return;
+      const arr = buildImageLightboxItems();
+      let idx = arr.findIndex((x) => x.id === itemId);
+      if (idx < 0) {
+        // Not in the filmstrip snapshot yet (URL just resolved) — lead with it.
+        arr.unshift({
+          id: itemId,
+          kind: "image",
+          url,
+          prompt: job.prompt,
+          seed: job.seed ?? null,
+          meta: {
+            model_id: job.model_id,
+            ...(Object.keys(job.params ?? {}).length > 0
+              ? { params: job.params }
+              : {}),
+          },
+        });
+        idx = 0;
+      }
+      setLightbox({ items: arr, index: idx, forVideo: false });
+    },
+    [libState.fileUrls, getFileUrl, buildImageLightboxItems],
+  );
+
+  const closeLightbox = useCallback(() => setLightbox(null), []);
+
   // ── Video request building (identical semantics to VideoGenSection) ──────
   const videoDefaults = videoForm.defaults;
   const videoAdvanced = useMemo(
@@ -868,6 +1007,42 @@ export function VariantStudio() {
     : activeJob?.status === "completed"
       ? (videoResults[activeJob.job_id] ?? null)
       : null;
+
+  const reuseVideoSeed = useCallback(
+    (seed: number) => setVideoForm({ seedText: String(seed) }),
+    [setVideoForm],
+  );
+
+  /** Open the currently playing video in the lightbox. */
+  const openVideoLightbox = useCallback(() => {
+    if (!playbackUrl) return;
+    const jobId =
+      playbackJobId ??
+      (activeJob?.status === "completed" ? activeJob.job_id : null);
+    const job =
+      jobs.find((j) => j.job_id === jobId) ??
+      (activeJob && activeJob.job_id === jobId ? activeJob : null);
+    setLightbox({
+      items: [
+        {
+          id: jobId ?? "video-playback",
+          kind: "video",
+          url: playbackUrl,
+          prompt: job?.prompt || videoForm.prompt.trim() || undefined,
+          meta: job
+            ? {
+                model_id: job.model_id,
+                elapsed_seconds: job.elapsed_seconds,
+                status: job.status,
+              }
+            : undefined,
+          title: "Generated video",
+        },
+      ],
+      index: 0,
+      forVideo: true,
+    });
+  }, [playbackUrl, playbackJobId, activeJob, jobs, videoForm.prompt]);
 
   // Readiness gates per mode.
   const imageReady = !!imageStatus?.available;
@@ -1323,11 +1498,23 @@ export function VariantStudio() {
       <div className="flex h-full w-full min-h-0 flex-col items-center gap-3 lg:flex-row lg:items-stretch">
         <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center">
           {selectedItemUrl ? (
-            <img
-              src={selectedItemUrl}
-              alt={selectedItem.prompt || "Library image"}
-              className="max-h-full max-w-full rounded-lg border object-contain"
-            />
+            <button
+              type="button"
+              onClick={() => openImageLightboxAt(selectedItem.id)}
+              className="group relative flex max-h-full max-w-full cursor-zoom-in items-center justify-center"
+              aria-label="Expand image"
+              title="Click to expand"
+            >
+              <img
+                src={selectedItemUrl}
+                alt={selectedItem.prompt || "Library image"}
+                className="max-h-full max-w-full rounded-lg border object-contain"
+              />
+              <span className="pointer-events-none absolute right-2 top-2 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-1 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+                <Maximize2 className="h-3 w-3" />
+                Expand
+              </span>
+            </button>
           ) : (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -1398,6 +1585,8 @@ export function VariantStudio() {
           result={imageResult}
           onClear={clearImageResult}
           onReuseSeed={reuseImageSeed}
+          prompt={imageForm.prompt.trim() || undefined}
+          onOpenLightbox={() => openImageLightboxAt(null)}
         />
       </div>
     ) : (
@@ -1482,14 +1671,26 @@ export function VariantStudio() {
 
       {playbackUrl ? (
         <div className="flex min-h-0 w-full max-w-2xl flex-1 flex-col gap-2">
-          <video
-            key={playbackUrl}
-            controls
-            autoPlay
-            loop
-            src={playbackUrl}
-            className="min-h-0 w-full flex-1 rounded-lg border bg-black object-contain"
-          />
+          <div className="relative flex min-h-0 w-full flex-1">
+            <video
+              key={playbackUrl}
+              controls
+              autoPlay
+              loop
+              src={playbackUrl}
+              className="min-h-0 w-full flex-1 rounded-lg border bg-black object-contain"
+            />
+            <button
+              type="button"
+              onClick={openVideoLightbox}
+              className="absolute right-2 top-2 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-1 text-[10px] text-white transition-colors hover:bg-black/75"
+              aria-label="Open video in the viewer"
+              title="Open in the full-screen viewer"
+            >
+              <Maximize2 className="h-3 w-3" />
+              Expand
+            </button>
+          </div>
           <div className="flex justify-end">
             <a
               href={playbackUrl}
@@ -1676,6 +1877,7 @@ export function VariantStudio() {
                   job={j}
                   onCancel={(id) => void cancelImageJob(id)}
                   onReuseSeed={reuseImageSeed}
+                  onExpand={(job) => void openJobLightbox(job)}
                 />
               ))}
             </div>
@@ -1725,33 +1927,48 @@ export function VariantStudio() {
                 const url = libState.fileUrls[item.id] ?? null;
                 const active = selectedItemId === item.id;
                 return (
-                  <button
+                  <div
                     key={item.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedItemId(active ? null : item.id);
-                      void getFileUrl(item.id);
-                    }}
-                    className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border transition-all ${
-                      active
-                        ? "border-violet-500 ring-2 ring-violet-500/40"
-                        : "hover:border-violet-500/50"
-                    }`}
-                    title={item.prompt || "(no prompt)"}
-                    aria-label={`Show ${item.prompt || "generated image"} on the canvas`}
+                    className="group relative h-16 w-16 shrink-0"
                   >
-                    {url ? (
-                      <img
-                        src={url}
-                        alt={item.prompt || "Generated image"}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <span className="flex h-full w-full items-center justify-center bg-muted/40">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                      </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedItemId(active ? null : item.id);
+                        void getFileUrl(item.id);
+                      }}
+                      className={`h-16 w-16 overflow-hidden rounded-md border transition-all ${
+                        active
+                          ? "border-violet-500 ring-2 ring-violet-500/40"
+                          : "hover:border-violet-500/50"
+                      }`}
+                      title={item.prompt || "(no prompt)"}
+                      aria-label={`Show ${item.prompt || "generated image"} on the canvas`}
+                    >
+                      {url ? (
+                        <img
+                          src={url}
+                          alt={item.prompt || "Generated image"}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <span className="flex h-full w-full items-center justify-center bg-muted/40">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                        </span>
+                      )}
+                    </button>
+                    {url && (
+                      <button
+                        type="button"
+                        onClick={() => openImageLightboxAt(item.id)}
+                        className="absolute right-0.5 top-0.5 rounded bg-black/60 p-0.5 text-white opacity-0 transition-opacity hover:bg-black/80 focus-visible:opacity-100 group-hover:opacity-100"
+                        aria-label={`Open ${item.prompt || "generated image"} in the viewer`}
+                        title="Open in the full-screen viewer"
+                      >
+                        <Maximize2 className="h-3 w-3" />
+                      </button>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </div>
@@ -1794,7 +2011,10 @@ export function VariantStudio() {
                     hardwareReason={m.hardware_reason}
                     requiresHfToken={m.requires_hf_token}
                     modelCardUrl={m.model_card_url}
-                    anyLoading={imageModelLoading || !!imageStatus?.is_loading}
+                    isLoadingThis={loadingImageModelId === m.model_id}
+                    anyLoadInFlight={
+                      imageModelLoading || !!imageStatus?.is_loading
+                    }
                     onLoad={() => void handleLoadImageModel(m)}
                     onUse={() => handleUseImageModel(m)}
                     onDownload={() => void downloadImageModel(m.model_id)}
@@ -1816,7 +2036,10 @@ export function VariantStudio() {
                     hardwareReason={m.hardware_reason}
                     requiresHfToken={m.requires_hf_token}
                     modelCardUrl={m.model_card_url}
-                    anyLoading={videoModelLoading || !!videoStatus?.is_loading}
+                    isLoadingThis={loadingVideoModelId === m.model_id}
+                    anyLoadInFlight={
+                      videoModelLoading || !!videoStatus?.is_loading
+                    }
                     onLoad={() => void handleLoadVideoModel(m)}
                     onUse={() => handleUseVideoModel(m)}
                     onDownload={() => void downloadVideoModel(m.model_id)}
@@ -1860,6 +2083,15 @@ export function VariantStudio() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ── Full-power media viewer ─────────────────────────────────────── */}
+      <MediaLightbox
+        open={lightbox !== null}
+        items={lightbox?.items ?? []}
+        startIndex={lightbox?.index ?? 0}
+        onClose={closeLightbox}
+        onReuseSeed={lightbox?.forVideo ? reuseVideoSeed : reuseImageSeed}
+      />
     </div>
   );
 }

@@ -53,6 +53,15 @@ _(none)_
 
 ## Active
 
+- [x] **Media-gen: download one model → all downloaded cards spin (2026-07-09)** —
+  Shared `anyLoading`/`busy` (`imageModelLoading || status.is_loading`) drove
+  the Load spinner on every downloaded model card. Fixed: track
+  `loadingImageModelId` / `loadingVideoModelId` in `use-media-gen`; cards spin
+  only when `loading*ModelId === m.model_id`, siblings only disable. Also
+  tightened `findModelDownload` to exact sanitized filename (no substring).
+  Files: `use-media-gen.ts`, `shared.tsx`, `ImageGenSection`/`VideoGenSection`,
+  variants Workspace/Studio/Focus/Gallery.
+
 - [x] **Media-gen backend: params exposure + media library + image job queue
   (2026-07-09)** — (1) `extra_params` passthrough on image/video generate
   (merged LAST, `prompt` protected, unknown kwargs fail loudly naming the
@@ -71,6 +80,36 @@ _(none)_
   `app/services/video_gen/{service,jobs}.py`,
   `app/api/{image_gen_routes,video_gen_routes,media_library_routes}.py`,
   `app/main.py`, `tests/smoke/test_media_gen_params_library.py`.
+
+- [x] **Private Media Vault backend (2026-07-09)** — Encrypted, password-locked
+  store for library media at `~/.matrx/media/vault/` (vault.json + opaque
+  `blobs/<id>.bin` / `<id>.meta.bin`). AES-256-GCM per-file (96-bit nonces,
+  AAD-bound to item id), VMK wrapped in a scrypt user slot AND a mandatory
+  RSA-4096-OAEP escrow slot (public key embedded in
+  `app/services/media_vault/escrow.py`; creation fails loudly if escrow wrap
+  fails). Move/restore are verify-before-delete (full decrypt round-trip +
+  SHA-256 before the source is removed). 15-min lazy auto-lock; locked access
+  = HTTP 423 everywhere; decrypted bytes served from memory only. Recovery
+  backdoor: `scripts/vault-recover.py` (escrow private key → decrypt-all
+  and/or rewrap a fresh user slot). `cryptography` now an explicit core dep
+  (was transitive-only). Files: `app/services/media_vault/{crypto,escrow,
+  service}.py`, `app/api/media_vault_routes.py`, `app/main.py`,
+  `scripts/vault-recover.py`, `tests/smoke/test_media_vault.py` (7 passing).
+
+- [ ] **Media Vault follow-ups** — (1) Desktop frontend for the vault is being
+  built in parallel against the /media-vault contract documented in
+  `app/api/media_vault_routes.py` — verify against the shipped UI. (2) Extend
+  the vault beyond media-library items (envelope already carries
+  content_type/file_name/sha256 for arbitrary files; needs an ingest route for
+  non-library files). (3) Consider surfacing auto-lock remaining time and a
+  configurable timeout. Added 2026-07-09.
+
+- [ ] **`uv sync` (no flags) strips installed extras from the venv** — running
+  plain `uv sync` removed torch/diffusers/whisper/matrx-scheduler that were
+  installed via extras; restored with `uv sync --all-extras`. Docs/CLAUDE.md
+  say `uv sync` — agents doing Hard-Rule-5 dep additions will silently
+  uninstall the media-gen stack. Should document `uv sync --all-extras` (or
+  `--inexact`) as the required form on dev machines. Discovered 2026-07-09.
 
 - [ ] **No mid-flight cancel for image OR video generation jobs** — DELETE
   /image-gen/jobs/{id} cancels queued jobs and removes finished records but

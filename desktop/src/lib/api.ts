@@ -4473,3 +4473,228 @@ export async function deleteMediaLibraryItem(
     { method: "DELETE" },
   );
 }
+
+// ── Media Vault API (password-protected private folder) ─────────────────────
+//
+// Same base URL + auth patterns as the media-library client above.
+// HTTP 423 ("Locked") is a first-class signal — the vault auto-locked or was
+// never unlocked — NOT an error condition. It is surfaced as VaultLockedError
+// so callers can flip UI state to "locked" instead of toasting.
+
+export interface MediaVaultStatus {
+  exists: boolean;
+  unlocked: boolean;
+  item_count: number | null;
+  auto_lock_seconds: number;
+}
+
+export interface MediaVaultOpResult {
+  item_id: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface MediaVaultBatchResponse {
+  results: MediaVaultOpResult[];
+}
+
+/** Thrown when the engine answers 423 — the vault is locked. Not an error toast. */
+export class VaultLockedError extends Error {
+  constructor() {
+    super("Vault is locked");
+    this.name = "VaultLockedError";
+  }
+}
+
+/** Thrown when unlock/change-password is rejected with 403 — wrong password. */
+export class VaultWrongPasswordError extends Error {
+  constructor(detail?: string) {
+    super(detail || "Wrong password");
+    this.name = "VaultWrongPasswordError";
+  }
+}
+
+function mediaVaultUrl(baseUrl: string, path: string): string {
+  return `${baseUrl}/media-vault${path}`;
+}
+
+async function mediaVaultFetch<T>(
+  url: string,
+  options?: RequestInit,
+): Promise<T> {
+  const auth = await engine.getEngineAuthHeaders();
+  const mergedHeaders = new Headers({
+    "Content-Type": "application/json",
+    ...auth,
+  });
+  if (options?.headers) {
+    const extra = new Headers(options.headers);
+    extra.forEach((value, key) => mergedHeaders.set(key, value));
+  }
+  const method = options?.method ?? "GET";
+  const resp = await fetch(url, { ...options, headers: mergedHeaders });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body) as { detail?: string };
+      if (parsed.detail) detail = parsed.detail;
+    } catch {
+      // use raw body
+    }
+    // 423 = vault locked — an expected state transition, logged at info only.
+    if (resp.status === 423) {
+      emitClientLog(
+        "info",
+        `[media-vault] ${method} → 423 (vault locked)`,
+        "engine",
+      );
+      throw new VaultLockedError();
+    }
+    if (resp.status === 403) {
+      // Wrong password on unlock/change-password. Expected user error — no
+      // error-level log spam, the UI shows it inline.
+      throw new VaultWrongPasswordError(detail);
+    }
+    try {
+      const u = new URL(url);
+      emitClientLog(
+        "error",
+        `[media-vault] ${method} ${u.pathname}${u.search} → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
+        "engine",
+      );
+    } catch {
+      emitClientLog(
+        "error",
+        `[media-vault] ${method} request failed → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
+        "engine",
+      );
+    }
+    throw new Error(detail || `HTTP ${resp.status}`);
+  }
+  return resp.json() as Promise<T>;
+}
+
+export async function getMediaVaultStatus(
+  baseUrl: string,
+): Promise<MediaVaultStatus> {
+  return mediaVaultFetch<MediaVaultStatus>(mediaVaultUrl(baseUrl, "/status"));
+}
+
+/** Create the vault (min 8 chars). Creates AND unlocks. */
+export async function createMediaVault(
+  baseUrl: string,
+  password: string,
+): Promise<void> {
+  await mediaVaultFetch<unknown>(mediaVaultUrl(baseUrl, "/create"), {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
+}
+
+/** Unlock the vault. Throws VaultWrongPasswordError on 403. */
+export async function unlockMediaVault(
+  baseUrl: string,
+  password: string,
+): Promise<void> {
+  await mediaVaultFetch<unknown>(mediaVaultUrl(baseUrl, "/unlock"), {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
+}
+
+export async function lockMediaVault(baseUrl: string): Promise<void> {
+  await mediaVaultFetch<unknown>(mediaVaultUrl(baseUrl, "/lock"), {
+    method: "POST",
+  });
+}
+
+/**
+ * List vault items (same shape as MediaLibraryItem). Throws VaultLockedError
+ * on 423. Accepts either a bare array or an `{items: [...]}` envelope so the
+ * client is robust to either serialization of the contract.
+ */
+export async function listMediaVaultItems(
+  baseUrl: string,
+): Promise<MediaLibraryItem[]> {
+  const data = await mediaVaultFetch<
+    MediaLibraryItem[] | { items: MediaLibraryItem[] }
+  >(mediaVaultUrl(baseUrl, "/items"));
+  return Array.isArray(data) ? data : data.items;
+}
+
+/**
+ * Fetch the decrypted bytes of a vault item with auth headers and return an
+ * object URL. Caller owns the URL and must revoke it. Throws VaultLockedError
+ * on 423.
+ */
+export async function fetchMediaVaultFile(
+  baseUrl: string,
+  itemId: string,
+): Promise<string> {
+  const auth = await engine.getEngineAuthHeaders();
+  const resp = await fetch(
+    mediaVaultUrl(baseUrl, `/file/${encodeURIComponent(itemId)}`),
+    { headers: new Headers({ ...auth }) },
+  );
+  if (!resp.ok) {
+    if (resp.status === 423) throw new VaultLockedError();
+    const detail = await resp.text().catch(() => `HTTP ${resp.status}`);
+    emitClientLog(
+      "error",
+      `[media-vault] GET /file/${itemId} → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
+      "engine",
+    );
+    throw new Error(detail || `HTTP ${resp.status}`);
+  }
+  const blob = await resp.blob();
+  return URL.createObjectURL(blob);
+}
+
+/** Move library items INTO the vault. Per-item results — never silent. */
+export async function moveToMediaVault(
+  baseUrl: string,
+  itemIds: string[],
+): Promise<MediaVaultBatchResponse> {
+  return mediaVaultFetch<MediaVaultBatchResponse>(
+    mediaVaultUrl(baseUrl, "/move"),
+    { method: "POST", body: JSON.stringify({ item_ids: itemIds }) },
+  );
+}
+
+/** Restore vault items back to the regular library. Per-item results. */
+export async function restoreFromMediaVault(
+  baseUrl: string,
+  itemIds: string[],
+): Promise<MediaVaultBatchResponse> {
+  return mediaVaultFetch<MediaVaultBatchResponse>(
+    mediaVaultUrl(baseUrl, "/restore"),
+    { method: "POST", body: JSON.stringify({ item_ids: itemIds }) },
+  );
+}
+
+/** Permanently delete a vault item. */
+export async function deleteMediaVaultItem(
+  baseUrl: string,
+  itemId: string,
+): Promise<void> {
+  await mediaVaultFetch<unknown>(
+    mediaVaultUrl(baseUrl, `/items/${encodeURIComponent(itemId)}`),
+    { method: "DELETE" },
+  );
+}
+
+/** Change the vault password. Throws VaultWrongPasswordError on 403. */
+export async function changeMediaVaultPassword(
+  baseUrl: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  await mediaVaultFetch<unknown>(mediaVaultUrl(baseUrl, "/change-password"), {
+    method: "POST",
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+}

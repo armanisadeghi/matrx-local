@@ -18,6 +18,7 @@ import {
   Copy,
   Dices,
   Download,
+  Maximize2,
   RotateCcw,
   X,
 } from "lucide-react";
@@ -28,6 +29,8 @@ import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import type { DownloadEntry } from "@/lib/downloads/types";
 import type { GeneratedImageResult } from "@/hooks/use-media-gen";
+import { MediaLightbox } from "@/components/media-gen/MediaLightbox";
+import type { LightboxItem } from "@/components/media-gen/MediaLightbox";
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
 
@@ -46,9 +49,12 @@ export function formatGb(gb: number): string {
  * "image_gen" / "video_gen" with the download `filename` set to the SANITIZED
  * model id (`/` → `--`, done by the engine's `sanitize_model_id`). The SSE
  * progress payload (ProgressEvent) does NOT carry a metadata field, so the
- * filename is the real join key. We match the sanitized id against the entry's
- * filename (and, as a courtesy, the display_name), case-insensitively and
- * tolerating both `--` and `_` sanitizing variants.
+ * filename is the real join key.
+ *
+ * Matching is EXACT on the sanitized filename (and the underscore variant),
+ * never substring — a loose `includes()` would let one active download light
+ * up every card that shared an org prefix (e.g. both Wan-AI models).
+ * Metadata.model_id is preferred when present (persisted on enqueue).
  */
 export function findModelDownload(
   downloads: DownloadEntry[],
@@ -57,17 +63,15 @@ export function findModelDownload(
 ): DownloadEntry | null {
   const idLower = modelId.toLowerCase();
   const sanitized = idLower.replace(/\//g, "--");
-  const sanitizedUnderscore = idLower.replace(/[/]/g, "_");
+  const sanitizedUnderscore = idLower.replace(/[/.]/g, "_");
   const candidates = downloads.filter((d) => {
     if (d.category !== category) return false;
+    const metaId = d.metadata?.model_id;
+    if (typeof metaId === "string" && metaId.toLowerCase() === idLower) {
+      return true;
+    }
     const fn = (d.filename ?? "").toLowerCase();
-    const dn = (d.display_name ?? "").toLowerCase();
-    return (
-      fn.includes(idLower) ||
-      fn.includes(sanitized) ||
-      fn.includes(sanitizedUnderscore) ||
-      dn.includes(idLower)
-    );
+    return fn === sanitized || fn === sanitizedUnderscore || fn === idLower;
   });
   if (candidates.length === 0) return null;
   // Prefer the most recently updated active/queued entry, else the newest.
@@ -83,7 +87,13 @@ export function findModelDownload(
 
 // ── Small presentational pieces ──────────────────────────────────────────────
 
-export function StarRating({ value, max = 5 }: { value: number; max?: number }) {
+export function StarRating({
+  value,
+  max = 5,
+}: {
+  value: number;
+  max?: number;
+}) {
   return (
     <span className="flex gap-0.5">
       {Array.from({ length: max }).map((_, i) => (
@@ -259,7 +269,8 @@ export function NumberSliderField({
           {defaultValue !== null && (
             <span className="text-muted-foreground font-normal">
               {" "}
-              (model default: {isDecimal ? defaultValue.toFixed(1) : defaultValue})
+              (model default:{" "}
+              {isDecimal ? defaultValue.toFixed(1) : defaultValue})
             </span>
           )}
         </Label>
@@ -296,10 +307,7 @@ export interface SizePreset {
 }
 
 /** Multiple-of-8 validation per the generation API. Null when valid. */
-export function dimensionError(
-  width: number,
-  height: number,
-): string | null {
+export function dimensionError(width: number, height: number): string | null {
   for (const [name, v] of [
     ["Width", width],
     ["Height", height],
@@ -462,11 +470,7 @@ export function computeAdvancedOverrides(
       error: `Invalid JSON: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
-  if (
-    parsed === null ||
-    typeof parsed !== "object" ||
-    Array.isArray(parsed)
-  ) {
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { ok: false, error: "Advanced settings must be a JSON object." };
   }
   const obj = parsed as Record<string, unknown>;
@@ -596,10 +600,15 @@ export function ParamsErrorBanner({
       </p>
       <p className="text-[11px] text-muted-foreground break-all">{error}</p>
       <p className="text-[11px] text-muted-foreground">
-        Showing basic defaults from the model catalog instead; advanced
-        settings are unavailable until this loads.
+        Showing basic defaults from the model catalog instead; advanced settings
+        are unavailable until this loads.
       </p>
-      <Button size="sm" variant="outline" className="h-6 text-xs" onClick={onRetry}>
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-6 text-xs"
+        onClick={onRetry}
+      >
         Retry
       </Button>
     </div>
@@ -702,24 +711,79 @@ export function SeedChip({
  * The one result-display pattern for generated images (generate view and
  * workflow view).  Prominently shows the seed actually used (copy + reuse for
  * reproducibility) and, subtly, the on-disk path where the engine saved it.
+ *
+ * The image itself is always clickable: by default it opens the MediaLightbox
+ * with this single result; callers with a richer viewing set (e.g. the Studio
+ * variant's filmstrip) pass `onOpenLightbox` to take over the click.
  */
 export function GeneratedImageView({
   result,
   onClear,
   onReuseSeed,
+  prompt,
+  meta,
+  onOpenLightbox,
 }: {
   result: GeneratedImageResult;
   onClear?: () => void;
   /** Puts the result's seed back into the form's seed input. */
   onReuseSeed?: (seed: number) => void;
+  /** The prompt used for this result — shown in the lightbox info panel. */
+  prompt?: string;
+  /** Extra generation params — shown in the lightbox info panel. */
+  meta?: Record<string, unknown>;
+  /** Overrides the click-to-expand behavior (e.g. multi-item lightbox). */
+  onOpenLightbox?: () => void;
 }) {
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const lightboxItems = useMemo<LightboxItem[]>(
+    () => [
+      {
+        id: result.itemId ?? "generated-result",
+        kind: "image",
+        url: `data:image/png;base64,${result.b64}`,
+        prompt,
+        seed: result.seed,
+        meta: {
+          width: result.width,
+          height: result.height,
+          elapsed_seconds: result.elapsed,
+          ...(result.filePath ? { file_path: result.filePath } : {}),
+          ...(meta ?? {}),
+        },
+      },
+    ],
+    [result, prompt, meta],
+  );
   return (
     <div className="space-y-2">
-      <img
-        src={`data:image/png;base64,${result.b64}`}
-        alt="Generated image"
-        className="w-full rounded-lg border object-contain"
-      />
+      <button
+        type="button"
+        onClick={() =>
+          onOpenLightbox ? onOpenLightbox() : setLightboxOpen(true)
+        }
+        className="group relative block w-full cursor-zoom-in"
+        aria-label="Expand image"
+        title="Click to expand"
+      >
+        <img
+          src={`data:image/png;base64,${result.b64}`}
+          alt="Generated image"
+          className="w-full rounded-lg border object-contain"
+        />
+        <span className="pointer-events-none absolute right-2 top-2 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-1 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+          <Maximize2 className="h-3 w-3" />
+          Expand
+        </span>
+      </button>
+      {!onOpenLightbox && (
+        <MediaLightbox
+          open={lightboxOpen}
+          items={lightboxItems}
+          onClose={() => setLightboxOpen(false)}
+          onReuseSeed={onReuseSeed}
+        />
+      )}
       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground flex-wrap">
         <span className="flex items-center gap-2 flex-wrap">
           <span className="tabular-nums">

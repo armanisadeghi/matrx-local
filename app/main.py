@@ -35,6 +35,7 @@ from app.api.hardware_routes import router as hardware_router, run_initial_detec
 from app.api.image_gen_routes import router as image_gen_router
 from app.api.video_gen_routes import router as video_gen_router
 from app.api.media_library_routes import router as media_library_router
+from app.api.media_vault_routes import router as media_vault_router
 from app.api.tts_routes import router as tts_router
 from app.api.hf_token_routes import router as hf_token_router
 from app.api.scrape_routes import router as scrape_router
@@ -1145,6 +1146,7 @@ app.include_router(hardware_router)
 app.include_router(image_gen_router)
 app.include_router(video_gen_router)
 app.include_router(media_library_router)
+app.include_router(media_vault_router)
 app.include_router(tts_router)
 app.include_router(hf_token_router)
 app.include_router(scrape_router)

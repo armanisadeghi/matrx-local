@@ -166,7 +166,8 @@ function WorkspaceModelCard({
   model,
   category,
   isLoaded,
-  anyLoading,
+  isLoadingThis,
+  anyLoadInFlight,
   onLoad,
   onDownload,
   onGenerate,
@@ -174,7 +175,8 @@ function WorkspaceModelCard({
   model: ImageGenModelInfo | VideoGenModelInfo;
   category: "image_gen" | "video_gen";
   isLoaded: boolean;
-  anyLoading: boolean;
+  isLoadingThis: boolean;
+  anyLoadInFlight: boolean;
   onLoad: () => void;
   onDownload: () => void;
   onGenerate: () => void;
@@ -290,10 +292,10 @@ function WorkspaceModelCard({
           size="sm"
           className="w-full"
           variant={isLoaded ? "default" : "outline"}
-          disabled={anyLoading || hardwareBlocked}
+          disabled={anyLoadInFlight || hardwareBlocked}
           onClick={() => (isLoaded ? onGenerate() : onLoad())}
         >
-          {anyLoading ? (
+          {isLoadingThis ? (
             <>
               <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
               Loading…
@@ -325,6 +327,7 @@ function ModelsView({
     imageStatusLoading,
     imageStatusError,
     imageModelLoading,
+    loadingImageModelId,
     imageGenError,
     imageForm,
     videoStatus,
@@ -332,6 +335,7 @@ function ModelsView({
     videoStatusLoading,
     videoStatusError,
     videoModelLoading,
+    loadingVideoModelId,
     videoGenError,
     videoForm,
   } = state;
@@ -529,7 +533,10 @@ function ModelsView({
                   model={m}
                   category="image_gen"
                   isLoaded={imageStatus?.loaded_model_id === m.model_id}
-                  anyLoading={imageModelLoading || !!imageStatus?.is_loading}
+                  isLoadingThis={loadingImageModelId === m.model_id}
+                  anyLoadInFlight={
+                    imageModelLoading || !!imageStatus?.is_loading
+                  }
                   onLoad={() => void handleImageLoad(m)}
                   onDownload={() => void downloadImageModel(m.model_id)}
                   onGenerate={() => handleImageOpenGenerate(m)}
@@ -627,7 +634,10 @@ function ModelsView({
                   model={m}
                   category="video_gen"
                   isLoaded={videoStatus?.loaded_model_id === m.model_id}
-                  anyLoading={videoModelLoading || !!videoStatus?.is_loading}
+                  isLoadingThis={loadingVideoModelId === m.model_id}
+                  anyLoadInFlight={
+                    videoModelLoading || !!videoStatus?.is_loading
+                  }
                   onLoad={() => void handleVideoLoad(m)}
                   onDownload={() => void downloadVideoModel(m.model_id)}
                   onGenerate={() => handleVideoOpenGenerate(m)}

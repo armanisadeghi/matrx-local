@@ -44,7 +44,7 @@ Do **not** put GLiNER next to Gemma/Qwen in the LLM picker. Put it next to TTS /
 | `~/.matrx/` model storage | TTS / wake-word / image-gen | `~/.matrx/ner-models/` |
 | Service registry / lifecycle | `app/launcher.py` | Register `"ner"` |
 | Hardware probe | `/hardware` | Status + “can load XXL?” |
-| Tool dispatcher + cloud sync | `app/tools/dispatcher.py`, `local_tool_manifest.py` | `local_extract_entities` (+ friends) |
+| Tool dispatcher + cloud sync | `app/tools/dispatcher.py`, `app/tools/catalog.py` | `local_extract_entities` (+ friends) |
 | Optional extras pattern | `pyproject.toml` `[transcription]`, `[image-gen]` | New `[ner]` extra |
 | Desktop download UX patterns | TTS / LocalModels | Model picker + download for small→large |
 | ONNX runtime (already core) | wake-word, TTS | Optional fast path for classic GLiNER later |

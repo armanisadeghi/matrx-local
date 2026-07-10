@@ -393,8 +393,9 @@ async def trigger_chat_sync() -> dict[str, Any]:
 # that AppContext / StreamEmitter are properly set for every request.
 # See main.py for how ai_app is constructed and mounted.
 # ---------------------------------------------------------------------------
-# The actual route handlers live in matrx_ai.app.routers — we import them
-# directly here so we don't duplicate any logic.
+# matrx-ai 0.3.0 dropped its packaged HTTP routers; the handlers below are
+# host-owned. /chat/ai itself is a 503 stub until the /ai-surface phase
+# builds the host-owned orchestration routes (see build_ai_sub_app).
 
 @router.get("/ai-status")
 async def ai_provider_status() -> dict[str, Any]:

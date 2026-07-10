@@ -1,0 +1,55 @@
+# FEATURE — Local SQLite Replica (`~/.matrx/matrx.db`)
+
+**Doctrine first:** read [`docs/SYNC_CONTRACT.md`](../../../docs/SYNC_CONTRACT.md)
+before changing anything here. The one-line version: **the cloud is the durable
+source of truth; SQLite is a FIRST-ACCESS REPLICA** — it makes reads instant
+and offline-proof, it is never a competing server and never the system of
+record for anything the cloud also stores. Docstrings claiming "SQLite is the
+single source of truth" described read-path routing, not ownership — the
+parity test `test_no_sqlite_source_of_truth_claims_in_sync_modules` bans the
+phrase in the sync directories.
+
+## What lives here
+
+- `database.py` — connection/bootstrap for `~/.matrx/matrx.db`.
+- `schema.py` — versioned migrations `_V1.._V7+` (core catalog tables,
+  auth_tokens/prompts/notes, conversation persistence, notes-sync metadata,
+  local version history). Additive, applied at startup.
+- `repositories.py` — typed repo layer; ALL reads elsewhere in the app go
+  through these (the replica IS the read path — never route local reads
+  through the cloud "for consistency").
+- `sync_engine.py` — the pull-only replica engine: AIDream `/api/ai-models` +
+  `/api/agents` → `ai_models`/`prompt_builtins`/`agents`; the local tool
+  catalog (`app.tools.catalog.get_catalog`, 108 entries) → `tools`. Runs at
+  startup + every 10 min (`DEFAULT_SYNC_INTERVAL = 600`). It is the ONLY
+  component allowed to write cloud catalog data into SQLite.
+  NOTE (2026-07): `/api/ai-models` was reshaped server-side (aidream
+  c7cfe4349) — `endpoints`/`provider`/`pricing` now live under
+  `metadata.legacy`, `api_class` is the routing field. `sync_models` maps
+  both shapes and caches `api_class`/`pricing`/`controls` in `raw_json`
+  because the `ai_models` table now ALSO feeds matrx-ai's model routing via
+  `app/services/ai/model_catalog.py` (SqliteModelCatalog) — change the
+  cached fields and AI model resolution breaks, not just the models list.
+- `secret_store.py` — keychain-backed Fernet encryption for `api_keys` (in the
+  SQLite `app_settings` blob) and `auth_tokens`. **These never sync, never
+  leave the machine.** Do not merge them into the synced settings blob.
+
+## Rules
+
+- **Cloud wins unconditionally for catalog data** — `delete_missing` prunes
+  rows absent from the feed (it's a cache, not user work). Empty-feed guard
+  keeps the cache instead of wiping it.
+- **Offline skips are LOUD and recorded** in `sync_meta.status`
+  (`skipped`/`offline`); stale cache is served, never wiped. Agents sync needs
+  a user JWT (from `auth_tokens`); no token ⇒ loud skip, cache kept.
+- **Do NOT delete `sync_queue` or `SyncMetaRepo`'s queue methods** — dormant,
+  but it is the designated outbox for future offline-write push pipelines
+  (conversations first; contract gap #1).
+- Conversations/messages are local-only today (gap #1) — hard-delete is fine
+  there because no cloud counterpart exists yet.
+- Known wart: `sync_all()` reports `"success"` for skipped entities (gap #6,
+  pinned by characterization) — truth lives in `sync_meta.status`.
+
+**Enforcement:** `tests/characterization/test_local_db_sync_characterization.py`
+(11 tests) + `tests/parity/test_sync_contract.py`. Red test = contract
+conversation, not a test edit.

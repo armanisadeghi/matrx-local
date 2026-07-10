@@ -256,11 +256,16 @@ Related trackers: `.matrx/AGENT_TASKS.md` (active worklist), `.arman/ARMAN_TASKS
 
 ### MXL-D-025 — matrx-ai circular import breaks GenericOpenAIChat
 - **Area:** engine / upstream package
-- **Symptom:** importing `GenericOpenAIChat` (matrx-ai v0.1.26) hits a circular import;
-  local LLM routing through matrx-ai disabled.
+- **Symptom:** importing `GenericOpenAIChat` cold hit a circular import; local LLM
+  routing through matrx-ai was disabled.
 - **Evidence:** root `AGENT_TASKS.md` (blocked section); `docs/matrx-ai-generic-openai-port.md`.
-- **Status:** blocked-external (fix must land in matrx-ai; may be mooted by the
-  aidream-workspace-packages migration in progress).
+- **Status:** fixed for matrx-local (2026-07-10, matrx-ai 0.3.0 migration, Phase 3):
+  engine imports `matrx_ai.orchestrator` before any provider import (grep
+  `import-order fix` in `app/services/ai/`), verified by
+  `tests/smoke/test_ai_client_host.py::test_runtime_model_registration`. The
+  UNDERLYING cycle still exists upstream in matrx-ai 0.3.0 for a cold
+  `matrx_ai.providers` import — tracked in `.matrx/AGENT_TASKS.md` (lazy import in
+  `orchestrator/executor.py`, then delete the three workaround imports here).
 - **Owner hint:** ai / packages
 
 ## Cross-repo

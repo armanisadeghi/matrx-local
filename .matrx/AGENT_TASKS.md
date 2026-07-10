@@ -53,6 +53,21 @@ _(none)_
 
 ## Active
 
+- [ ] **Circular import: app.config ↔ app.common (discovered 2026-07-10)** —
+  When `app.config` is the FIRST app module a process imports, its own import
+  fails: `app/config.py:5` imports `app.common.platform_ctx`, which triggers
+  `app/common/__init__.py` → `fancy_prints` → `from app.config import
+  LOG_VCPRINT` while `app.config` is partially initialized → ImportError.
+  Repro: fresh interpreter, `from app.services.documents.file_manager import
+  content_hash` (file_manager's first app import is app.config). The app
+  currently works only because normal entry points happen to import
+  `app.common` first. Fix: make `app/common/__init__.py` lazy or move
+  `LOG_VCPRINT` out of app.config (fancy_prints could read the env itself).
+  Characterization tests work around it with an explicit `import app.common`
+  first (tests/characterization/test_documents_sync_characterization.py and
+  test_local_db_sync_characterization.py) — remove those workaround imports
+  when fixing.
+
 - [x] **Media-gen: Generate while queue busy corrupted everything → generation
   gate + queue-first UX + queue-row lightbox + prompt caps (2026-07-09)** —
   Root cause: `POST /image-gen/generate` called `ImageGenService.generate`

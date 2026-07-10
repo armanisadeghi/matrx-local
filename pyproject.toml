@@ -56,9 +56,15 @@ dependencies = [
     # to ``matrx-<pkg>/v<x.y.z>`` (see aidream/.github/workflows/
     # publish-package.yml). There is intentionally no [tool.uv.sources]
     # path override — see the note further down near [tool.uv].
-    "matrx-utils>=1.0.19",
-    "matrx-orm>=3.0.32",
-    "matrx-ai>=0.1.26",
+    # ⚠️  PUBLISH BEFORE RELEASE / CI: matrx-ai 0.3.0 (and its NEW deps
+    # matrx-connect>=0.1.1, matrx-graph>=0.1.0, matrx-runtime>=0.0.1, plus
+    # matrx-utils>=1.0.20 / matrx-orm>=3.1.0) are NOT on PyPI yet — they only
+    # exist on aidream main. Until an operator tag-pushes them, `uv lock` /
+    # `uv sync` / CI clean installs CANNOT resolve these pins; the dev venv
+    # runs on wheels built from aidream (`uv build` + `uv pip install`).
+    "matrx-utils>=1.0.20",
+    "matrx-orm>=3.1.0",
+    "matrx-ai>=0.3.0",
     # matrx-scheduler — see the optional [scheduler] extra below. Kept OUT of
     # core on purpose: the Phase 8 host that uses it is gated off by default
     # (MATRX_LOCAL_SCHEDULER_ENABLED) and imports it lazily, so the engine runs
@@ -154,6 +160,11 @@ dev = [
 
 [tool.uv]
 python-preference = "only-managed"
+# xai-sdk (pulled via matrx-ai) hard-rejects protobuf 7.x at import time
+# (`ValueError: Unsupported protobuf version`) but does not declare the cap
+# in its metadata, and google-cloud-aiplatform happily resolves protobuf 7.
+# Without this constraint the AI engine dies at startup on a fresh resolve.
+constraint-dependencies = ["protobuf<7"]
 # tflite-runtime has no Python 3.13/3.14 wheels.  openWakeWord uses it only on
 # Linux as a second inference backend — we drive it via onnxruntime exclusively.
 # The impossible marker ensures uv skips it entirely on all platforms.

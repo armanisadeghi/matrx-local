@@ -1,36 +1,50 @@
 """matrx-ai engine lifecycle management.
 
-Handles one-time initialization of the matrx_ai library at startup, then
-registers all local OS tools into matrx-ai's ToolRegistry so AI models can
-invoke them.
+Handles one-time configuration of the matrx_ai library (>= 0.3.0 client-host
+seams) at startup, then registers all local OS tools into matrx-ai's
+ToolRegistry so AI models can invoke them.
 
 Initialization sequence
 -----------------------
-  1. ``initialize_matrx_ai()`` — sync phase: sets up client mode with a
-     fully-configured ClientModeConfig (server_url, supabase_url, anon_key,
-     get_jwt callable, and a SQLite-backed ConversationHandler).
+  1. ``initialize_matrx_ai()`` — sync phase: calls ``matrx_ai.configure()``
+     with the four client-host seams:
+       - ``api_key_resolver``      → SQLite-backed key resolver (key_manager)
+       - ``conversation_store``    → SQLiteConversationStore (conversation_handler)
+       - ``model_catalog``         → SqliteModelCatalog (model_catalog)
+       - ``get_jwt`` + ``server_url`` + ``source_app`` → user identity for
+         server-backed features (tool registry fetch, authenticated reads)
+     Seam validation is all-errors-at-once (ClientHostConfigError) and any
+     wiring failure CRASHES startup — a client host without its seams would
+     die with DBNotConfiguredError mid-request otherwise.
   2. ``load_tools_and_register()`` — async phase:
-       a. Loads the matrx-ai tool registry from the AIDream server API.
-       b. Registers all local OS tools via ``LocalToolBridge``.
+       a. Loads the matrx-ai tool registry (server DB fetch fails loudly in a
+          client host; that's expected and mitigated by b).
+       b. Backfills local tool definitions from app/tools/catalog.py and
+          registers all local OS tool executors via ``LocalToolBridge``.
 
-matrx-local ALWAYS runs in client mode
----------------------------------------
+matrx-local ALWAYS runs as a matrx-ai CLIENT HOST
+-------------------------------------------------
 Data flow follows docs/SYNC_CONTRACT.md: the cloud is the durable source of
 truth and local SQLite (~/.matrx/matrx.db) is a first-access replica /
 working store, never a competing server.
 
-  - No direct PostgreSQL / asyncpg connection is ever opened.
-  - Public data (models, tools, agent catalog) is fetched from the AIDream
-    REST API by the matrx-ai library itself; the local_db sync engine
-    separately caches the same catalog into SQLite for offline reads.
-  - Conversation persistence is handled by LocalConversationHandler, which
+  - No direct PostgreSQL / asyncpg connection is ever opened, and no matrx-ai
+    ORM base/model is ever configured — any DBNotConfiguredError after
+    configure() succeeds is a matrx-ai packaging bug (report it upstream,
+    never work around it here).
+  - Public data (models, tools, agent catalog) is cached into SQLite by the
+    local_db sync engine from the AIDream REST API; matrx-ai reads models
+    back through the injected SqliteModelCatalog.
+  - Conversation persistence is handled by SQLiteConversationStore, which
     writes to local SQLite. NOTE: these conversations/messages are currently
     LOCAL-ONLY — no reconnect push pipeline exists yet (contract gap #1 in
     docs/SYNC_CONTRACT.md).
-  - The user JWT is read from the auth_tokens SQLite table at call time so
-    it automatically picks up token refreshes without re-initializing.
+  - The user JWT is read from an in-memory cache (warmed from the auth_tokens
+    SQLite table, updated on every token push) at call time so it
+    automatically picks up token refreshes without re-initializing.
   - AI provider calls (OpenAI, Anthropic, etc.) work in full, using
-    locally-stored provider API keys (local-only, never synced).
+    locally-stored provider API keys (local-only, never synced) via the
+    injected key resolver.
 """
 
 from __future__ import annotations
@@ -41,6 +55,20 @@ import re
 from dotenv import load_dotenv
 
 from app.common.system_logger import get_logger
+
+# ── protobuf shadowing guard ──────────────────────────────────────────────
+# The image-gen installer PREPENDS ~/.matrx/image-gen-packages to sys.path
+# (main.py Phase 0a / frozen runtime_hook). That directory ships its own
+# protobuf (7.x today), which would shadow the venv's protobuf 6 — and
+# xai-sdk (pulled via matrx-ai) hard-rejects protobuf 7 at import time,
+# killing AI engine init with "Unsupported protobuf version". Importing
+# google.protobuf HERE (this module is imported by app/main.py before the
+# lifespan runs) pins the venv's version in sys.modules so the later path
+# injection can't swap it. See also [tool.uv] constraint-dependencies in
+# pyproject.toml. NOTE: the frozen build's runtime_hook.py injects before
+# any app import — the packaged binary bundles its own protobuf via
+# PyInstaller, so this guard is for the dev/uv path.
+import google.protobuf  # noqa: F401  (shadowing guard, see above)
 
 load_dotenv()
 
@@ -80,7 +108,7 @@ def clear_jwt_cache() -> None:
 
 
 def _get_jwt() -> str | None:
-    """Synchronous getter passed to ClientModeConfig.get_jwt."""
+    """Synchronous getter passed to matrx_ai.configure(get_jwt=...)."""
     return _jwt_cache
 
 
@@ -103,13 +131,17 @@ async def warm_jwt_cache() -> None:
 
 
 def initialize_matrx_ai() -> None:
-    """Initialize the matrx_ai library once at startup (synchronous phase).
+    """Configure the matrx_ai library once at startup (synchronous phase).
 
-    Builds a ClientModeConfig with:
-      - server_url from AIDREAM_SERVER_URL_LIVE env var
-      - supabase_url / supabase_anon_key from SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY
-      - get_jwt: callable that reads the stored JWT from SQLite at request time
-      - conversation_handler: LocalConversationHandler (SQLite-backed)
+    Wires the matrx-ai 0.3.0 client-host seams (see module docstring). A
+    seam-wiring failure (ClientHostConfigError) PROPAGATES — the engine must
+    not boot with a half-configured AI stack, because the failure mode is a
+    DBNotConfiguredError in the middle of a user's request instead of a
+    clear crash at startup.
+
+    Missing env vars (AIDREAM_SERVER_URL_LIVE) degrade only the
+    server-backed features (tool registry fetch, authenticated reads) and
+    are logged as ERRORs; the local seams are always wired.
 
     Call from the FastAPI lifespan handler BEFORE the async phase.
     """
@@ -118,12 +150,19 @@ def initialize_matrx_ai() -> None:
         logger.debug("[engine] initialize_matrx_ai() called again — already initialized, skipping")
         return
 
+    # KNOWN UPSTREAM DEFECT (matrx-ai 0.3.0): importing matrx_ai.providers.*
+    # cold still triggers the providers ↔ orchestrator circular import
+    # (providers/__init__ → unified_client → orchestrator/__init__ →
+    # executor → `from matrx_ai.providers import UnifiedAIClient` on the
+    # partially-initialized package). Importing the orchestrator FIRST breaks
+    # the cycle deterministically for the whole process. Tracked in
+    # .matrx/AGENT_TASKS.md — remove when matrx-ai makes the executor import
+    # lazy.
+    import matrx_ai.orchestrator  # noqa: F401  (import-order fix, see above)
+
     import matrx_ai
-    from matrx_ai.client_mode.config import ClientModeConfig
 
     server_url = os.getenv("AIDREAM_SERVER_URL_LIVE", "").strip()
-    supabase_url = os.getenv("SUPABASE_URL", "").strip()
-    supabase_anon_key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
 
     from importlib.metadata import version as _pkg_version
 
@@ -134,75 +173,64 @@ def initialize_matrx_ai() -> None:
             return "NOT INSTALLED"
 
     logger.info("=" * 60)
-    logger.info("[engine] matrx-ai STARTUP — client mode")
+    logger.info("[engine] matrx-ai STARTUP — client-host mode")
     logger.info("[engine]   matrx-ai   = %s", _safe_version("matrx-ai"))
-    logger.info("[engine]   matrx-orm  = %s", _safe_version("matrx-orm"))
     logger.info("[engine]   matrx-utils= %s", _safe_version("matrx-utils"))
     logger.info("[engine]   AIDREAM_SERVER_URL_LIVE  = %s", server_url or "(NOT SET ✗)")
-    logger.info("[engine]   SUPABASE_URL             = %s", supabase_url or "(NOT SET ✗)")
-    logger.info("[engine]   SUPABASE_PUBLISHABLE_KEY = %s", "SET ✓" if supabase_anon_key else "(NOT SET ✗)")
     logger.info("=" * 60)
 
-    missing = []
     if not server_url:
-        missing.append("AIDREAM_SERVER_URL_LIVE")
-    if not supabase_url:
-        missing.append("SUPABASE_URL")
-    if not supabase_anon_key:
-        missing.append("SUPABASE_PUBLISHABLE_KEY")
-    if missing:
         logger.error(
-            "[engine] Missing env vars: %s — AI models/agents may not load. "
-            "Add them to .env",
-            ", ".join(missing),
+            "[engine] AIDREAM_SERVER_URL_LIVE is not set — server-backed matrx-ai "
+            "features (tool registry fetch, authenticated reads) are DISABLED. "
+            "Add it to .env. Local seams (keys, conversations, model catalog) "
+            "are still active."
         )
 
-    from app.services.ai.conversation_handler import get_conversation_handler
+    from app.services.ai.conversation_handler import get_conversation_store
+    from app.services.ai.key_manager import get_key_resolver
+    from app.services.ai.model_catalog import get_model_catalog
 
-    try:
-        config = ClientModeConfig(
-            server_url=server_url,
-            supabase_url=supabase_url,
-            supabase_anon_key=supabase_anon_key,
-            get_jwt=_get_jwt,
-            conversation_handler=get_conversation_handler(),
-            source_app="matrx_local",
-        )
-        matrx_ai.initialize(client_mode=True, client_config=config)
-        _client_mode_active = True
-        logger.info(
-            "[engine] matrx-ai: initialized in client mode ✓  "
-            "(conversations → SQLite, data → AIDream API)"
-        )
-    except Exception:
-        logger.error(
-            "[engine] matrx-ai: client mode initialization FAILED",
-            exc_info=True,
-        )
-        # Mark initialized anyway so tool registration proceeds on the async phase.
-        # AI provider calls still work; DB-backed features unavailable.
-        matrx_ai._initialized = True
-
+    # Seam wiring errors must CRASH here (ClientHostConfigError lists every
+    # problem at once) — no try/except, no legacy fallback.
+    matrx_ai.configure(
+        api_key_resolver=get_key_resolver(),
+        conversation_store=get_conversation_store(),
+        model_catalog=get_model_catalog(),
+        # get_jwt requires server_url (validated upstream); omit both when the
+        # env var is missing so the degraded mode is explicit, not a crash.
+        get_jwt=_get_jwt if server_url else None,
+        server_url=server_url or None,
+        source_app="matrx_local",
+    )
+    _client_mode_active = True
     _ai_initialized = True
+    logger.info(
+        "[engine] matrx-ai: configured as client host ✓  "
+        "(keys → SQLite resolver, conversations → SQLite store, "
+        "models → SQLite catalog%s)",
+        ", identity → JWT cache" if server_url else "; NO server identity",
+    )
 
 
 def is_client_mode() -> bool:
-    """Return True if matrx-ai was successfully initialized in client (PostgREST + RLS) mode."""
+    """Return True if matrx-ai was successfully configured with the client-host seams."""
     return _client_mode_active
 
 
 def has_db() -> bool:
     """Always returns False for matrx-local.
 
-    matrx-local never opens an asyncpg connection to the database. All
-    data access goes through the Supabase PostgREST API (client mode).
-    Code that guards on has_db() will skip gracefully without error.
+    matrx-local never opens an asyncpg connection to the database and never
+    configures matrx-ai's ORM seams. All model/tool data comes from the
+    local SQLite cache (synced from the AIDream REST API). Code that guards
+    on has_db() will skip gracefully without error.
     """
     return False
 
 
 async def load_tools_and_register() -> int:
-    """Async startup phase: load tool registry from DB, register local tools, start executor.
+    """Async startup phase: load tool registry, register local tools, start executor.
 
     Call this from the FastAPI lifespan handler AFTER ``initialize_matrx_ai()``.
     Safe to call multiple times (idempotent after first call).
@@ -215,9 +243,7 @@ async def load_tools_and_register() -> int:
     if _tools_loaded:
         return _registered_tool_count
 
-    import matrx_ai
-
-    if not matrx_ai._initialized:
+    if not _ai_initialized:
         logger.warning(
             "[engine] matrx-ai not initialized — skipping tool registry load. "
             "Call initialize_matrx_ai() first."
@@ -232,11 +258,12 @@ async def load_tools_and_register() -> int:
     local_tools_ok = False
 
     # --- Phase A: load DB tools into matrx-ai registry ---
-    # matrx_ai vcprints a red error + traceback to stdout when the server
-    # registry fetch fails (the deployed server 404s this app's endpoint for
-    # matrx-ai 0.1.x). That is an expected, mitigated condition — Phase A½
-    # backfills the definitions — so capture the stdout noise and keep it at
-    # DEBUG instead of tripping issue reports with 3 ERR lines on every boot.
+    # In a client host there is no ORM ToolDefBase, so matrx-ai's registry
+    # fetch vcprints a red error + traceback to stdout and returns 0 rows.
+    # That is an expected, mitigated condition — Phase A½ backfills the
+    # definitions from the local catalog — so capture the stdout noise and
+    # keep it at DEBUG instead of tripping issue reports with ERR lines on
+    # every boot.
     import contextlib
     import io
 
@@ -273,18 +300,17 @@ async def load_tools_and_register() -> int:
 
     # --- Phase A½: backfill local tool definitions from the catalog ---
     # The server's tool registry endpoint may be unavailable or may not carry
-    # this app's tools (the deployed server 404s /api/ai-tools/app/matrx_local
-    # for matrx-ai 0.1.x clients). The desktop owns its OS tools end-to-end —
-    # the catalog (app/tools/catalog.py) has the schemas and Phase B registers
-    # the executors — so synthesize definitions for any catalog tool the
-    # server didn't provide. Server-provided definitions win (descriptions are
+    # this app's tools. The desktop owns its OS tools end-to-end — the catalog
+    # (app/tools/catalog.py) has the schemas and Phase B registers the
+    # executors — so synthesize definitions for any catalog tool the server
+    # didn't provide. Server-provided definitions win (descriptions are
     # DB-canonical); we only fill gaps.
     try:
-        from matrx_ai.tools.registry import ToolRegistryV2
+        from matrx_ai.tools.registry import ToolRegistry
 
         from app.services.ai.local_tool_bridge import build_local_tool_definitions
 
-        registry = ToolRegistryV2.get_instance()
+        registry = ToolRegistry.get_instance()
         missing = [
             d for d in build_local_tool_definitions() if registry.get(d.name) is None
         ]
@@ -317,15 +343,6 @@ async def load_tools_and_register() -> int:
             "AI won't have access to OS tools (will retry on next call)",
             exc_info=True,
         )
-
-    # --- Phase C: probe for local LLM (GenericOpenAIChat) support ---
-    # This check is non-blocking — it only logs status.  Actual local LLM
-    # registration happens later when the frontend calls POST /chat/local-llm/connect.
-    try:
-        from app.services.ai.local_llm_registry import _check_matrx_ai_support
-        _check_matrx_ai_support()
-    except Exception:
-        logger.warning("[engine] Could not probe local LLM registry", exc_info=True)
 
     # Only mark loaded when the critical local-tool registration succeeded, so
     # a transient failure doesn't permanently wedge the registry as "loaded".

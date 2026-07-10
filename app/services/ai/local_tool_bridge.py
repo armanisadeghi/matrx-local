@@ -2,8 +2,8 @@
 
 Architecture
 ------------
-matrx-ai's ToolExecutor dispatches tool calls for ``source_app="matrx_local"`` to
-the registered ``ExternalToolAdapter``.  This module provides that adapter.
+matrx-ai's ToolExecutor dispatches tool calls for ``source_kind="matrx_local"``
+to the registered ``ExternalToolAdapter``.  This module provides that adapter.
 
 Each local tool handler has the signature::
 
@@ -20,7 +20,7 @@ The adapter auto-discovers ALL local tools from the canonical catalog
 (``app.tools.catalog.get_catalog()`` — built from the dispatcher, one entry
 per dispatched tool) and registers them as individual per-tool handlers under
 their canonical cloud names (highest priority in the resolution chain). Any
-tool from ``source_app="matrx_local"`` not covered by the catalog falls
+tool from ``source_kind="matrx_local"`` not covered by the catalog falls
 through to ``dispatch()``, which surfaces a clear "not implemented" error to
 the model.
 
@@ -71,7 +71,9 @@ class LocalToolBridge(ExternalToolAdapter):
     manager signals that a conversation has ended or timed out.
     """
 
-    source_app = "matrx_local"
+    # matrx-ai >= 0.3.0: ExternalToolAdapter keys the app-level fallback on
+    # source_kind (was source_app pre-0.3.0).
+    source_kind = "matrx_local"
 
     def __init__(self) -> None:
         self._sessions: dict[str, Any] = {}  # conversation_id → ToolSession
@@ -153,12 +155,12 @@ class LocalToolBridge(ExternalToolAdapter):
         # Silence the vcprint from register_app_handler too.
         _orig_register_app = reg.__class__.register_app_handler
 
-        def _silent_register_app(self_reg: Any, source_app: str, handler: Any) -> None:
-            self_reg._app_handlers[source_app] = handler
+        def _silent_register_app(self_reg: Any, source_kind: str, handler: Any) -> None:
+            self_reg._app_handlers[source_kind] = handler
 
         reg.__class__.register_app_handler = _silent_register_app  # type: ignore[method-assign]
         try:
-            reg.register_app_handler(self.source_app, self._app_dispatcher)
+            reg.register_app_handler(self.source_kind, self._app_dispatcher)
         finally:
             reg.__class__.register_app_handler = _orig_register_app  # type: ignore[method-assign]
 
@@ -180,7 +182,7 @@ class LocalToolBridge(ExternalToolAdapter):
             "(app: %s): %s",
             len(registered_names),
             len(get_catalog()),
-            self.source_app,
+            self.source_kind,
             names_list,
         )
 
@@ -268,7 +270,7 @@ class LocalToolBridge(ExternalToolAdapter):
     async def dispatch(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         """Handle any ``matrx_local`` tool that has no registered handler.
 
-        This fires only when the DB contains a tool with ``source_app="matrx_local"``
+        This fires only when the DB contains a tool with ``source_kind="matrx_local"``
         that isn't in the local tool catalog.  The model receives a clear error so it
         can inform the user rather than silently failing.
         """
@@ -458,7 +460,7 @@ def _schema_to_param_dict(input_schema: dict[str, Any]) -> dict[str, Any]:
 def build_local_tool_definitions() -> list[Any]:
     """Build a ToolDefinition for every catalog tool.
 
-    ``tool_type=EXTERNAL_HANDLER`` + ``source_app="matrx_local"`` routes
+    ``tool_type=EXTERNAL_HANDLER`` + ``source_kind="matrx_local"`` routes
     execution to the LocalToolBridge handlers registered in ``register()`` —
     the same path a server-provided definition would take. Descriptions here
     are the code-side fallback; when the server registry is reachable its
@@ -477,10 +479,13 @@ def build_local_tool_definitions() -> list[Any]:
                     description=entry.description,
                     parameters=_schema_to_param_dict(entry.input_schema),
                     tool_type=ToolType.EXTERNAL_HANDLER,
-                    source_app="matrx_local",
+                    source_kind="matrx_local",
                     category=entry.category,
                     tags=list(entry.tags),
-                    version=entry.version,
+                    # ToolDefinition.version became an int row-version in
+                    # matrx-ai 0.3.0; the catalog's semantic version string
+                    # maps to `semver`.
+                    semver=entry.version,
                     timeout_seconds=float(entry.timeout_seconds),
                 )
             )

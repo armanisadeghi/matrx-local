@@ -1689,25 +1689,35 @@ pub fn run() {
                         .filter(|p| p.exists())
                         .map(|p| p.to_string_lossy().to_string());
 
-                    let mut server = llm_state.lock().await;
-                    match server
-                        .start(&handle, &model_path_str, gpu_layers, ctx, port, mmproj_path.as_deref())
-                        .await
+                    // start_server does NOT hold the LlmServerState mutex across
+                    // the health wait — status commands stay responsive while the
+                    // model loads, and a user-triggered start during auto-start is
+                    // rejected by its one-start-at-a-time guard.
+                    match llm::server::start_server(
+                        &handle,
+                        llm_state.inner(),
+                        &model_path_str,
+                        gpu_layers,
+                        ctx,
+                        port,
+                        mmproj_path.as_deref(),
+                    )
+                    .await
                     {
-                        Ok(()) => {
+                        Ok(status) => {
                             // Persist last_port / last_context_length — reload to preserve
                             // hf_token and any other fields, then update only these.
                             let mut updated = LlmConfig::load(&config_dir);
                             updated.last_port = Some(port);
                             updated.last_context_length = Some(ctx);
                             let _ = updated.save(&config_dir);
-                            let _ = handle.emit("llm-server-ready", &server.status);
+                            let _ = handle.emit("llm-server-ready", &status);
                             println!(
                                 "[llm-autostart] SUCCESS: llama-server ready on port {} (model={})",
                                 port, filename
                             );
                         }
-                        Err(e) => eprintln!("[llm-autostart] FAIL: server.start() returned: {}", e),
+                        Err(e) => eprintln!("[llm-autostart] FAIL: start_server returned: {}", e),
                     }
                 });
             }

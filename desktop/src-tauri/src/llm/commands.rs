@@ -9,7 +9,10 @@ use super::server::{find_free_port, LlmServer, LlmServerStatus};
 use crate::transcription::hardware::HardwareProfile;
 
 /// Async-safe state for the LLM server. Uses tokio::sync::Mutex so async
-/// tauri commands can hold the lock across .await points (start, stop, health).
+/// tauri commands can hold the lock across short .await points (stop, health).
+/// RULE: never hold this lock across the up-to-120s start health wait — use
+/// server::start_server, which locks only around stop + install. Holding it
+/// for the whole wait froze every status command during model load.
 pub type LlmServerState = Arc<Mutex<LlmServer>>;
 
 /// Sync-accessible handle to the llama-server child process.
@@ -130,10 +133,20 @@ pub async fn start_llm_server(
         }),
     );
 
-    let mut server = state.lock().await;
-    server
-        .start(&app, &model_path, gpu_layers, ctx, port, mmproj_path.as_deref())
-        .await?;
+    // NOTE: the LlmServerState mutex is NOT held across the up-to-120s health
+    // wait — start_server locks only briefly around stop + install, so
+    // get_llm_server_status / check_llm_server_health stay responsive during
+    // model load. Concurrent starts are rejected by start_server's own guard.
+    let status = super::server::start_server(
+        &app,
+        state.inner(),
+        &model_path,
+        gpu_layers,
+        ctx,
+        port,
+        mmproj_path.as_deref(),
+    )
+    .await?;
 
     // Persist config — reload first to preserve hf_token and any future fields,
     // then update only the fields this command owns.
@@ -146,11 +159,17 @@ pub async fn start_llm_server(
         let _ = config.save(&config_dir);
     }
 
-    let _ = app.emit("llm-server-ready", &server.status);
-    Ok(server.status.clone())
+    let _ = app.emit("llm-server-ready", &status);
+    Ok(status)
 }
 
 /// Stop the running llama-server.
+///
+/// Also covers a server that is mid-START: the start path does not hold the
+/// LlmServerState mutex during its health wait, so we can acquire the lock
+/// immediately — but the child is not installed in LlmServer yet. Taking the
+/// PID out of LlmProcessHandle and killing it (a) stops the process now and
+/// (b) signals start_server's phase-3 ownership check to abort the install.
 #[tauri::command]
 pub async fn stop_llm_server(
     app: AppHandle,
@@ -158,9 +177,25 @@ pub async fn stop_llm_server(
 ) -> Result<(), String> {
     let mut server = state.lock().await;
     server.stop().await;
+    drop(server);
     if let Some(handle) = app.try_state::<LlmProcessHandle>() {
-        if let Ok(mut g) = handle.lock() {
-            *g = None;
+        let pid = handle.lock().ok().and_then(|mut g| g.take());
+        if let Some(pid) = pid {
+            // Normally this PID was already killed by server.stop() above and
+            // the kill below is a no-op; it only bites for a mid-start server
+            // whose child lives outside LlmServer.process.
+            #[cfg(unix)]
+            {
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", &pid.to_string()])
+                    .output();
+            }
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/PID", &pid.to_string()])
+                    .output();
+            }
         }
     }
     let _ = app.emit("llm-server-stopped", ());

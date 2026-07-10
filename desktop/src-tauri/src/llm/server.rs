@@ -36,18 +36,107 @@ impl LlmServer {
         }
     }
 
-    pub async fn start(
-        &mut self,
-        app: &AppHandle,
-        model_path: &str,
-        gpu_layers: i32,
-        context_length: u32,
-        port: u16,
-        mmproj_path: Option<&str>,
-    ) -> Result<(), String> {
-        self.stop().await;
+}
 
-        let args = build_server_args(model_path, gpu_layers, context_length, port, mmproj_path);
+/// Guard flag: only one llama-server start may be in flight at a time.
+///
+/// The LlmServerState tokio mutex is intentionally NOT held across the
+/// up-to-120s health wait (holding it froze get_llm_server_status /
+/// check_llm_server_health for the whole model load), so this flag is what
+/// prevents two concurrent starts from spawning two servers.
+static START_IN_PROGRESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Start (or restart) llama-server WITHOUT holding the LlmServerState mutex
+/// across the health wait. Canonical orchestration for every spawn path
+/// (start_llm_server command + the lib.rs auto-start).
+///
+/// Phases:
+///   1. brief lock — stop any existing server
+///   2. NO lock — spawn + up-to-120s health poll (status commands stay live)
+///   3. brief lock — install the child + status; if the PID handle was
+///      cleared while we waited (stop/shutdown fired mid-start), kill the
+///      child and report the abort instead of resurrecting it
+pub async fn start_server(
+    app: &AppHandle,
+    state: &crate::llm::commands::LlmServerState,
+    model_path: &str,
+    gpu_layers: i32,
+    context_length: u32,
+    port: u16,
+    mmproj_path: Option<&str>,
+) -> Result<LlmServerStatus, String> {
+    use std::sync::atomic::Ordering;
+
+    if START_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err(
+            "An LLM server start is already in progress — wait for it to finish or fail."
+                .to_string(),
+        );
+    }
+    struct StartGuard;
+    impl Drop for StartGuard {
+        fn drop(&mut self) {
+            START_IN_PROGRESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let _guard = StartGuard;
+
+    // Phase 1: stop any existing server (brief lock).
+    {
+        let mut server = state.lock().await;
+        server.stop().await;
+    }
+
+    // Phase 2: spawn + health wait with the lock RELEASED.
+    let (child, captured) =
+        spawn_and_wait_healthy(app, model_path, gpu_layers, context_length, port, mmproj_path)
+            .await?;
+
+    // Phase 3: install (brief lock). Honor a stop/shutdown that fired mid-wait.
+    let mut server = state.lock().await;
+    let still_ours = app
+        .try_state::<crate::llm::commands::LlmProcessHandle>()
+        .map(|h| {
+            h.lock()
+                .map(|g| *g == Some(child.pid()))
+                .unwrap_or(false)
+        })
+        // No handle managed (shouldn't happen in production) — proceed.
+        .unwrap_or(true);
+    if !still_ours {
+        let _ = child.kill();
+        return Err("LLM server start aborted: a stop was requested during startup.".to_string());
+    }
+    server.process = Some(child);
+    server.status = LlmServerStatus {
+        running: true,
+        port,
+        model_path: model_path.to_string(),
+        model_name: extract_model_name(model_path),
+        gpu_layers,
+        context_length,
+        last_error_output: captured,
+    };
+    Ok(server.status.clone())
+}
+
+/// Spawn llama-server and wait (up to 120s) for it to report healthy.
+/// Publishes the child PID to LlmProcessHandle immediately after spawn so the
+/// shutdown path can kill a mid-start server. On failure the child is killed
+/// and the handle cleared before returning.
+async fn spawn_and_wait_healthy(
+    app: &AppHandle,
+    model_path: &str,
+    gpu_layers: i32,
+    context_length: u32,
+    port: u16,
+    mmproj_path: Option<&str>,
+) -> Result<(tauri_plugin_shell::process::CommandChild, String), String> {
+    let args = build_server_args(model_path, gpu_layers, context_length, port, mmproj_path);
 
         // Resolve the binaries directory so shared libraries can be found
         // regardless of where Tauri places the binary at runtime (dev vs. bundled).
@@ -95,8 +184,10 @@ impl LlmServer {
             .map_err(|e| format!("Failed to spawn llama-server: {e}"))?;
 
         // Publish the PID immediately (BEFORE the up-to-120s health wait) so
-        // graceful_shutdown_sync's prong (b) can kill a mid-start server even
-        // while our caller holds the LlmServerState tokio mutex.
+        // graceful_shutdown_sync's prong (b) — and stop_llm_server — can kill
+        // a mid-start server. It also serves as the ownership token checked by
+        // start_server phase 3: if it no longer matches this child's PID after
+        // the wait, a stop was requested and the start is aborted.
         if let Some(handle) = app.try_state::<crate::llm::commands::LlmProcessHandle>() {
             if let Ok(mut g) = handle.lock() {
                 *g = Some(child.pid());
@@ -194,20 +285,10 @@ impl LlmServer {
         }
 
         let captured = log_buf.lock().unwrap().clone();
-        self.process = Some(child);
-        self.status = LlmServerStatus {
-            running: true,
-            port,
-            model_path: model_path.to_string(),
-            model_name: extract_model_name(model_path),
-            gpu_layers,
-            context_length,
-            last_error_output: captured,
-        };
+        Ok((child, captured))
+}
 
-        Ok(())
-    }
-
+impl LlmServer {
     pub async fn stop(&mut self) {
         if let Some(child) = self.process.take() {
             let _ = child.kill();

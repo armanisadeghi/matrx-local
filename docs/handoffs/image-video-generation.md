@@ -2,72 +2,124 @@
 status: active
 updated: 2026-07-10
 repos: [matrx-local, aidream]
-vision: [CURRENT_ERRORS.md]
+owner-context: media generation (images + video), Media Generation page, media library, Private vault
 ---
 
-> **2026-07-10 update — v1.3.95–v1.3.98 all shipped.** Image gen works
-> end-to-end in the installed app. Shipped since the note below: Media
-> Generation page (Studio split-pane default; bake-off variants pending
-> Arman's word to delete), full param exposure + advanced JSON, image job
-> queue with priority-next + single-generation gate (one-shot during a
-> running job used to unload the pipeline mid-job — fixed in .98),
-> mid-flight cancel, media library, MediaLightbox (zoom/fullscreen),
-> encrypted Private vault (escrow backdoor: scripts/vault-recover.py;
-> PRIVATE key at ~/.matrx-escrow/ — Arman must back it up), real prompt
-> limits, readable errors. NEXT UP (assessed, awaiting go): image-to-image
-> + LoRA support. Still open below: video E2E on real hardware (#3),
-> packaged smoke gate (#4), aidream-side errors (#5), grants UX (#6),
-> model-LOAD-phase cancel.
+# Media generation — handoff
 
-# Image & video generation — finish the last mile
+## Where things stand (30 seconds of past, then all future)
 
-## Vision — Arman's words
+Image generation works end-to-end in the installed app. Released: **v1.3.98**
+(user-facing) — media-gen page with 5 layout variants, full parameter
+exposure, image job queue with priority-next + single-generation gate,
+mid-flight cancel, media library, lightbox, encrypted Private vault.
+Committed locally but **NOT pushed/released**: img2img + LoRA (backend +
+UI), the core/ unification of all layouts, the Playwright E2E harness, and
+the sd-server spike doc (commit `20fe69da1`). Full detail lives in git log
+and `.matrx/AGENT_TASKS.md` — do not re-derive it here.
 
-- "image and video generation are a critical part of our offerings for this desktop app"
-- "make sure that we are offering the latest opensource models because some better ones have been released"
-- "the system not really telling you when things aren't working but having silent failures is a big problem"
-- "It's not worth it for me to do this" — said after v1.3.94 still showed no image in the UI. The bar is: **click a button in the installed app, see an image.** Nothing else counts as working.
+## ⛔ THE GATE — read before doing anything
 
-## Current state — read this before anything else
+`main` is ~36 commits ahead of `origin/main` and includes an in-flight
+**matrx-ai 0.3.0 migration** (Phases 3–5, from a parallel session).
+`pyproject.toml` requires `matrx-ai>=0.3.0` which is **not on PyPI yet**
+(see the ⚠️ comment at pyproject.toml:59). Consequences:
 
-**The backend is PROVEN working on Arman's installed v1.3.94 app** (verified 2026-07-09 19:3x against the live packaged engine, port 22140):
-FLUX.2-klein-4B loads in 8s (MPS, bf16) and `POST /image-gen/generate` returned a real, beautiful 1024×1024 PNG in 10.4s.
-Arman's own generate clicks at 19:16:00 and 19:16:29 **also completed server-side** (`[image_gen_generate] Slow operation: 15417ms / 10530ms` in the unified log) — **but the UI showed him nothing**. The remaining defect is in the frontend result path, not the pipeline.
+- **Do not push** until matrx-ai 0.3.0 is published (publishing happens in
+  the aidream repo — see memory `reference_aidream_packages_location`).
+  Pushing earlier breaks CI and any release build.
+- `uv run` re-resolution fails → use **`uv run --no-sync pytest tests/smoke`**
+  until the publish lands. The existing venv is fully working.
+- Once published: `uv sync --all-extras` (plain `uv sync` STRIPS extras —
+  real incident, see AGENT_TASKS) → full verify → `git push` → cut
+  **v1.3.99** via `./scripts/release.sh --patch --monitor`.
 
-## Remaining work (priority order)
+## Priority work queue
 
-0. ~~**UI never displays the generated image**~~ — **RESOLVED 2026-07-09: Arman generated his first FLUX image in the UI.** Same day, the media-gen surface was overhauled (see Done): its own top-level **Media Generation** page (route `/media-generation`, no longer inside Confidential Chat) with Images | Video | Workflows | Library tabs, full parameter exposure (common controls + editable Advanced JSON `extra_params`, reset-to-defaults), concrete seeds always returned/shown, an image job queue (`/image-gen/jobs`, sequential FIFO), and a persistent media library (`~/.matrx/media/generated/` + `/media-library/*` API + Library UI). The UI bake-off is SHIPPED: 5 selectable layouts (Classic tabs / Studio split-pane / Workspace nav / Gallery first / Focus flow) via the header dropdown on the Media Generation page, persisted in localStorage, all sharing the same context state. Once Arman picks a winner, delete the losing `desktop/src/components/media-gen/variants/*` and the switcher (no dead code). Known follow-ups in `.matrx/AGENT_TASKS.md`: no mid-flight job cancel; `num_images_per_prompt>1` only persists the first image.
+### 1. Ship v1.3.99 (after the gate opens)
+Everything in `20fe69da1` is verified (202 smoke tests, tsc, vite build,
+E2E 5/5) but has never run on real GPU hardware. Before or immediately
+after release, do a live pass on Arman's machine (engine on port 22140,
+`~/.matrx/local.json` is truth; probe with the API key from `.env`):
+- img2img: SDXL-Turbo (watch `steps*strength >= 1` at 1 step) and
+  FLUX.2-klein (native reference-edit — NO strength; UI hides the slider).
+- LoRA: download one catalog SDXL LoRA + one FLUX LoRA, generate with
+  scale ~0.8, confirm unload-after-generate leaves the next plain
+  generation unaffected.
+- "Use as input" round trip: result → lightbox → Use as input → generate.
 
-1. **(historical) UI never displays the generated image (THE bug).** Repro: installed app → Image & Video tab → FLUX.2-klein loaded → Generate. Server completes (watch `~/Library/Logs/MatrxLocal/system.log` for `image_gen_generate`), UI shows no image/error.
-   Suspects, in order: `desktop/src/hooks/use-media-gen.ts` `generateImage` (sets `imageResult` only on `result.success && result.image_b64` — verify the parsed response shape against the live API; a 2.2MB JSON body), `ImageGenSection.tsx` generate-view result rendering (view state, result element visibility/scroll), and whether `imageGenerating` spinner even appears (if not, state updates aren't landing at all — check MediaGenProvider context delivery in the PROD build).
-   Verification bar: a screenshot of the image visible in the packaged app. Consider adding a client log line when `imageResult` is set, then compare against the server log.
-2. **Boot-ordering bug: resumed downloads fail before packages inject.** `app/main.py` Phase 0a starts the DownloadManager (which resumes incomplete downloads) BEFORE the image-gen packages sys.path injection, so a resumed HF download fails with "huggingface_hub is not importable" even though packages ARE installed. Live evidence: failed entry `Tongyi-MAI--Z-Image-Turbo` id f98e0567. Fix: inject packages before starting the DM, or make the DM's HF path retry after injection. Also give failed entries a visible Retry in the Download Manager UI.
-3. **Video generation has never run end-to-end on real hardware.** Service/routes/UI exist (`app/services/video_gen/`, `/video-gen/*`, `VideoGenSection`); only load-path and TestClient verified. Download Wan2.1-T2V-1.3B (~29GB) or LTX, run a real T2V job in the packaged app, watch the job progress UI. Expect minutes-long jobs on MPS; fp8 never on Metal (bf16 only — see `video_gen/service.py` dtype notes).
-4. **Packaged-build smoke gate in release.sh** — the class of bug that burned this project (works in dev, dead in frozen binary) is preventable: build sidecar → boot frozen engine on a test port → load smallest model → generate → assert non-trivial PNG. The full manual procedure is proven and documented in LESSONS.md (hidden-imports section).
-5. **aidream-side (separate session, that repo):** `GET /api/ai-tools/app/matrx_local` → 404 (engine loads 0 tools every boot); scraper queue `GET /api/scraper/queue/pending` persistent 500. Both triaged in `CURRENT_ERRORS.md` (T001/T008).
-6. **macOS grants UX:** notes sync needs Full Disk Access (now surfaced once, cleanly — but a guided grant flow in the UI would finish it); Screen Recording still shows denied in setup.
+### 2. Variant strategy (Arman's explicit direction — do not relitigate)
+Keep ALL five layouts for now. The core/ unification made their internals
+identical (`desktop/src/components/media-gen/core/` is the ONLY place
+logic lives; variants are thin shells). Standing rules:
+- **Never add logic to a variant file.** New capability → core/, layout
+  affordance → variant. If you catch yourself copying between variants,
+  you are doing it wrong.
+- Arman will keep ≥2 layouts after more real use; the E2E spec
+  "all 5 layout variants mount" is the drift canary — keep it green.
+- Merge remaining best-of features across layouts as they're noticed;
+  track them in `.matrx/AGENT_TASKS.md`.
 
-## Resources
+### 3. Video generation — still never run on real hardware
+Service/routes/UI exist and are queue-based with cancel. Missing: one real
+T2V run in the packaged app (Wan2.1-T2V-1.3B ~29GB or LTX). Expect
+minutes-long jobs on MPS, bf16 only (fp8 crashes Metal — service.py dtype
+notes). This is the biggest untested surface.
 
-- **Probe the live packaged engine** (fastest diagnostic loop; no rebuild): `API_KEY=$(grep -m1 '^API_KEY=' .env | cut -d= -f2)` then `curl -H "Authorization: Bearer $API_KEY" http://127.0.0.1:22140/image-gen/status` (port/pid truth: `~/.matrx/local.json`). Generate works via curl — see Current state.
-- **Unified log** (all engines + client + tauri interleaved): `~/Library/Logs/MatrxLocal/system.log`. Arman also keeps a curated log export + task list in `CURRENT_ERRORS.md` (repo root — groom it when fixing).
-- **Frozen-binary test loop:** `./scripts/build-sidecar.sh` (~4 min) → `MATRX_PORT=22156 TAURI_SIDECAR=1 nohup "./dist/Matrx Engine" &` → probe as above. The engine only deletes `~/.matrx/local.json` it owns (pid-guarded) — still verify after. NEVER run full pytest with a live engine (`tests/conftest.py` kills it — tracked); `pytest tests/smoke` is safe.
-- **Key files:** `app/services/image_gen/` + `video_gen/` + `media_gen/` (paths, hardware gating, HF token), `app/services/downloads/manager.py` (`_download_hf_snapshot`, file filtering), `app/api/{image,video}_gen_routes.py`, `desktop/src/hooks/use-media-gen.ts`, `desktop/src/components/media-gen/`, `desktop/src/contexts/MediaGenContext.tsx`.
-- **Models on disk:** `~/.matrx/image-models/` — FLUX.2-klein-4B (16GB, downloaded, WORKS) + sdxl-turbo (fp16, works, black-image fix verified). Video models: none yet.
-- **Lessons that will bite again:** LESSONS.md — frozen hidden-imports (timeit/modulefinder/filecmp; frozen-load test is the ONLY verification), multiprocessing freeze_support (run.py header comment), HF repos need file filtering (55GB→7GB), MPS: no fp8, no attention-slicing (NaN → black images), always pass guidance_scale.
-- Memory: `~/.claude/projects/-Users-armanisadeghi-code-matrx-local/memory/project_media_gen_overhaul.md`.
-- Catalog research (July 2026, licenses/sizes verified): images FLUX.2-klein-4B default / Z-Image-Turbo / Qwen-Image (Apache 2.0); video Wan2.2-TI2V-5B / Wan2.1-1.3B / LTX-Video. sd-server (stable-diffusion.cpp) is the researched future migration that would delete the whole torch/pip/frozen-stdlib class — llama-server-style binary + GGUF.
+### 4. sd-server migration — decision made: PARTIAL GO with a benchmark gate
+Read `docs/research/sd-server-spike.md` (verdict, parity matrix, kill
+criteria). Next concrete step is **Wave 1 only**: benchmark sd-server
+FLUX.2-klein GGUF vs our 10.4s diffusers baseline on Arman's M-series.
+Kill criterion: >2× slower → stop, keep diffusers. Do NOT start deeper
+integration before the benchmark passes.
 
-## Done
+### 5. E2E — use it, extend it
+`cd desktop && pnpm test:e2e` (docs/UI_TESTING.md). Dedicated test login
+in gitignored `desktop/.env.test` (never commit/print credentials).
+Engine-dependent specs are read-only against a live engine. Extend specs
+when touching media-gen UI; run before every release.
 
-- Media backend rebuilt: DownloadManager-routed HF downloads (progress/resume/filtering), refreshed catalogs, video-gen service + job API, hardware gating — `app/services/{image_gen,video_gen,media_gen}/`, shipped v1.3.91.
-- Rogue-engine root cause fixed + frozen-verified (freeze_support + xet off) — `run.py` header, v1.3.93.
-- Engine-URL self-healing + ~35 silent-failure fixes across UI/engine — v1.3.92–94, see git log.
-- Frozen stdlib gaps (timeit, modulefinder) fixed + frozen-load-verified; friendly load errors — v1.3.94, LESSONS.md.
-- HF token: dual-store gap closed (`read_hf_token()` reads hub store too); gated models name Settings → API Keys → Hugging Face — v1.3.94.
-- LLM DM live progress + mmproj DM entries; Analyze timeout/cancel; 60s default request timeout; wake-word SSE progress — v1.3.94.
+### 6. Platform issues found tonight (not media-gen, but real)
+- **Supabase SMTP is broken instance-wide** — all signup/reset emails fail
+  (KNOWN_DEFECTS.md MXL-D-028). Arman must fix SMTP in the Supabase
+  dashboard; until then no self-serve signups work in production.
+- aidream-side: `GET /api/ai-tools/app/matrx_local` 404, scraper queue 500
+  (CURRENT_ERRORS.md T001/T008 — aidream repo sessions).
 
-## Decisions needed (Arman)
+### 7. Tracked follow-ups (see .matrx/AGENT_TASKS.md for full list)
+Model-LOAD phase isn't cancellable (cancel lands right after load);
+`num_images_per_prompt>1` persists only the first image; FLUX LoRA
+catalog entries are dev-trained (schnell compat unproven); vault
+auto-lock not configurable; vault arbitrary-file ingest (PDFs etc.) is
+designed-for but not exposed; packaged-build smoke gate in release.sh
+still unbuilt (LESSONS.md has the manual procedure).
 
-- **Automated UI testing needs a login.** Situation: the app is Supabase-login-gated, so agents can only verify the UI by asking you to click; every "works via curl, dead in UI" bug slipped through this gap. Decide: provide a dedicated test account (email+password in `desktop/.env.test`, gitignored) so agents can drive the real UI with Playwright — or accept manual-only UI verification.
-- **sd-server migration.** Situation: most of this project's pain (multi-GB pip installs, frozen-binary stdlib gaps, torch upgrades) comes from running diffusers inside the Python engine; stable-diffusion.cpp now ships an sd-server binary (llama-server pattern, GGUF models, image + some video). Decide: green-light a spike replacing the diffusers path with sd-server, or keep investing in the current architecture.
+## Private vault — operational notes
+Escrow PRIVATE key: backed up by Arman (done, 2026-07-10). Public key
+embedded in `app/services/media_vault/escrow.py`. Recovery:
+`uv run python scripts/vault-recover.py --private-key <pem> --vault-dir
+~/.matrx/media/vault {--out <dir> | --new-password <pw>}`. A vault
+cannot be created without the escrow slot — keep it that way.
+
+## Verify loop (memorize this)
+```bash
+cd desktop && npx tsc --noEmit && pnpm build   # frontend
+uv run --no-sync pytest tests/smoke -q          # backend (drop --no-sync after matrx-ai publish)
+cd desktop && pnpm test:e2e                     # real UI, real login
+# NEVER run full pytest with a live engine — tests/conftest.py kills it.
+```
+
+## Suggested skills
+- `verify` — after any media-gen change, drive the affected flow for real.
+- `code-review` — before pushing large waves.
+- `build-sub-feature` — for adding capabilities INTO media-gen (they go in core/).
+- `feature-deep-dive` — if taking over an adjacent whole feature (e.g. video E2E).
+- `handoff` (installed at .claude/skills/handoff) — regenerate this doc at session end.
+
+## Decisions already made — do not reopen
+Studio is the default layout; all 5 variants stay (for now) on shared
+core internals. img2img + LoRA: approved and built. sd-server: partial-go,
+benchmark-gated. Escrow: embedded RSA-4096 public key, NOT the redaction
+KMS key; optional later upgrade to a dedicated asymmetric KMS key. Client
+never calls Python for DB reads (platform rule). Prompt caps are 10k chars
+with per-family token hints — never re-add arbitrary caps.

@@ -238,8 +238,11 @@ curl -s http://127.0.0.1:22140/health
 ```
 **Step 2 — tunnel up:**
 ```bash
-curl -s http://127.0.0.1:22140/tunnel/status            # public
-curl -s -X POST http://127.0.0.1:22140/tunnel/start      # flip it ON (persists)
+curl -s http://127.0.0.1:22140/tunnel/status             # public (in _PUBLIC_PATHS)
+curl -s -X POST http://127.0.0.1:22140/tunnel/start \
+  -H "Authorization: Bearer $API_KEY"                     # flip it ON (persists);
+                                                          # AuthMiddleware is presence-only
+                                                          # on loopback — API_KEY from root .env
 # expect {"running":true,"url":"https://<x>.trycloudflare.com",...}
 curl -s https://<x>.trycloudflare.com/health             # tunnel reaches engine
 ```

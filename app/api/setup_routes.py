@@ -1571,7 +1571,6 @@ async def debug_state() -> dict[str, Any]:
     Supabase config, SQLite counts, sync status, and a live probe of the
     PostgREST connection.
     """
-    import matrx_ai as _matrx_ai
     from app.services.ai.engine import is_client_mode, is_initialized, tools_loaded, has_db
     from app.services.local_db.repositories import (
         ModelsRepo, AgentsRepo, ToolsRepo, SyncMetaRepo,
@@ -1579,14 +1578,32 @@ async def debug_state() -> dict[str, Any]:
 
     report: dict[str, Any] = {}
 
-    # ── 1. matrx-ai state ────────────────────────────────────────────
+    # ── 1. matrx-ai state (0.3.0 client-host seams) ──────────────────
+    # matrx-ai >= 0.3.0 has no global _initialized/is_client_mode; the
+    # engine module owns init state and the _ext registry holds the seams
+    # configure() registered.
+    seams: dict[str, bool] = {}
+    try:
+        from matrx_ai._ext import has_ext
+        for seam in (
+            "api_key_resolver",
+            "conversation_store",
+            "model_catalog",
+            "get_jwt",
+            "server_url",
+            "source_app",
+        ):
+            seams[seam] = has_ext(seam)
+    except Exception as exc:
+        logger.error("[setup/debug] Could not read matrx-ai seam registry: %s", exc)
     report["matrx_ai"] = {
-        "initialized": _matrx_ai._initialized,
-        "client_mode": _matrx_ai.is_client_mode() if _matrx_ai._initialized else False,
+        "initialized": is_initialized(),
+        "client_mode": is_client_mode(),
         "engine_is_initialized": is_initialized(),
         "engine_client_mode_active": is_client_mode(),
         "engine_tools_loaded": tools_loaded(),
         "engine_has_db": has_db(),
+        "seams": seams,
     }
     logger.info("[setup/debug] matrx-ai state: %s", report["matrx_ai"])
 
@@ -1603,43 +1620,22 @@ async def debug_state() -> dict[str, Any]:
     }
     logger.info("[setup/debug] env: %s", report["env"])
 
-    # ── 3. Client singleton check ─────────────────────────────────────
-    if _matrx_ai._initialized and _matrx_ai.is_client_mode():
-        try:
-            from matrx_ai.db import get_client_singleton
-            config, auth = get_client_singleton()
-            report["client_singleton"] = {
-                "ok": True,
-                "url": config.url,
-                "anon_key_set": bool(config.anon_key),
-                "session_active": auth.session is not None,
-                "session_user_id": auth.session.user_id if auth.session else None,
-            }
-            logger.info("[setup/debug] client singleton: %s", report["client_singleton"])
-        except Exception as exc:
-            report["client_singleton"] = {"ok": False, "error": str(exc)}
-            logger.error("[setup/debug] client singleton FAILED: %s", exc)
-    else:
-        report["client_singleton"] = {"ok": False, "reason": "not in client mode or not initialized"}
-
-    # ── 4. Live PostgREST probe ───────────────────────────────────────
-    if report.get("client_singleton", {}).get("ok"):
-        probes: dict[str, Any] = {}
-        for table in ("ai_model", "prompt_builtins", "prompts"):
-            try:
-                from matrx_orm.client import SupabaseManager
-                from matrx_ai.db import get_client_singleton
-                cfg, ath = get_client_singleton()
-                mgr = SupabaseManager(table, config=cfg, auth=ath)
-                count = await mgr.count()
-                probes[table] = {"ok": True, "count": count}
-                logger.info("[setup/debug] probe %r → count=%s", table, count)
-            except Exception as exc:
-                probes[table] = {"ok": False, "error": str(exc)}
-                logger.error("[setup/debug] probe %r FAILED: %s", table, exc, exc_info=True)
-        report["postgrest_probes"] = probes
-    else:
-        report["postgrest_probes"] = {"skipped": "client singleton not available"}
+    # ── 3. Model catalog probe (replaces the pre-0.3.0 PostgREST /
+    # client-singleton probes: matrx-ai no longer talks PostgREST; all model
+    # reads flow through the injected SqliteModelCatalog) ────────────────
+    try:
+        from app.services.ai.model_catalog import get_model_catalog
+        catalog_models = await get_model_catalog().list_models()
+        with_wire = sum(1 for m in catalog_models if m.get("wire_format"))
+        report["model_catalog"] = {
+            "ok": True,
+            "models": len(catalog_models),
+            "with_explicit_wire_format": with_wire,
+        }
+        logger.info("[setup/debug] model catalog: %s", report["model_catalog"])
+    except Exception as exc:
+        report["model_catalog"] = {"ok": False, "error": str(exc)}
+        logger.error("[setup/debug] model catalog probe FAILED: %s", exc, exc_info=True)
 
     # ── 5. SQLite counts ──────────────────────────────────────────────
     try:
@@ -1667,11 +1663,12 @@ async def debug_state() -> dict[str, Any]:
         problems.append("SUPABASE_URL not set")
     if not anon_key:
         problems.append("SUPABASE_PUBLISHABLE_KEY not set")
-    if not report.get("client_singleton", {}).get("ok"):
-        problems.append("client singleton not available")
-    for tbl, probe in report.get("postgrest_probes", {}).items():
-        if isinstance(probe, dict) and not probe.get("ok"):
-            problems.append(f"PostgREST probe failed for {tbl}: {probe.get('error', '?')}")
+    if not report.get("model_catalog", {}).get("ok"):
+        problems.append(
+            f"model catalog not readable: {report.get('model_catalog', {}).get('error', '?')}"
+        )
+    elif report["model_catalog"]["models"] == 0:
+        problems.append("model catalog is empty (models sync never completed?)")
 
     report["summary"] = {
         "healthy": len(problems) == 0,

@@ -1,26 +1,27 @@
 """Supabase Broadcast plumb for engine ↔ matrx-extend cross-machine fallback.
 
-Phase 2 (master plan section C2.d) ships SUBSTRATE ONLY — the helpers
-exist so future cross-machine flows have a place to land without
-rebuilding. Active routing is gated behind the
+Live routing (Phase 7): inbound envelopes on the per-user channel are
+parsed as v2 CrossComponentEnvelopes and dispatched by
+`app/api/cross_component_router.py`. `kind:"rpc"` envelopes route into
+the SAME command registry as `POST /extension/rpc`
+(`extension_handlers.HANDLERS`) and are answered with a reply envelope
+on the same channel. Routing is gated behind the
 `extension_broadcast_enabled` user setting (default: ON), surfaced in
-the desktop Settings UI under Remote Access. Phase 3's C-bridge
-orchestrator will read the same flag.
+the desktop Settings UI under Remote Access.
 
 Channel name: `matrx-local-bridge:<userId>` (per-user-scoped, analogous
 to the existing matrx-extension-bridge channel used for the frontend
 side).
 
-Envelope shape (engine ↔ extension over Broadcast):
+Envelope shapes on this channel:
 
-    {
-      "direction": "engine->extension" | "extension->engine",
-      "type": str,            # "extension.invoke" | "extension.result"
-                              # | "ping" | "pong"
-      "callId": str | None,
-      "payload": dict,
-      "timestamp": int,       # ms since epoch
-    }
+  * v2 CrossComponentEnvelope (canonical — see
+    `app/api/cross_component_envelope.py`):
+    `{v, kind, direction, action, requestId, payload, timestamp,
+      fromInstance, toInstance?}`
+  * legacy engine→extension push (still emitted by
+    `publish_to_extension` for extension.invoke/result over Broadcast):
+    `{direction, type, callId, payload, timestamp}`
 
 Public API:
 
@@ -29,6 +30,7 @@ Public API:
     publish_to_extension(user_id,
                          type, payload,
                          call_id=None)  -> bool
+    publish_envelope(user_id, envelope) -> bool   # v2 envelope, sent as-is
 
 When the feature flag is OFF, every helper returns immediately with a
 debug log line — there is no Supabase client, no realtime subscription,
@@ -102,10 +104,10 @@ async def connect_broadcast(user_id: str) -> None:
       1. Create an async Supabase client (URL + publishable key from
          `app.config`).
       2. Open a realtime channel `matrx-local-bridge:<user_id>`.
-      3. Register a `broadcast` listener that LOGS the received envelope
-         only — Phase 2 does not route inbound traffic. Phase 3 will
-         replace the log-only handler with a router that dispatches
-         based on `direction` + `type`.
+      3. Register a `broadcast` listener that routes every received
+         envelope through `cross_component_router.route_envelope` —
+         rpc envelopes dispatch into the extension command registry
+         and are answered on this channel.
 
     Idempotent: connecting an already-connected user_id is a no-op.
     """
@@ -132,17 +134,21 @@ async def connect_broadcast(user_id: str) -> None:
             channel = client.channel(_channel_name(user_id))
 
             def _on_broadcast(payload: Dict[str, Any]) -> None:
-                # Phase 2: the log-only stub is replaced by the cross-component
-                # router. See app/api/cross_component_router.py for the routing
-                # logic; envelope parsing + back-compat lives in
-                # app/api/cross_component_envelope.py.
+                # Inbound envelopes route through the cross-component
+                # dispatcher: kind:"rpc" is invoked against the SAME
+                # HANDLERS registry as POST /extension/rpc and answered
+                # with a reply envelope on this channel. See
+                # app/api/cross_component_router.py for routing and
+                # app/api/cross_component_envelope.py for the v2 schema.
                 from app.api.cross_component_router import route_envelope
                 # supabase-py wraps the user-supplied event payload in
                 # {"type": "broadcast", "event": "<event-name>", "payload": {...}}
                 # — unwrap if needed, otherwise pass through.
                 inner = payload.get("payload", payload) if isinstance(payload, dict) else payload
                 if isinstance(inner, dict):
-                    route_envelope(inner)
+                    # user_id is the channel scope — the router needs it to
+                    # publish rpc replies back on the same channel.
+                    route_envelope(inner, user_id)
                 else:
                     logger.warning(
                         "[cross-component] non-dict broadcast payload dropped: type=%s",
@@ -241,23 +247,63 @@ async def publish_to_extension(
         "timestamp": _now_ms(),
     }
 
+    return await _send_on_channel(user_id, channel, envelope, type, call_id)
+
+
+async def publish_envelope(user_id: str, envelope: Dict[str, Any]) -> bool:
+    """Publish a fully-formed v2 CrossComponentEnvelope dict as-is.
+
+    Used by `cross_component_router` for rpc REPLY envelopes, which carry
+    the v2 shape (`kind` / `action` / `requestId` / `fromInstance` /
+    `toInstance`) rather than the legacy `publish_to_extension` shape.
+    Returns True on successful send, False on missing channel / error /
+    disabled feature flag.
+    """
+    if not is_broadcast_enabled():
+        _log_disabled(f"publish_envelope(action={envelope.get('action')})")
+        return False
+
+    channel = _channels.get(user_id)
+    if channel is None:
+        logger.warning(
+            "[extension_broadcast] publish_envelope skipped — user=%s not connected",
+            user_id,
+        )
+        return False
+
+    return await _send_on_channel(
+        user_id,
+        channel,
+        envelope,
+        str(envelope.get("action")),
+        envelope.get("requestId"),
+    )
+
+
+async def _send_on_channel(
+    user_id: str,
+    channel: Any,
+    envelope: Dict[str, Any],
+    label: str,
+    correlation_id: Optional[str],
+) -> bool:
     try:
         # realtime-py signature is send_broadcast(event, data) — the old
         # payload= kwarg raised TypeError on every call, so engine→extension
         # publish silently failed 100% of the time.
         await channel.send_broadcast("message", envelope)
         logger.debug(
-            "[extension_broadcast] published user=%s type=%s call_id=%s",
+            "[extension_broadcast] published user=%s label=%s correlation_id=%s",
             user_id,
-            type,
-            call_id,
+            label,
+            correlation_id,
         )
         return True
     except Exception as exc:
         logger.warning(
-            "[extension_broadcast] publish failed user=%s type=%s err=%s",
+            "[extension_broadcast] publish failed user=%s label=%s err=%s",
             user_id,
-            type,
+            label,
             exc,
             exc_info=True,
         )

@@ -17,8 +17,10 @@ them working unchanged.
 `sch_task` table (matrx-scheduler), not in bus envelopes. Wake envelopes
 carry `payload: {"taskId": "..."}` pointing at the durable row.
 
-Phase 1 ships this schema only. Phase 2 wires `parse_envelope` into the
-`_on_broadcast` handler in `extension_broadcast.py`.
+`parse_envelope` is wired into the `_on_broadcast` handler in
+`extension_broadcast.py`; `kind:"rpc"` envelopes are dispatched into the
+extension command registry by `cross_component_router.py` and answered
+with a reply envelope (`action: "<action>.result"`, same `requestId`).
 """
 
 from __future__ import annotations
@@ -56,6 +58,10 @@ class CrossComponentEnvelope(BaseModel):
     v2 fields default appropriately.
     """
 
+    # Envelope schema version. v1 publishers omit it (and every v2 field);
+    # v2 publishers stamp it explicitly. Bump ONLY on a breaking wire change
+    # and keep parse back-compat for at least one version.
+    v: int = 2
     kind: Literal["rpc", "wake", "presence"] = "rpc"
     direction: str = Field(..., min_length=1)
     action: str

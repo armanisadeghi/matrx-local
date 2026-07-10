@@ -1,9 +1,17 @@
-"""Handler registry for the matrx-extend Chrome extension RPC endpoint.
+"""Handler registry for the matrx-extend Chrome extension command surface.
 
-Each command sent to `POST /extension/rpc` is dispatched to a handler
-registered here. Handlers are async, accept the request args dict + the
-underlying FastAPI `Request`, and return a JSON-serializable dict that
-becomes the `data` field of the outer `DesktopRpcResponse`.
+This registry is the SINGLE command surface for every transport the
+extension can arrive on:
+
+  * `POST /extension/rpc` (HTTP, loopback or tunnel) — `extension_routes.py`
+  * Supabase Broadcast rpc envelopes (cross-machine fallback) —
+    `cross_component_router.py` dispatches `kind:"rpc"` envelopes here via
+    `invoke_command`.
+
+Handlers are async, accept the request args dict + the underlying FastAPI
+`Request` (or `None` when the call arrived over a non-HTTP transport), and
+return a JSON-serializable dict that becomes the `data` field of the outer
+`DesktopRpcResponse` (HTTP) or the reply envelope payload (Broadcast).
 
 Adding a new command is a one-line decorator:
 
@@ -34,9 +42,52 @@ from app.tools.session import ToolSession
 
 logger = get_logger()
 
-HandlerFunc = Callable[[Dict[str, Any], Request], Awaitable[Dict[str, Any]]]
+# Second parameter is the FastAPI Request for HTTP-transported commands and
+# None for transport-agnostic paths (Supabase Broadcast). None of the current
+# handlers read it; any future handler that does MUST tolerate None or reject
+# loudly with a clear error.
+HandlerFunc = Callable[[Dict[str, Any], Optional[Request]], Awaitable[Dict[str, Any]]]
 
 HANDLERS: Dict[str, HandlerFunc] = {}
+
+
+async def invoke_command(
+    command: str,
+    args: Optional[Dict[str, Any]],
+    request: Optional[Request] = None,
+) -> Dict[str, Any]:
+    """Transport-agnostic command dispatch into the HANDLERS registry.
+
+    Both the Broadcast rpc router and any future non-HTTP transport call
+    this instead of duplicating lookup/error handling. The HTTP route in
+    `extension_routes.py` keeps its own dispatch loop because it layers
+    per-branch metrics + bridge-event publishing on top; the command
+    REGISTRY is shared, so the surface cannot drift between transports.
+
+    Returns an envelope-ready dict:
+      success:  {"ok": True,  "data": <handler dict>}
+      failure:  {"ok": False, "error": str, "error_type": str}
+    Never raises — transport code must always get a reply to send.
+    """
+    handler = HANDLERS.get(command)
+    if handler is None:
+        logger.warning("[extension_handlers] unknown command %r via invoke_command", command)
+        return {
+            "ok": False,
+            "error": f"Unknown command: {command}",
+            "error_type": "UnknownCommand",
+        }
+    try:
+        data = await handler(args or {}, request)
+    except Exception as e:
+        logger.error(
+            "[extension_handlers] command %r failed via invoke_command: %s",
+            command,
+            e,
+            exc_info=True,
+        )
+        return {"ok": False, "error": str(e), "error_type": type(e).__name__}
+    return {"ok": True, "data": data}
 
 
 def register(name: str) -> Callable[[HandlerFunc], HandlerFunc]:
@@ -68,7 +119,7 @@ def _get_build_identifier() -> Optional[str]:
 
 
 @register("health")
-async def handle_health(args: Dict[str, Any], req: Request) -> Dict[str, Any]:
+async def handle_health(args: Dict[str, Any], req: Optional[Request]) -> Dict[str, Any]:
     """Return engine health — matches the extension's `DesktopHealthSchema`.
 
     user_id is None for now; will be populated once auth handshake lands
@@ -83,7 +134,7 @@ async def handle_health(args: Dict[str, Any], req: Request) -> Dict[str, Any]:
 
 
 @register("version")
-async def handle_version(args: Dict[str, Any], req: Request) -> Dict[str, Any]:
+async def handle_version(args: Dict[str, Any], req: Optional[Request]) -> Dict[str, Any]:
     """Return the engine version + a build identifier when packaged."""
     return {
         "version": _APP_VERSION,
@@ -92,7 +143,7 @@ async def handle_version(args: Dict[str, Any], req: Request) -> Dict[str, Any]:
 
 
 @register("capabilities")
-async def handle_capabilities(args: Dict[str, Any], req: Request) -> Dict[str, Any]:
+async def handle_capabilities(args: Dict[str, Any], req: Optional[Request]) -> Dict[str, Any]:
     """Return the engine's tool catalog so the extension can advertise tools.
 
     Schema: `{"tools": [{name, description, category, input_schema}, ...]}`.
@@ -104,7 +155,7 @@ async def handle_capabilities(args: Dict[str, Any], req: Request) -> Dict[str, A
 
 
 @register("tool")
-async def handle_tool(args: Dict[str, Any], req: Request) -> Dict[str, Any]:
+async def handle_tool(args: Dict[str, Any], req: Optional[Request]) -> Dict[str, Any]:
     """Generic tool invocation — dispatch a single tool call and return the result.
 
     Args payload (validated here, NOT via Pydantic so the registry stays

@@ -25,6 +25,19 @@ Contract (media-gen spec, July 2026 — the frontend is built against this):
 
 Completed jobs persist into the media library (~/.matrx/media/generated/videos/
 + JSON sidecar); the job's item_id links to GET /media-library/file/{item_id}.
+
+Job-event vocabulary (polled via GET /video-gen/jobs/{job_id}; there is no
+push stream — clients poll):
+  status       — "queued" → "running" → terminal "completed" | "failed" |
+                 "cancelled" (see app/services/video_gen/jobs.py JobStatus)
+  progress     — 0.0–1.0 denoising progress while running
+  cancel_requested — flips true immediately on DELETE; the cancel lands at
+                 the next denoising step (status → "cancelled")
+  error        — human-readable failure text on "failed"
+
+Error responses additionally carry the aidream envelope {error, message,
+details} via EnvelopeRoute — ADDITIVE: every legacy key ("detail",
+"needs_download", "job_active", ...) is preserved unchanged.
 """
 
 from __future__ import annotations
@@ -41,7 +54,9 @@ from app.services.video_gen.jobs import get_video_job_store
 from app.services.video_gen.models import VIDEO_GEN_MODELS
 from app.services.video_gen.service import get_video_gen_service
 
-router = APIRouter(prefix="/video-gen", tags=["video-gen"])
+from app.api.error_envelope import EnvelopeRoute
+
+router = APIRouter(prefix="/video-gen", tags=["video-gen"], route_class=EnvelopeRoute)
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────

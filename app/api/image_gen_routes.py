@@ -8,6 +8,20 @@ the optional dependencies are absent.
 /image-gen/install       — POST: start background install of torch + diffusers
 /image-gen/install/status — GET: current install state (polling)
 /image-gen/install/stream — GET: SSE progress stream during install
+
+Job-event vocabulary (polled via GET /image-gen/jobs/{job_id}; the only push
+stream is /install/stream, whose SSE data lines carry the install progress
+dict {phase, percent, message}):
+  status       — "queued" → "running" → terminal "completed" | "failed" |
+                 "cancelled"
+  progress     — 0.0–1.0 denoising progress while running
+  cancel_requested — flips true immediately on cancel; the cancel lands at
+                 the next denoising step (status → "cancelled")
+  error        — human-readable failure text on "failed"
+
+Error responses additionally carry the aidream envelope {error, message,
+details} via EnvelopeRoute — ADDITIVE: every legacy key ("detail",
+"needs_download", ...) is preserved unchanged.
 """
 
 from __future__ import annotations
@@ -31,7 +45,9 @@ from app.services.image_gen.installer import (
 )
 from app.common.route_errors import safe_route
 
-router = APIRouter(prefix="/image-gen", tags=["image-gen"])
+from app.api.error_envelope import EnvelopeRoute
+
+router = APIRouter(prefix="/image-gen", tags=["image-gen"], route_class=EnvelopeRoute)
 
 
 # ── Response / Request schemas ────────────────────────────────────────────────

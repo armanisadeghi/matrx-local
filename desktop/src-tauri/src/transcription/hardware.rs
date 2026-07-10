@@ -225,30 +225,52 @@ fn try_vulkaninfo() -> Option<(Option<u64>, bool, bool, Option<String>)> {
 /// Parse the largest device-local heap size from vulkaninfo output (bytes → MiB).
 #[cfg(not(target_os = "macos"))]
 fn parse_vulkan_vram(vulkaninfo_output: &str) -> Option<u64> {
-    // vulkaninfo outputs lines like:
-    //   size   = <N> (0xHEX) (N gib)
-    // immediately after "memoryHeaps[N]:" with "flags = ..." containing "DEVICE_LOCAL"
+    // Real vulkaninfo heap blocks look like:
+    //   memoryHeaps[0]:
+    //       size   = 25233588224 (0x5e0000000) (23.50 GiB)
+    //       budget = ...
+    //       usage  = ...
+    //       flags: count = 1
+    //           MEMORY_HEAP_DEVICE_LOCAL_BIT
+    //
+    // i.e. `size =` comes BEFORE the DEVICE_LOCAL flag line. The previous
+    // parser armed on DEVICE_LOCAL and then looked for a following `size`
+    // line, which never exists inside the same heap block — so AMD/Intel
+    // VRAM was never detected and tier selection lowballed (24 GB GPU →
+    // tiny model). Track both orders: remember the current heap's size and
+    // record it when its DEVICE_LOCAL flag appears (and vice versa).
     let mut max_vram_bytes: u64 = 0;
-    let mut in_device_local_heap = false;
+    let mut current_heap_size: Option<u64> = None;
+    let mut current_heap_device_local = false;
+
+    let record = |size: Option<u64>, device_local: bool, max: &mut u64| {
+        if device_local {
+            if let Some(bytes) = size {
+                if bytes > *max {
+                    *max = bytes;
+                }
+            }
+        }
+    };
 
     for line in vulkaninfo_output.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("memoryHeaps[") {
-            in_device_local_heap = false;
-        }
-        if trimmed.contains("DEVICE_LOCAL") {
-            in_device_local_heap = true;
-        }
-        if in_device_local_heap && trimmed.starts_with("size") {
-            // "size   = 8589934592 (0x200000000) (8 gib)"
+            // New heap block — reset per-heap state.
+            current_heap_size = None;
+            current_heap_device_local = false;
+        } else if trimmed.starts_with("size") {
+            // "size   = 8589934592 (0x200000000) (8.00 GiB)"
             if let Some(num_str) = trimmed.split('=').nth(1) {
                 let num_part = num_str.trim().split_whitespace().next().unwrap_or("");
                 if let Ok(bytes) = num_part.parse::<u64>() {
-                    if bytes > max_vram_bytes {
-                        max_vram_bytes = bytes;
-                    }
+                    current_heap_size = Some(bytes);
+                    record(current_heap_size, current_heap_device_local, &mut max_vram_bytes);
                 }
             }
+        } else if trimmed.contains("DEVICE_LOCAL") {
+            current_heap_device_local = true;
+            record(current_heap_size, current_heap_device_local, &mut max_vram_bytes);
         }
     }
 

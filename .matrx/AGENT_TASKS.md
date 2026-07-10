@@ -327,7 +327,57 @@ _(none)_
 
 ---
 
+## Active (added 2026-07-10, matrx-ai 0.3.0 migration — Phase 3)
+
+- [ ] **/ai-surface: rebuild the /chat/ai HTTP surface host-side (NEXT PHASE,
+  blocks AI chat in the next release)** — matrx-ai 0.3.0 removed
+  `matrx_ai.app.*` (AuthMiddleware + chat/agent/conversation/cancel routers
+  moved into aidream's server app, not shipped in the library).
+  `app/api/chat_routes.py::build_ai_sub_app` is now an explicit 503 stub
+  (`error: ai_surface_migration_pending`). Build host-owned routes that set
+  `matrx_connect` AppContext + a stream emitter per request and drive
+  `matrx_ai.orchestrator.execute_until_complete` directly (reference:
+  aidream `aidream/api/routers/chat.py` + middleware/auth.py). The seams
+  (store/catalog/keys/jwt) are already wired and proven by
+  `tests/smoke/test_ai_client_host.py` — only the HTTP layer is missing.
+- [ ] **Upstream (aidream/packages/matrx-ai): providers ↔ orchestrator circular
+  import still present in 0.3.0** — a COLD `import matrx_ai.providers...`
+  dies (`providers/__init__` → `unified_client` → `orchestrator/__init__` →
+  `executor` → `from matrx_ai.providers import UnifiedAIClient` on the
+  partially-initialized package). matrx-local works around it by importing
+  `matrx_ai.orchestrator` first (engine.py, local_llm_registry.py, the
+  client-host smoke test — grep `import-order fix`). Fix belongs in matrx-ai
+  (lazy import in orchestrator/executor.py); then delete the three
+  workaround imports here.
+- [ ] **Upstream (matrx-ai 0.3.0): pricing/cost lookup ignores the host
+  ModelCatalog** — `config/usage_config.py::warm_pricing_lookup` goes through
+  `ai_catalog_manager.ensure_loaded()` → ORM `get_model("AiEndpoint")` →
+  `DBNotConfiguredError` in a client host, so token costs are never
+  calculated locally (loud ERROR per request in the log). The host catalog
+  already serves `pricing` on the model dict — matrx-ai should consult it.
+  Cosmetic-but-noisy; surfaced by `tests/smoke/test_ai_client_host.py` runs.
+- [ ] **Publish matrx-* 0.3.0-era packages to PyPI (OPERATOR)** — matrx-ai
+  0.3.0, matrx-connect 0.1.1, matrx-graph 0.1.0, matrx-runtime 0.0.1,
+  matrx-utils 1.1.0, matrx-orm 3.1.0 exist only on aidream main. Until
+  tag-pushed, `uv lock`/`uv sync`/CI cannot resolve matrx-local's pins; dev
+  venv runs hand-installed wheels (`uv build` in aidream + `uv pip install`)
+  and uv.lock is intentionally stale (still pins matrx-ai 0.1.26). After
+  publishing: `uv lock && uv sync --extra all` and drop the `--no-sync`
+  workaround note in tests/conftest.py if desired.
+- [ ] **Image-gen packages dir shadows venv deps (root-caused 2026-07-10)** —
+  `~/.matrx/image-gen-packages` is PREPENDED to sys.path
+  (`inject_image_gen_path`), and its protobuf 7.34.1 shadowed the venv's
+  protobuf 6 → xai-sdk import crash → AI engine init FAILED at boot.
+  Mitigated by an early `import google.protobuf` guard in
+  app/services/ai/engine.py + `[tool.uv] constraint-dependencies =
+  ["protobuf<7"]`. Real fix: the frozen build's runtime_hook injects before
+  any app import — audit which shared deps the image-gen dir can shadow and
+  either append (not prepend) or vendor-isolate them.
+
 ## Completed
+
+- [FEAT] matrx-local adopts matrx-ai 0.3.0 client-host seams (Phase 3) — 2026-07-10.
+  `matrx_ai.initialize(client_mode=True, ClientModeConfig)` → `matrx_ai.configure(api_key_resolver=…, conversation_store=…, model_catalog=…, get_jwt=…, server_url=…, source_app="matrx_local")` (engine.py; seam errors crash startup, no legacy fallback). `LocalConversationHandler` → `SQLiteConversationStore` (full ConversationStore protocol incl. new `get_conversation_data`; store-owned idempotency; loud logging on every failure path; `get_conversation_config` now raises on missing conversation per protocol). NEW `app/services/ai/model_catalog.py` (SqliteModelCatalog over the ai_models cache + wire_format enrichment from legacy endpoint tokens). NEW SqliteKeyResolver in key_manager (env-var-name → SQLite key; elevenlabs + fastino(PIONEER dual) added; os.environ shim KEPT but deprecated, removal note 2026-09-01). local_llm_registry: `AiModelManager._api_cache` pokes → `matrx_ai.catalog.register_runtime_model/unregister_runtime_model`; ImportError guard deleted. `ToolRegistryV2`→`ToolRegistry`, adapter `source_app`→`source_kind`, ToolDefinition `version`→`semver`. sync_engine.sync_models handles the reshaped `GET /api/ai-models` (endpoints/provider under `metadata.legacy`, api_class fallback, api_class/pricing/controls cached for the catalog). Root AGENT_TASKS.md circular-import task: RESOLVED-with-workaround (see Active upstream task). Tests: full suite 310 passed / 1 skipped incl. new `tests/smoke/test_ai_client_host.py` (mock-provider conversation round-trips through the REAL store+catalog on tmp SQLite; runtime-model registration). Engine sanity-boot on 22199: all seams wired, 108 tools, 58 catalog models all with explicit wire_format, /setup/debug problems=[]. /chat/ai is a 503 stub pending /ai-surface (see Active).
 
 - [FEAT] Tool registry unification, matrx-local side (Phase 4) — 2026-07-10.
   **One code-side truth:** new `app/tools/catalog.py` (108 entries) auto-built from dispatcher `TOOL_HANDLERS` + `tool_schemas` introspection; each entry carries canonical cloud name (`local_*` — the `tool.definition` name; 62 legacy names pinned verbatim, 49 of them live in Supabase bound to executor `matrx-local`; 46 generated `local_<snake_case>`, zero collisions verified against `tool.definition`), dispatcher name, input_schema (arg_model > introspection), category, tags, platform gating, timeout. `LOCAL_TOOL_MANIFEST` DELETED (no shims); consumers repointed: `local_tool_bridge` (registers all 108 under cloud names), engine Phase-A½ backfill, `GET /chat/local-tools`, local-DB `sync_tools` (62→108 rows).

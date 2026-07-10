@@ -53,6 +53,32 @@ _(none)_
 
 ## Active
 
+- [ ] **Folder delete is destructive and untombstoned (discovered 2026-07-10,
+  Phase 6 sync-contract audit)** — `DELETE /documents/folders/{folder_id}`
+  (`app/api/document_routes.py::delete_folder`) hard-deletes the local folder
+  directory (all note files) and fire-and-forgets ONE cloud
+  `delete_folder(folder_id)` call. The contained notes get NO SQLite
+  tombstones (`notes.is_deleted` stays 0 / rows keep `file_path`), so if the
+  cloud call fails (offline), the next `full_sync` sees "local file gone, no
+  tombstone" and RESURRECTS every note in the folder from the cloud. Fix
+  (route file was outside Phase 6 scope): on folder delete, soft-delete each
+  contained note's SQLite row (repo.soft_delete) and fire-and-forget
+  per-note `soft_delete_note` calls, so the existing full_sync
+  tombstone-propagation branch handles the offline case. Contract reference:
+  docs/SYNC_CONTRACT.md gap #2; enforcement pattern in
+  tests/parity/test_sync_contract.py.
+
+- [ ] **Stale "SQLite is the single source of truth" claims outside the sync
+  subsystems (discovered 2026-07-10)** — Contradict the ratified replica
+  doctrine (docs/SYNC_CONTRACT.md): `app/api/chat_routes.py:21`,
+  `app/services/ai/conversation_handler.py:9`, and the notes comment at
+  `app/config.py:266` ("local is source of truth, Supabase is sync target").
+  Reword to replica terms (local = working copy / first-access replica;
+  cloud = durable truth; conversations currently local-only per contract gap
+  #1). The parity test `test_no_sqlite_source_of_truth_claims_in_sync_modules`
+  guards the three sync directories only; these three files were outside
+  Phase 6 scope.
+
 - [ ] **Circular import: app.config ↔ app.common (discovered 2026-07-10)** —
   When `app.config` is the FIRST app module a process imports, its own import
   fails: `app/config.py:5` imports `app.common.platform_ctx`, which triggers

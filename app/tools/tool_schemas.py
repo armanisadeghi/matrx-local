@@ -140,13 +140,33 @@ def _extract_param_descriptions(docstring: str | None) -> dict[str, str]:
     return descriptions
 
 
+def _handler_signature(handler: Any) -> inspect.Signature:
+    """Signature with REAL type annotations.
+
+    Every tool module uses ``from __future__ import annotations`` (PEP 563),
+    so a plain ``inspect.signature()`` returns *string* annotations and every
+    parameter would silently degrade to ``{"type": "string"}``. ``eval_str=True``
+    resolves them against the handler's module globals; if a stray annotation
+    cannot be evaluated we fall back to the raw signature for that handler.
+    """
+    try:
+        return inspect.signature(handler, eval_str=True)
+    except (NameError, AttributeError, TypeError) as exc:
+        logger.warning(
+            "Could not resolve annotations for %s (%s) — its schema degrades "
+            "to string-typed parameters",
+            getattr(handler, "__name__", handler), exc,
+        )
+        return inspect.signature(handler)
+
+
 def generate_tool_schema(tool_name: str) -> dict[str, Any] | None:
     """Generate an Anthropic-compatible tool schema for a single tool."""
     handler = TOOL_HANDLERS.get(tool_name)
     if handler is None:
         return None
 
-    sig = inspect.signature(handler)
+    sig = _handler_signature(handler)
     docstring = inspect.getdoc(handler) or f"Execute the {tool_name} tool."
     param_docs = _extract_param_descriptions(docstring)
 

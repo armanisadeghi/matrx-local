@@ -370,9 +370,15 @@ def _coerce_tool_input(handler: Callable, tool_input: dict[str, Any]) -> dict[st
     This pass converts them to the declared parameter types so handlers don't crash.
     """
     try:
-        sig = inspect.signature(handler)
-    except (ValueError, TypeError):
-        return tool_input
+        # eval_str=True: the tool modules use `from __future__ import
+        # annotations`, so without it every annotation is a *string* and the
+        # type checks below silently never match (no coercion at all).
+        sig = inspect.signature(handler, eval_str=True)
+    except (ValueError, TypeError, NameError, AttributeError):
+        try:
+            sig = inspect.signature(handler)
+        except (ValueError, TypeError):
+            return tool_input
 
     coerced: dict[str, Any] = {}
     for key, value in tool_input.items():

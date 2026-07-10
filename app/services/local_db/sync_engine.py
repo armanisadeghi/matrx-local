@@ -1,10 +1,12 @@
 """Background sync engine — pulls cloud data into local SQLite.
 
-Architecture
-------------
-SQLite is the single source of truth for all data.  This engine is the ONLY
-component allowed to write cloud data into SQLite.  All other components read
-from SQLite only.
+Architecture (see docs/SYNC_CONTRACT.md — the ratified sync contract)
+---------------------------------------------------------------------
+The cloud is the durable source of truth; local SQLite (~/.matrx/matrx.db) is
+a FIRST-ACCESS REPLICA of it — a pull-only cache that makes reads instant and
+offline-proof, never a competing server.  This engine is the ONLY component
+allowed to write cloud catalog data into SQLite.  All other components read
+from SQLite only (the replica IS the read path).
 
 Sync sources:
   - AIDream server (/api/ai-models, /api/agents)

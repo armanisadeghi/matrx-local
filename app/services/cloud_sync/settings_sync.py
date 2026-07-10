@@ -2,10 +2,24 @@
 
 Handles bidirectional synchronization of all app settings between
 the local JSON file and the Supabase cloud database.
+See docs/SYNC_CONTRACT.md — the ratified sync contract — for how this
+subsystem fits the replica doctrine (local JSON is the working copy;
+the cloud row is the durable record).
 
-Settings are stored as a single JSON blob per instance. On sync,
-the engine compares updated_at timestamps to determine which side
-has newer data, and uses that as the source of truth.
+Settings are stored as a single JSON blob per user+instance. On sync,
+the engine compares updated_at timestamps and the newer side wins —
+acceptable ONLY because the cloud row is scoped per-instance, so the
+only competing writer for a row is this instance itself.
+
+PING-PONG GUARD (do not remove): every pull path persists the CLOUD
+timestamp via _save_local(updated_at=...). Stamping now() on pull made
+every pull look like a newer local edit — the next sync() pushed, which
+bumped the cloud timestamp, which made the following sync() pull; the
+in_sync state was unreachable and last-writer-wins windows opened against
+other devices (fixed in 9ca565245; pinned by tests/parity).
+
+API keys are NOT part of this blob: they live in the SQLite app_settings
+store (ApiKeysRepo) and never sync to the cloud.
 
 Offline mode: if cloud is unreachable, local settings are used and
 sync is retried on next startup or manual trigger.

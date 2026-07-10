@@ -173,7 +173,8 @@ CREATE TABLE IF NOT EXISTS prompts (
 CREATE INDEX IF NOT EXISTS idx_prompts_user ON prompts(user_id);
 CREATE INDEX IF NOT EXISTS idx_prompts_name ON prompts(name);
 
--- Notes: local copy of the user's notes (Supabase is sync target, not source of truth)
+-- Notes: local working copy of the user's notes (cloud is durable truth;
+-- this table is the first-access replica — see docs/SYNC_CONTRACT.md)
 CREATE TABLE IF NOT EXISTS notes (
     id          TEXT PRIMARY KEY,
     user_id     TEXT NOT NULL DEFAULT '',

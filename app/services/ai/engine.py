@@ -15,14 +15,22 @@ Initialization sequence
 
 matrx-local ALWAYS runs in client mode
 ---------------------------------------
+Data flow follows docs/SYNC_CONTRACT.md: the cloud is the durable source of
+truth and local SQLite (~/.matrx/matrx.db) is a first-access replica /
+working store, never a competing server.
+
   - No direct PostgreSQL / asyncpg connection is ever opened.
-  - Public data (models, tools, prompt builtins) is fetched from the AIDream
-    REST API by the matrx-ai library itself.
+  - Public data (models, tools, agent catalog) is fetched from the AIDream
+    REST API by the matrx-ai library itself; the local_db sync engine
+    separately caches the same catalog into SQLite for offline reads.
   - Conversation persistence is handled by LocalConversationHandler, which
-    writes to local SQLite (~/.matrx/matrx.db).
+    writes to local SQLite. NOTE: these conversations/messages are currently
+    LOCAL-ONLY — no reconnect push pipeline exists yet (contract gap #1 in
+    docs/SYNC_CONTRACT.md).
   - The user JWT is read from the auth_tokens SQLite table at call time so
     it automatically picks up token refreshes without re-initializing.
-  - AI provider calls (OpenAI, Anthropic, etc.) work in full.
+  - AI provider calls (OpenAI, Anthropic, etc.) work in full, using
+    locally-stored provider API keys (local-only, never synced).
 """
 
 from __future__ import annotations

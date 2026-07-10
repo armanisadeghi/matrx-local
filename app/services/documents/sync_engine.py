@@ -1,13 +1,23 @@
 """Notes sync engine — bidirectional sync between local .md files and Supabase.
 
-Architecture: LOCAL FIRST. Always.
+Architecture (see docs/SYNC_CONTRACT.md — the ratified sync contract)
+---------------------------------------------------------------------
+The local files are the WORKING COPY — a full first-access replica with
+complete offline read/write; the cloud (workbench.notes) is the durable
+source of truth the replica converges to.
 
-- Local file is always written first and is the source of truth.
-- Supabase sync is best-effort — a failed network never blocks or fails a request.
-- Sync is MANUALLY TRIGGERED ONLY — no automatic background sync.
+- Local file is always written first; cloud propagation follows.
+- Supabase sync is best-effort — a failed network never blocks or fails a
+  request; failed pushes are marked sync_status=failed and retried.
+- Sync is MANUALLY TRIGGERED ONLY — no automatic background sync
+  (plus the file watcher for external edits/deletes).
 - Three modes: push, pull, bidirectional.
 - Conflict detection uses content hashes and SQLite sync metadata.
-- Conflict resolution supports: keep_local, keep_remote, merge, split, exclude.
+- Conflicts are NEVER destructive: both versions are preserved under
+  .sync/conflicts/<note_id>/ until the user resolves with one of
+  keep_local, keep_remote, merge, append, split, exclude.
+- Deletions are tombstones on both sides (SQLite is_deleted, cloud
+  deleted_at) and propagate in both directions.
 
 SQLite tracks per-note sync status:
   never_synced | synced | pending_push | failed | excluded

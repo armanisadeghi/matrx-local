@@ -175,25 +175,59 @@ class SyncEngine:
             "xai_chat": "xai",
             "cerebras_chat": "cerebras",
         }
+        # The 2026-07 aidream catalog reshape (aidream c7cfe4349) dropped the
+        # top-level `endpoints` column; api_class is now the routing field.
+        # Legacy endpoints survive under metadata.legacy.endpoints. Map both.
+        api_class_prefix_map = {
+            "anthropic": "anthropic",
+            "openai": "openai",
+            "google": "google",
+            "gemini": "google",
+            "groq": "groq",
+            "together": "together",
+            "xai": "xai",
+            "grok": "xai",
+            "cerebras": "cerebras",
+        }
 
         models_to_save: list[dict[str, Any]] = []
         for row in models_raw:
             if row.get("is_deprecated"):
                 continue
-            endpoints: list[str] = row.get("endpoints") or []
+            metadata = row.get("metadata") or {}
+            legacy = metadata.get("legacy") if isinstance(metadata, dict) else {}
+            legacy = legacy if isinstance(legacy, dict) else {}
+
+            endpoints: list[str] = row.get("endpoints") or legacy.get("endpoints") or []
             if isinstance(endpoints, str):
                 try:
                     endpoints = json.loads(endpoints)
                 except Exception:
                     endpoints = []
+            api_class = str(row.get("api_class") or "")
+
             provider = None
             for ep in endpoints:
                 p = endpoint_map.get(ep)
                 if p:
                     provider = p
                     break
+            if not provider and api_class:
+                for prefix, p in api_class_prefix_map.items():
+                    if api_class.startswith(prefix):
+                        provider = p
+                        break
             if not provider:
+                # Not a locally-runnable chat provider (image/video/tts/... or
+                # unknown vendor) — keep the existing chat-only cache behavior.
                 continue
+            # Keep the chat-only filter honest under the api_class fallback:
+            # only text-out models belong in the chat model list.
+            capabilities = row.get("capabilities") or {}
+            if isinstance(capabilities, dict):
+                output = capabilities.get("output") or []
+                if output and "text" not in output:
+                    continue
 
             models_to_save.append({
                 "id": row.get("id", ""),
@@ -201,12 +235,17 @@ class SyncEngine:
                 "common_name": row.get("common_name", ""),
                 "provider": provider,
                 "endpoints": endpoints,
-                "capabilities": row.get("capabilities") or [],
+                "capabilities": capabilities,
                 "context_window": row.get("context_window"),
                 "max_tokens": row.get("max_tokens"),
                 "is_primary": bool(row.get("is_primary", False)),
                 "is_premium": bool(row.get("is_premium", False)),
                 "is_deprecated": False,
+                # Routing fields for the matrx-ai SqliteModelCatalog
+                # (app/services/ai/model_catalog.py) — ride along in raw_json.
+                "api_class": api_class or None,
+                "pricing": legacy.get("pricing"),
+                "controls": row.get("controls"),
             })
 
         await self._models_repo.upsert_many(models_to_save)

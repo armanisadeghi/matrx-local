@@ -53,6 +53,49 @@ _(none)_
 
 ## Active
 
+- [ ] **Heartbeat never bumps `app_instances.tunnel_updated_at` (discovered
+  2026-07-10, Phase 7 remote-control audit)** —
+  `app/services/cloud_sync/settings_sync.py::heartbeat` re-asserts
+  `tunnel_url` / `tunnel_ws_url` / `tunnel_active` every 5 min (correct) but
+  omits `tunnel_updated_at`, so that column only moves on explicit
+  start/stop (`instance_manager.update_tunnel_url`) and goes stale while a
+  tunnel is live (observed: stuck at 2026-05-10 on this Mac). Nothing gates
+  on it today (frontend resolve + aidream `_is_online` use `last_seen` +
+  `tunnel_active`), but it misleads humans reading the row. Fix: include
+  `tunnel_updated_at = now` in the heartbeat payload whenever the
+  tunnel_payload dict is included. NOT fixed in Phase 7 because
+  `settings_sync*` was owned by a concurrent agent.
+
+- [ ] **Silent no-op PATCHes to `app_instances` (discovered 2026-07-10)** —
+  Both `settings_sync.heartbeat` and `instance_manager.update_tunnel_url`
+  PATCH with `user_id=eq.&instance_id=eq.` filters; PostgREST returns 2xx
+  even when ZERO rows match (row deleted / RLS-hidden), so an orphaned
+  instance "heartbeats successfully" forever. The orphan detector only
+  fires via `list_instances`. Fix: request `Prefer: return=representation`
+  (or `count=exact`) and treat 0 affected rows as an orphan signal.
+
+- [ ] **`app_instances` cross-user duplicate rows — DB cleanup + product
+  decision (discovered 2026-07-10)** — `instance_id`
+  `inst_940d435f8faf313e7261230f7f204db0` (linux, DESKTOP-9HE9A6L) exists
+  under TWO user_ids (`4cf62e4e-…` and `34ed4fc3-…`). This is NOT a
+  registration bug: the code upserts on the real unique constraint
+  `(user_id, instance_id)` (`settings_sync.register_instance`,
+  `on_conflict=user_id,instance_id`), and cross-user rows are invisible to
+  the client under RLS (`auth.uid() = user_id`) — the desktop app cannot
+  detect or delete the other user's row. Cleanup (admin, one-off):
+  `delete from app_instances where id = 'b7900a03-5fed-480a-8f02-29636f5a0606';`
+  (the stale 34ed4fc3 copy, last_seen 2026-03-03). Decision for Arman: if
+  one-machine-one-row is desired, a `unique(instance_id)` constraint would
+  BREAK second-account registration under current RLS (upsert can't adopt a
+  row it can't see) — needs a SECURITY DEFINER claim RPC instead.
+
+- [ ] **Mirror the envelope `v` field into matrx-frontend (discovered
+  2026-07-10, Phase 7)** — `app/api/cross_component_envelope.py` and
+  matrx-extend `src/lib/messaging/cross-component-envelope.ts` now carry a
+  `v: 2` version field (optional, defaults to 2). The canonical schema
+  `matrx-frontend/lib/types/bridge-envelope.ts` needs the same optional
+  field to stay byte-parity (v1/v2 publishers parse unchanged).
+
 - [ ] **Folder delete is destructive and untombstoned (discovered 2026-07-10,
   Phase 6 sync-contract audit)** — `DELETE /documents/folders/{folder_id}`
   (`app/api/document_routes.py::delete_folder`) hard-deletes the local folder

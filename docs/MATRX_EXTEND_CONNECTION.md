@@ -1,6 +1,8 @@
 # Matrx Extend ↔ Matrx Local Connection
 
-> Where the Chrome extension meets the desktop engine. Living doc; update on every protocol change.
+> Where the Chrome extension meets the desktop engine. Living doc; update on
+> every protocol change. Everything below is SHIPPED unless explicitly marked
+> pending — verified against live code 2026-07-10.
 
 ## Role
 
@@ -8,297 +10,280 @@
 (filesystem, shell, Whisper transcription, llama-server, OpenWakeWord, the
 unified scrape proxy, ~80 dispatcher tools) over a loopback FastAPI sidecar.
 `matrx-extend` is the Chrome extension that drives a frontier browser-agent
-harness. The extension wants to *invoke* the local OS surface (extension →
-local) **and** receive engine-pushed events when local code needs to drive
-the browser (local → extension). This document is the contract for both
-directions, the auth model, and how to add new commands without breaking
-the channel.
+harness. The extension *invokes* the local OS surface (extension → local)
+**and** services engine-pushed tool invocations when local code needs to
+drive the browser (local → extension). This document is the contract for both
+directions, the auth model, and how to add new commands without breaking the
+channel.
 
-## Surface area
+## Surface area (all shipped)
 
 | File | What it does | Direction |
 |---|---|---|
-| `app/api/extension_routes.py` (lines 23-47) | The `POST /extension/rpc` endpoint. Currently inline-handles only `command == "health"`; everything else returns `Unknown command`. Will delegate to a registry in Phase 1. | extension → local |
-| `app/api/extension_handlers.py` (Phase 1, planned) | The `HANDLERS` dict — `command → async def handler(payload, request) -> dict`. One canonical place for every RPC verb, including the generic `tool` command that delegates into the dispatcher. | extension → local |
-| `app/tools/dispatcher.py` (`dispatch(tool_name, tool_input, session) -> ToolResult`) | The clean public function any RPC handler uses to invoke any of the ~80 tools. Already has session, error envelopes, and tool-level auth checks. | extension → local |
-| `app/websocket_manager.py` (lines ~200-220) | `broadcast()` and `broadcast_notification()` — production-ready engine→client push primitives over the existing `/ws` channel. Currently used by other features; the extension does not yet subscribe. | local → extension |
-| `app/api/extension_invoke.py` (Phase 2, planned) | `invoke_extension_tool(tool_name, args, *, timeout=30) -> dict` — the outbound RPC primitive. Sends an envelope over the dedicated `/extension/ws` reverse channel and awaits a correlated reply by `callId`. | local → extension |
+| `app/api/extension_routes.py` | `POST /extension/rpc` (dispatches into `HANDLERS`) + the `/extension/ws` reverse-push WebSocket route. | both |
+| `app/api/extension_handlers.py` | The `HANDLERS` registry — `health`, `version`, `capabilities`, `tool` (generic dispatcher passthrough). Plus `invoke_command(command, args, request=None)` — the transport-agnostic dispatch every non-HTTP transport uses. **One command surface for all transports.** | extension → local |
+| `app/tools/dispatcher.py` | `dispatch(tool_name, tool_input, session) -> ToolResult` — the public function the `tool` command uses to reach all ~80 engine tools. | extension → local |
+| `app/api/extension_invoke.py` | `invoke_extension_tool(tool_name, args, session_id, timeout_seconds=30)` — engine-side outbound RPC primitive. Sends `extension.invoke` over `/extension/ws`, awaits the correlated `extension.result` by `callId`. | local → extension |
+| `app/api/extension_ws_manager.py` | Per-connection session registry + callId-keyed Future table for `/extension/ws`. | local → extension |
+| `app/api/extension_bridge_routes.py` | Introspection/driver endpoints: `GET /extension/sessions`, `POST /extension/invoke` (HTTP wrapper around `invoke_extension_tool`), `POST /extension/sessions/disconnect`, broadcast status/test, metrics, boot-check, `WS /extension/bridge-events`. | both |
+| `app/api/extension_broadcast.py` | Supabase Broadcast substrate — per-user channel `matrx-local-bridge:<userId>`. `connect_broadcast` / `disconnect_broadcast` / `publish_to_extension` / `publish_envelope`. Inbound envelopes route into the dispatcher (below). | both |
+| `app/api/cross_component_envelope.py` | v2 CrossComponentEnvelope Python mirror (`v`, `kind`, `direction`, `action`, `requestId`, `payload`, `timestamp`, `fromInstance`, `toInstance`). Mirrors `matrx-frontend/lib/types/bridge-envelope.ts` and `matrx-extend/src/lib/messaging/cross-component-envelope.ts`. | both |
+| `app/api/cross_component_router.py` | The inbound Broadcast dispatcher. `kind:"rpc"` envelopes are invoked against the SAME `HANDLERS` registry as `/extension/rpc` and answered with a reply envelope (`action: "<action>.result"`, same `requestId`, `direction: "local->extension"`). `wake` (Phase 3c) and `presence` remain log-only. | extension → local |
 
-The Phase 2 dedicated channel `/extension/ws` is a sibling of the existing
-`/ws` rather than a reuse, so engine-internal broadcasts (downloads, model
-loading, transcription progress) stay on `/ws` and the extension reverse
-channel stays focused on tool calls. Both run through
-`app/websocket_manager.py` for connection bookkeeping.
+Extension-side counterparts (in matrx-extend): `src/lib/desktop/discovery.ts`
+(port probe 22140–22159 + cache), `src/lib/desktop/http.ts` (`rpcHttp` →
+`POST /extension/rpc`, pairing token), `src/lib/desktop/ws-client.ts` +
+`ws-offscreen.ts` (MV3 offscreen-document WebSocket), and the reverse-invoke
+consumer in `src/lib/background/bootstrap.ts`
+(`registerWsReverseInvocationHandler` → `handleWebmcpCall` → tool registry →
+`extension.result`). The `desktop_run_command` privileged tool
+(`src/lib/tools/handlers/privileged.ts`) is the browser→engine caller: agents
+invoke any `HANDLERS` command through it, including the generic `tool`
+passthrough to the whole dispatcher catalog.
+
+## Message envelopes (versioned)
+
+1. **`/extension/rpc` (HTTP):** request `{command, args}` → response
+   `{ok, data?, error?}` (`DesktopRpcResponse`). Tool-layer failures ride
+   inside `data` as `{ok: false, error, error_type}` so the extension can
+   distinguish "never ran" from "ran and failed".
+2. **`/extension/ws` (reverse push):**
+   - engine → extension: `{"type":"extension.invoke","callId","toolName","args"}`
+   - extension → engine: `{"type":"extension.result","callId","ok",("result"|"error","errorType"?)}`
+   - liveness: `{"type":"ping"}` ⇄ `{"type":"pong", engine_version, tool_catalog_hash}`;
+     a hash mismatch makes the extension refetch `capabilities`.
+   - on connect the engine sends `{"type":"hello", session_id, engine_version, tool_catalog_hash}`.
+3. **Supabase Broadcast (cross-machine fallback):** v2 CrossComponentEnvelope,
+   **`v: 2`** (version field; v1 publishers omit it and all v2 fields — they
+   parse with defaults). Inbound `kind:"rpc"` dispatches `action` as a
+   `HANDLERS` command with `payload` as its args; the reply envelope carries
+   the `invoke_command` result (`{ok, data?}` / `{ok:false, error, error_type}`)
+   in `payload`, `action: "<action>.result"`, and the caller's `requestId`.
+   Bump `v` ONLY on a breaking wire change; keep parse back-compat one version.
 
 ## Observability
 
-Every call into `/extension/*` (HTTP RPC, the introspection endpoints
-under `/extension/sessions|invoke|broadcast/*`, plus WebSocket lifecycle
-on `/extension/ws`) is timed and counted by an in-memory ring in
-`app/api/extension_metrics.py`. The data resets on engine restart by
-design — these are diagnostics, not audit logs.
+Every call into `/extension/*` (HTTP RPC, the introspection endpoints, WS
+lifecycle on `/extension/ws`) and every Broadcast rpc dispatch (metric name
+`broadcast:<command>`) is timed and counted by an in-memory ring in
+`app/api/extension_metrics.py`. Resets on engine restart by design.
 
-Endpoints (Bearer-JWT-gated like the rest of `/extension/*`):
+  * `GET  /extension/metrics` — JSON snapshot per command name
+    (`tool`, `bridge:invoke`, `ws:connect`, `ws:message`, `broadcast:tool`, …)
+    with `count`, `error_count`, `last_n_latencies_ms` (≤100),
+    `last_called_at`, `last_error`.
+  * `POST /extension/metrics/reset` — drops every row. Idempotent.
 
-  * `GET  /extension/metrics`         — JSON snapshot, one row per
-    command name (`rpc.command` → `tool`, `bridge:invoke`,
-    `bridge:sessions`, `ws:connect`, `ws:disconnect`, `ws:message`,
-    etc.). Each row carries `count`, `error_count`,
-    `last_n_latencies_ms` (deque of up to 100), `last_called_at` (unix
-    ms), `last_error`.
-  * `POST /extension/metrics/reset`   — drops every row. Idempotent.
-
-Bounds: per-command latency ring caps at 100 samples; distinct command
-names cap at 200 (a synthetic `_overflow` row appears in the snapshot
-when that cap is hit so callers can warn).
-
-The desktop **Bridge Test** page (Settings → Bridge Test) has a "Request
-metrics" sub-section inside Panel 1 (Engine self-check) that polls these
-endpoints every 2s while visible and renders count / errors / p50 / p95
-per command, plus a Reset button. p50 / p95 are computed client-side
-from the latency deque.
+Bounds: latency ring caps at 100 samples/command; 200 distinct commands (a
+synthetic `_overflow` row appears past the cap). The desktop **Bridge Test**
+page (Settings → Bridge Test) polls these and renders count / errors / p50 /
+p95 per command.
 
 ### Boot self-check
 
-Every engine startup runs a single sweep that verifies the bridge is
-coherent before the first user request:
-
-  1. all expected `/extension/*` HTTP and WS routes are registered on the
-     FastAPI app
-  2. JWT validation posture (full crypto verification vs. degraded
-     permissive Bearer-presence) — including a smoke-test that confirms
-     the configured HS256 secret rejects an obviously bad token
-  3. tunnel-state singleton answers without raising
-  4. metrics module resets cleanly so this boot starts with empty counters
-  5. `~/.matrx/local.json` discovery file exists, parses as JSON, and
-     carries a valid `port`
-
-The result is logged as a multi-line `[boot] …` block at INFO level,
-with `warn` rows logged at WARNING and `fail` rows at ERROR so a degraded
-posture surfaces immediately in the startup log. The summary is also
-cached and exposed at:
-
-  * `GET  /extension/boot-check`     — last cached summary (sub-ms read)
-  * `POST /extension/boot-check/run` — re-run live, refresh the cache,
-    return the new summary
-
-Both endpoints are gated by the same Bearer-JWT path that protects the
-rest of `/extension/*`. See `app/api/extension_boot_check.py` for the
-`BootCheckSummary` dataclass and the per-check implementations. The
-desktop Bridge Test panel renders the summary as a table inside Panel 1
-(Engine self-check) with a "Re-run self-check" button that hits
-`POST /extension/boot-check/run`.
-
-A failed check sets `summary.ok = false` but never blocks startup — the
-bridge can be partially broken and the rest of the engine still needs
-to come up.
+Every engine startup verifies: all `/extension/*` routes registered, JWT
+posture (incl. bad-token smoke test), tunnel-state singleton, metrics reset,
+discovery file validity. Logged as a `[boot] …` block; cached at
+`GET /extension/boot-check`, re-runnable via `POST /extension/boot-check/run`.
+See `app/api/extension_boot_check.py`. A failed check never blocks startup.
 
 ## Substrates
 
-The engine is reachable via **two URLs** at any given time:
+The engine is reachable via **three** paths:
 
-  1. **Local loopback (always)** — `http://127.0.0.1:<port>` and
-     `ws://127.0.0.1:<port>/ws` on the FastAPI sidecar (`22140` by
-     default; auto-scans `22140-22159`). Zero-cost path for any client
-     on the same machine as the engine. Default for the extension.
-  2. **Cloudflare tunnel (when active)** — a `https://<random>.trycloudflare.com`
-     URL produced by the cloudflared subprocess, plus its
-     `wss://...trycloudflare.com/ws` equivalent. Lets a client on a
-     different network (or behind a corporate firewall that blocks
-     loopback access) reach the same engine. Quick mode (default) gets
-     a fresh URL on every restart; named mode (set
-     `CLOUDFLARE_TUNNEL_TOKEN`) produces a stable URL.
-
-Both URLs hit the same FastAPI app and the same routes — there is no
-"tunnel-only" surface. Auth, middleware, and rate limiting are
-identical regardless of which URL was dialed.
-
-The substrates within those URLs:
-
-- **HTTP REST** — `POST /extension/rpc` for the synchronous primitives
-  the extension uses (health, version, capabilities, the generic `tool`
-  passthrough). Single request/response, JSON in / JSON out.
-- **WebSocket (engine → client push)** — `/ws` is the existing broadcast
-  channel for download progress, model lifecycle, transcription events, etc.
-  Production-ready and unused by the extension today.
-- **WebSocket (extension reverse channel)** — `/extension/ws` is the
-  dedicated bidirectional channel where the engine asks the extension
-  to run a browser tool. Envelope:
-  - request: `{ "type": "extension.invoke", "callId": "<uuid>", "toolName": "...", "args": { ... } }`
-  - reply: `{ "type": "extension.result", "callId": "<uuid>", "ok": true, "result": { ... } }`
-    or `{ "type": "extension.result", "callId": "<uuid>", "ok": false, "error": "..." }`
-  Default timeout 30 seconds; `invoke_extension_tool` rejects with a
-  `TimeoutError` after that and the engine resumes whatever path called it.
-- **Future fallback — Supabase Broadcast** — when extension and engine
-  cannot reach either of the two URLs above (e.g. cloudflared blocked,
-  user on a captive portal), both sides subscribe to channel
-  `matrx-local-bridge:<userId>` over Supabase Realtime. Not implemented
-  yet; design slot reserved.
+  1. **Local loopback (always)** — `http://127.0.0.1:<port>` (`22140` default;
+     auto-scans `22140–22159`). Default for the extension.
+  2. **Cloudflare tunnel (when active)** — `https://<random>.trycloudflare.com`
+     (quick mode) or a stable URL (named mode, `CLOUDFLARE_TUNNEL_TOKEN`).
+     Same FastAPI app, same routes, same auth. See the runbook below for the
+     full remote-control chain.
+  3. **Supabase Broadcast (cross-machine fallback)** — per-user channel
+     `matrx-local-bridge:<userId>`; rpc envelopes dispatch into the same
+     `HANDLERS` registry. Gated by the `extension_broadcast_enabled` setting
+     (default ON). The engine subscribes when the C-bridge orchestrator calls
+     `connect_broadcast(user_id)` — subscription is NOT automatic on boot.
 
 ### Discovery primitives
 
-- **`~/.matrx/local.json` (on-disk, public)** — the bootstrap discovery
-  file. Always contains `port`, `host`, `url`, `ws`, `pid`, `version`.
-  When the Cloudflare tunnel is active, also contains `tunnel_url` and
-  `tunnel_ws`. This is what un-authenticated clients read to learn how
-  to reach the engine before they can present a token.
-- **`GET /extension/tunnel/status` (HTTP, authenticated)** — the
-  runtime introspection counterpart. Same data plus `active` (live
-  state from the tunnel manager singleton), the engine's `local_url`,
-  the `mode` (`quick` / `named`), `uptime_seconds`, and a `preferred`
-  hint (`"local"` / `"tunnel"`) telling the extension which URL it
-  *should* use right now. The hint flips to `"tunnel"` only when the
-  tunnel is up *and* the engine was started with
-  `MATRX_PREFER_TUNNEL=true` — otherwise the engine recommends the
-  cheaper loopback path. Backed by the in-memory singleton in
-  `app/api/tunnel_state.py`; updates flow from `run.py`'s discovery-file
-  writers and `app/api/tunnel_routes.py`'s start/stop handlers.
+- **`~/.matrx/local.json`** — bootstrap discovery file: `port`, `host`,
+  `url`, `ws`, `pid`, `version`, plus `tunnel_url` / `tunnel_ws` when the
+  tunnel is active (written on boot auto-start AND on `POST /tunnel/start`).
+- **`GET /extension/tunnel/status`** (authenticated) — live runtime state:
+  `active`, `local_url`, `mode` (`quick`/`named`), `uptime_seconds`, and a
+  `preferred` hint (`"tunnel"` only when up AND `MATRX_PREFER_TUNNEL=true`).
+  Backed by `app/api/tunnel_state.py`.
 
 ## Auth model
 
-- Bearer token in `Authorization: Bearer <token>` header on REST calls and
-  in the `?token=<token>` query param on the WebSocket handshake (Chrome's
-  WebSocket constructor cannot set headers; query param is the standard
-  workaround).
-- Token may be either a Supabase JWT issued by the same project the
-  extension uses (`txzxabzwovsujtloxrus`) — JWTs are reusable across
-  surfaces — or the local `API_KEY` (auto-generated on first engine boot,
-  written into `~/.matrx/local.json`). The extension prefers the Supabase
-  JWT so user identity flows end-to-end; the local API key is the offline
-  fallback.
-- **JWT validation on `/extension/*`.** Every request to `/extension/*`
-  (HTTP and WebSocket) goes through
-  `app/api/extension_auth.py::validate_extension_principal`. The engine
-  is a desktop sidecar — it runs on the user's own machine and therefore
-  CANNOT have a server-side JWT signing secret (no `SUPABASE_JWT_SECRET`
-  or any equivalent). Two posture options:
-    1. **JWKS / asymmetric (only crypto path).** Whenever `SUPABASE_URL`
-       is set AND the project issues asymmetric tokens (RS256/ES256),
-       the engine fetches `<SUPABASE_URL>/auth/v1/.well-known/jwks.json`
-       and verifies with the advertised algorithm. Same pattern the
-       remote scraper-service uses. Keys are cached for one hour by
-       `jwt.PyJWKClient`. JWKS-verified tokens fail closed on bad
-       signature or expired.
-    2. **Loopback presence-only (the desktop default).** HS256 tokens
-       cannot be verified by JWKS (and the engine has nowhere to store
-       a shared secret), so they pass through with presence-only
-       checking on loopback. The trust boundary on a desktop install is
-       the loopback socket itself, not the JWT signature.
-  Missing-token requests always return HTTP 401 / WS close 1008
-  regardless of mode. The principal (`user_id`, `email`, `is_anon`,
-  `verified`) is stashed on `request.state.principal`; `verified=True`
-  means the token went through the JWKS crypto path,
-  `verified=False` means it was accepted on presence over loopback.
-- **Other engine routes are unchanged.** `/ws`, `/tools/*`, `/chat/*`,
-  etc. continue to use the upstream `AuthMiddleware` (Bearer presence
-  only). The user trusts their own desktop UI / CLI on those surfaces;
-  the second layer is specific to `/extension/*` because that's the
-  surface the Chrome extension drives.
-- **Tunnel mode preserves the same auth posture.** Cloudflare relays
-  requests to `127.0.0.1:<port>` over an outbound tunnel — every
-  request still hits the FastAPI app, still walks the upstream
-  `AuthMiddleware`, and `/extension/*` requests still go through
-  `validate_extension_principal` for the JWT signature + expiry check.
-  There is no auth bypass on the tunnel path; remote callers must
-  present a valid Supabase JWT just like local callers do. The FastAPI
-  app continues to bind `127.0.0.1` only, so no port is exposed to the
-  public internet directly — the public URL is reachable only through
-  the cloudflared subprocess that proxies inbound traffic to loopback.
-- Port discovery: the engine writes the actual chosen port to
-  `~/.matrx/local.json` after startup. The Chrome extension's SW cannot
-  read that file, so it probes `GET /health` across the documented scan
-  range (22140–22159) in parallel and caches the winner in
-  `chrome.storage.local` for 30 minutes. The probe **must** stay on
-  `GET /health` (which is in `_PUBLIC_PATHS`); probing `/extension/rpc`
-  without a bearer trips the upstream `AuthMiddleware` and produces
-  one "missing bearer token" warning per cache-miss alarm tick. See
-  `src/lib/desktop/discovery.ts` in matrx-extend and the `connect-local`
-  skill there.
+- Bearer token in `Authorization` header (REST) or `?token=` query param (WS
+  upgrades — browsers cannot set WS headers).
+- The extension uses the pairing token (Settings → Pair desktop) — it never
+  sends the raw Supabase access token to a probed localhost port (audit P1-5).
+- **`/extension/*` validation** (`app/api/extension_auth.py::validate_extension_principal`):
+  a malformed bearer (not a JWT) fails closed with 401. Well-formed tokens:
+  1. **JWKS / asymmetric (RS256/ES256)** — verified locally against
+     `<SUPABASE_URL>/auth/v1/.well-known/jwks.json`; fails closed.
+  2. **HS256 / unverifiable** — introspected against the Supabase auth
+     server; if unconfirmed: rejected over the tunnel, accepted
+     presence-only over loopback (the socket is the boundary).
+  Over the tunnel there is additionally an **owner check** — a valid token
+  from a different AI Matrx user gets 403 on `/extension/*` and `/sandbox/*`.
+- Missing token → HTTP 401 / WS close 1008, always. The principal lands on
+  `request.state.principal` (`verified=True` only via crypto/introspection).
+- Port discovery: the extension probes `GET /health` (public) across
+  22140–22159 and caches the winner 30 min. Never probe `/extension/rpc`
+  without a bearer — it trips AuthMiddleware warnings.
 
 ## Adding a command inbound (extension → matrx-local)
 
-Goal: a new verb the extension can call over `POST /extension/rpc`.
+One registration serves BOTH transports (HTTP rpc + Broadcast rpc):
 
-1. **Pick a name.** Lowercase, dotted if it has a domain — e.g.
-   `fs.list_directory`, `clipboard.read`, `tool` (the generic dispatcher
-   passthrough). Stable; renaming is a breaking change for the extension.
-2. **Write the handler.** In `app/api/extension_handlers.py` (will be
-   created in Phase 1) add an entry to the `HANDLERS` dict. Signature:
+1. **Pick a name.** Lowercase, dotted if domain-scoped (`fs.list_directory`).
+   Renaming is a breaking change for the extension.
+2. **Register in `app/api/extension_handlers.py`:**
    ```python
-   async def fs_list_directory(payload: dict, request: Request) -> dict:
-       path = payload.get("path")
-       # Validate, run, return a JSON-serialisable dict.
-       return {"entries": [...]}
-   HANDLERS["fs.list_directory"] = fs_list_directory
+   @register("fs.list_directory")
+   async def fs_list_directory(args: Dict[str, Any], req: Optional[Request]) -> Dict[str, Any]:
+       ...
    ```
-3. **For tool invocations, use the generic `tool` command.** Don't add one
-   handler per tool. The single handler below makes every dispatcher tool
-   reachable to the extension without further wiring:
-   ```python
-   from app.tools.dispatcher import dispatch
-   async def tool_handler(payload: dict, request: Request) -> dict:
-       result = await dispatch(
-           tool_name=payload["tool_name"],
-           tool_input=payload.get("tool_input", {}),
-           session=request.state.session,
-       )
-       return result.model_dump()
-   HANDLERS["tool"] = tool_handler
-   ```
-4. **Update the dispatch line in `extension_routes.py`** to look up the
-   command in `HANDLERS` and fall through to the existing
-   `Unknown command` error if missing. The `health` branch stays inline
-   for backward compatibility.
-5. **Auth and validation** — handlers receive the already-authenticated
-   `Request`. Re-validate any path / shell-command / tool-name input
-   against the allowlist for that surface. Never trust `payload`.
-6. **Errors** — raise structured errors the wrapper turns into
-   `DesktopRpcResponse(ok=False, error=str(e))`. Don't return half-states.
-7. **Test with curl** (replace token / port from `~/.matrx/local.json`):
+   `req` is the FastAPI Request over HTTP and `None` over Broadcast —
+   handlers must tolerate None or reject loudly.
+3. **For tool invocations use the existing generic `tool` command** — never
+   one handler per tool.
+4. **Auth/validation** — never trust `args`; re-validate paths/commands.
+5. **Errors** — raise; the HTTP route converts to `ok=false`, the Broadcast
+   router converts to a `{ok:false, error, error_type}` reply payload.
+6. **Update** `tests/characterization/test_extension_rpc_characterization.py`
+   (`EXPECTED_COMMANDS` is pinned) and the extension client.
+7. **Test with curl** (port/token from `~/.matrx/local.json`):
    ```bash
    curl -s -X POST http://127.0.0.1:22140/extension/rpc \
-     -H "Authorization: Bearer $TOKEN" \
-     -H "Content-Type: application/json" \
-     -d '{"command":"fs.list_directory","args":{"path":"/Users/me"}}'
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"command":"tool","args":{"tool_name":"SystemInfo","tool_input":{}}}'
    ```
 
 ## Calling the extension outbound (matrx-local → extension)
 
-Goal: engine-side code drives a browser tool (open a tab, read a page,
-take a screenshot) on the user's currently-connected extension.
+```python
+from app.api.extension_invoke import invoke_extension_tool
+result = await invoke_extension_tool("read_page", {"mode": "text"}, session_id, timeout_seconds=30)
+# result = {"type": "extension.result", "callId": ..., "ok": bool, "result"|"error"...}
+```
 
-1. **Confirm the extension is connected.** `app/websocket_manager.py`
-   tracks live `/extension/ws` sessions per user. If none exist, fall back
-   to `broadcast_notification` over `/ws` so the user sees a "no extension
-   attached" toast and you fail the call cleanly.
-2. **Build the envelope.** Phase 2 will add
-   `app/api/extension_invoke.py::invoke_extension_tool`:
-   ```python
-   from app.api.extension_invoke import invoke_extension_tool
-   result = await invoke_extension_tool(
-       tool_name="take_screenshot",
-       args={"tab_id": 47},
-       timeout=30,
-   )
-   ```
-3. **Internals.** The function generates a `callId`, sends
-   `{"type":"extension.invoke","callId":...,"toolName":...,"args":...}`,
-   parks an `asyncio.Future` keyed by `callId`, and resolves on the matching
-   `extension.result` reply. 30 s default timeout; configurable per call.
-4. **Errors.** Three failure modes the caller must handle: no extension
-   attached, timeout, extension-side error (`ok: false, error: ...`).
-   Treat all three as soft failures — never crash the engine because the
-   browser disconnected.
-5. **Idempotency.** The reverse channel does not retry on its own. If you
-   need at-least-once semantics, the caller is responsible for retry +
-   deduplication.
+- Get a `session_id` from `extension_ws_manager.list_active_sessions()` (or
+  `GET /extension/sessions`). No session → fail cleanly, don't hang.
+- Failure modes to handle: no extension attached (RuntimeError), timeout
+  (RuntimeError), mid-call disconnect (ConnectionError), extension-side error
+  (`ok: false`). All soft failures.
+- The extension services these via `handleWebmcpCall` with the SAME
+  permission gating as page/frontend callers: `privileged` and `ask-user`
+  tier tools are rejected, `action` tier always confirms with the user.
+- No retries on the channel; callers own retry + dedup.
+- HTTP driver for testing: `POST /extension/invoke {session_id, tool_name, args, timeout_seconds}`.
+
+## Verification status (2026-07-10)
+
+- **Engine-side round trip: VERIFIED in CI-grade tests.**
+  `tests/smoke/test_extension_channel.py` runs the real engine (port 22199)
+  and exercises: `POST /extension/rpc` `tool` → real dispatcher
+  (`SystemInfo`), 401 on missing bearer, unknown-command envelope, WS
+  `hello`/`ping`/`pong`, and the FULL reverse-invoke callId round trip
+  (`POST /extension/invoke` → `extension.invoke` → simulated extension →
+  `extension.result` → HTTP response) including the error path.
+  `tests/characterization/test_broadcast_rpc_dispatch.py` pins the Broadcast
+  rpc dispatcher (reply shape, filtering, unknown command, tool routing).
+- **Extension-side units:** matrx-extend `tests/unit/ws-invoke.test.ts`
+  (reverse-invoke consumer) + existing dispatch tests; `pnpm test`.
+- **Pending: true in-browser E2E.** Manual steps:
+  1. Start the engine (`uv run python run.py`), load the extension unpacked,
+     pair it (Settings → Pair desktop).
+  2. Extension side: confirm `transport: 'http'` in the Bridges debug panel;
+     the WS auto-connects (`ws state: … → open` in the debug log).
+  3. Browser → engine: in a Pilot chat with privileged tools, call
+     `desktop_run_command` with `{"command":"tool","args":{"tool_name":"SystemInfo","tool_input":{}}}`.
+  4. Engine → browser: `GET /extension/sessions` for the session_id, then
+     `curl -X POST /extension/invoke -d '{"session_id":"…","tool_name":"read_page","args":{"mode":"text"}}'`
+     with the pair token; confirm page text returns.
+  5. Watch `GET /extension/metrics` for `tool`, `bridge:invoke`, `ws:*` rows.
+
+---
+
+## Remote-control runbook — the 6-link chain (web → this machine)
+
+How a web/mobile client ends up executing on this PC, and how to verify each
+link. Auth for `/extension/*` and `/tunnel/*` curl calls: any well-formed JWT
+works on loopback; use the API key from `~/.matrx/local.json` where noted.
+
+**The chain:** engine → tunnel → `app_instances` row → aidream local-proxy →
+frontend resolve → SandboxPanel.
+
+**Tunnel lifecycle truth (code-verified):**
+- Auto-start on boot is gated by the `tunnel_enabled` setting
+  (`~/.matrx/settings.json`, default **false**; env `TUNNEL_ENABLED` default
+  false) — `app/main.py` Phase 5.
+- `POST /tunnel/start` starts cloudflared, persists `tunnel_enabled=true`
+  (auto-start from then on), pushes `tunnel_url`/`tunnel_ws_url`/
+  `tunnel_active=true`/`tunnel_updated_at` to `app_instances`
+  (`instance_manager.update_tunnel_url`), updates `~/.matrx/local.json` and
+  the runtime singleton. `POST /tunnel/stop` reverses all of it
+  (`tunnel_active=false`, URL nulled). Engine shutdown also clears the row.
+- The 5-minute heartbeat (`settings_sync.heartbeat`) refreshes `last_seen`
+  AND re-asserts live tunnel state every beat, so a stale URL self-corrects
+  within one interval. (`tunnel_updated_at` is only bumped by start/stop —
+  see AGENT_TASKS.)
+
+**Step 1 — engine up:**
+```bash
+curl -s http://127.0.0.1:22140/health
+```
+**Step 2 — tunnel up:**
+```bash
+curl -s http://127.0.0.1:22140/tunnel/status            # public
+curl -s -X POST http://127.0.0.1:22140/tunnel/start      # flip it ON (persists)
+# expect {"running":true,"url":"https://<x>.trycloudflare.com",...}
+curl -s https://<x>.trycloudflare.com/health             # tunnel reaches engine
+```
+**Step 3 — cloud row fresh** (Supabase `app_instances`, project
+`txzxabzwovsujtloxrus`):
+```sql
+select instance_id, last_seen, tunnel_active, tunnel_url, tunnel_updated_at
+from app_instances where user_id = '<uid>' order by last_seen desc;
+```
+Expect `tunnel_active=true`, `tunnel_url` set, `last_seen` < 10 min (the
+frontend's staleness window).
+**Step 4 — aidream local-proxy** (forwards to `{tunnel_url}/sandbox/{path}`;
+this engine serves the orchestrator-shape `/sandbox/*` surface —
+`app/api/sandbox_routes.py`, mounted in `app/main.py`):
+```bash
+curl -s https://server.app.matrxserver.com/api/local-proxy/<app_instances.id>/fs/list?path=/ \
+  -H "X-Sandbox-Access-Token: <user Supabase JWT>"
+```
+404 = row not found / not owner; 410 = `_is_online` false (tunnel_active
+false or last_seen stale).
+**Step 5 — frontend resolve:**
+```bash
+curl -s -X POST https://<frontend>/api/compute-targets/resolve \
+  -H "Cookie: <session>" -d '{"kind":"local-pc","id":"<app_instances.id>"}'
+```
+410 `device_offline` = same freshness gate as step 4; 200 returns the
+`base_url` pointing at step 4's proxy.
+**Step 6 — SandboxPanel:** pick the device in the frontend SandboxPanel; fs
+listings/exec should flow. Errors here with steps 1–5 green = client-side.
+
+**Current state on this Mac (2026-07-10):** links 1, 3 healthy (heartbeat
+fresh); tunnel intentionally OFF (`tunnel_enabled=false`,
+`tunnel_active=false` since 2026-05-10). Flipping it on is ONE user action:
+`POST /tunnel/start` or the desktop Settings → Remote Access toggle — the
+rest of the chain re-lights automatically (row updated on start; heartbeat
+keeps it fresh).
+
+---
 
 ## Pointer to the master cross-repo doc
 
-`/Users/armanisadeghi/code/matrx-extend/.claude/worktrees/exciting-moser-4b984f/docs/CROSS_REPO_INTEGRATION.md`
-
-That file is the source of truth for which repo owns which side of the
-contract; this file is the local view from inside `matrx-local`.
+`/Users/armanisadeghi/code/matrx-extend/docs/CROSS_REPO_INTEGRATION.md` —
+source of truth for which repo owns which side of the contract; this file is
+the local view from inside `matrx-local`.
 
 ## Pointer to the local skill
 

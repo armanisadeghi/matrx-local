@@ -273,41 +273,54 @@ _(none)_
 A comprehensive audit fixed ~150 verified bugs (see commits 9ca5652..ab1f3c8).
 These were found, verified, and deliberately deferred:
 
-- [ ] **Rust: LlmServerState mutex held across 120s health wait** — status
-  commands block during model load. Shutdown is now covered via the PID
-  handle; releasing the lock during the wait needs a careful refactor with
-  local cargo-check. (`llm/commands.rs:90`, `llm/server.rs:39-189`)
+- [x] **Rust: LlmServerState mutex held across 120s health wait** — FIXED
+  2026-07-10 (commit de04a3dbf, Phase 8): new `server::start_server` locks
+  only around stop + install; static one-start-at-a-time guard; mid-start
+  stop kills by PID and trips the phase-3 ownership check. KNOWN_DEFECTS
+  MXL-D-005.
 - [ ] **Rust: audio capture is f32-only** — `build_input_stream` fails on
   I16/U16-default devices (common on Linux/ALSA); match `sample_format()`
-  and convert. (`transcription/audio_capture.rs:69-102`)
-- [ ] **Rust: vulkaninfo VRAM parse order inverted** — `size =` precedes
-  `DEVICE_LOCAL` in real output, so AMD/Intel VRAM is never detected and
-  tier selection lowballs (24GB GPU → tiny model + gpu_layers=1).
-  (`transcription/hardware.rs:227-260`)
+  and convert. (`transcription/audio_capture.rs:69-102`) STAYS DEFERRED
+  (needs hardware). KNOWN_DEFECTS MXL-D-007.
+- [x] **Rust: vulkaninfo VRAM parse order inverted** — FIXED 2026-07-10
+  (commit 269b8e90f, Phase 8): verified `size =` really does precede
+  DEVICE_LOCAL in real heap blocks; parser now order-independent per heap,
+  validated with a standalone harness. Runtime confirmation on a real
+  AMD/Intel box still wanted (cfg'd out on macOS). KNOWN_DEFECTS MXL-D-006.
 - [ ] **Rust: floating overlay mixes physical/logical px** on scaled
-  secondary monitors; `sidecar_status` hardcodes port 22140.
-- [ ] **Unmounted tool panels carry latent bugs** (BrowserPanel runner,
-  SchedulerPanel/RecordAudio arg mismatches, TerminalPanel stale closures,
-  AutomationPanel render-loop, KeyValueField index keys) — fix before
-  re-wiring them into Tools.tsx. Only Monitoring/Process panels are live
-  (both fixed). ALSO: these orphaned panels
-  (ClipboardPanel/ProcessPanel/TerminalPanel/NotifyPanel/BrowserPanel/
-  AudioMediaPanel/NetworkPanel/FilesPanel/SchedulerPanel/AutomationPanel/
-  InstalledAppsPanel/AudioPanel) carry latent silent-failure bugs and are
-  unreachable (Tools.tsx routes only Monitoring/Generic via panelType) —
-  either wire them into the registry's panelType routing or delete them;
-  don't leave them to rot with swallowed errors.
-- [ ] **Engine: dead stub files** (audio/player.py, tts/player.py,
-  transcription/transcribe.py, files/explorer.py, files/uploader.py,
-  audio/recorder.py) — no importers; delete or implement.
+  secondary monitors (needs-hw-verification, KNOWN_DEFECTS MXL-D-008).
+  The `sidecar_status` hardcoded-port half was FIXED 2026-07-10 (commit
+  5ac3748e4) — now reads the discovery file.
+- [x] **Unmounted tool panels carry latent bugs** — RESOLVED 2026-07-10
+  (commit 256e8f7c1, Phase 8): the 12 unreachable panels were DELETED
+  (Tools.tsx routes only Monitoring/Generic; import graph verified zero
+  importers; git history preserves them for any future re-wire).
+  KeyValueField (live via ToolForm) got a real fix: stable row ids replace
+  index keys, editing happens on an id-keyed row array. KNOWN_DEFECTS
+  MXL-D-015.
+- [x] **Engine: dead stub files** — DELETED 2026-07-10 (commit 2847904bd,
+  Phase 8): app/services/{transcription,audio,files}/ and tts/player.py
+  removed after repo-wide reference check incl. PyInstaller specs.
+  KNOWN_DEFECTS MXL-D-021.
 - [ ] **use-chat-tts**: chunks are serialized but `speakText` resolves at
   synthesis end, not playback drain — a small gap between sentences can
-  remain; gapless append-mode scheduling is the follow-up.
-- [ ] **extension_auth reject-log window** (`_REJECT_LOG_WINDOW_SECONDS`
-  dead constant, unbounded `_reject_log_state`) — logging-only.
+  remain; gapless append-mode scheduling is the follow-up. (MXL-D-019)
+- [x] **extension_auth reject-log window** — FIXED 2026-07-10 (commit
+  637828ff7, Phase 8): quiet-gap re-WARN wired to the previously dead
+  constant; state dict capped at 256 keys, longest-idle eviction.
+  KNOWN_DEFECTS MXL-D-020.
 - [ ] **capabilities/setup pip installs break in frozen builds**
   (`sys.executable -m pip` is the sidecar binary) — needs a packaged-build
-  strategy, not a code tweak.
+  strategy, not a code tweak. (MXL-D-023)
+
+- [x] **Download-chunk-discard P0 re-verified & closed (2026-07-10, Phase 8)**
+  — Root AGENT_TASKS.md P0 claimed BOTH managers discard bytes. Current
+  code: Python was already fixed (manager.py:814 tmp open, :827 write
+  before count, :873 tmp.replace(dest)); Rust internal path
+  (dm_enqueue → download_part) was STILL discarding — fixed in commit
+  a158612a7 (per-chunk write → .part tmp → fsync → atomic rename;
+  metadata.dest_dir now required, loud failure otherwise). KNOWN_DEFECTS
+  MXL-D-001; remaining audit phases tracked as MXL-D-012/013/014.
 
 
 _(none)_

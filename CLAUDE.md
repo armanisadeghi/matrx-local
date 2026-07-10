@@ -181,6 +181,7 @@ Only for re-fetching data changed externally (e.g., HF token set in browser). Ne
 ## Task Tracking
 
 - **`AGENT_TASKS.md`** — Bugs, issues, improvements. Update immediately on discovery or resolution.
+- **`KNOWN_DEFECTS.md`** — Platform-standard defect ledger (find-it-own-it: every defect you spot gets an entry with evidence; fixes flip status, entries are never deleted).
 - **`.arman/ARMAN_TASKS.md`** — Manual tasks for Arman. Simple checkbox + brief instructions.
 
 Never let a discovered issue go untracked. Add it to the right file and continue.

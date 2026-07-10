@@ -22,9 +22,9 @@ graph TB
 
   subgraph PythonEngine [Python/FastAPI Engine]
     FastAPI["FastAPI Server<br/>run.py :22140"]
-    ToolDispatcher["Tool Dispatcher<br/>~80 tools"]
+    ToolDispatcher["Tool Dispatcher<br/>108 tools"]
     ScraperEngine["Scraper Engine<br/>scraper-service subtree"]
-    SyncEngine["Sync Engine<br/>Documents & Settings sync"]
+    SyncEngine["Sync (3 subsystems)<br/>notes / replica / settings"]
     WSManager["WebSocket Manager<br/>Concurrent sessions"]
     ImageGenSvc["Image Gen Service<br/>diffusers optional extra"]
     TTSSvc["TTS Service<br/>Kokoro ONNX"]
@@ -86,11 +86,17 @@ matrx_local/
 │   │   ├── settings_routes.py      # /settings/*
 │   │   ├── proxy_routes.py         # /proxy/* (local HTTP proxy)
 │   │   └── cloud_sync_routes.py    # /cloud-sync/* (instance + settings)
-│   ├── tools/
-│   │   ├── dispatcher.py           # Tool routing (~80 tools registered)
+│   ├── tools/                      # See app/tools/FEATURE.md before touching
+│   │   ├── dispatcher.py           # Tool routing (TOOL_HANDLERS, 108 tools)
+│   │   ├── catalog.py              # Canonical code-side catalog (one CatalogEntry
+│   │   │                           #   per tool: cloud_name local_*, input_schema,
+│   │   │                           #   platform gating); cloud canon = Supabase
+│   │   │                           #   tool.definition ⨝ tool.binding (matrx-local)
+│   │   ├── tool_sync.py            # Drift reporter vs cloud canon + SQL changeset
+│   │   │                           #   emitter (desktop NEVER writes tool tables)
 │   │   ├── session.py              # Per-connection state (cwd, bg processes)
 │   │   ├── types.py                # ToolResult, ToolResultType
-│   │   └── tools/                  # Individual tool implementations (~33 files)
+│   │   └── tools/                  # Individual tool implementations (~30 files)
 │   │       ├── file_ops.py         # Read, Write, Edit, Glob, Grep
 │   │       ├── execution.py        # Bash, BashOutput, TaskStop
 │   │       ├── system.py           # SystemInfo, Screenshot, etc.
@@ -123,13 +129,15 @@ matrx_local/
 │   │   ├── wake_word/
 │   │   │   ├── models.py           # Wake word models
 │   │   │   └── service.py          # openWakeWord service
-│   │   ├── documents/
-│   │   │   ├── file_manager.py     # Local filesystem operations
-│   │   │   ├── supabase_client.py  # Supabase sync client
-│   │   │   └── sync_engine.py      # Local-first sync engine
+│   │   ├── documents/              # Notes sync — read docs/SYNC_CONTRACT.md first
+│   │   │   ├── file_manager.py     # Note files, .sync/state.json, conflicts dir
+│   │   │   ├── supabase_client.py  # workbench.notes wire client (column mapping)
+│   │   │   └── sync_engine.py      # Bidirectional notes sync (conflicts, watcher)
+│   │   ├── local_db/               # SQLite first-access replica (~/.matrx/matrx.db)
+│   │   │   └── sync_engine.py      # Pull-only replica of models/agents/tools
 │   │   ├── cloud_sync/
-│   │   │   ├── instance_manager.py # App instance registration
-│   │   │   └── settings_sync.py    # Settings sync engine
+│   │   │   ├── instance_manager.py # App instance registration + tunnel URL rows
+│   │   │   └── settings_sync.py    # Whole-blob settings sync + heartbeat
 │   │   └── proxy/
 │   │       └── server.py           # Local HTTP proxy (127.0.0.1:22180)
 │   └── common/
@@ -342,7 +350,39 @@ Auth: The Python engine attaches `Authorization: Bearer <SCRAPER_API_KEY>` from 
 
 ---
 
-## Tool Reference (~80 Tools)
+## Sync Architecture
+
+**The ratified doctrine lives in [`docs/SYNC_CONTRACT.md`](docs/SYNC_CONTRACT.md)
+— read it before touching any sync code.** The one-liner: the cloud is the
+durable source of truth; local SQLite (`~/.matrx/matrx.db`) and local files
+are a full first-access replica (offline-proof, never a competing server).
+
+Three deliberately separate subsystems:
+
+1. **`app/services/local_db/sync_engine.py`** — pull-only replica engine:
+   AIDream models/agents + the local tool catalog → SQLite, on startup + every
+   10 min. The only component allowed to write cloud catalog data into SQLite.
+2. **`app/services/documents/`** — bidirectional notes sync: content-hash
+   three-way conflict handling (both copies preserved, user resolves),
+   tombstoned deletes on both sides, file watcher. See its `FEATURE.md`.
+3. **`app/services/cloud_sync/`** — whole-blob settings sync + instance
+   registration/heartbeat (`app_instances`, tunnel URLs).
+
+Enforced by `tests/characterization/` (33 pinned tests) and
+`tests/parity/test_sync_contract.py`.
+
+---
+
+## Tool Reference (108 Tools)
+
+> **Authoritative list lives in code, not here:** `app/tools/catalog.py`
+> (`uv run python -m app.tools.tool_sync list`) — 108 entries, exact-set
+> enforced by `tests/parity/test_tool_count.py`. The cloud advertises them via
+> Supabase `tool.definition` ⨝ `tool.binding` (executor `matrx-local`); see
+> `app/tools/FEATURE.md`. The category tables below are a human-readable
+> overview and may lag the catalog (the 2026-07 unification wired in 18
+> previously-orphaned tools: mail, messages, contacts, calendar, photos,
+> location, speech — macOS-gated — plus BrowserClose).
 
 ### File Operations (5)
 
@@ -649,6 +689,19 @@ Validation logic for `/extension/*` requests (`app/api/extension_auth.py`):
 The engine logs the active posture once at boot via `[extension_auth]`.
 For deeper context and the migration rationale, see
 `docs/MATRX_EXTEND_CONNECTION.md`.
+
+### Extension Bridge (matrx-extend ↔ engine)
+
+`app/api/extension_handlers.py::HANDLERS` is the single command surface;
+three transports funnel into it — `POST /extension/rpc` (HTTP, loopback or
+tunnel), the `/extension/ws` reverse channel, and Supabase Broadcast v2
+envelopes (`cross_component_envelope.py` + `cross_component_router.py`,
+cross-machine fallback). Diagnostics: `/extension/boot-check`, `/extension/
+metrics`, `/extension/tunnel/status`, and the desktop Bridge Test panel
+(`extension_bridge_routes.py`). Current status: `health` / `version` /
+`capabilities` / `tool` handlers live; browser→engine round-trips beyond
+`health` still await end-to-end verification. Rules and details:
+`app/api/FEATURE.md`.
 
 ---
 

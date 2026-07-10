@@ -34,6 +34,8 @@ import {
   enqueueImageGenJob as apiEnqueueImageGenJob,
   listImageGenJobs as apiListImageGenJobs,
   cancelImageGenJob as apiCancelImageGenJob,
+  cancelImageGeneration as apiCancelImageGeneration,
+  cancelVideoGenJob as apiCancelVideoGenJob,
   fetchMediaLibraryFile as apiFetchMediaLibraryFile,
   getVideoGenStatus,
   listVideoGenModels,
@@ -226,6 +228,12 @@ export interface MediaGenState {
   /** Model id currently being loaded into memory, or null. */
   loadingImageModelId: string | null;
   imageGenerating: boolean;
+  /** True while a one-shot image cancel request is settling. */
+  imageCancelling: boolean;
+  /** Epoch ms when the in-flight one-shot image generation started. */
+  imageGenStartedAt: number | null;
+  /** Epoch ms when the in-flight image model load started (elapsed readout). */
+  imageLoadStartedAt: number | null;
   imageGenError: string | null;
   imageResult: GeneratedImageResult | null;
   /** The model the user is currently working with (survives tab switches). */
@@ -248,6 +256,10 @@ export interface MediaGenState {
   /** Model id currently being loaded into memory, or null. */
   loadingVideoModelId: string | null;
   videoGenerating: boolean;
+  /** True while a video cancel request is settling / being honored. */
+  videoCancelling: boolean;
+  /** Epoch ms when the in-flight video model load started (elapsed readout). */
+  videoLoadStartedAt: number | null;
   videoGenError: string | null;
   /** The job currently being watched (running, or the most recent one). */
   activeJob: VideoGenJob | null;
@@ -269,6 +281,12 @@ export interface MediaGenActions {
   generateImage: (input: ImageGenerateInput) => Promise<boolean>;
   /** Resolves true only when a result was produced; false on any failure. */
   generateImageWorkflow: (input: ImageWorkflowInput) => Promise<boolean>;
+  /**
+   * Cancel the in-flight one-shot image generation (regular or workflow).
+   * ALWAYS resolves the local awaiting state — even when the engine's cancel
+   * endpoint fails — so the UI can never be stuck on a spinner.
+   */
+  cancelImageGeneration: () => Promise<void>;
   setSelectedImageModelId: (modelId: string | null) => void;
   clearImageResult: () => void;
   clearImageGenError: () => void;
@@ -301,6 +319,10 @@ export interface MediaGenActions {
   generateVideo: (
     req: VideoGenRequest,
   ) => Promise<{ ok: boolean; error?: string }>;
+  /** Cancel the active video generation (the watched queued/running job). */
+  cancelVideoGeneration: () => Promise<void>;
+  /** Cancel a specific queued/running video job. */
+  cancelVideoJob: (jobId: string) => Promise<void>;
   fetchVideoResult: (jobId: string) => Promise<string | null>;
   clearActiveJob: () => void;
   clearVideoGenError: () => void;
@@ -337,6 +359,13 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     null,
   );
   const [imageGenerating, setImageGenerating] = useState(false);
+  const [imageCancelling, setImageCancelling] = useState(false);
+  const [imageGenStartedAt, setImageGenStartedAt] = useState<number | null>(
+    null,
+  );
+  const [imageLoadStartedAt, setImageLoadStartedAt] = useState<number | null>(
+    null,
+  );
   const [imageGenError, setImageGenError] = useState<string | null>(null);
   const [imageResult, setImageResult] = useState<GeneratedImageResult | null>(
     null,
@@ -361,6 +390,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     null,
   );
   const [videoGenerating, setVideoGenerating] = useState(false);
+  const [videoCancelling, setVideoCancelling] = useState(false);
+  const [videoLoadStartedAt, setVideoLoadStartedAt] = useState<number | null>(
+    null,
+  );
   const [videoGenError, setVideoGenError] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<VideoGenJob | null>(null);
   const [jobs, setJobs] = useState<VideoGenJob[]>([]);
@@ -377,6 +410,13 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   // a terminal "failed" state so the poll interval tears down and the UI
   // unwedges instead of spinning forever against a dead/restarted engine.
   const pollFailuresRef = useRef(0);
+  // One-shot image generation run id.  cancelImageGeneration bumps it to
+  // force-resolve the local awaiting state; the original await then sees a
+  // stale id and must NOT touch state (a newer run may already be in flight).
+  const imageRunRef = useRef(0);
+  // Video enqueue run id — guards the brief "Starting…" phase so a cancel
+  // issued before the job id exists doesn't get resurrected by a late 202.
+  const videoRunRef = useRef(0);
   useEffect(() => {
     activeJobRef.current = activeJob;
   }, [activeJob]);
@@ -639,11 +679,15 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setImageGenError(ENGINE_NOT_CONNECTED_ACTION);
         return false;
       }
+      const runId = ++imageRunRef.current;
       setImageGenerating(true);
+      setImageCancelling(false);
+      setImageGenStartedAt(Date.now());
       setImageGenError(null);
       setImageResult(null);
       try {
         const result = await apiGenerateImage(base, input);
+        if (imageRunRef.current !== runId) return false; // resolved by cancel
         if (result.success && result.image_b64) {
           setImageResult({
             b64: result.image_b64,
@@ -656,13 +700,24 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
           });
           return true;
         }
-        setImageGenError(result.error ?? "Generation failed");
+        setImageGenError(
+          result.cancelled
+            ? "Generation cancelled."
+            : (result.error ?? "Generation failed"),
+        );
         return false;
       } catch (e) {
+        if (imageRunRef.current !== runId) return false;
         setImageGenError(e instanceof Error ? e.message : "Generation failed");
         return false;
       } finally {
-        setImageGenerating(false);
+        // Guarded: after a cancel (or a newer run) this stale run must not
+        // clobber the fresh state.
+        if (imageRunRef.current === runId) {
+          setImageGenerating(false);
+          setImageCancelling(false);
+          setImageGenStartedAt(null);
+        }
       }
     },
     [],
@@ -676,11 +731,15 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setImageGenError(ENGINE_NOT_CONNECTED_ACTION);
         return false;
       }
+      const runId = ++imageRunRef.current;
       setImageGenerating(true);
+      setImageCancelling(false);
+      setImageGenStartedAt(Date.now());
       setImageGenError(null);
       setImageResult(null);
       try {
         const result = await apiGenerateImageWorkflow(base, input);
+        if (imageRunRef.current !== runId) return false; // resolved by cancel
         if (result.success && result.image_b64) {
           setImageResult({
             b64: result.image_b64,
@@ -693,17 +752,68 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
           });
           return true;
         }
-        setImageGenError(result.error ?? "Generation failed");
+        setImageGenError(
+          result.cancelled
+            ? "Generation cancelled."
+            : (result.error ?? "Generation failed"),
+        );
         return false;
       } catch (e) {
+        if (imageRunRef.current !== runId) return false;
         setImageGenError(e instanceof Error ? e.message : "Generation failed");
         return false;
       } finally {
-        setImageGenerating(false);
+        if (imageRunRef.current === runId) {
+          setImageGenerating(false);
+          setImageCancelling(false);
+          setImageGenStartedAt(null);
+        }
       }
     },
     [],
   );
+
+  /**
+   * Cancel the in-flight one-shot image generation.  The never-stuck
+   * guarantee lives HERE: whatever the cancel endpoint does (success, 404
+   * because the backend hasn't landed, timeout, engine down), the local
+   * awaiting state is force-resolved in the finally block.
+   */
+  const cancelImageGeneration = useCallback(async () => {
+    const base = engine.engineUrl;
+    setImageCancelling(true);
+    try {
+      if (base) {
+        const res = await apiCancelImageGeneration(base);
+        emitClientLog(
+          "info",
+          `[media-gen] image cancel → cancelled=${String(res.cancelled)}${res.was ? ` (${res.was})` : ""}${res.reason ? `: ${res.reason}` : ""}`,
+          "engine",
+        );
+      } else {
+        logEngineNotConnected("cancel image generation");
+      }
+      setImageGenError("Generation cancelled.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      emitClientLog(
+        "error",
+        `[media-gen] image cancel request failed: ${msg}`,
+        "engine",
+      );
+      setImageGenError(
+        `Cancel request failed (${msg}). The waiting state was released, but the engine may still be generating in the background.`,
+      );
+    } finally {
+      // Force-resolve the local awaiting state unconditionally.
+      imageRunRef.current++;
+      setImageGenerating(false);
+      setImageCancelling(false);
+      setImageGenStartedAt(null);
+      // Refresh so is_generating/cancel_requested reflect reality.
+      void refreshImageJobs();
+    }
+  }, [refreshImageJobs]);
 
   const enqueueImageJob = useCallback(
     async (input: ImageGenerateInput): Promise<boolean> => {
@@ -735,6 +845,16 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setImageJobsError(ENGINE_NOT_CONNECTED_ACTION);
         return;
       }
+      // Optimistic "Cancelling…" for active jobs — a running diffusion step
+      // can take tens of seconds to actually stop.
+      setImageJobs((prev) =>
+        prev.map((j) =>
+          j.job_id === jobId &&
+          (j.status === "queued" || j.status === "running")
+            ? { ...j, cancel_requested: true }
+            : j,
+        ),
+      );
       try {
         await apiCancelImageGenJob(base, jobId);
       } catch (e) {
@@ -758,6 +878,44 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     }, 2000);
     return () => window.clearInterval(id);
   }, [hasActiveImageJobs, refreshImageJobs]);
+
+  // ── Model-load watchdog (image) ────────────────────────────────────────────
+  // While the engine reports is_loading, poll status every 2s so (a) the
+  // spinner is guaranteed to clear when the engine finishes/fails and (b) a
+  // load_error resolves the spinner into a LOUD error, never a forever-spin.
+  const imageIsLoading = !!imageStatus?.is_loading;
+  useEffect(() => {
+    if (!imageIsLoading) return;
+    const id = window.setInterval(() => {
+      const base = engine.engineUrl;
+      if (!base) return;
+      getImageGenStatus(base)
+        .then((s) => {
+          setImageStatus(s);
+          if (!s.is_loading && s.load_error) {
+            setImageGenError(`Model load failed: ${s.load_error}`);
+          }
+        })
+        .catch((e) => {
+          emitClientLog(
+            "warn",
+            `[media-gen] image status poll (load watchdog) failed: ${String(e)}`,
+            "engine",
+          );
+        });
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [imageIsLoading]);
+
+  // Elapsed readout for image model loads (client-observed start time).
+  const imageLoadInFlight = loadingImageModelId !== null || imageIsLoading;
+  useEffect(() => {
+    if (imageLoadInFlight) {
+      setImageLoadStartedAt((prev) => prev ?? Date.now());
+    } else {
+      setImageLoadStartedAt(null);
+    }
+  }, [imageLoadInFlight]);
 
   // Fetch thumbnails for completed queue jobs (via the media-library file
   // endpoint).  Gated on the joined "jobId:itemId" list of completed jobs so
@@ -825,8 +983,22 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       setVideoStatus(status);
       setVideoStatusError(null);
       const [models, jobList] = await Promise.all([
-        listVideoGenModels(base).catch(() => [] as VideoGenModelInfo[]),
-        listVideoGenJobs(base).catch(() => [] as VideoGenJob[]),
+        listVideoGenModels(base).catch((e) => {
+          emitClientLog(
+            "warn",
+            `[media-gen] video model list failed: ${String(e)}`,
+            "engine",
+          );
+          return [] as VideoGenModelInfo[];
+        }),
+        listVideoGenJobs(base).catch((e) => {
+          emitClientLog(
+            "warn",
+            `[media-gen] video job list failed: ${String(e)}`,
+            "engine",
+          );
+          return [] as VideoGenJob[];
+        }),
       ]);
       setVideoModels(models);
       setJobs(jobList);
@@ -1019,6 +1191,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         } else if (job.status === "failed") {
           setVideoGenError(job.error ?? "Video generation failed");
           void refreshVideoRef.current?.();
+        } else if (job.status === "cancelled") {
+          void refreshVideoRef.current?.();
         }
       } catch (e) {
         const status = (e as { status?: number }).status;
@@ -1131,10 +1305,17 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setVideoGenError(ENGINE_NOT_CONNECTED_ACTION);
         return { ok: false, error: ENGINE_NOT_CONNECTED_ACTION };
       }
+      const runId = ++videoRunRef.current;
       setVideoGenerating(true);
       setVideoGenError(null);
       try {
         const { job_id } = await apiGenerateVideo(base, req);
+        if (videoRunRef.current !== runId) {
+          // Cancelled while the enqueue was in flight — kill the orphan job
+          // instead of silently letting it run.
+          void apiCancelVideoGenJob(base, job_id).catch(() => null);
+          return { ok: false, error: "Cancelled" };
+        }
         pollFailuresRef.current = 0;
         // Seed a queued job so the poll effect starts immediately.
         setActiveJob({
@@ -1150,6 +1331,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         });
         return { ok: true };
       } catch (e) {
+        if (videoRunRef.current !== runId) {
+          return { ok: false, error: "Cancelled" };
+        }
         const msg =
           e instanceof Error ? e.message : "Failed to start video generation";
         setVideoGenError(msg);
@@ -1160,6 +1344,101 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     },
     [],
   );
+
+  /**
+   * Cancel a specific queued/running video job.  Optimistically flags
+   * `cancel_requested` so the UI shows "Cancelling…" immediately; the 2s job
+   * poll picks up the real terminal status (steps can take tens of seconds).
+   */
+  const cancelVideoJob = useCallback(async (jobId: string) => {
+    const base = engine.engineUrl;
+    if (!base) {
+      logEngineNotConnected("cancel video job");
+      setVideoGenError(ENGINE_NOT_CONNECTED_ACTION);
+      return;
+    }
+    setVideoCancelling(true);
+    setActiveJob((prev) =>
+      prev && prev.job_id === jobId ? { ...prev, cancel_requested: true } : prev,
+    );
+    setJobs((prev) =>
+      prev.map((j) =>
+        j.job_id === jobId && (j.status === "queued" || j.status === "running")
+          ? { ...j, cancel_requested: true }
+          : j,
+      ),
+    );
+    try {
+      await apiCancelVideoGenJob(base, jobId);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      emitClientLog(
+        "error",
+        `[media-gen] video job cancel failed for ${jobId}: ${msg}`,
+        "engine",
+      );
+      setVideoGenError(`Cancel request failed: ${msg}`);
+      setVideoCancelling(false);
+    }
+  }, []);
+
+  /** Cancel the active (watched) video generation. */
+  const cancelVideoGeneration = useCallback(async () => {
+    const job = activeJobRef.current;
+    if (job && (job.status === "queued" || job.status === "running")) {
+      await cancelVideoJob(job.job_id);
+      return;
+    }
+    // No job id yet (the enqueue POST may still be in flight) — bump the run
+    // id so a late 202 is treated as cancelled, and clear every busy flag.
+    videoRunRef.current++;
+    setVideoGenerating(false);
+    setVideoCancelling(false);
+  }, [cancelVideoJob]);
+
+  // Clear the "Cancelling…" flag once the watched job reaches ANY terminal
+  // state (cancelled, failed, completed) or is dismissed — the poll's 3-strike
+  // failure synthesis guarantees this also happens when the engine dies.
+  const activeJobSettled =
+    !activeJob ||
+    (activeJob.status !== "queued" && activeJob.status !== "running");
+  useEffect(() => {
+    if (videoCancelling && activeJobSettled) setVideoCancelling(false);
+  }, [videoCancelling, activeJobSettled]);
+
+  // ── Model-load watchdog (video) — mirror of the image one ────────────────
+  const videoIsLoading = !!videoStatus?.is_loading;
+  useEffect(() => {
+    if (!videoIsLoading) return;
+    const id = window.setInterval(() => {
+      const base = engine.engineUrl;
+      if (!base) return;
+      getVideoGenStatus(base)
+        .then((s) => {
+          setVideoStatus(s);
+          if (!s.is_loading && s.load_error) {
+            setVideoGenError(`Model load failed: ${s.load_error}`);
+          }
+        })
+        .catch((e) => {
+          emitClientLog(
+            "warn",
+            `[media-gen] video status poll (load watchdog) failed: ${String(e)}`,
+            "engine",
+          );
+        });
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [videoIsLoading]);
+
+  const videoLoadInFlight = loadingVideoModelId !== null || videoIsLoading;
+  useEffect(() => {
+    if (videoLoadInFlight) {
+      setVideoLoadStartedAt((prev) => prev ?? Date.now());
+    } else {
+      setVideoLoadStartedAt(null);
+    }
+  }, [videoLoadInFlight]);
 
   const clearActiveJob = useCallback(() => setActiveJob(null), []);
   const clearVideoGenError = useCallback(() => setVideoGenError(null), []);
@@ -1209,6 +1488,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     imageModelLoading: loadingImageModelId !== null,
     loadingImageModelId,
     imageGenerating,
+    imageCancelling,
+    imageGenStartedAt,
+    imageLoadStartedAt,
     imageGenError,
     imageResult,
     selectedImageModelId,
@@ -1223,6 +1505,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     videoModelLoading: loadingVideoModelId !== null,
     loadingVideoModelId,
     videoGenerating,
+    videoCancelling,
+    videoLoadStartedAt,
     videoGenError,
     activeJob,
     jobs,
@@ -1238,6 +1522,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       downloadImageModel,
       generateImage,
       generateImageWorkflow,
+      cancelImageGeneration,
       setSelectedImageModelId,
       clearImageResult,
       clearImageGenError,
@@ -1254,6 +1539,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       unloadVideoModel,
       downloadVideoModel,
       generateVideo,
+      cancelVideoGeneration,
+      cancelVideoJob,
       fetchVideoResult,
       clearActiveJob,
       clearVideoGenError,
@@ -1271,6 +1558,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       downloadImageModel,
       generateImage,
       generateImageWorkflow,
+      cancelImageGeneration,
       setSelectedImageModelId,
       clearImageResult,
       clearImageGenError,
@@ -1287,6 +1575,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       unloadVideoModel,
       downloadVideoModel,
       generateVideo,
+      cancelVideoGeneration,
+      cancelVideoJob,
       fetchVideoResult,
       clearActiveJob,
       clearVideoGenError,

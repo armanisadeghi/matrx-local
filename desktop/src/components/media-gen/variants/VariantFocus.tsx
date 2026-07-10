@@ -62,10 +62,12 @@ import { WorkflowSection } from "@/components/media-gen/WorkflowSection";
 import { MediaLibrarySection } from "@/components/media-gen/MediaLibrarySection";
 import {
   AdvancedParamsEditor,
+  CancelableGenerateButton,
   DimensionPicker,
   ErrorNote,
   GeneratedImageView,
   InlineProgressBar,
+  StillWorkingNote,
   NumberSliderField,
   ParamsErrorBanner,
   ResetButton,
@@ -600,22 +602,36 @@ function ImageJobFeedCard({
             {job.prompt || "(no prompt)"}
           </p>
           <p className="text-[10px] text-muted-foreground">
-            {job.status === "failed" && job.error ? job.error : job.status}
+            {job.status === "failed" && job.error
+              ? job.error
+              : active && job.cancel_requested
+                ? "cancelling…"
+                : job.status}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {typeof job.seed === "number" && !active && (
             <SeedChip seed={job.seed} onReuse={onReuseSeed} />
           )}
-          <button
-            type="button"
-            onClick={onCancel}
-            className="text-muted-foreground transition-colors hover:text-foreground"
-            aria-label={active ? "Cancel job" : "Remove job"}
-            title={active ? "Cancel this job" : "Remove from the queue"}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          {active && job.cancel_requested ? (
+            <span
+              className="flex items-center gap-1 text-[10px] text-muted-foreground"
+              title="Cancel requested — the current step is finishing"
+            >
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Cancelling…
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="text-muted-foreground transition-colors hover:text-foreground"
+              aria-label={active ? "Cancel job" : "Remove job"}
+              title={active ? "Cancel this job" : "Remove from the queue"}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </div>
       {job.status === "running" && (
@@ -721,6 +737,8 @@ function ImageFocusFlow() {
     imageModelLoading,
     loadingImageModelId,
     imageGenerating,
+    imageCancelling,
+    imageGenStartedAt,
     imageGenError,
     imageResult,
     selectedImageModelId,
@@ -734,6 +752,7 @@ function ImageFocusFlow() {
     loadImageModel,
     downloadImageModel,
     generateImage,
+    cancelImageGeneration,
     clearImageResult,
     clearImageGenError,
     setImageForm,
@@ -1067,24 +1086,23 @@ function ImageFocusFlow() {
           </p>
         )}
         <div className="flex gap-2">
-          <Button
+          <CancelableGenerateButton
+            generating={imageGenerating}
+            cancelling={imageCancelling}
+            startedAt={imageGenStartedAt}
+            disabled={formInvalid}
+            onGenerate={() => void handleGenerate()}
+            onCancel={() => void cancelImageGeneration()}
+            containerClassName="flex-1"
             size="lg"
-            className="h-12 flex-1 rounded-xl text-sm font-semibold"
-            disabled={imageGenerating || formInvalid}
-            onClick={() => void handleGenerate()}
-          >
-            {imageGenerating ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Generating…
-              </>
-            ) : (
+            buttonClassName="h-12 w-full rounded-xl text-sm font-semibold"
+            idleContent={
               <>
                 <Sparkles className="mr-2 h-4 w-4" />
                 Generate
               </>
-            )}
-          </Button>
+            }
+          />
           <Button
             size="lg"
             variant="outline"
@@ -1113,9 +1131,11 @@ function ImageFocusFlow() {
                 <p className="truncate text-xs" title={imageForm.prompt}>
                   {imageForm.prompt.trim() || "Generating image…"}
                 </p>
-                <p className="text-[10px] text-muted-foreground">
-                  Generating — typically 5–60 seconds on-device
-                </p>
+                <StillWorkingNote
+                  startedAt={imageGenStartedAt}
+                  label="Generating on-device — still working"
+                  className="justify-start"
+                />
               </div>
             </div>
           )}
@@ -1155,6 +1175,7 @@ function VideoFocusFlow() {
     videoModelLoading,
     loadingVideoModelId,
     videoGenerating,
+    videoCancelling,
     videoGenError,
     activeJob,
     jobs,
@@ -1166,6 +1187,7 @@ function VideoFocusFlow() {
     loadVideoModel,
     downloadVideoModel,
     generateVideo,
+    cancelVideoGeneration,
     fetchVideoResult,
     clearActiveJob,
     clearVideoGenError,
@@ -1608,24 +1630,25 @@ function VideoFocusFlow() {
             Choose a model above to enable generation.
           </p>
         )}
-        <Button
+        <CancelableGenerateButton
+          generating={videoGenerating || jobIsActive}
+          cancelling={videoCancelling || !!activeJob?.cancel_requested}
+          elapsedSeconds={
+            jobIsActive ? (activeJob?.elapsed_seconds ?? null) : null
+          }
+          disabled={formInvalid}
+          onGenerate={() => void handleGenerate()}
+          onCancel={() => void cancelVideoGeneration()}
           size="lg"
-          className="h-12 w-full rounded-xl text-sm font-semibold"
-          disabled={videoGenerating || jobIsActive || formInvalid}
-          onClick={() => void handleGenerate()}
-        >
-          {videoGenerating || jobIsActive ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              {jobIsActive ? "Generating…" : "Starting…"}
-            </>
-          ) : (
+          buttonClassName="h-12 w-full rounded-xl text-sm font-semibold"
+          workingLabel="Generating video"
+          idleContent={
             <>
               <Film className="mr-2 h-4 w-4" />
               Generate video
             </>
-          )}
-        </Button>
+          }
+        />
       </section>
 
       {/* Session feed */}

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import inspect
+import gc
 import io
 import random
 import threading
@@ -40,6 +40,12 @@ from typing import Any, Callable
 
 from app.common.system_logger import get_logger
 from app.services.image_gen.models import IMAGE_GEN_MODELS, ImageGenModel
+from app.services.media_gen.cancellation import (
+    GenerationCancelled,
+    friendly_generation_error,
+    install_cancel_hook,
+    release_generation_memory,
+)
 from app.services.media_gen.hardware import (
     check_model_hardware,
     select_device,
@@ -188,6 +194,10 @@ class GenerationResult:
     """The CONCRETE seed used. When the request omitted a seed the service
     generates one server-side (never lets diffusers pick invisibly) so every
     image is reproducible."""
+    cancelled: bool = False
+    """True when the generation was aborted by a cancel request (POST
+    /image-gen/cancel or DELETE /image-gen/jobs/{id} on a running job).
+    Always paired with success=False and error="Cancelled"."""
 
 
 # ── service class ─────────────────────────────────────────────────────────────
@@ -211,7 +221,17 @@ class ImageGenService:
         self._loaded_model_id: str | None = None
         self._is_loading = False
         self._load_progress: float = 0.0
+        self._load_error: str | None = None
         self._device: str | None = None
+        # Active generations, keyed by an opaque token. Each entry:
+        #   {"kind": "oneshot"|"job", "job_id": str|None,
+        #    "event": threading.Event, "cancel_requested": bool,
+        #    "supports_step_cancel": bool|None}
+        # Registered in generate() BEFORE the (potentially minutes-long) model
+        # load, so a cancel always has something to grab — the exact
+        # "spinning forever with no way to stop it" scenario.
+        self._active_gens: dict[str, dict[str, Any]] = {}
+        self._gen_counter = 0
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -232,16 +252,85 @@ class ImageGenService:
         return self._is_loading
 
     def get_status(self) -> dict:
+        with self._lock:
+            gens = [dict(g) for g in self._active_gens.values()]
         return {
             "available": self.available,
             "unavailable_reason": DEPS_REASON if not self.available else None,
             "loaded_model_id": self._loaded_model_id,
             "is_loading": self._is_loading,
             "load_progress": self._load_progress,
+            "load_error": self._load_error,
+            "is_generating": bool(gens),
+            "cancel_requested": any(g["cancel_requested"] for g in gens),
             "packages_version": get_installed_diffusers_version(),
             "packages_outdated": are_packages_outdated(),
             "device": self._device or select_device(),
         }
+
+    # ── cancellation ──────────────────────────────────────────────────────────
+
+    def _register_generation(
+        self, kind: str, job_id: str | None, event: "threading.Event"
+    ) -> str:
+        with self._lock:
+            self._gen_counter += 1
+            token = f"gen-{self._gen_counter}"
+            self._active_gens[token] = {
+                "kind": kind,
+                "job_id": job_id,
+                "event": event,
+                "cancel_requested": False,
+                "supports_step_cancel": None,
+            }
+            return token
+
+    def _unregister_generation(self, token: str) -> None:
+        with self._lock:
+            self._active_gens.pop(token, None)
+
+    def request_cancel(self) -> dict:
+        """Cancel the currently running generation(s) — one-shot or job.
+
+        Returns {"cancelled": True, "was": "oneshot"|"job", "job_id": ...,
+        "mid_flight": bool} or {"cancelled": False, "reason":
+        "nothing_running"}. ``mid_flight=False`` means the running pipeline
+        supports no per-step callback (non-catalog pipeline) — the cancel is
+        recorded and takes effect when the pipeline call finishes, never
+        silently dropped.
+        """
+        with self._lock:
+            gens = list(self._active_gens.values())
+            if not gens:
+                return {"cancelled": False, "reason": "nothing_running"}
+            for g in gens:
+                g["cancel_requested"] = True
+                g["event"].set()
+            primary = gens[0]
+            return {
+                "cancelled": True,
+                "was": primary["kind"],
+                "job_id": primary["job_id"],
+                # None = hook not installed yet (still loading / pre-pipe) —
+                # the cancel event is checked before AND after pipe() too, so
+                # treat it as cancellable.
+                "mid_flight": primary["supports_step_cancel"] is not False,
+            }
+
+    def request_cancel_job(self, job_id: str) -> dict:
+        """Cancel a specific RUNNING job's generation. Returns {"found": bool,
+        "mid_flight": bool} — found=False when that job has no in-flight
+        generation (already finishing, or not started yet)."""
+        with self._lock:
+            for g in self._active_gens.values():
+                if g["job_id"] == job_id:
+                    g["cancel_requested"] = True
+                    g["event"].set()
+                    return {
+                        "found": True,
+                        "mid_flight": g["supports_step_cancel"] is not False,
+                    }
+        return {"found": False, "mid_flight": False}
 
     def list_models(self) -> list[ImageGenModel]:
         return IMAGE_GEN_MODELS
@@ -361,18 +450,28 @@ class ImageGenService:
         seed: int | None = None,
         extra_params: dict[str, Any] | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
+        job_id: str | None = None,
     ) -> GenerationResult:
         """Generate an image. Loads the model if not already loaded.
 
         ``extra_params`` are arbitrary pipeline kwargs merged LAST over the
         computed call kwargs — the user's values override every default, but
-        may never override ``prompt`` (loud ValueError → success=False).
+        may never override protected params (loud ValueError → success=False).
 
         A null ``seed`` becomes a concrete server-generated one — the used
         seed is always reported back (result + media-library sidecar).
 
         ``progress_callback(step, total_steps)`` fires per denoising step
-        when the pipeline supports callback_on_step_end (job queue progress)."""
+        when the pipeline supports callback_on_step_end (job queue progress).
+
+        ``job_id`` marks this generation as belonging to a queue job (for
+        cancellation bookkeeping); None means a one-shot request.
+
+        Cancellable at any point via request_cancel()/request_cancel_job():
+        during the model load (checked right after), before the pipeline
+        call, at every denoising step, and after the pipeline call.
+        Cancelled generations return success=False, error="Cancelled",
+        cancelled=True — promptly, never a hang."""
         if not self.available:
             return GenerationResult(success=False, error=self.unavailable_reason)
 
@@ -380,36 +479,54 @@ class ImageGenService:
         if model is None:
             return GenerationResult(success=False, error=f"Unknown model: {model_id}")
 
-        # Load if needed
-        if self._loaded_model_id != model_id or self._pipeline is None:
-            load_result = await self.load_model(model_id)
-            if not load_result.get("success"):
+        cancel_event = threading.Event()
+        token = self._register_generation(
+            "job" if job_id else "oneshot", job_id, cancel_event
+        )
+        try:
+            # Load if needed
+            if self._loaded_model_id != model_id or self._pipeline is None:
+                load_result = await self.load_model(model_id)
+                if not load_result.get("success"):
+                    return GenerationResult(
+                        success=False,
+                        error=load_result.get("error", "Failed to load model"),
+                    )
+            # A cancel that arrived during the (minutes-long) model load lands
+            # here — the load itself is not abortable, the generation is.
+            if cancel_event.is_set():
+                logger.info("[image_gen] Generation cancelled during model load")
                 return GenerationResult(
-                    success=False, error=load_result.get("error", "Failed to load model")
+                    success=False, error="Cancelled", cancelled=True,
+                    model_id=model_id,
                 )
 
-        # Resolve defaults from model catalog
-        resolved_steps = steps if steps is not None else model.recommended_steps
-        resolved_guidance = guidance if guidance is not None else model.recommended_guidance
-        resolved_width = width if width is not None else model.default_width
-        resolved_height = height if height is not None else model.default_height
-        used_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
+            # Resolve defaults from model catalog
+            resolved_steps = steps if steps is not None else model.recommended_steps
+            resolved_guidance = guidance if guidance is not None else model.recommended_guidance
+            resolved_width = width if width is not None else model.default_width
+            resolved_height = height if height is not None else model.default_height
+            used_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
 
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None,
-            self._generate_sync,
-            prompt,
-            negative_prompt if model.supports_negative_prompt else "",
-            resolved_steps,
-            resolved_guidance,
-            resolved_width,
-            resolved_height,
-            used_seed,
-            model,
-            extra_params or {},
-            progress_callback,
-        )
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                None,
+                self._generate_sync,
+                prompt,
+                negative_prompt if model.supports_negative_prompt else "",
+                resolved_steps,
+                resolved_guidance,
+                resolved_width,
+                resolved_height,
+                used_seed,
+                model,
+                extra_params or {},
+                progress_callback,
+                cancel_event,
+                token,
+            )
+        finally:
+            self._unregister_generation(token)
 
     # ── sync internals (run in thread pool) ──────────────────────────────────
 
@@ -420,6 +537,7 @@ class ImageGenService:
 
             self._is_loading = True
             self._load_progress = 0.0
+            self._load_error = None
             logger.info("[image_gen] Loading model: %s", model.model_id)
 
             try:
@@ -527,8 +645,14 @@ class ImageGenService:
                 logger.error("[image_gen] Failed to load model %s: %s", model.model_id, exc, exc_info=True)
                 self._pipeline = None
                 self._loaded_model_id = None
-                return {"success": False, "error": friendly_load_error(exc) or str(exc)}
+                error = friendly_load_error(exc) or str(exc)
+                # Surfaced in GET /image-gen/status as load_error so a
+                # reconnecting UI sees WHY the model is not loaded.
+                self._load_error = error
+                return {"success": False, "error": error}
             finally:
+                # is_loading may NEVER stay true after a load attempt —
+                # a stuck true here is the "spins forever" bug.
                 self._is_loading = False
 
     def _unload_sync(self) -> None:
@@ -539,15 +663,23 @@ class ImageGenService:
         """Must be called with self._lock held."""
         if self._pipeline is None:
             return
+        # Clear the references FIRST — even if the cache cleanup below fails,
+        # the service must never keep reporting a model as loaded.
+        self._pipeline = None
+        self._loaded_model_id = None
         try:
             import torch  # noqa: PLC0415
-            del self._pipeline
-            self._pipeline = None
-            self._loaded_model_id = None
+            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            elif (
+                hasattr(torch.backends, "mps")
+                and torch.backends.mps.is_available()
+                and hasattr(torch, "mps")
+            ):
+                torch.mps.empty_cache()
         except Exception as exc:
-            logger.warning("[image_gen] Error unloading pipeline: %s", exc)
+            logger.warning("[image_gen] Error freeing memory on unload: %s", exc)
 
     def _generate_sync(
         self,
@@ -561,11 +693,15 @@ class ImageGenService:
         model: ImageGenModel,
         extra_params: dict[str, Any],
         progress_callback: Callable[[int, int], None] | None = None,
+        cancel_event: threading.Event | None = None,
+        gen_token: str | None = None,
     ) -> GenerationResult:
         with self._lock:
             if self._pipeline is None:
                 return GenerationResult(success=False, error="No model loaded")
             pipe = self._pipeline
+        if cancel_event is None:
+            cancel_event = threading.Event()
 
         try:
             import torch  # noqa: PLC0415
@@ -602,25 +738,8 @@ class ImageGenService:
                 # the MPS black-image path (July 2026).
                 call_kwargs["guidance_scale"] = guidance
 
-            # Step progress for the job queue — only when the pipeline
-            # supports the modern callback (all catalog pipelines do).
-            if progress_callback is not None:
-                sig_params = inspect.signature(pipe.__call__).parameters
-                if "callback_on_step_end" in sig_params:
-                    def _on_step_end(
-                        p: Any, step: int, timestep: Any, cb_kwargs: dict
-                    ) -> dict:
-                        progress_callback(step + 1, steps)
-                        return cb_kwargs
-                    call_kwargs["callback_on_step_end"] = _on_step_end
-                else:
-                    logger.warning(
-                        "[image_gen] %s pipeline has no callback_on_step_end — "
-                        "job progress will jump 0→100", model.pipeline_type,
-                    )
-
             # User-supplied extra_params merge LAST (they override every
-            # computed default except the protected `prompt`) and are
+            # computed default except the protected params) and are
             # validated against the pipeline signature BEFORE burning compute.
             from app.services.media_gen.params import (  # noqa: PLC0415
                 merge_extra_params,
@@ -628,6 +747,28 @@ class ImageGenService:
             )
             validate_pipeline_kwargs(pipe, extra_params.keys())
             call_kwargs = merge_extra_params(call_kwargs, extra_params)
+
+            # Per-step hook: job progress + mid-flight cancellation. Installed
+            # AFTER the merge so nothing can displace it (the callback kwargs
+            # are also in PROTECTED_PARAMS). All catalog pipelines support the
+            # modern callback; "none" (generic DiffusionPipeline path only)
+            # means cancel lands when the pipeline finishes — reported via
+            # mid_flight=false on the cancel endpoints.
+            hook_mode = install_cancel_hook(
+                pipe,
+                call_kwargs,
+                cancel_event=cancel_event,
+                total_steps=steps,
+                progress_callback=progress_callback,
+            )
+            if gen_token is not None:
+                with self._lock:
+                    gen = self._active_gens.get(gen_token)
+                    if gen is not None:
+                        gen["supports_step_cancel"] = hook_mode != "none"
+
+            if cancel_event.is_set():
+                raise GenerationCancelled("Cancelled before the pipeline started")
 
             t0 = time.monotonic()
             try:
@@ -642,6 +783,12 @@ class ImageGenService:
                     ) from exc
                 raise
             elapsed = time.monotonic() - t0
+
+            # A cancel that landed on the final step (or against a pipeline
+            # with no per-step callback) arrives here — a cancelled request
+            # returns cancelled, never a surprise late result.
+            if cancel_event.is_set():
+                raise GenerationCancelled("Cancelled at pipeline completion")
 
             image = output.images[0]
 
@@ -677,7 +824,9 @@ class ImageGenService:
             )
             record_params = {
                 k: v for k, v in call_kwargs.items()
-                if k not in ("generator", "callback_on_step_end")
+                if k not in (
+                    "generator", "callback_on_step_end", "callback", "callback_steps",
+                )
             }
             item = save_generated_image(
                 png_bytes,
@@ -703,9 +852,25 @@ class ImageGenService:
                 seed=seed,
             )
 
+        except GenerationCancelled as exc:
+            # User-requested abort — clean terminal state, never a traceback.
+            logger.info("[image_gen] Generation cancelled: %s", exc)
+            release_generation_memory("image_gen")
+            return GenerationResult(
+                success=False, error="Cancelled", cancelled=True,
+                model_id=model.model_id, seed=seed,
+            )
         except Exception as exc:
+            # Outermost failure boundary: EVERYTHING (OOM, NaN/black-image
+            # guard, callback-raised errors, save failures) becomes a terminal
+            # success=False with a clear message — never an escaped exception,
+            # never a hang. Full traceback goes to the log.
             logger.error("[image_gen] Generation failed: %s", exc, exc_info=True)
-            return GenerationResult(success=False, error=str(exc))
+            release_generation_memory("image_gen")
+            return GenerationResult(
+                success=False, error=friendly_generation_error(exc),
+                model_id=model.model_id, seed=seed,
+            )
 
 
 # ── singleton ─────────────────────────────────────────────────────────────────

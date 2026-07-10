@@ -16,7 +16,11 @@ Contract (media-gen spec, July 2026 — the frontend is built against this):
   GET  /video-gen/params/{model_id}      — complete effective defaults (common
                                            + advanced, extra_params-overridable)
   GET  /video-gen/jobs                   — recent jobs
-  GET  /video-gen/jobs/{job_id}          — job status/progress (+item_id, seed)
+  GET  /video-gen/jobs/{job_id}          — job status/progress (+item_id, seed,
+                                           cancel_requested)
+  DELETE /video-gen/jobs/{job_id}        — cancel queued OR running (mid-flight,
+                                           lands at the next denoising step) /
+                                           remove a finished record
   GET  /video-gen/jobs/{job_id}/result   — the mp4 (FileResponse)
 
 Completed jobs persist into the media library (~/.matrx/media/generated/videos/
@@ -51,8 +55,15 @@ class VideoGenStatusResponse(BaseModel):
     loaded_model_id: str | None
     is_loading: bool
     load_progress: float
+    load_error: str | None = None
+    """Why the last model load failed (None when it succeeded / never ran).
+    is_loading always returns to false after a failed load — this carries
+    the reason so a reconnecting UI can show it."""
     device: str
     active_job_id: str | None
+    cancel_requested: bool = False
+    """True once a cancel has been requested for the active job but before
+    the abort lands (show "Cancelling…")."""
 
 
 class VideoGenModelInfo(BaseModel):
@@ -159,6 +170,11 @@ class VideoJobResponse(BaseModel):
     fps: int = 0
     seed: int | None = None
     """The CONCRETE seed used (server-generated when the request omitted it)."""
+    cancel_requested: bool = False
+    """True the instant DELETE /video-gen/jobs/{id} lands on this running
+    job. The abort takes effect at the NEXT denoising step — video steps can
+    take tens of seconds each on MPS — after which status becomes
+    "cancelled" (partial progress preserved). Poll this for "Cancelling…"."""
     created_at: float = 0.0
     item_id: str | None = None
     """Media-library id once completed — GET /media-library/file/{item_id}."""
@@ -181,6 +197,7 @@ def _job_response(job) -> VideoJobResponse:
         num_frames=d["num_frames"],
         fps=d["fps"],
         seed=d["seed"],
+        cancel_requested=d["cancel_requested"],
         created_at=d["created_at"],
         item_id=d.get("item_id"),
     )
@@ -386,6 +403,37 @@ async def get_video_job(job_id: str) -> VideoJobResponse:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return _job_response(job)
+
+
+@router.delete("/jobs/{job_id}")
+async def cancel_video_job(job_id: str) -> dict:
+    """Cancel a job or remove a finished record (mirrors DELETE
+    /image-gen/jobs/{id}). Outcomes:
+
+    - queued  → {"outcome": "cancelled"} (record kept, status=cancelled,
+      the one-job-at-a-time slot is freed)
+    - running → {"outcome": "cancelling", "mid_flight": bool} — the job's
+      cancel_requested flips true immediately (show "Cancelling…"); the
+      abort lands at the NEXT denoising step. Video steps can take tens of
+      seconds each on MPS, so expect up to one step of delay before status
+      becomes "cancelled" (partial progress preserved).
+    - finished → {"outcome": "removed"} (record deleted; the mp4 /
+      media-library item is NOT deleted)
+    - unknown  → 404
+    """
+    store = get_video_job_store()
+    outcome = store.cancel(job_id)
+    if outcome == "not_found":
+        raise HTTPException(status_code=404, detail="Job not found")
+    if outcome == "running":
+        store.request_cancel_running(job_id)
+        info = get_video_gen_service().request_cancel_job(job_id)
+        return {
+            "job_id": job_id,
+            "outcome": "cancelling",
+            "mid_flight": bool(info.get("mid_flight", False)),
+        }
+    return {"job_id": job_id, "outcome": outcome}
 
 
 @router.get("/jobs/{job_id}/result")

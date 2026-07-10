@@ -9,7 +9,8 @@
  * defaults, and every control has an obvious way back to the model default.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import {
   AlertCircle,
   Check,
@@ -18,8 +19,10 @@ import {
   Copy,
   Dices,
   Download,
+  Loader2,
   Maximize2,
   RotateCcw,
+  Square,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -150,6 +153,188 @@ export function InlineProgressBar({
       )}
     </div>
   );
+}
+
+// ── Elapsed time (never-looks-frozen readouts) ──────────────────────────────
+
+/** "M:SS" for elapsed readouts. */
+export function formatElapsed(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Ticking elapsed-seconds counter for a busy operation.  Pass the epoch-ms
+ * start time; returns whole seconds (re-rendering once per second), or null
+ * when not running.
+ */
+export function useElapsedSeconds(startedAt: number | null): number | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (startedAt === null) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [startedAt]);
+  if (startedAt === null) return null;
+  return Math.max(0, Math.floor((now - startedAt) / 1000));
+}
+
+/**
+ * "Still working — N:SS elapsed" line shown beside every long-running spinner
+ * so an in-flight generation/model-load never LOOKS frozen.  Pass either a
+ * `startedAt` (ticks locally) or an engine-reported `elapsedSeconds`.
+ */
+export function StillWorkingNote({
+  startedAt = null,
+  elapsedSeconds = null,
+  label = "Still working",
+  className = "",
+}: {
+  startedAt?: number | null;
+  elapsedSeconds?: number | null;
+  label?: string;
+  className?: string;
+}) {
+  const ticking = useElapsedSeconds(startedAt);
+  const seconds = elapsedSeconds ?? ticking;
+  return (
+    <p
+      className={`flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground tabular-nums ${className}`}
+    >
+      <Loader2 className="h-3 w-3 animate-spin text-violet-500" />
+      <span>
+        {label}
+        {seconds !== null ? ` — ${formatElapsed(seconds)} elapsed` : "…"}
+      </span>
+    </p>
+  );
+}
+
+// ── Cancelable generate button (the one escape hatch, shared everywhere) ────
+
+/**
+ * THE generate-button pattern for every media-gen surface.  Idle: a normal
+ * Generate button.  While a generation is in flight it BECOMES a prominent,
+ * destructive Cancel button (plus a ticking "still working" readout), so
+ * there is always a way out — no generation can ever only be stopped by
+ * force-killing the app.
+ *
+ * `cancelling` shows "Cancelling…" until the cancel request settles / the
+ * job status flips (video steps can take tens of seconds to actually stop).
+ */
+export function CancelableGenerateButton({
+  generating,
+  cancelling,
+  startedAt = null,
+  elapsedSeconds = null,
+  disabled = false,
+  onGenerate,
+  onCancel,
+  idleContent,
+  workingLabel = "Generating",
+  cancelLabel = "Cancel generation",
+  buttonClassName = "w-full",
+  containerClassName = "",
+  size,
+}: {
+  /** True while the generation this button controls is in flight. */
+  generating: boolean;
+  /** True while a cancel request is pending / being honored. */
+  cancelling: boolean;
+  /** Epoch ms when the generation started (local ticking readout). */
+  startedAt?: number | null;
+  /** Engine-reported elapsed seconds (wins over startedAt when set). */
+  elapsedSeconds?: number | null;
+  /** Disables the GENERATE action only — cancel is always available. */
+  disabled?: boolean;
+  onGenerate: () => void;
+  onCancel: () => void;
+  /** Idle button content (icon + label). */
+  idleContent: ReactNode;
+  workingLabel?: string;
+  cancelLabel?: string;
+  /** Applied to the button itself (both states). */
+  buttonClassName?: string;
+  containerClassName?: string;
+  size?: "default" | "sm" | "lg" | "icon";
+}) {
+  if (!generating) {
+    return (
+      <div className={containerClassName || undefined}>
+        <Button
+          size={size}
+          className={buttonClassName}
+          disabled={disabled}
+          onClick={onGenerate}
+        >
+          {idleContent}
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className={`space-y-1.5 ${containerClassName}`}>
+      <Button
+        size={size}
+        variant="destructive"
+        className={buttonClassName}
+        disabled={cancelling}
+        onClick={onCancel}
+        title="Stop this generation"
+      >
+        {cancelling ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            Cancelling…
+          </>
+        ) : (
+          <>
+            <Square className="h-4 w-4 mr-2" />
+            {cancelLabel}
+          </>
+        )}
+      </Button>
+      <StillWorkingNote
+        startedAt={startedAt}
+        elapsedSeconds={elapsedSeconds}
+        label={cancelling ? `Cancelling ${workingLabel.toLowerCase()}` : `${workingLabel} — still working`}
+      />
+    </div>
+  );
+}
+
+/**
+ * Model-load banner: elapsed readout while `is_loading`, and the LOUD
+ * resolution of the spinner into `load_error` when the engine reports one.
+ */
+export function ModelLoadingNotice({
+  loading,
+  startedAt,
+  loadError,
+  what = "model",
+}: {
+  loading: boolean;
+  startedAt: number | null;
+  loadError: string | null | undefined;
+  what?: string;
+}) {
+  if (loading) {
+    return (
+      <div className="rounded-lg border bg-muted/20 px-3 py-2">
+        <StillWorkingNote
+          startedAt={startedAt}
+          label={`Loading ${what} — still working`}
+          className="justify-start"
+        />
+      </div>
+    );
+  }
+  if (loadError) {
+    return <ErrorNote message={`Model load failed: ${loadError}`} />;
+  }
+  return null;
 }
 
 // ── Seed ─────────────────────────────────────────────────────────────────────

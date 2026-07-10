@@ -3707,6 +3707,17 @@ export interface ImageGenStatus {
   loaded_model_id: string | null;
   is_loading: boolean;
   load_progress: number;
+  /**
+   * LOUD model-load failure from the engine.  When set (with `is_loading`
+   * back to false) the UI must resolve any loading spinner into this error —
+   * never leave the spinner running.  Optional until every engine build
+   * reports it.
+   */
+  load_error?: string | null;
+  /** True while a one-shot /generate is executing on the engine. */
+  is_generating?: boolean;
+  /** True after POST /image-gen/cancel until the in-flight work stops. */
+  cancel_requested?: boolean;
   /** Installed diffusers version, or null when packages are not installed. */
   packages_version: string | null;
   /** True when the installed diffusers is older than the required minimum. */
@@ -3725,6 +3736,8 @@ export interface MediaLoadResult {
 
 export interface ImageGenResult {
   success: boolean;
+  /** True when the generation was cancelled via POST /image-gen/cancel. */
+  cancelled?: boolean;
   /** Base64-encoded PNG. Use as: `data:image/png;base64,${image_b64}` */
   image_b64?: string;
   width: number;
@@ -3771,9 +3784,50 @@ function imageGenUrl(baseUrl: string, path: string): string {
   return `${baseUrl}/image-gen${path}`;
 }
 
+/**
+ * Default bound for media-gen control-plane calls (status, params, lists,
+ * enqueue, cancel…).  Generation and model-load calls pass `null` — they can
+ * legitimately take many minutes (CPU fallback) and are escaped via the
+ * Cancel button instead of a hard timeout.
+ */
+const MEDIA_GEN_TIMEOUT_MS = 30_000;
+
+/** Never-hang guarantee: bounded requests carry an AbortSignal.timeout. */
+function mediaGenTimeoutSignal(
+  timeoutMs: number | null,
+): AbortSignal | undefined {
+  return timeoutMs === null ? undefined : AbortSignal.timeout(timeoutMs);
+}
+
+function isAbortTimeout(e: unknown): boolean {
+  return (
+    e instanceof DOMException &&
+    (e.name === "TimeoutError" || e.name === "AbortError")
+  );
+}
+
+function mediaGenTimeoutError(
+  surface: "image-gen" | "video-gen",
+  method: string,
+  url: string,
+  timeoutMs: number,
+): Error {
+  let path = url;
+  try {
+    const u = new URL(url);
+    path = `${u.pathname}${u.search}`;
+  } catch {
+    // keep full url
+  }
+  const msg = `Engine did not respond within ${Math.round(timeoutMs / 1000)}s (${method} ${path}) — the request was aborted so the UI never hangs`;
+  emitClientLog("error", `[${surface}] ${msg}`, "engine");
+  return new Error(msg);
+}
+
 async function imageGenFetch<T>(
   url: string,
   options?: RequestInit,
+  timeoutMs: number | null = MEDIA_GEN_TIMEOUT_MS,
 ): Promise<T> {
   const auth = await engine.getEngineAuthHeaders();
   const mergedHeaders = new Headers({
@@ -3785,10 +3839,19 @@ async function imageGenFetch<T>(
     extra.forEach((value, key) => mergedHeaders.set(key, value));
   }
   const method = options?.method ?? "GET";
-  const resp = await fetch(url, {
-    ...options,
-    headers: mergedHeaders,
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      signal: mediaGenTimeoutSignal(timeoutMs),
+      ...options,
+      headers: mergedHeaders,
+    });
+  } catch (e) {
+    if (isAbortTimeout(e) && timeoutMs !== null) {
+      throw mediaGenTimeoutError("image-gen", method, url, timeoutMs);
+    }
+    throw e;
+  }
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     let detail = body;
@@ -3863,11 +3926,28 @@ async function mediaGenLoad(
   model_id: string,
 ): Promise<MediaLoadResult> {
   const auth = await engine.getEngineAuthHeaders();
-  const resp = await fetch(`${baseUrl}${prefix}/load`, {
-    method: "POST",
-    headers: new Headers({ "Content-Type": "application/json", ...auth }),
-    body: JSON.stringify({ model_id }),
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(`${baseUrl}${prefix}/load`, {
+      method: "POST",
+      headers: new Headers({ "Content-Type": "application/json", ...auth }),
+      body: JSON.stringify({ model_id }),
+      // Loading multi-GB weights can legitimately take minutes; this cap only
+      // guards against a truly wedged connection so the Load spinner is never
+      // permanent.
+      signal: AbortSignal.timeout(30 * 60_000),
+    });
+  } catch (e) {
+    if (isAbortTimeout(e)) {
+      throw mediaGenTimeoutError(
+        prefix === "/image-gen" ? "image-gen" : "video-gen",
+        "POST",
+        `${baseUrl}${prefix}/load`,
+        30 * 60_000,
+      );
+    }
+    throw e;
+  }
   if (resp.status === 409) {
     const body = (await resp.json().catch(() => ({}))) as {
       detail?: string;
@@ -3935,10 +4015,16 @@ export async function generateImage(
     extra_params?: Record<string, unknown>;
   },
 ): Promise<ImageGenResult> {
-  return imageGenFetch<ImageGenResult>(imageGenUrl(baseUrl, "/generate"), {
-    method: "POST",
-    body: JSON.stringify(req),
-  });
+  // No hard timeout: generation can legitimately take many minutes (CPU
+  // fallback).  The escape hatch is POST /image-gen/cancel (Cancel button).
+  return imageGenFetch<ImageGenResult>(
+    imageGenUrl(baseUrl, "/generate"),
+    {
+      method: "POST",
+      body: JSON.stringify(req),
+    },
+    null,
+  );
 }
 
 export async function generateImageFromWorkflow(
@@ -3950,12 +4036,41 @@ export async function generateImageFromWorkflow(
     seed?: number;
   },
 ): Promise<ImageGenResult> {
+  // No hard timeout — same rationale as generateImage; cancel is the escape.
   return imageGenFetch<ImageGenResult>(
     imageGenUrl(baseUrl, "/generate-workflow"),
     {
       method: "POST",
       body: JSON.stringify(req),
     },
+    null,
+  );
+}
+
+// ── One-shot generation cancel ───────────────────────────────────────────────
+
+/** Result of POST /image-gen/cancel. */
+export interface MediaGenCancelResult {
+  cancelled: boolean;
+  /** What was cancelled, when anything was. */
+  was?: "oneshot" | "job";
+  job_id?: string;
+  reason?: string;
+}
+
+/**
+ * Cancel the in-flight image generation (one-shot or running job).  The
+ * awaited /generate request then resolves with
+ * `{ success: false, cancelled: true }`.  Short timeout — cancel must never
+ * itself hang.
+ */
+export async function cancelImageGeneration(
+  baseUrl: string,
+): Promise<MediaGenCancelResult> {
+  return imageGenFetch<MediaGenCancelResult>(
+    imageGenUrl(baseUrl, "/cancel"),
+    { method: "POST" },
+    15_000,
   );
 }
 
@@ -3971,6 +4086,12 @@ export type ImageGenJobStatus =
 export interface ImageGenJob {
   job_id: string;
   status: ImageGenJobStatus;
+  /**
+   * True after a cancel was requested for a RUNNING job, until the status
+   * flips to "cancelled".  UI shows "Cancelling…" while set — a video/CPU
+   * step can take tens of seconds to actually stop.
+   */
+  cancel_requested?: boolean;
   prompt: string;
   model_id: string;
   /** 0..1 fractional progress while running. */
@@ -4013,7 +4134,10 @@ export async function getImageGenJob(
   );
 }
 
-/** Cancel a queued job / remove a finished one from the queue. */
+/**
+ * Cancel a queued OR RUNNING job / remove a finished one from the queue.
+ * Running jobs flip to `cancel_requested: true` first, then to "cancelled".
+ */
 export async function cancelImageGenJob(
   baseUrl: string,
   jobId: string,
@@ -4111,6 +4235,8 @@ export interface VideoGenStatus {
   loaded_model_id: string | null;
   is_loading: boolean;
   load_progress: number;
+  /** LOUD model-load failure — see ImageGenStatus.load_error. */
+  load_error?: string | null;
   device: "mps" | "cuda" | "cpu";
   /** The id of the currently-running job, if any. */
   active_job_id: string | null;
@@ -4149,11 +4275,14 @@ export type VideoGenJobStatus =
   | "queued"
   | "running"
   | "completed"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export interface VideoGenJob {
   job_id: string;
   status: VideoGenJobStatus;
+  /** True after cancel was requested, until the status goes terminal. */
+  cancel_requested?: boolean;
   /** 0..1 fractional progress. */
   progress: number;
   current_step: number;
@@ -4190,6 +4319,7 @@ function videoGenUrl(baseUrl: string, path: string): string {
 async function videoGenFetch<T>(
   url: string,
   options?: RequestInit,
+  timeoutMs: number | null = MEDIA_GEN_TIMEOUT_MS,
 ): Promise<T> {
   const auth = await engine.getEngineAuthHeaders();
   const mergedHeaders = new Headers({
@@ -4201,7 +4331,19 @@ async function videoGenFetch<T>(
     extra.forEach((value, key) => mergedHeaders.set(key, value));
   }
   const method = options?.method ?? "GET";
-  const resp = await fetch(url, { ...options, headers: mergedHeaders });
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      signal: mediaGenTimeoutSignal(timeoutMs),
+      ...options,
+      headers: mergedHeaders,
+    });
+  } catch (e) {
+    if (isAbortTimeout(e) && timeoutMs !== null) {
+      throw mediaGenTimeoutError("video-gen", method, url, timeoutMs);
+    }
+    throw e;
+  }
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     let detail = body;
@@ -4318,6 +4460,23 @@ export async function listVideoGenJobs(
 }
 
 /**
+ * Cancel a queued OR RUNNING video job (mirror of cancelImageGenJob).  A
+ * running job flips to `cancel_requested: true` first; a diffusion step can
+ * take tens of seconds to actually stop, so the UI shows "Cancelling…" until
+ * the polled status goes terminal.
+ */
+export async function cancelVideoGenJob(
+  baseUrl: string,
+  jobId: string,
+): Promise<void> {
+  await videoGenFetch<unknown>(
+    videoGenUrl(baseUrl, `/jobs/${encodeURIComponent(jobId)}`),
+    { method: "DELETE" },
+    15_000,
+  );
+}
+
+/**
  * Fetch the finished mp4 for a job with auth headers and return an object URL
  * suitable for a `<video controls src=…>`.  The caller owns the returned URL
  * and must `URL.revokeObjectURL` it when done.
@@ -4327,10 +4486,27 @@ export async function fetchVideoGenResult(
   jobId: string,
 ): Promise<string> {
   const auth = await engine.getEngineAuthHeaders();
-  const resp = await fetch(
-    videoGenUrl(baseUrl, `/jobs/${encodeURIComponent(jobId)}/result`),
-    { headers: new Headers({ ...auth }) },
-  );
+  let resp: Response;
+  try {
+    resp = await fetch(
+      videoGenUrl(baseUrl, `/jobs/${encodeURIComponent(jobId)}/result`),
+      {
+        headers: new Headers({ ...auth }),
+        // Generous but bounded — an mp4 over loopback must not hang forever.
+        signal: AbortSignal.timeout(120_000),
+      },
+    );
+  } catch (e) {
+    if (isAbortTimeout(e)) {
+      throw mediaGenTimeoutError(
+        "video-gen",
+        "GET",
+        videoGenUrl(baseUrl, `/jobs/${jobId}/result`),
+        120_000,
+      );
+    }
+    throw e;
+  }
   if (!resp.ok) {
     const detail = await resp.text().catch(() => `HTTP ${resp.status}`);
     emitClientLog(

@@ -8,9 +8,12 @@ one pipeline) in submission order.
   POST   /image-gen/jobs        → enqueue, returns job_id immediately
   GET    /image-gen/jobs        → recent jobs, newest first
   GET    /image-gen/jobs/{id}   → status + per-step progress
-  DELETE /image-gen/jobs/{id}   → cancel a QUEUED job, or remove a finished
-                                  record; 409 while running (no mid-flight
-                                  abort — same semantics gap as video jobs)
+  DELETE /image-gen/jobs/{id}   → cancel a QUEUED job, cancel a RUNNING job
+                                  MID-FLIGHT (cancel_requested flips true
+                                  immediately; the abort lands at the next
+                                  denoising step; status → cancelled with
+                                  partial progress preserved), or remove a
+                                  finished record
 
 State lives in memory for live polling; the last ``_HISTORY_LIMIT`` jobs
 persist to ``~/.matrx/generated/images/jobs.json`` so a restart keeps history
@@ -68,6 +71,9 @@ class ImageJob:
     """Media-library id once completed — GET /media-library/file/{item_id}."""
     file_path: str | None = None
     """Absolute path of the persisted PNG once completed."""
+    cancel_requested: bool = False
+    """True the instant a cancel lands on a running job — the abort itself
+    takes effect at the next denoising step, so the UI shows "Cancelling…"."""
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
     finished_at: float | None = None
@@ -213,6 +219,30 @@ class ImageJobStore:
                 job.elapsed_seconds = round(job.finished_at - job.started_at, 1)
             self._persist_locked()
 
+    def mark_cancelled(self, job_id: str) -> None:
+        """Terminal cancelled state for a job whose in-flight generation was
+        aborted. Partial progress (current_step/progress) is preserved on the
+        record deliberately — the UI shows how far it got."""
+        with self._lock:
+            job = self._jobs[job_id]
+            job.status = "cancelled"
+            job.finished_at = time.time()
+            if job.started_at:
+                job.elapsed_seconds = round(job.finished_at - job.started_at, 1)
+            self._persist_locked()
+
+    def request_cancel_running(self, job_id: str) -> bool:
+        """Flip cancel_requested on a RUNNING job (the "Cancelling…" flag the
+        UI polls). The actual abort is driven by the service's cancel event;
+        the terminal status lands via the runner → mark_cancelled."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status != "running":
+                return False
+            job.cancel_requested = True
+            self._persist_locked()
+            return True
+
     def cancel(self, job_id: str) -> str:
         """Cancel/remove a job. Returns one of:
 
@@ -220,7 +250,8 @@ class ImageJobStore:
         - "removed"    — finished (completed/failed/cancelled) record deleted
                          (the media-library item, if any, is NOT deleted —
                          use DELETE /media-library/items/{item_id} for that)
-        - "running"    — cannot cancel mid-generation (caller maps to 409)
+        - "running"    — in flight; the caller escalates to a mid-flight
+                         cancel (service cancel event + request_cancel_running)
         - "not_found"
         """
         with self._lock:
@@ -257,6 +288,24 @@ class ImageJobRunner:
         self._task = asyncio.get_running_loop().create_task(
             self._drain(), name="image-gen-job-worker"
         )
+        self._task.add_done_callback(self._on_drain_done)
+
+    @staticmethod
+    def _on_drain_done(task: asyncio.Task) -> None:
+        """Loud recovery: the drain loop must never die silently. Per-job
+        failures are handled inside the loop; anything escaping to here is an
+        infrastructure bug (store corruption, cancellation, …). The next
+        enqueue restarts the worker either way."""
+        if task.cancelled():
+            logger.warning("[image_gen] Job worker task was cancelled")
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "[image_gen] Job worker task DIED unexpectedly — queued jobs "
+                "will not run until the next enqueue restarts it: %s",
+                exc, exc_info=exc,
+            )
 
     @property
     def active(self) -> bool:
@@ -302,8 +351,15 @@ class ImageJobRunner:
                     progress_callback=lambda step, total: self._store.update_progress(
                         job_id, step, total
                     ),
+                    job_id=job_id,
                 )
-                if result.success:
+                if result.cancelled:
+                    self._store.mark_cancelled(job_id)
+                    logger.info(
+                        "[image_gen] Job %s: cancelled mid-flight at step %d/%d",
+                        job_id[:8], job.current_step, job.total_steps,
+                    )
+                elif result.success:
                     assert result.item_id is not None and result.file_path is not None
                     self._store.mark_completed(
                         job_id,

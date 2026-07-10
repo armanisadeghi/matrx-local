@@ -79,6 +79,8 @@ import {
   AdvancedParamsEditor,
   ParamsErrorBanner,
   GeneratedImageView,
+  CancelableGenerateButton,
+  StillWorkingNote,
   computeAdvancedOverrides,
   parseSeedText,
   randomSeed,
@@ -696,7 +698,8 @@ function WorkspaceImageJobRow({
             {job.prompt || "(no prompt)"}
           </p>
           <p className="text-[10px] text-muted-foreground">
-            {job.model_id || "—"} · {job.status}
+            {job.model_id || "—"} ·{" "}
+            {active && job.cancel_requested ? "cancelling…" : job.status}
             {job.status === "failed" && job.error ? ` — ${job.error}` : ""}
           </p>
         </div>
@@ -704,14 +707,24 @@ function WorkspaceImageJobRow({
           {typeof job.seed === "number" && (
             <SeedChip seed={job.seed} onReuse={onReuseSeed} />
           )}
-          <button
-            onClick={() => onCancel(job.job_id)}
-            className="text-muted-foreground hover:text-foreground"
-            aria-label={active ? "Cancel job" : "Remove job"}
-            title={active ? "Cancel this job" : "Remove from the queue"}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          {active && job.cancel_requested ? (
+            <span
+              className="flex items-center gap-1 text-[10px] text-muted-foreground"
+              title="Cancel requested — the current step is finishing"
+            >
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Cancelling…
+            </span>
+          ) : (
+            <button
+              onClick={() => onCancel(job.job_id)}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label={active ? "Cancel job" : "Remove job"}
+              title={active ? "Cancel this job" : "Remove from the queue"}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </div>
       {job.status === "running" && (
@@ -734,6 +747,8 @@ function ImageGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
     imageStatusLoading,
     imageStatusError,
     imageGenerating,
+    imageCancelling,
+    imageGenStartedAt,
     imageGenError,
     imageResult,
     selectedImageModelId,
@@ -746,6 +761,7 @@ function ImageGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
     refreshImage,
     unloadImageModel,
     generateImage,
+    cancelImageGeneration,
     clearImageResult,
     clearImageGenError,
     setImageForm,
@@ -1038,25 +1054,21 @@ function ImageGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
               )}
 
               <div className="flex gap-2">
-                <Button
-                  className="flex-1"
-                  disabled={imageGenerating || formInvalid}
-                  onClick={() => {
-                    void handleGenerate();
-                  }}
-                >
-                  {imageGenerating ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                      Generating…
-                    </>
-                  ) : (
+                <CancelableGenerateButton
+                  generating={imageGenerating}
+                  cancelling={imageCancelling}
+                  startedAt={imageGenStartedAt}
+                  disabled={formInvalid}
+                  onGenerate={() => void handleGenerate()}
+                  onCancel={() => void cancelImageGeneration()}
+                  containerClassName="flex-1"
+                  idleContent={
                     <>
                       <ImageIcon className="h-4 w-4 mr-2" />
                       Generate
                     </>
-                  )}
-                </Button>
+                  }
+                />
                 <Button
                   variant="outline"
                   disabled={formInvalid}
@@ -1083,8 +1095,9 @@ function ImageGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
                 <div className="flex flex-col items-center justify-center rounded-lg border border-dashed aspect-square gap-3 text-muted-foreground">
                   <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
                   <span className="text-sm">Generating image…</span>
+                  <StillWorkingNote startedAt={imageGenStartedAt} />
                   <span className="text-xs">
-                    This may take 5–60 seconds depending on your hardware
+                    Can take minutes on CPU — use Cancel to stop at any time
                   </span>
                 </div>
               ) : (
@@ -1139,6 +1152,7 @@ function VideoGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
     videoStatusLoading,
     videoStatusError,
     videoGenerating,
+    videoCancelling,
     videoGenError,
     activeJob,
     jobs,
@@ -1149,6 +1163,8 @@ function VideoGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
     refreshVideo,
     unloadVideoModel,
     generateVideo,
+    cancelVideoGeneration,
+    cancelVideoJob,
     fetchVideoResult,
     clearActiveJob,
     clearVideoGenError,
@@ -1651,23 +1667,23 @@ function VideoGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
             </p>
           )}
 
-          <Button
-            className="w-full"
-            disabled={videoGenerating || jobIsActive || formInvalid}
-            onClick={() => void handleGenerate()}
-          >
-            {videoGenerating || jobIsActive ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                {jobIsActive ? "Generating…" : "Starting…"}
-              </>
-            ) : (
+          <CancelableGenerateButton
+            generating={videoGenerating || jobIsActive}
+            cancelling={videoCancelling || !!activeJob?.cancel_requested}
+            elapsedSeconds={
+              jobIsActive ? (activeJob?.elapsed_seconds ?? null) : null
+            }
+            disabled={formInvalid}
+            onGenerate={() => void handleGenerate()}
+            onCancel={() => void cancelVideoGeneration()}
+            workingLabel="Generating video"
+            idleContent={
               <>
                 <Film className="h-4 w-4 mr-2" />
                 Generate Video
               </>
-            )}
-          </Button>
+            }
+          />
         </div>
       )}
 
@@ -1703,10 +1719,30 @@ function VideoGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
                       : j.status === "completed"
                         ? `${j.elapsed_seconds.toFixed(0)}s`
                         : j.status === "queued" || j.status === "running"
-                          ? `${Math.round(j.progress * 100)}%`
+                          ? j.cancel_requested
+                            ? "cancelling…"
+                            : `${Math.round(j.progress * 100)}%`
                           : j.status}
                   </p>
                 </div>
+                {(j.status === "queued" || j.status === "running") &&
+                  (j.cancel_requested ? (
+                    <span className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Cancelling…
+                    </span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive shrink-0"
+                      onClick={() => void cancelVideoJob(j.job_id)}
+                      title="Cancel this video job"
+                    >
+                      <X className="h-3.5 w-3.5 mr-1" />
+                      Cancel
+                    </Button>
+                  ))}
                 {j.status === "completed" && (
                   <Button
                     size="sm"
@@ -1731,7 +1767,7 @@ function VideoGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
 function QueueFooter({ onJump }: { onJump: (id: NavId) => void }) {
   const [state, actions] = useMediaGenApp();
   const { imageJobs, activeJob } = state;
-  const { cancelImageJob, clearActiveJob } = actions;
+  const { cancelImageJob, cancelVideoJob, clearActiveJob } = actions;
 
   const activeImageJobs = imageJobs.filter(
     (j) => j.status === "queued" || j.status === "running",
@@ -1781,17 +1817,26 @@ function QueueFooter({ onJump }: { onJump: (id: NavId) => void }) {
                 </>
               )}
             </button>
-            {runningImageJob && (
-              <button
-                type="button"
-                onClick={() => void cancelImageJob(runningImageJob.job_id)}
-                className="text-muted-foreground hover:text-destructive shrink-0"
-                aria-label="Cancel image job"
-                title="Cancel this image job"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
+            {runningImageJob &&
+              (runningImageJob.cancel_requested ? (
+                <span
+                  className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0"
+                  title="Cancel requested — the current step is finishing"
+                >
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Cancelling…
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void cancelImageJob(runningImageJob.job_id)}
+                  className="text-muted-foreground hover:text-destructive shrink-0"
+                  aria-label="Cancel image job"
+                  title="Cancel this image job"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              ))}
           </div>
         )}
 
@@ -1837,6 +1882,26 @@ function QueueFooter({ onJump }: { onJump: (id: NavId) => void }) {
                 </span>
               )}
             </button>
+            {videoActive &&
+              (activeJob.cancel_requested ? (
+                <span
+                  className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0"
+                  title="Cancel requested — the current step is finishing"
+                >
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Cancelling…
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void cancelVideoJob(activeJob.job_id)}
+                  className="text-muted-foreground hover:text-destructive shrink-0"
+                  aria-label="Cancel video job"
+                  title="Cancel this video job"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              ))}
             {!videoActive && (
               <button
                 type="button"

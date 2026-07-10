@@ -40,9 +40,14 @@ CRITICAL_MODULES = [
 
 @pytest.mark.parametrize("module_path", CRITICAL_MODULES)
 def test_critical_module_imports(module_path: str) -> None:
-    """Each critical module can be imported without NameError or ImportError."""
-    if module_path in sys.modules:
-        sys.modules.pop(module_path)
+    """Each critical module can be imported without NameError or ImportError.
+
+    The original module object is restored into sys.modules afterwards:
+    leaving the freshly re-imported copy in place breaks module identity for
+    every later test that monkeypatches attributes on these modules (the
+    FastAPI app's handlers stay bound to the ORIGINAL module globals).
+    """
+    original = sys.modules.pop(module_path, None)
     try:
         importlib.import_module(module_path)
     except Exception as exc:
@@ -50,6 +55,16 @@ def test_critical_module_imports(module_path: str) -> None:
             f"Failed to import {module_path}: {type(exc).__name__}: {exc}\n"
             "This would crash the engine at startup."
         )
+    finally:
+        if original is not None:
+            sys.modules[module_path] = original
+            # Re-importing also rebinds the submodule attribute on the parent
+            # package object; `from pkg import mod` resolves through that
+            # attribute, so it must be restored too.
+            parent_name, _, child = module_path.rpartition(".")
+            parent = sys.modules.get(parent_name) if parent_name else None
+            if parent is not None:
+                setattr(parent, child, original)
 
 
 def test_main_app_object_exists() -> None:

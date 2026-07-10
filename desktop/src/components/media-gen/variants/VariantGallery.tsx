@@ -78,6 +78,7 @@ import type {
 import type { ImageGenerateInput } from "@/hooks/use-media-gen";
 import { ImageGenInstaller } from "../ImageGenInstaller";
 import {
+  CancelableGenerateButton,
   ErrorNote,
   InlineProgressBar,
   SeedInput,
@@ -262,19 +263,29 @@ function ImageJobChip({
             {job.prompt || "(no prompt)"}
           </p>
           <p className="truncate text-[10px] text-muted-foreground">
-            {job.status}
+            {active && job.cancel_requested ? "cancelling…" : job.status}
             {job.status === "failed" && job.error ? ` — ${job.error}` : ""}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => onCancel(job.job_id)}
-          className="shrink-0 text-muted-foreground hover:text-foreground"
-          aria-label={active ? "Cancel job" : "Remove job"}
-          title={active ? "Cancel this job" : "Remove from the queue"}
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        {active && job.cancel_requested ? (
+          <span
+            className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground"
+            title="Cancel requested — the current step is finishing"
+          >
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Cancelling…
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onCancel(job.job_id)}
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+            aria-label={active ? "Cancel job" : "Remove job"}
+            title={active ? "Cancel this job" : "Remove from the queue"}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       {job.status === "running" && (
         <InlineProgressBar
@@ -294,11 +305,15 @@ function ImageJobChip({
 function VideoJobCard({
   job,
   onDismiss,
+  onCancel,
 }: {
   job: VideoGenJob;
   onDismiss: () => void;
+  /** Cancel the queued/running job (now allowed by the engine). */
+  onCancel: (jobId: string) => void;
 }) {
   const active = job.status === "queued" || job.status === "running";
+  const cancelling = active && !!job.cancel_requested;
   return (
     <div className="flex w-72 shrink-0 flex-col gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/5 px-2.5 py-2">
       <div className="flex items-center gap-2">
@@ -317,13 +332,33 @@ function VideoJobCard({
             {job.prompt || "(no prompt)"}
           </p>
           <p className="truncate text-[10px] text-muted-foreground">
-            {job.status}
-            {active && job.total_steps > 0
+            {cancelling ? "cancelling…" : job.status}
+            {active && !cancelling && job.total_steps > 0
               ? ` — step ${job.current_step}/${job.total_steps}`
               : ""}
             {job.status === "failed" && job.error ? ` — ${job.error}` : ""}
           </p>
         </div>
+        {active &&
+          (cancelling ? (
+            <span
+              className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground"
+              title="Cancel requested — the current step is finishing"
+            >
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Cancelling…
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onCancel(job.job_id)}
+              className="shrink-0 text-muted-foreground hover:text-destructive"
+              aria-label="Cancel video job"
+              title="Cancel this video job"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          ))}
         {!active && (
           <button
             type="button"
@@ -673,6 +708,8 @@ export function VariantGallery() {
     imageModelLoading,
     loadingImageModelId,
     imageGenerating,
+    imageCancelling,
+    imageGenStartedAt,
     imageGenError,
     imageResult,
     selectedImageModelId,
@@ -686,6 +723,7 @@ export function VariantGallery() {
     videoModelLoading,
     loadingVideoModelId,
     videoGenerating,
+    videoCancelling,
     videoGenError,
     activeJob,
     videoForm,
@@ -695,6 +733,7 @@ export function VariantGallery() {
     loadImageModel,
     downloadImageModel,
     generateImage,
+    cancelImageGeneration,
     clearImageResult,
     clearImageGenError,
     setImageForm,
@@ -707,6 +746,8 @@ export function VariantGallery() {
     loadVideoModel,
     downloadVideoModel,
     generateVideo,
+    cancelVideoGeneration,
+    cancelVideoJob,
     clearActiveJob,
     clearVideoGenError,
     setVideoForm,
@@ -1126,24 +1167,43 @@ export function VariantGallery() {
                 />
 
                 {/* Generate + queue */}
-                <div className="flex shrink-0 gap-1.5">
-                  <Button
-                    disabled={
+                <div className="flex shrink-0 items-start gap-1.5">
+                  <CancelableGenerateButton
+                    generating={
                       mode === "image"
-                        ? !imageReady || imageGenerating
-                        : !videoReady || videoGenerating
+                        ? imageGenerating
+                        : videoGenerating || videoJobActive
                     }
-                    onClick={() => void handleGenerate()}
-                    className="h-[38px]"
-                  >
-                    {(mode === "image" && imageGenerating) ||
-                    (mode === "video" && (videoGenerating || videoJobActive)) ? (
-                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Sparkles className="mr-1.5 h-4 w-4" />
-                    )}
-                    Generate
-                  </Button>
+                    cancelling={
+                      mode === "image"
+                        ? imageCancelling
+                        : videoCancelling || !!activeJob?.cancel_requested
+                    }
+                    startedAt={mode === "image" ? imageGenStartedAt : null}
+                    elapsedSeconds={
+                      mode === "video" && videoJobActive
+                        ? (activeJob?.elapsed_seconds ?? null)
+                        : null
+                    }
+                    disabled={mode === "image" ? !imageReady : !videoReady}
+                    onGenerate={() => void handleGenerate()}
+                    onCancel={() =>
+                      void (mode === "image"
+                        ? cancelImageGeneration()
+                        : cancelVideoGeneration())
+                    }
+                    buttonClassName="h-[38px]"
+                    cancelLabel="Cancel"
+                    workingLabel={
+                      mode === "image" ? "Generating" : "Generating video"
+                    }
+                    idleContent={
+                      <>
+                        <Sparkles className="mr-1.5 h-4 w-4" />
+                        Generate
+                      </>
+                    }
+                  />
                   {mode === "image" && (
                     <Button
                       variant="outline"
@@ -1557,7 +1617,11 @@ export function VariantGallery() {
                 )}
                 {/* Single active/most-recent video job */}
                 {activeJob && (
-                  <VideoJobCard job={activeJob} onDismiss={clearActiveJob} />
+                  <VideoJobCard
+                    job={activeJob}
+                    onDismiss={clearActiveJob}
+                    onCancel={(id) => void cancelVideoJob(id)}
+                  />
                 )}
                 {/* Image queue chips */}
                 {queueJobs.map((j) => (

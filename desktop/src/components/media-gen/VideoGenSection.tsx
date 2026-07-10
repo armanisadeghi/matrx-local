@@ -63,6 +63,8 @@ import {
   computeAdvancedOverrides,
   parseSeedText,
   randomSeed,
+  CancelableGenerateButton,
+  ModelLoadingNotice,
 } from "./shared";
 import type { SizePreset } from "./shared";
 
@@ -219,11 +221,16 @@ function JobRow({
   job,
   resultUrl,
   onPlay,
+  onCancel,
 }: {
   job: VideoGenJob;
   resultUrl: string | null;
   onPlay: (jobId: string) => void;
+  /** Cancel a queued/running job (now allowed by the engine). */
+  onCancel: (jobId: string) => void;
 }) {
+  const active = job.status === "queued" || job.status === "running";
+  const cancelling = active && !!job.cancel_requested;
   return (
     <div className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5">
       <div className="w-5 shrink-0">
@@ -231,7 +238,7 @@ function JobRow({
           <CheckCircle2 className="h-4 w-4 text-green-500" />
         ) : job.status === "failed" ? (
           <AlertCircle className="h-4 w-4 text-destructive" />
-        ) : job.status === "queued" || job.status === "running" ? (
+        ) : active ? (
           <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
         ) : (
           <Film className="h-4 w-4 text-muted-foreground" />
@@ -247,11 +254,34 @@ function JobRow({
             ? (job.error ?? "failed")
             : job.status === "completed"
               ? `${job.elapsed_seconds.toFixed(0)}s`
-              : job.status === "queued" || job.status === "running"
-                ? `${Math.round(job.progress * 100)}%`
-                : job.status}
+              : cancelling
+                ? "cancelling…"
+                : active
+                  ? `${Math.round(job.progress * 100)}%`
+                  : job.status}
         </p>
       </div>
+      {active &&
+        (cancelling ? (
+          <span
+            className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0"
+            title="Cancel requested — the current step is finishing (can take tens of seconds)"
+          >
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Cancelling…
+          </span>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-destructive hover:text-destructive shrink-0"
+            onClick={() => onCancel(job.job_id)}
+            title="Cancel this video job"
+          >
+            <X className="h-3.5 w-3.5 mr-1" />
+            Cancel
+          </Button>
+        ))}
       {job.status === "completed" && (
         <Button size="sm" variant="outline" onClick={() => onPlay(job.job_id)}>
           <Play className="h-3.5 w-3.5 mr-1" />
@@ -274,6 +304,8 @@ export function VideoGenSection() {
     videoModelLoading,
     loadingVideoModelId,
     videoGenerating,
+    videoCancelling,
+    videoLoadStartedAt,
     videoGenError,
     activeJob,
     jobs,
@@ -286,6 +318,8 @@ export function VideoGenSection() {
     unloadVideoModel,
     downloadVideoModel,
     generateVideo,
+    cancelVideoGeneration,
+    cancelVideoJob,
     fetchVideoResult,
     clearActiveJob,
     clearVideoGenError,
@@ -645,6 +679,21 @@ export function VideoGenSection() {
                   {Math.round(activeJob.elapsed_seconds)}s
                 </span>
               )}
+              {jobIsActive &&
+                (videoCancelling || activeJob.cancel_requested ? (
+                  <span className="flex items-center gap-1 text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Cancelling…
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => void cancelVideoGeneration()}
+                    className="text-destructive hover:underline"
+                    title="Stop this video generation"
+                  >
+                    Cancel
+                  </button>
+                ))}
               {!jobIsActive && (
                 <button
                   onClick={clearActiveJob}
@@ -742,6 +791,12 @@ export function VideoGenSection() {
           {genError && (
             <ErrorNote message={genError} onDismiss={dismissGenError} />
           )}
+          <ModelLoadingNotice
+            loading={videoModelLoading || !!videoStatus?.is_loading}
+            startedAt={videoLoadStartedAt}
+            loadError={videoStatus?.load_error}
+            what={loadingVideoModelId ?? "model"}
+          />
           <div className="grid gap-3 sm:grid-cols-2">
             {videoModels.map((m) => (
               <VideoModelCard
@@ -961,23 +1016,23 @@ export function VideoGenSection() {
             </p>
           )}
 
-          <Button
-            className="w-full"
-            disabled={videoGenerating || jobIsActive || formInvalid}
-            onClick={() => void handleGenerate()}
-          >
-            {videoGenerating || jobIsActive ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                {jobIsActive ? "Generating…" : "Starting…"}
-              </>
-            ) : (
+          <CancelableGenerateButton
+            generating={videoGenerating || jobIsActive}
+            cancelling={videoCancelling || !!activeJob?.cancel_requested}
+            elapsedSeconds={
+              jobIsActive ? (activeJob?.elapsed_seconds ?? null) : null
+            }
+            disabled={formInvalid}
+            onGenerate={() => void handleGenerate()}
+            onCancel={() => void cancelVideoGeneration()}
+            workingLabel="Generating video"
+            idleContent={
               <>
                 <Film className="h-4 w-4 mr-2" />
                 Generate Video
               </>
-            )}
-          </Button>
+            }
+          />
         </div>
       )}
 
@@ -992,6 +1047,7 @@ export function VideoGenSection() {
                 job={j}
                 resultUrl={videoResults[j.job_id] ?? null}
                 onPlay={handlePlay}
+                onCancel={(id) => void cancelVideoJob(id)}
               />
             ))}
           </div>

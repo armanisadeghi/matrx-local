@@ -36,7 +36,18 @@ from app.services.video_gen.models import VideoGenModel
 
 # Keys extra_params may never override. ``prompt`` is the request's
 # authoritative field (and the media-library record of what was generated).
-PROTECTED_PARAMS: frozenset[str] = frozenset({"prompt"})
+# The pipeline callback kwargs are engine-owned: the per-step callback drives
+# job progress AND mid-flight cancellation (app/services/media_gen/
+# cancellation.py) — letting a caller displace it would re-create the
+# "unkillable generation" bug. (They are also unserializable over JSON, so no
+# legitimate API caller can supply them anyway.)
+PROTECTED_PARAMS: frozenset[str] = frozenset({
+    "prompt",
+    "callback",
+    "callback_steps",
+    "callback_on_step_end",
+    "callback_on_step_end_tensor_inputs",
+})
 
 
 def merge_extra_params(
@@ -55,7 +66,8 @@ def merge_extra_params(
     if blocked:
         raise ValueError(
             f"extra_params may not override protected parameter(s): "
-            f"{', '.join(sorted(blocked))}. Use the top-level request field instead."
+            f"{', '.join(sorted(blocked))}. prompt has a top-level request "
+            "field; pipeline callbacks are engine-owned (progress + cancellation)."
         )
     merged.update(extra_params)
     return merged

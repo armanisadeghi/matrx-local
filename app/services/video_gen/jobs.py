@@ -25,7 +25,7 @@ from app.services.media_gen.paths import generated_videos_dir
 
 logger = get_logger()
 
-JobStatus = Literal["queued", "running", "completed", "failed"]
+JobStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 
 _HISTORY_LIMIT = 50
 
@@ -51,6 +51,11 @@ class VideoJob:
     num_frames: int = 0
     fps: int = 0
     seed: int | None = None
+    cancel_requested: bool = False
+    """True the instant a cancel lands on a running job. The abort takes
+    effect at the NEXT denoising step — video steps can take tens of seconds
+    each on MPS, so the UI shows "Cancelling…" off this flag until status
+    flips to "cancelled" (partial progress preserved on the record)."""
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
     finished_at: float | None = None
@@ -147,13 +152,18 @@ class VideoJobStore:
         with self._lock:
             return [self._jobs[j] for j in reversed(self._order[-limit:])]
 
-    def mark_running(self, job_id: str, total_steps: int) -> None:
+    def mark_running(self, job_id: str, total_steps: int) -> bool:
+        """False when the job was cancelled between create and worker start —
+        the worker must skip it instead of resurrecting it."""
         with self._lock:
             job = self._jobs[job_id]
+            if job.status != "queued":
+                return False
             job.status = "running"
             job.started_at = time.time()
             job.total_steps = total_steps
             self._persist_locked()
+            return True
 
     def update_progress(self, job_id: str, current_step: int, total_steps: int) -> None:
         """Called from the diffusers step callback (worker thread). No disk IO —
@@ -195,6 +205,63 @@ class VideoJobStore:
             if self._active_job_id == job_id:
                 self._active_job_id = None
             self._persist_locked()
+
+    def mark_cancelled(self, job_id: str) -> None:
+        """Terminal cancelled state after a mid-flight abort. Partial progress
+        (current_step/progress) stays on the record — the UI shows how far it
+        got. Frees the one-job-at-a-time slot."""
+        with self._lock:
+            job = self._jobs[job_id]
+            job.status = "cancelled"
+            job.finished_at = time.time()
+            if job.started_at:
+                job.elapsed_seconds = round(job.finished_at - job.started_at, 1)
+            if self._active_job_id == job_id:
+                self._active_job_id = None
+            self._persist_locked()
+
+    def request_cancel_running(self, job_id: str) -> bool:
+        """Flip cancel_requested on a RUNNING job so the UI can show
+        "Cancelling…" immediately. The abort itself is driven by the
+        service's cancel event (next denoising step)."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status != "running":
+                return False
+            job.cancel_requested = True
+            self._persist_locked()
+            return True
+
+    def cancel(self, job_id: str) -> str:
+        """Cancel/remove a job (mirrors the image store). Returns:
+
+        - "cancelled"  — was queued, now marked cancelled (record kept;
+                         frees the one-job-at-a-time slot)
+        - "removed"    — finished (completed/failed/cancelled) record deleted
+                         (the media-library item / mp4 is NOT deleted)
+        - "running"    — in flight; the caller escalates to a mid-flight
+                         cancel (service cancel event + request_cancel_running)
+        - "not_found"
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return "not_found"
+            if job.status == "queued":
+                job.status = "cancelled"
+                job.finished_at = time.time()
+                if self._active_job_id == job_id:
+                    self._active_job_id = None
+                self._persist_locked()
+                return "cancelled"
+            if job.status == "running":
+                return "running"
+            del self._jobs[job_id]
+            self._order.remove(job_id)
+            if self._active_job_id == job_id:
+                self._active_job_id = None
+            self._persist_locked()
+            return "removed"
 
 
 _store: VideoJobStore | None = None

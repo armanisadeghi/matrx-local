@@ -60,6 +60,9 @@ import {
   computeAdvancedOverrides,
   parseSeedText,
   randomSeed,
+  CancelableGenerateButton,
+  ModelLoadingNotice,
+  StillWorkingNote,
 } from "./shared";
 import type { SizePreset } from "./shared";
 
@@ -251,6 +254,7 @@ function ImageJobRow({
   onReuseSeed: (seed: number) => void;
 }) {
   const active = job.status === "queued" || job.status === "running";
+  const cancelling = active && !!job.cancel_requested;
   return (
     <div className="rounded-lg border bg-card px-3 py-2.5 space-y-1.5">
       <div className="flex items-center gap-3">
@@ -277,7 +281,7 @@ function ImageJobRow({
             {job.prompt || "(no prompt)"}
           </p>
           <p className="text-[10px] text-muted-foreground">
-            {job.model_id || "—"} · {job.status}
+            {job.model_id || "—"} · {cancelling ? "cancelling…" : job.status}
             {job.status === "failed" && job.error ? ` — ${job.error}` : ""}
           </p>
         </div>
@@ -285,14 +289,24 @@ function ImageJobRow({
           {typeof job.seed === "number" && (
             <SeedChip seed={job.seed} onReuse={onReuseSeed} />
           )}
-          <button
-            onClick={() => onCancel(job.job_id)}
-            className="text-muted-foreground hover:text-foreground"
-            aria-label={active ? "Cancel job" : "Remove job"}
-            title={active ? "Cancel this job" : "Remove from the queue"}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          {cancelling ? (
+            <span
+              className="flex items-center gap-1 text-[10px] text-muted-foreground"
+              title="Cancel requested — the current step is finishing"
+            >
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Cancelling…
+            </span>
+          ) : (
+            <button
+              onClick={() => onCancel(job.job_id)}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label={active ? "Cancel job" : "Remove job"}
+              title={active ? "Cancel this job" : "Remove from the queue"}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </div>
       {job.status === "running" && (
@@ -319,6 +333,9 @@ export function ImageGenSection() {
     imageModelLoading,
     loadingImageModelId,
     imageGenerating,
+    imageCancelling,
+    imageGenStartedAt,
+    imageLoadStartedAt,
     imageGenError,
     imageResult,
     selectedImageModelId,
@@ -333,6 +350,7 @@ export function ImageGenSection() {
     unloadImageModel,
     downloadImageModel,
     generateImage,
+    cancelImageGeneration,
     clearImageResult,
     clearImageGenError,
     setImageForm,
@@ -705,6 +723,12 @@ export function ImageGenSection() {
             {genError && (
               <ErrorNote message={genError} onDismiss={dismissGenError} />
             )}
+            <ModelLoadingNotice
+              loading={imageModelLoading || !!imageStatus?.is_loading}
+              startedAt={imageLoadStartedAt}
+              loadError={imageStatus?.load_error}
+              what={loadingImageModelId ?? "model"}
+            />
             <div className="grid gap-3 sm:grid-cols-2">
               {imageModels.map((m) => (
                 <ImageModelCard
@@ -854,25 +878,21 @@ export function ImageGenSection() {
               )}
 
               <div className="flex gap-2">
-                <Button
-                  className="flex-1"
-                  disabled={imageGenerating || formInvalid}
-                  onClick={() => {
-                    void handleGenerate();
-                  }}
-                >
-                  {imageGenerating ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                      Generating…
-                    </>
-                  ) : (
+                <CancelableGenerateButton
+                  generating={imageGenerating}
+                  cancelling={imageCancelling}
+                  startedAt={imageGenStartedAt}
+                  disabled={formInvalid}
+                  onGenerate={() => void handleGenerate()}
+                  onCancel={() => void cancelImageGeneration()}
+                  containerClassName="flex-1"
+                  idleContent={
                     <>
                       <ImageIcon className="h-4 w-4 mr-2" />
                       Generate
                     </>
-                  )}
-                </Button>
+                  }
+                />
                 <Button
                   variant="outline"
                   disabled={formInvalid}
@@ -899,8 +919,9 @@ export function ImageGenSection() {
                 <div className="flex flex-col items-center justify-center rounded-lg border border-dashed aspect-square gap-3 text-muted-foreground">
                   <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
                   <span className="text-sm">Generating image…</span>
+                  <StillWorkingNote startedAt={imageGenStartedAt} />
                   <span className="text-xs">
-                    This may take 5–60 seconds depending on your hardware
+                    Can take minutes on CPU — use Cancel to stop at any time
                   </span>
                 </div>
               ) : (

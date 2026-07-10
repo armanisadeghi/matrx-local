@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import inspect
 import io
 import random
 import threading
@@ -35,6 +34,12 @@ from typing import Any
 
 from app.common.system_logger import get_logger
 from app.launcher import get_registry
+from app.services.media_gen.cancellation import (
+    GenerationCancelled,
+    friendly_generation_error,
+    install_cancel_hook,
+    release_generation_memory,
+)
 from app.services.media_gen.hardware import (
     check_model_hardware,
     get_compute_profile,
@@ -168,8 +173,14 @@ class VideoGenService:
         self._loaded_model_id: str | None = None
         self._is_loading = False
         self._load_progress: float = 0.0
+        self._load_error: str | None = None
         self._device: str | None = None
         self._worker: threading.Thread | None = None
+        # (job_id, cancel_event) for the job currently in the worker thread,
+        # plus whether its pipeline supports per-step abort (None = unknown,
+        # hook not installed yet). Guarded by self._lock.
+        self._active_cancel: tuple[str, threading.Event] | None = None
+        self._active_supports_step_cancel: bool | None = None
 
     # ── availability / status ────────────────────────────────────────────────
 
@@ -190,6 +201,9 @@ class VideoGenService:
             reason = DEPS_REASON
         else:
             reason = None
+        store = get_video_job_store()
+        active_job_id = store.active_job_id
+        active_job = store.get(active_job_id) if active_job_id else None
         return {
             "available": available,
             "unavailable_reason": reason,
@@ -199,9 +213,24 @@ class VideoGenService:
             "loaded_model_id": self._loaded_model_id,
             "is_loading": self._is_loading,
             "load_progress": self._load_progress,
+            "load_error": self._load_error,
             "device": self._device or compute.device,
-            "active_job_id": get_video_job_store().active_job_id,
+            "active_job_id": active_job_id,
+            "cancel_requested": bool(active_job and active_job.cancel_requested),
         }
+
+    def request_cancel_job(self, job_id: str) -> dict:
+        """Cancel the running job's generation mid-flight. Returns
+        {"found": bool, "mid_flight": bool} — found=False when that job has
+        no in-flight generation (already finishing or not yet started)."""
+        with self._lock:
+            if self._active_cancel is not None and self._active_cancel[0] == job_id:
+                self._active_cancel[1].set()
+                return {
+                    "found": True,
+                    "mid_flight": self._active_supports_step_cancel is not False,
+                }
+        return {"found": False, "mid_flight": False}
 
     def list_models(self) -> list[VideoGenModel]:
         return VIDEO_GEN_MODELS
@@ -338,6 +367,7 @@ class VideoGenService:
 
             self._is_loading = True
             self._load_progress = 0.0
+            self._load_error = None
             registry.starting("video-gen-model", model=model.model_id)
             logger.info("[video_gen] Loading model: %s", model.model_id)
 
@@ -428,8 +458,13 @@ class VideoGenService:
                 self._pipeline = None
                 self._i2v_pipeline = None
                 self._loaded_model_id = None
-                return {"success": False, "error": friendly_load_error(exc) or str(exc)}
+                error = friendly_load_error(exc) or str(exc)
+                # Surfaced in GET /video-gen/status as load_error so a
+                # reconnecting UI sees WHY the model is not loaded.
+                self._load_error = error
+                return {"success": False, "error": error}
             finally:
+                # is_loading may NEVER stay true after a load attempt.
                 self._is_loading = False
 
     def _unload_sync(self) -> None:
@@ -441,16 +476,12 @@ class VideoGenService:
             return
         registry = get_registry()
         registry.stopping("video-gen-model")
-        try:
-            import torch  # noqa: PLC0415
-            del self._pipeline
-            self._pipeline = None
-            self._i2v_pipeline = None
-            self._loaded_model_id = None
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception as exc:
-            logger.warning("[video_gen] Error unloading pipeline: %s", exc)
+        # Clear the references FIRST — even if the cache cleanup below fails,
+        # the service must never keep reporting a model as loaded.
+        self._pipeline = None
+        self._i2v_pipeline = None
+        self._loaded_model_id = None
+        release_generation_memory("video_gen")
         registry.stopped("video-gen-model")
 
     # ── generation (job-based) ───────────────────────────────────────────────
@@ -577,10 +608,20 @@ class VideoGenService:
         image_base64: str | None,
         extra_params: dict[str, Any],
     ) -> None:
-        """Worker thread: full generation → encode → job record updates."""
+        """Worker thread: full generation → encode → job record updates.
+
+        Every exit is a terminal job state: completed, failed (clear message,
+        full traceback in the log) or cancelled (mid-flight abort via the
+        per-step cancel event) — the job can never spin forever.
+        """
         store = get_video_job_store()
         job = store.get(job_id)
         assert job is not None
+
+        cancel_event = threading.Event()
+        with self._lock:
+            self._active_cancel = (job_id, cancel_event)
+            self._active_supports_step_cancel = None
 
         try:
             import torch  # noqa: PLC0415
@@ -593,7 +634,14 @@ class VideoGenService:
                     )
                 pipe = self._get_pipeline_for_mode(model, i2v=bool(image_base64))
 
-            store.mark_running(job_id, total_steps=steps)
+            if not store.mark_running(job_id, total_steps=steps):
+                # Cancelled (DELETE /video-gen/jobs/{id}) between create and
+                # worker start — never resurrect it.
+                logger.info(
+                    "[video_gen] Job %s: cancelled before start — skipping",
+                    job_id[:8],
+                )
+                return
 
             call_kwargs: dict = {
                 "prompt": job.prompt,
@@ -620,22 +668,8 @@ class VideoGenService:
                 img = img.convert("RGB").resize((job.width, job.height))
                 call_kwargs["image"] = img
 
-            # Step callback — updates the job record every denoising step.
-            def _on_step_end(p: Any, step: int, timestep: Any, cb_kwargs: dict) -> dict:
-                store.update_progress(job_id, current_step=step + 1, total_steps=steps)
-                return cb_kwargs
-
-            sig_params = inspect.signature(pipe.__call__).parameters
-            if "callback_on_step_end" in sig_params:
-                call_kwargs["callback_on_step_end"] = _on_step_end
-            else:
-                logger.warning(
-                    "[video_gen] %s pipeline has no callback_on_step_end — "
-                    "progress will jump 0→100", model.pipeline_type,
-                )
-
             # User-supplied extra_params merge LAST (they override every
-            # computed default except the protected `prompt`) and are
+            # computed default except the protected params) and are
             # validated against the pipeline signature BEFORE burning compute.
             from app.services.media_gen.params import (  # noqa: PLC0415
                 merge_extra_params,
@@ -643,6 +677,25 @@ class VideoGenService:
             )
             validate_pipeline_kwargs(pipe, extra_params.keys())
             call_kwargs = merge_extra_params(call_kwargs, extra_params)
+
+            # Per-step hook: job progress + mid-flight cancellation. Installed
+            # AFTER the merge so nothing can displace it (callback kwargs are
+            # also in PROTECTED_PARAMS). Wan/LTX (t2v + i2v) all support the
+            # modern callback on diffusers >= 0.37.
+            hook_mode = install_cancel_hook(
+                pipe,
+                call_kwargs,
+                cancel_event=cancel_event,
+                total_steps=steps,
+                progress_callback=lambda step, total: store.update_progress(
+                    job_id, current_step=step, total_steps=total
+                ),
+            )
+            with self._lock:
+                self._active_supports_step_cancel = hook_mode != "none"
+
+            if cancel_event.is_set():
+                raise GenerationCancelled("Cancelled before the pipeline started")
 
             t0 = time.monotonic()
             logger.info(
@@ -661,6 +714,11 @@ class VideoGenService:
                         f"(extra_params: {', '.join(sorted(extra_params))}) — {exc}"
                     ) from exc
                 raise
+            # A cancel that landed on the final step (or against a pipeline
+            # with no per-step callback) arrives here — never a surprise
+            # late completion after the user asked to stop.
+            if cancel_event.is_set():
+                raise GenerationCancelled("Cancelled at pipeline completion")
             frames = output.frames[0]
             gen_seconds = time.monotonic() - t0
             logger.info(
@@ -681,7 +739,10 @@ class VideoGenService:
             )
             record_params = {
                 k: v for k, v in call_kwargs.items()
-                if k not in ("generator", "image", "callback_on_step_end")
+                if k not in (
+                    "generator", "image",
+                    "callback_on_step_end", "callback", "callback_steps",
+                )
             }
             item = save_generated_video(
                 out_path,
@@ -704,9 +765,23 @@ class VideoGenService:
                 job_id[:8], item["file_path"], item["id"],
             )
 
+        except GenerationCancelled as exc:
+            # User-requested abort — clean terminal state, never a traceback.
+            logger.info("[video_gen] Job %s cancelled: %s", job_id[:8], exc)
+            release_generation_memory("video_gen")
+            store.mark_cancelled(job_id)
         except Exception as exc:
+            # Outermost failure boundary for the worker thread: EVERYTHING
+            # (OOM, encode failures, callback-raised errors, save failures)
+            # becomes a terminal failed job with a clear message — the thread
+            # never dies leaving the job stuck "running".
             logger.error("[video_gen] Job %s FAILED: %s", job_id[:8], exc, exc_info=True)
-            store.mark_failed(job_id, str(exc))
+            release_generation_memory("video_gen")
+            store.mark_failed(job_id, friendly_generation_error(exc))
+        finally:
+            with self._lock:
+                self._active_cancel = None
+                self._active_supports_step_cancel = None
 
     def _encode_mp4(self, frames: list[Any], *, fps: int, job_id: str):
         """Encode frames to H.264 mp4 with imageio-ffmpeg (core dep)."""

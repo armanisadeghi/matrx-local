@@ -80,6 +80,16 @@ class ImageGenStatusResponse(BaseModel):
     loaded_model_id: str | None
     is_loading: bool
     load_progress: float
+    load_error: str | None = None
+    """Why the last model load failed (None when it succeeded / never ran).
+    is_loading always returns to false after a failed load — this field
+    carries the reason so a reconnecting UI can show it."""
+    is_generating: bool = False
+    """True while any generation (one-shot or job) is in flight — includes
+    the auto-load phase. Lets a reconnecting UI see something is running."""
+    cancel_requested: bool = False
+    """True once a cancel has been requested for the in-flight generation
+    but before it lands (show "Cancelling…")."""
     packages_version: str | None = None
     """Installed diffusers version (None when packages are not installed)."""
     packages_outdated: bool = False
@@ -144,6 +154,26 @@ class GenerateResponse(BaseModel):
     seed: int | None = None
     """The CONCRETE seed used — server-generated when the request omitted it,
     so every image is reproducible."""
+    cancelled: bool = False
+    """True when this generation was aborted via POST /image-gen/cancel —
+    always paired with success=false and error="Cancelled"."""
+
+
+class CancelGenerationResponse(BaseModel):
+    cancelled: bool
+    """True when a running generation was told to stop; false when nothing
+    was running (see reason)."""
+    was: str | None = None
+    """"oneshot" | "job" — what kind of generation the cancel hit."""
+    job_id: str | None = None
+    """Set when the cancelled generation belongs to a queue job."""
+    reason: str | None = None
+    """"nothing_running" when cancelled=false."""
+    mid_flight: bool = True
+    """True when the running pipeline supports per-step abort (every catalog
+    model does) — the generation stops at the next denoising step. False only
+    for non-catalog pipelines with no step callback: the cancel is recorded
+    and the result is discarded when the pipeline call finishes."""
 
 
 class ModelParamsResponse(BaseModel):
@@ -184,6 +214,10 @@ class ImageJobResponse(BaseModel):
     item_id: str | None = None
     """Media-library id once completed — GET /media-library/file/{item_id}."""
     file_path: str | None = None
+    cancel_requested: bool = False
+    """True the instant a cancel lands on this running job; the abort takes
+    effect at the next denoising step (status then becomes "cancelled" with
+    partial progress preserved). Poll this to show "Cancelling…"."""
     created_at: float = 0.0
 
 
@@ -208,6 +242,7 @@ def _image_job_response(job) -> ImageJobResponse:
         error=d["error"],
         item_id=d["item_id"],
         file_path=d["file_path"],
+        cancel_requested=d["cancel_requested"],
         created_at=d["created_at"],
     )
 
@@ -378,7 +413,28 @@ async def generate_image(req: GenerateRequest) -> GenerateResponse:
         item_id=result.item_id,
         file_path=result.file_path,
         seed=result.seed,
+        cancelled=result.cancelled,
     )
+
+
+@router.post("/cancel", response_model=CancelGenerationResponse)
+@safe_route("image_gen_cancel")
+async def cancel_generation() -> CancelGenerationResponse:
+    """Cancel the currently running image generation (one-shot or job).
+
+    The abort lands at the next denoising step: the in-flight POST
+    /image-gen/generate returns promptly with success=false,
+    error="Cancelled", cancelled=true; a running job's status becomes
+    "cancelled" (partial progress preserved). Queued jobs are NOT touched —
+    cancel those individually via DELETE /image-gen/jobs/{id}.
+    Returns {cancelled: false, reason: "nothing_running"} when idle.
+    """
+    svc = get_image_gen_service()
+    result = svc.request_cancel()
+    if result.get("cancelled") and result.get("job_id"):
+        from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+        get_image_job_store().request_cancel_running(result["job_id"])
+    return CancelGenerationResponse(**result)
 
 
 # ── Job queue (async generation) ─────────────────────────────────────────────
@@ -409,11 +465,15 @@ async def enqueue_image_job(req: GenerateRequest) -> ImageJobEnqueuedResponse:
             status_code=409,
             content={"detail": "model not downloaded", "needs_download": True},
         )
-    if "prompt" in req.extra_params:
+    from app.services.media_gen.params import PROTECTED_PARAMS  # noqa: PLC0415
+    blocked = PROTECTED_PARAMS & set(req.extra_params)
+    if blocked:
         raise HTTPException(
             status_code=400,
-            detail="extra_params may not override protected parameter(s): prompt. "
-                   "Use the top-level request field instead.",
+            detail=f"extra_params may not override protected parameter(s): "
+                   f"{', '.join(sorted(blocked))}. prompt has a top-level "
+                   "request field; pipeline callbacks are engine-owned "
+                   "(progress + cancellation).",
         )
 
     from app.services.image_gen.jobs import (  # noqa: PLC0415
@@ -454,18 +514,30 @@ async def get_image_job(job_id: str) -> ImageJobResponse:
 
 @router.delete("/jobs/{job_id}")
 async def cancel_image_job(job_id: str) -> dict:
-    """Cancel a QUEUED job (record kept, status=cancelled) or remove a
-    finished job's record. 409 while running — there is no mid-flight abort.
-    Removing a completed job does NOT delete its media-library item."""
+    """Cancel a job or remove a finished record. Outcomes:
+
+    - queued  → {"outcome": "cancelled"} (record kept, status=cancelled)
+    - running → {"outcome": "cancelling", "mid_flight": bool} — the job's
+      cancel_requested flips true immediately (show "Cancelling…"); the abort
+      lands at the next denoising step and the job becomes status=cancelled
+      with partial progress preserved
+    - finished → {"outcome": "removed"} (record deleted; the media-library
+      item, if any, is NOT deleted)
+    - unknown  → 404
+    """
     from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
-    outcome = get_image_job_store().cancel(job_id)
+    store = get_image_job_store()
+    outcome = store.cancel(job_id)
     if outcome == "not_found":
         raise HTTPException(status_code=404, detail="Job not found")
     if outcome == "running":
-        raise HTTPException(
-            status_code=409,
-            detail="Job is running — a generation in flight cannot be aborted",
-        )
+        store.request_cancel_running(job_id)
+        info = get_image_gen_service().request_cancel_job(job_id)
+        return {
+            "job_id": job_id,
+            "outcome": "cancelling",
+            "mid_flight": bool(info.get("mid_flight", False)),
+        }
     return {"job_id": job_id, "outcome": outcome}
 
 
@@ -524,6 +596,7 @@ async def generate_from_workflow(req: WorkflowGenerateRequest) -> GenerateRespon
         item_id=result.item_id,
         file_path=result.file_path,
         seed=result.seed,
+        cancelled=result.cancelled,
     )
 
 

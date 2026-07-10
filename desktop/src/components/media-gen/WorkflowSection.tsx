@@ -24,6 +24,7 @@ import {
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import type { ImageGenWorkflowPreset } from "@/lib/api";
 import {
+  CancelableGenerateButton,
   ErrorNote,
   GeneratedImageView,
   SeedInput,
@@ -83,12 +84,15 @@ export function WorkflowSection() {
     imageStatusLoading,
     imageStatusError,
     imageGenerating,
+    imageCancelling,
+    imageGenStartedAt,
     imageGenError,
     imageResult,
   } = state;
   const {
     refreshImage,
     generateImageWorkflow,
+    cancelImageGeneration,
     clearImageResult,
     clearImageGenError,
   } = actions;
@@ -278,23 +282,20 @@ export function WorkflowSection() {
             <ErrorNote message={imageGenError} onDismiss={clearImageGenError} />
           )}
 
-          <Button
-            className="w-full"
-            disabled={imageGenerating || !presetId || !subject.trim()}
-            onClick={() => void handleGenerate()}
-          >
-            {imageGenerating ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                Generating…
-              </>
-            ) : (
+          <CancelableGenerateButton
+            generating={imageGenerating}
+            cancelling={imageCancelling}
+            startedAt={imageGenStartedAt}
+            disabled={!presetId || !subject.trim()}
+            onGenerate={() => void handleGenerate()}
+            onCancel={() => void cancelImageGeneration()}
+            idleContent={
               <>
                 <Wand2 className="h-4 w-4 mr-2" />
                 Generate Image
               </>
-            )}
-          </Button>
+            }
+          />
         </div>
       )}
 

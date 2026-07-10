@@ -59,6 +59,7 @@ from app.tools.tools.audio import (
 )
 from app.tools.tools.browser_automation import (
     tool_browser_click,
+    tool_browser_close,
     tool_browser_eval,
     tool_browser_extract,
     tool_browser_navigate,
@@ -123,6 +124,39 @@ from app.tools.tools.powershell_tools import (
     tool_service_control,
     tool_event_log,
     tool_windows_features,
+)
+# macOS app-integration tools (Mail, Messages, Contacts, Calendar, Photos,
+# Location, Speech). Registered on every platform — each handler self-gates
+# at runtime via PLATFORM["is_mac"] and returns a clear "only available on
+# macOS" error envelope elsewhere, matching AppleScript's behavior.
+from app.tools.tools.mail import (
+    tool_get_email_accounts,
+    tool_list_emails,
+    tool_send_email,
+)
+from app.tools.tools.messages import (
+    tool_list_conversations,
+    tool_list_messages,
+    tool_send_message,
+)
+from app.tools.tools.contacts import (
+    tool_get_contact,
+    tool_search_contacts,
+)
+from app.tools.tools.calendar_tools import (
+    tool_create_event,
+    tool_create_reminder,
+    tool_list_events,
+    tool_list_reminders,
+)
+from app.tools.tools.photos import (
+    tool_get_photo,
+    tool_search_photos,
+)
+from app.tools.tools.location import tool_get_location
+from app.tools.tools.speech_recognition_tools import (
+    tool_list_speech_locales,
+    tool_transcribe_with_speech,
 )
 from app.tools.types import ToolResult, ToolResultType
 
@@ -193,6 +227,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "BrowserScreenshot": tool_browser_screenshot,
     "BrowserEval": tool_browser_eval,
     "BrowserTabs": tool_browser_tabs,
+    "BrowserClose": tool_browser_close,
     # ── Network Discovery ────────────────────────────────────────────
     "NetworkInfo": tool_network_info,
     "NetworkScan": tool_network_scan,
@@ -242,6 +277,30 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "ServiceControl": tool_service_control,
     "EventLog": tool_event_log,
     "WindowsFeatures": tool_windows_features,
+    # ── Mail (macOS-only, runtime-gated) ───────────────────────────────────
+    "ListEmails": tool_list_emails,
+    "SendEmail": tool_send_email,
+    "GetEmailAccounts": tool_get_email_accounts,
+    # ── Messages (macOS-only, runtime-gated) ───────────────────────────────
+    "ListMessages": tool_list_messages,
+    "ListConversations": tool_list_conversations,
+    "SendMessage": tool_send_message,
+    # ── Contacts (macOS-only, runtime-gated) ───────────────────────────────
+    "SearchContacts": tool_search_contacts,
+    "GetContact": tool_get_contact,
+    # ── Calendar & Reminders (macOS-only, runtime-gated) ───────────────────
+    "ListEvents": tool_list_events,
+    "CreateEvent": tool_create_event,
+    "ListReminders": tool_list_reminders,
+    "CreateReminder": tool_create_reminder,
+    # ── Photos (macOS-only, runtime-gated) ─────────────────────────────────
+    "SearchPhotos": tool_search_photos,
+    "GetPhoto": tool_get_photo,
+    # ── Location (macOS-only, runtime-gated) ───────────────────────────────
+    "GetLocation": tool_get_location,
+    # ── Speech Recognition (macOS-only, runtime-gated) ─────────────────────
+    "TranscribeWithSpeech": tool_transcribe_with_speech,
+    "ListSpeechLocales": tool_list_speech_locales,
 }
 
 TOOL_NAMES: list[str] = sorted(TOOL_HANDLERS.keys())

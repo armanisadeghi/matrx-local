@@ -40,6 +40,7 @@ TOOL_CATEGORIES: dict[str, list[str]] = {
     "Browser Automation": [
         "BrowserNavigate", "BrowserClick", "BrowserType",
         "BrowserExtract", "BrowserScreenshot", "BrowserEval", "BrowserTabs",
+        "BrowserClose",
     ],
     "Network Discovery": ["NetworkInfo", "NetworkScan", "PortScan", "MDNSDiscover"],
     "System Monitoring": ["SystemResources", "BatteryStatus", "DiskUsage", "TopProcesses"],
@@ -55,6 +56,13 @@ TOOL_CATEGORIES: dict[str, list[str]] = {
         "ServiceList", "ServiceControl",
         "EventLog", "WindowsFeatures",
     ],
+    "Mail": ["ListEmails", "SendEmail", "GetEmailAccounts"],
+    "Messages": ["ListMessages", "ListConversations", "SendMessage"],
+    "Contacts": ["SearchContacts", "GetContact"],
+    "Calendar": ["ListEvents", "CreateEvent", "ListReminders", "CreateReminder"],
+    "Photos": ["SearchPhotos", "GetPhoto"],
+    "Location": ["GetLocation"],
+    "Speech Recognition": ["TranscribeWithSpeech", "ListSpeechLocales"],
 }
 
 # Reverse lookup: tool name → category

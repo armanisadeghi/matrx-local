@@ -2,10 +2,10 @@
 
 This test snapshots the complete tool surface as of 2026-07-10:
 
-  - TOOL_HANDLERS names        (app/tools/dispatcher.py)         — 90 tools
+  - TOOL_HANDLERS names        (app/tools/dispatcher.py)         — 108 tools
   - LOCAL_TOOL_MANIFEST names  (app/tools/local_tool_manifest.py) — 62 tools
   - tool_* source functions    (app/tools/tools/*.py)             — 108 funcs
-  - orphan source functions    (source − dispatcher handlers)     — 18 funcs
+  - orphan source functions    (source − dispatcher handlers)     — 0 funcs
 
 plus the derived relationships between them. Any drift — a tool added,
 removed, or renamed anywhere — fails loudly here.
@@ -141,11 +141,11 @@ def test_dispatcher_handler_functions_exact() -> None:
 
 
 def test_orphan_source_functions_exact() -> None:
-    """Source tool_* functions NOT wired into the dispatcher — 18 known orphans
-    (mail, messages, contacts, calendar, photos, location, speech recognition,
-    tool_browser_close). A new orphan means someone wrote a tool and forgot to
-    register it; a vanished orphan means one was wired up or deleted — both
-    must be deliberate."""
+    """Source tool_* functions NOT wired into the dispatcher — ZERO since the
+    2026-07 registry unification (the 18 historical orphans — mail, messages,
+    contacts, calendar, photos, location, speech, browser_close — were all
+    wired). A new orphan means someone wrote a tool and forgot to register
+    it; wire it into TOOL_HANDLERS (and the catalog picks it up) or delete it."""
     expected = _snapshot()["orphan_source_functions"]
     surface = current_surface()
     actual = surface["orphan_source_functions"]
@@ -164,11 +164,11 @@ def test_snapshot_counts() -> None:
     snap = _snapshot()
     counts = {k: len(v) for k, v in snap.items()}
     assert counts == {
-        "dispatcher_tool_names": 90,
+        "dispatcher_tool_names": 108,
         "manifest_tool_names": 62,
         "source_tool_functions": 108,
-        "dispatcher_handler_function_names": 90,
-        "orphan_source_functions": 18,
+        "dispatcher_handler_function_names": 108,
+        "orphan_source_functions": 0,
         "manifest_function_targets": 62,
     }, (
         f"TOOL SURFACE COUNTS CHANGED: {counts}. If intentional, update this "

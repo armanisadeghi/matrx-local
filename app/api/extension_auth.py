@@ -144,10 +144,15 @@ _DEBUG_FAILED_KIDS: set[str] = set()
 # rejection rate without restoring the per-request flood.
 # ---------------------------------------------------------------------------
 
+# Quiet gap after which the next rejection re-surfaces as a WARNING (a
+# stream that stopped and later resumed is news, not suppressed noise).
 _REJECT_LOG_WINDOW_SECONDS = 60.0
 _REJECT_SUMMARY_INTERVAL_SECONDS = 60.0
+# Hard bound on tracked (kind, path, reason) keys so arbitrary rejected
+# paths (port scanners, typo'd clients) cannot grow the dict forever.
+_REJECT_STATE_MAX_KEYS = 256
 
-# Per-rejection-key state: { key: (first_seen, last_warned, last_summary, count) }
+# Per-rejection-key state: { key: {first_seen, last_seen, last_summary, count} }
 _RejectStateKey = tuple[str, str, str]  # (kind, path, reason)
 _reject_log_state: dict[_RejectStateKey, dict[str, float]] = {}
 
@@ -176,13 +181,26 @@ def _log_rejection(kind: str, path: str, reason: str, *, method: str = "") -> No
     key: _RejectStateKey = (kind, path, reason)
     state = _reject_log_state.get(key)
 
+    # A rejection stream that went quiet for the full window and then
+    # resumed is news — drop the stale entry so it re-WARNs below.
+    if state is not None and now - state["last_seen"] >= _REJECT_LOG_WINDOW_SECONDS:
+        del _reject_log_state[key]
+        state = None
+
     method_str = f"{method} " if method else ""
     label = "rejected" if kind == "http" else "WS rejected"
 
     if state is None:
+        # Bound the state dict: evict the longest-idle key when full.
+        if len(_reject_log_state) >= _REJECT_STATE_MAX_KEYS:
+            oldest = min(
+                _reject_log_state,
+                key=lambda k: _reject_log_state[k]["last_seen"],
+            )
+            del _reject_log_state[oldest]
         _reject_log_state[key] = {
             "first_seen": now,
-            "last_warned": now,
+            "last_seen": now,
             "last_summary": now,
             "count": 1.0,
         }
@@ -196,7 +214,7 @@ def _log_rejection(kind: str, path: str, reason: str, *, method: str = "") -> No
         return
 
     state["count"] += 1
-    state["last_warned"] = now
+    state["last_seen"] = now
 
     # Continued rejection beyond the suppression window — emit a periodic
     # summary so the operator knows the situation hasn't resolved.

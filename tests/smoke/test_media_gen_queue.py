@@ -40,6 +40,17 @@ MODEL = next(
 )
 
 
+@pytest.fixture(autouse=True)
+def _force_image_gen_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub-pipeline tests must be hermetic on CI where the optional
+    image-gen packages are not installed — see the twin fixture in
+    test_media_gen_cancel.py (CI breakage 2026-07-10)."""
+    from app.services.image_gen import service as service_module
+
+    monkeypatch.setattr(service_module, "DEPS_AVAILABLE", True)
+    monkeypatch.setattr(service_module, "DEPS_REASON", "")
+
+
 @pytest.fixture(scope="module")
 def client() -> TestClient:
     from app.main import app

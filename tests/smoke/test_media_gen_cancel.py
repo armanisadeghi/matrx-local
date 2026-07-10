@@ -55,6 +55,19 @@ MODEL = next(
 )
 
 
+@pytest.fixture(autouse=True)
+def _force_image_gen_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests use STUB pipelines — they must be hermetic on CI where the
+    optional image-gen packages (diffusers/transformers/accelerate) are not
+    installed. Without this, ImageGenService.available is False and every
+    stub generation bails with "requires optional packages" before running
+    (exactly what broke CI on 2026-07-10)."""
+    from app.services.image_gen import service as service_module
+
+    monkeypatch.setattr(service_module, "DEPS_AVAILABLE", True)
+    monkeypatch.setattr(service_module, "DEPS_REASON", "")
+
+
 @pytest.fixture(scope="module")
 def client() -> TestClient:
     from app.main import app

@@ -25,6 +25,7 @@ import ast
 import json
 from pathlib import Path
 
+from app.tools.catalog import get_catalog
 from app.tools.dispatcher import TOOL_HANDLERS
 from app.tools.local_tool_manifest import LOCAL_TOOL_MANIFEST
 
@@ -72,8 +73,10 @@ def current_surface() -> dict[str, list[str]]:
     )
     source_funcs = _source_tool_functions()
     orphans = sorted(set(source_funcs) - set(handler_funcs))
+    catalog_cloud_names = sorted(e.cloud_name for e in get_catalog())
     return {
         "dispatcher_tool_names": dispatcher_names,
+        "catalog_cloud_names": catalog_cloud_names,
         "manifest_tool_names": manifest_names,
         "source_tool_functions": source_funcs,
         "dispatcher_handler_function_names": handler_funcs,
@@ -124,6 +127,15 @@ def test_manifest_tool_names_exact() -> None:
     assert actual == expected, _diff_message("LOCAL_TOOL_MANIFEST names", expected, actual)
 
 
+def test_catalog_cloud_names_exact() -> None:
+    """The catalog's canonical cloud names (tool.definition names) — the
+    platform-wide contract. 49 of these are LIVE Supabase rows bound to
+    executor 'matrx-local'; renames strand cloud tools."""
+    expected = _snapshot()["catalog_cloud_names"]
+    actual = sorted(e.cloud_name for e in get_catalog())
+    assert actual == expected, _diff_message("catalog cloud names", expected, actual)
+
+
 def test_source_tool_functions_exact() -> None:
     expected = _snapshot()["source_tool_functions"]
     actual = _source_tool_functions()
@@ -165,6 +177,7 @@ def test_snapshot_counts() -> None:
     counts = {k: len(v) for k, v in snap.items()}
     assert counts == {
         "dispatcher_tool_names": 108,
+        "catalog_cloud_names": 108,
         "manifest_tool_names": 62,
         "source_tool_functions": 108,
         "dispatcher_handler_function_names": 108,

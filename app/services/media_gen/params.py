@@ -117,6 +117,11 @@ def image_effective_params(model: ImageGenModel) -> dict[str, Any]:
         "negative_prompt": "",
         "seed": None,
     }
+    if model.supports_img2img and model.img2img_strength:
+        # img2img denoising strength — only applied when the request carries
+        # init_image_b64 (strength without an input image is a 400). Families
+        # without a strength knob (flux2-klein) deliberately omit it here.
+        common["strength"] = 0.6
 
     # num_images_per_prompt exists on every diffusers text-to-image pipeline.
     # NOTE: the service returns only images[0]; values > 1 spend compute on

@@ -19,6 +19,31 @@ dict {phase, percent, message}):
                  the next denoising step (status → "cancelled")
   error        — human-readable failure text on "failed"
 
+First-class request fields on POST /image-gen/generate AND /image-gen/jobs
+(beyond prompt/steps/guidance/width/height/seed/extra_params):
+  init_image_b64 — base64 PNG/JPEG (optional data: URL prefix accepted).
+                 Switches the run to IMAGE-TO-IMAGE for models whose catalog
+                 entry has supports_img2img=true (GET /image-gen/models). The
+                 image is aspect-fill resized + center-cropped to the
+                 requested width/height. Garbage/undecodable data → 400.
+  strength     — 0..1 img2img denoising strength (default 0.6 when an init
+                 image is present). Requires init_image_b64 (400 otherwise);
+                 rejected for families without a strength knob (flux2-klein).
+  loras        — [{id, scale}] of INSTALLED LoRA ids (GET /image-gen/loras).
+                 Applied for this generation only and always unloaded after
+                 (stateless). Unknown id / not-yet-downloaded / base-family
+                 mismatch (e.g. an sdxl LoRA on a flux model) → 400 naming
+                 the LoRA.
+
+LoRA management:
+  GET    /image-gen/loras            — installed LoRAs + curated catalog
+  POST   /image-gen/loras/download   — {repo_id, weight_name?} → routed
+                                       through the universal DownloadManager
+                                       (category "image_gen_lora"; progress on
+                                       /downloads/stream) — NEVER an inline
+                                       silent download
+  DELETE /image-gen/loras/{lora_id}  — remove an installed LoRA
+
 Error responses additionally carry the aidream envelope {error, message,
 details} via EnvelopeRoute — ADDITIVE: every legacy key ("detail",
 "needs_download", ...) is preserved unchanged.
@@ -69,6 +94,15 @@ class ImageGenModelInfo(BaseModel):
     default_width: int
     default_height: int
     requires_hf_token: bool
+    supports_img2img: bool
+    """True when init_image_b64 is accepted for this model (an img2img
+    pipeline exists for the family in diffusers)."""
+    img2img_strength: bool
+    """True when the family's img2img accepts the strength knob. False only
+    for flux2-klein (reference-image editing, no strength parameter)."""
+    lora_family: str
+    """LoRA-compatibility family ("sdxl" | "sd15" | "flux" | "flux2" | "qwen"
+    | "z-image") — match against a LoRA's base_family before requesting it."""
     tags: list[str]
     download_size_gb: float
     is_downloaded: bool
@@ -137,6 +171,14 @@ class LoadModelResponse(BaseModel):
     error: str | None = None
 
 
+class LoraSpec(BaseModel):
+    id: str
+    """Installed LoRA id (the sanitized repo id, e.g.
+    'latent-consistency--lcm-lora-sdxl') — see GET /image-gen/loras."""
+    scale: float = Field(1.0, ge=0.0, le=2.0)
+    """Adapter weight (typical 0.5–1.0; 1.0 = full effect)."""
+
+
 class GenerateRequest(BaseModel):
     # 10k chars is an API sanity bound, NOT a model limit. Real limits are per
     # model family and enforced by the model itself (SD/SDXL CLIP truncates at
@@ -151,6 +193,19 @@ class GenerateRequest(BaseModel):
     width: int | None = Field(None, ge=64, le=2048, multiple_of=8)
     height: int | None = Field(None, ge=64, le=2048, multiple_of=8)
     seed: int | None = None
+    init_image_b64: str | None = None
+    """Base64 PNG/JPEG (a ``data:image/...;base64,`` prefix is accepted and
+    stripped). Switches to IMAGE-TO-IMAGE — only for models with
+    supports_img2img=true. Aspect-fill resized + center-cropped to the
+    requested width/height. Undecodable data → 400."""
+    strength: float | None = Field(None, ge=0.0, le=1.0)
+    """img2img denoising strength (0=keep the input, 1=ignore it). Default
+    0.6 when init_image_b64 is present. Requires init_image_b64 — set without
+    an input image → 400."""
+    loras: list[LoraSpec] = Field(default_factory=list)
+    """INSTALLED LoRA ids (+ per-LoRA scale) to apply for THIS generation
+    only — always unloaded afterwards. Unknown id or base-family mismatch
+    → 400 naming the LoRA. GET /image-gen/loras for installed ids."""
     extra_params: dict[str, Any] = Field(default_factory=dict)
     """Arbitrary diffusers pipeline kwargs, merged LAST over the computed call
     kwargs — your values override every default. ``prompt`` can never be
@@ -234,6 +289,13 @@ class ImageJobResponse(BaseModel):
     height: int | None = None
     seed: int | None = None
     """Requested seed while queued; the CONCRETE seed used once running."""
+    has_init_image: bool = False
+    """True for image-to-image jobs (the init image itself is never echoed
+    back — init_image_sha256 identifies it)."""
+    init_image_sha256: str | None = None
+    strength: float | None = None
+    loras: list[dict[str, Any]] = []
+    """The requested LoRAs: [{"id", "scale"}]."""
     extra_params: dict[str, Any] = {}
     progress: float = 0.0
     """0..1 per denoising step."""
@@ -267,6 +329,10 @@ def _image_job_response(job) -> ImageJobResponse:
         width=d["width"],
         height=d["height"],
         seed=d["seed"],
+        has_init_image=d.get("has_init_image", False),
+        init_image_sha256=d.get("init_image_sha256"),
+        strength=d.get("strength"),
+        loras=d.get("loras", []),
         extra_params=d["extra_params"],
         progress=d["progress"],
         current_step=d["current_step"],
@@ -287,6 +353,110 @@ class WorkflowGenerateRequest(BaseModel):
     model_id: str | None = None
     """Override model. Defaults to the preset's suggested model."""
     seed: int | None = None
+
+
+# ── img2img / LoRA request validation ─────────────────────────────────────────
+
+_MAX_INIT_IMAGE_BYTES = 32 * 1024 * 1024  # 32 MB decoded — an API sanity bound
+
+
+def _validate_generation_inputs(
+    req: GenerateRequest, model
+) -> tuple[bytes | None, str | None]:
+    """Validate init_image_b64 / strength / loras for a request against a
+    catalog model. Returns (decoded_init_bytes, init_image_sha256). Every
+    failure is a clear 400 — nothing malformed ever reaches the queue or a
+    loaded pipeline."""
+    if req.strength is not None and not req.init_image_b64:
+        raise HTTPException(
+            status_code=400,
+            detail="strength only applies to image-to-image — provide "
+                   "init_image_b64 (the input image) or omit strength.",
+        )
+
+    init_bytes: bytes | None = None
+    init_sha: str | None = None
+    if req.init_image_b64:
+        if not model.supports_img2img:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{model.name} does not support image-to-image — pick "
+                       "a model with supports_img2img=true "
+                       "(GET /image-gen/models).",
+            )
+        if req.strength is not None and not model.img2img_strength:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{model.name} performs reference-image editing with "
+                       "no strength control — omit strength for this model.",
+            )
+        b64 = req.init_image_b64
+        if b64.startswith("data:"):
+            _, _, b64 = b64.partition(",")
+        import base64 as _base64  # noqa: PLC0415
+        try:
+            raw = _base64.b64decode(b64, validate=True)
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="init_image_b64 is not valid base64 data — send a "
+                       "base64-encoded PNG or JPEG image.",
+            )
+        if len(raw) > _MAX_INIT_IMAGE_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"init image is too large ({len(raw)} bytes decoded; "
+                       f"max {_MAX_INIT_IMAGE_BYTES}).",
+            )
+        import io as _io  # noqa: PLC0415
+        from PIL import Image  # noqa: PLC0415
+        try:
+            img = Image.open(_io.BytesIO(raw))
+            img.verify()
+            fmt = (img.format or "").upper()
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="init_image_b64 does not decode to a readable image — "
+                       "send a base64-encoded PNG or JPEG.",
+            )
+        if fmt not in ("PNG", "JPEG"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"init image format {fmt or 'unknown'} is not "
+                       "supported — send PNG or JPEG.",
+            )
+        import hashlib  # noqa: PLC0415
+        init_sha = hashlib.sha256(raw).hexdigest()
+        init_bytes = raw
+
+    if req.loras:
+        from app.services.image_gen.loras import (  # noqa: PLC0415
+            check_lora_model_compat,
+            get_installed_lora,
+        )
+        for spec in req.loras:
+            meta = get_installed_lora(spec.id)
+            if meta is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown LoRA id '{spec.id}' — GET /image-gen/loras "
+                           "lists installed LoRAs; download one via "
+                           "POST /image-gen/loras/download.",
+                )
+            if not meta["installed"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"LoRA '{spec.id}' is not fully downloaded yet — "
+                           "wait for its download to complete "
+                           "(/downloads/stream, category image_gen_lora).",
+                )
+            try:
+                check_lora_model_compat(model.lora_family, meta)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+    return init_bytes, init_sha
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -323,6 +493,9 @@ async def list_image_gen_models() -> list[ImageGenModelInfo]:
             default_width=m.default_width,
             default_height=m.default_height,
             requires_hf_token=m.requires_hf_token,
+            supports_img2img=m.supports_img2img,
+            img2img_strength=m.img2img_strength,
+            lora_family=m.lora_family,
             tags=list(m.tags),
             download_size_gb=m.download_size_gb,
             is_downloaded=svc.is_downloaded(m.model_id),
@@ -424,6 +597,12 @@ async def generate_image(req: GenerateRequest) -> GenerateResponse:
             status_code=503,
             detail=f"Image generation not available: {svc.unavailable_reason}",
         )
+    # Unknown models keep the legacy contract (success=false from the
+    # service); img2img/LoRA inputs are validated whenever the model is known.
+    model = svc.get_model(req.model_id) if hasattr(svc, "get_model") else None
+    init_bytes: bytes | None = None
+    if model is not None:
+        init_bytes, _init_sha = _validate_generation_inputs(req, model)
 
     result = await svc.generate(
         prompt=req.prompt,
@@ -435,6 +614,9 @@ async def generate_image(req: GenerateRequest) -> GenerateResponse:
         height=req.height,
         seed=req.seed,
         extra_params=req.extra_params,
+        init_image_bytes=init_bytes,
+        strength=req.strength,
+        loras=[{"id": s.id, "scale": s.scale} for s in req.loras],
     )
     return GenerateResponse(
         success=result.success,
@@ -493,8 +675,12 @@ async def enqueue_image_job(req: EnqueueImageJobRequest) -> ImageJobEnqueuedResp
             status_code=503,
             detail=f"Image generation not available: {svc.unavailable_reason}",
         )
-    if svc.get_model(req.model_id) is None:
+    model = svc.get_model(req.model_id)
+    if model is None:
         raise HTTPException(status_code=404, detail=f"Unknown model: {req.model_id}")
+    # Malformed img2img/LoRA input is a 400 BEFORE the downloaded check —
+    # a request that can only fail must never enqueue.
+    init_bytes, init_sha = _validate_generation_inputs(req, model)
     if not svc.is_downloaded(req.model_id):
         # Never queue a job that can only fail — the weights must exist first.
         return JSONResponse(  # type: ignore[return-value]
@@ -516,7 +702,8 @@ async def enqueue_image_job(req: EnqueueImageJobRequest) -> ImageJobEnqueuedResp
         get_image_job_runner,
         get_image_job_store,
     )
-    job = get_image_job_store().create(
+    store = get_image_job_store()
+    job = store.create(
         prompt=req.prompt,
         model_id=req.model_id,
         negative_prompt=req.negative_prompt,
@@ -525,9 +712,16 @@ async def enqueue_image_job(req: EnqueueImageJobRequest) -> ImageJobEnqueuedResp
         width=req.width,
         height=req.height,
         seed=req.seed,
+        has_init_image=init_bytes is not None,
+        init_image_sha256=init_sha,
+        strength=req.strength,
+        loras=[{"id": s.id, "scale": s.scale} for s in req.loras],
         extra_params=dict(req.extra_params),
         priority=req.priority,
     )
+    if init_bytes is not None:
+        # Bytes live in memory only (jobs.json carries just the sha256).
+        store.stash_init_image(job.job_id, init_bytes)
     get_image_job_runner().ensure_running()
     return ImageJobEnqueuedResponse(job_id=job.job_id)
 
@@ -576,6 +770,227 @@ async def cancel_image_job(job_id: str) -> dict:
             "mid_flight": bool(info.get("mid_flight", False)),
         }
     return {"job_id": job_id, "outcome": outcome}
+
+
+# ── LoRAs ─────────────────────────────────────────────────────────────────────
+
+class LoraInstalledInfo(BaseModel):
+    id: str
+    """Store id (sanitized repo id) — pass this in GenerateRequest.loras."""
+    repo_id: str
+    weight_name: str
+    base_family: str = "unknown"
+    """"sdxl" | "sd15" | "flux" | "unknown" — match against the model's
+    lora_family (GET /image-gen/models)."""
+    size_bytes: int = 0
+    added_at: str | None = None
+    installed: bool = True
+    """False while the download is still in flight (progress on
+    /downloads/stream, category "image_gen_lora")."""
+
+
+class LoraCatalogInfo(BaseModel):
+    repo_id: str
+    name: str
+    description: str
+    weight_name: str
+    base_family: str
+    license: str
+    unverified: bool = False
+    """True for catalog entries whose repo/file could not be verified against
+    live HF metadata. All current entries were verified 2026-07-10."""
+    installed: bool = False
+
+
+class LorasResponse(BaseModel):
+    installed: list[LoraInstalledInfo]
+    catalog: list[LoraCatalogInfo]
+
+
+class LoraDownloadRequest(BaseModel):
+    repo_id: str = Field(..., min_length=3, max_length=200)
+    """HF repo id (org/name)."""
+    weight_name: str | None = None
+    """Which .safetensors file to fetch. Optional when the repo contains
+    exactly one; required (400 lists the candidates) when it has several."""
+
+
+class LoraDownloadResponse(BaseModel):
+    queued: bool
+    download_id: str | None = None
+    lora_id: str | None = None
+    weight_name: str | None = None
+    base_family: str | None = None
+    already_installed: bool = False
+
+
+async def _resolve_lora_weight(
+    repo_id: str, weight_name: str | None
+) -> tuple[str, str]:
+    """Resolve (weight_name, base_family) from live HF repo metadata.
+
+    Module-level on purpose (tests stub it). Raises HTTPException with a
+    clear message on every failure path."""
+    try:
+        from huggingface_hub import HfApi  # noqa: PLC0415
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail="huggingface_hub is not installed — run the AI package "
+                   "installer first (POST /image-gen/install).",
+        )
+    from app.services.image_gen.loras import guess_base_family  # noqa: PLC0415
+    from app.services.media_gen.paths import read_hf_token  # noqa: PLC0415
+
+    api = HfApi(token=read_hf_token())
+    loop = asyncio.get_running_loop()
+    try:
+        info = await loop.run_in_executor(None, lambda: api.model_info(repo_id))
+    except Exception as exc:  # noqa: BLE001 — network/404/auth all land here
+        raise HTTPException(
+            status_code=404,
+            detail=f"Hugging Face repo '{repo_id}' could not be read: {exc}",
+        )
+    candidates = [
+        s.rfilename for s in (info.siblings or [])
+        if s.rfilename.endswith(".safetensors")
+    ]
+    if weight_name:
+        if weight_name not in candidates:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{weight_name}' is not a .safetensors file in "
+                       f"{repo_id}. Available: {', '.join(candidates) or 'none'}",
+            )
+        chosen = weight_name
+    else:
+        if not candidates:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{repo_id} contains no .safetensors file — it does "
+                       "not look like a LoRA repo.",
+            )
+        if len(candidates) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{repo_id} contains multiple .safetensors files — "
+                       f"pass weight_name. Candidates: {', '.join(candidates)}",
+            )
+        chosen = candidates[0]
+
+    base_model = None
+    card = getattr(info, "card_data", None) or getattr(info, "cardData", None)
+    if card is not None:
+        raw_base = card.get("base_model") if hasattr(card, "get") else None
+        if isinstance(raw_base, str):
+            base_model = raw_base
+        elif isinstance(raw_base, list) and raw_base and isinstance(raw_base[0], str):
+            base_model = raw_base[0]
+    return chosen, guess_base_family(repo_id, chosen, base_model)
+
+
+@router.get("/loras", response_model=LorasResponse)
+async def list_image_loras() -> LorasResponse:
+    """Installed LoRAs (pass their ``id`` in GenerateRequest.loras) plus the
+    curated catalog (verified well-known LoRAs, one click from
+    POST /image-gen/loras/download)."""
+    from app.services.image_gen.loras import (  # noqa: PLC0415
+        CURATED_LORA_CATALOG,
+        list_loras,
+        lora_id_for_repo,
+    )
+    items = list_loras()
+    installed_repo_ids = {m["repo_id"] for m in items if m["installed"]}
+    return LorasResponse(
+        installed=[
+            LoraInstalledInfo(
+                id=m["id"],
+                repo_id=m["repo_id"],
+                weight_name=m["weight_name"],
+                base_family=str(m.get("base_family") or "unknown"),
+                size_bytes=int(m.get("size_bytes") or 0),
+                added_at=m.get("added_at"),
+                installed=bool(m["installed"]),
+            )
+            for m in items
+        ],
+        catalog=[
+            LoraCatalogInfo(
+                repo_id=e["repo_id"],
+                name=e["name"],
+                description=e["description"],
+                weight_name=e["weight_name"],
+                base_family=e["base_family"],
+                license=e["license"],
+                unverified=bool(e.get("unverified", False)),
+                installed=e["repo_id"] in installed_repo_ids
+                or lora_id_for_repo(e["repo_id"]) in {m["id"] for m in items if m["installed"]},
+            )
+            for e in CURATED_LORA_CATALOG
+        ],
+    )
+
+
+@router.post("/loras/download", response_model=LoraDownloadResponse)
+@safe_route("image_gen_lora_download")
+async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
+    """Queue a LoRA download through the universal DownloadManager (category
+    "image_gen_lora" — byte progress/resume on /downloads/stream, exactly like
+    model weights; NEVER an inline silent download). Only the safetensors
+    weight file is fetched. Idempotent."""
+    from app.services.downloads.manager import get_download_manager  # noqa: PLC0415
+    from app.services.image_gen.loras import (  # noqa: PLC0415
+        get_installed_lora,
+        lora_dir,
+        lora_id_for_repo,
+        write_lora_meta,
+    )
+    lora_id = lora_id_for_repo(req.repo_id)
+    existing = get_installed_lora(lora_id)
+    if existing and existing["installed"]:
+        return LoraDownloadResponse(
+            queued=False, already_installed=True, lora_id=lora_id,
+            weight_name=existing["weight_name"],
+            base_family=str(existing.get("base_family") or "unknown"),
+        )
+
+    weight_name, base_family = await _resolve_lora_weight(
+        req.repo_id, req.weight_name
+    )
+    # Metadata sidecar first — the LoRA shows up as pending (installed=false)
+    # immediately; the DownloadManager marker flips it to installed.
+    write_lora_meta(
+        lora_id, repo_id=req.repo_id, weight_name=weight_name,
+        base_family=base_family,
+    )
+    entry = await get_download_manager().enqueue(
+        category="image_gen_lora",
+        filename=lora_id,
+        display_name=f"LoRA: {req.repo_id}",
+        urls=[f"hf://{req.repo_id}"],  # marker only — the HF path ignores URLs
+        metadata={
+            "dest_dir": str(lora_dir(lora_id)),
+            "hf_repo_id": req.repo_id,
+            # Exactly the weight file — bypasses the diffusers-layout filter
+            # (which would drop a root-level .safetensors as a "dup").
+            "hf_allow_files": [weight_name],
+            "lora_id": lora_id,
+        },
+        priority=1,
+    )
+    return LoraDownloadResponse(
+        queued=True, download_id=entry.id, lora_id=lora_id,
+        weight_name=weight_name, base_family=base_family,
+    )
+
+
+@router.delete("/loras/{lora_id}")
+async def delete_image_lora(lora_id: str) -> dict:
+    """Delete an installed LoRA (weights + metadata). 404 when unknown."""
+    from app.services.image_gen.loras import delete_lora  # noqa: PLC0415
+    if not delete_lora(lora_id):
+        raise HTTPException(status_code=404, detail=f"Unknown LoRA: {lora_id}")
+    return {"deleted": True, "lora_id": lora_id}
 
 
 @router.get("/params/{model_id:path}", response_model=ModelParamsResponse)

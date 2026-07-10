@@ -14,3 +14,9 @@ src-tauri/binaries/*.dylib
 src-tauri/binaries/*.so
 src-tauri/binaries/*.dll
 src-tauri/binaries/windows-dlls/*.dll
+
+# E2E test credentials (dedicated Supabase test account) — never commit.
+.env.test
+# Playwright output
+playwright-report/
+test-results/

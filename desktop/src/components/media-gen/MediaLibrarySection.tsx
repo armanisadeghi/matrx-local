@@ -20,6 +20,7 @@ import {
   Film,
   FolderOpen,
   Image as ImageIcon,
+  ImagePlus,
   Info,
   Loader2,
   Lock,
@@ -42,7 +43,10 @@ import type {
   MediaLibraryFilter,
 } from "@/hooks/use-media-library";
 import { useMediaVault } from "@/hooks/use-media-vault";
+import { useMediaGenApp } from "@/contexts/MediaGenContext";
+import { emitClientLog } from "@/hooks/use-unified-log";
 import type { MediaLibraryItem, MediaVaultOpResult } from "@/lib/api";
+import { pickedImageFromUrl } from "./core/pickedImage";
 import { ErrorNote } from "./shared";
 import { PrivateVaultPanel, VaultUnlockForm } from "./PrivateVaultPanel";
 import { MediaLightbox } from "./MediaLightbox";
@@ -269,12 +273,15 @@ function LibraryDetailDialog({
   fileUrls,
   getFileUrl,
   onDelete,
+  onUseAsInput,
   onClose,
 }: {
   item: MediaLibraryItem | null;
   fileUrls: Record<string, string>;
   getFileUrl: MediaLibraryActions["getFileUrl"];
   onDelete: (itemId: string) => Promise<boolean>;
+  /** Route an IMAGE item into the img2img input slot (Use as input). */
+  onUseAsInput: (item: MediaLibraryItem, url: string) => void;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -437,6 +444,17 @@ function LibraryDetailDialog({
                   )}
                   {copied ? "Copied" : "Copy prompt"}
                 </Button>
+                {item.media_type === "image" && fileUrls[item.id] && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onUseAsInput(item, fileUrls[item.id])}
+                    title="Use this image as the img2img input"
+                  >
+                    <ImagePlus className="h-3.5 w-3.5 mr-1.5" />
+                    Use as input
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="outline"
@@ -519,6 +537,27 @@ export function MediaLibrarySection() {
   const { refresh, setFilter, loadMore, getFileUrl, deleteItem, clearError } =
     actions;
   const [selected, setSelected] = useState<MediaLibraryItem | null>(null);
+
+  // "Use as input": route a library image into the img2img input slot.
+  const [, mediaGenActions] = useMediaGenApp();
+  const { useImageAsInput } = mediaGenActions;
+  const handleUseAsInput = useCallback(
+    (item: MediaLibraryItem, url: string) => {
+      void pickedImageFromUrl(url, item.file_name || `${item.id}.png`, (msg) =>
+        emitClientLog(
+          "error",
+          `[media-library] use-as-input failed for ${item.id}: ${msg}`,
+          "engine",
+        ),
+      ).then((img) => {
+        if (img) {
+          useImageAsInput(img);
+          setSelected(null);
+        }
+      });
+    },
+    [useImageAsInput],
+  );
 
   // ── Lightbox (click-to-popup viewer; detail dialog stays on the info btn) ──
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -848,6 +887,7 @@ export function MediaLibrarySection() {
         fileUrls={fileUrls}
         getFileUrl={getFileUrl}
         onDelete={deleteItem}
+        onUseAsInput={handleUseAsInput}
         onClose={() => setSelected(null)}
       />
 
@@ -857,6 +897,13 @@ export function MediaLibrarySection() {
         startIndex={lightboxStart}
         onClose={() => setLightboxOpen(false)}
         onDelete={(id) => void deleteItem(id)}
+        onUseAsInput={(li) => {
+          const item = items.find((i) => i.id === li.id);
+          if (item && item.media_type === "image") {
+            handleUseAsInput(item, li.url);
+            setLightboxOpen(false);
+          }
+        }}
       />
 
       {/* Private vault panel — full-height dialog, reachable from every layout

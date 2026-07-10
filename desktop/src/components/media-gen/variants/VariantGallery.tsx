@@ -1,41 +1,27 @@
 /**
  * VariantGallery — "Gallery first" media-gen layout (UI bake-off variant).
  *
- * Your creations ARE the interface (Midjourney-feed style):
- *  - Top: a full-width COMPOSER BAR — big prompt input, Image|Video mode
- *    toggle, loaded-model chip (→ model-picker popover), Settings popover
- *    (common params via shared.tsx controls, badge when off-defaults),
- *    Advanced popover (AdvancedParamsEditor, badge when overrides active),
- *    and Generate + Add-to-queue actions.
- *  - Under it: a QUEUE STRIP of job chips (thumbnail on completion, progress
- *    while running, cancel X, seed chip) + the single active video job card.
- *  - Everything else: the media library as an immersive masonry grid
- *    (newest first) with image/video filter pills. New generations surface at
- *    the top as jobs complete (narrowly-gated refresh effects). Click any
- *    tile → detail dialog (full preview, params JSON, copy prompt, reuse
- *    seed → composer form, delete).
+ * Your creations ARE the interface (Midjourney-feed style): a full-width
+ * composer bar (prompt + mode toggle + model/settings/advanced popovers +
+ * generate/queue), a queue strip of job chips, and the media library as an
+ * immersive masonry feed with a detail dialog.
  *
- * State doctrine (repo CLAUDE.md → React Patterns, obeyed strictly):
- *  - ALL prompt/params state lives in MediaGenContext (imageForm/videoForm
- *    via setImageForm/setVideoForm) — switching layout variants preserves
- *    work. Local useState is ONLY popover/dialog open state + grid selection.
- *  - No `actions` object in any effect dep list — only specific stable
- *    callbacks. Library-refresh effects are gated on completion COUNTS /
- *    completed-job ids, never on broad objects.
+ * THIN layout shell: the model picker (now WITH download progress), settings
+ * controls (now incl. img2img input + LoRA styles), advanced editor, queue
+ * chips and video job card all come from media-gen/core.
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   AlertCircle,
   Check,
-  CheckCircle2,
   ChevronDown,
   Copy,
   Cpu,
-  Download,
   Film,
   FolderOpen,
   Image as ImageIcon,
+  ImagePlus,
   ListPlus,
   Loader2,
   RefreshCw,
@@ -43,11 +29,10 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
-  X,
+  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Popover,
@@ -67,43 +52,36 @@ import type {
   MediaLibraryActions,
   MediaLibraryFilter,
 } from "@/hooks/use-media-library";
-import type {
-  ImageGenModelInfo,
-  VideoGenModelInfo,
-  ImageGenJob,
-  VideoGenJob,
-  MediaLibraryItem,
-  VideoGenRequest,
-} from "@/lib/api";
-import type { ImageGenerateInput } from "@/hooks/use-media-gen";
+import type { MediaLibraryItem } from "@/lib/api";
 import { ImageGenInstaller } from "../ImageGenInstaller";
 import {
   CancelableGenerateButton,
   ErrorNote,
-  InlineProgressBar,
-  SeedInput,
-  SeedChip,
-  ResetButton,
-  NumberSliderField,
-  DimensionPicker,
-  dimensionError,
-  NegativePromptField,
-  AdvancedParamsEditor,
-  ParamsErrorBanner,
-  GeneratedImageView,
-  computeAdvancedOverrides,
-  parseSeedText,
-  randomSeed,
-  formatGb,
-  QueueNotice,
-  UpNextBadge,
-  isUpNextJob,
-  useImageJobLightbox,
   PromptCapacityHint,
+  QueueNotice,
+  SeedChip,
 } from "../shared";
-import type { SizePreset } from "../shared";
-
-// ── Local helpers ────────────────────────────────────────────────────────────
+import { useImageGenController } from "../core/imageController";
+import { useVideoGenController } from "../core/videoController";
+import { pickedImageFromUrl } from "../core/pickedImage";
+import { ImageStatusErrorCard } from "../core/gates";
+import { ImageModelPicker, VideoModelPicker } from "../core/ModelPicker";
+import {
+  ImageAdvancedSection,
+  ImageCommonSettings,
+  ImageParamsErrorNotice,
+  InputImageControl,
+  LoraStylesSection,
+} from "../core/ImageGenerateForm";
+import {
+  SourceImageControl,
+  VideoAdvancedSection,
+  VideoCommonSettings,
+  VideoParamsErrorNotice,
+} from "../core/VideoGenerateForm";
+import { ImageResultPane } from "../core/ResultView";
+import { ImageQueuePanel } from "../core/ImageQueuePanel";
+import { ActiveVideoJobCard } from "../core/VideoJobPanel";
 
 type ComposerMode = "image" | "video";
 
@@ -133,289 +111,6 @@ async function showInFolder(path: string): Promise<void> {
   await open(dir || path);
 }
 
-const IMAGE_SIZE_PRESETS: SizePreset[] = [
-  { label: "512", width: 512, height: 512 },
-  { label: "768", width: 768, height: 768 },
-  { label: "1024", width: 1024, height: 1024 },
-  { label: "Portrait 832×1216", width: 832, height: 1216 },
-  { label: "Landscape 1216×832", width: 1216, height: 832 },
-];
-
-// ── Model picker (popover body) ──────────────────────────────────────────────
-
-function ModelPickerRow({
-  name,
-  provider,
-  sizeGb,
-  isDownloaded,
-  isLoaded,
-  requiresToken,
-  hardwareOk,
-  hardwareReason,
-  isLoadingThis,
-  anyLoadInFlight,
-  onLoad,
-  onDownload,
-}: {
-  name: string;
-  provider: string;
-  sizeGb: number;
-  isDownloaded: boolean;
-  isLoaded: boolean;
-  requiresToken: boolean;
-  hardwareOk: boolean;
-  hardwareReason: string | null;
-  isLoadingThis: boolean;
-  anyLoadInFlight: boolean;
-  onLoad: () => void;
-  onDownload: () => void;
-}) {
-  return (
-    <div
-      className={`rounded-lg border px-3 py-2 space-y-1.5 ${
-        isLoaded ? "border-violet-500/50 bg-violet-500/5" : "bg-card"
-      } ${!hardwareOk ? "opacity-60" : ""}`}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <p className="truncate text-xs font-medium">{name}</p>
-          <p className="truncate text-[10px] text-muted-foreground">
-            {provider} · {formatGb(sizeGb)}
-            {requiresToken ? " · HF token" : ""}
-          </p>
-        </div>
-        <div className="shrink-0">
-          {isLoaded ? (
-            <Badge className="gap-1 border-green-500/30 bg-green-500/15 text-[10px] text-green-600 dark:text-green-400">
-              <CheckCircle2 className="h-3 w-3" />
-              Loaded
-            </Badge>
-          ) : !isDownloaded ? (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[11px]"
-              disabled={!hardwareOk || anyLoadInFlight}
-              onClick={onDownload}
-            >
-              <Download className="mr-1 h-3 w-3" />
-              Download
-            </Button>
-          ) : (
-            <Button
-              size="sm"
-              className="h-6 px-2 text-[11px]"
-              disabled={!hardwareOk || anyLoadInFlight}
-              onClick={onLoad}
-            >
-              {isLoadingThis ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                "Load"
-              )}
-            </Button>
-          )}
-        </div>
-      </div>
-      {!hardwareOk && (
-        <p className="flex items-center gap-1 text-[10px] text-muted-foreground">
-          <AlertCircle className="h-3 w-3 shrink-0 text-amber-500" />
-          {hardwareReason ?? "Hardware does not meet this model's requirements."}
-        </p>
-      )}
-    </div>
-  );
-}
-
-// ── Queue strip pieces ───────────────────────────────────────────────────────
-
-function ImageJobChip({
-  job,
-  thumbUrl,
-  onCancel,
-  onReuseSeed,
-  onOpen,
-  opening,
-}: {
-  job: ImageGenJob;
-  thumbUrl: string | null;
-  onCancel: (jobId: string) => void;
-  onReuseSeed: (seed: number) => void;
-  /** Opens a COMPLETED job's image in the lightbox. */
-  onOpen: (job: ImageGenJob) => void;
-  /** True while this job's image bytes are being fetched before opening. */
-  opening: boolean;
-}) {
-  const active = job.status === "queued" || job.status === "running";
-  const viewable = job.status === "completed" && !!job.item_id;
-  return (
-    <div
-      className={`flex w-64 shrink-0 flex-col gap-1.5 rounded-lg border bg-card px-2.5 py-2 ${
-        viewable ? "cursor-pointer transition-colors hover:bg-muted/20" : ""
-      }`}
-      onClick={viewable ? () => onOpen(job) : undefined}
-      role={viewable ? "button" : undefined}
-      tabIndex={viewable ? 0 : undefined}
-      onKeyDown={
-        viewable
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onOpen(job);
-              }
-            }
-          : undefined
-      }
-      title={viewable ? "Click to view the image" : undefined}
-    >
-      <div className="flex items-center gap-2">
-        {thumbUrl ? (
-          <img
-            src={thumbUrl}
-            alt="Generated"
-            className="h-9 w-9 shrink-0 rounded border object-cover"
-          />
-        ) : (
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded border bg-muted/30">
-            {opening ? (
-              <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
-            ) : job.status === "failed" ? (
-              <AlertCircle className="h-4 w-4 text-destructive" />
-            ) : job.status === "cancelled" ? (
-              <X className="h-4 w-4 text-muted-foreground" />
-            ) : job.status === "completed" ? (
-              <CheckCircle2 className="h-4 w-4 text-green-500" />
-            ) : (
-              <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
-            )}
-          </div>
-        )}
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[11px]" title={job.prompt}>
-            {job.prompt || "(no prompt)"}
-          </p>
-          <p className="truncate text-[10px] text-muted-foreground">
-            {active && job.cancel_requested ? "cancelling…" : job.status}
-            {job.status === "failed" && job.error ? ` — ${job.error}` : ""}
-          </p>
-        </div>
-        {isUpNextJob(job) && <UpNextBadge />}
-        {active && job.cancel_requested ? (
-          <span
-            className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground"
-            title="Cancel requested — the current step is finishing"
-          >
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Cancelling…
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onCancel(job.job_id);
-            }}
-            className="shrink-0 text-muted-foreground hover:text-foreground"
-            aria-label={active ? "Cancel job" : "Remove job"}
-            title={active ? "Cancel this job" : "Remove from the queue"}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-      {job.status === "running" && (
-        <InlineProgressBar
-          percent={(job.progress ?? 0) * 100}
-          indeterminate={(job.progress ?? 0) <= 0}
-        />
-      )}
-      {job.status === "completed" && typeof job.seed === "number" && (
-        <div onClick={(e) => e.stopPropagation()}>
-          <SeedChip seed={job.seed} onReuse={onReuseSeed} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function VideoJobCard({
-  job,
-  onDismiss,
-  onCancel,
-}: {
-  job: VideoGenJob;
-  onDismiss: () => void;
-  /** Cancel the queued/running job (now allowed by the engine). */
-  onCancel: (jobId: string) => void;
-}) {
-  const active = job.status === "queued" || job.status === "running";
-  const cancelling = active && !!job.cancel_requested;
-  return (
-    <div className="flex w-72 shrink-0 flex-col gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/5 px-2.5 py-2">
-      <div className="flex items-center gap-2">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded border bg-muted/30">
-          {job.status === "completed" ? (
-            <CheckCircle2 className="h-4 w-4 text-green-500" />
-          ) : job.status === "failed" ? (
-            <AlertCircle className="h-4 w-4 text-destructive" />
-          ) : (
-            <Film className="h-4 w-4 text-violet-500" />
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[11px]" title={job.prompt}>
-            <span className="font-medium">Video</span> ·{" "}
-            {job.prompt || "(no prompt)"}
-          </p>
-          <p className="truncate text-[10px] text-muted-foreground">
-            {cancelling ? "cancelling…" : job.status}
-            {active && !cancelling && job.total_steps > 0
-              ? ` — step ${job.current_step}/${job.total_steps}`
-              : ""}
-            {job.status === "failed" && job.error ? ` — ${job.error}` : ""}
-          </p>
-        </div>
-        {active &&
-          (cancelling ? (
-            <span
-              className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground"
-              title="Cancel requested — the current step is finishing"
-            >
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Cancelling…
-            </span>
-          ) : (
-            <button
-              type="button"
-              onClick={() => onCancel(job.job_id)}
-              className="shrink-0 text-muted-foreground hover:text-destructive"
-              aria-label="Cancel video job"
-              title="Cancel this video job"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          ))}
-        {!active && (
-          <button
-            type="button"
-            onClick={onDismiss}
-            className="shrink-0 text-muted-foreground hover:text-foreground"
-            aria-label="Dismiss video job"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-      {active && (
-        <InlineProgressBar
-          percent={(job.progress ?? 0) * 100}
-          indeterminate={(job.progress ?? 0) <= 0}
-        />
-      )}
-    </div>
-  );
-}
-
 // ── Masonry tile (auth'd blob loader) ────────────────────────────────────────
 
 function GalleryTile({
@@ -432,8 +127,6 @@ function GalleryTile({
   const url = fileUrls[item.id] ?? null;
   const [failed, setFailed] = useState(false);
 
-  // Kick off the byte fetch once per item id; getFileUrl is stable and
-  // dedupes in-flight fetches, so this never stampedes.
   useEffect(() => {
     let cancelled = false;
     if (!url) {
@@ -488,7 +181,6 @@ function GalleryTile({
           loading="lazy"
         />
       )}
-      {/* Hover overlay: prompt + meta, Midjourney-feed style */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 translate-y-1 bg-gradient-to-t from-black/75 to-transparent p-2.5 pt-8 opacity-0 transition-all group-hover:translate-y-0 group-hover:opacity-100">
         <p className="line-clamp-2 text-[11px] leading-snug text-white">
           {item.prompt || "(no prompt)"}
@@ -506,7 +198,7 @@ function GalleryTile({
   );
 }
 
-// ── Detail dialog (slim rebuild of the library detail experience) ────────────
+// ── Detail dialog ────────────────────────────────────────────────────────────
 
 function GalleryDetailDialog({
   item,
@@ -514,6 +206,7 @@ function GalleryDetailDialog({
   getFileUrl,
   onDelete,
   onReuseSeed,
+  onUseAsInput,
   onClose,
 }: {
   item: MediaLibraryItem | null;
@@ -521,6 +214,8 @@ function GalleryDetailDialog({
   getFileUrl: MediaLibraryActions["getFileUrl"];
   onDelete: (itemId: string) => Promise<boolean>;
   onReuseSeed: (item: MediaLibraryItem, seed: number) => void;
+  /** Routes an IMAGE item into the img2img input slot. */
+  onUseAsInput: (item: MediaLibraryItem, url: string) => void;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -529,7 +224,6 @@ function GalleryDetailDialog({
   const [actionError, setActionError] = useState<string | null>(null);
   const url = item ? (fileUrls[item.id] ?? null) : null;
 
-  // Reset transient dialog state when a different item is shown.
   useEffect(() => {
     setCopied(false);
     setConfirmingDelete(false);
@@ -537,8 +231,6 @@ function GalleryDetailDialog({
     setActionError(null);
   }, [item?.id]);
 
-  // Ensure the full-size bytes are available (cache hit when the tile
-  // already fetched them). Stable + deduped, per the library hook contract.
   useEffect(() => {
     const id = item?.id;
     if (!id || url) return;
@@ -693,6 +385,17 @@ function GalleryDetailDialog({
                   )}
                   {copied ? "Copied" : "Copy prompt"}
                 </Button>
+                {item.media_type === "image" && url && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onUseAsInput(item, url)}
+                    title="Use this image as the img2img input"
+                  >
+                    <ImagePlus className="mr-1.5 h-3.5 w-3.5" />
+                    Use as input
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="outline"
@@ -724,8 +427,6 @@ function GalleryDetailDialog({
   );
 }
 
-// ── Filter pills ─────────────────────────────────────────────────────────────
-
 const FILTERS: { value: MediaLibraryFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "image", label: "Images" },
@@ -738,60 +439,30 @@ export function VariantGallery() {
   const [mediaGen, mediaGenActions] = useMediaGenApp();
   const {
     imageStatus,
-    imageModels,
-    imageStatusLoading,
     imageStatusError,
-    imageModelLoading,
-    loadingImageModelId,
     imageGenerating,
     imageCancelling,
     imageGenStartedAt,
-    imageGenError,
     imageQueueNotice,
     imageResult,
-    selectedImageModelId,
-    imageForm,
     imageJobs,
-    imageJobsError,
-    imageJobThumbs,
     videoStatus,
-    videoModels,
     videoStatusError,
+    imageModelLoading,
     videoModelLoading,
-    loadingVideoModelId,
     videoGenerating,
     videoCancelling,
-    videoGenError,
     activeJob,
-    videoForm,
   } = mediaGen;
   const {
     refreshImage,
-    loadImageModel,
-    downloadImageModel,
-    generateImage,
+    refreshVideo,
     cancelImageGeneration,
-    clearImageResult,
-    clearImageGenError,
+    cancelVideoGeneration,
     clearImageQueueNotice,
     setImageForm,
-    prepareImageGenerate,
-    resetImageCommon,
-    resetImageAdvanced,
-    enqueueImageJob,
-    cancelImageJob,
-    refreshVideo,
-    loadVideoModel,
-    downloadVideoModel,
-    generateVideo,
-    cancelVideoGeneration,
-    cancelVideoJob,
-    clearActiveJob,
-    clearVideoGenError,
     setVideoForm,
-    prepareVideoGenerate,
-    resetVideoCommon,
-    resetVideoAdvanced,
+    useImageAsInput,
   } = mediaGenActions;
 
   const [library, libraryActions] = useMediaLibrary();
@@ -821,52 +492,11 @@ export function VariantGallery() {
   const [resultOpen, setResultOpen] = useState(false);
   const [selected, setSelected] = useState<MediaLibraryItem | null>(null);
 
-  // ── Model resolution ──────────────────────────────────────────────────────
-  const imageModelId =
-    imageForm.defaults?.modelId ??
-    selectedImageModelId ??
-    imageStatus?.loaded_model_id ??
-    null;
-  const currentImageModel = useMemo(
-    () => imageModels.find((m) => m.model_id === imageModelId) ?? null,
-    [imageModels, imageModelId],
-  );
-  const videoModelId =
-    videoForm.defaults?.modelId ?? videoStatus?.loaded_model_id ?? null;
-  const currentVideoModel = useMemo(
-    () => videoModels.find((m) => m.model_id === videoModelId) ?? null,
-    [videoModels, videoModelId],
-  );
-
-  // If a model is loaded but the form defaults belong to another model (or
-  // none — e.g. loaded before this layout mounted), fetch its full parameter
-  // schema. Guarded so it runs once per model change, never in a loop.
-  useEffect(() => {
-    if (imageForm.paramsLoading) return;
-    if (!currentImageModel) return;
-    if (imageForm.defaults?.modelId === currentImageModel.model_id) return;
-    void prepareImageGenerate(currentImageModel);
-  }, [
-    imageForm.paramsLoading,
-    imageForm.defaults?.modelId,
-    currentImageModel,
-    prepareImageGenerate,
-  ]);
-  useEffect(() => {
-    if (videoForm.paramsLoading) return;
-    if (!currentVideoModel) return;
-    if (videoForm.defaults?.modelId === currentVideoModel.model_id) return;
-    void prepareVideoGenerate(currentVideoModel);
-  }, [
-    videoForm.paramsLoading,
-    videoForm.defaults?.modelId,
-    currentVideoModel,
-    prepareVideoGenerate,
-  ]);
+  const closePicker = useCallback(() => setModelPickerOpen(false), []);
+  const imageCtl = useImageGenController({ onAfterSelect: closePicker });
+  const videoCtl = useVideoGenController({ onAfterSelect: closePicker });
 
   // ── Library freshness: new generations surface at the top ────────────────
-  // Refresh when the COUNT of completed image-queue jobs increases (narrow
-  // gate — never the jobs array itself, and only on a rising edge).
   const completedImageJobCount = useMemo(
     () => imageJobs.filter((j) => j.status === "completed").length,
     [imageJobs],
@@ -879,7 +509,6 @@ export function VariantGallery() {
     prevCompletedCountRef.current = completedImageJobCount;
   }, [completedImageJobCount, refreshLibrary]);
 
-  // Refresh once per completed video job id.
   const completedVideoJobId =
     activeJob?.status === "completed" ? activeJob.job_id : null;
   useEffect(() => {
@@ -887,7 +516,6 @@ export function VariantGallery() {
     void refreshLibrary();
   }, [completedVideoJobId, refreshLibrary]);
 
-  // Refresh once per persisted foreground-generate result.
   const freshResultItemId = imageResult?.itemId ?? null;
   useEffect(() => {
     if (!freshResultItemId) return;
@@ -895,181 +523,67 @@ export function VariantGallery() {
   }, [freshResultItemId, refreshLibrary]);
 
   // ── Form plumbing (ALL content state lives in context) ───────────────────
-  const form = mode === "image" ? imageForm : videoForm;
-  const prompt = form.prompt;
+  const isImage = mode === "image";
+  const prompt = isImage ? imageCtl.form.prompt : videoCtl.form.prompt;
   const setPrompt = useCallback(
     (value: string) => {
-      if (mode === "image") setImageForm({ prompt: value });
+      if (isImage) setImageForm({ prompt: value });
       else setVideoForm({ prompt: value });
     },
-    [mode, setImageForm, setVideoForm],
-  );
-
-  const imageDefaults = imageForm.defaults;
-  const videoDefaults = videoForm.defaults;
-
-  const imageAdvanced = useMemo(
-    () =>
-      computeAdvancedOverrides(
-        imageForm.advancedText,
-        imageDefaults?.advanced ?? {},
-      ),
-    [imageForm.advancedText, imageDefaults?.advanced],
-  );
-  const videoAdvanced = useMemo(
-    () =>
-      computeAdvancedOverrides(
-        videoForm.advancedText,
-        videoDefaults?.advanced ?? {},
-      ),
-    [videoForm.advancedText, videoDefaults?.advanced],
+    [isImage, setImageForm, setVideoForm],
   );
 
   // Settings-off-defaults badge counts.
   const imageSettingsDirty = useMemo(() => {
-    const d = imageDefaults;
+    const d = imageCtl.defaults;
+    const f = imageCtl.form;
     if (!d) return 0;
     let n = 0;
-    if (imageForm.steps !== d.steps) n++;
-    if (imageForm.guidance !== d.guidance) n++;
-    if (imageForm.width !== d.width || imageForm.height !== d.height) n++;
-    if (imageForm.negativePrompt.trim() !== d.negativePrompt.trim()) n++;
-    if (imageForm.seedText.trim() !== "") n++;
+    if (f.steps !== d.steps) n++;
+    if (f.guidance !== d.guidance) n++;
+    if (f.width !== d.width || f.height !== d.height) n++;
+    if (f.negativePrompt.trim() !== d.negativePrompt.trim()) n++;
+    if (f.seedText.trim() !== "") n++;
+    if (f.initImage !== null) n++;
+    if (f.loras.some((l) => l.enabled)) n++;
     return n;
-  }, [
-    imageDefaults,
-    imageForm.steps,
-    imageForm.guidance,
-    imageForm.width,
-    imageForm.height,
-    imageForm.negativePrompt,
-    imageForm.seedText,
-  ]);
+  }, [imageCtl.defaults, imageCtl.form]);
   const videoSettingsDirty = useMemo(() => {
-    const d = videoDefaults;
+    const d = videoCtl.defaults;
+    const f = videoCtl.form;
     if (!d) return 0;
     let n = 0;
-    if (videoForm.steps !== d.steps) n++;
-    if (videoForm.guidance !== d.guidance) n++;
-    if (videoForm.width !== d.width || videoForm.height !== d.height) n++;
-    if (videoForm.numFrames !== d.numFrames) n++;
-    if (videoForm.fps !== d.fps) n++;
-    if (videoForm.negativePrompt.trim() !== d.negativePrompt.trim()) n++;
-    if (videoForm.seedText.trim() !== "") n++;
+    if (f.steps !== d.steps) n++;
+    if (f.guidance !== d.guidance) n++;
+    if (f.width !== d.width || f.height !== d.height) n++;
+    if (f.numFrames !== d.numFrames) n++;
+    if (f.fps !== d.fps) n++;
+    if (f.negativePrompt.trim() !== d.negativePrompt.trim()) n++;
+    if (f.seedText.trim() !== "") n++;
+    if (f.sourceImage !== null) n++;
     return n;
-  }, [
-    videoDefaults,
-    videoForm.steps,
-    videoForm.guidance,
-    videoForm.width,
-    videoForm.height,
-    videoForm.numFrames,
-    videoForm.fps,
-    videoForm.negativePrompt,
-    videoForm.seedText,
-  ]);
+  }, [videoCtl.defaults, videoCtl.form]);
 
-  const settingsDirty = mode === "image" ? imageSettingsDirty : videoSettingsDirty;
-  const advancedResult = mode === "image" ? imageAdvanced : videoAdvanced;
+  const settingsDirty = isImage ? imageSettingsDirty : videoSettingsDirty;
+  const advancedResult = isImage ? imageCtl.advanced : videoCtl.advanced;
   const advancedCount = advancedResult.ok ? advancedResult.count : 0;
 
-  // ── Validation ────────────────────────────────────────────────────────────
-  const imageDimError = dimensionError(imageForm.width, imageForm.height);
-  const videoDimError = dimensionError(videoForm.width, videoForm.height);
-  const videoJobActive =
-    activeJob?.status === "queued" || activeJob?.status === "running";
-
-  const imageReady =
-    !!imageDefaults &&
-    !!prompt.trim() &&
-    imageAdvanced.ok &&
-    imageDimError === null;
-  const videoReady =
-    !!videoDefaults &&
-    !!prompt.trim() &&
-    videoAdvanced.ok &&
-    videoDimError === null &&
-    !videoJobActive;
-
-  // ── Request building + submit ────────────────────────────────────────────
-  const buildImageInput = useCallback((): ImageGenerateInput | null => {
-    const d = imageForm.defaults;
-    if (!d) return null;
-    const adv = computeAdvancedOverrides(imageForm.advancedText, d.advanced);
-    if (!adv.ok) return null;
-    // Resolve a concrete seed even for "random" so every result is
-    // reproducible — the used seed lands on the queue chip and in the library.
-    const seed = parseSeedText(imageForm.seedText) ?? randomSeed();
-    return {
-      prompt: imageForm.prompt.trim(),
-      model_id: d.modelId,
-      negative_prompt: d.supportsNegativePrompt
-        ? imageForm.negativePrompt.trim() || undefined
-        : undefined,
-      steps: imageForm.steps,
-      guidance: imageForm.guidance,
-      width: imageForm.width,
-      height: imageForm.height,
-      seed,
-      extra_params: adv.count > 0 ? adv.overrides : undefined,
-    };
-  }, [imageForm]);
-
-  const buildVideoRequest = useCallback((): VideoGenRequest | null => {
-    const d = videoForm.defaults;
-    if (!d) return null;
-    const adv = computeAdvancedOverrides(videoForm.advancedText, d.advanced);
-    if (!adv.ok) return null;
-    const seed = parseSeedText(videoForm.seedText) ?? randomSeed();
-    return {
-      prompt: videoForm.prompt.trim(),
-      model_id: d.modelId,
-      negative_prompt: d.supportsNegativePrompt
-        ? videoForm.negativePrompt.trim() || undefined
-        : undefined,
-      steps: videoForm.steps,
-      guidance: videoForm.guidance,
-      width: videoForm.width,
-      height: videoForm.height,
-      num_frames: videoForm.numFrames,
-      fps: videoForm.fps,
-      seed,
-      image_base64: videoForm.sourceImage?.base64,
-      extra_params: adv.count > 0 ? adv.overrides : undefined,
-    };
-  }, [videoForm]);
+  const videoJobActive = videoCtl.jobIsActive;
+  const imageReady = !imageCtl.formInvalid;
+  const videoReady = !videoCtl.formInvalid && !videoJobActive;
 
   const handleGenerate = useCallback(async () => {
-    if (mode === "image") {
-      const input = buildImageInput();
+    if (isImage) {
+      const input = imageCtl.buildInput();
       if (!input) return;
-      const ok = await generateImage(input);
-      if (ok) setResultOpen(true);
+      // Show the fresh result dialog after a successful foreground run.
+      await imageCtl.handleGenerate();
+      setResultOpen(true);
     } else {
-      const req = buildVideoRequest();
-      if (!req) return;
-      await generateVideo(req);
+      await videoCtl.handleGenerate();
     }
-  }, [mode, buildImageInput, buildVideoRequest, generateImage, generateVideo]);
+  }, [isImage, imageCtl, videoCtl]);
 
-  const handleEnqueue = useCallback(async () => {
-    const input = buildImageInput();
-    if (!input) return;
-    // Queue and clear nothing — the prompt stays editable for the next one.
-    await enqueueImageJob(input);
-  }, [buildImageInput, enqueueImageJob]);
-
-  const reuseImageSeed = useCallback(
-    (seed: number) => setImageForm({ seedText: String(seed) }),
-    [setImageForm],
-  );
-
-  // Click-to-open for completed queue jobs (shared lightbox behavior).
-  const { openJob, openingJobId, lightboxElement } = useImageJobLightbox({
-    jobs: imageJobs,
-    thumbs: imageJobThumbs,
-    onReuseSeed: reuseImageSeed,
-  });
   const reuseSeedFromLibrary = useCallback(
     (item: MediaLibraryItem, seed: number) => {
       if (item.media_type === "video") {
@@ -1084,45 +598,36 @@ export function VariantGallery() {
     [setImageForm, setVideoForm],
   );
 
-  // ── Model picker handlers ────────────────────────────────────────────────
-  const handleLoadImageModel = useCallback(
-    async (model: ImageGenModelInfo) => {
-      const result = await loadImageModel(model.model_id);
-      if (result.success) {
-        await prepareImageGenerate(model);
-        setModelPickerOpen(false);
-      }
+  const handleUseAsInputFromLibrary = useCallback(
+    (item: MediaLibraryItem, url: string) => {
+      void pickedImageFromUrl(url, item.file_name || `${item.id}.png`, (msg) =>
+        imageCtl.setLocalError(msg),
+      ).then((img) => {
+        if (img) {
+          useImageAsInput(img);
+          setMode("image");
+          setSelected(null);
+        }
+      });
     },
-    [loadImageModel, prepareImageGenerate],
-  );
-  const handleLoadVideoModel = useCallback(
-    async (model: VideoGenModelInfo) => {
-      const result = await loadVideoModel(model.model_id);
-      if (result.success) {
-        await prepareVideoGenerate(model);
-        setModelPickerOpen(false);
-      }
-    },
-    [loadVideoModel, prepareVideoGenerate],
+    [imageCtl, useImageAsInput],
   );
 
   // ── Not-ready states ─────────────────────────────────────────────────────
   const packagesMissing = imageStatus !== null && !imageStatus.available;
   const engineDown = imageStatusError !== null;
-  const modeStatusError = mode === "image" ? imageStatusError : videoStatusError;
-  const genError = mode === "image" ? imageGenError : videoGenError;
-  const dismissGenError =
-    mode === "image" ? clearImageGenError : clearVideoGenError;
-  const modelLoading = mode === "image" ? imageModelLoading : videoModelLoading;
-  const currentModelName =
-    mode === "image" ? currentImageModel?.name : currentVideoModel?.name;
+  const modeStatusError = isImage ? imageStatusError : videoStatusError;
+  const modelLoading = isImage ? imageModelLoading : videoModelLoading;
+  const currentModelName = isImage
+    ? imageCtl.model?.name
+    : videoCtl.model?.name;
+  const genError = isImage ? imageCtl.genError : videoCtl.genError;
+  const dismissGenError = isImage
+    ? imageCtl.dismissGenError
+    : videoCtl.dismissGenError;
 
-  const activeQueueCount = imageJobs.filter(
-    (j) => j.status === "queued" || j.status === "running",
-  ).length;
-  const queueJobs = imageJobs.slice(0, 12);
   const showQueueStrip =
-    queueJobs.length > 0 || activeJob !== null || imageResult !== null;
+    imageJobs.length > 0 || activeJob !== null || imageResult !== null;
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto">
@@ -1130,37 +635,24 @@ export function VariantGallery() {
       <div className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto max-w-6xl space-y-2.5 px-4 py-3">
           {engineDown && (
-            <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-              <span className="min-w-0 flex-1 break-words">
-                {imageStatusError}
-              </span>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-6 shrink-0 text-[11px]"
-                onClick={() => {
-                  void refreshImage();
-                  void refreshVideo();
-                }}
-              >
-                <RefreshCw className="mr-1 h-3 w-3" />
-                Retry
-              </Button>
-            </div>
+            <ImageStatusErrorCard
+              error={imageStatusError ?? ""}
+              onRetry={() => {
+                void refreshImage();
+                void refreshVideo();
+              }}
+            />
           )}
 
           {!engineDown && packagesMissing ? (
-            /* Packages missing → the existing one-click installer flow. */
             <ImageGenInstaller
-              models={imageModels}
+              models={mediaGen.imageModels}
               onInstallComplete={() => void refreshImage()}
             />
-          ) : (
+          ) : !engineDown ? (
             <>
               {/* Row 1: mode toggle · prompt · actions */}
               <div className="flex items-start gap-2.5">
-                {/* Mode toggle */}
                 <div className="flex shrink-0 rounded-lg border bg-muted/30 p-0.5">
                   {(
                     [
@@ -1189,12 +681,11 @@ export function VariantGallery() {
                   ))}
                 </div>
 
-                {/* Big prompt input (context-backed — survives navigation) */}
                 <Textarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder={
-                    mode === "image"
+                    isImage
                       ? "Describe the image you want to create…"
                       : "Describe the video you want to create…"
                   }
@@ -1203,7 +694,11 @@ export function VariantGallery() {
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
-                      if (mode === "image" ? imageReady && !imageGenerating : videoReady && !videoGenerating) {
+                      if (
+                        isImage
+                          ? imageReady && !imageGenerating
+                          : videoReady && !videoGenerating
+                      ) {
                         void handleGenerate();
                       }
                     }
@@ -1211,37 +706,34 @@ export function VariantGallery() {
                   aria-label="Prompt"
                 />
 
-                {/* Generate + queue */}
                 <div className="flex shrink-0 items-start gap-1.5">
                   <CancelableGenerateButton
                     generating={
-                      mode === "image"
+                      isImage
                         ? imageGenerating
                         : videoGenerating || videoJobActive
                     }
                     cancelling={
-                      mode === "image"
+                      isImage
                         ? imageCancelling
                         : videoCancelling || !!activeJob?.cancel_requested
                     }
-                    startedAt={mode === "image" ? imageGenStartedAt : null}
+                    startedAt={isImage ? imageGenStartedAt : null}
                     elapsedSeconds={
-                      mode === "video" && videoJobActive
+                      !isImage && videoJobActive
                         ? (activeJob?.elapsed_seconds ?? null)
                         : null
                     }
-                    disabled={mode === "image" ? !imageReady : !videoReady}
+                    disabled={isImage ? !imageReady : !videoReady}
                     onGenerate={() => void handleGenerate()}
                     onCancel={() =>
-                      void (mode === "image"
+                      void (isImage
                         ? cancelImageGeneration()
                         : cancelVideoGeneration())
                     }
                     buttonClassName="h-[38px]"
                     cancelLabel="Cancel"
-                    workingLabel={
-                      mode === "image" ? "Generating" : "Generating video"
-                    }
+                    workingLabel={isImage ? "Generating" : "Generating video"}
                     idleContent={
                       <>
                         <Sparkles className="mr-1.5 h-4 w-4" />
@@ -1249,11 +741,11 @@ export function VariantGallery() {
                       </>
                     }
                   />
-                  {mode === "image" && (
+                  {isImage && (
                     <Button
                       variant="outline"
                       disabled={!imageReady}
-                      onClick={() => void handleEnqueue()}
+                      onClick={() => void imageCtl.handleEnqueue()}
                       className="h-[38px]"
                       title="Queue this generation and keep editing"
                     >
@@ -1266,8 +758,10 @@ export function VariantGallery() {
 
               {/* Row 2: model chip · settings · advanced · inline status */}
               <div className="flex flex-wrap items-center gap-1.5">
-                {/* Model chip → picker popover */}
-                <Popover open={modelPickerOpen} onOpenChange={setModelPickerOpen}>
+                <Popover
+                  open={modelPickerOpen}
+                  onOpenChange={setModelPickerOpen}
+                >
                   <PopoverTrigger asChild>
                     <button
                       type="button"
@@ -1292,9 +786,9 @@ export function VariantGallery() {
                   <PopoverContent align="start" className="w-96 p-3">
                     <div className="space-y-2">
                       <p className="text-xs font-semibold">
-                        {mode === "image" ? "Image models" : "Video models"}
+                        {isImage ? "Image models" : "Video models"}
                       </p>
-                      {mode === "video" &&
+                      {!isImage &&
                         videoStatus &&
                         !videoStatus.hardware_supported && (
                           <p className="flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-2 text-[11px] text-muted-foreground">
@@ -1303,81 +797,34 @@ export function VariantGallery() {
                               "Video generation is not supported on this hardware."}
                           </p>
                         )}
-                      {modeStatusError && (
-                        <ErrorNote message={modeStatusError} />
-                      )}
-                      <div className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
-                        {mode === "image"
-                          ? imageModels.map((m) => (
-                              <ModelPickerRow
-                                key={m.model_id}
-                                name={m.name}
-                                provider={m.provider}
-                                sizeGb={m.download_size_gb}
-                                isDownloaded={m.is_downloaded}
-                                isLoaded={
-                                  imageStatus?.loaded_model_id === m.model_id
-                                }
-                                requiresToken={m.requires_hf_token}
-                                hardwareOk={m.hardware_ok}
-                                hardwareReason={m.hardware_reason}
-                                isLoadingThis={loadingImageModelId === m.model_id}
-                                anyLoadInFlight={
-                                  imageModelLoading ||
-                                  !!imageStatus?.is_loading
-                                }
-                                onLoad={() => void handleLoadImageModel(m)}
-                                onDownload={() =>
-                                  void downloadImageModel(m.model_id)
-                                }
-                              />
-                            ))
-                          : videoModels.map((m) => (
-                              <ModelPickerRow
-                                key={m.model_id}
-                                name={m.name}
-                                provider={m.provider}
-                                sizeGb={m.download_size_gb}
-                                isDownloaded={m.is_downloaded}
-                                isLoaded={
-                                  videoStatus?.loaded_model_id === m.model_id
-                                }
-                                requiresToken={m.requires_hf_token}
-                                hardwareOk={m.hardware_ok}
-                                hardwareReason={m.hardware_reason}
-                                isLoadingThis={loadingVideoModelId === m.model_id}
-                                anyLoadInFlight={
-                                  videoModelLoading ||
-                                  !!videoStatus?.is_loading
-                                }
-                                onLoad={() => void handleLoadVideoModel(m)}
-                                onDownload={() =>
-                                  void downloadVideoModel(m.model_id)
-                                }
-                              />
-                            ))}
-                        {(mode === "image" ? imageModels : videoModels)
-                          .length === 0 && (
-                          <p className="py-4 text-center text-xs text-muted-foreground">
-                            {imageStatusLoading
-                              ? "Loading model catalog…"
-                              : "No models available."}
-                          </p>
+                      {modeStatusError && <ErrorNote message={modeStatusError} />}
+                      <div className="max-h-80 overflow-y-auto pr-1">
+                        {isImage ? (
+                          <ImageModelPicker
+                            ctl={imageCtl}
+                            layout="rows"
+                            showHeading={false}
+                            showLoadedBanner={false}
+                          />
+                        ) : (
+                          <VideoModelPicker
+                            ctl={videoCtl}
+                            layout="rows"
+                            showHeading={false}
+                            showLoadedBanner={false}
+                          />
                         )}
                       </div>
-                      <p className="text-[10px] text-muted-foreground">
-                        Download progress appears in the Download Manager.
-                      </p>
                     </div>
                   </PopoverContent>
                 </Popover>
 
-                {/* Settings popover (common params) */}
+                {/* Settings popover (common params + image input) */}
                 <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
                   <PopoverTrigger asChild>
                     <button
                       type="button"
-                      disabled={!form.defaults}
+                      disabled={isImage ? !imageCtl.defaults : !videoCtl.defaults}
                       className="relative flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors hover:bg-muted/30 disabled:opacity-50"
                     >
                       <Settings2 className="h-3 w-3" />
@@ -1389,171 +836,22 @@ export function VariantGallery() {
                       )}
                     </button>
                   </PopoverTrigger>
-                  <PopoverContent align="start" className="w-[380px] p-4">
-                    {mode === "image" && imageDefaults ? (
+                  <PopoverContent
+                    align="start"
+                    className="max-h-[70vh] w-[400px] overflow-y-auto p-4"
+                  >
+                    {isImage && imageCtl.defaults ? (
                       <div className="space-y-3.5">
-                        {imageForm.paramsError && currentImageModel && (
-                          <ParamsErrorBanner
-                            error={imageForm.paramsError}
-                            onRetry={() =>
-                              void prepareImageGenerate(currentImageModel)
-                            }
-                          />
-                        )}
-                        <div className="grid grid-cols-2 gap-3">
-                          <NumberSliderField
-                            label="Steps"
-                            value={imageForm.steps}
-                            onChange={(v) => setImageForm({ steps: v })}
-                            min={1}
-                            max={
-                              currentImageModel?.pipeline_type.startsWith(
-                                "flux",
-                              )
-                                ? 50
-                                : 100
-                            }
-                            step={1}
-                            defaultValue={imageDefaults.steps}
-                          />
-                          <NumberSliderField
-                            label="Guidance"
-                            value={imageForm.guidance}
-                            onChange={(v) => setImageForm({ guidance: v })}
-                            min={0}
-                            max={20}
-                            step={0.5}
-                            defaultValue={imageDefaults.guidance}
-                          />
-                        </div>
-                        <DimensionPicker
-                          width={imageForm.width}
-                          height={imageForm.height}
-                          onChange={(w, h) =>
-                            setImageForm({ width: w, height: h })
-                          }
-                          presets={[
-                            {
-                              label: `Default ${imageDefaults.width}×${imageDefaults.height}`,
-                              width: imageDefaults.width,
-                              height: imageDefaults.height,
-                            },
-                            ...IMAGE_SIZE_PRESETS.filter(
-                              (p) =>
-                                p.width !== imageDefaults.width ||
-                                p.height !== imageDefaults.height,
-                            ),
-                          ]}
-                        />
-                        <div className="space-y-1.5">
-                          <Label className="text-xs">
-                            Seed{" "}
-                            <span className="text-muted-foreground">
-                              (blank = random; the used seed is always shown)
-                            </span>
-                          </Label>
-                          <SeedInput
-                            value={imageForm.seedText}
-                            onChange={(seedText) => setImageForm({ seedText })}
-                          />
-                        </div>
-                        <NegativePromptField
-                          supported={imageDefaults.supportsNegativePrompt}
-                          value={imageForm.negativePrompt}
-                          onChange={(v) => setImageForm({ negativePrompt: v })}
-                        />
-                        <div className="flex justify-end">
-                          <ResetButton
-                            onClick={resetImageCommon}
-                            label="Reset to model defaults"
-                          />
-                        </div>
+                        <ImageParamsErrorNotice ctl={imageCtl} />
+                        <ImageCommonSettings ctl={imageCtl} />
+                        <InputImageControl ctl={imageCtl} />
+                        <LoraStylesSection ctl={imageCtl} />
                       </div>
-                    ) : mode === "video" && videoDefaults ? (
+                    ) : !isImage && videoCtl.defaults ? (
                       <div className="space-y-3.5">
-                        {videoForm.paramsError && currentVideoModel && (
-                          <ParamsErrorBanner
-                            error={videoForm.paramsError}
-                            onRetry={() =>
-                              void prepareVideoGenerate(currentVideoModel)
-                            }
-                          />
-                        )}
-                        <div className="grid grid-cols-2 gap-3">
-                          <NumberSliderField
-                            label="Steps"
-                            value={videoForm.steps}
-                            onChange={(v) => setVideoForm({ steps: v })}
-                            min={1}
-                            max={100}
-                            step={1}
-                            defaultValue={videoDefaults.steps}
-                          />
-                          <NumberSliderField
-                            label="Guidance"
-                            value={videoForm.guidance}
-                            onChange={(v) => setVideoForm({ guidance: v })}
-                            min={0}
-                            max={20}
-                            step={0.5}
-                            defaultValue={videoDefaults.guidance}
-                          />
-                          <NumberSliderField
-                            label="Frames"
-                            value={videoForm.numFrames}
-                            onChange={(v) => setVideoForm({ numFrames: v })}
-                            min={8}
-                            max={currentVideoModel?.max_num_frames ?? 129}
-                            step={1}
-                            defaultValue={videoDefaults.numFrames}
-                          />
-                          <NumberSliderField
-                            label="FPS"
-                            value={videoForm.fps}
-                            onChange={(v) => setVideoForm({ fps: v })}
-                            min={4}
-                            max={60}
-                            step={1}
-                            defaultValue={videoDefaults.fps}
-                          />
-                        </div>
-                        <DimensionPicker
-                          width={videoForm.width}
-                          height={videoForm.height}
-                          onChange={(w, h) =>
-                            setVideoForm({ width: w, height: h })
-                          }
-                          presets={[
-                            {
-                              label: `Default ${videoDefaults.width}×${videoDefaults.height}`,
-                              width: videoDefaults.width,
-                              height: videoDefaults.height,
-                            },
-                          ]}
-                        />
-                        <div className="space-y-1.5">
-                          <Label className="text-xs">
-                            Seed{" "}
-                            <span className="text-muted-foreground">
-                              (blank = random)
-                            </span>
-                          </Label>
-                          <SeedInput
-                            value={videoForm.seedText}
-                            onChange={(seedText) => setVideoForm({ seedText })}
-                          />
-                        </div>
-                        <NegativePromptField
-                          supported={videoDefaults.supportsNegativePrompt}
-                          value={videoForm.negativePrompt}
-                          onChange={(v) => setVideoForm({ negativePrompt: v })}
-                        />
-                        <div className="flex justify-end">
-                          <ResetButton
-                            onClick={resetVideoCommon}
-                            label="Reset to model defaults"
-                          />
-                        </div>
+                        <VideoParamsErrorNotice ctl={videoCtl} />
+                        <VideoCommonSettings ctl={videoCtl} />
+                        <SourceImageControl ctl={videoCtl} />
                       </div>
                     ) : (
                       <p className="py-2 text-xs text-muted-foreground">
@@ -1568,7 +866,7 @@ export function VariantGallery() {
                   <PopoverTrigger asChild>
                     <button
                       type="button"
-                      disabled={!form.defaults}
+                      disabled={isImage ? !imageCtl.defaults : !videoCtl.defaults}
                       className="relative flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors hover:bg-muted/30 disabled:opacity-50"
                     >
                       <SlidersHorizontal className="h-3 w-3" />
@@ -1585,24 +883,10 @@ export function VariantGallery() {
                     </button>
                   </PopoverTrigger>
                   <PopoverContent align="start" className="w-[440px] p-4">
-                    {mode === "image" && imageDefaults ? (
-                      <AdvancedParamsEditor
-                        defaults={imageDefaults.advanced}
-                        text={imageForm.advancedText}
-                        onChange={(advancedText) =>
-                          setImageForm({ advancedText })
-                        }
-                        onReset={resetImageAdvanced}
-                      />
-                    ) : mode === "video" && videoDefaults ? (
-                      <AdvancedParamsEditor
-                        defaults={videoDefaults.advanced}
-                        text={videoForm.advancedText}
-                        onChange={(advancedText) =>
-                          setVideoForm({ advancedText })
-                        }
-                        onReset={resetVideoAdvanced}
-                      />
+                    {isImage && imageCtl.defaults ? (
+                      <ImageAdvancedSection ctl={imageCtl} />
+                    ) : !isImage && videoCtl.defaults ? (
+                      <VideoAdvancedSection ctl={videoCtl} />
                     ) : (
                       <p className="py-2 text-xs text-muted-foreground">
                         Load a model first — its advanced parameters appear
@@ -1613,16 +897,16 @@ export function VariantGallery() {
                 </Popover>
 
                 {/* Inline validation hint */}
-                {(mode === "image" ? imageDimError : videoDimError) && (
+                {(isImage ? imageCtl.dimError : videoCtl.dimError) && (
                   <span className="flex items-center gap-1 text-[11px] text-destructive">
                     <AlertCircle className="h-3 w-3" />
-                    {mode === "image" ? imageDimError : videoDimError}
+                    {isImage ? imageCtl.dimError : videoCtl.dimError}
                   </span>
                 )}
 
-                {mode === "image" && (
+                {isImage && (
                   <PromptCapacityHint
-                    pipelineType={currentImageModel?.pipeline_type}
+                    pipelineType={imageCtl.model?.pipeline_type}
                     className="w-full"
                   />
                 )}
@@ -1632,24 +916,18 @@ export function VariantGallery() {
                 <ErrorNote message={genError} onDismiss={dismissGenError} />
               )}
 
-              {mode === "image" && imageQueueNotice && (
+              {isImage && imageQueueNotice && (
                 <QueueNotice
                   message={imageQueueNotice}
                   onDismiss={clearImageQueueNotice}
                 />
               )}
             </>
-          )}
+          ) : null}
 
           {/* ══ Queue strip ══════════════════════════════════════════════ */}
-          {!packagesMissing && showQueueStrip && (
+          {!packagesMissing && !engineDown && showQueueStrip && (
             <div className="space-y-1">
-              {activeQueueCount > 0 && (
-                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Queue · {activeQueueCount} active
-                </p>
-              )}
-              {imageJobsError && <ErrorNote message={imageJobsError} />}
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {/* Fresh foreground result */}
                 {imageResult && (
@@ -1676,25 +954,12 @@ export function VariantGallery() {
                 )}
                 {/* Single active/most-recent video job */}
                 {activeJob && (
-                  <VideoJobCard
-                    job={activeJob}
-                    onDismiss={clearActiveJob}
-                    onCancel={(id) => void cancelVideoJob(id)}
-                  />
+                  <div className="w-96 shrink-0">
+                    <ActiveVideoJobCard />
+                  </div>
                 )}
-                {/* Image queue chips */}
-                {queueJobs.map((j) => (
-                  <ImageJobChip
-                    key={j.job_id}
-                    job={j}
-                    thumbUrl={imageJobThumbs[j.job_id] ?? null}
-                    onCancel={(id) => void cancelImageJob(id)}
-                    onReuseSeed={reuseImageSeed}
-                    onOpen={openJob}
-                    opening={openingJobId === j.job_id}
-                  />
-                ))}
               </div>
+              <ImageQueuePanel layout="chips" limit={12} showHeading={false} />
             </div>
           )}
         </div>
@@ -1740,9 +1005,7 @@ export function VariantGallery() {
           !libraryError && (
             <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed py-24 text-muted-foreground">
               <Sparkles className="h-10 w-10 opacity-20" />
-              <span className="text-sm font-medium">
-                Your gallery is empty
-              </span>
+              <span className="text-sm font-medium">Your gallery is empty</span>
               <span className="max-w-sm text-center text-xs">
                 Write a prompt in the composer above and hit Generate —
                 everything you create lands here, newest first.
@@ -1792,6 +1055,7 @@ export function VariantGallery() {
         getFileUrl={getFileUrl}
         onDelete={deleteItem}
         onReuseSeed={reuseSeedFromLibrary}
+        onUseAsInput={handleUseAsInputFromLibrary}
         onClose={() => setSelected(null)}
       />
 
@@ -1809,20 +1073,9 @@ export function VariantGallery() {
               Also saved to your gallery below.
             </DialogDescription>
           </DialogHeader>
-          {imageResult && (
-            <GeneratedImageView
-              result={imageResult}
-              onClear={() => {
-                clearImageResult();
-                setResultOpen(false);
-              }}
-              onReuseSeed={reuseImageSeed}
-            />
-          )}
+          {imageResult && <ImageResultPane hideIdle />}
         </DialogContent>
       </Dialog>
-
-      {lightboxElement}
     </div>
   );
 }

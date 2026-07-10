@@ -46,6 +46,17 @@ def video_models_dir() -> Path:
     return MATRX_HOME_DIR / "video-models"
 
 
+def image_loras_dir() -> Path:
+    """Installed image LoRAs: ~/.matrx/image-models/loras/<sanitized-repo-id>/.
+
+    Safe alongside model dirs: sanitized HF repo ids always contain ``--`` (an
+    org/name slash), so a model dir can never be literally named ``loras``.
+    Each LoRA dir holds the safetensors weight file, a ``lora.json`` metadata
+    sidecar, and the same ``.download-complete`` marker models use.
+    """
+    return image_models_dir() / "loras"
+
+
 def generated_videos_dir() -> Path:
     return MATRX_HOME_DIR / "generated" / "videos"
 

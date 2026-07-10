@@ -939,7 +939,21 @@ class DownloadManager:
             raise RuntimeError(f"Hugging Face repo {repo_id} lists no files")
 
         load_variant = md.get("load_variant") or None
-        files = filter_hf_repo_files(all_files, load_variant=load_variant)
+        allow_files = md.get("hf_allow_files") or None
+        if allow_files:
+            # Explicit allowlist (LoRA downloads: exactly the safetensors
+            # weight file) — bypasses the diffusers-layout filter, which would
+            # otherwise drop root-level *.safetensors as "checkpoint dups".
+            allow_set = {str(f) for f in allow_files}
+            files = [(fn, size) for fn, size in all_files if fn in allow_set]
+            missing = allow_set - {fn for fn, _ in files}
+            if missing:
+                raise RuntimeError(
+                    f"Hugging Face repo {repo_id} does not contain the "
+                    f"requested file(s): {', '.join(sorted(missing))}"
+                )
+        else:
+            files = filter_hf_repo_files(all_files, load_variant=load_variant)
         if not files:
             raise RuntimeError(
                 f"Hugging Face repo {repo_id}: file filter removed every file "

@@ -48,12 +48,16 @@ import {
   fetchVideoGenResult as apiFetchVideoGenResult,
   getImageGenParams as apiGetImageGenParams,
   getVideoGenParams as apiGetVideoGenParams,
+  listImageGenLoras as apiListImageGenLoras,
+  downloadImageGenLora as apiDownloadImageGenLora,
+  deleteImageGenLora as apiDeleteImageGenLora,
 } from "@/lib/api";
 import type {
   ImageGenStatus,
   ImageGenModelInfo,
   ImageGenWorkflowPreset,
   ImageGenJob,
+  ImageGenLoraList,
   MediaGenParams,
   MediaLoadResult,
   VideoGenStatus,
@@ -111,6 +115,12 @@ export interface ImageGenerateInput {
   width?: number;
   height?: number;
   seed?: number;
+  /** Base64-encoded input image (no data: prefix) for img2img. */
+  init_image_b64?: string;
+  /** img2img denoise strength (0..1) — how much to change the input. */
+  strength?: number;
+  /** Enabled LoRA adapters with their scales. */
+  loras?: { id: string; scale: number }[];
   /**
    * Extra diffusers pipeline kwargs (advanced settings) merged into the call.
    * Only CHANGED keys should be sent — the UI diffs against the defaults from
@@ -142,7 +152,30 @@ export interface ImageFormDefaults {
   /** Every remaining pipeline kwarg with its default (params endpoint). */
   advanced: Record<string, unknown>;
   supportsNegativePrompt: boolean;
+  /** True when the model accepts an input image (img2img). */
+  supportsImg2Img: boolean;
+  /** Model-default img2img strength (params endpoint), or null when unknown. */
+  strength: number | null;
 }
+
+/** An in-memory picked image (img2img input / video source image). */
+export interface PickedImage {
+  name: string;
+  /** Base64 without the data: prefix — exactly what the engine expects. */
+  base64: string;
+  /** data: or blob: URL for the preview thumbnail. */
+  previewUrl: string;
+}
+
+/** A LoRA selected in the generate form. Only ENABLED entries are sent. */
+export interface SelectedLora {
+  id: string;
+  scale: number;
+  enabled: boolean;
+}
+
+/** Fallback img2img strength when the params endpoint carries no default. */
+export const IMG2IMG_DEFAULT_STRENGTH = 0.6;
 
 export interface ImageFormState {
   view: MediaGenView;
@@ -159,17 +192,28 @@ export interface ImageFormState {
   /** LOUD params-endpoint failure — banner in the UI, never silent. */
   paramsError: string | null;
   defaults: ImageFormDefaults | null;
+  /** img2img input image (only sent when the model supports it). */
+  initImage: PickedImage | null;
+  /** img2img denoise strength (0..1). */
+  strength: number;
+  /** LoRA selections (persist across model switches; mismatches are warned). */
+  loras: SelectedLora[];
 }
 
-export interface VideoFormDefaults extends ImageFormDefaults {
+export interface VideoFormDefaults
+  extends Omit<ImageFormDefaults, "supportsImg2Img" | "strength"> {
   numFrames: number;
   fps: number;
 }
 
-export interface VideoFormState extends Omit<ImageFormState, "defaults"> {
+export interface VideoFormState
+  extends Omit<
+    ImageFormState,
+    "defaults" | "initImage" | "strength" | "loras"
+  > {
   numFrames: number;
   fps: number;
-  sourceImage: { name: string; base64: string; previewUrl: string } | null;
+  sourceImage: PickedImage | null;
   defaults: VideoFormDefaults | null;
 }
 
@@ -186,6 +230,9 @@ const INITIAL_IMAGE_FORM: ImageFormState = {
   paramsLoading: false,
   paramsError: null,
   defaults: null,
+  initImage: null,
+  strength: IMG2IMG_DEFAULT_STRENGTH,
+  loras: [],
 };
 
 const INITIAL_VIDEO_FORM: VideoFormState = {
@@ -252,6 +299,15 @@ export interface MediaGenState {
   imageJobsError: string | null;
   /** jobId → object URL of a completed job's image (thumbnails). */
   imageJobThumbs: Record<string, string>;
+  /** Installed + catalog LoRA adapters, or null before the first fetch. */
+  loraList: ImageGenLoraList | null;
+  /**
+   * LOUD LoRA-endpoint failure (404 until the backend lands, engine down…).
+   * The Styles (LoRA) section renders this — never a silent empty list.
+   */
+  loraError: string | null;
+  /** repo_id → DownloadManager download id for in-flight LoRA downloads. */
+  loraDownloads: Record<string, string>;
 
   // ── Video ──────────────────────────────────────────────────────────────
   videoStatus: VideoGenStatus | null;
@@ -326,6 +382,21 @@ export interface MediaGenActions {
   ) => Promise<boolean>;
   /** Cancel a queued job / remove a finished one. */
   cancelImageJob: (jobId: string) => Promise<void>;
+  // LoRA adapters
+  /** Re-fetch installed + catalog LoRAs. Failures land in loraError (loud). */
+  refreshLoras: () => Promise<void>;
+  /**
+   * Start a LoRA download (catalog entry or pasted HF repo id).  Returns the
+   * DownloadManager download id, or null on failure (loraError is set).
+   */
+  downloadLora: (repoId: string, weightName?: string) => Promise<string | null>;
+  /** Delete an installed LoRA (also drops it from the form selection). */
+  deleteLora: (loraId: string) => Promise<void>;
+  /**
+   * Route an image into the img2img input slot (the "Use as input" action on
+   * lightbox items, library cards and result views).
+   */
+  useImageAsInput: (image: PickedImage) => void;
   // Video
   refreshVideo: () => Promise<void>;
   loadVideoModel: (modelId: string) => Promise<MediaLoadResult>;
@@ -394,6 +465,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const [imageJobs, setImageJobs] = useState<ImageGenJob[]>([]);
   const [imageJobsError, setImageJobsError] = useState<string | null>(null);
   const [imageJobThumbs, setImageJobThumbs] = useState<Record<string, string>>(
+    {},
+  );
+  const [loraList, setLoraList] = useState<ImageGenLoraList | null>(null);
+  const [loraError, setLoraError] = useState<string | null>(null);
+  const [loraDownloads, setLoraDownloads] = useState<Record<string, string>>(
     {},
   );
 
@@ -559,6 +635,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
           advanced: p.advanced ?? {},
           supportsNegativePrompt:
             p.supports_negative_prompt ?? model.supports_negative_prompt,
+          supportsImg2Img: model.supports_img2img ?? false,
+          strength: p.common.strength ?? null,
         };
       } catch (e) {
         paramsError = e instanceof Error ? e.message : String(e);
@@ -571,6 +649,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
           negativePrompt: "",
           advanced: {},
           supportsNegativePrompt: model.supports_negative_prompt,
+          supportsImg2Img: model.supports_img2img ?? false,
+          strength: null,
         };
       }
       setImageFormState((prev) => ({
@@ -579,13 +659,15 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         paramsLoading: false,
         paramsError,
         defaults,
-        // Apply the new model's defaults; the prompt text is preserved.
+        // Apply the new model's defaults; the prompt text, input image and
+        // LoRA selections are preserved (mismatches are warned, not dropped).
         negativePrompt: defaults.negativePrompt,
         steps: defaults.steps,
         guidance: defaults.guidance,
         width: defaults.width,
         height: defaults.height,
         seedText: "",
+        strength: defaults.strength ?? IMG2IMG_DEFAULT_STRENGTH,
         advancedText: advancedJsonOf(defaults.advanced),
       }));
     },
@@ -604,6 +686,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         width: d.width,
         height: d.height,
         seedText: "",
+        strength: d.strength ?? IMG2IMG_DEFAULT_STRENGTH,
       };
     });
   }, []);
@@ -628,6 +711,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         width: d.width,
         height: d.height,
         seedText: "",
+        strength: d.strength ?? IMG2IMG_DEFAULT_STRENGTH,
         advancedText: advancedJsonOf(d.advanced),
       };
     });
@@ -981,6 +1065,92 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     },
     [refreshImageJobs],
   );
+
+  // ── LoRA adapters ─────────────────────────────────────────────────────────
+  const refreshLoras = useCallback(async () => {
+    const base = engine.engineUrl;
+    if (!base) {
+      setLoraError(ENGINE_NOT_CONNECTED);
+      return;
+    }
+    try {
+      const list = await apiListImageGenLoras(base);
+      setLoraList(list);
+      setLoraError(null);
+    } catch (e) {
+      // LOUD: 404 (backend not landed) / engine down land in the UI banner.
+      const msg = e instanceof Error ? e.message : String(e);
+      setLoraError(msg);
+      emitClientLog(
+        "warn",
+        `[media-gen] LoRA list fetch failed: ${msg}`,
+        "engine",
+      );
+    }
+  }, []);
+
+  const downloadLora = useCallback(
+    async (repoId: string, weightName?: string): Promise<string | null> => {
+      const base = engine.engineUrl;
+      if (!base) {
+        logEngineNotConnected("LoRA download");
+        setLoraError(ENGINE_NOT_CONNECTED_ACTION);
+        return null;
+      }
+      try {
+        const { download_id } = await apiDownloadImageGenLora(base, {
+          repo_id: repoId,
+          weight_name: weightName,
+        });
+        setLoraDownloads((prev) => ({ ...prev, [repoId]: download_id }));
+        setLoraError(null);
+        return download_id;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setLoraError(msg);
+        emitClientLog(
+          "error",
+          `[media-gen] LoRA download failed for ${repoId}: ${msg}`,
+          "engine",
+        );
+        return null;
+      }
+    },
+    [],
+  );
+
+  const deleteLora = useCallback(
+    async (loraId: string) => {
+      const base = engine.engineUrl;
+      if (!base) {
+        logEngineNotConnected("LoRA delete");
+        setLoraError(ENGINE_NOT_CONNECTED_ACTION);
+        return;
+      }
+      try {
+        await apiDeleteImageGenLora(base, loraId);
+        // Drop it from the form selection too — never send an unknown id.
+        setImageFormState((prev) => ({
+          ...prev,
+          loras: prev.loras.filter((l) => l.id !== loraId),
+        }));
+        await refreshLoras();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setLoraError(msg);
+        emitClientLog(
+          "error",
+          `[media-gen] LoRA delete failed for ${loraId}: ${msg}`,
+          "engine",
+        );
+      }
+    },
+    [refreshLoras],
+  );
+
+  const useImageAsInput = useCallback((image: PickedImage) => {
+    setImageFormState((prev) => ({ ...prev, initImage: image }));
+  }, []);
 
   // Poll the image job queue every 2s ONLY while something is queued/running.
   const hasActiveImageJobs = imageJobs.some(
@@ -1566,7 +1736,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   useEffect(() => {
     void refreshImage();
     void refreshVideo();
-  }, [refreshImage, refreshVideo]);
+    void refreshLoras();
+  }, [refreshImage, refreshVideo, refreshLoras]);
 
   // While the engine URL is not yet available, retry — engine.engineUrl is set
   // outside React state and isn't reactive.  Gated on the specific error string
@@ -1581,10 +1752,17 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       if (engine.engineUrl) {
         void refreshImage();
         void refreshVideo();
+        void refreshLoras();
       }
     }, 2500);
     return () => window.clearInterval(id);
-  }, [imageStatusError, videoStatusError, refreshImage, refreshVideo]);
+  }, [
+    imageStatusError,
+    videoStatusError,
+    refreshImage,
+    refreshVideo,
+    refreshLoras,
+  ]);
 
   // Revoke any object URLs on final unmount to avoid leaks.
   useEffect(() => {
@@ -1618,6 +1796,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     imageJobs,
     imageJobsError,
     imageJobThumbs,
+    loraList,
+    loraError,
+    loraDownloads,
     videoStatus,
     videoModels,
     videoStatusLoading,
@@ -1655,6 +1836,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       refreshImageJobs,
       enqueueImageJob,
       cancelImageJob,
+      refreshLoras,
+      downloadLora,
+      deleteLora,
+      useImageAsInput,
       refreshVideo,
       loadVideoModel,
       unloadVideoModel,
@@ -1692,6 +1877,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       refreshImageJobs,
       enqueueImageJob,
       cancelImageJob,
+      refreshLoras,
+      downloadLora,
+      deleteLora,
+      useImageAsInput,
       refreshVideo,
       loadVideoModel,
       unloadVideoModel,

@@ -9,7 +9,10 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:setup": "node e2e/setup/create-test-user.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -56,6 +59,7 @@
     "tauri-plugin-macos-permissions-api": "^2.3.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@tauri-apps/cli": "^2.2.4",
     "@types/node": "^25.3.0",
     "@types/react": "^19.0.0",

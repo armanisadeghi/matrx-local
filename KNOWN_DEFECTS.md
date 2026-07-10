@@ -286,3 +286,19 @@ Related trackers: `.matrx/AGENT_TASKS.md` (active worklist), `.arman/ARMAN_TASKS
 - **Evidence:** root `AGENT_TASKS.md` (active bugs).
 - **Status:** needs-hw-verification.
 - **Owner hint:** voice
+
+### MXL-D-028 — Supabase instance SMTP broken: public email signup fails platform-wide
+- **Area:** cross-repo / Supabase Auth (instance txzxabzwovsujtloxrus)
+- **Symptom:** `POST /auth/v1/signup` (supabase-js `auth.signUp`) fails with
+  "Error sending confirmation email" and the user creation rolls back (no row in
+  `auth.users`). Because confirm-email is enabled, ANY self-serve email signup —
+  and likely password-reset / magic-link emails — is dead on every Matrx surface.
+- **Evidence:** discovered 2026-07-10 provisioning the matrx-local E2E test
+  account (`desktop/e2e/setup/create-test-user.mjs`): two addresses, same 5xx,
+  `auth.users` empty afterward. Workaround used: direct SQL insert into
+  `auth.users`/`auth.identities` (confirmed email) + password rotation via
+  `auth.updateUser`. See `docs/UI_TESTING.md` § Credential rotation.
+- **Status:** open — fix SMTP provider in Supabase Auth settings (dashboard;
+  not fixable from this repo). Attempted to file in the matrx-feedback tracker;
+  submission was permission-blocked, so it is recorded here.
+- **Owner hint:** platform / Supabase admin (Arman)

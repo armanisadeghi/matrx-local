@@ -24,6 +24,18 @@ Supported pipeline types (see models.py):
   - "flux"                  → FluxPipeline
   - "stable-diffusion-xl"   → StableDiffusionXLPipeline
   - "stable-diffusion"      → StableDiffusionPipeline
+
+Image-to-image: when a request carries init image bytes, the loaded pipeline
+is wrapped per generation via AutoPipelineForImage2Image.from_pipe (component
+sharing — no re-load, near-zero extra memory; see _to_img2img). The init
+image is aspect-fill resized + center-cropped to the requested dims
+(prepare_init_image). The generation gate, cancel hooks, and library
+persistence cover img2img identically to text-to-image.
+
+LoRAs: applied per generation INSIDE the gate (_apply_loras) and ALWAYS
+unloaded in a finally — the pipeline is stateless across generations. LoRA
+weights are installed by the DownloadManager into
+~/.matrx/image-models/loras/ (app/services/image_gen/loras.py).
 """
 
 from __future__ import annotations
@@ -171,6 +183,134 @@ def are_packages_outdated() -> bool:
     if v is None:
         return False
     return _parse_version(v) < MIN_DIFFUSERS_VERSION
+
+
+# ── image-to-image helpers ────────────────────────────────────────────────────
+
+def prepare_init_image(image_bytes: bytes, width: int, height: int) -> Any:
+    """Decode + fit an init image to the requested dims.
+
+    Aspect-fill + center-crop (documented contract): the image is scaled so it
+    COVERS width x height (no letterboxing, no distortion), then the overflow
+    is cropped symmetrically around the center. Returns an RGB PIL image of
+    exactly (width, height). Raises ValueError on undecodable bytes.
+    """
+    import io as _io  # noqa: PLC0415
+    from PIL import Image  # noqa: PLC0415
+
+    try:
+        img = Image.open(_io.BytesIO(image_bytes))
+        img.load()
+    except Exception as exc:
+        raise ValueError(f"init image could not be decoded: {exc}") from exc
+    img = img.convert("RGB")
+    scale = max(width / img.width, height / img.height)
+    new_w = max(width, round(img.width * scale))
+    new_h = max(height, round(img.height * scale))
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    left = (new_w - width) // 2
+    top = (new_h - height) // 2
+    return img.crop((left, top, left + width, top + height))
+
+
+def _to_img2img(pipe: Any, model: "ImageGenModel") -> Any:
+    """Wrap the loaded text-to-image pipeline as its family's img2img pipeline.
+
+    Uses ``AutoPipelineForImage2Image.from_pipe`` — COMPONENT SHARING: the new
+    pipeline object reuses the exact loaded modules (transformer/unet, VAE,
+    text encoders), so there is no re-download, no re-load, and near-zero
+    extra memory. Verified per catalog family against diffusers 0.39.0
+    (task-class resolution): SD → StableDiffusionImg2ImgPipeline, SDXL →
+    StableDiffusionXLImg2ImgPipeline, flux → FluxImg2ImgPipeline, qwen-image →
+    QwenImageImg2ImgPipeline, z-image → ZImageImg2ImgPipeline, flux2-klein →
+    Flux2KleinPipeline (the unified pipeline IS its own img2img). Fallback:
+    ``DiffusionPipeline.from_pipe`` on the mapped class via the same mapping —
+    both failing is a loud error, never a silent text-to-image run.
+    """
+    from diffusers import AutoPipelineForImage2Image  # noqa: PLC0415
+
+    try:
+        return AutoPipelineForImage2Image.from_pipe(pipe)
+    except Exception as exc:  # noqa: BLE001 — fall back, then fail loudly
+        logger.warning(
+            "[image_gen] AutoPipelineForImage2Image.from_pipe failed for %s "
+            "(%s) — trying explicit task-class from_pipe",
+            model.pipeline_type, exc,
+        )
+        try:
+            from diffusers.pipelines.auto_pipeline import (  # noqa: PLC0415
+                AUTO_IMAGE2IMAGE_PIPELINES_MAPPING,
+                _get_task_class,
+            )
+            cls = _get_task_class(
+                AUTO_IMAGE2IMAGE_PIPELINES_MAPPING, type(pipe).__name__
+            )
+            return cls.from_pipe(pipe)
+        except Exception as exc2:
+            raise RuntimeError(
+                f"Image-to-image is unavailable for {model.model_id}: the "
+                f"img2img pipeline could not be constructed from the loaded "
+                f"components ({exc2})"
+            ) from exc2
+
+
+def _apply_loras(
+    call_pipe: Any, lora_specs: list[dict[str, Any]], model: "ImageGenModel"
+) -> list[dict[str, Any]]:
+    """Load + activate the requested LoRAs on ``call_pipe``. Runs INSIDE the
+    generation gate; the caller MUST pair it with unload_lora_weights() in a
+    finally (stateless per-generation — the pipeline is always left clean).
+
+    Returns the applied-lora records for the sidecar/job. Raises RuntimeError
+    naming the offending LoRA on any failure (missing install, family
+    mismatch, diffusers load error) — the generation aborts loudly.
+    """
+    from app.services.image_gen.loras import (  # noqa: PLC0415
+        check_lora_model_compat,
+        get_installed_lora,
+    )
+
+    names: list[str] = []
+    scales: list[float] = []
+    applied: list[dict[str, Any]] = []
+    for i, spec in enumerate(lora_specs):
+        lora_id = str(spec["id"])
+        scale = float(spec.get("scale", 1.0))
+        meta = get_installed_lora(lora_id)
+        if meta is None or not meta.get("installed"):
+            raise RuntimeError(
+                f"LoRA '{lora_id}' is not installed — download it first via "
+                "POST /image-gen/loras/download (GET /image-gen/loras lists "
+                "installed ids)."
+            )
+        try:
+            check_lora_model_compat(model.lora_family, meta)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        adapter = f"matrx_lora_{i}"
+        try:
+            call_pipe.load_lora_weights(
+                meta["dir"], weight_name=meta["weight_name"], adapter_name=adapter
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load LoRA '{lora_id}' ({meta['repo_id']}, "
+                f"{meta['weight_name']}): {exc}"
+            ) from exc
+        names.append(adapter)
+        scales.append(scale)
+        applied.append({
+            "id": lora_id,
+            "repo_id": meta["repo_id"],
+            "weight_name": meta["weight_name"],
+            "scale": scale,
+        })
+    call_pipe.set_adapters(names, adapter_weights=scales)
+    logger.info(
+        "[image_gen] Applied %d LoRA(s): %s",
+        len(applied), ", ".join(f"{a['id']}@{a['scale']}" for a in applied),
+    )
+    return applied
 
 
 # ── result type ───────────────────────────────────────────────────────────────
@@ -463,8 +603,21 @@ class ImageGenService:
         extra_params: dict[str, Any] | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
         job_id: str | None = None,
+        init_image_bytes: bytes | None = None,
+        strength: float | None = None,
+        loras: list[dict[str, Any]] | None = None,
     ) -> GenerationResult:
         """Generate an image. Loads the model if not already loaded.
+
+        ``init_image_bytes`` (decoded PNG/JPEG bytes) switches the run to
+        IMAGE-TO-IMAGE: the loaded pipeline is wrapped via
+        ``AutoPipelineForImage2Image.from_pipe`` (component sharing — no
+        re-load) and the init image is aspect-fill resized + center-cropped
+        to the requested dims. ``strength`` (0..1, default 0.6) is only valid
+        with an init image and only for families whose img2img accepts it
+        (all except flux2-klein). ``loras`` is a list of
+        ``{"id": <installed-lora-id>, "scale": float}`` applied inside the
+        generation gate and ALWAYS unloaded afterwards (stateless).
 
         ``extra_params`` are arbitrary pipeline kwargs merged LAST over the
         computed call kwargs — the user's values override every default, but
@@ -495,6 +648,27 @@ class ImageGenService:
         model = self.get_model(model_id)
         if model is None:
             return GenerationResult(success=False, error=f"Unknown model: {model_id}")
+
+        # img2img request-shape guards (the routes 400 these first; this is
+        # the defense-in-depth for direct service callers / the job runner).
+        if strength is not None and init_image_bytes is None:
+            return GenerationResult(
+                success=False,
+                error="strength only applies to image-to-image — provide "
+                      "init_image_b64 (an input image) or omit strength.",
+            )
+        if init_image_bytes is not None and not model.supports_img2img:
+            return GenerationResult(
+                success=False,
+                error=f"{model.name} does not support image-to-image "
+                      "(no img2img pipeline exists for this family).",
+            )
+        if strength is not None and not model.img2img_strength:
+            return GenerationResult(
+                success=False,
+                error=f"{model.name} performs reference-image editing without "
+                      "a strength control — omit strength for this model.",
+            )
 
         if self._gen_gate.locked():
             logger.info(
@@ -535,22 +709,28 @@ class ImageGenService:
                 resolved_height = height if height is not None else model.default_height
                 used_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
 
+                import functools  # noqa: PLC0415
                 loop = asyncio.get_running_loop()
                 return await loop.run_in_executor(
                     None,
-                    self._generate_sync,
-                    prompt,
-                    negative_prompt if model.supports_negative_prompt else "",
-                    resolved_steps,
-                    resolved_guidance,
-                    resolved_width,
-                    resolved_height,
-                    used_seed,
-                    model,
-                    extra_params or {},
-                    progress_callback,
-                    cancel_event,
-                    token,
+                    functools.partial(
+                        self._generate_sync,
+                        prompt,
+                        negative_prompt if model.supports_negative_prompt else "",
+                        resolved_steps,
+                        resolved_guidance,
+                        resolved_width,
+                        resolved_height,
+                        used_seed,
+                        model,
+                        extra_params or {},
+                        progress_callback,
+                        cancel_event,
+                        token,
+                        init_image_bytes=init_image_bytes,
+                        strength=strength,
+                        loras=list(loras or []),
+                    ),
                 )
             finally:
                 self._unregister_generation(token)
@@ -722,6 +902,10 @@ class ImageGenService:
         progress_callback: Callable[[int, int], None] | None = None,
         cancel_event: threading.Event | None = None,
         gen_token: str | None = None,
+        *,
+        init_image_bytes: bytes | None = None,
+        strength: float | None = None,
+        loras: list[dict[str, Any]] | None = None,
     ) -> GenerationResult:
         with self._lock:
             if self._pipeline is None:
@@ -729,6 +913,7 @@ class ImageGenService:
             pipe = self._pipeline
         if cancel_event is None:
             cancel_event = threading.Event()
+        lora_specs = list(loras or [])
 
         try:
             import torch  # noqa: PLC0415
@@ -738,12 +923,49 @@ class ImageGenService:
             device = self._device or "cpu"
             generator = torch.Generator(device=device).manual_seed(seed)
 
+            # ── img2img: wrap the SAME loaded components (no re-load) ────────
+            call_pipe = pipe
+            init_image_sha256: str | None = None
+            resolved_strength: float | None = None
+            if init_image_bytes is not None:
+                import hashlib  # noqa: PLC0415
+                init_image_sha256 = hashlib.sha256(init_image_bytes).hexdigest()
+                call_pipe = _to_img2img(pipe, model)
+                init_image = prepare_init_image(init_image_bytes, width, height)
+                if model.img2img_strength:
+                    resolved_strength = strength if strength is not None else 0.6
+                    # img2img runs ~steps*strength denoising steps — zero
+                    # effective steps is a guaranteed pipeline failure; say
+                    # so BEFORE burning a model load.
+                    if int(steps * resolved_strength) < 1:
+                        raise RuntimeError(
+                            f"steps ({steps}) x strength ({resolved_strength}) "
+                            "rounds to zero denoising steps — raise steps or "
+                            "strength so steps*strength >= 1 (e.g. steps=2 at "
+                            "strength 0.6)."
+                        )
+
             call_kwargs: dict = {
                 "prompt": prompt,
                 "num_inference_steps": steps,
                 "width": width,
                 "height": height,
             }
+            if init_image_bytes is not None:
+                call_kwargs["image"] = init_image
+                if resolved_strength is not None:
+                    call_kwargs["strength"] = resolved_strength
+                # SD/SDXL img2img pipelines take no width/height — the output
+                # size IS the (pre-resized) init image size, which we already
+                # fitted to the requested dims above.
+                try:
+                    import inspect as _inspect  # noqa: PLC0415
+                    i2i_params = _inspect.signature(call_pipe.__call__).parameters
+                    for dim_key in ("width", "height"):
+                        if dim_key not in i2i_params:
+                            call_kwargs.pop(dim_key, None)
+                except (TypeError, ValueError):
+                    pass
 
             call_kwargs["generator"] = generator
 
@@ -772,7 +994,7 @@ class ImageGenService:
                 merge_extra_params,
                 validate_pipeline_kwargs,
             )
-            validate_pipeline_kwargs(pipe, extra_params.keys())
+            validate_pipeline_kwargs(call_pipe, extra_params.keys())
             call_kwargs = merge_extra_params(call_kwargs, extra_params)
 
             # Per-step hook: job progress + mid-flight cancellation. Installed
@@ -782,7 +1004,7 @@ class ImageGenService:
             # means cancel lands when the pipeline finishes — reported via
             # mid_flight=false on the cancel endpoints.
             hook_mode = install_cancel_hook(
-                pipe,
+                call_pipe,
                 call_kwargs,
                 cancel_event=cancel_event,
                 total_steps=steps,
@@ -797,18 +1019,37 @@ class ImageGenService:
             if cancel_event.is_set():
                 raise GenerationCancelled("Cancelled before the pipeline started")
 
+            # LoRAs load + activate INSIDE the gate and are ALWAYS unloaded in
+            # the finally below — every generation starts and ends with a
+            # clean, adapter-free pipeline (stateless per-generation). A
+            # failed load aborts the generation loudly, naming the LoRA.
+            applied_loras: list[dict[str, Any]] = []
             t0 = time.monotonic()
             try:
-                output = pipe(**call_kwargs)
-            except (TypeError, ValueError) as exc:
-                if extra_params:
-                    # Loud recovery: name the user's parameters instead of
-                    # silently stripping them or surfacing a bare traceback.
-                    raise RuntimeError(
-                        "The pipeline rejected the generation parameters "
-                        f"(extra_params: {', '.join(sorted(extra_params))}) — {exc}"
-                    ) from exc
-                raise
+                if lora_specs:
+                    applied_loras = _apply_loras(call_pipe, lora_specs, model)
+                try:
+                    output = call_pipe(**call_kwargs)
+                except (TypeError, ValueError) as exc:
+                    if extra_params:
+                        # Loud recovery: name the user's parameters instead of
+                        # silently stripping them or surfacing a bare traceback.
+                        raise RuntimeError(
+                            "The pipeline rejected the generation parameters "
+                            f"(extra_params: {', '.join(sorted(extra_params))}) — {exc}"
+                        ) from exc
+                    raise
+            finally:
+                if lora_specs:
+                    try:
+                        call_pipe.unload_lora_weights()
+                    except Exception as unload_exc:  # noqa: BLE001 — must not mask the real failure
+                        logger.error(
+                            "[image_gen] Failed to unload LoRA weights after "
+                            "generation — the pipeline may retain adapters "
+                            "until the model is reloaded: %s",
+                            unload_exc, exc_info=True,
+                        )
             elapsed = time.monotonic() - t0
 
             # A cancel that landed on the final step (or against a pipeline
@@ -852,9 +1093,17 @@ class ImageGenService:
             record_params = {
                 k: v for k, v in call_kwargs.items()
                 if k not in (
-                    "generator", "callback_on_step_end", "callback", "callback_steps",
+                    # "image" (the init PIL image) is deliberately NOT
+                    # persisted — the sidecar notes init_image_sha256 instead.
+                    "generator", "callback_on_step_end", "callback",
+                    "callback_steps", "image",
                 )
             }
+            record_params["has_init_image"] = init_image_bytes is not None
+            if init_image_sha256 is not None:
+                record_params["init_image_sha256"] = init_image_sha256
+            if applied_loras:
+                record_params["loras"] = applied_loras
             item = save_generated_image(
                 png_bytes,
                 model_id=model.model_id,

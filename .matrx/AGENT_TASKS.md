@@ -53,6 +53,33 @@ _(none)_
 
 ## Active
 
+- [ ] **img2img + LoRA follow-ups (added 2026-07-10, image-gen img2img/LoRA
+  build)** — shipped: `init_image_b64`/`strength`/`loras` on
+  /image-gen/generate + /image-gen/jobs, `supports_img2img`/`img2img_strength`/
+  `lora_family` in the model catalog, /image-gen/loras endpoints (list +
+  DownloadManager-routed download + delete), curated 5-entry LoRA catalog
+  (all verified against live HF metadata 2026-07-10), smoke suite
+  `tests/smoke/test_media_gen_img2img_lora.py` (22 tests). Remaining:
+  - [ ] Live GPU verification per family: run a real img2img generation on
+    each downloaded model (sdxl-turbo, FLUX.2-klein, Z-Image, FLUX.1-schnell,
+    Qwen-Image). Smoke tests cover routing/contracts with stub pipelines
+    only; `AutoPipelineForImage2Image.from_pipe` task-class resolution was
+    verified statically against diffusers 0.39.0/0.37.1 but not executed
+    with real weights.
+  - [ ] Live LoRA verification: download `latent-consistency/lcm-lora-sdxl`
+    and generate on sdxl-turbo; confirm adapter effect + clean unload. Note:
+    catalog FLUX LoRAs are trained on FLUX.1-dev — compatibility with our
+    FLUX.1-schnell is family-plausible but unproven.
+  - [ ] Desktop UI (out of scope for the Python-only build): img2img
+    drop-zone + strength slider + LoRA picker in the Image tab, wired to the
+    new request fields and /image-gen/loras.
+  - [ ] DELETE /image-gen/loras/{id} while its download is still active is
+    not blocked (the manager will fail the entry loudly, but a 409 with a
+    clear message would be nicer).
+  - [ ] flux2-klein img2img is unified reference-image editing (no strength
+    knob) — surface an "edit mode" label in the UI so users don't expect
+    SD-style partial-denoise behavior.
+
 - [ ] **Heartbeat never bumps `app_instances.tunnel_updated_at` (discovered
   2026-07-10, Phase 7 remote-control audit)** —
   `app/services/cloud_sync/settings_sync.py::heartbeat` re-asserts

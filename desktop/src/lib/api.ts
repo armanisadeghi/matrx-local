@@ -3685,6 +3685,12 @@ export interface ImageGenModelInfo {
   hardware_ok: boolean;
   /** Human-readable reason when `hardware_ok` is false. */
   hardware_reason: string | null;
+  /**
+   * True when the model can take an input image (img2img).  Optional until
+   * every engine build reports it — the UI hides the input-image controls
+   * when absent/false, never guesses.
+   */
+  supports_img2img?: boolean;
 }
 
 export interface ImageGenWorkflowPreset {
@@ -3769,6 +3775,8 @@ export interface MediaGenCommonParams {
   seed?: number | null;
   num_frames?: number;
   fps?: number;
+  /** img2img denoise strength default (0..1) — present when supported. */
+  strength?: number;
 }
 
 export interface MediaGenParams {
@@ -4046,6 +4054,12 @@ export async function generateImage(
     width?: number;
     height?: number;
     seed?: number;
+    /** Base64-encoded input image (no data: prefix) for img2img. */
+    init_image_b64?: string;
+    /** img2img denoise strength (0..1) — how much to change the input. */
+    strength?: number;
+    /** LoRA adapters to apply, each with its scale. */
+    loras?: { id: string; scale: number }[];
     /** Extra pipeline kwargs merged into the diffusers call (user wins). */
     extra_params?: Record<string, unknown>;
   },
@@ -4190,6 +4204,58 @@ export async function cancelImageGenJob(
 ): Promise<void> {
   await imageGenFetch<unknown>(
     imageGenUrl(baseUrl, `/jobs/${encodeURIComponent(jobId)}`),
+    { method: "DELETE" },
+  );
+}
+
+// ── Image-gen LoRA adapters ──────────────────────────────────────────────────
+
+export interface ImageGenLoraInfo {
+  id: string;
+  repo_id: string;
+  weight_name: string | null;
+  /** Base model family this LoRA was trained for (e.g. "sdxl", "flux"). */
+  base_family: string;
+  size_bytes: number;
+  added_at: string | null;
+  /** Catalog entries the engine has not verified may carry this flag. */
+  unverified?: boolean;
+}
+
+export interface ImageGenLoraList {
+  installed: ImageGenLoraInfo[];
+  catalog: ImageGenLoraInfo[];
+}
+
+/** GET /image-gen/loras — installed + downloadable catalog. 404 → throws (backend not landed yet; callers surface it LOUDLY). */
+export async function listImageGenLoras(
+  baseUrl: string,
+): Promise<ImageGenLoraList> {
+  return imageGenFetch<ImageGenLoraList>(imageGenUrl(baseUrl, "/loras"));
+}
+
+/**
+ * POST /image-gen/loras/download — starts a DownloadManager download for a
+ * LoRA (catalog entry or pasted HF repo id). Progress arrives via the
+ * universal downloads SSE; the returned id joins it to a specific entry.
+ */
+export async function downloadImageGenLora(
+  baseUrl: string,
+  req: { repo_id: string; weight_name?: string },
+): Promise<{ download_id: string }> {
+  return imageGenFetch<{ download_id: string }>(
+    imageGenUrl(baseUrl, "/loras/download"),
+    { method: "POST", body: JSON.stringify(req) },
+  );
+}
+
+/** DELETE /image-gen/loras/{id} — remove an installed LoRA from disk. */
+export async function deleteImageGenLora(
+  baseUrl: string,
+  loraId: string,
+): Promise<void> {
+  await imageGenFetch<unknown>(
+    imageGenUrl(baseUrl, `/loras/${encodeURIComponent(loraId)}`),
     { method: "DELETE" },
   );
 }

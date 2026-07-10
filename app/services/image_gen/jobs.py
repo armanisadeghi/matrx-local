@@ -60,6 +60,15 @@ class ImageJob:
     height: int | None = None
     seed: int | None = None
     """Requested seed; replaced by the CONCRETE seed once the job runs."""
+    has_init_image: bool = False
+    """True for image-to-image jobs. The init image BYTES are held in memory
+    by the store (never persisted to jobs.json — only the sha256 is); a
+    restart fails in-flight/queued jobs anyway, so nothing is lost."""
+    init_image_sha256: str | None = None
+    strength: float | None = None
+    """img2img denoising strength (0..1); None for text-to-image jobs."""
+    loras: list[dict[str, Any]] = field(default_factory=list)
+    """Requested LoRAs: [{"id": <installed-lora-id>, "scale": float}]."""
     extra_params: dict[str, Any] = field(default_factory=dict)
     status: ImageJobStatus = "queued"
     progress: float = 0.0
@@ -105,6 +114,11 @@ class ImageJobStore:
         self._jobs: dict[str, ImageJob] = {}
         self._order: list[str] = []  # newest last
         self._loaded = False
+        # Init-image bytes for queued img2img jobs, keyed by job_id. In-memory
+        # ONLY (never in jobs.json — the sidecar/job record carry the sha256).
+        # Taken (removed) by the runner when the job starts; dropped when a
+        # queued job is cancelled.
+        self._init_images: dict[str, bytes] = {}
 
     # ── persistence ───────────────────────────────────────────────────────────
 
@@ -179,6 +193,18 @@ class ImageJobStore:
     def get(self, job_id: str) -> ImageJob | None:
         with self._lock:
             return self._jobs.get(job_id)
+
+    # ── init-image stash (img2img jobs) ──────────────────────────────────────
+
+    def stash_init_image(self, job_id: str, image_bytes: bytes) -> None:
+        with self._lock:
+            self._init_images[job_id] = image_bytes
+
+    def take_init_image(self, job_id: str) -> bytes | None:
+        """Remove + return the stashed init image (the runner calls this once
+        when the job starts). None for text-to-image jobs."""
+        with self._lock:
+            return self._init_images.pop(job_id, None)
 
     def recent(self, limit: int = 50) -> list[ImageJob]:
         with self._lock:
@@ -288,12 +314,14 @@ class ImageJobStore:
             if job.status == "queued":
                 job.status = "cancelled"
                 job.finished_at = time.time()
+                self._init_images.pop(job_id, None)  # never runs — drop bytes
                 self._persist_locked()
                 return "cancelled"
             if job.status == "running":
                 return "running"
             del self._jobs[job_id]
             self._order.remove(job_id)
+            self._init_images.pop(job_id, None)
             self._persist_locked()
             return "removed"
 
@@ -375,6 +403,9 @@ class ImageJobRunner:
                     height=job.height,
                     seed=used_seed,
                     extra_params=job.extra_params,
+                    init_image_bytes=self._store.take_init_image(job_id),
+                    strength=job.strength,
+                    loras=job.loras,
                     progress_callback=lambda step, total: self._store.update_progress(
                         job_id, step, total
                     ),

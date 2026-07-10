@@ -84,6 +84,26 @@ class ImageGenModel:
     requires_hf_token: bool = False
     """Whether a HF token is needed to download this model."""
 
+    supports_img2img: bool = False
+    """Whether the family has an image-to-image pipeline in diffusers (>=0.37,
+    verified against 0.39.0, July 2026). When true, POST /image-gen/generate
+    and /image-gen/jobs accept ``init_image_b64`` (+ ``strength``); the service
+    wraps the loaded pipeline via ``AutoPipelineForImage2Image.from_pipe``
+    (component sharing — no re-load, near-zero extra memory)."""
+
+    img2img_strength: bool = True
+    """Whether the family's img2img call accepts a ``strength`` knob. False for
+    flux2-klein: ``Flux2KleinPipeline`` is its own unified generate+edit
+    pipeline (AutoPipelineForImage2Image maps flux2-klein → Flux2KleinPipeline)
+    that conditions on reference image(s) with NO strength parameter —
+    sending strength for it fails loudly instead of being silently dropped.
+    Only meaningful when ``supports_img2img`` is true."""
+
+    lora_family: str = "unknown"
+    """LoRA-compatibility family of the base model ("sdxl" | "sd15" | "flux" |
+    "flux2" | "qwen" | "z-image"). A LoRA whose detected base_family is known
+    and differs from this fails loudly BEFORE any weights load."""
+
     tags: list[str] = field(default_factory=list)
 
 
@@ -114,6 +134,13 @@ IMAGE_GEN_MODELS: list[ImageGenModel] = [
         # Verified filtered size (HfApi, July 2026): 15.98 GB — transformer
         # 7.75 + text_encoder 8.05 + vae 0.17 (root single-file dup excluded).
         download_size_gb=16.0,
+        # img2img: AutoPipelineForImage2Image maps flux2-klein →
+        # Flux2KleinPipeline itself (verified, diffusers 0.39.0): the SAME
+        # unified pipeline accepts a reference `image` for editing but has NO
+        # `strength` parameter — hence img2img_strength=False.
+        supports_img2img=True,
+        img2img_strength=False,
+        lora_family="flux2",
         tags=["default", "fast", "high-quality", "apache-2.0"],
     ),
     # ── Z-Image Turbo — 6B photorealism + text rendering, 8 steps ─────────────
@@ -138,6 +165,10 @@ IMAGE_GEN_MODELS: list[ImageGenModel] = [
         # Verified filtered size (HfApi, July 2026): 32.85 GB — the repo ships
         # a single (fp32-shard) weight format, so no variant can shrink it.
         download_size_gb=32.9,
+        # ZImageImg2ImgPipeline exists in diffusers 0.37.1 AND 0.39.0
+        # (verified) with image + strength.
+        supports_img2img=True,
+        lora_family="z-image",
         tags=["photorealism", "text-rendering", "apache-2.0"],
     ),
     # ── Qwen-Image — 20B flagship, heavy: gate on 48GB unified / 24GB VRAM ────
@@ -162,6 +193,10 @@ IMAGE_GEN_MODELS: list[ImageGenModel] = [
         # Verified filtered size (HfApi, July 2026): 57.70 GB — single weight
         # format (no duplicates to filter beyond docs).
         download_size_gb=57.8,
+        # QwenImageImg2ImgPipeline exists in diffusers 0.37.1 AND 0.39.0
+        # (verified) with image + strength + true_cfg_scale.
+        supports_img2img=True,
+        lora_family="qwen",
         tags=["flagship", "text-rendering", "heavy", "apache-2.0"],
     ),
     # ── FLUX.1-schnell — legacy fast option, kept for compatibility ───────────
@@ -184,6 +219,9 @@ IMAGE_GEN_MODELS: list[ImageGenModel] = [
         # Verified filtered size (HfApi, July 2026): 33.73 GB — root
         # flux1-schnell.safetensors + ae.safetensors dups (24 GB) excluded.
         download_size_gb=33.8,
+        # FluxImg2ImgPipeline (verified 0.37.1 + 0.39.0): image + strength.
+        supports_img2img=True,
+        lora_family="flux",
         tags=["fast", "legacy", "apache-2.0"],
     ),
     # ── SDXL-Turbo — instant previews on modest hardware ──────────────────────
@@ -210,6 +248,14 @@ IMAGE_GEN_MODELS: list[ImageGenModel] = [
         # single-file checkpoint). fp16 halves the download and matches the
         # bf16/fp16 dtype we load with anyway.
         load_variant="fp16",
+        # StableDiffusionXLImg2ImgPipeline (verified 0.37.1 + 0.39.0). NOTE:
+        # SD/SDXL img2img take no width/height — the service pre-resizes the
+        # init image to the requested dims (aspect-fill + center-crop), and
+        # img2img runs ~steps*strength denoising steps, so steps*strength must
+        # be >= 1 (the service enforces this loudly; for this 1-step model
+        # use steps=2 with the default strength 0.6).
+        supports_img2img=True,
+        lora_family="sdxl",
         tags=["fast", "preview", "1-step"],
     ),
 ]

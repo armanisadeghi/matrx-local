@@ -22,6 +22,7 @@ import {
   ChevronRight,
   Copy,
   Download,
+  ImagePlus,
   Info,
   Maximize,
   Maximize2,
@@ -188,6 +189,7 @@ export function MediaLightbox({
   onClose,
   onReuseSeed,
   onDelete,
+  onUseAsInput,
 }: {
   open: boolean;
   items: LightboxItem[];
@@ -195,6 +197,8 @@ export function MediaLightbox({
   onClose: () => void;
   onReuseSeed?: (seed: number) => void;
   onDelete?: (id: string) => void;
+  /** "Use as input" (img2img) action for image items. */
+  onUseAsInput?: (item: LightboxItem) => void;
 }): JSX.Element | null {
   const [index, setIndex] = useState(0);
   const [scale, setScale] = useState(1);
@@ -555,6 +559,15 @@ export function MediaLightbox({
               title={`Reuse seed ${current.seed}`}
             >
               <Sprout className="h-4 w-4" />
+            </BarButton>
+          )}
+          {onUseAsInput && current.kind === "image" && (
+            <BarButton
+              onClick={() => onUseAsInput(current)}
+              label="Use as input image"
+              title="Use as the img2img input image"
+            >
+              <ImagePlus className="h-4 w-4" />
             </BarButton>
           )}
           {onDelete &&

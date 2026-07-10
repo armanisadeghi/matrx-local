@@ -19,6 +19,7 @@ import {
   Copy,
   Dices,
   Download,
+  ImagePlus,
   ListPlus,
   Loader2,
   Maximize2,
@@ -36,6 +37,8 @@ import type { GeneratedImageResult } from "@/hooks/use-media-gen";
 import type { ImageGenJob } from "@/lib/api";
 import { engine, fetchMediaLibraryFile } from "@/lib/api";
 import { emitClientLog } from "@/hooks/use-unified-log";
+import { useMediaGenApp } from "@/contexts/MediaGenContext";
+import { pickedImageFromUrl } from "@/components/media-gen/core/pickedImage";
 import { MediaLightbox } from "@/components/media-gen/MediaLightbox";
 import type { LightboxItem } from "@/components/media-gen/MediaLightbox";
 
@@ -999,6 +1002,7 @@ export function GeneratedImageView({
   prompt,
   meta,
   onOpenLightbox,
+  onUseAsInput,
 }: {
   result: GeneratedImageResult;
   onClear?: () => void;
@@ -1010,6 +1014,8 @@ export function GeneratedImageView({
   meta?: Record<string, unknown>;
   /** Overrides the click-to-expand behavior (e.g. multi-item lightbox). */
   onOpenLightbox?: () => void;
+  /** Routes this result into the img2img input slot. */
+  onUseAsInput?: () => void;
 }) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const lightboxItems = useMemo<LightboxItem[]>(
@@ -1058,6 +1064,7 @@ export function GeneratedImageView({
           items={lightboxItems}
           onClose={() => setLightboxOpen(false)}
           onReuseSeed={onReuseSeed}
+          onUseAsInput={onUseAsInput ? () => onUseAsInput() : undefined}
         />
       )}
       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground flex-wrap">
@@ -1073,6 +1080,17 @@ export function GeneratedImageView({
           {onClear && (
             <Button size="sm" variant="ghost" onClick={onClear}>
               Clear
+            </Button>
+          )}
+          {onUseAsInput && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onUseAsInput}
+              title="Use this image as the img2img input"
+            >
+              <ImagePlus className="h-3.5 w-3.5 mr-1.5" />
+              Use as input
             </Button>
           )}
           <Button
@@ -1239,6 +1257,24 @@ export function useImageJobLightbox({
 
   const closeLightbox = useCallback(() => setLightbox(null), []);
 
+  // "Use as input": route the viewed image into the img2img input slot.
+  const [, mediaGenActions] = useMediaGenApp();
+  const { useImageAsInput } = mediaGenActions;
+  const handleUseAsInput = useCallback(
+    (item: LightboxItem) => {
+      void pickedImageFromUrl(item.url, `${item.id}.png`, (msg) =>
+        emitClientLog(
+          "error",
+          `[media-gen] use-as-input failed for ${item.id}: ${msg}`,
+          "engine",
+        ),
+      ).then((img) => {
+        if (img) useImageAsInput(img);
+      });
+    },
+    [useImageAsInput],
+  );
+
   const lightboxElement = (
     <MediaLightbox
       open={lightbox !== null}
@@ -1246,6 +1282,7 @@ export function useImageJobLightbox({
       startIndex={lightbox?.index ?? 0}
       onClose={closeLightbox}
       onReuseSeed={onReuseSeed}
+      onUseAsInput={handleUseAsInput}
     />
   );
 

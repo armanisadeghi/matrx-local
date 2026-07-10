@@ -172,14 +172,18 @@ _(none)_
   Qwen3-8B and Mid2 → Phi-4-reasoning-plus; added Phi-4-mini-reasoning.
   Full NER plan: `docs/GLINER_NER_INTEGRATION_PLAN.md` + TASK-001 (Arman gate).
 
-- [ ] **pytest engine fixture kills live dev engines** — `tests/conftest.py`
-  spawns a real engine whose `preflight.clean_orphans()` sweeps ALL
-  engine-pattern processes except its own ancestry, SIGKILLing any running
-  dev engine on the machine; the smoke suite's session teardown pkill is
-  similarly broad. Also the fixture's 40s boot wait exceeds the 30s pytest
-  timeout, so the spawned test engine times out anyway. Confirmed twice
-  live on 2026-07-09 during the media-gen overhaul. Fixture needs
-  ancestry-scoped cleanup + a longer/boot-aware timeout.
+- [x] **pytest engine fixture kills live dev engines (fixed 2026-07-10)** —
+  `tests/conftest.py` spawned a real engine whose `preflight.clean_orphans()`
+  swept ALL engine-pattern processes, SIGKILLing live dev engines (confirmed
+  twice 2026-07-09); it also clobbered the real `~/.matrx/local.json`, and
+  its 40s boot wait exceeded the 30s pytest timeout. Fixed: run.py honors
+  `MATRX_SKIP_ORPHAN_SCAN=1` (loud skip of clean_orphans, set by the
+  fixture); fixture isolates `MATRX_HOME_DIR` to a session tmp dir (model
+  dirs symlinked read-through); teardown is PID-scoped to the spawned tree
+  only (never patterns/ports); boot wait 60s with
+  `timeout_func_only = true` in tests/pytest.ini so fixture setup is
+  excluded from the 30s per-test timer. Verified: full smoke+parity green
+  with a live packaged engine on 22140 untouched.
 
 ### Bug-hunt wave 1 — deferred items (2026-06-11 full-system audit)
 A comprehensive audit fixed ~150 verified bugs (see commits 9ca5652..ab1f3c8).

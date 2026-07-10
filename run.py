@@ -651,7 +651,21 @@ def main() -> None:
     )
     try:
         from app.preflight import clean_orphans, assign_engine_port
-        clean_orphans()
+        if os.environ.get("MATRX_SKIP_ORPHAN_SCAN") == "1":
+            # Test/isolated mode: this instance must NEVER touch other
+            # processes on the machine. The pytest engine fixture sets this
+            # (tests/conftest.py) so a test-spawned engine cannot kill a live
+            # dev engine — clean_orphans() pattern-matches ALL matrx engines
+            # system-wide and the live-owner health probe is not a guarantee.
+            # Loud by design: if you see this line outside a test run,
+            # something is misconfigured.
+            print(
+                "[phase:preflight] MATRX_SKIP_ORPHAN_SCAN=1 — SKIPPING orphan "
+                "sweep (isolated/test instance; no system processes touched)",
+                flush=True,
+            )
+        else:
+            clean_orphans()
     except Exception:
         # Preflight must never block startup. Fall back to direct port bind
         # and rely on the port scan below if the orphan sweep failed.

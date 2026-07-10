@@ -55,6 +55,24 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _normalize_note_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Map canonical remote columns back to the sync engine's vocabulary.
+
+    The remote table soft-deletes via ``deleted_at`` (timestamptz, null = live)
+    while the sync engine and local SQLite speak ``is_deleted`` (bool). The
+    2026-06 workbench repoint mapped the WRITE side (soft_delete_note PATCHes
+    ``deleted_at``) but not the READ side, so ``note.get("is_deleted")`` in
+    SyncEngine._pull_note was always falsy against real remote rows — remote
+    soft-deletes stopped propagating and pulled deleted notes back to disk as
+    live content (the exact resurrection bug 9ca565245 fixed). Every read path
+    that returns note rows to the engine must pass through here.
+    See docs/SYNC_CONTRACT.md (tombstones).
+    """
+    if "deleted_at" in row and "is_deleted" not in row:
+        row["is_deleted"] = row.get("deleted_at") is not None
+    return row
+
+
 class SupabaseDocClient:
     """Thin wrapper around Supabase PostgREST for the notes/documents tables."""
 
@@ -195,14 +213,15 @@ class SupabaseDocClient:
             params["folder_id"] = f"eq.{folder_id}"
         if search:
             params["or"] = f"(label.ilike.%{search}%,content.ilike.%{search}%)"
-        return await self._request("GET", "notes", params=params, schema=_WORKBENCH)
+        rows = await self._request("GET", "notes", params=params, schema=_WORKBENCH)
+        return [_normalize_note_row(r) for r in rows]
 
     async def get_note(self, note_id: str) -> dict[str, Any] | None:
         try:
             rows = await self._request(
                 "GET", "notes", params={"id": f"eq.{note_id}"}, schema=_WORKBENCH
             )
-            return rows[0] if rows else None
+            return _normalize_note_row(rows[0]) if rows else None
         except Exception:
             logger.debug("get_note(%s) returned no result", note_id, exc_info=True)
             return None
@@ -538,8 +557,15 @@ class SupabaseDocClient:
     async def get_notes_since(
         self, user_id: str, since_version: int
     ) -> list[dict[str, Any]]:
-        """Get all notes updated since a given sync_version."""
-        return await self._request(
+        """Get all notes updated since a given sync_version.
+
+        Includes soft-deleted rows on purpose: the cloud-side
+        ``trigger_notes_sync_version`` (BEFORE UPDATE) bumps ``sync_version``
+        on every update including the ``deleted_at`` PATCH, so remote
+        deletions ride the same incremental checkpoint as edits and propagate
+        via pull_changes → _pull_note's tombstone branch.
+        """
+        rows = await self._request(
             "GET",
             "notes",
             params={
@@ -549,9 +575,16 @@ class SupabaseDocClient:
             },
             schema=_WORKBENCH,
         )
+        return [_normalize_note_row(r) for r in rows]
 
     async def get_all_notes_with_hashes(self, user_id: str) -> list[dict[str, Any]]:
-        """Get id, file_path, content_hash, sync_version for all notes."""
+        """Get id, file_path, content_hash, sync_version for all LIVE notes.
+
+        Deliberately excludes soft-deleted rows (``deleted_at`` non-null), so
+        full_sync's remote set never resurrects deleted notes. Remote deletions
+        propagate through the incremental path (get_notes_since → _pull_note),
+        not through this snapshot. See docs/SYNC_CONTRACT.md.
+        """
         return await self._request(
             "GET",
             "notes",

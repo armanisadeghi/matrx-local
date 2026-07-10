@@ -34,6 +34,7 @@ try:
     import app.common  # noqa: F401  (see ordering note above)
 
     from app.services.documents.file_manager import content_hash
+    from app.services.documents.supabase_client import _normalize_note_row
     from app.services.documents.sync_engine import SyncEngine, _note_id_for_path
 except Exception as exc:  # pragma: no cover — env-dependent import guard
     pytest.skip(
@@ -400,6 +401,28 @@ def test_pull_of_remote_soft_delete_propagates_deletion(engine: SyncEngine) -> N
 
 def test_pull_without_user_returns_none(engine: SyncEngine) -> None:
     assert _run(engine.pull_note("whatever")) is None
+
+
+def test_normalize_note_row_maps_deleted_at_to_is_deleted() -> None:
+    """Wire-boundary tombstone mapping (docs/SYNC_CONTRACT.md).
+
+    The remote workbench.notes table soft-deletes via ``deleted_at``; the
+    engine's tombstone branch checks ``is_deleted``. Every remote read path
+    must normalize, or remote deletions silently resurrect on pull (the
+    regression the 2026-06 workbench repoint introduced)."""
+    assert _normalize_note_row({"id": "n", "deleted_at": None})["is_deleted"] is False
+    assert (
+        _normalize_note_row({"id": "n", "deleted_at": "2026-07-10T00:00:00Z"})[
+            "is_deleted"
+        ]
+        is True
+    )
+    # Rows that already carry is_deleted (fakes, legacy) are left untouched.
+    assert _normalize_note_row({"id": "n", "is_deleted": True, "deleted_at": None})[
+        "is_deleted"
+    ] is True
+    # Rows without either column (narrow selects) gain nothing.
+    assert "is_deleted" not in _normalize_note_row({"id": "n"})
 
 
 # ---------------------------------------------------------------------------

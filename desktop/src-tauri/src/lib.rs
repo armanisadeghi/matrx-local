@@ -980,7 +980,11 @@ async fn sidecar_status(state: tauri::State<'_, SidecarState>) -> Result<Sidecar
     };
     Ok(SidecarStatus {
         running,
-        port: 22140,
+        // Real port from the engine's discovery file (~/.matrx/local.json);
+        // 22140 is only the fallback when the file isn't readable yet. The
+        // engine auto-scans 22140–22159, so hardcoding lied whenever 22140
+        // was already taken.
+        port: read_engine_port_from_discovery().unwrap_or(22140),
     })
 }
 

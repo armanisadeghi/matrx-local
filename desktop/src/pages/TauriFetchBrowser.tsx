@@ -16,7 +16,7 @@
  * Scraping: The raw bytes returned by proxy_fetch can be parsed directly —
  * no network round-trip, no rate limit, instant.
  */
-import { useState, useRef, useCallback, KeyboardEvent, useEffect } from "react";
+import { useState, useRef, useCallback, type KeyboardEvent, useEffect } from "react";
 import {
     ChevronLeft,
     ChevronRight,

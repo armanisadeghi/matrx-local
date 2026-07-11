@@ -495,11 +495,10 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
 
   useEffect(() => {
     if (!isVisible) return;
-    if (activeTab === "terminals") {
-      fetchTerminals();
-      const iv = setInterval(fetchTerminals, 15000);
-      return () => clearInterval(iv);
-    }
+    if (activeTab !== "terminals") return;
+    fetchTerminals();
+    const iv = setInterval(fetchTerminals, 15000);
+    return () => clearInterval(iv);
   }, [activeTab, fetchTerminals, isVisible]);
 
   const handleKill = async (force: boolean) => {

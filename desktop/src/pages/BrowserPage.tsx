@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, KeyboardEvent } from "react";
+import { useState, useRef, useCallback, type KeyboardEvent } from "react";
 import { ChevronLeft, ChevronRight, RefreshCw, ExternalLink } from "lucide-react";
 
 const DEFAULT_URL = "https://www.aimatrx.com";

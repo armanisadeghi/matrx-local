@@ -76,13 +76,13 @@ export function WakeWordActivePopup({
 
   // Animate in when visible becomes true; reset when hidden so re-show animates again.
   useEffect(() => {
-    if (visible) {
-      setIsEntering(true);
-      const id = setTimeout(() => setIsEntering(false), 300);
-      return () => clearTimeout(id);
-    } else {
+    if (!visible) {
       setIsEntering(false);
+      return;
     }
+    setIsEntering(true);
+    const id = setTimeout(() => setIsEntering(false), 300);
+    return () => clearTimeout(id);
   }, [visible]);
 
   // Auto-scroll transcript

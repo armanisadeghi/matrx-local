@@ -617,7 +617,7 @@ function CustomModelRow({ onAdded }: { onAdded: () => void }) {
     try {
       const segments = new URL(u).pathname.split("/");
       const last = segments[segments.length - 1];
-      if (last.endsWith(".gguf")) return last;
+      if (last && last.endsWith(".gguf")) return last;
     } catch {
       /* ignore */
     }
@@ -1422,12 +1422,15 @@ function ModelRow({
 
   const [selectedVariantIdx, setSelectedVariantIdx] = useState<number>(0);
   const hasVariants = model.variants && model.variants.length > 1;
+  const selectedVariant = hasVariants
+    ? model.variants[selectedVariantIdx]
+    : undefined;
 
-  const effectiveFilename = hasVariants
-    ? model.variants[selectedVariantIdx].filename
+  const effectiveFilename = selectedVariant
+    ? selectedVariant.filename
     : model.filename;
-  const effectiveIsSplit = hasVariants
-    ? model.variants[selectedVariantIdx].is_split
+  const effectiveIsSplit = selectedVariant
+    ? selectedVariant.is_split
     : model.is_split;
   // Split models only count as downloaded when every part is present —
   // otherwise an incomplete download would show as "Downloaded" and could
@@ -1542,15 +1545,15 @@ function ModelRow({
 
         {/* Size */}
         <span className="text-xs text-foreground/80 text-right tabular-nums">
-          {hasVariants
-            ? `${model.variants[selectedVariantIdx].disk_size_gb.toFixed(1)} GB`
+          {selectedVariant
+            ? `${selectedVariant.disk_size_gb.toFixed(1)} GB`
             : `${model.disk_size_gb.toFixed(1)} GB`}
         </span>
 
         {/* RAM */}
         <span className="text-xs text-foreground/80 text-right tabular-nums">
-          {hasVariants
-            ? `${model.variants[selectedVariantIdx].ram_required_gb.toFixed(0)} GB`
+          {selectedVariant
+            ? `${selectedVariant.ram_required_gb.toFixed(0)} GB`
             : `${model.ram_required_gb.toFixed(0)} GB`}
         </span>
 
@@ -1609,15 +1612,14 @@ function ModelRow({
               className="h-7 w-7 p-0 text-destructive hover:text-destructive/80"
               onClick={() => {
                 onClearDownloadError?.(effectiveFilename);
-                if (hasVariants) {
-                  const v = model.variants[selectedVariantIdx];
+                if (selectedVariant) {
                   onDownload(
                     {
                       ...model,
-                      filename: v.filename,
-                      hf_url: v.hf_url,
-                      hf_parts: v.hf_parts,
-                      all_part_urls: v.all_part_urls,
+                      filename: selectedVariant.filename,
+                      hf_url: selectedVariant.hf_url,
+                      hf_parts: selectedVariant.hf_parts,
+                      all_part_urls: selectedVariant.all_part_urls,
                     },
                     false,
                   );
@@ -1635,15 +1637,14 @@ function ModelRow({
               variant="ghost"
               className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
               onClick={() => {
-                if (hasVariants) {
-                  const v = model.variants[selectedVariantIdx];
+                if (selectedVariant) {
                   onDownload(
                     {
                       ...model,
-                      filename: v.filename,
-                      hf_url: v.hf_url,
-                      hf_parts: v.hf_parts,
-                      all_part_urls: v.all_part_urls,
+                      filename: selectedVariant.filename,
+                      hf_url: selectedVariant.hf_url,
+                      hf_parts: selectedVariant.hf_parts,
+                      all_part_urls: selectedVariant.all_part_urls,
                     },
                     false,
                   );
@@ -1666,9 +1667,12 @@ function ModelRow({
             className={`h-7 w-7 p-0 ${effectiveDownloaded && !isThisRunning ? "text-green-500 hover:text-green-400" : "text-muted-foreground/20 cursor-not-allowed"}`}
             onClick={() => {
               if (!effectiveDownloaded || isThisRunning) return;
-              if (hasVariants) {
-                const v = model.variants[selectedVariantIdx];
-                onLoad({ ...model, filename: v.filename, hf_url: v.hf_url });
+              if (selectedVariant) {
+                onLoad({
+                  ...model,
+                  filename: selectedVariant.filename,
+                  hf_url: selectedVariant.hf_url,
+                });
               } else {
                 onLoad(model);
               }
@@ -3223,9 +3227,10 @@ function SaveToNoteModal({
       .then((t) => {
         setTree(t);
         // Pre-select first folder if any
-        if (t.folders.length > 0) {
-          setSelectedFolderId(t.folders[0].id);
-          setSelectedFolderName(t.folders[0].name);
+        const firstFolder = t.folders[0];
+        if (firstFolder) {
+          setSelectedFolderId(firstFolder.id);
+          setSelectedFolderName(firstFolder.name);
         } else {
           setSelectedFolderId(null);
           setSelectedFolderName("General");
@@ -6161,7 +6166,7 @@ function InferenceTab() {
                     max={2}
                     step={0.01}
                     value={[temperature]}
-                    onValueChange={([v]) => setTemperature(v)}
+                    onValueChange={([v]) => setTemperature(v ?? temperature)}
                   />
                   <p className="text-xs text-muted-foreground">
                     0.7 balanced · 0.1 precise · 1.5 creative
@@ -6181,7 +6186,7 @@ function InferenceTab() {
                     max={1}
                     step={0.05}
                     value={[topP]}
-                    onValueChange={([v]) => setTopP(v)}
+                    onValueChange={([v]) => setTopP(v ?? topP)}
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -6568,7 +6573,7 @@ function ServerTab() {
                       max={99}
                       step={1}
                       value={[effectiveGpuLayers]}
-                      onValueChange={([v]) => setGpuLayers(v)}
+                      onValueChange={([v]) => setGpuLayers(v ?? null)}
                       disabled={isDetecting}
                     />
                     <p className="text-xs text-muted-foreground">

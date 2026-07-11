@@ -157,8 +157,12 @@ function groupByDate(conversations: Conversation[]): Record<string, Conversation
     else if (d >= monthAgo) group = "Previous 30 days";
     else group = "Older";
 
-    if (!groups[group]) groups[group] = [];
-    groups[group].push(conv);
+    let list = groups[group];
+    if (!list) {
+      list = [];
+      groups[group] = list;
+    }
+    list.push(conv);
   }
 
   return groups;

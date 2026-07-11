@@ -448,7 +448,10 @@ function LibraryDetailDialog({
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => onUseAsInput(item, fileUrls[item.id])}
+                    onClick={() => {
+                      const url = fileUrls[item.id];
+                      if (url) onUseAsInput(item, url);
+                    }}
                     title="Use this image as the img2img input"
                   >
                     <ImagePlus className="h-3.5 w-3.5 mr-1.5" />
@@ -568,11 +571,14 @@ export function MediaLibrarySection() {
   const lightboxItems = useMemo<LightboxItem[]>(
     () =>
       items
-        .filter((i) => fileUrls[i.id])
-        .map((i) => ({
+        .map((i) => ({ item: i, url: fileUrls[i.id] }))
+        .filter(
+          (x): x is { item: MediaLibraryItem; url: string } => !!x.url,
+        )
+        .map(({ item: i, url }) => ({
           id: i.id,
           kind: i.media_type,
-          url: fileUrls[i.id],
+          url,
           prompt: i.prompt,
           seed: i.seed,
           title: i.file_name,
@@ -639,7 +645,10 @@ export function MediaLibrarySection() {
             Math.min(lastClickedIndex.current, index),
             Math.max(lastClickedIndex.current, index),
           ];
-          for (let i = lo; i <= hi; i++) next.add(items[i].id);
+          for (let i = lo; i <= hi; i++) {
+            const it = items[i];
+            if (it) next.add(it.id);
+          }
         } else if (next.has(id)) {
           next.delete(id);
         } else {

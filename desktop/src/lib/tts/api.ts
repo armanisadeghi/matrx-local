@@ -244,6 +244,7 @@ export async function* synthesizeStream(
     let pos = 0;
     while (pos < n) {
       const head = chunks[0];
+      if (!head) throw new Error("internal: consume buffer empty");
       const need = n - pos;
       if (head.byteLength <= need) {
         out.set(head, pos);
@@ -307,11 +308,24 @@ export async function* synthesizeStream(
       }
       const hdr = consume(5);
       const tag = hdr[0];
+      const b1 = hdr[1];
+      const b2 = hdr[2];
+      const b3 = hdr[3];
+      const b4 = hdr[4];
+      if (
+        tag === undefined ||
+        b1 === undefined ||
+        b2 === undefined ||
+        b3 === undefined ||
+        b4 === undefined
+      ) {
+        throw new Error("internal: truncated frame header");
+      }
       const len =
-        ((hdr[1] << 24) >>> 0) +
-        ((hdr[2] << 16) >>> 0) +
-        ((hdr[3] << 8) >>> 0) +
-        (hdr[4] >>> 0);
+        ((b1 << 24) >>> 0) +
+        ((b2 << 16) >>> 0) +
+        ((b3 << 8) >>> 0) +
+        (b4 >>> 0);
 
       if (len > MAX_FRAME_BYTES) {
         throw new TtsStreamError(

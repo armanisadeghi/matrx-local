@@ -245,10 +245,12 @@ export function QuickActionBar(props: QuickActionBarProps) {
     } else if (llmHasModels) {
       const model = llmState.downloadedModels[0];
       // Detected GPU layers, not hardcoded CPU-only (see QuickLocalChatModal).
-      await llmActions.startServer(
-        model.filename,
-        llmState.hardwareResult?.recommended_gpu_layers ?? 0,
-      );
+      if (model) {
+        await llmActions.startServer(
+          model.filename,
+          llmState.hardwareResult?.recommended_gpu_layers ?? 0,
+        );
+      }
     }
   }, [llmRunning, llmHasModels, llmState.downloadedModels, llmActions]);
 

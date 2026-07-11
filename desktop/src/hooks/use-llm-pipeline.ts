@@ -78,7 +78,7 @@ export function parsePolishOutput(
     // Strip markdown code fences: ```json … ``` or ``` … ```
     let s = raw.trim();
     const fenceMatch = s.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/i);
-    if (fenceMatch) s = fenceMatch[1].trim();
+    if (fenceMatch) s = (fenceMatch[1] ?? "").trim();
 
     // Find the outermost JSON object even if there's surrounding prose
     const objMatch = s.match(/\{[\s\S]*\}/);
@@ -236,7 +236,7 @@ function substituteVars(
   vars: Record<string, string>,
 ): string {
   return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
-    return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : match;
+    return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] ?? match : match;
   });
 }
 
@@ -308,7 +308,7 @@ export function useLlmPipeline(
       }
 
       // Resolve template
-      const tpl: PipelineTemplate =
+      const tpl: PipelineTemplate | undefined =
         typeof template === "string" ? PIPELINE_TEMPLATES[template] : template;
 
       if (!tpl) {

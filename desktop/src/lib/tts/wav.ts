@@ -19,8 +19,12 @@ export function audioBuffersToWavBlob(buffers: AudioBuffer[]): Blob {
     return new Blob([], { type: "audio/wav" });
   }
 
-  const sampleRate = buffers[0].sampleRate;
-  const numChannels = buffers[0].numberOfChannels;
+  const firstBuffer = buffers[0];
+  if (!firstBuffer) {
+    return new Blob([], { type: "audio/wav" });
+  }
+  const sampleRate = firstBuffer.sampleRate;
+  const numChannels = firstBuffer.numberOfChannels;
   const bitsPerSample = 16;
   const totalFrames = buffers.reduce((sum, b) => sum + b.length, 0);
 
@@ -79,7 +83,10 @@ export function audioBuffersToWavBlob(buffers: AudioBuffer[]): Blob {
     }
     for (let i = 0; i < buf.length; i++) {
       for (let c = 0; c < numChannels; c++) {
-        let s = channels[c][i];
+        const channel = channels[c];
+        if (!channel) continue;
+        let s = channel[i];
+        if (s === undefined) continue;
         if (s > 1) s = 1;
         else if (s < -1) s = -1;
         const intSample = s < 0 ? s * 0x8000 : s * 0x7fff;

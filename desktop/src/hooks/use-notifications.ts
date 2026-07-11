@@ -20,14 +20,14 @@ function playTone(type: "chime" | "alert" | "error" | "success"): void {
     const gain = ctx.createGain();
     gain.connect(ctx.destination);
 
-    const configs: Record<string, { freq: number[]; dur: number; type: OscillatorType }> = {
+    const configs: Record<"chime" | "alert" | "success" | "error", { freq: number[]; dur: number; type: OscillatorType }> = {
       chime:   { freq: [880, 1100], dur: 0.25, type: "sine" },
       alert:   { freq: [440, 660],  dur: 0.3,  type: "triangle" },
       success: { freq: [523, 659, 784], dur: 0.18, type: "sine" },
       error:   { freq: [220, 180],  dur: 0.4,  type: "sawtooth" },
     };
 
-    const cfg = configs[type] ?? configs.chime;
+    const cfg = configs[type];
     let start = ctx.currentTime;
 
     cfg.freq.forEach((freq) => {

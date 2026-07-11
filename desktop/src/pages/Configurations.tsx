@@ -315,7 +315,9 @@ function SliderRow({
       <div className="flex items-center gap-2">
         <Slider
           value={[value]}
-          onValueChange={([v]) => onChange(v)}
+          onValueChange={([v]) => {
+            if (v !== undefined) onChange(v);
+          }}
           min={min}
           max={max}
           step={step}
@@ -364,7 +366,9 @@ function CompactSlider({
       </div>
       <Slider
         value={[value]}
-        onValueChange={([v]) => onChange(v)}
+        onValueChange={([v]) => {
+          if (v !== undefined) onChange(v);
+        }}
         min={min}
         max={max}
         step={step}
@@ -1076,8 +1080,7 @@ export function Configurations() {
                           typeof catalogs.systemPromptOptions
                         > = {};
                         for (const p of catalogs.systemPromptOptions) {
-                          if (!groups[p.category]) groups[p.category] = [];
-                          groups[p.category].push(p);
+                          (groups[p.category] ??= []).push(p);
                         }
                         return Object.entries(groups).map(([cat, prompts]) => (
                           <SelectGroup key={cat}>

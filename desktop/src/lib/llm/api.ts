@@ -477,7 +477,9 @@ export async function structuredOutput<T>(
   }
 
   const data: ChatCompletionResponse = await response.json();
-  return JSON.parse(data.choices[0].message.content!) as T;
+  const choice = data.choices[0];
+  if (!choice) throw new Error("Structured output failed: response had no choices");
+  return JSON.parse(choice.message.content!) as T;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────

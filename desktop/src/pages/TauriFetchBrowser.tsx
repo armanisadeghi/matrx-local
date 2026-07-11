@@ -201,6 +201,7 @@ export function TauriFetchBrowser() {
         if (historyIdxRef.current <= 0) return;
         historyIdxRef.current -= 1;
         const prev = historyRef.current[historyIdxRef.current];
+        if (!prev) return;
         currentBlobUrl.current = prev.blobUrl;
         setPage(prev);
         setInputUrl(prev.url);
@@ -211,6 +212,7 @@ export function TauriFetchBrowser() {
         if (historyIdxRef.current >= historyRef.current.length - 1) return;
         historyIdxRef.current += 1;
         const next = historyRef.current[historyIdxRef.current];
+        if (!next) return;
         currentBlobUrl.current = next.blobUrl;
         setPage(next);
         setInputUrl(next.url);

@@ -44,7 +44,7 @@ function useDownloadStats(progress: DownloadProgressData | null) {
     samplesRef.current = samplesRef.current.filter((s) => s.time >= cutoff);
 
     if (samplesRef.current.length >= 2) {
-      const oldest = samplesRef.current[0];
+      const oldest = samplesRef.current[0]!;
       const elapsed = (now - oldest.time) / 1000;
       const byteDelta = progress.bytes_downloaded - oldest.bytes;
       const bps = elapsed > 0 ? byteDelta / elapsed : 0;

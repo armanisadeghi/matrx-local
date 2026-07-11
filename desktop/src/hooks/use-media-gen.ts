@@ -1570,7 +1570,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
           const keys = Object.keys(next);
           if (keys.length > 5) {
             for (const staleKey of keys.slice(0, keys.length - 5)) {
-              URL.revokeObjectURL(next[staleKey]);
+              const staleUrl = next[staleKey];
+              if (staleUrl) URL.revokeObjectURL(staleUrl);
               delete next[staleKey];
             }
           }

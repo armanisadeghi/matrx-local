@@ -109,8 +109,9 @@ export function ChatPanel({
     if (!forceLocalModel) return;
     const current = availableModels.find((m) => m.id === model);
     if (current?.provider === "local") return;
-    if (localOnlyModels.length > 0) {
-      setModel(localOnlyModels[0].id);
+    const firstLocalModel = localOnlyModels[0];
+    if (firstLocalModel) {
+      setModel(firstLocalModel.id);
     }
   }, [forceLocalModel, model, availableModels, localOnlyModels, setModel]);
 

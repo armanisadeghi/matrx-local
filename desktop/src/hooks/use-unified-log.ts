@@ -175,7 +175,7 @@ export function clearClientLog(): void {
 
 export function clearClientLogBySource(source: string): void {
   for (let i = _buffer.length - 1; i >= 0; i--) {
-    if (_buffer[i].source === source) _buffer.splice(i, 1);
+    if (_buffer[i]?.source === source) _buffer.splice(i, 1);
   }
   if (source === "access") {
     _accessBuffer.splice(0, _accessBuffer.length);

@@ -33,6 +33,7 @@ function flushPendingSegments(): void {
     const idx = sessions.findIndex((s) => s.id === sessionId);
     if (idx === -1) continue;
     const session = sessions[idx];
+    if (!session) continue;
     session.segments = [...session.segments, ...segs];
     session.fullText = session.segments
       .map((s) => s.text)
@@ -132,11 +133,13 @@ export function finalizeSession(
   const sessions = loadSessions();
   const idx = sessions.findIndex((s) => s.id === sessionId);
   if (idx === -1) return null;
+  const session = sessions[idx];
+  if (!session) return null;
 
-  sessions[idx].durationSecs = durationSecs;
-  sessions[idx].updatedAt = new Date().toISOString();
+  session.durationSecs = durationSecs;
+  session.updatedAt = new Date().toISOString();
   saveSessions(sessions);
-  return sessions[idx];
+  return session;
 }
 
 /** Update just the title of a session. */
@@ -147,11 +150,13 @@ export function renameSession(
   const sessions = loadSessions();
   const idx = sessions.findIndex((s) => s.id === sessionId);
   if (idx === -1) return null;
+  const session = sessions[idx];
+  if (!session) return null;
 
-  sessions[idx].title = title;
-  sessions[idx].updatedAt = new Date().toISOString();
+  session.title = title;
+  session.updatedAt = new Date().toISOString();
   saveSessions(sessions);
-  return sessions[idx];
+  return session;
 }
 
 /** Overwrite the fullText of a session (user-edited content) and recount chars. */
@@ -162,12 +167,14 @@ export function updateSessionText(
   const sessions = loadSessions();
   const idx = sessions.findIndex((s) => s.id === sessionId);
   if (idx === -1) return null;
+  const session = sessions[idx];
+  if (!session) return null;
 
-  sessions[idx].fullText = newText;
-  sessions[idx].charCount = newText.length;
-  sessions[idx].updatedAt = new Date().toISOString();
+  session.fullText = newText;
+  session.charCount = newText.length;
+  session.updatedAt = new Date().toISOString();
   saveSessions(sessions);
-  return sessions[idx];
+  return session;
 }
 
 /**
@@ -191,6 +198,7 @@ export function polishSession(
   if (idx === -1) return null;
 
   const session = sessions[idx];
+  if (!session) return null;
   const now = new Date().toISOString();
 
   // Preserve the original raw transcript on the first AI-polish run only.

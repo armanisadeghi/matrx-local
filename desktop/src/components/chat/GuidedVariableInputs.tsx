@@ -532,6 +532,7 @@ export function GuidedVariableInputs({
   // to a 2-variable agent indexed past the end and TypeError'd the chat page.
   const safeIndex = Math.min(activeIndex, total - 1);
   const variable = variableDefaults[safeIndex];
+  if (!variable) return null;
   const value = values[variable.name] ?? variable.defaultValue ?? "";
   const formattedName = formatLabel(variable.name);
   const helpText = variable.helpText;

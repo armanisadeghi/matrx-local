@@ -290,8 +290,9 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
         setFileUrls((prev) => {
           const next = { ...prev };
           for (const id of restored) {
-            if (id in next) {
-              URL.revokeObjectURL(next[id]);
+            const url = next[id];
+            if (url) {
+              URL.revokeObjectURL(url);
               delete next[id];
             }
           }
@@ -326,8 +327,9 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
         await deleteMediaVaultItem(base, itemId);
         setItems((prev) => prev.filter((i) => i.id !== itemId));
         setFileUrls((prev) => {
-          if (!(itemId in prev)) return prev;
-          URL.revokeObjectURL(prev[itemId]);
+          const url = prev[itemId];
+          if (!url) return prev;
+          URL.revokeObjectURL(url);
           const next = { ...prev };
           delete next[itemId];
           return next;

@@ -596,7 +596,10 @@ function VaultGrid({
             Math.min(lastClickedIndex.current, index),
             Math.max(lastClickedIndex.current, index),
           ];
-          for (let i = lo; i <= hi; i++) next.add(items[i].id);
+          for (let i = lo; i <= hi; i++) {
+            const it = items[i];
+            if (it) next.add(it.id);
+          }
         } else if (next.has(item.id)) {
           next.delete(item.id);
         } else {

@@ -938,7 +938,7 @@ export function SetupWizard({
                   if (comp.id === "transcription") {
                     return (
                       <div key={comp.id} className="space-y-2">
-                        <ComponentRow component={comp} progress={p} />
+                        <ComponentRow component={comp} {...(p ? { progress: p } : {})} />
                         {!isReady && !isInstalling && (
                           <div className="ml-9 space-y-1.5">
                             <p className="text-xs text-muted-foreground">
@@ -981,7 +981,7 @@ export function SetupWizard({
                   if (comp.id === "local_llm") {
                     return (
                       <div key={comp.id} className="space-y-2">
-                        <ComponentRow component={comp} progress={p} />
+                        <ComponentRow component={comp} {...(p ? { progress: p } : {})} />
                         {!isReady && !isInstalling && llmHardware && (
                           <div className="ml-9 space-y-1.5">
                             <p className="text-xs text-muted-foreground">
@@ -1024,7 +1024,7 @@ export function SetupWizard({
                   }
 
                   return (
-                    <ComponentRow key={comp.id} component={comp} progress={p} />
+                    <ComponentRow key={comp.id} component={comp} {...(p ? { progress: p } : {})} />
                   );
                 })}
               </div>

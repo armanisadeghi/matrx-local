@@ -43,7 +43,9 @@ export function QuickLocalChatModal({
       // Use the detected GPU layers — hardcoded 0 forced full CPU inference
       // for quick-launched chats (drastically slower than the Models page).
       const gpuLayers = llmState.hardwareResult?.recommended_gpu_layers ?? 0;
-      llmActions.startServer(model.filename, gpuLayers).catch((e) => console.warn("[local-chat] startServer failed:", e));
+      if (model) {
+        llmActions.startServer(model.filename, gpuLayers).catch((e) => console.warn("[local-chat] startServer failed:", e));
+      }
     }
     if (!open) {
       autoStartedRef.current = false;

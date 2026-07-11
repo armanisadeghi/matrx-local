@@ -73,9 +73,11 @@ export function Sparkline({
     const h = height - pad * 2;
     const step = w / (data.length - 1);
     const i = data.length - 1;
+    const last = data[i];
+    if (last === undefined) return null;
     return {
       x: pad + i * step,
-      y: pad + h - ((data[i] - min) / range) * h,
+      y: pad + h - ((last - min) / range) * h,
     };
   }, [data, width, height, fixedMin, fixedMax]);
 

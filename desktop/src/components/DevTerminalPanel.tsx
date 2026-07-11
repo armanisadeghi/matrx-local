@@ -1200,16 +1200,22 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
                   );
                 })}
               </div>
-              {counts.errors.length > 0 && (
-                <p className="mt-1.5 text-[10px] text-red-400 font-mono truncate">
-                  ↳ {counts.errors[counts.errors.length - 1].trim()}
-                </p>
-              )}
-              {counts.errors.length === 0 && counts.warns.length > 0 && (
-                <p className="mt-1.5 text-[10px] text-amber-400 font-mono truncate">
-                  ↳ {counts.warns[counts.warns.length - 1].trim()}
-                </p>
-              )}
+              {(() => {
+                const lastError = counts.errors[counts.errors.length - 1];
+                return lastError !== undefined && (
+                  <p className="mt-1.5 text-[10px] text-red-400 font-mono truncate">
+                    ↳ {lastError.trim()}
+                  </p>
+                );
+              })()}
+              {(() => {
+                const lastWarn = counts.warns[counts.warns.length - 1];
+                return counts.errors.length === 0 && lastWarn !== undefined && (
+                  <p className="mt-1.5 text-[10px] text-amber-400 font-mono truncate">
+                    ↳ {lastWarn.trim()}
+                  </p>
+                );
+              })()}
             </div>
           );
         })}

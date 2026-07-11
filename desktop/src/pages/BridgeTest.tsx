@@ -492,8 +492,9 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
       return;
     }
     const stillValid = sessions.some((s) => s.session_id === invokeSessionId);
-    if (!stillValid) {
-      setInvokeSessionId(sessions[0].session_id);
+    const firstSession = sessions[0];
+    if (!stillValid && firstSession) {
+      setInvokeSessionId(firstSession.session_id);
     }
   }, [sessions, invokeSessionId]);
 
@@ -1165,7 +1166,7 @@ function percentileFromSamples(samples: number[], p: number): number | null {
     sorted.length - 1,
     Math.max(0, Math.ceil((p / 100) * sorted.length) - 1),
   );
-  return sorted[idx];
+  return sorted[idx] ?? null;
 }
 
 function formatLatencyMs(value: number | null): string {

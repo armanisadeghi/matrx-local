@@ -431,7 +431,7 @@ function InstalledLoraRow({
             max={1.5}
             step={0.05}
             value={[scale]}
-            onValueChange={([v]) => setSelection({ scale: v })}
+            onValueChange={([v]) => v !== undefined && setSelection({ scale: v })}
             className="flex-1"
           />
           <span className="w-9 text-right text-[10px] tabular-nums text-muted-foreground">

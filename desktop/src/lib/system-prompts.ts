@@ -240,7 +240,9 @@ export const systemPrompts = {
     const all = loadAll();
     const idx = all.findIndex((p) => p.id === id);
     if (idx === -1) return false;
-    all[idx] = { ...all[idx], ...changes, updatedAt: Date.now() };
+    const current = all[idx];
+    if (!current) return false;
+    all[idx] = { ...current, ...changes, updatedAt: Date.now() };
     saveAll(all);
     return true;
   },

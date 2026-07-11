@@ -25,7 +25,9 @@ function parseEnvFile(p: string): Record<string, string> {
   if (!existsSync(p)) return out;
   for (const line of readFileSync(p, "utf8").split("\n")) {
     const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-    if (m && !line.trim().startsWith("#")) out[m[1]] = m[2];
+    const key = m?.[1];
+    const value = m?.[2];
+    if (key !== undefined && value !== undefined && !line.trim().startsWith("#")) out[key] = value;
   }
   return out;
 }

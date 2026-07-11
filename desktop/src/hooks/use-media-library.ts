@@ -188,8 +188,9 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
       await deleteMediaLibraryItem(base, itemId);
       setItems((prev) => prev.filter((i) => i.id !== itemId));
       setFileUrls((prev) => {
-        if (!(itemId in prev)) return prev;
-        URL.revokeObjectURL(prev[itemId]);
+        const url = prev[itemId];
+        if (!url) return prev;
+        URL.revokeObjectURL(url);
         const next = { ...prev };
         delete next[itemId];
         return next;

@@ -93,7 +93,9 @@ function groupVoicesByLanguage(voices: TtsVoice[]): TtsLanguageGroup[] {
   }
   const groups: TtsLanguageGroup[] = [];
   for (const [language, list] of map) {
-    groups.push({ language, lang_code: list[0].lang_code, voices: list });
+    const first = list[0];
+    if (!first) continue;
+    groups.push({ language, lang_code: first.lang_code, voices: list });
   }
   return groups;
 }

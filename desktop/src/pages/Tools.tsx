@@ -118,8 +118,9 @@ export function Tools({ engineStatus, engineUrl, tools }: ToolsProps) {
           fromEngineSchema,
         );
         setEngineSchemas(schemas);
-        if (!selectedToolName && schemas.length > 0)
-          setSelectedToolName(schemas[0].toolName);
+        const firstSchema = schemas[0];
+        if (!selectedToolName && firstSchema)
+          setSelectedToolName(firstSchema.toolName);
       } catch {
         /* graceful fallback */
       }
@@ -160,8 +161,9 @@ export function Tools({ engineStatus, engineUrl, tools }: ToolsProps) {
   }, [schemas]);
 
   useEffect(() => {
-    if (!selectedCategory && categoryList.length > 0) {
-      setSelectedCategory(categoryList[0].id);
+    const firstCategory = categoryList[0];
+    if (!selectedCategory && firstCategory) {
+      setSelectedCategory(firstCategory.id);
     }
   }, [categoryList, selectedCategory]);
 
@@ -237,7 +239,7 @@ export function Tools({ engineStatus, engineUrl, tools }: ToolsProps) {
               {!search &&
                 categoryList.map((cat) => {
                   const colors =
-                    categoryColorMap[cat.color] ?? categoryColorMap["slate"];
+                    categoryColorMap[cat.color] ?? categoryColorMap["slate"]!;
                   const isActive = selectedCategory === cat.id;
                   const catTools = schemas.filter((s) => s.category === cat.id);
 
@@ -321,7 +323,7 @@ export function Tools({ engineStatus, engineUrl, tools }: ToolsProps) {
                   const isActive = selectedToolName === s.toolName;
                   const meta = getCategoryMeta(s.category);
                   const colors =
-                    categoryColorMap[meta.color] ?? categoryColorMap["slate"];
+                    categoryColorMap[meta.color] ?? categoryColorMap["slate"]!;
                   return (
                     <button
                       key={s.toolName}

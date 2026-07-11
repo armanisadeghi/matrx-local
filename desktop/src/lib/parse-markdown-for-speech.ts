@@ -37,11 +37,12 @@ export function parseMarkdownToText(markdown: string): string {
       "ninety",
     ];
     const numInt = parseInt(num, 10);
-    if (numInt < 20) return ones[numInt];
+    if (numInt < 20) return ones[numInt]!;
     if (numInt < 100) {
       const t = Math.floor(numInt / 10);
       const o = numInt % 10;
-      return o === 0 ? tens[t] : `${tens[t]}-${ones[o]}`;
+      const tensWord = tens[t]!;
+      return o === 0 ? tensWord : `${tensWord}-${ones[o]}`;
     }
     if (numInt < 1000) {
       const h = Math.floor(numInt / 100);

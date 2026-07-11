@@ -207,7 +207,7 @@ export function resolveProvider(rawName: string): string | null {
     if (provider.envVarNames) {
       for (const envName of provider.envVarNames) {
         if (upper === envName.toUpperCase()) {
-          return provider.names[0];
+          return provider.names[0] ?? null;
         }
       }
     }
@@ -219,7 +219,7 @@ export function resolveProvider(rawName: string): string | null {
   for (const provider of PROVIDER_PATTERNS) {
     for (const alias of provider.names) {
       if (stripped === alias.toUpperCase()) {
-        return provider.names[0];
+        return provider.names[0] ?? null;
       }
     }
 
@@ -229,7 +229,7 @@ export function resolveProvider(rawName: string): string | null {
         // Check if the stripped name contains the core of the env-var name
         const envCore = stripSuffixes(stripPrefixes(envName)).toUpperCase();
         if (stripped === envCore) {
-          return provider.names[0];
+          return provider.names[0] ?? null;
         }
       }
     }
@@ -280,6 +280,7 @@ export function parseEnvBlock(text: string): ParsedEnvEntry[] {
     if (!match) continue;
 
     const [, key, value] = match;
+    if (key === undefined || value === undefined) continue;
     const cleanValue = value.trim();
 
     // Deduplicate by key

@@ -67,6 +67,10 @@ class BackgroundOrchestrator {
       }
 
       const task = queue[idx];
+      if (!task) {
+        scheduleIdle(() => runNext(idx + 1));
+        return;
+      }
       if (task.runOnce !== false && this.completed.has(task.id)) {
         skipped++;
         scheduleIdle(() => runNext(idx + 1));

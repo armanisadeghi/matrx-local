@@ -284,7 +284,9 @@ function SpeakTab({
             max={2}
             step={0.05}
             value={[state.speed]}
-            onValueChange={([v]) => actions.setSpeed(v)}
+            onValueChange={([v]) => {
+              if (v !== undefined) actions.setSpeed(v);
+            }}
             disabled={!isReady || isActive}
           />
         </div>
@@ -1174,7 +1176,9 @@ function BlendTab({
                 max={1}
                 step={0.01}
                 value={[comp.weight]}
-                onValueChange={([v]) => updateComponent(idx, { weight: v })}
+                onValueChange={([v]) => {
+                  if (v !== undefined) updateComponent(idx, { weight: v });
+                }}
               />
             </div>
           ))}
@@ -1859,7 +1863,9 @@ function SettingsTab({
               max={2}
               step={0.05}
               value={[state.speed]}
-              onValueChange={([v]) => actions.setSpeed(v)}
+              onValueChange={([v]) => {
+                if (v !== undefined) actions.setSpeed(v);
+              }}
             />
           </div>
         </div>

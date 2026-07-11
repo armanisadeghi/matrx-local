@@ -556,8 +556,7 @@ export function SystemPrompts() {
   // Group by category for the list display
   const grouped: Record<string, PromptEntry[]> = {};
   filteredEntries.forEach((p) => {
-    if (!grouped[p.category]) grouped[p.category] = [];
-    grouped[p.category].push(p);
+    (grouped[p.category] ??= []).push(p);
   });
 
   const handleSave = (data: EditorState) => {

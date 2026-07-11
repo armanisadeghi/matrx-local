@@ -1990,14 +1990,17 @@ function TranscribeTab({
                         </p>
                       </>
                     )}
-                    {llmState.serverLogs.length > 0 && (
-                      <p className="text-[10px] text-muted-foreground/70 truncate font-mono">
-                        {
-                          llmState.serverLogs[llmState.serverLogs.length - 1]
-                            .line
-                        }
-                      </p>
-                    )}
+                    {(() => {
+                      const lastLog =
+                        llmState.serverLogs[llmState.serverLogs.length - 1];
+                      return (
+                        lastLog && (
+                          <p className="text-[10px] text-muted-foreground/70 truncate font-mono">
+                            {lastLog.line}
+                          </p>
+                        )
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -2782,8 +2785,8 @@ function DevicesTab({
 
         // Compute RMS from frequency magnitudes
         let sum = 0;
-        for (let i = 0; i < freqData.length; i++) {
-          const norm = freqData[i] / 255;
+        for (const value of freqData) {
+          const norm = value / 255;
           sum += norm * norm;
         }
         const rms = Math.sqrt(sum / freqData.length);
@@ -2804,7 +2807,8 @@ function DevicesTab({
           const endBin = Math.floor(((b + 1) / barCount) * binCount);
           let max = 0;
           for (let k = startBin; k < endBin; k++) {
-            if (freqData[k] > max) max = freqData[k];
+            const sample = freqData[k];
+            if (sample !== undefined && sample > max) max = sample;
           }
           barsArr[b] = max / 255;
         }
@@ -3038,10 +3042,10 @@ function DevicesTab({
                           : "text-muted-foreground",
                       )}
                     >
-                      {device.channels.length > 0
+                      {device.channels[0] !== undefined
                         ? `${device.channels[0]}ch`
                         : ""}
-                      {device.sample_rates.length > 0
+                      {device.sample_rates[0] !== undefined
                         ? ` · ${(device.sample_rates[0] / 1000).toFixed(0)}kHz`
                         : ""}
                     </p>

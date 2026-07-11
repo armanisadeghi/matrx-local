@@ -191,7 +191,7 @@ export async function waitForEngine(
 
   // Extract port from baseUrl for the Rust path
   const portMatch = baseUrl.match(/:(\d+)/);
-  const port = portMatch ? parseInt(portMatch[1], 10) : 22140;
+  const port = portMatch?.[1] ? parseInt(portMatch[1], 10) : 22140;
 
   for (let i = 0; i < maxRetries; i++) {
     try {

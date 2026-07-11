@@ -499,7 +499,7 @@ export function MediaLightbox({
     const urls: string[] = [];
     for (const off of [1, count - 1]) {
       const item = items[(safeIndex + off) % count];
-      if (item.kind === "image") urls.push(item.url);
+      if (item && item.kind === "image") urls.push(item.url);
     }
     return [...new Set(urls)];
   }, [items, safeIndex, count]);

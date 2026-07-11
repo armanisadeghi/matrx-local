@@ -178,8 +178,8 @@ function applyLogToSteps(steps: PhaseStep[], line: string): PhaseStep[] {
   const match = clean.match(/\[phase:([^\]]+)\]/);
   if (!match) return steps;
 
-  const phaseKey = match[1].toLowerCase();
-  const stepId = PHASE_MAP[phaseKey];
+  const phaseKey = match[1]?.toLowerCase();
+  const stepId = phaseKey ? PHASE_MAP[phaseKey] : undefined;
   if (!stepId) return steps;
 
   const detail = clean.replace(/^\[[^\]]+\]\s*/, "").trim() || undefined;

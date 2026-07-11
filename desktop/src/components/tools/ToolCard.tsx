@@ -23,7 +23,7 @@ function DynamicIcon({ name, ...props }: { name: string } & LucideProps) {
 
 export function ToolCard({ schema, isSelected, onClick }: ToolCardProps) {
   const meta   = getCategoryMeta(schema.category);
-  const colors = categoryColorMap[meta.color] ?? categoryColorMap["slate"];
+  const colors = categoryColorMap[meta.color] ?? categoryColorMap["slate"]!;
 
   return (
     <button

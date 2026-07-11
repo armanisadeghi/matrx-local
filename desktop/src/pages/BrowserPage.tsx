@@ -29,6 +29,7 @@ export function BrowserPage() {
         if (historyIndexRef.current <= 0) return;
         historyIndexRef.current -= 1;
         const prev = historyRef.current[historyIndexRef.current];
+        if (!prev) return;
         setUrl(prev);
         setInputUrl(prev);
         setKey((k) => k + 1);
@@ -38,6 +39,7 @@ export function BrowserPage() {
         if (historyIndexRef.current >= historyRef.current.length - 1) return;
         historyIndexRef.current += 1;
         const next = historyRef.current[historyIndexRef.current];
+        if (!next) return;
         setUrl(next);
         setInputUrl(next);
         setKey((k) => k + 1);

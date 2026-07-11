@@ -92,7 +92,7 @@ export function findModelDownload(
       (b.updated_at ?? "").localeCompare(a.updated_at ?? "")
     );
   });
-  return activeFirst[0];
+  return activeFirst[0] ?? null;
 }
 
 // ── Small presentational pieces ──────────────────────────────────────────────
@@ -526,7 +526,7 @@ export function NumberSliderField({
         max={max}
         step={step}
         value={[Math.min(max, Math.max(min, value))]}
-        onValueChange={([v]) => onChange(v)}
+        onValueChange={([v]) => v !== undefined && onChange(v)}
         disabled={disabled}
       />
     </div>
@@ -1212,7 +1212,7 @@ export function useImageJobLightbox({
         const viewable = jobs.filter(
           (j) => j.status === "completed" && j.item_id && urls[j.job_id],
         );
-        const items = viewable.map((j) => jobLightboxItem(j, urls[j.job_id]));
+        const items = viewable.map((j) => jobLightboxItem(j, urls[j.job_id]!));
         const index = Math.max(
           0,
           viewable.findIndex((j) => j.job_id === job.job_id),

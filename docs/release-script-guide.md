@@ -195,7 +195,7 @@ Some version commands update more than one file. You must commit **all** of them
 | Command | Files modified |
 |---|---|
 | `npm version X.Y.Z --no-git-tag-version` | `package.json` **and** `package-lock.json` |
-| `pnpm version X.Y.Z --no-git-tag-version` | `package.json` **and** `pnpm-lock.yaml` |
+| `pnpm version X.Y.Z --no-git-tag-version` | `package.json` only (lockfile untouched) |
 | `cargo set-version X.Y.Z` (cargo-edit) | `Cargo.toml` **and** `Cargo.lock` |
 | `poetry version X.Y.Z` | `pyproject.toml` only |
 
@@ -206,7 +206,6 @@ Always check what a version command actually writes before finalizing the `git a
 git add \
     pyproject.toml \
     desktop/package.json \
-    desktop/package-lock.json \   # <-- npm also writes this
     desktop/src-tauri/Cargo.toml \
     desktop/src-tauri/tauri.conf.json
 ```
@@ -311,7 +310,7 @@ sedi 's/"version": "[^"]*"/"version": "'"$VERSION"'"/' package.json
 sedi 's/^  "version": "[^"]*"/  "version": "'"$VERSION"'"/' package.json
 
 # SAFEST — use the package manager's own tool
-npm version "$VERSION" --no-git-tag-version  # handles JSON correctly
+pnpm version "$VERSION" --no-git-tag-version  # handles JSON correctly
 ```
 
 For JSON files, prefer using the package manager CLI over sed whenever one is available. For TOML and plain text, anchor your patterns to `^` (start of line) and use `[^"]*` (no quote in version string) rather than `.*` (greedy, will match too much).

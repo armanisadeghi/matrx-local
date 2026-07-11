@@ -641,8 +641,8 @@ export function useLlm(): [LlmState, LlmActions] {
         const { resolveContextLength } =
           await import("@/lib/llm/contextLength");
         const resolvedCtx = await resolveContextLength(modelFilename, {
-          explicit: contextLength,
-          catalogContext: catalogCtx,
+          ...(contextLength !== undefined ? { explicit: contextLength } : {}),
+          ...(catalogCtx !== undefined ? { catalogContext: catalogCtx } : {}),
         });
         const status = await tauriInvoke<LlmServerStatus>("start_llm_server", {
           modelFilename,

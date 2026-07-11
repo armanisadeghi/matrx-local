@@ -56,8 +56,8 @@ export function ShareDialog({
     setShareError(null);
     try {
       await engine.createShare(userId, {
-        note_id: noteId ?? undefined,
-        folder_id: folderId ?? undefined,
+        ...(noteId ? { note_id: noteId } : {}),
+        ...(folderId ? { folder_id: folderId } : {}),
         shared_with_id: email.trim(), // In production, resolve email to user_id
         permission,
       });
@@ -81,8 +81,8 @@ export function ShareDialog({
         await engine.deleteShare(publicShare.id, userId);
       } else {
         await engine.createShare(userId, {
-          note_id: noteId ?? undefined,
-          folder_id: folderId ?? undefined,
+          ...(noteId ? { note_id: noteId } : {}),
+          ...(folderId ? { folder_id: folderId } : {}),
           is_public: true,
           permission: "read",
         });

@@ -35,8 +35,8 @@ export function ImageResultPane({
         result={imageResult}
         onClear={clearImageResult}
         onReuseSeed={(seed) => setImageForm({ seedText: String(seed) })}
-        prompt={imageForm.prompt.trim() || undefined}
-        onOpenLightbox={onOpenLightbox}
+        {...(imageForm.prompt.trim() ? { prompt: imageForm.prompt.trim() } : {})}
+        {...(onOpenLightbox !== undefined ? { onOpenLightbox } : {})}
         onUseAsInput={() =>
           useImageAsInput({
             name: "generated.png",

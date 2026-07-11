@@ -211,15 +211,18 @@ function AssistantMessage({
         {/* Tool calls */}
         {message.tool_calls && message.tool_calls.length > 0 && (
           <div className="mt-3 space-y-2">
-            {message.tool_calls.map((tc) => (
-              <ChatToolCall
-                key={tc.id}
-                toolCall={tc}
-                result={message.tool_results?.find(
-                  (r) => r.tool_call_id === tc.id,
-                )}
-              />
-            ))}
+            {message.tool_calls.map((tc) => {
+              const result = message.tool_results?.find(
+                (r) => r.tool_call_id === tc.id,
+              );
+              return (
+                <ChatToolCall
+                  key={tc.id}
+                  toolCall={tc}
+                  {...(result !== undefined ? { result } : {})}
+                />
+              );
+            })}
           </div>
         )}
 
@@ -229,10 +232,10 @@ function AssistantMessage({
             <MessageActions
               text={message.content}
               messageId={message.id}
-              ttsEnabled={ttsEnabled}
-              isReading={isReading}
-              onReadAloud={onReadAloud}
-              onStopReadAloud={onStopReadAloud}
+              {...(ttsEnabled !== undefined ? { ttsEnabled } : {})}
+              {...(isReading !== undefined ? { isReading } : {})}
+              {...(onReadAloud !== undefined ? { onReadAloud } : {})}
+              {...(onStopReadAloud !== undefined ? { onStopReadAloud } : {})}
             />
           </div>
         )}
@@ -299,10 +302,10 @@ export function ChatMessages({
           <AssistantMessage
             key={msg.id}
             message={msg}
-            ttsEnabled={ttsReadAloudEnabled}
+            {...(ttsReadAloudEnabled !== undefined ? { ttsEnabled: ttsReadAloudEnabled } : {})}
             isReading={readingMessageId === msg.id}
-            onReadAloud={onReadAloud}
-            onStopReadAloud={onStopReadAloud}
+            {...(onReadAloud !== undefined ? { onReadAloud } : {})}
+            {...(onStopReadAloud !== undefined ? { onStopReadAloud } : {})}
           />
         ),
       )}

@@ -153,8 +153,8 @@ export function emitClientLog(
     time: _makeTime(),
     level,
     message,
-    source,
-    accessEntry,
+    ...(source !== undefined ? { source } : {}),
+    ...(accessEntry !== undefined ? { accessEntry } : {}),
   };
   _push(line);
 }

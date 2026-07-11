@@ -507,7 +507,13 @@ export function useChat({ engineUrl }: UseChatOptions) {
       if (hasAgent && !currentConv?.serverConversationId && existingMessages.length === 0) {
         setConversations((prev) =>
           prev.map((c) =>
-            c.id === convId ? { ...c, routeMode: "agent" as ConversationRouteMode, agentId: options!.agentId } : c
+            c.id === convId
+              ? {
+                  ...c,
+                  routeMode: "agent" as ConversationRouteMode,
+                  ...(options!.agentId !== undefined ? { agentId: options!.agentId } : {}),
+                }
+              : c
           )
         );
       }

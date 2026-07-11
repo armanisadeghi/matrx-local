@@ -197,12 +197,17 @@ function applyLogToSteps(steps: PhaseStep[], line: string): PhaseStep[] {
     if (i < idx && s.status === "active")
       return { ...s, status: "done" as const };
     if (s.id === stepId) {
+      const mergedDetail = detail ?? s.detail;
       if (isError)
-        return { ...s, status: "error" as const, detail: detail ?? s.detail };
+        return {
+          ...s,
+          status: "error" as const,
+          ...(mergedDetail !== undefined ? { detail: mergedDetail } : {}),
+        };
       return {
         ...s,
         status: isDone ? ("done" as const) : ("active" as const),
-        detail: detail ?? s.detail,
+        ...(mergedDetail !== undefined ? { detail: mergedDetail } : {}),
       };
     }
     return s;

@@ -107,8 +107,8 @@ export function useDocuments(
       try {
         update({ loading: true, error: null });
         const notes = await engine.listNotes(userId ?? "local", {
-          folder_id: folderId ?? undefined,
-          search: search ?? undefined,
+          ...(folderId != null ? { folder_id: folderId } : {}),
+          ...(search !== undefined ? { search } : {}),
         });
         update({ notes, loading: false });
       } catch (err) {
@@ -306,7 +306,7 @@ export function useDocuments(
       try {
         const folder = await engine.createFolder(userId ?? "local", {
           name,
-          parent_id: parentId,
+          ...(parentId !== undefined ? { parent_id: parentId } : {}),
         });
         await loadTree();
         return folder;
@@ -344,7 +344,7 @@ export function useDocuments(
       if (!engineReady) return;
       try {
         const updatedNote = await engine.updateNote(noteId, userId ?? "local", {
-          folder_id: folderId ?? undefined,
+          ...(folderId != null ? { folder_id: folderId } : {}),
           folder_name: folderName,
         });
         if (state.activeNote?.id === noteId) {

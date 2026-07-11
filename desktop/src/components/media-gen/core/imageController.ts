@@ -174,27 +174,32 @@ export function useImageGenController(options?: {
     const enabledLoras = imageForm.loras
       .filter((l) => l.enabled)
       .map(({ id, scale }) => ({ id, scale }));
+    const negativePrompt = d.supportsNegativePrompt
+      ? imageForm.negativePrompt.trim() || undefined
+      : undefined;
+    const initImageB64 = useInitImage
+      ? (imageForm.initImage as PickedImage).base64
+      : undefined;
+    // d.strength is null when the params endpoint omits it — that model
+    // (e.g. flux2-klein) edits from the reference image directly and the
+    // engine 400s on an explicit strength. Never send one there.
+    const strength =
+      useInitImage && d.strength !== null ? imageForm.strength : undefined;
+    const loras = enabledLoras.length > 0 ? enabledLoras : undefined;
+    const extraParams = adv.count > 0 ? adv.overrides : undefined;
     return {
       prompt: imageForm.prompt.trim(),
       model_id: d.modelId,
-      negative_prompt: d.supportsNegativePrompt
-        ? imageForm.negativePrompt.trim() || undefined
-        : undefined,
       steps: imageForm.steps,
       guidance: imageForm.guidance,
       width: imageForm.width,
       height: imageForm.height,
       seed,
-      init_image_b64: useInitImage
-        ? (imageForm.initImage as PickedImage).base64
-        : undefined,
-      // d.strength is null when the params endpoint omits it — that model
-      // (e.g. flux2-klein) edits from the reference image directly and the
-      // engine 400s on an explicit strength. Never send one there.
-      strength:
-        useInitImage && d.strength !== null ? imageForm.strength : undefined,
-      loras: enabledLoras.length > 0 ? enabledLoras : undefined,
-      extra_params: adv.count > 0 ? adv.overrides : undefined,
+      ...(negativePrompt !== undefined ? { negative_prompt: negativePrompt } : {}),
+      ...(initImageB64 !== undefined ? { init_image_b64: initImageB64 } : {}),
+      ...(strength !== undefined ? { strength } : {}),
+      ...(loras !== undefined ? { loras } : {}),
+      ...(extraParams !== undefined ? { extra_params: extraParams } : {}),
     };
   }, [imageForm]);
 

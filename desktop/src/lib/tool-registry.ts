@@ -283,10 +283,10 @@ export function fromEngineSchema(schema: EngineToolSchema): ToolUISchema {
         (def.type === "string" || def.type === undefined)
           ? "file-path"
           : toFieldType(def.type),
-      description: def.description,
+      ...(def.description !== undefined ? { description: def.description } : {}),
       defaultValue: def.default,
       required: required.has(name),
-      placeholder: name.includes("path") ? "/path/to/file" : undefined,
+      ...(name.includes("path") ? { placeholder: "/path/to/file" } : {}),
     }),
   );
 

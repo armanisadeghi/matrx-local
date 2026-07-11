@@ -20,3 +20,4 @@ src-tauri/binaries/windows-dlls/*.dll
 # Playwright output
 playwright-report/
 test-results/
+dist-e2e/

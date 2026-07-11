@@ -129,9 +129,9 @@ export function AppLayout({
         <StatusBar
           engineStatus={engineStatus}
           engineUrl={engineUrl}
-          engineVersion={engineVersion}
+          {...(engineVersion !== undefined ? { engineVersion } : {})}
           onRefresh={onRefresh}
-          onOpenMonitor={onOpenMonitor}
+          {...(onOpenMonitor !== undefined ? { onOpenMonitor } : {})}
         />
       </div>
     </div>

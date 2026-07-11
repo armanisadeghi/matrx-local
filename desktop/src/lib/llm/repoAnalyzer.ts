@@ -120,7 +120,9 @@ export async function analyzeModelRepo(
   signal?: AbortSignal
 ): Promise<RepoAnalysisResult> {
   const body: AnalyzeRequest = { url, hardware };
-  return engine.post("/model-repo/analyze", body, { signal }) as Promise<RepoAnalysisResult>;
+  return engine.post("/model-repo/analyze", body, {
+    ...(signal !== undefined ? { signal } : {}),
+  }) as Promise<RepoAnalysisResult>;
 }
 
 // ── UI helpers ─────────────────────────────────────────────────────────────

@@ -118,7 +118,7 @@ function SingleTab({ engineStatus }: { engineStatus: EngineStatus }) {
 
       {/* Result */}
       <ScrapeResultViewer
-        url={urlInput ? normalizeUrl(urlInput) : undefined}
+        {...(urlInput ? { url: normalizeUrl(urlInput) } : {})}
         result={result}
         loading={loading}
         className="flex-1"

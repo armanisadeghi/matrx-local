@@ -396,7 +396,7 @@ export function useWakeWord(
           await attachWhisperListeners();
           await invoke("start_wake_word", { deviceName: deviceName ?? null });
         } else {
-          await engineAPI.owwStart({ deviceName });
+          await engineAPI.owwStart({ ...(deviceName !== undefined ? { deviceName } : {}) });
           attachOwwStream();
         }
         setUiMode("listening");

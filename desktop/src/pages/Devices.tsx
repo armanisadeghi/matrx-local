@@ -772,9 +772,7 @@ function ScreenRecordingCard({ perm }: { perm: PermissionInfo | null }) {
         const screenIdx =
           selectedMonitor === "all" ? undefined : parseInt(selectedMonitor);
         const result = await engine.recordScreen({
-          screen_index: isNaN(screenIdx as number)
-            ? undefined
-            : (screenIdx as number),
+          ...(isNaN(screenIdx as number) ? {} : { screen_index: screenIdx as number }),
           duration_seconds: duration,
         });
         const meta = result.metadata as Record<string, unknown> | null;

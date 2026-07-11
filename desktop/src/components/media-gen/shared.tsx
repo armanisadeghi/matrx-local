@@ -1024,7 +1024,7 @@ export function GeneratedImageView({
         id: result.itemId ?? "generated-result",
         kind: "image",
         url: `data:image/png;base64,${result.b64}`,
-        prompt,
+        ...(prompt !== undefined ? { prompt } : {}),
         seed: result.seed,
         meta: {
           width: result.width,
@@ -1063,8 +1063,8 @@ export function GeneratedImageView({
           open={lightboxOpen}
           items={lightboxItems}
           onClose={() => setLightboxOpen(false)}
-          onReuseSeed={onReuseSeed}
-          onUseAsInput={onUseAsInput ? () => onUseAsInput() : undefined}
+          {...(onReuseSeed !== undefined ? { onReuseSeed } : {})}
+          {...(onUseAsInput ? { onUseAsInput: () => onUseAsInput() } : {})}
         />
       )}
       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground flex-wrap">
@@ -1073,7 +1073,7 @@ export function GeneratedImageView({
             {result.width}×{result.height} · {result.elapsed.toFixed(1)}s
           </span>
           {result.seed !== null && (
-            <SeedChip seed={result.seed} onReuse={onReuseSeed} />
+            <SeedChip seed={result.seed} {...(onReuseSeed !== undefined ? { onReuse: onReuseSeed } : {})} />
           )}
         </span>
         <div className="flex gap-2 shrink-0">
@@ -1281,7 +1281,7 @@ export function useImageJobLightbox({
       items={lightbox?.items ?? []}
       startIndex={lightbox?.index ?? 0}
       onClose={closeLightbox}
-      onReuseSeed={onReuseSeed}
+      {...(onReuseSeed !== undefined ? { onReuseSeed } : {})}
       onUseAsInput={handleUseAsInput}
     />
   );

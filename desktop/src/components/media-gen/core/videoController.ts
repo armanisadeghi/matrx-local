@@ -140,11 +140,13 @@ export function useVideoGenController(options?: {
     const adv = computeAdvancedOverrides(videoForm.advancedText, d.advanced);
     if (!adv.ok) return null;
     const seed = parseSeedText(videoForm.seedText) ?? randomSeed();
+    const negativePrompt = d.supportsNegativePrompt
+      ? videoForm.negativePrompt.trim() || undefined
+      : undefined;
+    const imageBase64 = videoForm.sourceImage?.base64;
+    const extraParams = adv.count > 0 ? adv.overrides : undefined;
     return {
       prompt: videoForm.prompt.trim(),
-      negative_prompt: d.supportsNegativePrompt
-        ? videoForm.negativePrompt.trim() || undefined
-        : undefined,
       model_id: d.modelId,
       width: videoForm.width,
       height: videoForm.height,
@@ -153,8 +155,9 @@ export function useVideoGenController(options?: {
       steps: videoForm.steps,
       guidance: videoForm.guidance,
       seed,
-      image_base64: videoForm.sourceImage?.base64,
-      extra_params: adv.count > 0 ? adv.overrides : undefined,
+      ...(negativePrompt !== undefined ? { negative_prompt: negativePrompt } : {}),
+      ...(imageBase64 !== undefined ? { image_base64: imageBase64 } : {}),
+      ...(extraParams !== undefined ? { extra_params: extraParams } : {}),
     };
   }, [videoForm]);
 

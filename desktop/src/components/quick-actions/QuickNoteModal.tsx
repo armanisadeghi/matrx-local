@@ -44,8 +44,8 @@ export function QuickNoteModal({
       const note = await docs.createNote({
         label: title.trim() || "Untitled Note",
         content: content.trim(),
-        folder_name: folder?.name,
-        folder_id: folderId || undefined,
+        ...(folder?.name !== undefined ? { folder_name: folder.name } : {}),
+        ...(folderId ? { folder_id: folderId } : {}),
       });
       if (!note) {
         setSaveError(

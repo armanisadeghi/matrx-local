@@ -695,11 +695,11 @@ else
 fi
 
 # ── TypeScript type-check ────────────────────────────────────────────────────
-info "Running TypeScript type-check (pnpm tsc --noEmit)..."
+info "Running TypeScript type-check (pnpm tsc -b)..."
 if ! command -v pnpm &>/dev/null; then
     warn "pnpm not found — skipping TypeScript check. Install pnpm to enable this guard."
 else
-    if ! (cd desktop && pnpm tsc --noEmit 2>&1); then
+    if ! (cd desktop && pnpm tsc -b 2>&1); then
         echo ""
         fail "TypeScript errors detected. Fix them before releasing (shown above)."
     fi
@@ -750,7 +750,7 @@ echo ""
 
 if $DRY_RUN; then
     preview "Would check: pnpm-lock.yaml freshness (auto-fix and stage if stale)"
-    preview "Would run: pnpm tsc --noEmit (TypeScript check)"
+    preview "Would run: pnpm tsc -b (TypeScript check)"
     preview "Would update $VERSION_FILE: $CURRENT_VERSION → $NEW_VERSION"
     preview "Would update desktop/src-tauri/tauri.conf.json"
     preview "Would update desktop/src-tauri/Cargo.toml"

@@ -311,7 +311,7 @@ function SliderRow({
   decimals?: number;
 }) {
   return (
-    <SettingRow label={label} description={description}>
+    <SettingRow label={label} {...(description !== undefined ? { description } : {})}>
       <div className="flex items-center gap-2">
         <Slider
           value={[value]}

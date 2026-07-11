@@ -158,7 +158,7 @@ export async function* streamCompletion(
       top_k: params.top_k,
       chat_template_kwargs: params.chat_template_kwargs,
     }),
-    signal: options?.signal,
+    signal: options?.signal ?? null,
   });
 
   if (!response.ok) {
@@ -231,7 +231,7 @@ export async function callWithTools(
       top_k: params.top_k,
       chat_template_kwargs: params.chat_template_kwargs,
     }),
-    signal,
+    signal: signal ?? null,
   });
 
   if (!response.ok) {

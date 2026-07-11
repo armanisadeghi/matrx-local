@@ -276,7 +276,7 @@ export function usePermissions(): UsePermissionsReturn {
       setPermissions((prev) => {
         const next = new Map(prev);
         const current = next.get(key)!;
-        next.set(key, { ...current, status, detail });
+        next.set(key, { ...current, status, ...(detail !== undefined ? { detail } : {}) });
         return next;
       });
     },

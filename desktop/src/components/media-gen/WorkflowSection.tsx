@@ -122,7 +122,7 @@ export function WorkflowSection() {
     await generateImageWorkflow({
       preset_id: presetId,
       subject: subject.trim(),
-      model_id: modelOverride === SUGGESTED ? undefined : modelOverride,
+      ...(modelOverride === SUGGESTED ? {} : { model_id: modelOverride }),
       seed,
     });
   }, [presetId, subject, modelOverride, seedText, generateImageWorkflow]);

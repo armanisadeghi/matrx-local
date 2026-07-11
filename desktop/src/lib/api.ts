@@ -671,7 +671,7 @@ class EngineAPI {
         method: "POST",
         headers,
         body: JSON.stringify({ model_name: name }),
-        signal: callbacks.signal,
+        signal: callbacks.signal ?? null,
       },
     );
     if (!resp.ok) {
@@ -1877,7 +1877,7 @@ class EngineAPI {
     try {
       resp = await fetch(`${this.baseUrl}${path}`, {
         ...init,
-        signal,
+        signal: signal ?? null,
         headers: {
           ...authHdrs,
           ...(init?.headers as Record<string, string> | undefined),
@@ -1992,7 +1992,7 @@ class EngineAPI {
       return {
         status:
           (resp.status as "token_ready" | "opened" | "manual") ?? "manual",
-        token: resp.token ?? undefined,
+        ...(resp.token !== undefined ? { token: resp.token } : {}),
       };
     } catch {
       return { status: "manual" };
@@ -2086,7 +2086,7 @@ class EngineAPI {
       resp = await fetch(`${this.baseUrl}/notes${path}`, {
         method,
         headers,
-        body: body ? JSON.stringify(body) : undefined,
+        body: body ? JSON.stringify(body) : null,
         signal: controller.signal,
       });
     } catch (err) {
@@ -2672,7 +2672,7 @@ class EngineAPI {
     const resp = await fetch(`${this.baseUrl}/setup/install?mode=${mode}`, {
       method: "POST",
       headers,
-      signal: callbacks.signal,
+      signal: callbacks.signal ?? null,
     });
     if (!resp.ok) {
       callbacks.onError(`Setup install failed: ${resp.status}`);
@@ -2759,7 +2759,7 @@ class EngineAPI {
       method: "POST",
       headers,
       body: JSON.stringify({ model }),
-      signal: callbacks.signal,
+      signal: callbacks.signal ?? null,
     });
     if (!resp.ok) {
       callbacks.onError(`Transcription install failed: ${resp.status}`);
@@ -2834,7 +2834,7 @@ class EngineAPI {
 
     const run = async () => {
       try {
-        const resp = await fetch(url, { signal: callbacks.signal });
+        const resp = await fetch(url, { signal: callbacks.signal ?? null });
         if (!resp.ok) {
           callbacks.onError?.(`Log stream failed: ${resp.status}`);
           return;
@@ -3906,7 +3906,7 @@ async function imageGenFetch<T>(
   let resp: Response;
   try {
     resp = await fetch(url, {
-      signal: mediaGenTimeoutSignal(timeoutMs),
+      signal: mediaGenTimeoutSignal(timeoutMs) ?? null,
       ...options,
       headers: mergedHeaders,
     });
@@ -4597,7 +4597,7 @@ async function videoGenFetch<T>(
   let resp: Response;
   try {
     resp = await fetch(url, {
-      signal: mediaGenTimeoutSignal(timeoutMs),
+      signal: mediaGenTimeoutSignal(timeoutMs) ?? null,
       ...options,
       headers: mergedHeaders,
     });

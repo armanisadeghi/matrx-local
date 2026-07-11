@@ -71,7 +71,7 @@ async function aidreamGet<T>(
   const response = await fetch(url, {
     method: "GET",
     headers,
-    signal: options.signal,
+    signal: options.signal ?? null,
   });
 
   if (!response.ok) {
@@ -189,7 +189,7 @@ export async function resolveComputeTarget(
       method: "POST",
       headers,
       body: JSON.stringify(ref),
-      signal: options.signal,
+      signal: options.signal ?? null,
     });
     if (!resp.ok) return null;
     return (await resp.json()) as SandboxBindingPayload;

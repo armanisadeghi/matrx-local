@@ -802,7 +802,7 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
                 <div className="space-y-1.5">
                   <Label className="text-xs">Target session</Label>
                   <Select
-                    value={invokeSessionId || undefined}
+                    {...(invokeSessionId ? { value: invokeSessionId } : {})}
                     onValueChange={setInvokeSessionId}
                     disabled={sessions.length === 0}
                   >

@@ -529,9 +529,7 @@ export function ImageModelPicker({
             onLoad={() => void ctl.handleLoadModel(m)}
             onDownload={() => void ctl.handleDownloadModel(m)}
             onGenerate={() => ctl.handleOpenGenerate(m)}
-            onDeleteCustom={
-              m.custom ? () => deleteCustomModel(m.model_id) : undefined
-            }
+            {...(m.custom ? { onDeleteCustom: () => deleteCustomModel(m.model_id) } : {})}
           />
         ))}
         {imageModels.length === 0 && (

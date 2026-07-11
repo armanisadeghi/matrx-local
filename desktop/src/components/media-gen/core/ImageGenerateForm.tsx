@@ -775,7 +775,7 @@ export function ImageGenerateActions({
         onGenerate={() => void ctl.handleGenerate()}
         onCancel={() => void cancelImageGeneration()}
         containerClassName="flex-1"
-        size={size}
+        {...(size !== undefined ? { size } : {})}
         buttonClassName={buttonClassName}
         idleContent={
           <>
@@ -873,7 +873,7 @@ export function ImageGenerateForm({
   return (
     <div className="space-y-4">
       {showHeader && (
-        <ImageFormHeader ctl={ctl} onSwitchModel={onSwitchModel} />
+        <ImageFormHeader ctl={ctl} {...(onSwitchModel !== undefined ? { onSwitchModel } : {})} />
       )}
       {!hideNotices && <ImageParamsErrorNotice ctl={ctl} />}
       <ImagePromptField ctl={ctl} />

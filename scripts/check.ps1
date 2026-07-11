@@ -155,9 +155,9 @@ if (-not $Smoke -and -not $Parity) {
         Pop-Location
     }
 
-    Run-Step "tsc --noEmit" {
+    Run-Step "tsc -b" {
         Push-Location $DesktopDir
-        npx tsc --noEmit
+        npx tsc -b
         Pop-Location
     }
 

@@ -200,7 +200,7 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
     const merged = {
       ...(payload as DownloadEntry & { id: string }),
       speed_bps,
-      eta_seconds,
+      ...(eta_seconds !== undefined ? { eta_seconds } : {}),
       // Ensure updated_at always present
       updated_at:
         (payload as DownloadEntry).updated_at ?? new Date().toISOString(),

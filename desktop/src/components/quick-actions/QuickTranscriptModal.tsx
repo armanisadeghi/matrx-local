@@ -270,7 +270,7 @@ export function QuickTranscriptModal({
               height="sm"
               showDot
               label={isCalibrating ? "Calibrating mic level…" : "Recording"}
-              detail={selectedDevice ?? undefined}
+              {...(selectedDevice ? { detail: selectedDevice } : {})}
             />
           )}
           {isProcessingTail && (

@@ -3276,7 +3276,7 @@ function SaveToNoteModal({
         label: noteTitle.trim(),
         content,
         folder_name: selectedFolderName,
-        folder_id: selectedFolderId ?? undefined,
+        ...(selectedFolderId ? { folder_id: selectedFolderId } : {}),
       });
       setSaved(true);
       setTimeout(onClose, 900);
@@ -4072,12 +4072,13 @@ function InferenceTab() {
       )?.filename ||
       downloadedModels[0]?.filename;
     if (!filename) return;
+    const catalogContext = hardwareResult?.all_models.find(
+      (m) =>
+        m.filename === filename ||
+        m.variants?.some((v) => v.filename === filename),
+    )?.context_length;
     void resolveContextLength(filename, {
-      catalogContext: hardwareResult?.all_models.find(
-        (m) =>
-          m.filename === filename ||
-          m.variants?.some((v) => v.filename === filename),
-      )?.context_length,
+      ...(catalogContext !== undefined ? { catalogContext } : {}),
     }).then(setContextLengthOverride);
     // Re-seed when model selection changes, not on every hardware refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4133,7 +4134,7 @@ function InferenceTab() {
       systemPrompt: "",
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      modelName: serverStatus?.model_name,
+      ...(serverStatus?.model_name ? { modelName: serverStatus.model_name } : {}),
     };
     const updated = [conv, ...conversations];
     persistConvs(updated);
@@ -4443,7 +4444,7 @@ function InferenceTab() {
       systemPrompt: activeConv.systemPrompt,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      modelName: activeConv.modelName,
+      ...(activeConv.modelName ? { modelName: activeConv.modelName } : {}),
     };
     const updated = [fork, ...conversations];
     persistConvs(updated);
@@ -4507,7 +4508,7 @@ function InferenceTab() {
         systemPrompt,
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        modelName: serverStatus?.model_name,
+        ...(serverStatus?.model_name ? { modelName: serverStatus.model_name } : {}),
       };
       persistConvs([conv, ...conversations]);
       convId = conv.id;
@@ -4625,7 +4626,7 @@ function InferenceTab() {
         systemPrompt,
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        modelName: serverStatus?.model_name,
+        ...(serverStatus?.model_name ? { modelName: serverStatus.model_name } : {}),
       };
       persistConvs([conv, ...conversations]);
       convId = conv.id;

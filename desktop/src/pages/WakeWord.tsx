@@ -817,17 +817,22 @@ function ModelsTab({
         </div>
       ) : (
         <div className="space-y-2">
-          {models.map((model) => (
-            <ModelCard
-              key={model.name}
-              model={model}
-              isActive={model.name === currentModel}
-              isDownloading={downloading.has(model.name)}
-              downloadPct={downloadPct.get(model.name)}
-              onDownload={() => void handleDownload(model.name)}
-              onCancel={() => handleCancelDownload(model.name)}
-            />
-          ))}
+          {models.map((model) => {
+            const pct = downloadPct.get(model.name);
+            return (
+              <ModelCard
+                key={model.name}
+                model={model}
+                isActive={model.name === currentModel}
+                isDownloading={downloading.has(model.name)}
+                {...(pct !== undefined ? { downloadPct: pct } : {})}
+                onDownload={() => {
+                  void handleDownload(model.name);
+                }}
+                onCancel={() => handleCancelDownload(model.name)}
+              />
+            );
+          })}
         </div>
       )}
 

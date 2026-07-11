@@ -190,8 +190,8 @@ if ! $MODE_SMOKE_ONLY && ! $MODE_PARITY_ONLY; then
     (cd "$DESKTOP_DIR" && pnpm install --silent 2>&1) || true
   fi
 
-  run_step "tsc --noEmit" \
-    bash -c "cd '$DESKTOP_DIR' && npx tsc --noEmit"
+  run_step "tsc -b" \
+    bash -c "cd '$DESKTOP_DIR' && npx tsc -b"
 
   run_step "vite build" \
     bash -c "cd '$DESKTOP_DIR' && pnpm run build 2>&1 | grep -v 'Some chunks are larger' || true"

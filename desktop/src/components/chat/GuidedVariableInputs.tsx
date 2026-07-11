@@ -445,7 +445,7 @@ function VariableContent({
           value={value}
           onChange={onChange}
           options={cc.options}
-          allowOther={cc.allowOther}
+          {...(cc.allowOther !== undefined ? { allowOther: cc.allowOther } : {})}
           onAutoAdvance={onAutoAdvance}
         />
       );
@@ -465,7 +465,7 @@ function VariableContent({
           value={value}
           onChange={onChange}
           options={cc.options}
-          allowOther={cc.allowOther}
+          {...(cc.allowOther !== undefined ? { allowOther: cc.allowOther } : {})}
         />
       );
     case "toggle":
@@ -473,7 +473,7 @@ function VariableContent({
         <GuidedToggle
           value={value}
           onChange={onChange}
-          toggleValues={cc.toggleValues}
+          {...(cc.toggleValues !== undefined ? { toggleValues: cc.toggleValues } : {})}
           onAutoAdvance={onAutoAdvance}
         />
       );
@@ -482,9 +482,9 @@ function VariableContent({
         <GuidedNumber
           value={value}
           onChange={onChange}
-          min={cc.min}
-          max={cc.max}
-          step={cc.step}
+          {...(cc.min !== undefined ? { min: cc.min } : {})}
+          {...(cc.max !== undefined ? { max: cc.max } : {})}
+          {...(cc.step !== undefined ? { step: cc.step } : {})}
         />
       );
     default:

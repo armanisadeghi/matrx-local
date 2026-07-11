@@ -476,7 +476,7 @@ export function DownloadManagerModal() {
         display_name: entry.display_name,
         urls: entry.urls,
         priority: entry.priority,
-        metadata: entry.metadata,
+        ...(entry.metadata !== undefined ? { metadata: entry.metadata } : {}),
       });
     },
     [enqueue],

@@ -212,7 +212,7 @@ export async function* synthesizeStream(
     method: "POST",
     headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify(req),
-    signal,
+    signal: signal ?? null,
   });
 
   if (!resp.ok) {

@@ -194,7 +194,7 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
             setStatus({
               status: "installed",
               version: result.version,
-              body: result.body,
+              ...(result.body !== undefined ? { body: result.body } : {}),
             });
             setProgress(100);
           } else {

@@ -223,7 +223,7 @@ export function ChatPanel({
       setActiveVariables([]);
       setVariableValues({});
       await sendMessage(content, {
-        agentId: activeAgent?.id || undefined,
+        ...(activeAgent?.id ? { agentId: activeAgent.id } : {}),
         variables: submittedVars,
       });
     },

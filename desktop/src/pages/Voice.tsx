@@ -442,9 +442,7 @@ export function Voice() {
         rms={state.liveRms || wwState.listenRms}
         transcript={state.fullTranscript}
         onDismiss={wwActions.dismiss}
-        onPublishToNote={
-          engine.engineUrl ? handleOverlayPublishToNote : undefined
-        }
+        {...(engine.engineUrl ? { onPublishToNote: handleOverlayPublishToNote } : {})}
       />
 
       <PageHeader
@@ -1523,7 +1521,7 @@ function TranscribeTab({
                         ? "Calibrating mic level…"
                         : "Recording"
                     }
-                    detail={state.selectedDevice ?? undefined}
+                    {...(state.selectedDevice ? { detail: state.selectedDevice } : {})}
                   />
                 </div>
               )}

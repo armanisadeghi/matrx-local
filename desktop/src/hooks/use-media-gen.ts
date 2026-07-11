@@ -956,12 +956,12 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
           await enqueueImageAsNext(base, {
             prompt: preset.prompt_template.replace("{subject}", input.subject),
             model_id: input.model_id ?? preset.suggested_model_id,
-            negative_prompt: preset.negative_prompt || undefined,
+            ...(preset.negative_prompt ? { negative_prompt: preset.negative_prompt } : {}),
             steps: preset.steps,
             guidance: preset.guidance,
             width: preset.width,
             height: preset.height,
-            seed: input.seed,
+            ...(input.seed !== undefined ? { seed: input.seed } : {}),
           });
           return false;
         }

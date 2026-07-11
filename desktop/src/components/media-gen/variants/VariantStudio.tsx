@@ -215,7 +215,7 @@ export function VariantStudio() {
         id: imageResult.itemId ?? "fresh-result",
         kind: "image",
         url: `data:image/png;base64,${imageResult.b64}`,
-        prompt: imageForm.prompt.trim() || undefined,
+        ...(imageForm.prompt.trim() ? { prompt: imageForm.prompt.trim() } : {}),
         seed: imageResult.seed,
         meta: {
           width: imageResult.width,

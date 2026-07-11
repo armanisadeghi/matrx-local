@@ -100,7 +100,7 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
       try {
         const f = filterRef.current;
         const page = await listMediaLibraryItems(base, {
-          media_type: f === "all" ? undefined : f,
+          ...(f === "all" ? {} : { media_type: f }),
           limit: PAGE_SIZE,
           offset,
         });

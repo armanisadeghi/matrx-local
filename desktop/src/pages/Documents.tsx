@@ -103,7 +103,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
       label: "New Note",
       content: "",
       folder_name: folderName,
-      folder_id: docs.activeFolderId ?? undefined,
+      ...(docs.activeFolderId ? { folder_id: docs.activeFolderId } : {}),
     });
   };
 

@@ -330,7 +330,7 @@ function PromptManageDialog({
               </p>
               <PromptEditor
                 key={editing?.id ?? "new"}
-                initial={editing ?? undefined}
+                {...(editing ? { initial: editing } : {})}
                 onSave={editing ? handleUpdate : handleCreate}
                 onCancel={() => { setCreating(false); setEditing(null); }}
               />
@@ -423,7 +423,7 @@ export function PromptPicker({
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         onSelect={onSelect}
-        currentContent={currentContent}
+        {...(currentContent !== undefined ? { currentContent } : {})}
       />
     </>
   );
@@ -456,7 +456,7 @@ export function PromptPickerIcon({
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         onSelect={onSelect}
-        currentContent={currentContent}
+        {...(currentContent !== undefined ? { currentContent } : {})}
       />
     </>
   );

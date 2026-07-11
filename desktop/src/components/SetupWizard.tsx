@@ -345,7 +345,7 @@ export function SetupWizard({
               status: data.status,
               message: data.message,
               percent: data.percent,
-              deep_link: data.deep_link,
+              ...(data.deep_link !== undefined ? { deep_link: data.deep_link } : {}),
             },
           }));
 
@@ -815,12 +815,10 @@ export function SetupWizard({
                 <ComponentRow
                   key={comp.id}
                   component={comp}
-                  progress={progress[comp.id]}
-                  onOpenSettings={
-                    comp.deep_link
-                      ? () => openDeepLink(comp.deep_link!)
-                      : undefined
-                  }
+                  {...(progress[comp.id] !== undefined ? { progress: progress[comp.id] } : {})}
+                  {...(comp.deep_link
+                    ? { onOpenSettings: () => openDeepLink(comp.deep_link!) }
+                    : {})}
                 />
               ))}
             </div>

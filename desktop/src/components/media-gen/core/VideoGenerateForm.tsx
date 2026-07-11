@@ -278,7 +278,7 @@ export function VideoGenerateActions({
       disabled={ctl.formInvalid || extraDisabled}
       onGenerate={() => void ctl.handleGenerate()}
       onCancel={() => void cancelVideoGeneration()}
-      size={size}
+      {...(size !== undefined ? { size } : {})}
       buttonClassName={buttonClassName}
       workingLabel="Generating video"
       idleContent={
@@ -356,7 +356,7 @@ export function VideoGenerateForm({
   return (
     <div className="space-y-4">
       {showHeader && (
-        <VideoFormHeader ctl={ctl} onSwitchModel={onSwitchModel} />
+        <VideoFormHeader ctl={ctl} {...(onSwitchModel !== undefined ? { onSwitchModel } : {})} />
       )}
       {!hideNotices && <VideoParamsErrorNotice ctl={ctl} />}
       <VideoPromptField ctl={ctl} />

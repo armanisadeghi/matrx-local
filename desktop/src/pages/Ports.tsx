@@ -1157,15 +1157,21 @@ function TerminalTable({
         lines: 80,
       });
       if (result.type === "success") {
+        const openFiles = result.metadata?.open_files as
+          | TailResult["open_files"]
+          | undefined;
+        const connections = result.metadata?.connections as
+          | TailResult["connections"]
+          | undefined;
+        const note = result.metadata?.note as string | undefined;
         setTailData((prev) => ({
           ...prev,
           [t.pid]: {
             output: result.output ?? "",
             source: (result.metadata?.source as string) ?? "unknown",
-            open_files: result.metadata?.open_files as TailResult["open_files"],
-            connections: result.metadata
-              ?.connections as TailResult["connections"],
-            note: result.metadata?.note as string | undefined,
+            ...(openFiles !== undefined ? { open_files: openFiles } : {}),
+            ...(connections !== undefined ? { connections } : {}),
+            ...(note !== undefined ? { note } : {}),
           },
         }));
       } else {

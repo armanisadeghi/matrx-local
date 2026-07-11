@@ -106,6 +106,24 @@ class ImageGenModel:
 
     tags: list[str] = field(default_factory=list)
 
+    # ── custom-model fields (user-registered models; catalog entries keep the
+    #    defaults — see app/services/image_gen/custom_models.py) ──────────────
+    format: str = "diffusers"
+    """"diffusers" (model_index.json + component subfolders, loaded via
+    from_pretrained) or "single_file" (one .safetensors checkpoint, loaded via
+    <FamilyPipeline>.from_single_file). Catalog models are always diffusers."""
+
+    weight_name: str | None = None
+    """single_file only: the checkpoint filename inside the model dir."""
+
+    custom: bool = False
+    """True for user-registered models from the custom-model registry
+    (~/.matrx/image-models/custom-models.json). Custom models are deletable
+    via DELETE /image-gen/custom-models/{model_id}."""
+
+    source: str = "catalog"
+    """"catalog" | "hf" | "civitai" — where the model definition came from."""
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Catalog

@@ -56,6 +56,9 @@ PROVIDER_ENV_MAP: dict[str, list[str]] = {
     "fastino":    ["PIONEER_API_KEY", "FASTINO_API_KEY"],
     # Hugging Face Hub (local GGUF downloads via desktop + any Python hub usage)
     "huggingface": ["HUGGING_FACE_HUB_TOKEN", "HF_TOKEN"],
+    # Civitai — custom image model / LoRA downloads (read via
+    # app.services.media_gen.paths.read_civitai_key; sent only to civitai.com).
+    "civitai": ["CIVITAI_API_KEY", "CIVITAI_API_TOKEN"],
 }
 
 # Reverse index: env var name → provider (first provider that declares it wins;

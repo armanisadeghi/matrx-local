@@ -51,6 +51,11 @@ import {
   listImageGenLoras as apiListImageGenLoras,
   downloadImageGenLora as apiDownloadImageGenLora,
   deleteImageGenLora as apiDeleteImageGenLora,
+  inspectCustomImageModel as apiInspectCustomImageModel,
+  registerCustomImageModel as apiRegisterCustomImageModel,
+  deleteCustomImageModel as apiDeleteCustomImageModel,
+  classifyLoraRef,
+  MediaGenHttpError,
 } from "@/lib/api";
 import type {
   ImageGenStatus,
@@ -64,6 +69,8 @@ import type {
   VideoGenModelInfo,
   VideoGenJob,
   VideoGenRequest,
+  CustomImageModelEntry,
+  CustomImageModelInspectResult,
 } from "@/lib/api";
 import { emitClientLog } from "@/hooks/use-unified-log";
 
@@ -90,6 +97,19 @@ function logEngineNotConnected(action: string): void {
   console.error(
     `[media-gen] ${action} blocked — engine not connected (engine.engineUrl is null)`,
   );
+}
+
+/**
+ * Map a 404 from the custom-model routes (engine build without them) to a
+ * clear user-facing message; pass every other failure through unchanged.
+ */
+function customModelUnsupported(e: unknown): Error {
+  if (e instanceof MediaGenHttpError && e.status === 404) {
+    return new Error(
+      "Custom model support is not available on this engine build yet (the /image-gen/custom-models endpoint was not found). Update Matrx Local, then try again.",
+    );
+  }
+  return e instanceof Error ? e : new Error(String(e));
 }
 
 export interface GeneratedImageResult {
@@ -308,6 +328,12 @@ export interface MediaGenState {
   loraError: string | null;
   /** repo_id → DownloadManager download id for in-flight LoRA downloads. */
   loraDownloads: Record<string, string>;
+  /**
+   * True when the last LoRA download failed with 401 on a Civitai reference —
+   * the UI shows a "Set your Civitai API key" affordance (Settings → API
+   * Keys).  Cleared on the next download attempt / success.
+   */
+  loraNeedsCivitaiKey: boolean;
 
   // ── Video ──────────────────────────────────────────────────────────────
   videoStatus: VideoGenStatus | null;
@@ -386,12 +412,31 @@ export interface MediaGenActions {
   /** Re-fetch installed + catalog LoRAs. Failures land in loraError (loud). */
   refreshLoras: () => Promise<void>;
   /**
-   * Start a LoRA download (catalog entry or pasted HF repo id).  Returns the
-   * DownloadManager download id, or null on failure (loraError is set).
+   * Start a LoRA download.  `ref` may be a catalog repo id, a pasted HF repo
+   * id/URL, or a Civitai link / numeric id (classified automatically unless
+   * `weightName` is given, which pins it as an HF repo).  Returns the
+   * DownloadManager download id, or null on failure (loraError is set; a 401
+   * on a Civitai ref also sets loraNeedsCivitaiKey).
    */
-  downloadLora: (repoId: string, weightName?: string) => Promise<string | null>;
+  downloadLora: (ref: string, weightName?: string) => Promise<string | null>;
   /** Delete an installed LoRA (also drops it from the form selection). */
   deleteLora: (loraId: string) => Promise<void>;
+  // Custom models (Hugging Face / Civitai checkpoints)
+  /**
+   * Resolve a pasted HF repo / Civitai link into a proposed model entry with
+   * warnings + the registerable gate.  THROWS with a user-presentable
+   * message on failure (400 with the engine's reason, 404 when the engine
+   * build lacks custom-model support) — callers render it verbatim.
+   */
+  inspectCustomModel: (ref: string) => Promise<CustomImageModelInspectResult>;
+  /**
+   * Register a confirmed custom model: the engine queues the weights
+   * download (standard DownloadManager progress) and the model list is
+   * refreshed so the entry appears in the picker.  THROWS on failure.
+   */
+  registerCustomModel: (entry: CustomImageModelEntry) => Promise<void>;
+  /** Unregister a custom model and refresh the model list.  THROWS on failure. */
+  deleteCustomModel: (modelId: string) => Promise<void>;
   /**
    * Route an image into the img2img input slot (the "Use as input" action on
    * lightbox items, library cards and result views).
@@ -472,6 +517,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const [loraDownloads, setLoraDownloads] = useState<Record<string, string>>(
     {},
   );
+  const [loraNeedsCivitaiKey, setLoraNeedsCivitaiKey] = useState(false);
 
   // ── Video state ──────────────────────────────────────────────────────────
   const [videoStatus, setVideoStatus] = useState<VideoGenStatus | null>(null);
@@ -1090,27 +1136,35 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   }, []);
 
   const downloadLora = useCallback(
-    async (repoId: string, weightName?: string): Promise<string | null> => {
+    async (ref: string, weightName?: string): Promise<string | null> => {
       const base = engine.engineUrl;
       if (!base) {
         logEngineNotConnected("LoRA download");
         setLoraError(ENGINE_NOT_CONNECTED_ACTION);
         return null;
       }
+      // Catalog rows pass an explicit weight file — those are HF by
+      // definition.  Free-text pastes are classified (Civitai link/id vs HF
+      // repo/URL).
+      const wire = weightName
+        ? { repo_id: ref, weight_name: weightName }
+        : classifyLoraRef(ref);
+      setLoraNeedsCivitaiKey(false);
       try {
-        const { download_id } = await apiDownloadImageGenLora(base, {
-          repo_id: repoId,
-          weight_name: weightName,
-        });
-        setLoraDownloads((prev) => ({ ...prev, [repoId]: download_id }));
+        const { download_id } = await apiDownloadImageGenLora(base, wire);
+        setLoraDownloads((prev) => ({ ...prev, [ref]: download_id }));
         setLoraError(null);
         return download_id;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        if (e instanceof MediaGenHttpError && e.status === 401) {
+          // Engine says the upstream needs credentials (Civitai API key).
+          setLoraNeedsCivitaiKey(true);
+        }
         setLoraError(msg);
         emitClientLog(
           "error",
-          `[media-gen] LoRA download failed for ${repoId}: ${msg}`,
+          `[media-gen] LoRA download failed for ${ref}: ${msg}`,
           "engine",
         );
         return null;
@@ -1151,6 +1205,75 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const useImageAsInput = useCallback((image: PickedImage) => {
     setImageFormState((prev) => ({ ...prev, initImage: image }));
   }, []);
+
+  // ── Custom models (Hugging Face / Civitai checkpoints) ────────────────────
+  const inspectCustomModel = useCallback(
+    async (ref: string): Promise<CustomImageModelInspectResult> => {
+      const base = engine.engineUrl;
+      if (!base) {
+        logEngineNotConnected("custom model inspect");
+        throw new Error(ENGINE_NOT_CONNECTED_ACTION);
+      }
+      try {
+        return await apiInspectCustomImageModel(base, ref);
+      } catch (e) {
+        emitClientLog(
+          "error",
+          `[media-gen] custom-model inspect failed for "${ref}": ${String(e)}`,
+          "engine",
+        );
+        throw customModelUnsupported(e);
+      }
+    },
+    [],
+  );
+
+  const registerCustomModel = useCallback(
+    async (entry: CustomImageModelEntry): Promise<void> => {
+      const base = engine.engineUrl;
+      if (!base) {
+        logEngineNotConnected("custom model register");
+        throw new Error(ENGINE_NOT_CONNECTED_ACTION);
+      }
+      try {
+        await apiRegisterCustomImageModel(base, entry);
+      } catch (e) {
+        emitClientLog(
+          "error",
+          `[media-gen] custom-model register failed for ${entry.model_id}: ${String(e)}`,
+          "engine",
+        );
+        throw customModelUnsupported(e);
+      }
+      // The entry (and its queued weights download) must appear in the picker.
+      await refreshImage();
+    },
+    [refreshImage],
+  );
+
+  const deleteCustomModel = useCallback(
+    async (modelId: string): Promise<void> => {
+      const base = engine.engineUrl;
+      if (!base) {
+        logEngineNotConnected("custom model delete");
+        throw new Error(ENGINE_NOT_CONNECTED_ACTION);
+      }
+      try {
+        await apiDeleteCustomImageModel(base, modelId);
+      } catch (e) {
+        emitClientLog(
+          "error",
+          `[media-gen] custom-model delete failed for ${modelId}: ${String(e)}`,
+          "engine",
+        );
+        throw customModelUnsupported(e);
+      }
+      // Never leave a deleted model selected.
+      setSelectedImageModelIdState((prev) => (prev === modelId ? null : prev));
+      await refreshImage();
+    },
+    [refreshImage],
+  );
 
   // Poll the image job queue every 2s ONLY while something is queued/running.
   const hasActiveImageJobs = imageJobs.some(
@@ -1799,6 +1922,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     loraList,
     loraError,
     loraDownloads,
+    loraNeedsCivitaiKey,
     videoStatus,
     videoModels,
     videoStatusLoading,
@@ -1839,6 +1963,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       refreshLoras,
       downloadLora,
       deleteLora,
+      inspectCustomModel,
+      registerCustomModel,
+      deleteCustomModel,
       useImageAsInput,
       refreshVideo,
       loadVideoModel,
@@ -1880,6 +2007,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       refreshLoras,
       downloadLora,
       deleteLora,
+      inspectCustomModel,
+      registerCustomModel,
+      deleteCustomModel,
       useImageAsInput,
       refreshVideo,
       loadVideoModel,

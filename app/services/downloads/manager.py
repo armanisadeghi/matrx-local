@@ -233,6 +233,12 @@ def filter_hf_repo_files(
     return kept
 
 
+class NonRetryableDownloadError(RuntimeError):
+    """A download failure that retrying can never fix (e.g. Civitai 401/403
+    without a valid API key). The retry loop surfaces it immediately with its
+    message intact instead of burning attempts."""
+
+
 # SSE subscriber queue type
 _Subscriber = asyncio.Queue[str]
 
@@ -337,9 +343,10 @@ class DownloadManager:
                             (entry.metadata or {}).get("dest_dir", dest_dir)
                         ) / DOWNLOAD_COMPLETE_MARKER
                     else:
-                        existing_dest = Path(
-                            (entry.metadata or {}).get("dest_dir", dest_dir)
-                        ) / entry.filename
+                        _md = entry.metadata or {}
+                        existing_dest = Path(_md.get("dest_dir", dest_dir)) / (
+                            _md.get("dest_filename") or entry.filename
+                        )
                     if existing_dest.exists():
                         logger.debug("[downloads] Already completed: %s", filename)
                         return entry
@@ -702,8 +709,20 @@ class DownloadManager:
         bytes_before_this_part = 0
         max_retries = 3
 
+        # Civitai direct downloads authenticate with the stored API key.
+        # httpx drops the Authorization header on cross-origin redirects
+        # (civitai.com → their signed CDN URL), which is exactly right.
+        # The key is never logged.
+        request_headers: dict[str, str] = {}
+        if (entry.metadata or {}).get("civitai_download"):
+            from app.services.media_gen.paths import read_civitai_key  # noqa: PLC0415
+            civitai_key = read_civitai_key()
+            if civitai_key:
+                request_headers["Authorization"] = f"Bearer {civitai_key}"
+
         async with httpx.AsyncClient(
             follow_redirects=True,
+            headers=request_headers,
             timeout=httpx.Timeout(connect=30.0, read=120.0, write=30.0, pool=30.0),
         ) as client:
             for part_idx, url in enumerate(urls):
@@ -741,6 +760,10 @@ class DownloadManager:
                         break
                     except asyncio.CancelledError:
                         raise
+                    except NonRetryableDownloadError:
+                        # e.g. Civitai 401/403 — retrying cannot fix a missing
+                        # or invalid API key; surface the message immediately.
+                        raise
                     except Exception as exc:
                         last_error = exc
                         logger.warning(
@@ -752,6 +775,15 @@ class DownloadManager:
                     raise RuntimeError(
                         f"Download failed after {max_retries} attempts. Last error: {last_error}"
                     ) from last_error
+
+        # Custom image models / Civitai LoRAs downloaded via direct URL use
+        # the same completion marker the HF snapshot path writes — the
+        # image/LoRA services treat weights as installed ONLY when it exists.
+        if (entry.metadata or {}).get("write_complete_marker"):
+            from app.services.media_gen.paths import DOWNLOAD_COMPLETE_MARKER  # noqa: PLC0415
+            marker_dir = Path((entry.metadata or {})["dest_dir"])
+            marker_dir.mkdir(parents=True, exist_ok=True)
+            (marker_dir / DOWNLOAD_COMPLETE_MARKER).write_text("ok", encoding="utf-8")
 
         entry.status = "completed"
         entry.bytes_done = entry.total_bytes if entry.total_bytes > 0 else bytes_before_this_part
@@ -784,13 +816,17 @@ class DownloadManager:
         Multi-part downloads (e.g. split GGUF) are distinct files — use each
         URL's basename; single-part downloads use the entry filename.
         """
-        dest_dir = Path((entry.metadata or {}).get("dest_dir", "."))
+        md = entry.metadata or {}
+        dest_dir = Path(md.get("dest_dir", "."))
         if entry.part_total > 1:
             name = url.split("?")[0].rstrip("/").rsplit("/", 1)[-1] or (
                 f"{entry.filename}.part{part_idx + 1}"
             )
         else:
-            name = entry.filename
+            # dest_filename decouples the on-disk name from the (unique)
+            # entry filename: e.g. a Civitai LoRA entry is keyed by its
+            # store id, but the weight file must keep its real name.
+            name = md.get("dest_filename") or entry.filename
         return dest_dir / name
 
     async def _download_part(
@@ -813,6 +849,15 @@ class DownloadManager:
         try:
             with open(tmp, "wb") as fh:
                 async with client.stream("GET", url) as response:
+                    if (
+                        response.status_code in (401, 403)
+                        and (entry.metadata or {}).get("civitai_download")
+                    ):
+                        raise NonRetryableDownloadError(
+                            "Civitai API key required or invalid — add your "
+                            "key under Settings → API Keys → Civitai, then "
+                            "retry the download."
+                        )
                     response.raise_for_status()
 
                     part_total = int(response.headers.get("content-length", 0))

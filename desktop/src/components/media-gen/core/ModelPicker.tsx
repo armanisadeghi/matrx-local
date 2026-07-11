@@ -8,7 +8,7 @@
  * the loaded-model banner.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -18,6 +18,8 @@ import {
   Film,
   Image as ImageIcon,
   Loader2,
+  PackagePlus,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
@@ -34,6 +36,7 @@ import {
 } from "@/components/media-gen/shared";
 import type { ImageGenController } from "./imageController";
 import type { VideoGenController } from "./videoController";
+import { AddCustomModelDialog } from "./AddCustomModelDialog";
 
 export type ModelPickerLayout = "grid" | "rows";
 
@@ -82,6 +85,80 @@ function DownloadProgress({
   );
 }
 
+/**
+ * Two-step delete affordance for custom models (both layouts): trash icon →
+ * inline "Remove?" confirm.  Errors render loudly in place.
+ */
+function CustomModelDelete({
+  modelName,
+  onDelete,
+}: {
+  modelName: string;
+  onDelete: () => Promise<void>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!confirming) {
+    return (
+      <div className="flex items-center">
+        <button
+          type="button"
+          onClick={() => setConfirming(true)}
+          className="text-muted-foreground hover:text-destructive"
+          aria-label={`Delete custom model ${modelName}`}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+        {error && (
+          <span className="ml-2 max-w-[16rem] truncate text-[10px] text-destructive">
+            {error}
+          </span>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-[10px] text-muted-foreground">Remove?</span>
+      <Button
+        size="sm"
+        variant="destructive"
+        className="h-6 px-2 text-[10px]"
+        disabled={deleting}
+        onClick={() => {
+          setDeleting(true);
+          setError(null);
+          onDelete()
+            .catch((e: unknown) => {
+              setError(e instanceof Error ? e.message : String(e));
+            })
+            .finally(() => {
+              setDeleting(false);
+              setConfirming(false);
+            });
+        }}
+      >
+        {deleting ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          "Yes, delete"
+        )}
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-6 px-2 text-[10px]"
+        disabled={deleting}
+        onClick={() => setConfirming(false)}
+      >
+        Keep
+      </Button>
+    </div>
+  );
+}
+
 /** One model — rich card (grid) or compact row (rows). */
 function ModelEntry({
   model,
@@ -93,6 +170,7 @@ function ModelEntry({
   onLoad,
   onDownload,
   onGenerate,
+  onDeleteCustom,
 }: {
   model: AnyModel;
   category: "image_gen" | "video_gen";
@@ -104,6 +182,8 @@ function ModelEntry({
   onDownload: () => void;
   /** Called for a LOADED model's primary action ("Generate →" / "Use"). */
   onGenerate: () => void;
+  /** Present only for custom entries — enables the two-step delete. */
+  onDeleteCustom?: () => Promise<void>;
 }) {
   const { dl, openModal } = useModelDownload(category, model.model_id);
   const downloading = dl?.status === "active" || dl?.status === "queued";
@@ -111,6 +191,7 @@ function ModelEntry({
   const imageToVideo =
     "supports_image_to_video" in model && model.supports_image_to_video;
   const img2img = "supports_img2img" in model && model.supports_img2img;
+  const isCustom = "custom" in model && model.custom === true;
 
   const actionArea =
     downloading && dl ? (
@@ -181,6 +262,11 @@ function ModelEntry({
           <div className="min-w-0">
             <p className="text-sm font-medium truncate flex items-center gap-1.5">
               {model.name}
+              {isCustom && (
+                <span className="rounded bg-blue-500/20 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 text-[10px] font-normal">
+                  Custom
+                </span>
+              )}
               {isLoaded && (
                 <span className="rounded bg-green-500/20 text-green-600 dark:text-green-400 px-1.5 py-0.5 text-[10px] font-normal">
                   Loaded
@@ -211,6 +297,12 @@ function ModelEntry({
             >
               <ExternalLink className="h-3.5 w-3.5" />
             </button>
+            {isCustom && onDeleteCustom && (
+              <CustomModelDelete
+                modelName={model.name}
+                onDelete={onDeleteCustom}
+              />
+            )}
           </div>
         </div>
         {hardwareNote}
@@ -231,16 +323,31 @@ function ModelEntry({
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <p className="font-medium text-sm">{model.name}</p>
+          <p className="font-medium text-sm flex items-center gap-1.5">
+            {model.name}
+            {isCustom && (
+              <span className="rounded bg-blue-500/20 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 text-[10px] font-normal">
+                Custom
+              </span>
+            )}
+          </p>
           <p className="text-xs text-muted-foreground">{model.provider}</p>
         </div>
-        <button
-          onClick={() => void openExternalUrl(model.model_card_url)}
-          className="shrink-0 text-muted-foreground hover:text-foreground"
-          aria-label={`Open model card for ${model.name}`}
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {isCustom && onDeleteCustom && (
+            <CustomModelDelete
+              modelName={model.name}
+              onDelete={onDeleteCustom}
+            />
+          )}
+          <button
+            onClick={() => void openExternalUrl(model.model_card_url)}
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+            aria-label={`Open model card for ${model.name}`}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
       <p className="text-xs text-muted-foreground leading-relaxed">
         {model.description}
@@ -334,7 +441,7 @@ export function ImageModelPicker({
   showLoadedBanner?: boolean;
   showHeading?: boolean;
 }) {
-  const [state] = useMediaGenApp();
+  const [state, actions] = useMediaGenApp();
   const {
     imageStatus,
     imageModels,
@@ -342,7 +449,38 @@ export function ImageModelPicker({
     loadingImageModelId,
     imageLoadStartedAt,
   } = state;
+  const { deleteCustomModel } = actions;
   const anyLoadInFlight = imageModelLoading || !!imageStatus?.is_loading;
+  const [addCustomOpen, setAddCustomOpen] = useState(false);
+
+  const addCustomEntry =
+    layout === "grid" ? (
+      <button
+        type="button"
+        onClick={() => setAddCustomOpen(true)}
+        className="flex min-h-[7rem] flex-col items-center justify-center gap-2 rounded-lg border border-dashed p-4 text-muted-foreground transition-colors hover:border-violet-500/50 hover:text-foreground"
+      >
+        <PackagePlus className="h-5 w-5" />
+        <span className="text-sm font-medium">Add custom model</span>
+        <span className="text-[11px]">
+          Paste a Hugging Face repo or Civitai link
+        </span>
+      </button>
+    ) : (
+      <button
+        type="button"
+        onClick={() => setAddCustomOpen(true)}
+        className="flex w-full items-center gap-2 rounded-lg border border-dashed px-3 py-2.5 text-left text-muted-foreground transition-colors hover:border-violet-500/50 hover:text-foreground"
+      >
+        <PackagePlus className="h-4 w-4 shrink-0" />
+        <span className="min-w-0">
+          <span className="block text-sm font-medium">Add custom model</span>
+          <span className="block truncate text-[11px]">
+            Paste a Hugging Face repo or Civitai link
+          </span>
+        </span>
+      </button>
+    );
 
   return (
     <div className="space-y-3">
@@ -391,6 +529,9 @@ export function ImageModelPicker({
             onLoad={() => void ctl.handleLoadModel(m)}
             onDownload={() => void ctl.handleDownloadModel(m)}
             onGenerate={() => ctl.handleOpenGenerate(m)}
+            onDeleteCustom={
+              m.custom ? () => deleteCustomModel(m.model_id) : undefined
+            }
           />
         ))}
         {imageModels.length === 0 && (
@@ -398,7 +539,12 @@ export function ImageModelPicker({
             No image models available yet.
           </div>
         )}
+        {addCustomEntry}
       </div>
+      <AddCustomModelDialog
+        open={addCustomOpen}
+        onOpenChange={setAddCustomOpen}
+      />
     </div>
   );
 }

@@ -273,6 +273,10 @@ _PROVIDER_LABELS: dict[str, dict[str, str]] = {
         "label": "Hugging Face",
         "description": "Read token for local GGUF downloads (XET / gated repos); sent only to huggingface.co",
     },
+    "civitai": {
+        "label": "Civitai",
+        "description": "API key for downloading custom image models and LoRAs from Civitai; sent only to civitai.com",
+    },
 }
 
 

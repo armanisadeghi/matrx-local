@@ -36,13 +36,43 @@ First-class request fields on POST /image-gen/generate AND /image-gen/jobs
                  the LoRA.
 
 LoRA management:
-  GET    /image-gen/loras            — installed LoRAs + curated catalog
-  POST   /image-gen/loras/download   — {repo_id, weight_name?} → routed
-                                       through the universal DownloadManager
-                                       (category "image_gen_lora"; progress on
+  GET    /image-gen/loras            — installed LoRAs + curated catalog;
+                                       installed entries carry source
+                                       ("hf" | "civitai")
+  POST   /image-gen/loras/download   — {repo_id, weight_name?} (HF repo id OR
+                                       HF URL) or {civitai: "<model/version
+                                       URL/id>"} — exactly one of
+                                       repo_id/civitai. Routed through the
+                                       universal DownloadManager (category
+                                       "image_gen_lora"; progress on
                                        /downloads/stream) — NEVER an inline
-                                       silent download
+                                       silent download. A Civitai ref whose
+                                       type is not LORA (e.g. a Checkpoint)
+                                       → 400 directing to Add Model
+                                       (POST /image-gen/custom-models).
   DELETE /image-gen/loras/{lora_id}  — remove an installed LoRA
+
+Custom models (user-added checkpoints from Hugging Face / Civitai):
+  POST   /image-gen/custom-models/inspect {ref}
+         ref = HF repo id, HF URL, or Civitai model/version URL/id. Resolves
+         WITHOUT downloading weights → {entry, warnings[], registerable,
+         refusal_reason}. Unresolvable refs → 400 with the reason; a Civitai
+         LoRA pointed here → 400 directing to /loras/download.
+  POST   /image-gen/custom-models {entry-from-inspect}
+         Validates server-side (unknown family / unsupported single_file
+         family combos are refused HERE with the reason, never at load
+         time), persists to ~/.matrx/image-models/custom-models.json, and
+         queues the weights through the DownloadManager (HF snapshot path,
+         or Civitai direct URL with Bearer auth from the stored key —
+         missing/invalid key surfaces "Civitai API key required" on the
+         download entry). → {registered, model_id, queued, download_id}.
+  DELETE /image-gen/custom-models/{model_id}
+         Removes the registry entry AND the weights on disk (unloads the
+         model first when it is the loaded one).
+  Registered entries merge into GET /image-gen/models with custom=true,
+  source ("hf"|"civitai") and format ("diffusers"|"single_file"); they are
+  loadable/generatable exactly like catalog models (same job queue, img2img
+  and LoRA flags derived from the detected family).
 
 Error responses additionally carry the aidream envelope {error, message,
 details} via EnvelopeRoute — ADDITIVE: every legacy key ("detail",
@@ -108,6 +138,13 @@ class ImageGenModelInfo(BaseModel):
     is_downloaded: bool
     hardware_ok: bool
     hardware_reason: str | None = None
+    custom: bool = False
+    """True for user-registered models (deletable via
+    DELETE /image-gen/custom-models/{model_id})."""
+    source: str = "catalog"
+    """"catalog" | "hf" | "civitai"."""
+    format: str = "diffusers"
+    """"diffusers" | "single_file"."""
 
 
 class WorkflowPresetInfo(BaseModel):
@@ -471,10 +508,12 @@ async def image_gen_status() -> ImageGenStatusResponse:
 
 @router.get("/models", response_model=list[ImageGenModelInfo])
 async def list_image_gen_models() -> list[ImageGenModelInfo]:
-    """List all available image generation models with download + hardware state."""
+    """List all available models (curated catalog + user-registered custom
+    models, flagged custom=true) with download + hardware state."""
+    from app.services.image_gen.custom_models import list_custom_catalog_models  # noqa: PLC0415
     svc = get_image_gen_service()
     out: list[ImageGenModelInfo] = []
-    for m in IMAGE_GEN_MODELS:
+    for m in [*IMAGE_GEN_MODELS, *list_custom_catalog_models()]:
         hw_ok, hw_reason = svc.model_hardware_check(m)
         out.append(ImageGenModelInfo(
             model_id=m.model_id,
@@ -501,6 +540,9 @@ async def list_image_gen_models() -> list[ImageGenModelInfo]:
             is_downloaded=svc.is_downloaded(m.model_id),
             hardware_ok=hw_ok,
             hardware_reason=hw_reason,
+            custom=m.custom,
+            source=m.source,
+            format=m.format,
         ))
     return out
 
@@ -787,6 +829,9 @@ class LoraInstalledInfo(BaseModel):
     installed: bool = True
     """False while the download is still in flight (progress on
     /downloads/stream, category "image_gen_lora")."""
+    source: str = "hf"
+    """"hf" | "civitai" — where the LoRA was downloaded from. For civitai,
+    repo_id carries the canonical "civitai:<modelId>@<versionId>" ref."""
 
 
 class LoraCatalogInfo(BaseModel):
@@ -808,11 +853,17 @@ class LorasResponse(BaseModel):
 
 
 class LoraDownloadRequest(BaseModel):
-    repo_id: str = Field(..., min_length=3, max_length=200)
-    """HF repo id (org/name)."""
+    repo_id: str | None = Field(None, min_length=3, max_length=500)
+    """HF repo id (org/name) OR a Hugging Face URL. Exactly one of
+    repo_id / civitai must be provided."""
     weight_name: str | None = None
-    """Which .safetensors file to fetch. Optional when the repo contains
-    exactly one; required (400 lists the candidates) when it has several."""
+    """HF only: which .safetensors file to fetch. Optional when the repo
+    contains exactly one; required (400 lists the candidates) when it has
+    several."""
+    civitai: str | None = Field(None, min_length=1, max_length=500)
+    """Civitai model/version URL or id (also accepts a bare model id or
+    "civitai:<modelId>[@<versionId>]"). The Civitai model type must be LORA —
+    a Checkpoint ref → 400 directing to POST /image-gen/custom-models."""
 
 
 class LoraDownloadResponse(BaseModel):
@@ -822,6 +873,8 @@ class LoraDownloadResponse(BaseModel):
     weight_name: str | None = None
     base_family: str | None = None
     already_installed: bool = False
+    source: str = "hf"
+    """"hf" | "civitai"."""
 
 
 async def _resolve_lora_weight(
@@ -911,6 +964,7 @@ async def list_image_loras() -> LorasResponse:
                 size_bytes=int(m.get("size_bytes") or 0),
                 added_at=m.get("added_at"),
                 installed=bool(m["installed"]),
+                source=str(m.get("source") or "hf"),
             )
             for m in items
         ],
@@ -937,40 +991,74 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
     """Queue a LoRA download through the universal DownloadManager (category
     "image_gen_lora" — byte progress/resume on /downloads/stream, exactly like
     model weights; NEVER an inline silent download). Only the safetensors
-    weight file is fetched. Idempotent."""
+    weight file is fetched. Idempotent.
+
+    Sources — exactly ONE of:
+      repo_id — HF repo id (org/name) or HF URL
+      civitai — Civitai model/version URL/id (type must be LORA; a
+                Checkpoint → 400 directing to POST /image-gen/custom-models)
+    """
     from app.services.downloads.manager import get_download_manager  # noqa: PLC0415
+    from app.services.image_gen.custom_models import (  # noqa: PLC0415
+        InspectError,
+        parse_ref,
+    )
     from app.services.image_gen.loras import (  # noqa: PLC0415
         get_installed_lora,
         lora_dir,
         lora_id_for_repo,
         write_lora_meta,
     )
-    lora_id = lora_id_for_repo(req.repo_id)
+
+    if bool(req.repo_id) == bool(req.civitai):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide exactly one of repo_id (Hugging Face repo id or "
+                   "URL) or civitai (Civitai model/version URL/id).",
+        )
+    try:
+        parsed = parse_ref(req.civitai or req.repo_id or "")
+    except InspectError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    if req.civitai and parsed["kind"] != "civitai":
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{req.civitai}' is not a Civitai reference — pass "
+                   "Hugging Face repos via repo_id.",
+        )
+
+    if parsed["kind"] == "civitai":
+        return await _download_lora_civitai(parsed)
+
+    # ── Hugging Face path (repo id or URL, normalized by parse_ref) ──────────
+    repo_id = str(parsed["repo_id"])
+    lora_id = lora_id_for_repo(repo_id)
     existing = get_installed_lora(lora_id)
     if existing and existing["installed"]:
         return LoraDownloadResponse(
             queued=False, already_installed=True, lora_id=lora_id,
             weight_name=existing["weight_name"],
             base_family=str(existing.get("base_family") or "unknown"),
+            source="hf",
         )
 
     weight_name, base_family = await _resolve_lora_weight(
-        req.repo_id, req.weight_name
+        repo_id, req.weight_name
     )
     # Metadata sidecar first — the LoRA shows up as pending (installed=false)
     # immediately; the DownloadManager marker flips it to installed.
     write_lora_meta(
-        lora_id, repo_id=req.repo_id, weight_name=weight_name,
-        base_family=base_family,
+        lora_id, repo_id=repo_id, weight_name=weight_name,
+        base_family=base_family, source="hf",
     )
     entry = await get_download_manager().enqueue(
         category="image_gen_lora",
         filename=lora_id,
-        display_name=f"LoRA: {req.repo_id}",
-        urls=[f"hf://{req.repo_id}"],  # marker only — the HF path ignores URLs
+        display_name=f"LoRA: {repo_id}",
+        urls=[f"hf://{repo_id}"],  # marker only — the HF path ignores URLs
         metadata={
             "dest_dir": str(lora_dir(lora_id)),
-            "hf_repo_id": req.repo_id,
+            "hf_repo_id": repo_id,
             # Exactly the weight file — bypasses the diffusers-layout filter
             # (which would drop a root-level .safetensors as a "dup").
             "hf_allow_files": [weight_name],
@@ -980,7 +1068,85 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
     )
     return LoraDownloadResponse(
         queued=True, download_id=entry.id, lora_id=lora_id,
-        weight_name=weight_name, base_family=base_family,
+        weight_name=weight_name, base_family=base_family, source="hf",
+    )
+
+
+async def _download_lora_civitai(parsed: dict[str, Any]) -> LoraDownloadResponse:
+    """Civitai LoRA download: resolve version metadata (type MUST be LORA),
+    write the pending sidecar, queue the direct-URL download (Bearer auth from
+    the stored Civitai key; 401/403 surfaces the friendly key message)."""
+    from app.services.downloads.manager import get_download_manager  # noqa: PLC0415
+    from app.services.image_gen.custom_models import (  # noqa: PLC0415
+        InspectError,
+        resolve_civitai,
+    )
+    from app.services.image_gen.loras import (  # noqa: PLC0415
+        get_installed_lora,
+        lora_dir,
+        write_lora_meta,
+    )
+
+    try:
+        info = await resolve_civitai(parsed)
+    except InspectError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+
+    model_type = str(info["model_type"] or "")
+    if model_type.upper() != "LORA":
+        if model_type == "Checkpoint":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Civitai model '{info['model_name']}' is a Checkpoint, "
+                       "not a LoRA — register it as a custom model via "
+                       "POST /image-gen/custom-models (Add Model) instead.",
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Civitai model '{info['model_name']}' has type "
+                   f"'{model_type or 'unknown'}' — only LORA models can be "
+                   "installed as LoRAs.",
+        )
+
+    lora_id = f"civitai--{info['model_id']}-{info['version_id']}"
+    canonical_ref = f"civitai:{info['model_id']}@{info['version_id']}"
+    existing = get_installed_lora(lora_id)
+    if existing and existing["installed"]:
+        return LoraDownloadResponse(
+            queued=False, already_installed=True, lora_id=lora_id,
+            weight_name=existing["weight_name"],
+            base_family=str(existing.get("base_family") or "unknown"),
+            source="civitai",
+        )
+
+    base_family = str(info["family"])  # "unknown" is allowed for LoRAs
+    weight_name = str(info["file_name"])
+    write_lora_meta(
+        lora_id, repo_id=canonical_ref, weight_name=weight_name,
+        base_family=base_family, source="civitai",
+        extra={
+            "civitai_model_id": info["model_id"],
+            "civitai_version_id": info["version_id"],
+            "name": info["model_name"],
+        },
+    )
+    entry = await get_download_manager().enqueue(
+        category="image_gen_lora",
+        filename=lora_id,
+        display_name=f"LoRA: {info['model_name']}",
+        urls=[str(info["download_url"])],
+        metadata={
+            "dest_dir": str(lora_dir(lora_id)),
+            "civitai_download": True,
+            "write_complete_marker": True,
+            "dest_filename": weight_name,
+            "lora_id": lora_id,
+        },
+        priority=1,
+    )
+    return LoraDownloadResponse(
+        queued=True, download_id=entry.id, lora_id=lora_id,
+        weight_name=weight_name, base_family=base_family, source="civitai",
     )
 
 
@@ -991,6 +1157,145 @@ async def delete_image_lora(lora_id: str) -> dict:
     if not delete_lora(lora_id):
         raise HTTPException(status_code=404, detail=f"Unknown LoRA: {lora_id}")
     return {"deleted": True, "lora_id": lora_id}
+
+
+# ── Custom models (user-added checkpoints from HF / Civitai) ─────────────────
+
+class CustomModelInspectRequest(BaseModel):
+    ref: str = Field(..., min_length=1, max_length=500)
+    """HF repo id ("org/name"), HF URL, Civitai model/version URL, bare
+    Civitai model id, or "civitai:<modelId>[@<versionId>]"."""
+
+
+class CustomModelEntry(BaseModel):
+    """A custom-model registry entry — returned by /inspect and posted back
+    (confirmed) to POST /custom-models. Derived fields (vram/ram, model_id
+    shape) are recomputed server-side at registration."""
+
+    model_id: str
+    """Namespaced id: "custom/<sanitized-ref>"."""
+    name: str
+    source: Literal["hf", "civitai"]
+    source_ref: str
+    """HF repo id, or "civitai:<modelId>@<versionId>"."""
+    family: str
+    """"sd15" | "sdxl" | "flux" | "flux2" | "qwen" | "z-image" | "unknown".
+    "unknown" is NOT registerable — registration refuses with the reason."""
+    pipeline_type: str = "unknown"
+    format: Literal["diffusers", "single_file"]
+    weight_name: str | None = None
+    """single_file: the checkpoint filename."""
+    files: list[dict[str, Any]] | None = None
+    """diffusers: the filtered file listing [{name, size}] used for sizing."""
+    size_gb: float = 0.0
+    requires_hf_token: bool = False
+    download_url: str | None = None
+    """Civitai direct download URL."""
+    civitai_model_id: int | None = None
+    civitai_version_id: int | None = None
+    vram_gb: float = 0.0
+    """Conservative size-based estimate (see custom_models.estimate_hardware)."""
+    ram_gb: float = 0.0
+    added_at: str | None = None
+
+
+class CustomModelInspectResponse(BaseModel):
+    entry: CustomModelEntry
+    warnings: list[str]
+    registerable: bool
+    refusal_reason: str | None = None
+    """Why registration would be refused (family unknown, unsupported
+    single_file family, ...). POST /custom-models enforces the same gate."""
+
+
+class CustomModelRegisterResponse(BaseModel):
+    registered: bool
+    model_id: str
+    already_registered: bool = False
+    queued: bool = False
+    download_id: str | None = None
+    already_downloaded: bool = False
+
+
+@router.post("/custom-models/inspect", response_model=CustomModelInspectResponse)
+@safe_route("image_gen_custom_inspect")
+async def inspect_custom_model(req: CustomModelInspectRequest) -> CustomModelInspectResponse:
+    """Resolve a HF/Civitai ref into a proposed registry entry WITHOUT
+    downloading any weights. 400 with a clear message for unresolvable refs;
+    a Civitai LoRA pointed here → 400 directing to /loras/download."""
+    from app.services.image_gen.custom_models import InspectError, inspect_ref  # noqa: PLC0415
+    try:
+        result = await inspect_ref(req.ref)
+    except InspectError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    return CustomModelInspectResponse(
+        entry=CustomModelEntry(**result["entry"]),
+        warnings=result["warnings"],
+        registerable=result["registerable"],
+        refusal_reason=result["refusal_reason"],
+    )
+
+
+@router.post("/custom-models", response_model=CustomModelRegisterResponse)
+@safe_route("image_gen_custom_register")
+async def register_custom_model_route(entry: CustomModelEntry) -> CustomModelRegisterResponse:
+    """Register an inspect-confirmed entry + queue its weights download.
+
+    Unsupported entries (family "unknown", single_file for a family without a
+    from_single_file loader) are refused HERE with the reason — never
+    discovered at load time. Idempotent on model_id."""
+    from app.services.image_gen.custom_models import register_custom_model  # noqa: PLC0415
+    from app.services.media_gen.paths import read_hf_token  # noqa: PLC0415
+
+    payload = entry.model_dump()
+    # Token pre-check BEFORE registering — the user gets one clean message
+    # instead of a registered-but-undownloadable entry.
+    if payload.get("requires_hf_token") and read_hf_token() is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{payload.get('name') or payload.get('model_id')} needs a "
+                   "Hugging Face token (gated components). Add your read "
+                   "token under Settings → API Keys → Hugging Face, then "
+                   "register again.",
+        )
+    try:
+        stored, created = register_custom_model(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    svc = get_image_gen_service()
+    dl = await svc.start_download(stored["model_id"])
+    if dl.get("error") and not dl.get("already_downloaded"):
+        # Registration stands (retry via POST /image-gen/download); the
+        # download problem is reported loudly, never swallowed.
+        raise HTTPException(status_code=502, detail=dl["error"])
+    return CustomModelRegisterResponse(
+        registered=True,
+        model_id=stored["model_id"],
+        already_registered=not created,
+        queued=bool(dl.get("queued")),
+        download_id=dl.get("download_id"),
+        already_downloaded=bool(dl.get("already_downloaded")),
+    )
+
+
+@router.delete("/custom-models/{model_id:path}")
+@safe_route("image_gen_custom_delete")
+async def delete_custom_model(model_id: str) -> dict:
+    """Remove a custom model: registry entry + weights on disk. Unloads it
+    first when it is the currently-loaded model. 404 when unknown; catalog
+    models can never be deleted through this endpoint."""
+    from app.services.image_gen.custom_models import (  # noqa: PLC0415
+        get_custom_entry,
+        remove_custom_model,
+    )
+    if get_custom_entry(model_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown custom model: {model_id}")
+    svc = get_image_gen_service()
+    if svc.loaded_model_id == model_id:
+        await svc.unload_model()
+    remove_custom_model(model_id)
+    return {"deleted": True, "model_id": model_id}
 
 
 @router.get("/params/{model_id:path}", response_model=ModelParamsResponse)

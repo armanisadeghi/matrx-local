@@ -612,7 +612,24 @@ export function Settings({
       const data = (await engine.get("/settings/api-keys")) as {
         providers: ApiKeyProviderStatus[];
       };
-      setApiKeyProviders(data?.providers ?? []);
+      const providers = [...(data?.providers ?? [])];
+      // The Civitai row must always be offered (custom image models and LoRA
+      // styles download from Civitai). Older engine builds don't list it yet
+      // — synthesize the row so the key can still be saved via the same
+      // generic /settings/api-keys/civitai routes.
+      if (
+        providers.length > 0 &&
+        !providers.some((p) => p.provider === "civitai")
+      ) {
+        providers.push({
+          provider: "civitai",
+          label: "Civitai",
+          description:
+            "Used to download custom image models and LoRA styles from Civitai (required by many Civitai downloads).",
+          configured: false,
+        });
+      }
+      setApiKeyProviders(providers);
     } catch {
       // Non-critical
     }
@@ -1733,7 +1750,9 @@ export function Settings({
                   <p className="text-xs text-muted-foreground">
                     Enter your own API keys to use AI providers directly from
                     this device. The Hugging Face entry is also used for local
-                    GGUF downloads (including XET-hosted models). Keys are
+                    GGUF downloads (including XET-hosted models) and gated
+                    image checkpoints; the Civitai entry is used for
+                    downloading custom image models and LoRA styles. Keys are
                     stored locally on this machine only and are never sent to AI
                     Matrx servers. Leave a key blank if you don't have one —
                     that provider will be unavailable.
@@ -2383,6 +2402,10 @@ export function Settings({
                     {
                       label: "Hugging Face",
                       url: "https://huggingface.co/settings/tokens",
+                    },
+                    {
+                      label: "Civitai",
+                      url: "https://civitai.com/user/account",
                     },
                     { label: "Groq", url: "https://console.groq.com/keys" },
                     {

@@ -80,6 +80,52 @@ _(none)_
     knob) — surface an "edit mode" label in the UI so users don't expect
     SD-style partial-denoise behavior.
 
+- [ ] **Custom image models (HF + Civitai) follow-ups (added 2026-07-11,
+  custom-model registry build)** — shipped: custom-model registry
+  (`~/.matrx/image-models/custom-models.json`, atomic writes) merged into
+  GET /image-gen/models (`custom`/`source`/`format` fields); POST
+  /image-gen/custom-models/inspect (HF repo/URL + Civitai model/version
+  URL/id, network-free resolution of family/format/size, warnings +
+  registerable verdict); POST /image-gen/custom-models (server-side
+  validation — unknown family + unsupported single_file combos refused at
+  registration — + DownloadManager enqueue); DELETE
+  /image-gen/custom-models/{id}; Civitai direct-download path in
+  DownloadManager (Bearer auth from stored key, non-retryable 401/403 with
+  "Civitai API key required — Settings → API Keys" message,
+  `.download-complete` marker, `dest_filename` override); `civitai` provider
+  in the API-key store (PUT/DELETE /settings/api-keys/civitai, masked list,
+  `read_civitai_key()`); single-file loading via
+  `<FamilyPipeline>.from_single_file` (SD/SDXL/FLUX/Z-Image — verified
+  FromSingleFileMixin on diffusers 0.37.1; Qwen + Flux2Klein have none and
+  are refused at registration); POST /image-gen/loras/download now accepts
+  HF URLs and `{civitai: ...}` (type must be LORA — checkpoints are
+  redirected to Add Model and vice versa), LoRA store entries carry
+  `source`. Smoke suite `tests/smoke/test_media_gen_custom_models.py`
+  (18 tests, network-free). Remaining:
+  - [ ] Live end-to-end verification: register a real small Civitai SDXL
+    checkpoint + a Civitai LoRA with a real API key, download, load,
+    generate (from_single_file dtype behavior on MPS is family-plausible
+    but unproven for community checkpoints; the constant-image guard will
+    scream if a dtype bug ships black images).
+  - [ ] Flux single-file checkpoints: from_single_file fetches text
+    encoders/VAE from the gated FLUX.1 HF repos at FIRST LOAD (surfaced as
+    an inspect warning + requires_hf_token, and load passes
+    token=read_hf_token()) — but that first load is a multi-GB fetch
+    outside the DownloadManager (no progress UI). Consider pre-fetching
+    components through the DownloadManager at registration instead.
+  - [ ] Desktop UI: "Add custom model" flow (ref input → inspect card with
+    warnings → confirm), Civitai key field in Settings → API Keys, custom
+    badge + delete button on model cards, LoRA-from-Civitai input.
+  - [ ] Civitai baseModel map only covers common bases (SD1.x, SDXL/Pony/
+    Illustrious/NoobAI, Flux.1 D/S/Krea, Flux.2 Klein, Qwen, Z-Image);
+    unmapped bases refuse honestly. Extend as diffusers gains loaders
+    (SD3.x is mappable once we ship an SD3 pipeline family).
+  - [ ] Hardware estimates for custom models are size-heuristic
+    (single_file: size+1.5 GB VRAM; diffusers: 0.65x+1.5 GB; floors 6/10;
+    RAM=VRAM+4 — documented in custom_models.py). Consider refining with
+    actual tensor-dtype inspection from safetensors headers (HTTP range
+    request on the first 8 bytes + header JSON, still download-free).
+
 - [ ] **Heartbeat never bumps `app_instances.tunnel_updated_at` (discovered
   2026-07-10, Phase 7 remote-control audit)** —
   `app/services/cloud_sync/settings_sync.py::heartbeat` re-asserts

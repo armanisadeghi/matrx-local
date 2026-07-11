@@ -488,7 +488,14 @@ class ImageGenService:
         return IMAGE_GEN_MODELS
 
     def get_model(self, model_id: str) -> ImageGenModel | None:
-        return next((m for m in IMAGE_GEN_MODELS if m.model_id == model_id), None)
+        m = next((m for m in IMAGE_GEN_MODELS if m.model_id == model_id), None)
+        if m is not None:
+            return m
+        # Custom registry fallback — user-registered models behave exactly
+        # like catalog models from here on (load/generate/img2img/LoRA flags
+        # all come off the bridged ImageGenModel).
+        from app.services.image_gen.custom_models import get_custom_model  # noqa: PLC0415
+        return get_custom_model(model_id)
 
     def is_downloaded(self, model_id: str) -> bool:
         return is_model_downloaded(image_models_dir(), model_id)
@@ -522,6 +529,18 @@ class ImageGenService:
                 ),
                 "needs_hf_token": True,
             }
+
+        if model.custom:
+            # Custom models carry their own download spec (HF snapshot or
+            # Civitai direct URL) in the registry entry.
+            from app.services.image_gen.custom_models import (  # noqa: PLC0415
+                enqueue_custom_download,
+                get_custom_entry,
+            )
+            custom_entry = get_custom_entry(model_id)
+            if custom_entry is None:
+                return {"queued": False, "error": f"Unknown custom model: {model_id}"}
+            return await enqueue_custom_download(custom_entry)
 
         from app.services.downloads.manager import get_download_manager  # noqa: PLC0415
         dest = model_dir(image_models_dir(), model_id)
@@ -801,7 +820,54 @@ class ImageGenService:
 
                 self._load_progress = 10.0
 
-                if model.pipeline_type == "flux2-klein":
+                if model.format == "single_file":
+                    # Custom single-file checkpoints (Civitai / HF root
+                    # .safetensors). Registration already rejected any
+                    # family without from_single_file support (verified
+                    # against diffusers 0.37.1, the runtime floor: SD, SDXL,
+                    # FLUX, Z-Image inherit FromSingleFileMixin; Qwen and
+                    # Flux2Klein do NOT — see custom_models.py).
+                    #
+                    # NOTE on local_files_only: from_single_file resolves the
+                    # pipeline's CONFIG (a few KB of json) from the reference
+                    # HF repo unless already cached, so we deliberately do
+                    # NOT pass local_files_only here. For flux checkpoints
+                    # (transformer-only files) it also fetches the text
+                    # encoders/VAE on first load — surfaced as a warning +
+                    # requires_hf_token at inspect/registration time, never
+                    # silently sprung on the user without notice.
+                    if not model.weight_name:
+                        raise RuntimeError(
+                            f"Custom model {model.model_id} has no weight_name "
+                            "in its registry entry — re-register it."
+                        )
+                    weight_path = str(
+                        model_dir(image_models_dir(), model.model_id)
+                        / model.weight_name
+                    )
+                    single_file_classes: dict[str, Any] = {
+                        "stable-diffusion": StableDiffusionPipeline,
+                        "stable-diffusion-xl": StableDiffusionXLPipeline,
+                        "flux": FluxPipeline,
+                    }
+                    if model.pipeline_type == "z-image":
+                        from diffusers import ZImagePipeline  # noqa: PLC0415
+                        sf_cls: Any = ZImagePipeline
+                    else:
+                        sf_cls = single_file_classes.get(model.pipeline_type)
+                    if sf_cls is None:
+                        # Defense in depth — registration must have refused.
+                        raise RuntimeError(
+                            f"Pipeline family '{model.pipeline_type}' has no "
+                            "from_single_file loader — this model should have "
+                            "been rejected at registration."
+                        )
+                    pipe = sf_cls.from_single_file(
+                        weight_path,
+                        torch_dtype=dtype,
+                        token=read_hf_token(),
+                    )
+                elif model.pipeline_type == "flux2-klein":
                     from diffusers import Flux2KleinPipeline  # noqa: PLC0415
                     pipe = Flux2KleinPipeline.from_pretrained(local_path, **common_kwargs)
                 elif model.pipeline_type == "z-image":

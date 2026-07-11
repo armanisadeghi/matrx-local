@@ -83,8 +83,17 @@ export async function loginViaUI(page: Page, creds: TestCreds): Promise<void> {
 
   // Login errors surface inline on the card — fail fast with a useful message
   // instead of timing out on the nav assertion.
+  //
+  // The Engine Monitor dialog can auto-open at ANY point after auth (engine
+  // status flaps to "error" mid port-scan). Radix modals mark the rest of the
+  // app aria-hidden, which makes the shell-nav role query unmatchable even
+  // though the shell rendered — so dismiss the dialog inside the retry loop,
+  // not only after login completes.
   const shellNav = page.getByRole("link", { name: "Dashboard" });
-  await expect(shellNav).toBeVisible({ timeout: 90_000 });
+  await expect(async () => {
+    await dismissEngineMonitorIfOpen(page);
+    await expect(shellNav).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 90_000 });
 }
 
 /**

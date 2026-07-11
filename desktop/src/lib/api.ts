@@ -3691,6 +3691,12 @@ export interface ImageGenModelInfo {
    * when absent/false, never guesses.
    */
   supports_img2img?: boolean;
+  /**
+   * True for user-added checkpoints (Hugging Face / Civitai custom models).
+   * Custom entries get a "Custom" badge and a delete affordance in the
+   * picker.  Optional until every engine build reports it.
+   */
+  custom?: boolean;
 }
 
 export interface ImageGenWorkflowPreset {
@@ -3849,6 +3855,21 @@ function stringifyErrorDetail(detail: unknown, fallback: string): string {
   return fallback;
 }
 
+/**
+ * Error thrown by media-gen fetch helpers for non-OK HTTP responses.  Carries
+ * the status code so callers can branch on it (401 → "set your Civitai API
+ * key" affordance, 404 → "engine build too old" messaging) without string
+ * matching.  `message` is the flattened FastAPI `detail` — user-facing.
+ */
+export class MediaGenHttpError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "MediaGenHttpError";
+    this.status = status;
+  }
+}
+
 function mediaGenTimeoutError(
   surface: "image-gen" | "video-gen",
   method: string,
@@ -3919,7 +3940,7 @@ async function imageGenFetch<T>(
         "engine",
       );
     }
-    throw new Error(detail || `HTTP ${resp.status}`);
+    throw new MediaGenHttpError(detail || `HTTP ${resp.status}`, resp.status);
   }
   return resp.json() as Promise<T>;
 }
@@ -4220,6 +4241,11 @@ export interface ImageGenLoraInfo {
   added_at: string | null;
   /** Catalog entries the engine has not verified may carry this flag. */
   unverified?: boolean;
+  /**
+   * Where the LoRA came from ("hf" | "civitai").  Optional until every
+   * engine build reports it.
+   */
+  source?: string;
 }
 
 export interface ImageGenLoraList {
@@ -4235,13 +4261,35 @@ export async function listImageGenLoras(
 }
 
 /**
+ * A LoRA download reference: either a Hugging Face repo (id or URL, with an
+ * optional specific weight file) or a Civitai link / numeric model id.
+ */
+export type LoraDownloadRef =
+  | { repo_id: string; weight_name?: string }
+  | { civitai: string };
+
+/**
+ * Classify a user-pasted LoRA/model reference into the wire shape the engine
+ * expects.  Civitai: anything containing "civitai.com" or a bare numeric id.
+ * Everything else (org/name repo ids and huggingface.co URLs) is passed
+ * through as `repo_id` — the engine resolves HF URLs itself.
+ */
+export function classifyLoraRef(input: string): LoraDownloadRef {
+  const t = input.trim();
+  if (/civitai\.com/i.test(t) || /^\d+$/.test(t)) return { civitai: t };
+  return { repo_id: t };
+}
+
+/**
  * POST /image-gen/loras/download — starts a DownloadManager download for a
- * LoRA (catalog entry or pasted HF repo id). Progress arrives via the
- * universal downloads SSE; the returned id joins it to a specific entry.
+ * LoRA (catalog entry, pasted HF repo id/URL, or Civitai link/id). Progress
+ * arrives via the universal downloads SSE; the returned id joins it to a
+ * specific entry.  Throws MediaGenHttpError — 401 means a Civitai API key is
+ * required (Settings → API Keys).
  */
 export async function downloadImageGenLora(
   baseUrl: string,
-  req: { repo_id: string; weight_name?: string },
+  req: LoraDownloadRef,
 ): Promise<{ download_id: string }> {
   return imageGenFetch<{ download_id: string }>(
     imageGenUrl(baseUrl, "/loras/download"),
@@ -4256,6 +4304,109 @@ export async function deleteImageGenLora(
 ): Promise<void> {
   await imageGenFetch<unknown>(
     imageGenUrl(baseUrl, `/loras/${encodeURIComponent(loraId)}`),
+    { method: "DELETE" },
+  );
+}
+
+// ── Custom image models (checkpoints from Hugging Face / Civitai) ───────────
+
+/**
+ * A registered (or proposed) user-added checkpoint.  Wire mirror of the
+ * engine's `CustomModelEntry` (app/api/image_gen_routes.py).  The FULL
+ * object from /inspect is round-tripped unchanged to POST /custom-models —
+ * never rebuild it client-side.
+ */
+export interface CustomImageModelEntry {
+  /** Namespaced id: "custom/<sanitized-ref>". */
+  model_id: string;
+  name: string;
+  source: "hf" | "civitai";
+  /** HF repo id, or "civitai:<modelId>@<versionId>". */
+  source_ref: string;
+  /** Base model family (e.g. "sdxl", "flux"). "unknown" is not registerable. */
+  family: string;
+  pipeline_type: string;
+  format: "diffusers" | "single_file";
+  /** single_file: the checkpoint filename. */
+  weight_name?: string | null;
+  /** diffusers: the filtered file listing used for sizing. */
+  files?: Array<Record<string, unknown>> | null;
+  size_gb: number;
+  requires_hf_token: boolean;
+  /** Civitai direct download URL. */
+  download_url?: string | null;
+  civitai_model_id?: number | null;
+  civitai_version_id?: number | null;
+  vram_gb?: number;
+  ram_gb?: number;
+  added_at?: string | null;
+}
+
+/**
+ * Inspect result: the proposed entry plus prominent, user-facing warnings
+ * (community model, unknown license, …).  The UI must render `warnings`
+ * visibly before the user confirms, and must honor `registerable` /
+ * `refusal_reason` (family "unknown" etc. — the register route enforces the
+ * same gate).
+ */
+export interface CustomImageModelInspectResult {
+  entry: CustomImageModelEntry;
+  warnings: string[];
+  registerable: boolean;
+  refusal_reason?: string | null;
+}
+
+/** Wire mirror of the engine's CustomModelRegisterResponse. */
+export interface CustomImageModelRegisterResult {
+  registered: boolean;
+  model_id: string;
+  already_registered?: boolean;
+  queued?: boolean;
+  download_id?: string | null;
+  already_downloaded?: boolean;
+}
+
+/**
+ * POST /image-gen/custom-models/inspect — resolve a pasted HF repo / Civitai
+ * link into a proposed model entry.  400s (unresolvable ref, unsupported /
+ * unknown family) throw MediaGenHttpError whose message is the engine's
+ * user-facing explanation — render it verbatim.  Generous timeout: the
+ * engine calls out to HF/Civitai APIs.
+ */
+export async function inspectCustomImageModel(
+  baseUrl: string,
+  ref: string,
+): Promise<CustomImageModelInspectResult> {
+  return imageGenFetch<CustomImageModelInspectResult>(
+    imageGenUrl(baseUrl, "/custom-models/inspect"),
+    { method: "POST", body: JSON.stringify({ ref }) },
+    60_000,
+  );
+}
+
+/**
+ * POST /image-gen/custom-models — register a confirmed entry (the body IS
+ * the entry object from /inspect) and queue its weights download through the
+ * DownloadManager (progress via the standard downloads SSE, joined by
+ * model_id / category "image_gen").
+ */
+export async function registerCustomImageModel(
+  baseUrl: string,
+  entry: CustomImageModelEntry,
+): Promise<CustomImageModelRegisterResult> {
+  return imageGenFetch<CustomImageModelRegisterResult>(
+    imageGenUrl(baseUrl, "/custom-models"),
+    { method: "POST", body: JSON.stringify(entry) },
+  );
+}
+
+/** DELETE /image-gen/custom-models/{id} — unregister a custom model (and its weights). */
+export async function deleteCustomImageModel(
+  baseUrl: string,
+  modelId: string,
+): Promise<void> {
+  await imageGenFetch<unknown>(
+    imageGenUrl(baseUrl, `/custom-models/${encodeURIComponent(modelId)}`),
     { method: "DELETE" },
   );
 }
@@ -4701,7 +4852,7 @@ async function mediaLibraryFetch<T>(
         "engine",
       );
     }
-    throw new Error(detail || `HTTP ${resp.status}`);
+    throw new MediaGenHttpError(detail || `HTTP ${resp.status}`, resp.status);
   }
   return resp.json() as Promise<T>;
 }
@@ -4858,7 +5009,7 @@ async function mediaVaultFetch<T>(
         "engine",
       );
     }
-    throw new Error(detail || `HTTP ${resp.status}`);
+    throw new MediaGenHttpError(detail || `HTTP ${resp.status}`, resp.status);
   }
   return resp.json() as Promise<T>;
 }

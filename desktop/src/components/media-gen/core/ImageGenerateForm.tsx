@@ -19,6 +19,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
   ChevronDown,
@@ -26,6 +27,7 @@ import {
   Download,
   Image as ImageIcon,
   ImagePlus,
+  KeyRound,
   ListPlus,
   Loader2,
   Sparkles,
@@ -382,6 +384,7 @@ function InstalledLoraRow({
             {lora.size_bytes > 0
               ? ` · ${formatGb(lora.size_bytes / 1024 ** 3)}`
               : ""}
+            {lora.source ? ` · ${lora.source}` : ""}
           </p>
         </div>
         {lora.base_family && (
@@ -448,9 +451,10 @@ function LoraCatalogDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [state, actions] = useMediaGenApp();
-  const { loraList, loraError, loraDownloads } = state;
+  const { loraList, loraError, loraDownloads, loraNeedsCivitaiKey } = state;
   const { downloadLora, refreshLoras } = actions;
   const { downloads } = useDownloadManager();
+  const navigate = useNavigate();
   const [repoInput, setRepoInput] = useState("");
 
   // Live progress: repo_id → DownloadEntry, joined by the returned id.
@@ -489,10 +493,26 @@ function LoraCatalogDialog({
           <DialogTitle>Get more styles (LoRA)</DialogTitle>
           <DialogDescription>
             Download style adapters from the curated catalog, or paste any
-            Hugging Face LoRA repo id.
+            Hugging Face LoRA repo or Civitai link.
           </DialogDescription>
         </DialogHeader>
         {loraError && <ErrorNote message={loraError} />}
+        {loraNeedsCivitaiKey && (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2.5">
+            <p className="flex items-start gap-2 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+              <KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Civitai downloads need your Civitai API key.
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 shrink-0 text-xs"
+              onClick={() => navigate("/settings?tab=api-keys")}
+            >
+              Set your Civitai API key
+            </Button>
+          </div>
+        )}
         <div className="max-h-[45vh] space-y-2 overflow-y-auto pr-1">
           {catalog.map((c) => {
             const dl = entryByRepo[c.repo_id];
@@ -512,6 +532,7 @@ function LoraCatalogDialog({
                       {c.size_bytes > 0
                         ? ` · ${formatGb(c.size_bytes / 1024 ** 3)}`
                         : ""}
+                      {c.source ? ` · ${c.source}` : ""}
                       {c.unverified ? " · unverified" : ""}
                     </p>
                   </div>
@@ -551,17 +572,26 @@ function LoraCatalogDialog({
           })}
           {catalog.length === 0 && !loraError && (
             <p className="py-4 text-center text-xs text-muted-foreground">
-              No catalog entries — paste a Hugging Face repo id below.
+              No catalog entries — paste a Hugging Face repo or Civitai link
+              below.
             </p>
           )}
         </div>
         <div className="space-y-1.5 border-t pt-3">
-          <Label className="text-xs">Hugging Face LoRA repo id</Label>
+          <Label className="text-xs">
+            Hugging Face repo or Civitai link
+          </Label>
           <div className="flex gap-2">
             <Input
               value={repoInput}
               onChange={(e) => setRepoInput(e.target.value)}
-              placeholder="e.g. ostris/super-cereal-sdxl-lora"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && repoInput.trim()) {
+                  void downloadLora(repoInput.trim());
+                  setRepoInput("");
+                }
+              }}
+              placeholder="e.g. ostris/super-cereal-sdxl-lora or https://civitai.com/models/…"
               className="text-sm"
             />
             <Button

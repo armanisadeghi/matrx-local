@@ -1262,6 +1262,8 @@ VALID_PROVIDERS: frozenset[str] = frozenset({
     "xai",
     "cerebras",
     "huggingface",
+    # Civitai API key — model/LoRA downloads from civitai.com (image gen).
+    "civitai",
 })
 
 

@@ -114,14 +114,22 @@ def write_lora_meta(
     repo_id: str,
     weight_name: str,
     base_family: str,
+    source: str = "hf",
+    extra: dict[str, Any] | None = None,
 ) -> None:
+    """``source`` is "hf" (HF repo download) or "civitai" (direct download);
+    for Civitai LoRAs ``repo_id`` carries the canonical
+    ``civitai:<modelId>@<versionId>`` ref and ``extra`` records the numeric
+    ids (civitai_model_id / civitai_version_id)."""
     d = lora_dir(lora_id)
     d.mkdir(parents=True, exist_ok=True)
     meta = {
         "repo_id": repo_id,
         "weight_name": weight_name,
         "base_family": base_family,
+        "source": source,
         "added_at": datetime.now(timezone.utc).isoformat(),
+        **(extra or {}),
     }
     (d / "lora.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
@@ -147,6 +155,7 @@ def get_installed_lora(lora_id: str) -> dict[str, Any] | None:
     installed = (d / DOWNLOAD_COMPLETE_MARKER).exists() and weight.exists()
     meta["id"] = lora_id
     meta["dir"] = str(d)
+    meta.setdefault("source", "hf")  # pre-Civitai installs predate the field
     meta["size_bytes"] = weight.stat().st_size if weight.exists() else 0
     meta["installed"] = installed
     return meta

@@ -95,6 +95,35 @@ def mark_model_downloaded(base: Path, model_id: str) -> None:
     (d / DOWNLOAD_COMPLETE_MARKER).write_text("ok", encoding="utf-8")
 
 
+def read_civitai_key() -> str | None:
+    """The configured Civitai API key, or None.
+
+    Resolution order (mirrors ``read_hf_token``):
+      1. ``CIVITAI_API_KEY`` / ``CIVITAI_API_TOKEN`` env vars — the key_manager
+         injects the app-stored key (SQLite ``civitai`` API key, saved via
+         PUT /settings/api-keys/civitai) into these at startup AND on save.
+      2. The key_manager's in-memory resolver cache — survives the planned
+         removal of the deprecated env-mutation shim.
+
+    Civitai requires an API key for most model downloads; the DownloadManager
+    sends this as ``Authorization: Bearer <key>`` to civitai.com only. The key
+    value is never logged.
+    """
+    for var in ("CIVITAI_API_KEY", "CIVITAI_API_TOKEN"):
+        val = os.environ.get(var)
+        if val and val.strip():
+            return val.strip()
+    try:
+        from app.services.ai.key_manager import get_cached_user_keys  # noqa: PLC0415
+
+        cached = get_cached_user_keys().get("civitai")
+    except Exception:  # noqa: BLE001 — cache unavailable must never break callers
+        cached = None
+    if cached and cached.strip():
+        return cached.strip()
+    return None
+
+
 def read_hf_token() -> str | None:
     """The configured Hugging Face token, or None.
 

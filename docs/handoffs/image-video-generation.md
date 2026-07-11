@@ -37,10 +37,16 @@ and `.matrx/AGENT_TASKS.md` — do not re-derive it here.
 ## Priority work queue
 
 ### 1. Ship v1.3.99 (after the gate opens)
-Everything in `20fe69da1` is verified (202 smoke tests, tsc, vite build,
-E2E 5/5) but has never run on real GPU hardware. Before or immediately
-after release, do a live pass on Arman's machine (engine on port 22140,
-`~/.matrx/local.json` is truth; probe with the API key from `.env`):
+Everything in `20fe69da1` + `d56ab5bdb` is verified (220 smoke tests,
+tsc, vite build, E2E 5/5) but has never run on real GPU hardware.
+`d56ab5bdb` adds CUSTOM models + LoRAs from HF/Civitai (one-paste
+add-model dialog, Civitai API key in Settings → API Keys, single-file
+checkpoints via from_single_file for SD/SDXL/FLUX/Z-Image). Live pass
+additions: add one Civitai SDXL checkpoint + one Civitai LoRA with a
+real key (needs Arman's key), plus the original items below. Before or
+immediately after release, do a live pass on Arman's machine (engine on
+port 22140, `~/.matrx/local.json` is truth; probe with the API key from
+`.env`):
 - img2img: SDXL-Turbo (watch `steps*strength >= 1` at 1 step) and
   FLUX.2-klein (native reference-edit — NO strength; UI hides the slider).
 - LoRA: download one catalog SDXL LoRA + one FLUX LoRA, generate with

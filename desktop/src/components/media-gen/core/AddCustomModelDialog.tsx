@@ -131,7 +131,7 @@ export function AddCustomModelDialog({
               onKeyDown={(e) => {
                 if (e.key === "Enter") void handleInspect();
               }}
-              placeholder="e.g. stabilityai/sdxl-turbo or https://civitai.com/models/…"
+              placeholder="HF repo, or civitai.com / civitai.red link with ?modelVersionId=…"
               className="text-sm"
               disabled={busy}
             />

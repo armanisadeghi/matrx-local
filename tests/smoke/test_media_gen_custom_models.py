@@ -50,6 +50,7 @@ def _force_image_gen_available(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(scope="module")
 def client() -> TestClient:
     from app.main import app
+
     # No context manager on purpose: lifespan must NOT run.
     return TestClient(app, headers={"Authorization": "Bearer test-token"})
 
@@ -120,25 +121,42 @@ def _http_401(url: str) -> httpx.HTTPStatusError:
 
 # ── ref parsing ───────────────────────────────────────────────────────────────
 
+
 def test_parse_ref_variants() -> None:
     assert cm.parse_ref("acme/dream-xl") == {"kind": "hf", "repo_id": "acme/dream-xl"}
     assert cm.parse_ref("https://huggingface.co/acme/dream-xl/tree/main") == {
-        "kind": "hf", "repo_id": "acme/dream-xl",
+        "kind": "hf",
+        "repo_id": "acme/dream-xl",
     }
     assert cm.parse_ref("12345") == {
-        "kind": "civitai", "model_id": 12345, "version_id": None,
+        "kind": "civitai",
+        "model_id": 12345,
+        "version_id": None,
     }
     assert cm.parse_ref("civitai:12@34") == {
-        "kind": "civitai", "model_id": 12, "version_id": 34,
+        "kind": "civitai",
+        "model_id": 12,
+        "version_id": 34,
     }
     assert cm.parse_ref(
         "https://civitai.com/models/257749/pony-diffusion-v6-xl?modelVersionId=290640"
     ) == {"kind": "civitai", "model_id": 257749, "version_id": 290640}
+    # .red is the full/NSFW front door — same path shape, must parse identically.
+    assert cm.parse_ref(
+        "https://civitai.red/models/1379962/amateur-instagramification"
+        "?modelVersionId=2457938"
+    ) == {"kind": "civitai", "model_id": 1379962, "version_id": 2457938}
     assert cm.parse_ref("https://civitai.com/api/download/models/290640") == {
-        "kind": "civitai", "model_id": None, "version_id": 290640,
+        "kind": "civitai",
+        "model_id": None,
+        "version_id": 290640,
     }
-    for bad in ("", "no-slash-not-a-repo!", "https://example.com/models/1",
-                "https://huggingface.co/datasets/acme/x"):
+    for bad in (
+        "",
+        "no-slash-not-a-repo!",
+        "https://example.com/models/1",
+        "https://huggingface.co/datasets/acme/x",
+    ):
         with pytest.raises(cm.InspectError):
             cm.parse_ref(bad)
 
@@ -150,6 +168,10 @@ def test_map_civitai_base_model_table() -> None:
     assert cm.map_civitai_base_model("SD 1.5") == "sd15"
     assert cm.map_civitai_base_model("Flux.1 D") == "flux"
     assert cm.map_civitai_base_model("Flux.1 S") == "flux"
+    # Live Civitai string is the camel-concat form, not "Z-Image Turbo".
+    assert cm.map_civitai_base_model("ZImageTurbo") == "z-image"
+    assert cm.map_civitai_base_model("ZImageBase") == "z-image"
+    assert cm.map_civitai_base_model("Z-Image Turbo") == "z-image"
     assert cm.map_civitai_base_model("SD 3.5") == "unknown"
     assert cm.map_civitai_base_model(None) == "unknown"
 
@@ -174,10 +196,19 @@ def _hf_diffusers_responses(class_name: str = "StableDiffusionXLPipeline") -> di
         _HF_API: {
             "siblings": [
                 {"rfilename": "model_index.json", "size": 500},
-                {"rfilename": "unet/diffusion_pytorch_model.safetensors", "size": 5_000_000_000},
-                {"rfilename": "unet/diffusion_pytorch_model.bin", "size": 5_000_000_000},
+                {
+                    "rfilename": "unet/diffusion_pytorch_model.safetensors",
+                    "size": 5_000_000_000,
+                },
+                {
+                    "rfilename": "unet/diffusion_pytorch_model.bin",
+                    "size": 5_000_000_000,
+                },
                 {"rfilename": "text_encoder/model.safetensors", "size": 1_000_000_000},
-                {"rfilename": "vae/diffusion_pytorch_model.safetensors", "size": 300_000_000},
+                {
+                    "rfilename": "vae/diffusion_pytorch_model.safetensors",
+                    "size": 300_000_000,
+                },
                 {"rfilename": "sd_xl_dream.safetensors", "size": 7_000_000_000},
                 {"rfilename": "README.md", "size": 1000},
             ],
@@ -294,9 +325,7 @@ def test_inspect_civitai_version_maps_family(
 def test_inspect_civitai_unknown_base_model_refused(
     client: TestClient, model_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _mock_http(
-        monkeypatch, {_CIV_VER: _civitai_version_payload(base_model="SD 3.5")}
-    )
+    _mock_http(monkeypatch, {_CIV_VER: _civitai_version_payload(base_model="SD 3.5")})
     r = client.post("/image-gen/custom-models/inspect", json={"ref": "civitai:123@999"})
     assert r.status_code == 200, r.text
     data = r.json()
@@ -310,9 +339,7 @@ def test_inspect_civitai_unknown_base_model_refused(
 def test_inspect_civitai_lora_directed_to_lora_endpoint(
     client: TestClient, model_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _mock_http(
-        monkeypatch, {_CIV_VER: _civitai_version_payload(model_type="LORA")}
-    )
+    _mock_http(monkeypatch, {_CIV_VER: _civitai_version_payload(model_type="LORA")})
     r = client.post("/image-gen/custom-models/inspect", json={"ref": "civitai:123@999"})
     assert r.status_code == 400, r.text
     assert "loras/download" in r.json()["detail"]
@@ -330,9 +357,8 @@ def test_inspect_civitai_401_friendly_key_message(
 
 # ── registry round-trip ───────────────────────────────────────────────────────
 
-def _registered_pony_entry(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> dict:
+
+def _registered_pony_entry(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> dict:
     _mock_http(monkeypatch, {_CIV_VER: _civitai_version_payload()})
     r = client.post("/image-gen/custom-models/inspect", json={"ref": "civitai:123@999"})
     assert r.status_code == 200, r.text
@@ -343,7 +369,9 @@ def _registered_pony_entry(
 
 
 def test_register_roundtrip_models_merge_and_delete(
-    client: TestClient, model_store: Path, monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+    model_store: Path,
+    monkeypatch: pytest.MonkeyPatch,
     fake_download_manager: list[dict],
 ) -> None:
     out = _registered_pony_entry(client, monkeypatch)
@@ -392,14 +420,15 @@ def test_register_roundtrip_models_merge_and_delete(
 
     # simulate a finished download → is_downloaded flips via the marker
     from app.services.media_gen.paths import DOWNLOAD_COMPLETE_MARKER
+
     d = model_store / "custom--civitai-123-999"
     d.mkdir(parents=True, exist_ok=True)
     (d / "ponyDreamV6.safetensors").write_bytes(b"\x00" * 8)
     (d / DOWNLOAD_COMPLETE_MARKER).write_text("ok", encoding="utf-8")
     r = client.get("/image-gen/models")
-    assert {m["model_id"]: m for m in r.json()}[
-        "custom/civitai-123-999"
-    ]["is_downloaded"] is True
+    assert {m["model_id"]: m for m in r.json()}["custom/civitai-123-999"][
+        "is_downloaded"
+    ] is True
 
     # delete removes the registry entry AND the weights dir
     r = client.delete("/image-gen/custom-models/custom/civitai-123-999")
@@ -408,9 +437,10 @@ def test_register_roundtrip_models_merge_and_delete(
     r = client.get("/image-gen/models")
     assert "custom/civitai-123-999" not in {m["model_id"] for m in r.json()}
     # second delete → 404
-    assert client.delete(
-        "/image-gen/custom-models/custom/civitai-123-999"
-    ).status_code == 404
+    assert (
+        client.delete("/image-gen/custom-models/custom/civitai-123-999").status_code
+        == 404
+    )
 
 
 def test_register_single_file_unsupported_family_rejected(
@@ -433,12 +463,17 @@ def test_register_single_file_unsupported_family_rejected(
     detail = r.json()["detail"]
     assert "qwen" in detail and "from_single_file" in detail
     assert fake_download_manager == [], "a refused entry must never enqueue"
-    assert not (model_store / "custom-models.json").exists() or json.loads(
-        (model_store / "custom-models.json").read_text(encoding="utf-8")
-    )["models"] == []
+    assert (
+        not (model_store / "custom-models.json").exists()
+        or json.loads((model_store / "custom-models.json").read_text(encoding="utf-8"))[
+            "models"
+        ]
+        == []
+    )
 
 
 # ── Civitai API key endpoints (mirrors the HF token pattern) ─────────────────
+
 
 class _FakeApiKeysRepo:
     store: dict[str, str] = {}
@@ -536,7 +571,9 @@ def _civitai_lora_payload(model_type: str = "LORA") -> dict:
 
 
 def test_lora_download_from_civitai(
-    client: TestClient, lora_store: Path, monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+    lora_store: Path,
+    monkeypatch: pytest.MonkeyPatch,
     fake_download_manager: list[dict],
 ) -> None:
     _mock_http(monkeypatch, {_CIV_LORA_VER: _civitai_lora_payload()})
@@ -573,7 +610,9 @@ def test_lora_download_from_civitai(
 
 
 def test_lora_download_civitai_checkpoint_rejected(
-    client: TestClient, lora_store: Path, monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+    lora_store: Path,
+    monkeypatch: pytest.MonkeyPatch,
     fake_download_manager: list[dict],
 ) -> None:
     _mock_http(
@@ -587,7 +626,9 @@ def test_lora_download_civitai_checkpoint_rejected(
 
 
 def test_lora_download_civitai_401_friendly(
-    client: TestClient, lora_store: Path, monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+    lora_store: Path,
+    monkeypatch: pytest.MonkeyPatch,
     fake_download_manager: list[dict],
 ) -> None:
     _mock_http(monkeypatch, {_CIV_LORA_VER: _http_401(_CIV_LORA_VER)})
@@ -611,7 +652,9 @@ def test_lora_download_requires_exactly_one_source(
 
 
 def test_lora_download_accepts_hf_url(
-    client: TestClient, lora_store: Path, monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+    lora_store: Path,
+    monkeypatch: pytest.MonkeyPatch,
     fake_download_manager: list[dict],
 ) -> None:
     """An HF URL in repo_id is normalized to the repo id."""

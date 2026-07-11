@@ -15,11 +15,11 @@ the weight file) — silent in-request downloads are this project's original
 sin and are never reintroduced here.
 
 Family compatibility: every installed LoRA carries a ``base_family`` guess
-("sdxl" | "sd15" | "flux" | "unknown"), derived from the repo's declared
-``base_model`` when available and from repo-id/filename heuristics otherwise.
-A KNOWN family that differs from the target model's ``lora_family`` fails
-loudly before any weights load; "unknown" is attempted and any diffusers
-error is surfaced cleanly.
+("sdxl" | "sd15" | "flux" | "z-image" | "unknown"), derived from the repo's
+declared ``base_model`` when available and from repo-id/filename heuristics
+otherwise. A KNOWN family that differs from the target model's ``lora_family``
+fails loudly before any weights load; "unknown" is attempted and any
+diffusers error is surfaced cleanly.
 """
 
 from __future__ import annotations
@@ -60,12 +60,14 @@ def lora_dir(lora_id: str) -> Path:
 
 # ── base-family detection ─────────────────────────────────────────────────────
 
+
 def guess_base_family(
     repo_id: str,
     weight_name: str | None = None,
     declared_base_model: str | None = None,
 ) -> str:
-    """Best-effort LoRA base-family guess: "sdxl" | "sd15" | "flux" | "unknown".
+    """Best-effort LoRA base-family guess:
+    "sdxl" | "sd15" | "flux" | "z-image" | "unknown".
 
     Precedence: the repo's declared ``base_model`` (HF cardData — reliable),
     then repo-id/filename token heuristics. Honest by design — anything
@@ -81,13 +83,25 @@ def guess_base_family(
     for text in haystacks:
         if "flux" in text:
             return "flux"
+        # Civitai camel form ("ZImageTurbo") and dashed ("z-image-turbo")
+        if "z-image" in text or "zimage" in text or "z_image" in text:
+            return "z-image"
         if "xl" in text and ("sd" in text or "stable-diffusion" in text):
             return "sdxl"
         if "sdxl" in text:
             return "sdxl"
-        if any(t in text for t in ("sd15", "sd-1-5", "sd1.5", "sd_1_5",
-                                   "stable-diffusion-v1-5",
-                                   "stable-diffusion-1-5", "sdv1-5")):
+        if any(
+            t in text
+            for t in (
+                "sd15",
+                "sd-1-5",
+                "sd1.5",
+                "sd_1_5",
+                "stable-diffusion-v1-5",
+                "stable-diffusion-1-5",
+                "sdv1-5",
+            )
+        ):
             return "sd15"
     return "unknown"
 
@@ -107,6 +121,7 @@ def check_lora_model_compat(model_lora_family: str, lora_meta: dict[str, Any]) -
 
 
 # ── metadata sidecar ──────────────────────────────────────────────────────────
+
 
 def write_lora_meta(
     lora_id: str,
@@ -146,7 +161,11 @@ def get_installed_lora(lora_id: str) -> dict[str, Any] | None:
         return None
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if not isinstance(meta, dict) or "repo_id" not in meta or "weight_name" not in meta:
+        if (
+            not isinstance(meta, dict)
+            or "repo_id" not in meta
+            or "weight_name" not in meta
+        ):
             raise ValueError("lora.json missing required fields")
     except Exception as exc:  # noqa: BLE001 — skip-and-scream, never crash a listing
         logger.error("[image_gen] Corrupt lora.json in %s: %s", d, exc)
@@ -196,13 +215,115 @@ def delete_lora(lora_id: str) -> bool:
 
 
 # ── curated catalog ───────────────────────────────────────────────────────────
-# Every entry below was verified to exist on the HF Hub via the live API on
-# 2026-07-10 (repo present, exact weight filename listed in siblings,
-# license/base_model read from cardData) — hence unverified=False throughout.
-# If you add an entry you could NOT verify against live HF metadata, set
-# unverified=True instead of guessing.
+# HF entries: verified against the Hub API (repo present, exact weight
+# filename in siblings, license/base_model from cardData).
+# Civitai entries: verified against GET /api/v1/models/<id> (type=LORA,
+# baseModel=ZImageTurbo, primary .safetensors file). ``repo_id`` is the
+# canonical short ref ``civitai:<modelId>@<versionId>`` — the version pin is
+# REQUIRED because multi-base Civitai pages resolve to the newest version
+# (often a different family) when modelVersionId is omitted.
+# Set unverified=True only when you could NOT verify against live metadata.
 
 CURATED_LORA_CATALOG: list[dict[str, Any]] = [
+    # ── Z-Image Turbo (most-used catalog model) — Civitai, verified 2026-07-11
+    {
+        "repo_id": "civitai:2268008@2617751",
+        "name": "Realistic Snapshot (ZIT v5)",
+        "description": (
+            "Organic photorealism for Z-Image Turbo — skin pores, sensor "
+            "noise, candid lighting. Strength ~0.6–0.7. Civitai baseModel "
+            "ZImageTurbo."
+        ),
+        "weight_name": "RealisticSnapshot-Zimage-Turbov5.safetensors",
+        "base_family": "z-image",
+        "license": "civitai (see model page)",
+        "source": "civitai",
+        "unverified": False,
+    },
+    {
+        "repo_id": "civitai:2395852@2812128",
+        "name": "Radiant Realism Pro (ZIT v2)",
+        "description": (
+            "Beauty / skin-texture / natural skin-tone LoRA for Z-Image "
+            "Turbo portraits. Steps 8–10, CFG 1."
+        ),
+        "weight_name": "Z-Image Turbo Radiant v2.0.safetensors",
+        "base_family": "z-image",
+        "license": "civitai (see model page)",
+        "source": "civitai",
+        "unverified": False,
+    },
+    {
+        "repo_id": "civitai:2283998@2570552",
+        "name": "ZepiCRealism (Turbo)",
+        "description": (
+            "Natural detail realism LoRA for Z-Image Turbo. Strength 1.0 "
+            "(or 0.5–1.0); reduces the default Asian prior toward a more "
+            "neutral look."
+        ),
+        "weight_name": "ZepiCRealism-Turbo.safetensors",
+        "base_family": "z-image",
+        "license": "civitai (see model page)",
+        "source": "civitai",
+        "unverified": False,
+    },
+    {
+        "repo_id": "civitai:580857@2674760",
+        "name": "Realistic Skin Texture (ZTurbo v4.5)",
+        "description": (
+            "Detailed photorealistic skin-texture style for Z-Image Turbo. "
+            "Multi-base page — this pin is the ZImageTurbo v4.5 version."
+        ),
+        "weight_name": "skin texture Photorealistic style v4.5.safetensors",
+        "base_family": "z-image",
+        "license": "civitai (see model page)",
+        "source": "civitai",
+        "unverified": False,
+    },
+    {
+        "repo_id": "civitai:1379962@2457938",
+        "name": "Amateur Instagramification (Z-turbo)",
+        "description": (
+            "Amateur / Instagram candid aesthetic for Z-Image Turbo. "
+            "Multi-base page — this pin is the ZImageTurbo version."
+        ),
+        "weight_name": "zimage-igbaddie.safetensors",
+        "base_family": "z-image",
+        "license": "civitai (see model page)",
+        "source": "civitai",
+        "unverified": False,
+    },
+    {
+        "repo_id": "civitai:2234266@2515203",
+        "name": "[ZIT] Detail Slider",
+        "description": ("Detail-enhancement slider LoRA trained for Z-Image Turbo."),
+        "weight_name": "Z-Detail-Slider.safetensors",
+        "base_family": "z-image",
+        "license": "civitai (see model page)",
+        "source": "civitai",
+        "unverified": False,
+    },
+    {
+        "repo_id": "civitai:432586@2454927",
+        "name": "Cinematic Shot (ZIT)",
+        "description": "Cinematic framing / lighting style for Z-Image Turbo.",
+        "weight_name": "zy_CinematicShot_zit.safetensors",
+        "base_family": "z-image",
+        "license": "civitai (see model page)",
+        "source": "civitai",
+        "unverified": False,
+    },
+    {
+        "repo_id": "civitai:689192@2558476",
+        "name": "Aesthetic Amateur Photo (ZIT)",
+        "description": ("Amateur-photo aesthetic LoRA for Z-Image Turbo."),
+        "weight_name": "aesthetic_exp1.safetensors",
+        "base_family": "z-image",
+        "license": "civitai (see model page)",
+        "source": "civitai",
+        "unverified": False,
+    },
+    # ── SDXL / FLUX (HF Hub, verified 2026-07-10) ────────────────────────────
     {
         "repo_id": "latent-consistency/lcm-lora-sdxl",
         "name": "LCM LoRA (SDXL)",
@@ -213,6 +334,7 @@ CURATED_LORA_CATALOG: list[dict[str, Any]] = [
         "weight_name": "pytorch_lora_weights.safetensors",
         "base_family": "sdxl",
         "license": "openrail++",
+        "source": "hf",
         "unverified": False,
     },
     {
@@ -222,6 +344,7 @@ CURATED_LORA_CATALOG: list[dict[str, Any]] = [
         "weight_name": "pixel-art-xl.safetensors",
         "base_family": "sdxl",
         "license": "creativeml-openrail-m",
+        "source": "hf",
         "unverified": False,
     },
     {
@@ -231,6 +354,7 @@ CURATED_LORA_CATALOG: list[dict[str, Any]] = [
         "weight_name": "toy_face_sdxl.safetensors",
         "base_family": "sdxl",
         "license": "other (see model card)",
+        "source": "hf",
         "unverified": False,
     },
     {
@@ -243,6 +367,7 @@ CURATED_LORA_CATALOG: list[dict[str, Any]] = [
         "weight_name": "lora.safetensors",
         "base_family": "flux",
         "license": "flux-1-dev-non-commercial-license",
+        "source": "hf",
         "unverified": False,
     },
     {
@@ -255,6 +380,7 @@ CURATED_LORA_CATALOG: list[dict[str, Any]] = [
         "weight_name": "diffusion_pytorch_model.safetensors",
         "base_family": "flux",
         "license": "flux-1-dev-non-commercial-license",
+        "source": "hf",
         "unverified": False,
     },
 ]

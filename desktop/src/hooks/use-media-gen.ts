@@ -220,17 +220,18 @@ export interface ImageFormState {
   loras: SelectedLora[];
 }
 
-export interface VideoFormDefaults
-  extends Omit<ImageFormDefaults, "supportsImg2Img" | "strength"> {
+export interface VideoFormDefaults extends Omit<
+  ImageFormDefaults,
+  "supportsImg2Img" | "strength"
+> {
   numFrames: number;
   fps: number;
 }
 
-export interface VideoFormState
-  extends Omit<
-    ImageFormState,
-    "defaults" | "initImage" | "strength" | "loras"
-  > {
+export interface VideoFormState extends Omit<
+  ImageFormState,
+  "defaults" | "initImage" | "strength" | "loras"
+> {
   numFrames: number;
   fps: number;
   sourceImage: PickedImage | null;
@@ -956,7 +957,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
           await enqueueImageAsNext(base, {
             prompt: preset.prompt_template.replace("{subject}", input.subject),
             model_id: input.model_id ?? preset.suggested_model_id,
-            ...(preset.negative_prompt ? { negative_prompt: preset.negative_prompt } : {}),
+            ...(preset.negative_prompt
+              ? { negative_prompt: preset.negative_prompt }
+              : {}),
             steps: preset.steps,
             guidance: preset.guidance,
             width: preset.width,
@@ -1143,12 +1146,16 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setLoraError(ENGINE_NOT_CONNECTED_ACTION);
         return null;
       }
-      // Catalog rows pass an explicit weight file — those are HF by
-      // definition.  Free-text pastes are classified (Civitai link/id vs HF
-      // repo/URL).
-      const wire = weightName
-        ? { repo_id: ref, weight_name: weightName }
-        : classifyLoraRef(ref);
+      // Always classify first — curated catalog rows may be Civitai
+      // (``civitai:<model>@<ver>``) or HF.  weight_name is HF-only (Civitai
+      // resolves the primary .safetensors from the version metadata).
+      const classified = classifyLoraRef(ref);
+      const wire =
+        "civitai" in classified
+          ? classified
+          : weightName
+            ? { repo_id: classified.repo_id, weight_name: weightName }
+            : classified;
       setLoraNeedsCivitaiKey(false);
       try {
         const { download_id } = await apiDownloadImageGenLora(base, wire);
@@ -1772,7 +1779,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     }
     setVideoCancelling(true);
     setActiveJob((prev) =>
-      prev && prev.job_id === jobId ? { ...prev, cancel_requested: true } : prev,
+      prev && prev.job_id === jobId
+        ? { ...prev, cancel_requested: true }
+        : prev,
     );
     setJobs((prev) =>
       prev.map((j) =>

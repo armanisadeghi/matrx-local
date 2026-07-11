@@ -81,41 +81,65 @@ CUSTOM_MODEL_PREFIX = "custom/"
 FAMILY_INFO: dict[str, dict[str, Any]] = {
     "sd15": {
         "pipeline_type": "stable-diffusion",
-        "steps": 30, "guidance": 7.5, "negative_prompt": True,
-        "width": 512, "height": 512,
-        "supports_img2img": True, "img2img_strength": True,
+        "steps": 30,
+        "guidance": 7.5,
+        "negative_prompt": True,
+        "width": 512,
+        "height": 512,
+        "supports_img2img": True,
+        "img2img_strength": True,
     },
     "sdxl": {
         "pipeline_type": "stable-diffusion-xl",
-        "steps": 30, "guidance": 6.0, "negative_prompt": True,
-        "width": 1024, "height": 1024,
-        "supports_img2img": True, "img2img_strength": True,
+        "steps": 30,
+        "guidance": 6.0,
+        "negative_prompt": True,
+        "width": 1024,
+        "height": 1024,
+        "supports_img2img": True,
+        "img2img_strength": True,
     },
     "flux": {
         "pipeline_type": "flux",
-        "steps": 28, "guidance": 3.5, "negative_prompt": False,
-        "width": 1024, "height": 1024,
-        "supports_img2img": True, "img2img_strength": True,
+        "steps": 28,
+        "guidance": 3.5,
+        "negative_prompt": False,
+        "width": 1024,
+        "height": 1024,
+        "supports_img2img": True,
+        "img2img_strength": True,
     },
     "flux2": {
         "pipeline_type": "flux2-klein",
-        "steps": 4, "guidance": 1.0, "negative_prompt": False,
-        "width": 1024, "height": 1024,
+        "steps": 4,
+        "guidance": 1.0,
+        "negative_prompt": False,
+        "width": 1024,
+        "height": 1024,
         # Flux2KleinPipeline is its own unified generate+edit pipeline with
         # NO strength parameter (see models.py catalog entry).
-        "supports_img2img": True, "img2img_strength": False,
+        "supports_img2img": True,
+        "img2img_strength": False,
     },
     "qwen": {
         "pipeline_type": "qwen-image",
-        "steps": 50, "guidance": 4.0, "negative_prompt": True,
-        "width": 1024, "height": 1024,
-        "supports_img2img": True, "img2img_strength": True,
+        "steps": 50,
+        "guidance": 4.0,
+        "negative_prompt": True,
+        "width": 1024,
+        "height": 1024,
+        "supports_img2img": True,
+        "img2img_strength": True,
     },
     "z-image": {
         "pipeline_type": "z-image",
-        "steps": 9, "guidance": 0.0, "negative_prompt": False,
-        "width": 1024, "height": 1024,
-        "supports_img2img": True, "img2img_strength": True,
+        "steps": 9,
+        "guidance": 0.0,
+        "negative_prompt": False,
+        "width": 1024,
+        "height": 1024,
+        "supports_img2img": True,
+        "img2img_strength": True,
     },
 }
 
@@ -162,6 +186,10 @@ CIVITAI_BASE_MODEL_TO_FAMILY: dict[str, str] = {
     "qwen": "qwen",
     "z-image": "z-image",
     "z-image turbo": "z-image",
+    # Civitai's live baseModel string for Tongyi Z-Image Turbo / Base
+    # (verified via API 2026-07-11 — NOT "Z-Image Turbo", the camel-concat form).
+    "zimageturbo": "z-image",
+    "zimagebase": "z-image",
 }
 
 
@@ -182,6 +210,7 @@ class InspectError(Exception):
 
 # ── hardware heuristic ────────────────────────────────────────────────────────
 
+
 def estimate_hardware(size_gb: float, fmt: str) -> tuple[float, float]:
     """Conservative size-based (vram_gb, ram_gb) estimate — see module docs."""
     if fmt == "single_file":
@@ -194,6 +223,7 @@ def estimate_hardware(size_gb: float, fmt: str) -> tuple[float, float]:
 
 
 # ── registry persistence (atomic) ─────────────────────────────────────────────
+
 
 def registry_path() -> Path:
     return image_models_dir() / REGISTRY_FILENAME
@@ -263,8 +293,19 @@ def parse_ref(ref: str) -> dict[str, Any]:
             "version_id": int(m.group(2)) if m.group(2) else None,
         }
 
+    # civitai.com = SFW front door; civitai.red = full/NSFW front door;
+    # civitai.green redirects to .com. Same DB + path shape on all three —
+    # only the host filter differs. API resolution always hits civitai.com.
+    _CIVITAI_HOSTS = frozenset({"civitai.com", "civitai.red", "civitai.green"})
     looks_like_url = "://" in r or r.lower().startswith(
-        ("www.", "huggingface.co/", "hf.co/", "civitai.com/")
+        (
+            "www.",
+            "huggingface.co/",
+            "hf.co/",
+            "civitai.com/",
+            "civitai.red/",
+            "civitai.green/",
+        )
     )
     if looks_like_url:
         url = r if "://" in r else f"https://{r}"
@@ -272,18 +313,27 @@ def parse_ref(ref: str) -> dict[str, Any]:
         host = (parsed.netloc or "").lower().removeprefix("www.")
         path = parsed.path or ""
 
-        if host == "civitai.com":
+        if host in _CIVITAI_HOSTS:
             dl = re.search(r"/api/download/models/(\d+)", path)
             if dl:
-                return {"kind": "civitai", "model_id": None,
-                        "version_id": int(dl.group(1))}
+                return {
+                    "kind": "civitai",
+                    "model_id": None,
+                    "version_id": int(dl.group(1)),
+                }
             mv = re.search(r"/(?:api/v1/)?model-versions/(\d+)", path)
             if mv:
-                return {"kind": "civitai", "model_id": None,
-                        "version_id": int(mv.group(1))}
+                return {
+                    "kind": "civitai",
+                    "model_id": None,
+                    "version_id": int(mv.group(1)),
+                }
             mm = re.search(r"/models/(\d+)", path)
             if mm:
                 q = parse_qs(parsed.query or "")
+                # modelVersionId is the pin — without it multi-base models
+                # (ZIT + Flux + SDXL on one page) resolve to the NEWEST
+                # version, which is often a different family.
                 ver = q.get("modelVersionId", [None])[0]
                 return {
                     "kind": "civitai",
@@ -293,7 +343,8 @@ def parse_ref(ref: str) -> dict[str, Any]:
             raise InspectError(
                 400,
                 f"Unrecognized Civitai URL '{ref}' — expected a model page "
-                "(civitai.com/models/<id>) or model-version URL.",
+                "(civitai.com|civitai.red/models/<id>?modelVersionId=<ver>) "
+                "or model-version / download URL.",
             )
 
         if host in ("huggingface.co", "hf.co"):
@@ -311,7 +362,7 @@ def parse_ref(ref: str) -> dict[str, Any]:
         raise InspectError(
             400,
             f"Unsupported host in '{ref}' — only huggingface.co and "
-            "civitai.com references are accepted.",
+            "civitai.com / civitai.red references are accepted.",
         )
 
     if _HF_REPO_RE.match(r) and ".." not in r:
@@ -325,6 +376,7 @@ def parse_ref(ref: str) -> dict[str, Any]:
 
 
 # ── HTTP (mocked in tests — everything network goes through here) ────────────
+
 
 async def _http_get_json(url: str, headers: dict[str, str] | None = None) -> Any:
     async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
@@ -358,6 +410,7 @@ def _friendly_civitai_http_error(exc: httpx.HTTPStatusError, what: str) -> Inspe
 
 
 # ── Civitai resolution ────────────────────────────────────────────────────────
+
 
 def _pick_civitai_file(files: list[dict[str, Any]]) -> dict[str, Any]:
     """Pick the primary safetensors Model file of a version. Loud on failure."""
@@ -440,6 +493,7 @@ async def resolve_civitai(parsed: dict[str, Any]) -> dict[str, Any]:
 
 # ── HF resolution ─────────────────────────────────────────────────────────────
 
+
 def _guess_checkpoint_family(
     repo_id: str, filename: str | None, base_model: str | None, tags: list[str]
 ) -> str:
@@ -463,13 +517,24 @@ def _guess_checkpoint_family(
             return "z-image"
         if "qwen-image" in text:
             return "qwen"
-        if "sdxl" in text or ("xl" in text and ("sd" in text or "stable-diffusion" in text)):
+        if "sdxl" in text or (
+            "xl" in text and ("sd" in text or "stable-diffusion" in text)
+        ):
             return "sdxl"
         if "pony" in text or "illustrious" in text:
             return "sdxl"
-        if any(t in text for t in ("sd15", "sd-1-5", "sd1.5", "sd_1_5",
-                                   "stable-diffusion-v1-5",
-                                   "stable-diffusion-1-5", "sdv1-5")):
+        if any(
+            t in text
+            for t in (
+                "sd15",
+                "sd-1-5",
+                "sd1.5",
+                "sd_1_5",
+                "stable-diffusion-v1-5",
+                "stable-diffusion-1-5",
+                "sdv1-5",
+            )
+        ):
             return "sd15"
     return "unknown"
 
@@ -500,8 +565,12 @@ async def resolve_hf(repo_id: str) -> dict[str, Any]:
                 "Settings → API Keys → Hugging Face.",
             )
         if code == 404:
-            raise InspectError(404, f"Hugging Face repo '{repo_id}' does not exist (404).")
-        raise InspectError(400, f"Hugging Face request for '{repo_id}' failed ({code}).")
+            raise InspectError(
+                404, f"Hugging Face repo '{repo_id}' does not exist (404)."
+            )
+        raise InspectError(
+            400, f"Hugging Face request for '{repo_id}' failed ({code})."
+        )
 
     siblings: list[dict[str, Any]] = list(info.get("siblings") or [])
     files: list[tuple[str, int]] = [
@@ -513,9 +582,14 @@ async def resolve_hf(repo_id: str) -> dict[str, Any]:
 
     card = info.get("cardData") or {}
     raw_base = card.get("base_model")
-    base_model = raw_base if isinstance(raw_base, str) else (
-        raw_base[0] if isinstance(raw_base, list) and raw_base
-        and isinstance(raw_base[0], str) else None
+    base_model = (
+        raw_base
+        if isinstance(raw_base, str)
+        else (
+            raw_base[0]
+            if isinstance(raw_base, list) and raw_base and isinstance(raw_base[0], str)
+            else None
+        )
     )
     tags = [str(t) for t in (info.get("tags") or [])]
 
@@ -546,7 +620,11 @@ async def resolve_hf(repo_id: str) -> dict[str, Any]:
             "name": repo_id.split("/", 1)[1],
         }
 
-    root_st = [(fn, s) for fn, s in files if "/" not in fn and fn.lower().endswith(".safetensors")]
+    root_st = [
+        (fn, s)
+        for fn, s in files
+        if "/" not in fn and fn.lower().endswith(".safetensors")
+    ]
     if not root_st:
         raise InspectError(
             400,
@@ -572,6 +650,7 @@ async def resolve_hf(repo_id: str) -> dict[str, Any]:
 
 
 # ── inspection (the /inspect endpoint body) ───────────────────────────────────
+
 
 def registration_refusal(entry: dict[str, Any]) -> str | None:
     """Why this entry may NOT be registered, or None when it is registerable.
@@ -599,10 +678,14 @@ def registration_refusal(entry: dict[str, Any]) -> str | None:
                 f"{', '.join(sorted(SINGLE_FILE_FAMILIES))}."
             )
         if not entry.get("weight_name"):
-            return "single_file entries must carry weight_name (the checkpoint filename)."
+            return (
+                "single_file entries must carry weight_name (the checkpoint filename)."
+            )
     if entry.get("source") == "civitai" and not entry.get("download_url"):
         return "Civitai entries must carry download_url (from inspect)."
-    if entry.get("source") == "hf" and not _HF_REPO_RE.match(str(entry.get("source_ref") or "")):
+    if entry.get("source") == "hf" and not _HF_REPO_RE.match(
+        str(entry.get("source_ref") or "")
+    ):
         return f"source_ref '{entry.get('source_ref')}' is not a valid Hugging Face repo id."
     return None
 
@@ -652,12 +735,15 @@ async def inspect_ref(ref: str) -> dict[str, Any]:
             "model_id": f"{CUSTOM_MODEL_PREFIX}civitai-{info['model_id']}-{info['version_id']}",
             "name": (
                 f"{info['model_name']} ({info['version_name']})"
-                if info["version_name"] else info["model_name"]
+                if info["version_name"]
+                else info["model_name"]
             ),
             "source": "civitai",
             "source_ref": f"civitai:{info['model_id']}@{info['version_id']}",
             "family": family,
-            "pipeline_type": FAMILY_INFO.get(family, {}).get("pipeline_type", "unknown"),
+            "pipeline_type": FAMILY_INFO.get(family, {}).get(
+                "pipeline_type", "unknown"
+            ),
             "format": "single_file",
             "weight_name": info["file_name"],
             "files": None,
@@ -667,10 +753,13 @@ async def inspect_ref(ref: str) -> dict[str, Any]:
             "civitai_model_id": info["model_id"],
             "civitai_version_id": info["version_id"],
         }
-        warnings.insert(0, (
-            "Community model from Civitai — the license and content are not "
-            "verified by this app; check the model page before commercial use."
-        ))
+        warnings.insert(
+            0,
+            (
+                "Community model from Civitai — the license and content are not "
+                "verified by this app; check the model page before commercial use."
+            ),
+        )
         if not read_civitai_key():
             warnings.append(
                 "Most Civitai downloads require an API key — add one under "
@@ -691,7 +780,9 @@ async def inspect_ref(ref: str) -> dict[str, Any]:
             "source": "hf",
             "source_ref": repo_id,
             "family": family,
-            "pipeline_type": FAMILY_INFO.get(family, {}).get("pipeline_type", "unknown"),
+            "pipeline_type": FAMILY_INFO.get(family, {}).get(
+                "pipeline_type", "unknown"
+            ),
             "format": info["format"],
             "weight_name": info["weight_name"],
             "files": info["files"],
@@ -741,6 +832,7 @@ async def inspect_ref(ref: str) -> dict[str, Any]:
 
 # ── registration / deletion / catalog bridge ──────────────────────────────────
 
+
 def register_custom_model(entry: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Validate + persist an (inspect-confirmed) entry. Returns (stored, created).
 
@@ -753,7 +845,9 @@ def register_custom_model(entry: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         raise ValueError(refusal)
 
     model_id = str(entry.get("model_id") or "")
-    if not model_id.startswith(CUSTOM_MODEL_PREFIX) or len(model_id) <= len(CUSTOM_MODEL_PREFIX):
+    if not model_id.startswith(CUSTOM_MODEL_PREFIX) or len(model_id) <= len(
+        CUSTOM_MODEL_PREFIX
+    ):
         raise ValueError(
             f"Custom model ids must be namespaced '{CUSTOM_MODEL_PREFIX}<ref>' "
             f"— got '{model_id}'."
@@ -765,8 +859,9 @@ def register_custom_model(entry: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         return existing, False
 
     family = str(entry["family"])
-    vram_gb, ram_gb = estimate_hardware(float(entry.get("size_gb") or 0.0),
-                                        str(entry["format"]))
+    vram_gb, ram_gb = estimate_hardware(
+        float(entry.get("size_gb") or 0.0), str(entry["format"])
+    )
     stored: dict[str, Any] = {
         "model_id": model_id,
         "name": str(entry.get("name") or model_id),
@@ -790,7 +885,11 @@ def register_custom_model(entry: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     save_registry(models)
     logger.info(
         "[image_gen] Registered custom model %s (source=%s family=%s format=%s "
-        "size=%.2fGB)", model_id, stored["source"], family, stored["format"],
+        "size=%.2fGB)",
+        model_id,
+        stored["source"],
+        family,
+        stored["format"],
         stored["size_gb"],
     )
     return stored, True
@@ -875,6 +974,7 @@ def list_custom_catalog_models() -> list[ImageGenModel]:
 
 
 # ── download enqueue ──────────────────────────────────────────────────────────
+
 
 async def enqueue_custom_download(entry: dict[str, Any]) -> dict[str, Any]:
     """Queue a registered custom model's weights through the DownloadManager.

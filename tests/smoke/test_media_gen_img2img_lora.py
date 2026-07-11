@@ -42,7 +42,9 @@ from app.services.image_gen.jobs import ImageJobStore
 from app.services.image_gen.models import IMAGE_GEN_MODELS
 from app.services.image_gen.service import ImageGenService, prepare_init_image
 
-SDXL_MODEL = next(m for m in IMAGE_GEN_MODELS if m.pipeline_type == "stable-diffusion-xl")
+SDXL_MODEL = next(
+    m for m in IMAGE_GEN_MODELS if m.pipeline_type == "stable-diffusion-xl"
+)
 FLUX_MODEL = next(m for m in IMAGE_GEN_MODELS if m.pipeline_type == "flux")
 KLEIN_MODEL = next(m for m in IMAGE_GEN_MODELS if m.pipeline_type == "flux2-klein")
 
@@ -63,6 +65,7 @@ def _force_image_gen_available(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(scope="module")
 def client() -> TestClient:
     from app.main import app
+
     # No context manager on purpose: lifespan must NOT run (it would start
     # engine services). Plain requests still traverse the middleware stack.
     return TestClient(app, headers={"Authorization": "Bearer test-token"})
@@ -123,6 +126,7 @@ def _isolate_image_history(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
 
 # ── catalog + params contract ─────────────────────────────────────────────────
 
+
 def test_models_expose_img2img_and_lora_family(client: TestClient) -> None:
     r = client.get("/image-gen/models")
     assert r.status_code == 200, r.text
@@ -152,11 +156,17 @@ def test_params_strength_default_only_for_strength_families(client: TestClient) 
 
 # ── request validation 400s ───────────────────────────────────────────────────
 
+
 def test_strength_without_init_image_400(client: TestClient) -> None:
     for path in ("/image-gen/generate", "/image-gen/jobs"):
-        r = client.post(path, json={
-            "prompt": "x", "model_id": SDXL_MODEL.model_id, "strength": 0.5,
-        })
+        r = client.post(
+            path,
+            json={
+                "prompt": "x",
+                "model_id": SDXL_MODEL.model_id,
+                "strength": 0.5,
+            },
+        )
         assert r.status_code == 400, f"{path}: {r.status_code} {r.text}"
         assert "input image" in r.json()["detail"], r.text
 
@@ -164,40 +174,57 @@ def test_strength_without_init_image_400(client: TestClient) -> None:
 def test_garbage_init_image_b64_400(client: TestClient) -> None:
     for payload in ("!!!not-base64!!!", base64.b64encode(b"not an image").decode()):
         for path in ("/image-gen/generate", "/image-gen/jobs"):
-            r = client.post(path, json={
-                "prompt": "x", "model_id": SDXL_MODEL.model_id,
-                "init_image_b64": payload,
-            })
+            r = client.post(
+                path,
+                json={
+                    "prompt": "x",
+                    "model_id": SDXL_MODEL.model_id,
+                    "init_image_b64": payload,
+                },
+            )
             assert r.status_code == 400, f"{path}: {r.status_code} {r.text}"
             assert "PNG or JPEG" in r.json()["detail"], r.text
 
 
 def test_strength_rejected_for_flux2_klein(client: TestClient) -> None:
     b64, _ = _png_b64()
-    r = client.post("/image-gen/jobs", json={
-        "prompt": "x", "model_id": KLEIN_MODEL.model_id,
-        "init_image_b64": b64, "strength": 0.5,
-    })
+    r = client.post(
+        "/image-gen/jobs",
+        json={
+            "prompt": "x",
+            "model_id": KLEIN_MODEL.model_id,
+            "init_image_b64": b64,
+            "strength": 0.5,
+        },
+    )
     assert r.status_code == 400, r.text
     assert "strength" in r.json()["detail"]
 
 
 def test_unknown_lora_id_400_names_it(client: TestClient, lora_store: Path) -> None:
     for path in ("/image-gen/generate", "/image-gen/jobs"):
-        r = client.post(path, json={
-            "prompt": "x", "model_id": SDXL_MODEL.model_id,
-            "loras": [{"id": "no-such--lora", "scale": 1.0}],
-        })
+        r = client.post(
+            path,
+            json={
+                "prompt": "x",
+                "model_id": SDXL_MODEL.model_id,
+                "loras": [{"id": "no-such--lora", "scale": 1.0}],
+            },
+        )
         assert r.status_code == 400, f"{path}: {r.status_code} {r.text}"
         assert "no-such--lora" in r.json()["detail"], r.text
 
 
 def test_lora_family_mismatch_400(client: TestClient, lora_store: Path) -> None:
     lora_id = _install_fake_lora(lora_store, "acme/style-sdxl", base_family="sdxl")
-    r = client.post("/image-gen/jobs", json={
-        "prompt": "x", "model_id": FLUX_MODEL.model_id,
-        "loras": [{"id": lora_id, "scale": 1.0}],
-    })
+    r = client.post(
+        "/image-gen/jobs",
+        json={
+            "prompt": "x",
+            "model_id": FLUX_MODEL.model_id,
+            "loras": [{"id": lora_id, "scale": 1.0}],
+        },
+    )
     assert r.status_code == 400, r.text
     detail = r.json()["detail"]
     assert "sdxl" in detail and "flux" in detail, (
@@ -207,6 +234,7 @@ def test_lora_family_mismatch_400(client: TestClient, lora_store: Path) -> None:
 
 # ── stub pipelines ────────────────────────────────────────────────────────────
 
+
 class RecordingPipe:
     """Text-to-image stub that records LoRA + call activity."""
 
@@ -214,7 +242,9 @@ class RecordingPipe:
         self.calls = calls
         self.fail_lora_load = fail_lora_load
 
-    def load_lora_weights(self, path: str, *, weight_name: str, adapter_name: str) -> None:
+    def load_lora_weights(
+        self, path: str, *, weight_name: str, adapter_name: str
+    ) -> None:
         self.calls.append(("load_lora_weights", weight_name, adapter_name))
         if self.fail_lora_load:
             raise RuntimeError("synthetic LoRA load failure")
@@ -239,7 +269,10 @@ class RecordingPipe:
     ) -> Any:
         self.calls.append(("call", "t2i"))
         from PIL import Image
-        return SimpleNamespace(images=[Image.new("RGB", (width, height), (10, 200, 30))])
+
+        return SimpleNamespace(
+            images=[Image.new("RGB", (width, height), (10, 200, 30))]
+        )
 
 
 class RecordingImg2ImgPipe:
@@ -250,7 +283,9 @@ class RecordingImg2ImgPipe:
         self.calls = calls
         self.kwargs: dict[str, Any] | None = None
 
-    def load_lora_weights(self, path: str, *, weight_name: str, adapter_name: str) -> None:
+    def load_lora_weights(
+        self, path: str, *, weight_name: str, adapter_name: str
+    ) -> None:
         self.calls.append(("load_lora_weights", weight_name, adapter_name))
 
     def set_adapters(self, names: list, adapter_weights: list) -> None:
@@ -289,6 +324,7 @@ def _make_stub_service(pipe: Any, model=SDXL_MODEL) -> ImageGenService:
 
 # ── service: img2img routing ──────────────────────────────────────────────────
 
+
 def test_prepare_init_image_aspect_fill_center_crop() -> None:
     _, raw = _png_b64(20, 10)
     out = prepare_init_image(raw, 64, 64)
@@ -312,11 +348,17 @@ def test_img2img_routes_to_img2img_pipe_with_strength(
     svc = _make_stub_service(t2i)
 
     _, raw = _png_b64(32, 16)
-    result = asyncio.run(svc.generate(
-        prompt="an edit", model_id=SDXL_MODEL.model_id,
-        steps=4, width=64, height=64,
-        init_image_bytes=raw, strength=0.7,
-    ))
+    result = asyncio.run(
+        svc.generate(
+            prompt="an edit",
+            model_id=SDXL_MODEL.model_id,
+            steps=4,
+            width=64,
+            height=64,
+            init_image_bytes=raw,
+            strength=0.7,
+        )
+    )
     assert result.success is True, result.error
     assert ("call", "img2img") in calls and ("call", "t2i") not in calls, (
         "init_image must route to the img2img pipeline, never text-to-image"
@@ -350,10 +392,16 @@ def test_img2img_default_strength_applied(
     svc = _make_stub_service(RecordingPipe(calls))
 
     _, raw = _png_b64()
-    result = asyncio.run(svc.generate(
-        prompt="x", model_id=SDXL_MODEL.model_id, steps=4, width=32, height=32,
-        init_image_bytes=raw,
-    ))
+    result = asyncio.run(
+        svc.generate(
+            prompt="x",
+            model_id=SDXL_MODEL.model_id,
+            steps=4,
+            width=32,
+            height=32,
+            init_image_bytes=raw,
+        )
+    )
     assert result.success is True, result.error
     assert i2i.kwargs is not None and i2i.kwargs["strength"] == 0.6
 
@@ -373,10 +421,16 @@ def test_img2img_zero_effective_steps_fails_loudly(
     svc = _make_stub_service(RecordingPipe(calls))
 
     _, raw = _png_b64()
-    result = asyncio.run(svc.generate(
-        prompt="x", model_id=SDXL_MODEL.model_id, steps=1,  # 1 * 0.6 → 0
-        width=32, height=32, init_image_bytes=raw,
-    ))
+    result = asyncio.run(
+        svc.generate(
+            prompt="x",
+            model_id=SDXL_MODEL.model_id,
+            steps=1,  # 1 * 0.6 → 0
+            width=32,
+            height=32,
+            init_image_bytes=raw,
+        )
+    )
     assert result.success is False
     assert "strength" in (result.error or "")
     assert ("call", "img2img") not in calls
@@ -384,14 +438,19 @@ def test_img2img_zero_effective_steps_fails_loudly(
 
 def test_service_guard_strength_without_image() -> None:
     svc = _make_stub_service(RecordingPipe([]))
-    result = asyncio.run(svc.generate(
-        prompt="x", model_id=SDXL_MODEL.model_id, strength=0.5,
-    ))
+    result = asyncio.run(
+        svc.generate(
+            prompt="x",
+            model_id=SDXL_MODEL.model_id,
+            strength=0.5,
+        )
+    )
     assert result.success is False
     assert "input image" in (result.error or "")
 
 
 # ── service: LoRA apply/unload ordering ──────────────────────────────────────
+
 
 def test_lora_apply_call_unload_order(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, lora_store: Path
@@ -403,14 +462,23 @@ def test_lora_apply_call_unload_order(
     calls: list = []
     pipe = RecordingPipe(calls)
     svc = _make_stub_service(pipe)
-    result = asyncio.run(svc.generate(
-        prompt="x", model_id=SDXL_MODEL.model_id, steps=2, width=32, height=32,
-        loras=[{"id": lora_id, "scale": 0.8}],
-    ))
+    result = asyncio.run(
+        svc.generate(
+            prompt="x",
+            model_id=SDXL_MODEL.model_id,
+            steps=2,
+            width=32,
+            height=32,
+            loras=[{"id": lora_id, "scale": 0.8}],
+        )
+    )
     assert result.success is True, result.error
     kinds = [c[0] for c in calls]
     assert kinds == [
-        "load_lora_weights", "set_adapters", "call", "unload_lora_weights",
+        "load_lora_weights",
+        "set_adapters",
+        "call",
+        "unload_lora_weights",
     ], f"LoRA lifecycle order wrong: {kinds}"
     assert calls[0][1] == "w.safetensors"
     assert calls[1][2] == (0.8,)  # adapter_weights carries the scale
@@ -426,10 +494,16 @@ def test_lora_failed_load_aborts_and_still_unloads(
     calls: list = []
     pipe = RecordingPipe(calls, fail_lora_load=True)
     svc = _make_stub_service(pipe)
-    result = asyncio.run(svc.generate(
-        prompt="x", model_id=SDXL_MODEL.model_id, steps=2, width=32, height=32,
-        loras=[{"id": lora_id, "scale": 1.0}],
-    ))
+    result = asyncio.run(
+        svc.generate(
+            prompt="x",
+            model_id=SDXL_MODEL.model_id,
+            steps=2,
+            width=32,
+            height=32,
+            loras=[{"id": lora_id, "scale": 1.0}],
+        )
+    )
     assert result.success is False
     assert lora_id in (result.error or ""), "the failed LoRA must be named"
     kinds = [c[0] for c in calls]
@@ -449,10 +523,16 @@ def test_lora_family_mismatch_service_guard(
     calls: list = []
     pipe = RecordingPipe(calls)
     svc = _make_stub_service(pipe, model=FLUX_MODEL)
-    result = asyncio.run(svc.generate(
-        prompt="x", model_id=FLUX_MODEL.model_id, steps=2, width=32, height=32,
-        loras=[{"id": lora_id, "scale": 1.0}],
-    ))
+    result = asyncio.run(
+        svc.generate(
+            prompt="x",
+            model_id=FLUX_MODEL.model_id,
+            steps=2,
+            width=32,
+            height=32,
+            loras=[{"id": lora_id, "scale": 1.0}],
+        )
+    )
     assert result.success is False
     assert "sdxl" in (result.error or "") and "flux" in (result.error or "")
     assert ("load_lora_weights", "w.safetensors", "matrx_lora_0") not in calls, (
@@ -468,21 +548,32 @@ def test_lora_sidecar_records_applied_loras(
     lora_id = _install_fake_lora(lora_store, "acme/style-sdxl", base_family="sdxl")
 
     svc = _make_stub_service(RecordingPipe([]))
-    result = asyncio.run(svc.generate(
-        prompt="x", model_id=SDXL_MODEL.model_id, steps=2, width=32, height=32,
-        loras=[{"id": lora_id, "scale": 0.5}],
-    ))
+    result = asyncio.run(
+        svc.generate(
+            prompt="x",
+            model_id=SDXL_MODEL.model_id,
+            steps=2,
+            width=32,
+            height=32,
+            loras=[{"id": lora_id, "scale": 0.5}],
+        )
+    )
     assert result.success is True, result.error
     meta = json.loads(
         next((media_dir / "images").glob("*.json")).read_text(encoding="utf-8")
     )
-    assert meta["params"]["loras"] == [{
-        "id": lora_id, "repo_id": "acme/style-sdxl",
-        "weight_name": "w.safetensors", "scale": 0.5,
-    }]
+    assert meta["params"]["loras"] == [
+        {
+            "id": lora_id,
+            "repo_id": "acme/style-sdxl",
+            "weight_name": "w.safetensors",
+            "scale": 0.5,
+        }
+    ]
 
 
 # ── job records carry the new fields ──────────────────────────────────────────
+
 
 def test_job_record_carries_img2img_and_lora_fields(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -492,8 +583,11 @@ def test_job_record_carries_img2img_and_lora_fields(
     _, raw = _png_b64()
     sha = hashlib.sha256(raw).hexdigest()
     job = store.create(
-        prompt="x", model_id=SDXL_MODEL.model_id,
-        has_init_image=True, init_image_sha256=sha, strength=0.4,
+        prompt="x",
+        model_id=SDXL_MODEL.model_id,
+        has_init_image=True,
+        init_image_sha256=sha,
+        strength=0.4,
         loras=[{"id": "acme--style-sdxl", "scale": 0.9}],
     )
     store.stash_init_image(job.job_id, raw)
@@ -522,7 +616,9 @@ def test_job_record_carries_img2img_and_lora_fields(
 
 
 def test_jobs_api_echoes_new_fields(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     lora_store: Path,
 ) -> None:
     """Enqueue an img2img+LoRA job through the API (model 'downloaded' via
@@ -542,18 +638,28 @@ def test_jobs_api_echoes_new_fields(
             pass
 
     monkeypatch.setattr(jobs_module, "get_image_job_runner", lambda: NoRunRunner())
-    monkeypatch.setattr(image_gen_routes, "get_image_gen_service", lambda: SimpleNamespace(
-        available=True, unavailable_reason="",
-        get_model=lambda mid: SDXL_MODEL if mid == SDXL_MODEL.model_id else None,
-        is_downloaded=lambda mid: True,
-    ))
+    monkeypatch.setattr(
+        image_gen_routes,
+        "get_image_gen_service",
+        lambda: SimpleNamespace(
+            available=True,
+            unavailable_reason="",
+            get_model=lambda mid: SDXL_MODEL if mid == SDXL_MODEL.model_id else None,
+            is_downloaded=lambda mid: True,
+        ),
+    )
 
     b64, raw = _png_b64()
-    r = client.post("/image-gen/jobs", json={
-        "prompt": "an edit", "model_id": SDXL_MODEL.model_id,
-        "init_image_b64": b64, "strength": 0.55,
-        "loras": [{"id": lora_id, "scale": 0.7}],
-    })
+    r = client.post(
+        "/image-gen/jobs",
+        json={
+            "prompt": "an edit",
+            "model_id": SDXL_MODEL.model_id,
+            "init_image_b64": b64,
+            "strength": 0.55,
+            "loras": [{"id": lora_id, "scale": 0.7}],
+        },
+    )
     assert r.status_code == 202, r.text
     job_id = r.json()["job_id"]
 
@@ -568,6 +674,7 @@ def test_jobs_api_echoes_new_fields(
 
 
 # ── /loras HTTP contract ──────────────────────────────────────────────────────
+
 
 def test_loras_list_contract(client: TestClient, lora_store: Path) -> None:
     lora_id = _install_fake_lora(lora_store, "acme/style-sdxl", base_family="sdxl")
@@ -587,13 +694,28 @@ def test_loras_list_contract(client: TestClient, lora_store: Path) -> None:
 
     assert len(data["catalog"]) >= 4
     for c in data["catalog"]:
-        for key in ("repo_id", "name", "description", "weight_name",
-                    "base_family", "license", "unverified", "installed"):
+        for key in (
+            "repo_id",
+            "name",
+            "description",
+            "weight_name",
+            "base_family",
+            "license",
+            "source",
+            "unverified",
+            "installed",
+        ):
             assert key in c, f"catalog entry missing {key}: {c}"
         assert c["unverified"] is False, (
-            "current curated entries were all verified against live HF "
-            "metadata on 2026-07-10"
+            "current curated entries were all verified against live HF / "
+            "Civitai metadata"
         )
+        assert c["source"] in ("hf", "civitai")
+    zit = [c for c in data["catalog"] if c["base_family"] == "z-image"]
+    assert zit, "curated catalog must include Z-Image Turbo LoRAs"
+    assert all(
+        c["source"] == "civitai" and c["repo_id"].startswith("civitai:") for c in zit
+    )
 
 
 def test_lora_download_routes_through_download_manager(
@@ -648,19 +770,36 @@ def test_lora_delete_contract(client: TestClient, lora_store: Path) -> None:
 
 # ── base-family heuristics ────────────────────────────────────────────────────
 
+
 def test_guess_base_family() -> None:
     from app.services.image_gen.loras import guess_base_family
 
-    assert guess_base_family(
-        "acme/thing", None, "stabilityai/stable-diffusion-xl-base-1.0"
-    ) == "sdxl"
-    assert guess_base_family(
-        "acme/thing", None, "black-forest-labs/FLUX.1-dev"
-    ) == "flux"
-    assert guess_base_family(
-        "acme/thing", None, "stable-diffusion-v1-5/stable-diffusion-v1-5"
-    ) == "sd15"
-    assert guess_base_family("nerijs/pixel-art-xl", "pixel-art-xl.safetensors", None) in (
-        "sdxl", "unknown"
+    assert (
+        guess_base_family(
+            "acme/thing", None, "stabilityai/stable-diffusion-xl-base-1.0"
+        )
+        == "sdxl"
     )
-    assert guess_base_family("acme/mystery-lora", "weights.safetensors", None) == "unknown"
+    assert (
+        guess_base_family("acme/thing", None, "black-forest-labs/FLUX.1-dev") == "flux"
+    )
+    assert (
+        guess_base_family(
+            "acme/thing", None, "stable-diffusion-v1-5/stable-diffusion-v1-5"
+        )
+        == "sd15"
+    )
+    assert guess_base_family(
+        "nerijs/pixel-art-xl", "pixel-art-xl.safetensors", None
+    ) in ("sdxl", "unknown")
+    assert (
+        guess_base_family(
+            "civitai:2268008@2617751",
+            "RealisticSnapshot-Zimage-Turbov5.safetensors",
+            "ZImageTurbo",
+        )
+        == "z-image"
+    )
+    assert (
+        guess_base_family("acme/mystery-lora", "weights.safetensors", None) == "unknown"
+    )

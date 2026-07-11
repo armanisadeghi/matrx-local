@@ -274,9 +274,7 @@ export function InputImageControl({ ctl }: { ctl: ImageGenController }) {
             }
           }}
           className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border border-dashed px-4 py-5 text-center transition-colors ${
-            dragOver
-              ? "border-violet-500 bg-violet-500/5"
-              : "hover:bg-muted/20"
+            dragOver ? "border-violet-500 bg-violet-500/5" : "hover:bg-muted/20"
           }`}
           title="Click to choose an image, or drop / paste one here"
         >
@@ -358,10 +356,7 @@ function InstalledLoraRow({
   const setSelection = (patch: Partial<SelectedLora>) => {
     const others = ctl.form.loras.filter((l) => l.id !== lora.id);
     setImageForm({
-      loras: [
-        ...others,
-        { id: lora.id, scale, enabled, ...patch },
-      ],
+      loras: [...others, { id: lora.id, scale, enabled, ...patch }],
     });
   };
 
@@ -431,7 +426,9 @@ function InstalledLoraRow({
             max={1.5}
             step={0.05}
             value={[scale]}
-            onValueChange={([v]) => v !== undefined && setSelection({ scale: v })}
+            onValueChange={([v]) =>
+              v !== undefined && setSelection({ scale: v })
+            }
             className="flex-1"
           />
           <span className="w-9 text-right text-[10px] tabular-nums text-muted-foreground">
@@ -470,8 +467,7 @@ function LoraCatalogDialog({
   // When a tracked LoRA download completes, refresh the installed list.
   const completedTracked = useMemo(
     () =>
-      Object.values(entryByRepo).filter((d) => d.status === "completed")
-        .length,
+      Object.values(entryByRepo).filter((d) => d.status === "completed").length,
     [entryByRepo],
   );
   useEffect(() => {
@@ -525,7 +521,9 @@ function LoraCatalogDialog({
               >
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium">{c.id}</p>
+                    <p className="truncate text-xs font-medium">
+                      {c.name || c.repo_id}
+                    </p>
                     <p className="truncate text-[10px] text-muted-foreground">
                       {c.repo_id}
                       {c.base_family ? ` · ${c.base_family}` : ""}
@@ -546,10 +544,7 @@ function LoraCatalogDialog({
                       variant="outline"
                       className="h-7 px-2.5 text-xs"
                       onClick={() =>
-                        void downloadLora(
-                          c.repo_id,
-                          c.weight_name ?? undefined,
-                        )
+                        void downloadLora(c.repo_id, c.weight_name ?? undefined)
                       }
                     >
                       <Download className="mr-1 h-3 w-3" />
@@ -578,9 +573,7 @@ function LoraCatalogDialog({
           )}
         </div>
         <div className="space-y-1.5 border-t pt-3">
-          <Label className="text-xs">
-            Hugging Face repo or Civitai link
-          </Label>
+          <Label className="text-xs">Hugging Face repo or Civitai link</Label>
           <div className="flex gap-2">
             <Input
               value={repoInput}
@@ -591,7 +584,7 @@ function LoraCatalogDialog({
                   setRepoInput("");
                 }
               }}
-              placeholder="e.g. ostris/super-cereal-sdxl-lora or https://civitai.com/models/…"
+              placeholder="HF repo, or civitai.com / civitai.red link with ?modelVersionId=…"
               className="text-sm"
             />
             <Button
@@ -661,9 +654,7 @@ export function LoraStylesSection({ ctl }: { ctl: ImageGenController }) {
       {open && (
         <div className="space-y-2 border-t px-3 py-2.5">
           {loraError && (
-            <ErrorNote
-              message={`LoRA styles unavailable — ${loraError}`}
-            />
+            <ErrorNote message={`LoRA styles unavailable — ${loraError}`} />
           )}
           {missingEnabled.length > 0 && (
             <ErrorNote
@@ -873,7 +864,10 @@ export function ImageGenerateForm({
   return (
     <div className="space-y-4">
       {showHeader && (
-        <ImageFormHeader ctl={ctl} {...(onSwitchModel !== undefined ? { onSwitchModel } : {})} />
+        <ImageFormHeader
+          ctl={ctl}
+          {...(onSwitchModel !== undefined ? { onSwitchModel } : {})}
+        />
       )}
       {!hideNotices && <ImageParamsErrorNotice ctl={ctl} />}
       <ImagePromptField ctl={ctl} />

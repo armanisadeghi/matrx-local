@@ -107,6 +107,7 @@ router = APIRouter(prefix="/image-gen", tags=["image-gen"], route_class=Envelope
 
 # ── Response / Request schemas ────────────────────────────────────────────────
 
+
 class ImageGenModelInfo(BaseModel):
     model_id: str
     name: str
@@ -386,7 +387,12 @@ def _image_job_response(job) -> ImageJobResponse:
 
 class WorkflowGenerateRequest(BaseModel):
     preset_id: str
-    subject: str = Field(..., min_length=1, max_length=2000, description="Fills the {subject} placeholder in the prompt template.")
+    subject: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="Fills the {subject} placeholder in the prompt template.",
+    )
     model_id: str | None = None
     """Override model. Defaults to the preset's suggested model."""
     seed: int | None = None
@@ -408,7 +414,7 @@ def _validate_generation_inputs(
         raise HTTPException(
             status_code=400,
             detail="strength only applies to image-to-image — provide "
-                   "init_image_b64 (the input image) or omit strength.",
+            "init_image_b64 (the input image) or omit strength.",
         )
 
     init_bytes: bytes | None = None
@@ -418,35 +424,37 @@ def _validate_generation_inputs(
             raise HTTPException(
                 status_code=400,
                 detail=f"{model.name} does not support image-to-image — pick "
-                       "a model with supports_img2img=true "
-                       "(GET /image-gen/models).",
+                "a model with supports_img2img=true "
+                "(GET /image-gen/models).",
             )
         if req.strength is not None and not model.img2img_strength:
             raise HTTPException(
                 status_code=400,
                 detail=f"{model.name} performs reference-image editing with "
-                       "no strength control — omit strength for this model.",
+                "no strength control — omit strength for this model.",
             )
         b64 = req.init_image_b64
         if b64.startswith("data:"):
             _, _, b64 = b64.partition(",")
         import base64 as _base64  # noqa: PLC0415
+
         try:
             raw = _base64.b64decode(b64, validate=True)
         except Exception:
             raise HTTPException(
                 status_code=400,
                 detail="init_image_b64 is not valid base64 data — send a "
-                       "base64-encoded PNG or JPEG image.",
+                "base64-encoded PNG or JPEG image.",
             )
         if len(raw) > _MAX_INIT_IMAGE_BYTES:
             raise HTTPException(
                 status_code=400,
                 detail=f"init image is too large ({len(raw)} bytes decoded; "
-                       f"max {_MAX_INIT_IMAGE_BYTES}).",
+                f"max {_MAX_INIT_IMAGE_BYTES}).",
             )
         import io as _io  # noqa: PLC0415
         from PIL import Image  # noqa: PLC0415
+
         try:
             img = Image.open(_io.BytesIO(raw))
             img.verify()
@@ -455,15 +463,16 @@ def _validate_generation_inputs(
             raise HTTPException(
                 status_code=400,
                 detail="init_image_b64 does not decode to a readable image — "
-                       "send a base64-encoded PNG or JPEG.",
+                "send a base64-encoded PNG or JPEG.",
             )
         if fmt not in ("PNG", "JPEG"):
             raise HTTPException(
                 status_code=400,
                 detail=f"init image format {fmt or 'unknown'} is not "
-                       "supported — send PNG or JPEG.",
+                "supported — send PNG or JPEG.",
             )
         import hashlib  # noqa: PLC0415
+
         init_sha = hashlib.sha256(raw).hexdigest()
         init_bytes = raw
 
@@ -472,21 +481,22 @@ def _validate_generation_inputs(
             check_lora_model_compat,
             get_installed_lora,
         )
+
         for spec in req.loras:
             meta = get_installed_lora(spec.id)
             if meta is None:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Unknown LoRA id '{spec.id}' — GET /image-gen/loras "
-                           "lists installed LoRAs; download one via "
-                           "POST /image-gen/loras/download.",
+                    "lists installed LoRAs; download one via "
+                    "POST /image-gen/loras/download.",
                 )
             if not meta["installed"]:
                 raise HTTPException(
                     status_code=400,
                     detail=f"LoRA '{spec.id}' is not fully downloaded yet — "
-                           "wait for its download to complete "
-                           "(/downloads/stream, category image_gen_lora).",
+                    "wait for its download to complete "
+                    "(/downloads/stream, category image_gen_lora).",
                 )
             try:
                 check_lora_model_compat(model.lora_family, meta)
@@ -497,6 +507,7 @@ def _validate_generation_inputs(
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
 
 @router.get("/status", response_model=ImageGenStatusResponse)
 async def image_gen_status() -> ImageGenStatusResponse:
@@ -511,39 +522,42 @@ async def list_image_gen_models() -> list[ImageGenModelInfo]:
     """List all available models (curated catalog + user-registered custom
     models, flagged custom=true) with download + hardware state."""
     from app.services.image_gen.custom_models import list_custom_catalog_models  # noqa: PLC0415
+
     svc = get_image_gen_service()
     out: list[ImageGenModelInfo] = []
     for m in [*IMAGE_GEN_MODELS, *list_custom_catalog_models()]:
         hw_ok, hw_reason = svc.model_hardware_check(m)
-        out.append(ImageGenModelInfo(
-            model_id=m.model_id,
-            name=m.name,
-            provider=m.provider,
-            pipeline_type=m.pipeline_type,
-            vram_gb=m.vram_gb,
-            ram_gb=m.ram_gb,
-            description=m.description,
-            quality_rating=m.quality_rating,
-            speed_rating=m.speed_rating,
-            recommended_steps=m.recommended_steps,
-            recommended_guidance=m.recommended_guidance,
-            supports_negative_prompt=m.supports_negative_prompt,
-            model_card_url=m.model_card_url,
-            default_width=m.default_width,
-            default_height=m.default_height,
-            requires_hf_token=m.requires_hf_token,
-            supports_img2img=m.supports_img2img,
-            img2img_strength=m.img2img_strength,
-            lora_family=m.lora_family,
-            tags=list(m.tags),
-            download_size_gb=m.download_size_gb,
-            is_downloaded=svc.is_downloaded(m.model_id),
-            hardware_ok=hw_ok,
-            hardware_reason=hw_reason,
-            custom=m.custom,
-            source=m.source,
-            format=m.format,
-        ))
+        out.append(
+            ImageGenModelInfo(
+                model_id=m.model_id,
+                name=m.name,
+                provider=m.provider,
+                pipeline_type=m.pipeline_type,
+                vram_gb=m.vram_gb,
+                ram_gb=m.ram_gb,
+                description=m.description,
+                quality_rating=m.quality_rating,
+                speed_rating=m.speed_rating,
+                recommended_steps=m.recommended_steps,
+                recommended_guidance=m.recommended_guidance,
+                supports_negative_prompt=m.supports_negative_prompt,
+                model_card_url=m.model_card_url,
+                default_width=m.default_width,
+                default_height=m.default_height,
+                requires_hf_token=m.requires_hf_token,
+                supports_img2img=m.supports_img2img,
+                img2img_strength=m.img2img_strength,
+                lora_family=m.lora_family,
+                tags=list(m.tags),
+                download_size_gb=m.download_size_gb,
+                is_downloaded=svc.is_downloaded(m.model_id),
+                hardware_ok=hw_ok,
+                hardware_reason=hw_reason,
+                custom=m.custom,
+                source=m.source,
+                format=m.format,
+            )
+        )
     return out
 
 
@@ -691,11 +705,13 @@ async def cancel_generation() -> CancelGenerationResponse:
     result = svc.request_cancel()
     if result.get("cancelled") and result.get("job_id"):
         from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+
         get_image_job_store().request_cancel_running(result["job_id"])
     return CancelGenerationResponse(**result)
 
 
 # ── Job queue (async generation) ─────────────────────────────────────────────
+
 
 @router.post("/jobs", response_model=ImageJobEnqueuedResponse, status_code=202)
 @safe_route("image_gen_enqueue_job")
@@ -730,20 +746,22 @@ async def enqueue_image_job(req: EnqueueImageJobRequest) -> ImageJobEnqueuedResp
             content={"detail": "model not downloaded", "needs_download": True},
         )
     from app.services.media_gen.params import PROTECTED_PARAMS  # noqa: PLC0415
+
     blocked = PROTECTED_PARAMS & set(req.extra_params)
     if blocked:
         raise HTTPException(
             status_code=400,
             detail=f"extra_params may not override protected parameter(s): "
-                   f"{', '.join(sorted(blocked))}. prompt has a top-level "
-                   "request field; pipeline callbacks are engine-owned "
-                   "(progress + cancellation).",
+            f"{', '.join(sorted(blocked))}. prompt has a top-level "
+            "request field; pipeline callbacks are engine-owned "
+            "(progress + cancellation).",
         )
 
     from app.services.image_gen.jobs import (  # noqa: PLC0415
         get_image_job_runner,
         get_image_job_store,
     )
+
     store = get_image_job_store()
     job = store.create(
         prompt=req.prompt,
@@ -772,6 +790,7 @@ async def enqueue_image_job(req: EnqueueImageJobRequest) -> ImageJobEnqueuedResp
 async def list_image_jobs(limit: int = 50) -> list[ImageJobResponse]:
     """Recent jobs, newest first (history survives restarts via jobs.json)."""
     from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+
     return [_image_job_response(j) for j in get_image_job_store().recent(limit=limit)]
 
 
@@ -779,6 +798,7 @@ async def list_image_jobs(limit: int = 50) -> list[ImageJobResponse]:
 async def get_image_job(job_id: str) -> ImageJobResponse:
     """Job status + per-step progress (poll every ~1-2s while running)."""
     from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+
     job = get_image_job_store().get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -799,6 +819,7 @@ async def cancel_image_job(job_id: str) -> dict:
     - unknown  → 404
     """
     from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+
     store = get_image_job_store()
     outcome = store.cancel(job_id)
     if outcome == "not_found":
@@ -815,6 +836,7 @@ async def cancel_image_job(job_id: str) -> dict:
 
 
 # ── LoRAs ─────────────────────────────────────────────────────────────────────
+
 
 class LoraInstalledInfo(BaseModel):
     id: str
@@ -836,14 +858,18 @@ class LoraInstalledInfo(BaseModel):
 
 class LoraCatalogInfo(BaseModel):
     repo_id: str
+    """HF ``org/name`` or canonical Civitai short ref
+    ``civitai:<modelId>@<versionId>`` (version pin required)."""
     name: str
     description: str
     weight_name: str
     base_family: str
     license: str
+    source: str = "hf"
+    """"hf" | "civitai" — drives how the UI wires POST /loras/download."""
     unverified: bool = False
     """True for catalog entries whose repo/file could not be verified against
-    live HF metadata. All current entries were verified 2026-07-10."""
+    live HF / Civitai metadata."""
     installed: bool = False
 
 
@@ -890,7 +916,7 @@ async def _resolve_lora_weight(
         raise HTTPException(
             status_code=503,
             detail="huggingface_hub is not installed — run the AI package "
-                   "installer first (POST /image-gen/install).",
+            "installer first (POST /image-gen/install).",
         )
     from app.services.image_gen.loras import guess_base_family  # noqa: PLC0415
     from app.services.media_gen.paths import read_hf_token  # noqa: PLC0415
@@ -905,7 +931,8 @@ async def _resolve_lora_weight(
             detail=f"Hugging Face repo '{repo_id}' could not be read: {exc}",
         )
     candidates = [
-        s.rfilename for s in (info.siblings or [])
+        s.rfilename
+        for s in (info.siblings or [])
         if s.rfilename.endswith(".safetensors")
     ]
     if weight_name:
@@ -913,7 +940,7 @@ async def _resolve_lora_weight(
             raise HTTPException(
                 status_code=400,
                 detail=f"'{weight_name}' is not a .safetensors file in "
-                       f"{repo_id}. Available: {', '.join(candidates) or 'none'}",
+                f"{repo_id}. Available: {', '.join(candidates) or 'none'}",
             )
         chosen = weight_name
     else:
@@ -921,13 +948,13 @@ async def _resolve_lora_weight(
             raise HTTPException(
                 status_code=400,
                 detail=f"{repo_id} contains no .safetensors file — it does "
-                       "not look like a LoRA repo.",
+                "not look like a LoRA repo.",
             )
         if len(candidates) > 1:
             raise HTTPException(
                 status_code=400,
                 detail=f"{repo_id} contains multiple .safetensors files — "
-                       f"pass weight_name. Candidates: {', '.join(candidates)}",
+                f"pass weight_name. Candidates: {', '.join(candidates)}",
             )
         chosen = candidates[0]
 
@@ -952,6 +979,7 @@ async def list_image_loras() -> LorasResponse:
         list_loras,
         lora_id_for_repo,
     )
+
     items = list_loras()
     installed_repo_ids = {m["repo_id"] for m in items if m["installed"]}
     return LorasResponse(
@@ -976,9 +1004,11 @@ async def list_image_loras() -> LorasResponse:
                 weight_name=e["weight_name"],
                 base_family=e["base_family"],
                 license=e["license"],
+                source=str(e.get("source") or "hf"),
                 unverified=bool(e.get("unverified", False)),
                 installed=e["repo_id"] in installed_repo_ids
-                or lora_id_for_repo(e["repo_id"]) in {m["id"] for m in items if m["installed"]},
+                or lora_id_for_repo(e["repo_id"])
+                in {m["id"] for m in items if m["installed"]},
             )
             for e in CURATED_LORA_CATALOG
         ],
@@ -1014,7 +1044,7 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
         raise HTTPException(
             status_code=400,
             detail="Provide exactly one of repo_id (Hugging Face repo id or "
-                   "URL) or civitai (Civitai model/version URL/id).",
+            "URL) or civitai (Civitai model/version URL/id).",
         )
     try:
         parsed = parse_ref(req.civitai or req.repo_id or "")
@@ -1024,7 +1054,7 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
         raise HTTPException(
             status_code=400,
             detail=f"'{req.civitai}' is not a Civitai reference — pass "
-                   "Hugging Face repos via repo_id.",
+            "Hugging Face repos via repo_id.",
         )
 
     if parsed["kind"] == "civitai":
@@ -1036,20 +1066,23 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
     existing = get_installed_lora(lora_id)
     if existing and existing["installed"]:
         return LoraDownloadResponse(
-            queued=False, already_installed=True, lora_id=lora_id,
+            queued=False,
+            already_installed=True,
+            lora_id=lora_id,
             weight_name=existing["weight_name"],
             base_family=str(existing.get("base_family") or "unknown"),
             source="hf",
         )
 
-    weight_name, base_family = await _resolve_lora_weight(
-        repo_id, req.weight_name
-    )
+    weight_name, base_family = await _resolve_lora_weight(repo_id, req.weight_name)
     # Metadata sidecar first — the LoRA shows up as pending (installed=false)
     # immediately; the DownloadManager marker flips it to installed.
     write_lora_meta(
-        lora_id, repo_id=repo_id, weight_name=weight_name,
-        base_family=base_family, source="hf",
+        lora_id,
+        repo_id=repo_id,
+        weight_name=weight_name,
+        base_family=base_family,
+        source="hf",
     )
     entry = await get_download_manager().enqueue(
         category="image_gen_lora",
@@ -1067,8 +1100,12 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
         priority=1,
     )
     return LoraDownloadResponse(
-        queued=True, download_id=entry.id, lora_id=lora_id,
-        weight_name=weight_name, base_family=base_family, source="hf",
+        queued=True,
+        download_id=entry.id,
+        lora_id=lora_id,
+        weight_name=weight_name,
+        base_family=base_family,
+        source="hf",
     )
 
 
@@ -1098,14 +1135,14 @@ async def _download_lora_civitai(parsed: dict[str, Any]) -> LoraDownloadResponse
             raise HTTPException(
                 status_code=400,
                 detail=f"Civitai model '{info['model_name']}' is a Checkpoint, "
-                       "not a LoRA — register it as a custom model via "
-                       "POST /image-gen/custom-models (Add Model) instead.",
+                "not a LoRA — register it as a custom model via "
+                "POST /image-gen/custom-models (Add Model) instead.",
             )
         raise HTTPException(
             status_code=400,
             detail=f"Civitai model '{info['model_name']}' has type "
-                   f"'{model_type or 'unknown'}' — only LORA models can be "
-                   "installed as LoRAs.",
+            f"'{model_type or 'unknown'}' — only LORA models can be "
+            "installed as LoRAs.",
         )
 
     lora_id = f"civitai--{info['model_id']}-{info['version_id']}"
@@ -1113,7 +1150,9 @@ async def _download_lora_civitai(parsed: dict[str, Any]) -> LoraDownloadResponse
     existing = get_installed_lora(lora_id)
     if existing and existing["installed"]:
         return LoraDownloadResponse(
-            queued=False, already_installed=True, lora_id=lora_id,
+            queued=False,
+            already_installed=True,
+            lora_id=lora_id,
             weight_name=existing["weight_name"],
             base_family=str(existing.get("base_family") or "unknown"),
             source="civitai",
@@ -1122,8 +1161,11 @@ async def _download_lora_civitai(parsed: dict[str, Any]) -> LoraDownloadResponse
     base_family = str(info["family"])  # "unknown" is allowed for LoRAs
     weight_name = str(info["file_name"])
     write_lora_meta(
-        lora_id, repo_id=canonical_ref, weight_name=weight_name,
-        base_family=base_family, source="civitai",
+        lora_id,
+        repo_id=canonical_ref,
+        weight_name=weight_name,
+        base_family=base_family,
+        source="civitai",
         extra={
             "civitai_model_id": info["model_id"],
             "civitai_version_id": info["version_id"],
@@ -1145,8 +1187,12 @@ async def _download_lora_civitai(parsed: dict[str, Any]) -> LoraDownloadResponse
         priority=1,
     )
     return LoraDownloadResponse(
-        queued=True, download_id=entry.id, lora_id=lora_id,
-        weight_name=weight_name, base_family=base_family, source="civitai",
+        queued=True,
+        download_id=entry.id,
+        lora_id=lora_id,
+        weight_name=weight_name,
+        base_family=base_family,
+        source="civitai",
     )
 
 
@@ -1154,12 +1200,14 @@ async def _download_lora_civitai(parsed: dict[str, Any]) -> LoraDownloadResponse
 async def delete_image_lora(lora_id: str) -> dict:
     """Delete an installed LoRA (weights + metadata). 404 when unknown."""
     from app.services.image_gen.loras import delete_lora  # noqa: PLC0415
+
     if not delete_lora(lora_id):
         raise HTTPException(status_code=404, detail=f"Unknown LoRA: {lora_id}")
     return {"deleted": True, "lora_id": lora_id}
 
 
 # ── Custom models (user-added checkpoints from HF / Civitai) ─────────────────
+
 
 class CustomModelInspectRequest(BaseModel):
     ref: str = Field(..., min_length=1, max_length=500)
@@ -1219,11 +1267,14 @@ class CustomModelRegisterResponse(BaseModel):
 
 @router.post("/custom-models/inspect", response_model=CustomModelInspectResponse)
 @safe_route("image_gen_custom_inspect")
-async def inspect_custom_model(req: CustomModelInspectRequest) -> CustomModelInspectResponse:
+async def inspect_custom_model(
+    req: CustomModelInspectRequest,
+) -> CustomModelInspectResponse:
     """Resolve a HF/Civitai ref into a proposed registry entry WITHOUT
     downloading any weights. 400 with a clear message for unresolvable refs;
     a Civitai LoRA pointed here → 400 directing to /loras/download."""
     from app.services.image_gen.custom_models import InspectError, inspect_ref  # noqa: PLC0415
+
     try:
         result = await inspect_ref(req.ref)
     except InspectError as exc:
@@ -1238,7 +1289,9 @@ async def inspect_custom_model(req: CustomModelInspectRequest) -> CustomModelIns
 
 @router.post("/custom-models", response_model=CustomModelRegisterResponse)
 @safe_route("image_gen_custom_register")
-async def register_custom_model_route(entry: CustomModelEntry) -> CustomModelRegisterResponse:
+async def register_custom_model_route(
+    entry: CustomModelEntry,
+) -> CustomModelRegisterResponse:
     """Register an inspect-confirmed entry + queue its weights download.
 
     Unsupported entries (family "unknown", single_file for a family without a
@@ -1254,9 +1307,9 @@ async def register_custom_model_route(entry: CustomModelEntry) -> CustomModelReg
         raise HTTPException(
             status_code=400,
             detail=f"{payload.get('name') or payload.get('model_id')} needs a "
-                   "Hugging Face token (gated components). Add your read "
-                   "token under Settings → API Keys → Hugging Face, then "
-                   "register again.",
+            "Hugging Face token (gated components). Add your read "
+            "token under Settings → API Keys → Hugging Face, then "
+            "register again.",
         )
     try:
         stored, created = register_custom_model(payload)
@@ -1289,6 +1342,7 @@ async def delete_custom_model(model_id: str) -> dict:
         get_custom_entry,
         remove_custom_model,
     )
+
     if get_custom_entry(model_id) is None:
         raise HTTPException(status_code=404, detail=f"Unknown custom model: {model_id}")
     svc = get_image_gen_service()
@@ -1309,6 +1363,7 @@ async def get_image_model_params(model_id: str) -> ModelParamsResponse:
     POST /image-gen/generate.
     """
     from app.services.media_gen.params import image_effective_params  # noqa: PLC0415
+
     model = get_image_gen_service().get_model(model_id)
     if model is None:
         raise HTTPException(status_code=404, detail=f"Unknown model: {model_id}")
@@ -1327,7 +1382,9 @@ async def generate_from_workflow(req: WorkflowGenerateRequest) -> GenerateRespon
 
     preset = next((p for p in WORKFLOW_PRESETS if p.preset_id == req.preset_id), None)
     if preset is None:
-        raise HTTPException(status_code=404, detail=f"Workflow preset not found: {req.preset_id}")
+        raise HTTPException(
+            status_code=404, detail=f"Workflow preset not found: {req.preset_id}"
+        )
 
     prompt = preset.prompt_template.replace("{subject}", req.subject)
     model_id = req.model_id or preset.suggested_model_id
@@ -1358,6 +1415,7 @@ async def generate_from_workflow(req: WorkflowGenerateRequest) -> GenerateRespon
 
 
 # ── On-demand package installer ────────────────────────────────────────────────
+
 
 class InstallStatusResponse(BaseModel):
     status: str
@@ -1411,13 +1469,18 @@ async def install_image_gen() -> InstallStatusResponse:
     """
     if is_image_gen_installed() and not needs_upgrade():
         from app.services.image_gen.installer import inject_image_gen_path
+
         inject_image_gen_path()
         from app.services.image_gen import service as _svc
+
         _svc.DEPS_AVAILABLE, _svc.DEPS_REASON = _svc._check_deps()
         from app.services.video_gen import service as _vsvc
+
         _vsvc.DEPS_AVAILABLE, _vsvc.DEPS_REASON = _vsvc._check_deps()
         return _make_status(
-            status="complete", stage="done", percent=100.0,
+            status="complete",
+            stage="done",
+            percent=100.0,
             message="Image generation is already installed.",
             already_installed=True,
         )
@@ -1425,15 +1488,19 @@ async def install_image_gen() -> InstallStatusResponse:
     existing = get_active_progress()
     if existing and existing.status == "running":
         return _make_status(
-            status=existing.status, stage=existing.stage,
-            percent=existing.percent, message=existing.message,
+            status=existing.status,
+            stage=existing.stage,
+            percent=existing.percent,
+            message=existing.message,
             progress=existing,
         )
 
     progress = await start_install()
     return _make_status(
-        status=progress.status, stage=progress.stage,
-        percent=progress.percent, message="Installation started.",
+        status=progress.status,
+        stage=progress.stage,
+        percent=progress.percent,
+        message="Installation started.",
         progress=progress,
     )
 
@@ -1449,7 +1516,9 @@ async def get_install_status() -> InstallStatusResponse:
     active = get_active_progress()
     if is_image_gen_installed() and not (active and active.status == "running"):
         return _make_status(
-            status="complete", stage="done", percent=100.0,
+            status="complete",
+            stage="done",
+            percent=100.0,
             message="Image generation packages are installed.",
             already_installed=True,
         )
@@ -1457,14 +1526,19 @@ async def get_install_status() -> InstallStatusResponse:
     progress = get_active_progress()
     if progress is None:
         return _make_status(
-            status="idle", stage="", percent=0.0,
+            status="idle",
+            stage="",
+            percent=0.0,
             message="No installation in progress.",
         )
 
     return _make_status(
-        status=progress.status, stage=progress.stage,
-        percent=progress.percent, message=progress.message,
-        error=progress.error, progress=progress,
+        status=progress.status,
+        stage=progress.stage,
+        percent=progress.percent,
+        message=progress.message,
+        error=progress.error,
+        progress=progress,
     )
 
 
@@ -1476,6 +1550,7 @@ async def stream_install_progress() -> StreamingResponse:
     install completes or errors, or after 30 minutes (safety timeout for
     large downloads on slow connections).
     """
+
     async def event_stream():
         loop = asyncio.get_running_loop()
 

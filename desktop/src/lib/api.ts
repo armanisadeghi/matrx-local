@@ -4051,13 +4051,10 @@ export async function downloadImageGenModel(
   baseUrl: string,
   model_id: string,
 ): Promise<{ queued: boolean }> {
-  return imageGenFetch<{ queued: boolean }>(
-    imageGenUrl(baseUrl, "/download"),
-    {
-      method: "POST",
-      body: JSON.stringify({ model_id }),
-    },
-  );
+  return imageGenFetch<{ queued: boolean }>(imageGenUrl(baseUrl, "/download"), {
+    method: "POST",
+    body: JSON.stringify({ model_id }),
+  });
 }
 
 export async function unloadImageGenModel(baseUrl: string): Promise<void> {
@@ -4234,8 +4231,11 @@ export async function cancelImageGenJob(
 export interface ImageGenLoraInfo {
   id: string;
   repo_id: string;
+  /** Human label — present on curated catalog rows; installed rows may omit. */
+  name?: string;
+  description?: string;
   weight_name: string | null;
-  /** Base model family this LoRA was trained for (e.g. "sdxl", "flux"). */
+  /** Base model family this LoRA was trained for (e.g. "sdxl", "flux", "z-image"). */
   base_family: string;
   size_bytes: number;
   added_at: string | null;
@@ -4246,6 +4246,8 @@ export interface ImageGenLoraInfo {
    * engine build reports it.
    */
   source?: string;
+  license?: string;
+  installed?: boolean;
 }
 
 export interface ImageGenLoraList {
@@ -4270,13 +4272,29 @@ export type LoraDownloadRef =
 
 /**
  * Classify a user-pasted LoRA/model reference into the wire shape the engine
- * expects.  Civitai: anything containing "civitai.com" or a bare numeric id.
- * Everything else (org/name repo ids and huggingface.co URLs) is passed
- * through as `repo_id` — the engine resolves HF URLs itself.
+ * expects.
+ *
+ * Civitai (→ `{ civitai }`):
+ *   - `https://civitai.com/models/<id>[/<slug>]?modelVersionId=<ver>`
+ *   - `https://civitai.red/models/<id>[/<slug>]?modelVersionId=<ver>`
+ *     (.com = SFW front door, .red = full/NSFW — same DB, same path shape;
+ *      only the host differs. Prefer keeping `?modelVersionId=` — multi-base
+ *      pages resolve to the newest version without it.)
+ *   - `https://civitai.com/api/download/models/<versionId>`
+ *   - short form `civitai:<modelId>@<versionId>` (or `civitai:<modelId>`)
+ *   - bare numeric model id
+ *
+ * Everything else (org/name repo ids and huggingface.co URLs) → `{ repo_id }`.
  */
 export function classifyLoraRef(input: string): LoraDownloadRef {
   const t = input.trim();
-  if (/civitai\.com/i.test(t) || /^\d+$/.test(t)) return { civitai: t };
+  if (
+    /civitai\.(com|red|green)/i.test(t) ||
+    /^civitai:\d+/i.test(t) ||
+    /^\d+$/.test(t)
+  ) {
+    return { civitai: t };
+  }
   return { repo_id: t };
 }
 
@@ -4673,13 +4691,10 @@ export async function downloadVideoGenModel(
   baseUrl: string,
   model_id: string,
 ): Promise<{ queued: boolean }> {
-  return videoGenFetch<{ queued: boolean }>(
-    videoGenUrl(baseUrl, "/download"),
-    {
-      method: "POST",
-      body: JSON.stringify({ model_id }),
-    },
-  );
+  return videoGenFetch<{ queued: boolean }>(videoGenUrl(baseUrl, "/download"), {
+    method: "POST",
+    body: JSON.stringify({ model_id }),
+  });
 }
 
 export async function loadVideoGenModel(
@@ -4698,13 +4713,10 @@ export async function generateVideo(
   baseUrl: string,
   req: VideoGenRequest,
 ): Promise<{ job_id: string }> {
-  return videoGenFetch<{ job_id: string }>(
-    videoGenUrl(baseUrl, "/generate"),
-    {
-      method: "POST",
-      body: JSON.stringify(req),
-    },
-  );
+  return videoGenFetch<{ job_id: string }>(videoGenUrl(baseUrl, "/generate"), {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
 }
 
 export async function getVideoGenJob(

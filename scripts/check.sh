@@ -186,15 +186,15 @@ if ! $MODE_SMOKE_ONLY && ! $MODE_PARITY_ONLY; then
   DESKTOP_DIR="$PROJECT_ROOT/desktop"
 
   if [ ! -d "$DESKTOP_DIR/node_modules" ]; then
-    warn "node_modules not found — running npm install..."
-    (cd "$DESKTOP_DIR" && npm install --silent 2>&1) || true
+    warn "node_modules not found — running pnpm install..."
+    (cd "$DESKTOP_DIR" && pnpm install --silent 2>&1) || true
   fi
 
   run_step "tsc --noEmit" \
     bash -c "cd '$DESKTOP_DIR' && npx tsc --noEmit"
 
   run_step "vite build" \
-    bash -c "cd '$DESKTOP_DIR' && npm run build 2>&1 | grep -v 'Some chunks are larger' || true"
+    bash -c "cd '$DESKTOP_DIR' && pnpm run build 2>&1 | grep -v 'Some chunks are larger' || true"
 fi
 
 # ---------------------------------------------------------------------------

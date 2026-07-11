@@ -7,7 +7,7 @@
 #   pyproject.toml
 #   desktop/src-tauri/tauri.conf.json
 #   desktop/src-tauri/Cargo.toml
-#   desktop/package.json  (via npm — also updates package-lock.json)
+#   desktop/package.json  (via pnpm version)
 #
 # Dynamic (no update needed):
 #   run.py, app/api/routes.py — read via importlib.metadata
@@ -754,7 +754,7 @@ if $DRY_RUN; then
     preview "Would update $VERSION_FILE: $CURRENT_VERSION → $NEW_VERSION"
     preview "Would update desktop/src-tauri/tauri.conf.json"
     preview "Would update desktop/src-tauri/Cargo.toml"
-    preview "Would update desktop/package.json + package-lock.json"
+    preview "Would update desktop/package.json"
     preview "Would commit: '$COMMIT_MSG'"
     preview "Would create tag: $NEW_TAG"
     preview "Would push to $REMOTE/$BRANCH"
@@ -784,12 +784,12 @@ sedi "s/^version = \"[^\"]*\"/version = \"${NEW_VERSION}\"/" \
     desktop/src-tauri/Cargo.toml
 ok "Cargo.toml → $NEW_VERSION"
 
-# ── Update desktop/package.json (+ package-lock.json) ────────────────────────
+# ── Update desktop/package.json ──────────────────────────────────────────────
 info "Syncing desktop/package.json..."
 cd desktop
-npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version 2>/dev/null
+pnpm version "$NEW_VERSION" --no-git-tag-version --allow-same-version 2>/dev/null
 cd "$REPO_ROOT"
-ok "package.json + package-lock.json → $NEW_VERSION"
+ok "package.json → $NEW_VERSION"
 
 # ── Commit ───────────────────────────────────────────────────────────────────
 info "Committing..."
@@ -797,8 +797,7 @@ git add \
     pyproject.toml \
     desktop/src-tauri/tauri.conf.json \
     desktop/src-tauri/Cargo.toml \
-    desktop/package.json \
-    desktop/package-lock.json
+    desktop/package.json
 git commit -m "$COMMIT_MSG"
 ok "Committed: '$COMMIT_MSG'"
 

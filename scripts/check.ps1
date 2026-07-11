@@ -149,9 +149,9 @@ if (-not $Smoke -and -not $Parity) {
     $DesktopDir = Join-Path $ProjectRoot "desktop"
 
     if (-not (Test-Path (Join-Path $DesktopDir "node_modules"))) {
-        Write-Info "node_modules not found -- running npm install..."
+        Write-Info "node_modules not found -- running pnpm install..."
         Push-Location $DesktopDir
-        npm install --silent 2>&1 | Out-Null
+        pnpm install --silent 2>&1 | Out-Null
         Pop-Location
     }
 
@@ -163,7 +163,7 @@ if (-not $Smoke -and -not $Parity) {
 
     Run-Step "vite build" {
         Push-Location $DesktopDir
-        npm run build
+        pnpm run build
         Pop-Location
     }
 }

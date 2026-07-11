@@ -6,7 +6,7 @@
 
 Matrx Local is a **Tauri v2 desktop app** (Rust + React) with a **Python/FastAPI sidecar engine** exposing ~80 tools (filesystem, shell, scraping, documents, etc.) via REST and WebSocket for AI Matrx cloud. End-user desktop app, not a developer tool.
 
-**Not a Next.js/Vercel project.** Stack: Tauri v2 (Rust), React 19, TS 5.7, Vite 6, Tailwind 3.4 + shadcn/ui (`darkMode: "class"`), Python 3.13+/FastAPI/Uvicorn, Supabase Auth, pnpm (desktop), uv (Python).
+**Not a Next.js/Vercel project.** Stack: Tauri v2 (Rust), React 19, TS 7.0 (native compiler), Vite 6, Tailwind 3.4 + shadcn/ui (`darkMode: "class"`), Python 3.13+/FastAPI/Uvicorn, Supabase Auth, pnpm (desktop), uv (Python).
 
 ## Key Entry Points
 

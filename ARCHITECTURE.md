@@ -239,7 +239,7 @@ matrx_local/
 | Layer | Technology | Version |
 |-------|-----------|---------|
 | **Desktop Shell** | Tauri v2 (Rust) | 2.x |
-| **Frontend** | React + TypeScript + Vite | React 19, TS 5.7, Vite 6 |
+| **Frontend** | React + TypeScript + Vite | React 19, TS 7.0 (native), Vite 6 |
 | **Styling** | Tailwind CSS + shadcn/ui | TW 3.4 |
 | **Python Runtime** | Python | 3.13+ |
 | **API Framework** | FastAPI + Uvicorn | Latest |

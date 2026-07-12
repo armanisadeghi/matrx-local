@@ -538,24 +538,27 @@ function AppInner() {
             </>
           )}
         </Routes>
+        {/* These live INSIDE HashRouter (though outside Routes): several of
+            them — DownloadManagerModal's action dialog especially — call
+            useNavigate(). Hoisting them out crashes the app on boot. */}
+        <NotificationToastContainer
+          toasts={toasts}
+          onDismiss={notif.hideToast}
+        />
+        <EngineMonitor
+          open={monitorOpen}
+          onOpenChange={setMonitorOpen}
+          engineStatus={status}
+          engineError={engineError}
+          onRestartEngine={restartEngine}
+          onRefresh={refresh}
+        />
+        <RestartingOverlay visible={updateState.restarting} />
+        <UpdateBanner state={updateState} actions={updateActions} />
+        <UpdateDialog state={updateState} actions={updateActions} />
+        <DownloadManagerModal />
+        <DevTerminalPanel />
       </HashRouter>
-      <NotificationToastContainer
-        toasts={toasts}
-        onDismiss={notif.hideToast}
-      />
-      <EngineMonitor
-        open={monitorOpen}
-        onOpenChange={setMonitorOpen}
-        engineStatus={status}
-        engineError={engineError}
-        onRestartEngine={restartEngine}
-        onRefresh={refresh}
-      />
-      <RestartingOverlay visible={updateState.restarting} />
-      <UpdateBanner state={updateState} actions={updateActions} />
-      <UpdateDialog state={updateState} actions={updateActions} />
-      <DownloadManagerModal />
-      <DevTerminalPanel />
     </TooltipProvider>
   );
 }

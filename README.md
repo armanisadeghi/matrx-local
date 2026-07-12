@@ -11,7 +11,7 @@ Companion desktop app for **AI Matrx** — Tauri shell + React UI + Python/FastA
 
 ```bash
 cp .env.example .env          # set API_KEY (any value for local dev)
-uv sync
+uv sync --all-extras          # plain `uv sync` strips extras-installed packages
 uv run playwright install chromium
 
 # Terminal 1 — engine (wait for Uvicorn on :22140)

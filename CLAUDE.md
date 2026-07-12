@@ -39,7 +39,7 @@ Matrx Local is a **Tauri v2 desktop app** (Rust + React) with a **Python/FastAPI
 
 ```bash
 # Python engine (Terminal 1)
-uv sync && uv run python run.py
+uv sync --all-extras && uv run python run.py   # plain `uv sync` STRIPS installed extras (torch/whisper/…)
 
 # React frontend (Terminal 2)
 cd desktop && pnpm install && pnpm dev   # http://localhost:1420
@@ -105,7 +105,7 @@ cd desktop && pnpm tauri:dev
 
 4. **Port 22140** — Default engine port. Auto-scans 22140–22159. Discovery file: `~/.matrx/local.json`.
 
-5. **Every Python import must be in pyproject.toml** — No bare `try/except ImportError` as a substitute for declaring deps. Add package and `uv sync` in the same commit. Optional extras: `[transcription]` (openai-whisper), `[image-gen]` (torch+diffusers, multi-GB, not in `all`). TTS deps (kokoro-onnx, soundfile) are core — always installed.
+5. **Every Python import must be in pyproject.toml** — No bare `try/except ImportError` as a substitute for declaring deps. Add package and `uv sync --all-extras` in the same commit (plain `uv sync` uninstalls extras-installed packages — the media-gen/whisper stack — from dev venvs). Optional extras: `[transcription]` (openai-whisper), `[image-gen]` (torch+diffusers, multi-GB, not in `all`). TTS deps (kokoro-onnx, soundfile) are core — always installed.
 
 6. **PyInstaller hidden imports must sync** — Packages PyInstaller can't auto-discover (e.g., `python_multipart`) go in all 4 `.spec` files under `specs/` AND `scripts/build-sidecar.sh` fallback. Use Python import name, not pip name. Omitting causes silent runtime failures in compiled sidecar only.
 
@@ -200,10 +200,11 @@ Only for re-fetching data changed externally (e.g., HF token set in browser). Ne
 ## Task Tracking
 
 - **`.matrx/AGENT_TASKS.md`** — **Only** Arman-approved agent work. If your work touches an open task here, take it. Rules: `.matrx/AGENT_INSTRUCTIONS.md`. Inbox: `.matrx/TASKS_FROM_USER.md`.
-- **`FOUND_DEFECTS.md`** — Temporary holding area for discoveries that are **not** yet approved tasks. File with evidence; opportunistic fixes while open are OK; promotion to agent tasks requires Arman. Re-encounter → remind Arman (approve now or promote).
-- **`.matrx/ARMAN_TASKS.md`** — Reminders for agents to **ask Arman** when blocked (secrets, accounts, decisions). Not Arman’s personal todo inbox.
-- **`CURRENT_ERRORS.md`** — Error dumps from live testing. Triage into a fix, `FOUND_DEFECTS`, or (with approval) `.matrx/AGENT_TASKS.md`.
+- **`FOUND_DEFECTS.md`** — Temporary holding area for discoveries that are **not** yet approved tasks. File with evidence; opportunistic fixes while open are OK — then DELETE the entry and record a one-line completed item in `.matrx/AGENT_TASKS.md`. Promotion to agent tasks requires Arman. Re-encounter → remind Arman (approve now or promote). Check its `## Rejected` section before filing.
+- **`.matrx/ARMAN_TASKS.md`** — Reminders for agents to **ask Arman** when blocked (secrets, accounts, decisions). Not Arman’s personal todo inbox. Verify a task is still real before asking; ranked quickest-wins-first.
+- **`CURRENT_ERRORS.md`** — Error-dump inbox from live testing. Every error gets a home (quick fix / `FOUND_DEFECTS` / approved task / ask-Arman), then the inbox is cleared. Quick fixes available RIGHT NOW → stop and tell Arman.
 - **`.arman/` is Arman-private.** Agents must not read, write, or list that directory. All ask-Arman tasks live in `.matrx/ARMAN_TASKS.md`.
+- **Maintenance:** the `task-hygiene` skill (`/task-hygiene`, or one step like `/task-hygiene errors`) runs cleanup, dedupe, defect promotion, Arman-task prep, and doc-staleness passes over these four files. Issues belonging to another repo are filed in that repo's own task system.
 
 Never let a discovered issue go untracked. Prefer the right file; do not invent approved tasks without Arman.
 

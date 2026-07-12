@@ -31,7 +31,10 @@ from app.api.setup_routes import router as setup_router
 from app.api.platform_routes import router as platform_router
 from app.api.wake_word_routes import router as wake_word_router
 from app.api.model_repo_routes import router as model_repo_router
-from app.api.hardware_routes import router as hardware_router, run_initial_detection as run_hardware_detection
+from app.api.hardware_routes import (
+    router as hardware_router,
+    run_initial_detection as run_hardware_detection,
+)
 from app.api.image_gen_routes import router as image_gen_router
 from app.api.video_gen_routes import router as video_gen_router
 from app.api.media_library_routes import router as media_library_router
@@ -42,7 +45,12 @@ from app.api.scrape_routes import router as scrape_router
 from app.api.extension_bridge_routes import router as extension_bridge_router
 from app.api.extension_routes import router as extension_router
 from app.services.downloads.routes import router as downloads_router
-from app.config import ALLOWED_ORIGINS, ALLOWED_ORIGIN_REGEX, MATRX_HOME_DIR, TUNNEL_ENABLED
+from app.config import (
+    ALLOWED_ORIGINS,
+    ALLOWED_ORIGIN_REGEX,
+    MATRX_HOME_DIR,
+    TUNNEL_ENABLED,
+)
 from app.common.system_logger import get_logger
 import app.common.access_log as access_log
 from app.common.platform_ctx import refresh_capabilities
@@ -50,7 +58,11 @@ from app.services.scraper.engine import get_scraper_engine
 from app.services.proxy.server import get_proxy_server
 from app.services.tunnel.manager import get_tunnel_manager
 from app.services.cloud_sync.settings_sync import get_settings_sync
-from app.services.ai.engine import initialize_matrx_ai, load_tools_and_register, warm_jwt_cache
+from app.services.ai.engine import (
+    initialize_matrx_ai,
+    load_tools_and_register,
+    warm_jwt_cache,
+)
 from app.services.ai.key_manager import load_user_keys_into_env
 from app.services.local_db.database import get_db
 from app.services.local_db.sync_engine import get_sync_engine
@@ -88,9 +100,7 @@ async def _ensure_playwright_browsers() -> None:
     # Quick check: skip install if at least one versioned browser directory exists.
     browser_markers = ("chromium-", "firefox-", "webkit-", "chromium_headless_shell-")
     if os.path.isdir(browsers_path) and any(
-        e.startswith(m)
-        for m in browser_markers
-        for e in os.listdir(browsers_path)
+        e.startswith(m) for m in browser_markers for e in os.listdir(browsers_path)
     ):
         logger.debug(
             "[app/main.py] Playwright browsers already present at %s", browsers_path
@@ -111,6 +121,7 @@ async def _ensure_playwright_browsers() -> None:
 
     try:
         from playwright._impl._driver import compute_driver_executable  # type: ignore[import]
+
         node_exe, cli_js = compute_driver_executable()
         # Verify the node binary actually exists; if not, use the Python fallback
         if not os.path.isfile(node_exe):
@@ -122,7 +133,15 @@ async def _ensure_playwright_browsers() -> None:
             "falling back to `python -m playwright install`",
             exc,
         )
-        cmd = [sys.executable, "-m", "playwright", "install", "chromium", "firefox", "webkit"]
+        cmd = [
+            sys.executable,
+            "-m",
+            "playwright",
+            "install",
+            "chromium",
+            "firefox",
+            "webkit",
+        ]
 
     env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": browsers_path}
 
@@ -258,7 +277,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         local_db = get_db()
         await local_db.connect()
-        logger.info("[app/main.py] Phase 0a: Local database ready ✓ (%s)", local_db.path)
+        logger.info(
+            "[app/main.py] Phase 0a: Local database ready ✓ (%s)", local_db.path
+        )
         print("[phase:database] Local database ready", flush=True)
         _registry.ready("database", path=str(local_db.path))
     except Exception as exc:
@@ -275,12 +296,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _registry.starting("downloads")
     try:
         from app.services.downloads.manager import get_download_manager
+
         dl_manager = get_download_manager()
         await dl_manager.start()
         logger.info("[app/main.py] Phase 0a: Download manager started ✓")
         _registry.ready("downloads")
     except Exception as exc:
-        logger.warning("[app/main.py] Phase 0a: Download manager failed to start (non-fatal)", exc_info=True)
+        logger.warning(
+            "[app/main.py] Phase 0a: Download manager failed to start (non-fatal)",
+            exc_info=True,
+        )
         _registry.degraded("downloads", reason=f"start failed: {exc}")
 
     # Phase 0a (post): Warm the in-memory JWT cache from SQLite so matrx-ai has
@@ -288,16 +313,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         await warm_jwt_cache()
     except Exception:
-        logger.warning("[app/main.py] Phase 0a: JWT cache warm failed (non-fatal)", exc_info=True)
+        logger.warning(
+            "[app/main.py] Phase 0a: JWT cache warm failed (non-fatal)", exc_info=True
+        )
 
     # Phase 0a (post2): Load user-stored AI provider API keys from SQLite into
     # os.environ so matrx_ai picks them up on every request.  This runs before
     # initialize_matrx_ai() so the keys are available during AI engine setup.
     try:
         loaded = await load_user_keys_into_env()
-        logger.info("[app/main.py] Phase 0a: Loaded %d user API key(s) into env ✓", loaded)
+        logger.info(
+            "[app/main.py] Phase 0a: Loaded %d user API key(s) into env ✓", loaded
+        )
     except Exception:
-        logger.warning("[app/main.py] Phase 0a: User API key load failed (non-fatal)", exc_info=True)
+        logger.warning(
+            "[app/main.py] Phase 0a: User API key load failed (non-fatal)",
+            exc_info=True,
+        )
 
     # Phase 0a (image-gen): If the user has previously installed image-gen packages
     # via the in-app installer, inject the packages directory into sys.path now so
@@ -306,29 +338,54 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # are not yet installed.
     try:
         from app.services.image_gen.installer import inject_image_gen_path
+
         if inject_image_gen_path():
-            logger.info("[app/main.py] Phase 0a: image-gen packages injected into sys.path ✓")
+            logger.info(
+                "[app/main.py] Phase 0a: image-gen packages injected into sys.path ✓"
+            )
             # CRITICAL: service.py runs _check_deps() at import time (line 52), before
             # this path injection. Reload DEPS_AVAILABLE now that sys.path is correct.
             try:
                 from app.services.image_gen import service as _ig_svc
+
                 _ig_svc.DEPS_AVAILABLE, _ig_svc.DEPS_REASON = _ig_svc._check_deps()
                 # video_gen shares the same package install and takes the same
                 # import-time snapshot — reload it too or /video-gen/status
                 # reports packages_installed=false after a fresh boot.
                 from app.services.video_gen import service as _vg_svc
+
                 _vg_svc.DEPS_AVAILABLE, _vg_svc.DEPS_REASON = _vg_svc._check_deps()
                 logger.info(
                     "[app/main.py] Phase 0a: media-gen service deps reloaded: image=%s video=%s",
-                    _ig_svc.DEPS_AVAILABLE, _vg_svc.DEPS_AVAILABLE,
+                    _ig_svc.DEPS_AVAILABLE,
+                    _vg_svc.DEPS_AVAILABLE,
                 )
-            except Exception as _reload_err:
+            except Exception:
                 logger.warning(
-                    "[app/main.py] Phase 0a: media-gen service deps reload failed: %s",
-                    _reload_err,
+                    "[app/main.py] Phase 0a: media-gen deps reload failed (non-fatal)",
+                    exc_info=True,
                 )
     except Exception:
-        pass  # Non-fatal — image-gen will just be unavailable until installed
+        logger.warning(
+            "[app/main.py] Phase 0a: image-gen path injection failed (non-fatal)",
+            exc_info=True,
+        )
+
+    # Phase 0a (capabilities): Whisper / other managed optional packages.
+    try:
+        from app.services.capabilities.installer import inject_all_capability_paths
+
+        injected = inject_all_capability_paths()
+        if injected:
+            logger.info(
+                "[app/main.py] Phase 0a: capability packages injected: %s ✓",
+                ", ".join(injected),
+            )
+    except Exception:
+        logger.warning(
+            "[app/main.py] Phase 0a: capability path injection failed (non-fatal)",
+            exc_info=True,
+        )
 
     # Phase 0b: Ensure Playwright browsers are installed (auto-installs if missing).
     # Browsers are NOT bundled in the PyInstaller binary (bundling causes macOS
@@ -346,7 +403,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "[app/main.py] Phase 0b: Playwright browser check failed — browser automation may not work",
             exc_info=True,
         )
-        print("[phase:browsers] Browser engine check failed (scraping limited)", flush=True)
+        print(
+            "[phase:browsers] Browser engine check failed (scraping limited)",
+            flush=True,
+        )
 
     # Phase 0c: Probe hardware/permission capabilities once at startup.
     # Populates CAPABILITIES in platform_ctx (mic, GPU, screen capture, etc.)
@@ -408,9 +468,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _ai_surface = build_ai_app()
         app.mount("/ai", _ai_surface)
         app.mount("/chat/ai", _ai_surface)
-        logger.info(
-            "[app/main.py] Phase 1b: /ai surface mounted at /ai and /chat/ai ✓"
-        )
+        logger.info("[app/main.py] Phase 1b: /ai surface mounted at /ai and /chat/ai ✓")
     except Exception:
         logger.error(
             "[app/main.py] Phase 1b: /ai surface mount FAILED — AI chat/agent endpoints will be unavailable",
@@ -476,7 +534,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "[app/main.py] Phase 3: Scraper engine FAILED to start — scraping tools will be unavailable",
             exc_info=True,
         )
-        print("[phase:scraper] Scraper engine FAILED (scraping unavailable)", flush=True)
+        print(
+            "[phase:scraper] Scraper engine FAILED (scraping unavailable)", flush=True
+        )
         _registry.failed("scraper", exc)
 
     # Guarded like every other phase: an exception here would abort lifespan
@@ -490,13 +550,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 restored,
             )
     except Exception:
-        logger.error("[app/main.py] Scheduled-task restore FAILED (non-fatal)", exc_info=True)
+        logger.error(
+            "[app/main.py] Scheduled-task restore FAILED (non-fatal)", exc_info=True
+        )
 
     # Read the actual port Uvicorn is going to bind (written by run.py)
     # We need this to ensure the proxy doesn't collide with it, and to point the tunnel at it.
     try:
         import json
         from app.config import MATRX_HOME_DIR
+
         disc_data = json.loads((MATRX_HOME_DIR / "local.json").read_text())
         main_server_port = disc_data.get("port", 22140)
     except Exception:
@@ -507,7 +570,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings_sync = get_settings_sync()
         proxy_enabled = settings_sync.get("proxy_enabled", True)
     except Exception:
-        logger.error("[app/main.py] Settings read FAILED — proxy defaults on", exc_info=True)
+        logger.error(
+            "[app/main.py] Settings read FAILED — proxy defaults on", exc_info=True
+        )
         proxy_enabled = True
     logger.info("[app/main.py] Phase 4: HTTP proxy enabled=%s", proxy_enabled)
     if proxy_enabled:
@@ -521,7 +586,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 fallback_port = main_server_port + 40
                 logger.warning(
                     "[app/main.py] Phase 4: Proxy port %d collides with main server port! "
-                    "Falling back to %d.", proxy_port, fallback_port
+                    "Falling back to %d.",
+                    proxy_port,
+                    fallback_port,
                 )
                 proxy_port = fallback_port
 
@@ -544,7 +611,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 exc,
             )
             print("[phase:proxy] HTTP proxy FAILED (port in use)", flush=True)
-            _registry.failed("proxy", f"port {settings_sync.get('proxy_port', 22180)} in use: {exc}")
+            _registry.failed(
+                "proxy", f"port {settings_sync.get('proxy_port', 22180)} in use: {exc}"
+            )
         except Exception as exc:
             logger.error(
                 "[app/main.py] Phase 4: HTTP proxy FAILED to start", exc_info=True
@@ -563,6 +632,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _registry.starting("tunnel", upstream_port=main_server_port)
         try:
             from app.services.tunnel.manager import get_tunnel_manager as _get_tm
+
             _tm = _get_tm()
             _tunnel_url = await _tm.start(port=main_server_port)
             if _tunnel_url:
@@ -574,7 +644,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     mode="named" if _tm._token else "quick",
                 )
                 try:
-                    from app.services.cloud_sync.instance_manager import get_instance_manager as _get_im
+                    from app.services.cloud_sync.instance_manager import (
+                        get_instance_manager as _get_im,
+                    )
+
                     await _get_im().update_tunnel_url(_tunnel_url, active=True)
                 except Exception:
                     logger.warning(
@@ -587,8 +660,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 # left local.json without tunnel_url/tunnel_ws.
                 try:
                     import sys as _sys
+
                     _run_mod = _sys.modules.get("run") or _sys.modules.get("__main__")
-                    if _run_mod is not None and hasattr(_run_mod, "update_discovery_tunnel"):
+                    if _run_mod is not None and hasattr(
+                        _run_mod, "update_discovery_tunnel"
+                    ):
                         _run_mod.update_discovery_tunnel(_tunnel_url)
                 except Exception:
                     logger.debug(
@@ -600,6 +676,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 # state from the very first request post-boot.
                 try:
                     from app.api.tunnel_state import set_tunnel_url
+
                     set_tunnel_url(
                         _tunnel_url,
                         mode="named" if _tm._token else "quick",
@@ -611,9 +688,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                         exc_info=True,
                     )
             else:
-                logger.warning("[app/main.py] Phase 5: Tunnel started but no URL captured within timeout")
+                logger.warning(
+                    "[app/main.py] Phase 5: Tunnel started but no URL captured within timeout"
+                )
                 print("[phase:tunnel] Tunnel started but no URL captured", flush=True)
-                _registry.degraded("tunnel", reason="started but no URL captured within timeout")
+                _registry.degraded(
+                    "tunnel", reason="started but no URL captured within timeout"
+                )
         except Exception as exc:
             logger.error("[app/main.py] Phase 5: Tunnel FAILED to start", exc_info=True)
             print("[phase:tunnel] Tunnel FAILED to start", flush=True)
@@ -648,14 +729,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         retry_queue.start()
     except Exception:
-        logger.error("[app/main.py] Retry queue start FAILED (non-fatal)", exc_info=True)
+        logger.error(
+            "[app/main.py] Retry queue start FAILED (non-fatal)", exc_info=True
+        )
 
     # Start scrape store background sync (pushes pending local scrapes to cloud,
     # retries failed ones, surfaces sync errors to the user via /scrapes/sync-status)
     try:
         scrape_store.start_sync()
     except Exception:
-        logger.error("[app/main.py] Scrape store sync start FAILED (non-fatal)", exc_info=True)
+        logger.error(
+            "[app/main.py] Scrape store sync start FAILED (non-fatal)", exc_info=True
+        )
 
     # Phase 6: Extension bridge self-check.
     # Walks /extension/* routes, JWT posture, tunnel + metrics + discovery
@@ -669,6 +754,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # down) and the rest of the engine still needs to come up.
     try:
         from app.api.extension_boot_check import run_extension_boot_check
+
         await run_extension_boot_check(app)
     except Exception:
         logger.warning(
@@ -691,7 +777,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # id latched here is stashed on app.state.broadcast_user_id so the
     # shutdown teardown can match the subscribe that started it.
     app.state.broadcast_user_id = None
-    if os.environ.get("MATRX_BRIDGE_BROADCAST_ENABLED", "").lower() in ("1", "true", "yes"):
+    if os.environ.get("MATRX_BRIDGE_BROADCAST_ENABLED", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
         try:
             from app.api.extension_broadcast import connect_broadcast
             from app.services.local_db.repositories import TokenRepo
@@ -847,9 +937,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             from app.services.scheduler_host import stop_scheduler_host
 
             await asyncio.wait_for(stop_scheduler_host(), timeout=5.0)
-            logger.info(
-                "[app/main.py] Phase S00: matrx-scheduler host stopped ✓"
-            )
+            logger.info("[app/main.py] Phase S00: matrx-scheduler host stopped ✓")
         except asyncio.TimeoutError:
             logger.warning(
                 "[app/main.py] Phase S00: scheduler stop timed out after 5s — "
@@ -869,7 +957,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             from app.api.extension_broadcast import disconnect_broadcast
 
-            await asyncio.wait_for(disconnect_broadcast(_broadcast_user_id), timeout=3.0)
+            await asyncio.wait_for(
+                disconnect_broadcast(_broadcast_user_id), timeout=3.0
+            )
             logger.info(
                 "[app/main.py] Phase S0: cross-component broadcast disconnected for user_id=%s",
                 _broadcast_user_id,
@@ -889,7 +979,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         sync_eng = get_sync_engine()
         sync_eng.stop()
-        if hasattr(sync_eng, '_task') and sync_eng._task and not sync_eng._task.done():
+        if hasattr(sync_eng, "_task") and sync_eng._task and not sync_eng._task.done():
             try:
                 await asyncio.wait_for(sync_eng._task, timeout=2.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
@@ -911,6 +1001,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── Phase S2: Stop Python wake word service (release microphone) ──────
     try:
         from app.services.wake_word.service import get_wake_word_service
+
         oww_svc = get_wake_word_service()
         if oww_svc._running:
             await asyncio.wait_for(oww_svc.stop(), timeout=3.0)
@@ -921,6 +1012,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── Phase S3: Cancel all scheduled tasks + kill prevent-sleep process ─
     try:
         from app.tools.tools.scheduler import shutdown_scheduler
+
         await asyncio.wait_for(shutdown_scheduler(), timeout=3.0)
         logger.info("[app/main.py] Scheduler shut down ✓")
     except (asyncio.TimeoutError, Exception):
@@ -929,6 +1021,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── Phase S4: Stop file watches + document watcher ─────────────────
     try:
         from app.tools.tools.file_watch import shutdown_file_watches
+
         shutdown_file_watches()
         logger.info("[app/main.py] File watches stopped ✓")
     except Exception:
@@ -936,6 +1029,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     try:
         from app.services.documents.sync_engine import sync_engine as _doc_sync
+
         if _doc_sync._watch_task and not _doc_sync._watch_task.done():
             await asyncio.wait_for(_doc_sync.stop_watcher(), timeout=3.0)
             logger.info("[app/main.py] Document file watcher stopped ✓")
@@ -956,10 +1050,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("[app/main.py] HTTP proxy stopped ✓")
             _registry.stopped("proxy")
         except asyncio.TimeoutError:
-            logger.warning("[app/main.py] HTTP proxy stop timed out after 5s — forcing teardown")
+            logger.warning(
+                "[app/main.py] HTTP proxy stop timed out after 5s — forcing teardown"
+            )
             _registry.failed("proxy", "stop timed out after 5s")
         except Exception as exc:
-            logger.error("[app/main.py] HTTP proxy failed to stop cleanly", exc_info=True)
+            logger.error(
+                "[app/main.py] HTTP proxy failed to stop cleanly", exc_info=True
+            )
             _registry.failed("proxy", exc)
     else:
         logger.debug(
@@ -980,8 +1078,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 await asyncio.wait_for(tm.stop(), timeout=7.0)
                 logger.info("[app/main.py] Tunnel stopped ✓")
                 try:
-                    from app.services.cloud_sync.instance_manager import get_instance_manager as _get_im
-                    await asyncio.wait_for(_get_im().update_tunnel_url(None, active=False), timeout=2.0)
+                    from app.services.cloud_sync.instance_manager import (
+                        get_instance_manager as _get_im,
+                    )
+
+                    await asyncio.wait_for(
+                        _get_im().update_tunnel_url(None, active=False), timeout=2.0
+                    )
                 except (asyncio.TimeoutError, Exception):
                     logger.warning(
                         "[app/main.py] Shutdown: failed to clear tunnel URL in Supabase",
@@ -990,6 +1093,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 # Mirror the inactive state into the runtime singleton.
                 try:
                     from app.api.tunnel_state import mark_tunnel_inactive
+
                     mark_tunnel_inactive()
                 except Exception:
                     pass
@@ -997,8 +1101,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 # matrx-extend doesn't read a dead URL after shutdown.
                 try:
                     import sys as _sys
+
                     _run_mod = _sys.modules.get("run") or _sys.modules.get("__main__")
-                    if _run_mod is not None and hasattr(_run_mod, "update_discovery_tunnel"):
+                    if _run_mod is not None and hasattr(
+                        _run_mod, "update_discovery_tunnel"
+                    ):
                         _run_mod.update_discovery_tunnel(None)
                 except Exception:
                     pass
@@ -1010,7 +1117,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 cloudflared_recent_output=tm.recent_output[-30:],
             )
         except asyncio.TimeoutError:
-            logger.warning("[app/main.py] Tunnel stop timed out after 7s — forcing teardown")
+            logger.warning(
+                "[app/main.py] Tunnel stop timed out after 7s — forcing teardown"
+            )
             _registry.failed(
                 "tunnel",
                 "stop timed out after 7s — cloudflared subprocess may be wedged",
@@ -1030,8 +1139,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("[app/main.py] Scraper engine stopped ✓")
         _registry.stopped("scraper")
     except asyncio.TimeoutError:
-        logger.warning("[app/main.py] Scraper engine stop timed out after 8s — forcing teardown")
-        _registry.failed("scraper", "stop timed out after 8s — Playwright may be wedged")
+        logger.warning(
+            "[app/main.py] Scraper engine stop timed out after 8s — forcing teardown"
+        )
+        _registry.failed(
+            "scraper", "stop timed out after 8s — Playwright may be wedged"
+        )
     except Exception as exc:
         logger.error(
             "[app/main.py] Scraper engine failed to stop cleanly", exc_info=True
@@ -1062,11 +1175,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         logger.info("[app/main.py] Browser automation contexts closed ✓")
     except Exception:
-        logger.debug("[app/main.py] Browser automation cleanup skipped (no active contexts)")
+        logger.debug(
+            "[app/main.py] Browser automation cleanup skipped (no active contexts)"
+        )
 
     # ── Phase S6b: Stop download manager (before SQLite close) ──────────
     try:
         from app.services.downloads.manager import get_download_manager
+
         await get_download_manager().stop()
         logger.info("[app/main.py] Download manager stopped ✓")
     except Exception:
@@ -1184,6 +1300,7 @@ app.include_router(downloads_router)
 # We define log_requests as a regular function and register it via add_middleware so
 # we control placement explicitly (unlike @app.middleware which always inserts at [0]).
 
+
 async def _log_requests_dispatch(request: Request, call_next):
     import json as _json
     import time as _time
@@ -1195,49 +1312,51 @@ async def _log_requests_dispatch(request: Request, call_next):
 
     # High-frequency polling routes and CORS preflights — log at DEBUG to keep
     # the terminal readable.  Only genuinely interesting one-off requests stay at INFO.
-    _SILENT_PATHS = frozenset({
-        "/health",
-        "/tools/list",
-        "/cloud/heartbeat",
-        "/ports",
-        "/version",
-        "/logs/access",
-        # SSE streaming endpoints — connection is INFO, individual frames are not logged
-        "/logs/stream",
-        "/logs/access/stream",
-        "/setup/logs",
-        # Setup/dashboard polling (fires every 2-5s)
-        "/setup/status",
-        # AI status — polled on page mount
-        "/chat/ai-status",
-        "/chat/local-llm/status",
-        # Device monitoring polling (fires every 2-10s)
-        "/devices/system",
-        "/devices/permissions",
-        "/devices/audio",
-        # Notes polling
-        "/notes/tree",
-        "/notes/notes",
-        "/notes/sync/status",
-        # Settings reads (fetched on every page mount)
-        "/settings/paths",
-        "/settings/forbidden-urls",
-        # Status endpoints polled by Settings page
-        "/proxy/status",
-        "/tunnel/status",
-        "/cloud/instance",
-        "/cloud/instances",
-        "/capabilities",
-        # Hardware polling
-        "/hardware/status",
-        # TTS status polling
-        "/tts/status",
-        # Scrape sync polling
-        "/scrapes/sync-status",
-        # Download manager SSE stream + status polling
-        "/downloads/stream",
-        "/downloads",
-    })
+    _SILENT_PATHS = frozenset(
+        {
+            "/health",
+            "/tools/list",
+            "/cloud/heartbeat",
+            "/ports",
+            "/version",
+            "/logs/access",
+            # SSE streaming endpoints — connection is INFO, individual frames are not logged
+            "/logs/stream",
+            "/logs/access/stream",
+            "/setup/logs",
+            # Setup/dashboard polling (fires every 2-5s)
+            "/setup/status",
+            # AI status — polled on page mount
+            "/chat/ai-status",
+            "/chat/local-llm/status",
+            # Device monitoring polling (fires every 2-10s)
+            "/devices/system",
+            "/devices/permissions",
+            "/devices/audio",
+            # Notes polling
+            "/notes/tree",
+            "/notes/notes",
+            "/notes/sync/status",
+            # Settings reads (fetched on every page mount)
+            "/settings/paths",
+            "/settings/forbidden-urls",
+            # Status endpoints polled by Settings page
+            "/proxy/status",
+            "/tunnel/status",
+            "/cloud/instance",
+            "/cloud/instances",
+            "/capabilities",
+            # Hardware polling
+            "/hardware/status",
+            # TTS status polling
+            "/tts/status",
+            # Scrape sync polling
+            "/scrapes/sync-status",
+            # Download manager SSE stream + status polling
+            "/downloads/stream",
+            "/downloads",
+        }
+    )
 
     # OPTIONS preflights are always silent — they carry no data.
     is_options = request.method == "OPTIONS"
@@ -1387,12 +1506,11 @@ async def websocket_endpoint(websocket: WebSocket):
         # Logging it as ERROR creates noise in every update/restart cycle.
         # Any other unexpected exception is a genuine error worth surfacing.
         from starlette.websockets import WebSocketDisconnect
+
         if isinstance(e, WebSocketDisconnect) and e.code in (1001, 1012):
             # 1001 = Going Away (page unload / app close) — expected, not an error.
             # 1012 = Service Restart — normal on engine restart/update.
-            logger.debug(
-                f"WebSocket closed normally ({e.code}): {url}"
-            )
+            logger.debug(f"WebSocket closed normally ({e.code}): {url}")
         else:
             logger.error(
                 f"WebSocket error: {e} | {url} | Headers: {dict(websocket.headers)}"

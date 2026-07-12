@@ -88,14 +88,17 @@ export function Dashboard({
     setBrowserInstallError(false);
     try {
       const result = await engine.installCapability("browser_automation");
-      if (result.success) {
+      const ok = result.status === "complete";
+      if (ok) {
         setBrowserInstallMessage(
           "Installed successfully — restart the engine to activate.",
         );
         onRefresh();
       } else {
         setBrowserInstallError(true);
-        setBrowserInstallMessage(`Install failed: ${result.message}`);
+        setBrowserInstallMessage(
+          `Install failed: ${result.error || result.message}`,
+        );
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);

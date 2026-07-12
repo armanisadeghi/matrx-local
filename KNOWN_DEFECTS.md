@@ -242,7 +242,11 @@ Related trackers: `.matrx/AGENT_TASKS.md` (active worklist), `.arman/ARMAN_TASKS
 - **Symptom:** `sys.executable -m pip` is the sidecar binary in compiled builds —
   install paths need a packaged-build strategy, not a code tweak.
 - **Evidence:** `app/api/setup_routes.py`, capability probes.
-- **Status:** open (needs design).
+- **Status:** partially fixed (2026-07-11) — Settings → Capabilities (Whisper)
+  and light capability installs now use the shared frozen-safe
+  `pip --target` installer (`app/services/optional_packages/`) with SSE
+  progress, matching image-gen. Remaining: `setup_routes.py` playwright
+  sync path and any other `sys.executable -m pip` call sites.
 - **Owner hint:** packaging
 
 ### MXL-D-024 — Plain `uv sync` strips installed extras from the venv

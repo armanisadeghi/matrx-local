@@ -382,9 +382,12 @@ These were found, verified, and deliberately deferred:
   637828ff7, Phase 8): quiet-gap re-WARN wired to the previously dead
   constant; state dict capped at 256 keys, longest-idle eviction.
   KNOWN_DEFECTS MXL-D-020.
-- [ ] **capabilities/setup pip installs break in frozen builds**
-  (`sys.executable -m pip` is the sidecar binary) — needs a packaged-build
-  strategy, not a code tweak. (MXL-D-023)
+- [~] **capabilities/setup pip installs break in frozen builds**
+  (`sys.executable -m pip` is the sidecar binary) — partially fixed 2026-07-11:
+  Settings → Capabilities (Whisper) now uses frozen-safe `--target` + SSE
+  (`app/services/optional_packages/`, `app/services/capabilities/installer.py`).
+  Remaining: `setup_routes.py` and other raw `sys.executable -m pip` sites.
+  (MXL-D-023)
 
 - [x] **Download-chunk-discard P0 re-verified & closed (2026-07-10, Phase 8)**
   — Root AGENT_TASKS.md P0 claimed BOTH managers discard bytes. Current

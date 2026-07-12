@@ -39,15 +39,23 @@ if sys.platform == "win32":
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         else:
             import io
+
             sys.stdout = io.TextIOWrapper(
-                sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
+                sys.stdout.buffer,
+                encoding="utf-8",
+                errors="replace",
+                line_buffering=True,
             )
         if hasattr(sys.stderr, "reconfigure"):
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
         else:
             import io
+
             sys.stderr = io.TextIOWrapper(
-                sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
+                sys.stderr.buffer,
+                encoding="utf-8",
+                errors="replace",
+                line_buffering=True,
             )
     except Exception:
         pass  # If reconfigure fails (e.g. no buffer attr), continue — better than crashing.
@@ -56,6 +64,7 @@ if sys.platform == "win32":
 # Must run before any other module import so dotenv / config.py see the values.
 try:
     from app.bundled_config import apply as _apply_bundled_config
+
     _apply_bundled_config()
 except Exception:
     pass  # Dev mode or partial build — values come from .env instead.
@@ -141,7 +150,9 @@ try:
                             "        return False"
                         )
                         _patched = _src.replace(_old, _new, 1)
-                        _patched = _patched.replace("filecmp.cmp(", "_files_equal(", 100)
+                        _patched = _patched.replace(
+                            "filecmp.cmp(", "_files_equal(", 100
+                        )
                         _dmu.write_text(_patched, encoding="utf-8")
                         # Remove stale .pyc
                         _pyc_dir = _dmu.parent / "__pycache__"
@@ -154,6 +165,31 @@ try:
             except Exception:
                 pass  # patch failure is non-fatal; import will fail naturally if filecmp is missing
 
+            break
+except Exception:
+    pass  # Never crash on path injection failure
+
+# ── Transcription / capability packages (user-installed on demand) ────────────
+#
+# openai-whisper + torch are NOT bundled. When the user installs Speech
+# Transcription from Settings → Capabilities, packages land in
+# ~/.matrx/transcription-packages/ (or Windows equivalent). Inject here so
+# `import whisper` works without a restart after the next engine boot.
+try:
+    _cap_dir_candidates = []
+    if sys.platform == "win32":
+        _local_app = os.getenv("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+        _cap_dir_candidates.append(
+            Path(_local_app) / "AI Matrx" / "transcription-packages"
+        )
+    else:
+        _cap_dir_candidates.append(Path.home() / ".matrx" / "transcription-packages")
+
+    for _cap_dir in _cap_dir_candidates:
+        if (_cap_dir / ".install-complete").exists():
+            _cap_str = str(_cap_dir)
+            if _cap_str not in sys.path:
+                sys.path.insert(0, _cap_str)
             break
 except Exception:
     pass  # Never crash on path injection failure

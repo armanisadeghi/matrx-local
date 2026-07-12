@@ -2484,14 +2484,89 @@ class EngineAPI {
     return this.request<CapabilitiesResponse>("/capabilities");
   }
 
+  /**
+   * Start a capability install. Heavy caps (Whisper) return immediately with
+   * `async_install: true` — follow with `streamCapabilityInstall` for progress.
+   * Light caps complete synchronously (still frozen-safe on the engine).
+   */
   async installCapability(
     capabilityId: string,
-  ): Promise<InstallCapabilityResult> {
-    return this.request<InstallCapabilityResult>("/capabilities/install", {
+  ): Promise<CapabilityInstallStatus> {
+    // Light sync installs (playwright browsers) can exceed 60s; heavy ones
+    // return immediately so this timeout only covers the kickoff / light path.
+    return this.request<CapabilityInstallStatus>("/capabilities/install", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ capability_id: capabilityId }),
+      signal: AbortSignal.timeout(600_000),
     });
+  }
+
+  async getCapabilityInstallStatus(
+    capabilityId: string,
+  ): Promise<CapabilityInstallStatus> {
+    return this.request<CapabilityInstallStatus>(
+      `/capabilities/install/status?capability_id=${encodeURIComponent(capabilityId)}`,
+      { signal: AbortSignal.timeout(15_000) },
+    );
+  }
+
+  /**
+   * SSE progress for managed capability installs (Whisper). Returns cleanup.
+   */
+  streamCapabilityInstall(
+    capabilityId: string,
+    onEvent: (e: CapabilityInstallStatus) => void,
+  ): () => void {
+    let closed = false;
+    let es: EventSource | null = null;
+    let sawTerminal = false;
+
+    const connect = async () => {
+      if (!this.baseUrl) return;
+      const token = await this.getAccessToken();
+      const qs = new URLSearchParams({ capability_id: capabilityId });
+      if (token) qs.set("token", token);
+      const url = `${this.baseUrl}/capabilities/install/stream?${qs}`;
+      es = new EventSource(url);
+      es.onmessage = (ev) => {
+        if (closed) return;
+        try {
+          const data = JSON.parse(ev.data) as CapabilityInstallStatus;
+          if (data.status === "complete" || data.status === "error") {
+            sawTerminal = true;
+          }
+          onEvent(data);
+          if (data.status === "complete" || data.status === "error") {
+            es?.close();
+          }
+        } catch {
+          // ignore parse errors
+        }
+      };
+      es.onerror = () => {
+        if (closed) return;
+        es?.close();
+        if (!sawTerminal) {
+          onEvent({
+            status: "error",
+            capability_id: capabilityId,
+            stage: "error",
+            percent: 0,
+            message:
+              "Lost connection to the engine during installation. Check Engine Monitor, then try again.",
+            error:
+              "Lost connection to the engine during installation. Check Engine Monitor, then try again.",
+          });
+        }
+      };
+    };
+
+    void connect();
+    return () => {
+      closed = true;
+      es?.close();
+    };
   }
 
   async getSystemResources(): Promise<DeviceProbeResult> {
@@ -3345,9 +3420,36 @@ export interface CapabilitiesResponse {
   capabilities: Capability[];
 }
 
+/** Response from POST /capabilities/install and related status/stream events. */
+export interface CapabilityInstallStatus {
+  status: "idle" | "running" | "complete" | "error" | "connected" | "waiting";
+  capability_id: string;
+  stage: string;
+  percent: number;
+  message: string;
+  error?: string | null;
+  already_installed?: boolean;
+  install_dir?: string | null;
+  log_lines?: string[];
+  async_install?: boolean;
+  /** True when this SSE event is a raw pip log line */
+  log?: boolean;
+}
+
+/** @deprecated Prefer CapabilityInstallStatus — kept for Dashboard call sites. */
 export interface InstallCapabilityResult {
   success: boolean;
   message: string;
+}
+
+/** Map engine install status → legacy success/message shape. */
+export function capabilityInstallToResult(
+  status: CapabilityInstallStatus,
+): InstallCapabilityResult {
+  return {
+    success: status.status === "complete",
+    message: status.error || status.message || status.status,
+  };
 }
 
 // ---- Path types ----

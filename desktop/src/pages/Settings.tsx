@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Settings as SettingsIcon,
   Server,
@@ -162,9 +162,13 @@ export function Settings({
   // Capabilities state
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
   const [installingId, setInstallingId] = useState<string | null>(null);
+  const [installProgress, setInstallProgress] = useState<
+    Record<string, { percent: number; message: string }>
+  >({});
   const [installResult, setInstallResult] = useState<
     Record<string, { success: boolean; message: string }>
   >({});
+  const capabilitySseCleanup = useRef<(() => void) | null>(null);
 
   // Tunnel / remote access state
   const [tunnelStatus, setTunnelStatus] = useState<{
@@ -552,24 +556,97 @@ export function Settings({
   }, [engineStatus]);
 
   const handleInstallCapability = async (capabilityId: string) => {
+    capabilitySseCleanup.current?.();
+    capabilitySseCleanup.current = null;
     setInstallingId(capabilityId);
+    setInstallProgress((prev) => ({
+      ...prev,
+      [capabilityId]: { percent: 0, message: "Starting installation…" },
+    }));
     setInstallResult((prev) => {
       const next = { ...prev };
       delete next[capabilityId];
       return next;
     });
+
+    const finish = (success: boolean, message: string) => {
+      capabilitySseCleanup.current?.();
+      capabilitySseCleanup.current = null;
+      setInstallResult((prev) => ({
+        ...prev,
+        [capabilityId]: { success, message },
+      }));
+      setInstallingId(null);
+      if (success) void loadCapabilities();
+    };
+
     try {
-      const result = await engine.installCapability(capabilityId);
-      setInstallResult((prev) => ({ ...prev, [capabilityId]: result }));
-      if (result.success) {
-        // Refresh capability status after successful install
-        await loadCapabilities();
+      const started = await engine.installCapability(capabilityId);
+
+      if (started.status === "complete") {
+        finish(true, started.message || "Installed successfully.");
+        return;
       }
+      if (started.status === "error") {
+        finish(
+          false,
+          started.error || started.message || "Installation failed.",
+        );
+        return;
+      }
+
+      // Heavy path (Whisper): POST returned immediately — follow SSE for progress.
+      if (started.async_install || started.status === "running") {
+        setInstallProgress((prev) => ({
+          ...prev,
+          [capabilityId]: {
+            percent: started.percent ?? 0,
+            message: started.message || "Downloading…",
+          },
+        }));
+
+        await new Promise<void>((resolve) => {
+          const cleanup = engine.streamCapabilityInstall(capabilityId, (ev) => {
+            if (ev.log) {
+              setInstallProgress((prev) => ({
+                ...prev,
+                [capabilityId]: {
+                  percent: prev[capabilityId]?.percent ?? 0,
+                  message: ev.message || prev[capabilityId]?.message || "",
+                },
+              }));
+              return;
+            }
+            if (ev.percent !== undefined || ev.message) {
+              setInstallProgress((prev) => ({
+                ...prev,
+                [capabilityId]: {
+                  percent: ev.percent ?? prev[capabilityId]?.percent ?? 0,
+                  message:
+                    ev.message || prev[capabilityId]?.message || "Installing…",
+                },
+              }));
+            }
+            if (ev.status === "complete") {
+              finish(true, ev.message || "Installed successfully.");
+              resolve();
+            } else if (ev.status === "error") {
+              finish(false, ev.error || ev.message || "Installation failed.");
+              resolve();
+            }
+          });
+          capabilitySseCleanup.current = cleanup;
+        });
+        return;
+      }
+
+      // Unexpected residual status after early returns (idle/connected/waiting).
+      finish(
+        false,
+        started.message || `Unexpected install status: ${started.status}`,
+      );
     } catch (err) {
       const errMsg = String(err);
-      // Detect engine crash / network failure during install — previously
-      // the engine would get SIGKILL'd by macOS watchdog mid-install and
-      // the request would hang or fail with a generic network error.
       const engineCrashed =
         errMsg.includes("fetch") ||
         errMsg.includes("network") ||
@@ -577,17 +654,12 @@ export function Settings({
         errMsg.includes("Load failed") ||
         errMsg.includes("NetworkError");
 
-      setInstallResult((prev) => ({
-        ...prev,
-        [capabilityId]: {
-          success: false,
-          message: engineCrashed
-            ? "The engine became unreachable during installation. It may have been killed by the OS. Open Engine Monitor for logs, then restart the engine."
-            : errMsg,
-        },
-      }));
-    } finally {
-      setInstallingId(null);
+      finish(
+        false,
+        engineCrashed
+          ? "The engine became unreachable during installation. It may have been killed by the OS. Open Engine Monitor for logs, then restart the engine."
+          : errMsg,
+      );
     }
   };
 
@@ -1750,12 +1822,12 @@ export function Settings({
                   <p className="text-xs text-muted-foreground">
                     Enter your own API keys to use AI providers directly from
                     this device. The Hugging Face entry is also used for local
-                    GGUF downloads (including XET-hosted models) and gated
-                    image checkpoints; the Civitai entry is used for
-                    downloading custom image models and LoRA styles. Keys are
-                    stored locally on this machine only and are never sent to AI
-                    Matrx servers. Leave a key blank if you don't have one —
-                    that provider will be unavailable.
+                    GGUF downloads (including XET-hosted models) and gated image
+                    checkpoints; the Civitai entry is used for downloading
+                    custom image models and LoRA styles. Keys are stored locally
+                    on this machine only and are never sent to AI Matrx servers.
+                    Leave a key blank if you don't have one — that provider will
+                    be unavailable.
                   </p>
                   <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
                     Keys are base64-encoded in local storage. Do not enter keys
@@ -3255,8 +3327,8 @@ export function Settings({
                         Enable Broadcast plumb
                       </Label>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Default: ON. Disable only if you don't use the
-                        extension or want to reduce outbound connections.
+                        Default: ON. Disable only if you don't use the extension
+                        or want to reduce outbound connections.
                       </p>
                     </div>
                     <Switch
@@ -3441,6 +3513,7 @@ export function Settings({
                   const isInstalled = cap.status === "installed";
                   const isInstalling = installingId === cap.id;
                   const result = installResult[cap.id];
+                  const progress = installProgress[cap.id];
                   return (
                     <div key={cap.id}>
                       {idx > 0 && <Separator />}
@@ -3525,6 +3598,24 @@ export function Settings({
                             )}
                           </div>
                         </div>
+                        {isInstalling && progress && (
+                          <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 space-y-1.5">
+                            <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                              <span className="truncate">{progress.message}</span>
+                              <span className="shrink-0 tabular-nums">
+                                {Math.round(progress.percent)}%
+                              </span>
+                            </div>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                              <div
+                                className="h-full rounded-full bg-primary transition-[width] duration-300"
+                                style={{
+                                  width: `${Math.min(100, Math.max(0, progress.percent))}%`,
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
                         {result && (
                           <div
                             className={`rounded-md border px-3 py-2 text-xs ${

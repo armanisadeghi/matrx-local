@@ -1,6 +1,25 @@
 # CLAUDE.md -- Matrx Local
 
-> AI assistant instructions. See ARCHITECTURE.md for full technical reference. See LESSONS.md for hard-won CI/build gotchas.
+> **Agent entry point.** Read this file first. Technical depth: [docs/official/ARCHITECTURE.md](docs/official/ARCHITECTURE.md).
+
+## Documentation map
+
+| If you need… | Read |
+|--------------|------|
+| Rules, commands, hard constraints | **This file** (§ Hard Rules, § React Patterns) |
+| Architecture — scan then drill down | [docs/official/ARCHITECTURE.md](docs/official/ARCHITECTURE.md) |
+| Lifecycle / startup / shutdown contract | [docs/official/lifecycle-ownership.md](docs/official/lifecycle-ownership.md) |
+| Env vars, CORS | [docs/official/configuration.md](docs/official/configuration.md) |
+| App settings keys (`AppSettings`) | [docs/official/settings-catalog.md](docs/official/settings-catalog.md) |
+| Settings audit / known gaps | [docs/official/settings-audit.md](docs/official/settings-audit.md) |
+| CI, PyInstaller, Tauri build gotchas | [docs/official/build-lessons.md](docs/official/build-lessons.md) |
+| Download pipeline (audit / defects) | [docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md](docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md) |
+| Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |
+| matrx-extend ↔ engine | [docs/MATRX_EXTEND_CONNECTION.md](docs/MATRX_EXTEND_CONNECTION.md) |
+| Code-local rules | `app/tools/FEATURE.md`, `app/api/FEATURE.md`, `app/services/*/FEATURE.md` |
+| Defect holding area | [FOUND_DEFECTS.md](FOUND_DEFECTS.md) |
+| Approved agent work | [.matrx/AGENT_TASKS.md](.matrx/AGENT_TASKS.md) |
+| Ask Arman | [.matrx/ARMAN_TASKS.md](.matrx/ARMAN_TASKS.md) |
 
 ## Project Overview
 
@@ -34,7 +53,7 @@ cd desktop && pnpm tauri:dev
 0. **Lifecycle ownership is non-negotiable.** Each level of the process tree
    only touches its own children. When the parent triggers a start or stop,
    that level must cascade the same to its children before reporting done.
-   See **ARCHITECTURE.md → Lifecycle & Ownership** for the full contract.
+   See **[lifecycle-ownership.md](docs/official/lifecycle-ownership.md)** for the full contract.
 
    - **Rust never pkills cloudflared, the scraper, the proxy, or any other
      engine-spawned process.** Cloudflared and friends are children of the
@@ -107,7 +126,7 @@ Three separate concerns — do not confuse them:
 - **Root `.env`** — Python engine config (API_KEY, SCRAPER_API_KEY, etc.). Not committed.
 - **`desktop/.env`** — Supabase client (VITE_* vars only). Not committed.
 - Comment out values instead of deleting, with a note for Arman.
-- Full env var reference in ARCHITECTURE.md.
+- Full env var reference in [configuration.md](docs/official/configuration.md).
 
 ## Database Migrations
 
@@ -180,21 +199,24 @@ Only for re-fetching data changed externally (e.g., HF token set in browser). Ne
 
 ## Task Tracking
 
-- **`AGENT_TASKS.md`** — Bugs, issues, improvements. Update immediately on discovery or resolution.
-- **`KNOWN_DEFECTS.md`** — Platform-standard defect ledger (find-it-own-it: every defect you spot gets an entry with evidence; fixes flip status, entries are never deleted).
-- **`.arman/ARMAN_TASKS.md`** — Manual tasks for Arman. Simple checkbox + brief instructions.
+- **`.matrx/AGENT_TASKS.md`** — **Only** Arman-approved agent work. If your work touches an open task here, take it. Rules: `.matrx/AGENT_INSTRUCTIONS.md`. Inbox: `.matrx/TASKS_FROM_USER.md`.
+- **`FOUND_DEFECTS.md`** — Temporary holding area for discoveries that are **not** yet approved tasks. File with evidence; opportunistic fixes while open are OK; promotion to agent tasks requires Arman. Re-encounter → remind Arman (approve now or promote).
+- **`.matrx/ARMAN_TASKS.md`** — Reminders for agents to **ask Arman** when blocked (secrets, accounts, decisions). Not Arman’s personal todo inbox.
+- **`CURRENT_ERRORS.md`** — Error dumps from live testing. Triage into a fix, `FOUND_DEFECTS`, or (with approval) `.matrx/AGENT_TASKS.md`.
+- **`.arman/` is Arman-private.** Agents must not read, write, or list that directory. All ask-Arman tasks live in `.matrx/ARMAN_TASKS.md`.
 
-Never let a discovered issue go untracked. Add it to the right file and continue.
+Never let a discovered issue go untracked. Prefer the right file; do not invent approved tasks without Arman.
 
 ## Preferences
 
 - Work systematically, one task at a time
-- Track all issues immediately in AGENT_TASKS.md
+- Track discoveries in `FOUND_DEFECTS.md`; execute approved work from `.matrx/AGENT_TASKS.md`
 - Production-grade only — no stubs, no TODOs, no placeholder logic
 - Keep solutions simple; avoid over-engineering
 - Keep going until done or stuck
 - OK to edit .env files — comment out, don't delete
 - Update docs when code changes
+- Never edit `docs/official/**` (or any `*/official/*`) unless Arman explicitly asks or approves — flag stale official docs instead
 
 ---
 
@@ -204,6 +226,6 @@ The matrx-extend Chrome extension is a primary client of this engine. Integratio
 - Connection details: [docs/MATRX_EXTEND_CONNECTION.md](./docs/MATRX_EXTEND_CONNECTION.md)
 - Skill for working on this connection: `.cursor/skills/connect-matrx-extend/SKILL.md`
 - Master cross-repo doc (in matrx-extend): `/Users/armanisadeghi/code/matrx-extend/docs/CROSS_REPO_INTEGRATION.md`
-- Task pipeline for cross-repo work: `.matrx/` (TASKS_FROM_USER → AGENT_TASKS → AGENT_INSTRUCTIONS). Note: legacy root `AGENT_TASKS.md` retained as read-only history; new tasks go in `.matrx/`.
+- Task pipeline: `.matrx/` (`TASKS_FROM_USER` → `AGENT_TASKS` / `ARMAN_TASKS` → `AGENT_INSTRUCTIONS`). Canonical agent worklist is **only** `.matrx/AGENT_TASKS.md`. Never enter `.arman/`.
 
 **Channel B status (matrx-extend ↔ matrx-local): FULLY ACTIVE, engine-side verified (2026-07-10).** `/extension/rpc` dispatches `health` / `version` / `capabilities` / `tool` (→ the full ~80-tool dispatcher); `/extension/ws` services engine→extension tool invocations (callId protocol, `app/api/extension_invoke.py`); and the inbound Supabase-Broadcast router (`app/api/cross_component_router.py`) dispatches `kind:"rpc"` envelopes into the SAME `HANDLERS` registry via `extension_handlers.invoke_command` and replies on the channel (envelope `v: 2`). Round trips are pinned by `tests/smoke/test_extension_channel.py` (real engine on 22199: HTTP `tool`→SystemInfo, WS hello/ping/pong, full reverse-invoke round trip incl. error path) and `tests/characterization/test_broadcast_rpc_dispatch.py`. Only true in-browser E2E remains manual — steps in `docs/MATRX_EXTEND_CONNECTION.md` § Verification status. The remote-control (tunnel) chain runbook lives in the same doc.

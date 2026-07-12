@@ -33,7 +33,9 @@ This kills: Python engine, Vite server, Tauri window, Matrx Engine sidecar (and 
 
 ---
 
-## Agent priority queue (in `AGENT_TASKS.md`)
+## Agent priority queue (in `.matrx/AGENT_TASKS.md`)
+
+_Stale snapshot — verify against `.matrx/AGENT_TASKS.md` before acting. Historical list:_
 
 The next 7 highest-priority items for the agent team, in order:
 

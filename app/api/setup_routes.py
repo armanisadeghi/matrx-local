@@ -392,7 +392,11 @@ async def _check_permissions_macos(deep_link: str) -> ComponentStatus:
         results["Screen Recording"] = PermissionStatus.UNKNOWN
         logger.warning("[permissions] macOS screen recording check FAILED — error: %s", exc)
 
-    # DENIED and UNKNOWN are both "not ready" — NOT_DETERMINED no longer exists for screen recording
+    # Anything that isn't GRANTED is "not ready" — but the WORDS matter:
+    # not_determined means "we never asked", which is a click away, while denied
+    # means "the user turned it off". Reporting the former as the latter (which
+    # this did, because the checker collapsed both into DENIED) tells the user
+    # they refused a permission they were never offered.
     not_granted = [name for name, s in results.items() if s not in (PermissionStatus.GRANTED,)]
     detail_parts = [f"{name}={s.value}" for name, s in results.items()]
     logger.info("[permissions] macOS summary — %s", ", ".join(detail_parts))

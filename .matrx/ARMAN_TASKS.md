@@ -1,14 +1,19 @@
 # Arman Tasks — Matrx Local
 
-_Last updated: 2026-07-09_
+_Last updated: 2026-07-12_
 
-> Secrets, accounts, CDN, OS-only steps. Code work → `AGENT_TASKS.md`.
+> **Ask-Arman list for agents** — not Arman’s personal inbox. When blocked on
+> secrets, accounts, CDN, OS permissions, or a decision only Arman can make,
+> agents file it here and **ask him in chat** when it blocks current work.
+>
+> Code work → `.matrx/AGENT_TASKS.md`. Discoveries → `FOUND_DEFECTS.md`.
+> **Never enter `.arman/`** — that directory is Arman-private.
 
 ---
 
 ## Active
 
-- [ ] **CRITICAL: Secure the Media Vault escrow PRIVATE key** — The Private
+- [X] **CRITICAL: Secure the Media Vault escrow PRIVATE key** — The Private
   media vault's recovery backdoor is an RSA-4096 keypair generated
   2026-07-09. The PUBLIC key is embedded in the app
   (`app/services/media_vault/escrow.py`); the PRIVATE key lives ONLY at
@@ -66,17 +71,16 @@ _Last updated: 2026-07-09_
 
 ## Review queue (doc / backlog audit 2026-03-24)
 
-_Skim and check off or delete files._
+_Skim and check off or delete. Agents: do not open `.arman/` — leave that to Arman._
 
 | Item | Note |
 |------|------|
-| [`AGENT_TASKS.md`](../AGENT_TASKS.md) — “Doc hygiene → candidates” table | Delete or archive the two `.arman/.../INITIAL.md` drafts? Trim [`PLATFORM_AUDIT.md`](../PLATFORM_AUDIT.md)? |
-| [`PLATFORM_AUDIT.md`](../PLATFORM_AUDIT.md) | Says `initPlatformCtx` never called — **wrong**; `use-engine.ts` wires it. Either delete or rewrite Phase 1. |
-| [`.arman/pending/ui-overhaul/INITIAL.md`](pending/ui-overhaul/INITIAL.md) | 600+ line draft UI overhaul; partially superseded by real Tools work. |
-| [`.arman/in-progress/proxy/INITIAL.md`](in-progress/proxy/INITIAL.md) | Generic proxy research; safe to delete if you agree. |
-| [`local-llm-inference-integration.md`](../local-llm-inference-integration.md) | Long operational doc — keep; update when LLM packaging changes. |
-| [`whisper-transcription-integration.md`](../whisper-transcription-integration.md) | Same for voice. |
-| [`docs/react-migration-notes-api.md`](../docs/react-migration-notes-api.md) | Still valid for external clients (`/documents` → `/notes`). |
+| Doc-hygiene leftovers from deleted root AGENT_TASKS | Confirm whether private drafts under `.arman/` still matter; whether `PLATFORM_AUDIT.md` should stay gone |
+| `PLATFORM_AUDIT.md` (repo root, if present) | Historically wrong about `initPlatformCtx`; delete or rewrite if it returns |
+| Private drafts (Arman only): `.arman/pending/ui-overhaul/`, `.arman/in-progress/proxy/` | UI overhaul draft / proxy research — Arman decides keep vs delete |
+| [`local-llm-inference-integration.md`](../local-llm-inference-integration.md) | Long operational doc — keep; update when LLM packaging changes |
+| [`whisper-transcription-integration.md`](../whisper-transcription-integration.md) | Same for voice |
+| [`docs/react-migration-notes-api.md`](../docs/react-migration-notes-api.md) | Still valid for external clients (`/documents` → `/notes`) |
 
 **Suggested tickets to spawn (your call):**
 
@@ -85,6 +89,32 @@ _Skim and check off or delete files._
 3. **Production Supabase health** — If any user still sees `app_settings` 404, RLS/project mismatch; SQL verify on `txzxabzwovsujtloxrus`.
 
 ---
+
+## From the 2026-07-11 startup-error sweep (MXL-D-029 … D-032)
+
+- [ ] **Add your Hugging Face token** — Settings → API Keys → Hugging Face.
+      There is currently NO HF token anywhere on this machine: the app's key
+      store holds only anthropic/cerebras/google/xai, and there is no
+      `HF_TOKEN` in `.env`, in the environment, or in the huggingface-cli
+      cache. That is why FLUX.1-schnell 401'd — the download went out
+      unauthenticated. (The app now asks you for it properly instead of
+      showing a 401.)
+- [ ] **Accept the FLUX.1-schnell license** (only if you want that model) —
+      https://huggingface.co/black-forest-labs/FLUX.1-schnell → "Agree and
+      access repository". It is `gated: auto` (the only gated repo in the
+      catalog); Apache-2.0 licensed but still gated. The app now links you
+      straight there when the download hits the gate.
+- [ ] **Grant Screen Recording** — Setup Wizard → Review & Grant → Grant Access.
+      This now actually calls `CGRequestScreenCaptureAccess` in the engine (the
+      process that runs `screencapture`), which is what finally lists it in
+      System Settings → Privacy & Security → Screen Recording. macOS may need
+      an app restart before it reads back as granted.
+- [ ] **Publish matrx-ai 0.3.6** (fix is committed in `aidream/packages/matrx-ai`:
+      `configure()` no longer loads `db/_registry.py` by file path, which was
+      impossible in a PyInstaller bundle and killed the AI stack in every
+      packaged build). Then raise the floor in matrx-local `pyproject.toml`
+      (`matrx-ai>=0.3.6`) and drop the pre-import workaround in
+      `app/services/ai/engine.py`. matrx-local works with 0.3.3 in the meantime.
 
 ## Done
 
@@ -96,4 +126,4 @@ _Skim and check off or delete files._
 - [x] GitHub secrets: `AIDREAM_SERVER_URL_LIVE`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY`.
 - [x] Windows installer NSIS + hooks.
 - [x] First-run / setup wizard shipped in app (`FirstRunScreen` + wizard).
-
+- [x] Moved ask-Arman list from `.arman/ARMAN_TASKS.md` → `.matrx/ARMAN_TASKS.md` (2026-07-12); agents must not enter `.arman/`.

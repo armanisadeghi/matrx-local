@@ -1,6 +1,6 @@
 # Tasks from User
 
-Drop anything here — bullets, prose, half-thoughts, voice-transcribed ramblings. No format required. An agent will pick it up, structure it, and either do it now or move it to `AGENT_TASKS.md`.
+Drop anything here — bullets, prose, half-thoughts, voice-transcribed ramblings. No format required. An agent will pick it up, structure it, and either do it now or move it to `.matrx/AGENT_TASKS.md` (Arman-approved worklist).
 
 **Rules of the road:** see `AGENT_INSTRUCTIONS.md`. The short version:
 - Write whatever you want under `## Inbox`.

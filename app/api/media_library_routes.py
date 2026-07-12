@@ -5,7 +5,9 @@ video generation services (app/services/media_gen/library.py):
 
   GET    /media-library/items?media_type=image|video&limit=&offset=
                                         — newest-first sidecar metadata
-  GET    /media-library/file/{item_id}  — the media bytes (use in <img>/<video>)
+  GET    /media-library/file/{item_id}  — the media bytes (use in <img>/<video>);
+                                          resolves VAULTED ids too (423 when the
+                                          vault is locked) — see get_media_file
   DELETE /media-library/items/{item_id} — delete file + sidecar
 
 Auth comes from the same Bearer-token AuthMiddleware that gates the
@@ -18,11 +20,16 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from app.common.route_errors import safe_route
 from app.services.media_gen import library
+from app.services.media_vault.service import (
+    VaultError,
+    VaultLockedError,
+    get_vault_service,
+)
 
 router = APIRouter(prefix="/media-library", tags=["media-library"])
 
@@ -72,22 +79,49 @@ async def list_media_items(
 
 
 @router.get("/file/{item_id}")
-async def get_media_file(item_id: str) -> FileResponse:
+async def get_media_file(item_id: str) -> Response:
     """The media bytes with the correct content-type — point <img>/<video>
-    tags here (append ?token= for auth when headers aren't available)."""
+    tags here (append ?token= for auth when headers aren't available).
+
+    THE canonical read path for any generated media id, wherever it now lives.
+    Moving an item into the Private Vault deletes the plaintext file, but every
+    historical reference to it (job history, thumbnails, share links) still
+    holds the same id — so a vaulted id resolves here too:
+
+      plaintext library hit  → 200 file bytes
+      vaulted + unlocked     → 200 decrypted bytes (in memory, never on disk)
+      vaulted + locked       → 423 Locked (the vault contract's locked code)
+      neither                → 404
+
+    The 423 is the whole point: before this, a vaulted id 404'd as "Unknown
+    media item", which is a lie — the item exists and is one unlock away.
+    """
     meta = library.get_item(item_id)
-    if meta is None:
-        raise HTTPException(status_code=404, detail=f"Unknown media item: {item_id}")
-    path = Path(meta["file_path"])
-    if not path.exists():
-        raise HTTPException(
-            status_code=410, detail="Media file no longer exists on disk"
+    if meta is not None:
+        path = Path(meta["file_path"])
+        if not path.exists():
+            raise HTTPException(
+                status_code=410, detail="Media file no longer exists on disk"
+            )
+        return FileResponse(
+            str(path),
+            media_type=library.content_type_for(meta["media_type"]),
+            filename=path.name,
         )
-    return FileResponse(
-        str(path),
-        media_type=library.content_type_for(meta["media_type"]),
-        filename=path.name,
-    )
+
+    vault = get_vault_service()
+    if not vault.has_item(item_id):
+        raise HTTPException(status_code=404, detail=f"Unknown media item: {item_id}")
+    try:
+        data, content_type = vault.read_file(item_id)
+    except VaultLockedError as exc:
+        raise HTTPException(
+            status_code=423,
+            detail="Item is in the locked Private Vault — unlock it to view.",
+        ) from exc
+    except VaultError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(content=data, media_type=content_type)
 
 
 @router.delete("/items/{item_id}")

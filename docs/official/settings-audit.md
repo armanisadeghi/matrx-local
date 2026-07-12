@@ -1,5 +1,6 @@
 # Settings System Audit
 
+> Companion to [settings-catalog.md](./settings-catalog.md).  
 > **Last updated:** 2026-03-25  
 > Every `AppSettings` key tracked across all five concerns:  
 > (1) Single source of truth, (2) Vite ↔ Python sync, (3) Local DB (localStorage + `~/.matrx/settings.json`), (4) Cloud sync, (5) UI error visibility

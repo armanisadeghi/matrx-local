@@ -160,6 +160,18 @@ def initialize_matrx_ai() -> None:
     # lazy.
     import matrx_ai.orchestrator  # noqa: F401  (import-order fix, see above)
 
+    # KNOWN UPSTREAM DEFECT (matrx-ai <= 0.3.5): configure() loads
+    # matrx_ai/db/_registry.py by FILE PATH (spec_from_file_location on
+    # Path(matrx_ai.__file__).parent / "db" / "_registry.py"). A PyInstaller
+    # bundle ships modules inside the PYZ archive with no .py on disk, so that
+    # load raised FileNotFoundError and killed the whole AI stack in every
+    # packaged build (dev runs from source and never saw it). configure() skips
+    # the file-path load when the module is ALREADY in sys.modules, so importing
+    # it normally here is a complete, version-agnostic immunization. Fixed
+    # upstream (matrx-ai __init__ now does a plain import); keep this until the
+    # floor in pyproject.toml is raised past the fixed release.
+    import matrx_ai.db._registry  # noqa: F401  (frozen-build fix, see above)
+
     import matrx_ai
 
     server_url = os.getenv("AIDREAM_SERVER_URL_LIVE", "").strip()

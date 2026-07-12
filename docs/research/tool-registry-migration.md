@@ -1,5 +1,8 @@
 # matrx-local Migration Guide — Tool Registry Redesign
 
+> **Historical** (2026). Moved from repo root. Index: [ARCHITECTURE.md](../official/ARCHITECTURE.md).  
+> Companion docs below were aidream-platform guides — may not exist in this repo.
+
 > Audience: matrx-local (desktop app) developers, server-side and client-side.
 >
 > Companion docs: [TOOL_REGISTRY_REDESIGN.md](TOOL_REGISTRY_REDESIGN.md), [CLIENT_REGISTRATION_GUIDE.md](CLIENT_REGISTRATION_GUIDE.md), [MATRX_EXTEND_MIGRATION_GUIDE.md](MATRX_EXTEND_MIGRATION_GUIDE.md), [MATRX_FRONTEND_MIGRATION_GUIDE.md](MATRX_FRONTEND_MIGRATION_GUIDE.md).

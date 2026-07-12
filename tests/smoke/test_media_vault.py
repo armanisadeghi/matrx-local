@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import uuid
 from pathlib import Path
 
 import pytest
@@ -118,9 +119,20 @@ def test_vault_full_lifecycle(client: TestClient, vault_env) -> None:
 
     # Original is GONE from the library; ciphertext blobs exist and are opaque.
     assert not Path(item["file_path"]).exists()
-    assert client.get(f"/media-library/file/{item_id}").status_code == 404
     blob = (vault_env["tmp"] / "vault" / "blobs" / f"{item_id}.bin").read_bytes()
     assert FAKE_PNG[:8] not in blob, "blob must be ciphertext, not plaintext"
+
+    # /media-library/file/{id} is THE read path for a media id wherever it lives:
+    # vaulting an item must not turn every historical reference to it (job
+    # thumbnails, share links) into a 404 "Unknown media item" — that lie is what
+    # produced an endless 404 storm against a vault that held the items all along.
+    # Unlocked → the bytes. Locked → 423, never 404. Unknown id → 404.
+    assert client.get(f"/media-library/file/{item_id}").status_code == 200
+    assert client.get(f"/media-library/file/{item_id}").content == FAKE_PNG
+    client.post("/media-vault/lock")
+    assert client.get(f"/media-library/file/{item_id}").status_code == 423
+    assert client.post("/media-vault/unlock", json={"password": PASSWORD}).status_code == 200
+    assert client.get(f"/media-library/file/{uuid.uuid4()}").status_code == 404
 
     st = client.get("/media-vault/status").json()
     assert st["exists"] and st["unlocked"] and st["item_count"] == 1

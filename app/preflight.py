@@ -272,8 +272,8 @@ SERVICES: tuple[ManagedService, ...] = (
     ),
     # NOTE: llama-server is INTENTIONALLY OMITTED from this registry.
     #
-    # Per the lifecycle ownership contract (see ARCHITECTURE.md → "Lifecycle &
-    # Ownership"), each component manages only its own children. llama-server
+    # Per the lifecycle ownership contract (see docs/official/lifecycle-ownership.md),
+    # each component manages only its own children. llama-server
     # is owned by the Rust desktop shell — it is auto-started by Tauri's
     # setup() hook (desktop/src-tauri/src/lib.rs, "Auto-start LLM server")
     # and torn down by Rust's graceful_shutdown_sync() / kill_orphaned_llama_server().
@@ -624,9 +624,7 @@ def _scan_processes(
             if svc.orphan_only and not _is_orphaned(proc):
                 break
 
-            found.append(
-                FoundProcess(pid=pid, name=name, cmdline=cmdline, service=svc)
-            )
+            found.append(FoundProcess(pid=pid, name=name, cmdline=cmdline, service=svc))
             break
 
     return found
@@ -746,6 +744,7 @@ def _terminate_single_pid(pid: int, *, label: str) -> bool:
     if sys.platform == "win32":
         try:
             import subprocess as _sp  # local import keeps top-level clean
+
             _sp.run(
                 ["taskkill", "/F", "/T", "/PID", str(pid)],
                 capture_output=True,
@@ -840,7 +839,8 @@ def clean_orphans(*, services: Iterable[ManagedService] | None = None) -> CleanR
     report = CleanReport()
     found = _scan_processes(services, protected_pids=protected, user=user)
     report.inspected = sum(
-        1 for _ in psutil.process_iter()  # cheap re-iter for the count
+        1
+        for _ in psutil.process_iter()  # cheap re-iter for the count
     )
 
     # Resolve TCP listening ports for matched processes BEFORE we report.
@@ -885,7 +885,10 @@ def clean_orphans(*, services: Iterable[ManagedService] | None = None) -> CleanR
             _ok(svc.name, "clean (no lingering processes)")
             continue
         plural = "es" if len(procs) != 1 else ""
-        _warn(svc.name, f"FOUND {len(procs)} lingering process{plural} from previous session")
+        _warn(
+            svc.name,
+            f"FOUND {len(procs)} lingering process{plural} from previous session",
+        )
         for fp in procs:
             short_cmd = fp.cmdline if len(fp.cmdline) <= 80 else fp.cmdline[:77] + "..."
             ports_str = (
@@ -1063,9 +1066,7 @@ def assign_engine_port(*, env_override: str | None = None) -> int:
     # instances are allowed — see clean_orphans protect_live_owner); name its
     # PID loudly. A non-Matrx listener keeps the original "foreign process"
     # wording.
-    incumbent_is_matrx = _probe_matrx_health(
-        f"http://127.0.0.1:{DEFAULT_ENGINE_PORT}"
-    )
+    incumbent_is_matrx = _probe_matrx_health(f"http://127.0.0.1:{DEFAULT_ENGINE_PORT}")
     incumbent_pid = _pid_listening_on(DEFAULT_ENGINE_PORT)
     pid_str = f"pid {incumbent_pid}" if incumbent_pid is not None else "pid unknown"
 
@@ -1233,7 +1234,9 @@ def status() -> int:
     data = read_discovery_file()
     if data:
         _say(f"Discovery: {DISCOVERY_FILE} (schema={data.get('schema', 1)})")
-        _say(f"  port={data.get('port')} pid={data.get('pid')} version={data.get('version')}")
+        _say(
+            f"  port={data.get('port')} pid={data.get('pid')} version={data.get('version')}"
+        )
         services = data.get("services") or {}
         for k, v in services.items():
             _say(f"  services.{k}: {v}")

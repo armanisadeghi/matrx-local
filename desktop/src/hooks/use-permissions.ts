@@ -328,14 +328,28 @@ export function usePermissions(): UsePermissionsReturn {
             return granted ? "granted" : "not_determined";
 
           case "screen_recording": {
-            // CGPreflightScreenCaptureAccess() — read-only status query, no prompt.
-            // Known limitation: returns false until app restart after an in-session
-            // grant. This is acceptable — the user will see correct status on next launch.
+            // THE ENGINE is authoritative here, not this window: screen capture
+            // runs in the Python engine (`screencapture`), and macOS grants the
+            // permission per-process — the Tauri app's own preflight answers a
+            // question nobody asked. Asking the plugin instead is what let the
+            // Setup Wizard (engine-sourced) say "denied" while the Permissions
+            // modal (plugin-sourced) said "Not Requested" on the same screen.
             //
-            // DO NOT cross-check via engine.getDevicePermission("screen_recording"):
-            // the engine previously used SCShareableContent which ACTIVELY TRIGGERS
-            // the macOS Sequoia recurring 30-day screen recording consent dialog
-            // every time it is called. That caused repeated prompts on every checkAll().
+            // Safe to call on every checkAll: the engine's check is a read-only
+            // CGPreflightScreenCaptureAccess. (It once used SCShareableContent,
+            // which ACTIVELY TRIGGERS the macOS Sequoia 30-day consent dialog on
+            // every call — never reintroduce that; see checker.py.)
+            try {
+              const res = (await engine.get(
+                "/devices/permissions/screen_recording",
+              )) as { status?: string };
+              if (res.status === "granted") return "granted";
+              if (res.status === "denied") return "denied";
+              if (res.status === "not_determined") return "not_determined";
+            } catch {
+              // Engine not up yet — fall back to this process's own preflight
+              // rather than reporting a permission state we cannot know.
+            }
             granted = await perms.checkScreenRecordingPermission();
             return granted ? "granted" : "not_determined";
           }
@@ -456,15 +470,28 @@ export function usePermissions(): UsePermissionsReturn {
           break;
         }
 
-        // ── Screen Recording: always open System Settings ──────────────────────
-        // On macOS Sequoia (15+), the requestScreenRecordingPermission() plugin
-        // call opens System Settings — there is no longer a native in-app dialog.
-        // The plugin's check uses CGPreflightScreenCaptureAccess() which returns
-        // false until the next app restart even when the user has already granted
-        // access, so we always send the user to System Settings to confirm/change.
-        case "screen_recording":
+        // ── Screen Recording: ask the ENGINE first, then open System Settings ──
+        // Screen capture runs in the Python engine (`screencapture`), so the
+        // ENGINE is the process that needs the grant — and until it calls
+        // CGRequestScreenCaptureAccess once, macOS never lists it under Screen
+        // Recording. Sending the user straight to System Settings (what this
+        // used to do) sent them to a pane with nothing to switch on.
+        //
+        // The engine's request registers it and shows the native prompt; we then
+        // still open System Settings, because on macOS Sequoia a grant only
+        // takes effect on the next app launch and the user may need to flip the
+        // switch there.
+        case "screen_recording": {
+          try {
+            await engine.post("/devices/permissions/request/screen-recording", {});
+          } catch (err) {
+            console.error("[permissions] Engine screen-recording request failed:", err);
+          }
+          await delay(POST_REQUEST_DELAY_MS);
+          await check(key);
           await openSettings(key);
           break;
+        }
 
         // ── Accessibility, Full Disk Access, Input Monitoring: open Settings ──
         // These cannot be prompted with an in-app dialog — the plugin's request

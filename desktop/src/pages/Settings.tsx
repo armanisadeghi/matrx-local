@@ -3601,7 +3601,9 @@ export function Settings({
                         {isInstalling && progress && (
                           <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 space-y-1.5">
                             <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                              <span className="truncate">{progress.message}</span>
+                              <span className="truncate">
+                                {progress.message}
+                              </span>
                               <span className="shrink-0 tabular-nums">
                                 {Math.round(progress.percent)}%
                               </span>

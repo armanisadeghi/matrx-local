@@ -1,6 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+)
 
 # SPECPATH is injected by PyInstaller and equals the directory containing this
 # spec file (specs/). All project-relative paths must be resolved from the
@@ -18,6 +22,13 @@ _kokoro_data = collect_data_files('kokoro_onnx')
 # language_tags: JSON registry files required by phonemizer → segments → csvw → language-tags
 _lang_tags_data = collect_data_files('language_tags')
 
+# matrx-ai resolves matrx_ai.db.* lazily (PEP 562 __getattr__) and its
+# configure() historically loaded matrx_ai/db/_registry.py by file path, so
+# PyInstaller's static analysis sees NONE of those submodules. Missing
+# matrx_ai.db._registry killed the AI stack in every packaged build; collect
+# the whole package so no lazily-imported submodule can go missing again.
+_matrx_ai_mods = collect_submodules('matrx_ai')
+
 
 a = Analysis(
     [os.path.join(_ROOT, 'run.py')],
@@ -28,7 +39,7 @@ a = Analysis(
         (os.path.join(_ROOT, 'scraper-service/app'), 'scraper-service/app'),
         (os.path.join(_ROOT, 'pyproject.toml'), '.'),
     ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data,
-    hiddenimports=[
+    hiddenimports=_matrx_ai_mods + [
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
         'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',
         'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto',
@@ -71,7 +82,7 @@ a = Analysis(
         # torch/torchvision/transformers lazily import stdlib modules the engine's
         # own import graph never references, so PyInstaller omits them and the
         # user-installed packages raise ModuleNotFoundError at load time. Verified
-        # by booting the frozen engine and loading FLUX.2-klein-4B (see LESSONS.md).
+        # by booting the frozen engine and loading FLUX.2-klein-4B (see docs/official/build-lessons.md).
         #   filecmp,doctest  <- transformers    modulefinder <- torchvision/__init__
         #   timeit           <- torch _strobelight (torch>=2.11 imports it at import)
         'filecmp', 'doctest', 'modulefinder', 'timeit',

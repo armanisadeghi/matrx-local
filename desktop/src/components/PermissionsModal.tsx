@@ -236,9 +236,14 @@ function PermissionRow({
           <span className="text-xs text-muted-foreground">N/A</span>
         ) : isRestricted ? (
           <span className="text-xs text-orange-500">MDM/Restricted</span>
-        ) : (state.key === "microphone" || state.key === "camera") &&
+        ) : (state.key === "microphone" ||
+            state.key === "camera" ||
+            state.key === "screen_recording") &&
           state.status === "not_determined" ? (
-          // Mic & camera: AVFoundation can show an in-app OS dialog the first time
+          // Mic & camera: AVFoundation can show an in-app OS dialog the first time.
+          // Screen recording: the engine's CGRequestScreenCaptureAccess shows the
+          // native prompt AND is what finally lists the engine in System Settings —
+          // so this is a real "Grant", not an "Open Settings" dead end.
           <Button
             size="sm"
             variant="default"

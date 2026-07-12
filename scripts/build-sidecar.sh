@@ -371,6 +371,10 @@ args = [
     "--hidden-import", "supabase",
     "--hidden-import", "openwakeword",
     "--hidden-import", "onnxruntime",
+    # matrx-ai resolves matrx_ai.db.* lazily (PEP 562 __getattr__), so static
+    # analysis sees none of it. A missing matrx_ai.db._registry killed the AI
+    # stack in every packaged build — collect the whole package.
+    "--collect-submodules", "matrx_ai",
     # Cross-component scheduler host (optional extra, lazily imported, gated off
     # by default) — bundle it so flipping MATRX_LOCAL_SCHEDULER_ENABLED works.
     "--hidden-import", "matrx_scheduler",
@@ -386,7 +390,7 @@ args = [
     # torchvision/__init__ does "from modulefinder import Module"; torch>=2.11
     # _strobelight does "from timeit import default_timer" at import. These fail
     # with ModuleNotFoundError at model-load time — verified by loading
-    # FLUX.2-klein-4B in the frozen engine (see LESSONS.md).
+    # FLUX.2-klein-4B in the frozen engine (see docs/official/build-lessons.md).
     "--hidden-import", "filecmp",
     "--hidden-import", "doctest",
     "--hidden-import", "modulefinder",

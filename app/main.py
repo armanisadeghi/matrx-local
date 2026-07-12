@@ -290,9 +290,39 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         print("[phase:database] Local database FAILED (fallbacks active)", flush=True)
         _registry.failed("database", exc)
 
-    # Phase 0a (post0): Start the universal download manager.
+    # Phase 0a (post): Warm the in-memory JWT cache from SQLite so matrx-ai has
+    # the user's token available immediately on first authenticated API call.
+    try:
+        await warm_jwt_cache()
+    except Exception:
+        logger.warning(
+            "[app/main.py] Phase 0a: JWT cache warm failed (non-fatal)", exc_info=True
+        )
+
+    # Phase 0a (post2): Load user-stored AI provider API keys from SQLite into
+    # os.environ so matrx_ai picks them up on every request.  Runs before
+    # initialize_matrx_ai() so the keys are available during AI engine setup —
+    # and, CRITICALLY, before the download manager starts: start() resumes
+    # incomplete downloads immediately, and a resumed Hugging Face download that
+    # beats this line reads a token that isn't there yet and goes out
+    # unauthenticated, failing 401 on a gated repo the user has full access to.
+    # Do not move the download manager back above this.
+    try:
+        loaded = await load_user_keys_into_env()
+        logger.info(
+            "[app/main.py] Phase 0a: Loaded %d user API key(s) into env ✓", loaded
+        )
+    except Exception:
+        logger.warning(
+            "[app/main.py] Phase 0a: User API key load failed (non-fatal)",
+            exc_info=True,
+        )
+
+    # Phase 0a (post3): Start the universal download manager.
     # Must run after the database is connected (Phase 0a) because it reads
-    # any incomplete downloads from SQLite on startup for crash recovery.
+    # any incomplete downloads from SQLite on startup for crash recovery — and
+    # after the API keys are loaded (post2 above), because it resumes those
+    # downloads the moment it starts.
     _registry.starting("downloads")
     try:
         from app.services.downloads.manager import get_download_manager
@@ -307,29 +337,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             exc_info=True,
         )
         _registry.degraded("downloads", reason=f"start failed: {exc}")
-
-    # Phase 0a (post): Warm the in-memory JWT cache from SQLite so matrx-ai has
-    # the user's token available immediately on first authenticated API call.
-    try:
-        await warm_jwt_cache()
-    except Exception:
-        logger.warning(
-            "[app/main.py] Phase 0a: JWT cache warm failed (non-fatal)", exc_info=True
-        )
-
-    # Phase 0a (post2): Load user-stored AI provider API keys from SQLite into
-    # os.environ so matrx_ai picks them up on every request.  This runs before
-    # initialize_matrx_ai() so the keys are available during AI engine setup.
-    try:
-        loaded = await load_user_keys_into_env()
-        logger.info(
-            "[app/main.py] Phase 0a: Loaded %d user API key(s) into env ✓", loaded
-        )
-    except Exception:
-        logger.warning(
-            "[app/main.py] Phase 0a: User API key load failed (non-fatal)",
-            exc_info=True,
-        )
 
     # Phase 0a (image-gen): If the user has previously installed image-gen packages
     # via the in-app installer, inject the packages directory into sys.path now so

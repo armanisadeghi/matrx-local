@@ -175,8 +175,8 @@ Total to fully support small through largest in a production-grade way: roughly 
 
 ### Decisions needed from Arman
 
-- [ ] Approve building NER as a Python sidecar subsystem (not LLM catalog)
-- [ ] Choose default always-on model: **bi-edge** vs **GLiNER2-base** vs both (small default + GLiNER2 on demand)
+- [x] Approve building NER as a Python sidecar subsystem (not LLM catalog)
+- [ ] Choose default always-on model: **bi-edge** vs **GLiNER2-base** vs both (small default + GLiNER2 on demand) - Must use the same as what our server uses, which is GLiNER2-base. We can 'add' bi-edge for other things locally, but the server needs 
 - [ ] Confirm whether PII presets / relation extraction are in P1 or P3
 - [ ] Confirm whether desktop UI is required for P1 or tools+API-only is enough to start
 - [ ] Confirm XXL should be offered in-app (with hardware gate) or deferred

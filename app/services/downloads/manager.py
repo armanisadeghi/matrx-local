@@ -35,6 +35,9 @@ import httpx
 from pathlib import Path
 
 from app.common.system_logger import get_logger
+from app.services.downloads import failures
+from app.services.downloads.errors import NonRetryableDownloadError
+from app.services.downloads.failures import ActionableDownloadError
 from app.services.local_db.database import get_db
 
 logger = get_logger()
@@ -113,6 +116,26 @@ class DownloadEntry:
         while len(self._speed_samples) > _SPEED_WINDOW_SIZE:
             self._speed_samples.popleft()
 
+    def set_resolution(self, resolution: Optional[dict[str, Any]]) -> None:
+        """Attach (or clear) the user-facing fix for a failed download.
+
+        Stored inside `metadata` because that column already round-trips as JSON
+        through persistence and hydration — a failure that survives a restart is
+        the whole point (the user quits, reopens, and must still be told what to
+        do). Read it back off `to_dict()["resolution"]`, never off metadata.
+        """
+        meta = dict(self.metadata or {})
+        if resolution is None:
+            meta.pop("resolution", None)
+        else:
+            meta["resolution"] = resolution
+        self.metadata = meta or None
+
+    @property
+    def resolution(self) -> Optional[dict[str, Any]]:
+        res = (self.metadata or {}).get("resolution")
+        return res if isinstance(res, dict) else None
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("_speed_samples", None)
@@ -121,6 +144,9 @@ class DownloadEntry:
         remaining = self.total_bytes - self.bytes_done
         spd = self.current_speed_bps()
         d["eta_seconds"] = (remaining / spd) if (spd > 0 and remaining > 0) else None
+        # Hoisted to the top level: the UI's contract is entry.resolution, not
+        # a scavenger hunt through metadata.
+        d["resolution"] = self.resolution
         return d
 
 
@@ -140,6 +166,9 @@ class ProgressEvent:
     speed_bps: float = 0.0
     eta_seconds: Optional[float] = None
     error_msg: Optional[str] = None
+    resolution: Optional[dict[str, Any]] = None
+    """Set on a user-fixable failure — see app/services/downloads/failures.py.
+    The UI renders it as an explain-and-ask dialog; None means a real error."""
     updated_at: str = ""
     bandwidth_bps: float = 0.0
 
@@ -233,10 +262,50 @@ def filter_hf_repo_files(
     return kept
 
 
-class NonRetryableDownloadError(RuntimeError):
-    """A download failure that retrying can never fix (e.g. Civitai 401/403
-    without a valid API key). The retry loop surfaces it immediately with its
-    message intact instead of burning attempts."""
+async def _hf_token_is_valid(token: str) -> bool:
+    """Does Hugging Face still accept this token? One whoami call.
+
+    This is the ONLY way to tell "your token is dead" from "your token is fine
+    but you haven't accepted this model's license" — both arrive as a bare 401,
+    and telling a user to re-enter a key that is already correct is exactly the
+    dead end we're removing. Network trouble here answers "valid": we'd rather
+    send the user to the license page (harmless, and the far likelier cause)
+    than accuse a good token of being bad.
+    """
+    try:
+        from huggingface_hub import HfApi  # noqa: PLC0415
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: HfApi(token=token).whoami())
+        return True
+    except Exception as exc:  # noqa: BLE001
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (401, 403):
+            return False
+        logger.warning(
+            "[downloads] HF whoami inconclusive (%s) — assuming the token is "
+            "valid and the model gate is unaccepted", exc,
+        )
+        return True
+
+
+async def _classify_hf_auth_failure(
+    exc: BaseException, repo_id: str, token: Optional[str]
+) -> BaseException:
+    """Map a Hugging Face failure to the thing the user must actually do.
+
+    Returns an ActionableDownloadError for the three self-fixable cases, or the
+    ORIGINAL exception untouched for everything else — a 500 from HF or a dead
+    network is not the user's problem and must not be dressed up as one.
+    """
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status not in (401, 403):
+        return exc
+    if not token:
+        return failures.hf_token_missing(repo_id)
+    if not await _hf_token_is_valid(token):
+        return failures.hf_token_invalid(repo_id)
+    return failures.hf_gate_not_accepted(repo_id)
 
 
 # SSE subscriber queue type
@@ -358,6 +427,8 @@ class DownloadManager:
                     entry.bytes_done = 0
                     entry.completed_at = None
                     entry.metadata = {**(entry.metadata or {}), "dest_dir": dest_dir}
+                    entry.set_resolution(None)  # re-queued: last failure's ask is stale
+                    entry.error_msg = None
                     entry.updated_at = _now()
                     self._cancel_flags[entry.id] = asyncio.Event()
                     await self._persist(entry)
@@ -609,6 +680,15 @@ class DownloadManager:
             if entry.status not in ("cancelled", "completed"):
                 entry.status = "failed"
                 entry.error_msg = str(exc)
+                # A user-fixable failure carries the fix. Stash it on the entry
+                # (it persists + rides the SSE event) so the UI can ASK the user
+                # for the one thing it needs instead of showing them a 401.
+                resolution = (
+                    exc.resolution.to_dict()
+                    if isinstance(exc, ActionableDownloadError)
+                    else None
+                )
+                entry.set_resolution(resolution)
                 entry.updated_at = _now()
                 await self._persist(entry)
                 await self._broadcast(ProgressEvent(
@@ -623,17 +703,28 @@ class DownloadManager:
                     part_current=entry.part_current,
                     part_total=entry.part_total,
                     error_msg=str(exc),
+                    resolution=resolution,
                     updated_at=entry.updated_at,
                     bandwidth_bps=self._bandwidth_bps,
                 ))
-                logger.error(
-                    "[downloads] FAILED: %s (id=%s category=%s bytes_done=%d total_bytes=%d part=%d/%d) — %s",
-                    entry.filename, dl_id, entry.category,
-                    entry.bytes_done, entry.total_bytes,
-                    entry.part_current, entry.part_total,
-                    exc,
-                    exc_info=True,
-                )
+                # A failure the user is expected to resolve is not an engine
+                # error — log it as a warning, without a stack trace, so it
+                # stops showing up as a red ERROR in the issue report.
+                if resolution is not None:
+                    logger.warning(
+                        "[downloads] NEEDS USER ACTION: %s (id=%s code=%s) — %s",
+                        entry.filename, dl_id, resolution["code"],
+                        resolution["message"],
+                    )
+                else:
+                    logger.error(
+                        "[downloads] FAILED: %s (id=%s category=%s bytes_done=%d total_bytes=%d part=%d/%d) — %s",
+                        entry.filename, dl_id, entry.category,
+                        entry.bytes_done, entry.total_bytes,
+                        entry.part_current, entry.part_total,
+                        exc,
+                        exc_info=True,
+                    )
         finally:
             self._active_ids.discard(dl_id)
             self._update_bandwidth()
@@ -853,11 +944,7 @@ class DownloadManager:
                         response.status_code in (401, 403)
                         and (entry.metadata or {}).get("civitai_download")
                     ):
-                        raise NonRetryableDownloadError(
-                            "Civitai API key required or invalid — add your "
-                            "key under Settings → API Keys → Civitai, then "
-                            "retry the download."
-                        )
+                        raise failures.civitai_key_required()
                     response.raise_for_status()
 
                     part_total = int(response.headers.get("content-length", 0))
@@ -955,11 +1042,7 @@ class DownloadManager:
         try:
             from huggingface_hub import HfApi, hf_hub_download  # noqa: PLC0415
         except ImportError as exc:
-            raise RuntimeError(
-                "huggingface_hub is not importable — the AI packages are not "
-                "installed. Run the in-app installer (POST /image-gen/install) "
-                "before downloading model weights."
-            ) from exc
+            raise failures.ai_packages_missing() from exc
 
         # Single source of truth for the token — env (app-stored key injected
         # by key_manager, or a user-set HF_TOKEN) with a fallback to
@@ -974,9 +1057,16 @@ class DownloadManager:
         # what the diffusers-format load actually needs. The same filtered list
         # feeds total_bytes AND the download loop below (must stay consistent).
         api = HfApi(token=token)
-        info = await loop.run_in_executor(
-            None, lambda: api.repo_info(repo_id, files_metadata=True)
-        )
+        try:
+            info = await loop.run_in_executor(
+                None, lambda: api.repo_info(repo_id, files_metadata=True)
+            )
+        except Exception as exc:
+            # repo_info is the FIRST authenticated call, so this is where a
+            # gated/auth problem surfaces — turn it into a specific request to
+            # the user here, once, instead of letting a raw 401 leak out of the
+            # per-file loop below.
+            raise await _classify_hf_auth_failure(exc, repo_id, token) from exc
         all_files: list[tuple[str, int]] = [
             (s.rfilename, s.size or 0) for s in (info.siblings or [])
         ]
@@ -1095,6 +1185,13 @@ class DownloadManager:
             return
 
         if errors:
+            # A per-file 401/403 means the same three things a repo_info 401
+            # means (dead token / unaccepted gate / no token) — classify it the
+            # same way rather than surfacing the raw HF text. Non-auth errors
+            # come back unchanged and keep their real message.
+            classified = await _classify_hf_auth_failure(errors[0], repo_id, token)
+            if isinstance(classified, ActionableDownloadError):
+                raise classified from errors[0]
             raise RuntimeError(
                 f"Hugging Face download failed for {repo_id}: {errors[0]}"
             ) from errors[0]

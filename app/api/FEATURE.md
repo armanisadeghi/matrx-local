@@ -36,7 +36,7 @@ mirrors it too). v2 adds `kind: "rpc"|"wake"|"presence"`, `fromInstance` /
 unchanged). `kind:"task"` is intentionally absent — durable tasks live in
 `sch_task`, wake envelopes only point at the row. If you change the shape,
 change ALL mirrors in the same effort (frontend `v` mirror is currently
-pending — KNOWN_DEFECTS MXL-D-026).
+pending — FOUND_DEFECTS MXL-D-026).
 
 ## Auth posture (`extension_auth.py`)
 

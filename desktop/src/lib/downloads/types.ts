@@ -16,6 +16,24 @@ export type DownloadCategory =
 /** Log source tag used when emitting download-specific log lines to use-unified-log */
 export const DOWNLOAD_LOG_SOURCE = "downloads" as const;
 
+/** What the app must ask the user to do so a failed download can succeed.
+ * Mirrors app/services/downloads/failures.py — the engine decides the ask (only
+ * it knows WHY the download failed); the UI renders it and runs the action. */
+export type DownloadActionKind =
+  | "settings_api_keys"
+  | "open_url"
+  | "install_ai_packages";
+
+export interface DownloadResolution {
+  code: string;
+  title: string;
+  message: string;
+  action_kind: DownloadActionKind;
+  action_label: string;
+  action_url: string | null;
+  provider: string | null;
+}
+
 export interface DownloadEntry {
   id: string;
   category: string;
@@ -27,6 +45,10 @@ export interface DownloadEntry {
   percent: number;
   status: DownloadStatus;
   error_msg: string | null;
+  /** Present ONLY when the failure is one the user can fix (missing API key,
+   * unaccepted model license, AI packages not installed). When set, the UI owes
+   * the user an explanation and a button — never a raw error string. */
+  resolution?: DownloadResolution | null;
   priority: number;
   part_current: number;
   part_total: number;

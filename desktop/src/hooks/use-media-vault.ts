@@ -36,6 +36,15 @@ import { emitClientLog } from "@/hooks/use-unified-log";
 
 const ENGINE_NOT_CONNECTED = "Engine not connected";
 
+/** Fired on the window whenever the vault transitions locked → unlocked.
+ * Anything that gave up on a 423 (vault-locked) media read listens for this to
+ * retry — e.g. media-gen job thumbnails, whose items may live in the vault. */
+export const VAULT_UNLOCKED_EVENT = "matrx:media-vault-unlocked";
+
+function announceUnlocked(): void {
+  window.dispatchEvent(new CustomEvent(VAULT_UNLOCKED_EVENT));
+}
+
 export interface MediaVaultState {
   /** null until the first /status fetch resolves. */
   status: MediaVaultStatus | null;
@@ -186,6 +195,7 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
         // Create also unlocks — refresh status and load the (empty) list.
         await fetchStatus();
         await fetchItems();
+        announceUnlocked();
         return null;
       } catch (e) {
         const msg =
@@ -208,6 +218,7 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
         await unlockMediaVault(base, password);
         await fetchStatus();
         await fetchItems();
+        announceUnlocked();
         return null;
       } catch (e) {
         if (e instanceof VaultWrongPasswordError) return "Wrong password";

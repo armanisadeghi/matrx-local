@@ -37,6 +37,7 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
@@ -1126,15 +1127,42 @@ def _wifi_instructions() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _screen_recording_requested_marker() -> Path:
+    """Marker file: has this engine ever asked macOS for screen recording?
+
+    macOS gives us exactly one bit — CGPreflightScreenCaptureAccess() is false
+    for BOTH "the user has never been asked" and "the user said no". Those are
+    completely different situations for the user ("click this button" vs "go
+    turn it back on in System Settings"), so we remember whether we've asked.
+    """
+    from app.config import MATRX_HOME_DIR  # noqa: PLC0415 — avoid an import cycle
+
+    return Path(MATRX_HOME_DIR) / "screen_recording_requested"
+
+
+def mark_screen_recording_requested() -> None:
+    try:
+        marker = _screen_recording_requested_marker()
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except Exception as exc:  # noqa: BLE001 — a marker failure must not break the grant
+        logger.warning("[permissions] Could not write screen-recording marker: %s", exc)
+
+
 def _macos_screen_recording_status() -> PermissionStatus:
     """Check screen recording permission status — read-only, no prompt.
 
     Uses CGPreflightScreenCaptureAccess() from CoreGraphics, which is a
     passive status-only query. It does NOT trigger a permission dialog.
 
-    Returns GRANTED, DENIED, or UNKNOWN. Never NOT_DETERMINED — that state
-    cannot be distinguished from denied via CGPreflightScreenCaptureAccess,
-    and the caller handles the prompt via CGRequestScreenCaptureAccess.
+    Returns GRANTED, NOT_DETERMINED, DENIED, or UNKNOWN.
+
+    Preflight-false means "not granted", and NOTHING more. Reporting that as
+    DENIED — as this did — is a lie in the common case: the engine had simply
+    never asked, so macOS had never even listed it under Screen Recording, and
+    the user was told "denied" about a permission they were never offered. We
+    now report NOT_DETERMINED until the engine has actually issued the request
+    (marker above), and DENIED only after an ask that came back false.
 
     IMPORTANT: SCShareableContent.getShareableContentWithCompletionHandler_()
     was previously used here but it ACTIVELY TRIGGERS the macOS Sequoia
@@ -1145,13 +1173,18 @@ def _macos_screen_recording_status() -> PermissionStatus:
     until the app is restarted even when the user grants permission in the same
     session. This is expected macOS TCC cache behaviour.
     """
-    if CAPABILITIES["has_quartz"]:
-        try:
-            from Quartz import CGPreflightScreenCaptureAccess  # pyobjc-framework-Quartz
-            return PermissionStatus.GRANTED if CGPreflightScreenCaptureAccess() else PermissionStatus.DENIED
-        except Exception:
-            return PermissionStatus.UNKNOWN
-    return PermissionStatus.UNKNOWN
+    if not CAPABILITIES["has_quartz"]:
+        return PermissionStatus.UNKNOWN
+    try:
+        from Quartz import CGPreflightScreenCaptureAccess  # pyobjc-framework-Quartz
+
+        if CGPreflightScreenCaptureAccess():
+            return PermissionStatus.GRANTED
+    except Exception:
+        return PermissionStatus.UNKNOWN
+    if _screen_recording_requested_marker().exists():
+        return PermissionStatus.DENIED
+    return PermissionStatus.NOT_DETERMINED
 
 
 def _macos_request_screen_recording() -> bool:
@@ -1171,10 +1204,37 @@ def _macos_request_screen_recording() -> bool:
     if CAPABILITIES["has_quartz"]:
         try:
             from Quartz import CGRequestScreenCaptureAccess  # pyobjc-framework-Quartz
-            return bool(CGRequestScreenCaptureAccess())
+
+            granted = bool(CGRequestScreenCaptureAccess())
+            # We have now ASKED. From here on a preflight-false is a real denial
+            # (see _macos_screen_recording_status) — and, just as importantly,
+            # this call is what makes the engine appear in System Settings →
+            # Screen Recording at all, so the user finally has a switch to flip.
+            mark_screen_recording_requested()
+            return granted
         except Exception:
             pass
     return False
+
+
+async def request_screen_recording() -> PermissionResult:
+    """Ask macOS for screen recording, then report the resulting status.
+
+    This is the ONLY thing that makes the engine appear in System Settings →
+    Privacy & Security → Screen Recording. Without it the user is told the
+    permission is missing and sent to a settings pane where the app isn't even
+    listed — a dead end, which is exactly what shipped.
+
+    Screen capture runs in THIS process (`screencapture`, see
+    app/tools/tools/system.py), so this process is the one that must hold the
+    grant; asking on behalf of the Tauri window would register the wrong
+    principal. Only ever called from an explicit user action.
+    """
+    if not PLATFORM["is_mac"]:
+        return await check_screen_recording()
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _macos_request_screen_recording)
+    return await check_screen_recording()
 
 
 async def check_screen_recording() -> PermissionResult:
@@ -1199,9 +1259,16 @@ async def check_screen_recording() -> PermissionResult:
             detail = "Screen recording permission granted"
             user_detail = "Screen capture is active"
             user_instruction = ""
+        elif status == PermissionStatus.NOT_DETERMINED:
+            # Never asked — so macOS has never listed us, and there is nothing
+            # for the user to switch on yet. The fix is a click, not a trip to
+            # System Settings.
+            detail = "Screen recording has not been requested yet"
+            user_detail = "Screen capture hasn’t been set up yet"
+            user_instruction = "Click Grant to allow screen capture"
         else:
-            detail = "Screen recording permission not granted — rebuild and reinstall the app to apply the new entitlement, then grant access in System Settings"
-            user_detail = "Screen capture needs permission"
+            detail = "Screen recording permission denied — enable it in System Settings"
+            user_detail = "Screen capture is turned off"
             user_instruction = "Open System Settings > Privacy & Security > Screen Recording and enable AI Matrx"
 
         return PermissionResult(

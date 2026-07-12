@@ -52,8 +52,8 @@ Two writers, on purpose — keep them consistent:
 2. `settings_sync.heartbeat` — re-asserts the tunnel fields every 5 min so a
    recovered cloud row converges.
 
-Known defects to keep in mind before touching these paths
-(`KNOWN_DEFECTS.md`): heartbeat omits `tunnel_updated_at` (MXL-D-010) and both
+Found defects to keep in mind before touching these paths
+(`FOUND_DEFECTS.md`): heartbeat omits `tunnel_updated_at` (MXL-D-010) and both
 writers PATCH blindly — PostgREST 2xx on zero matched rows hides orphaned
 instances (MXL-D-003).
 

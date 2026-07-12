@@ -122,6 +122,20 @@ export const PROVIDER_PATTERNS: ProviderPattern[] = [
     label: "Hugging Face",
   },
 
+  // ── Civitai (image-gen models / LoRAs) ────────────────────────────────────
+  // In the engine's VALID_PROVIDERS but missing here, so the bulk .env import
+  // silently ignored a CIVITAI_API_KEY — while Civitai downloads failed 401 and
+  // told the user to go set that very key. (tests/parity/test_api_key_providers)
+  {
+    names: ["civitai", "civit_ai"],
+    envVarNames: [
+      "CIVITAI_API_KEY",
+      "CIVITAI_API_TOKEN",
+      "CIVITAI_TOKEN",
+    ],
+    label: "Civitai",
+  },
+
   // ── Groq ──────────────────────────────────────────────────────────────────
   {
     names: ["groq", "groq_ai"],

@@ -2,10 +2,10 @@
 Local LLM test script — runs llama-server directly and tests inference.
 
 Usage:
-    uv run python test_llm.py                   # auto-pick first available model
-    uv run python test_llm.py --model qwen3-4b  # pick model by short name
-    uv run python test_llm.py --hf              # skip llama-server, hit HuggingFace API instead
-    uv run python test_llm.py --chat            # interactive chat loop after single test
+    uv run python scripts/test_llm.py                   # auto-pick first available model
+    uv run python scripts/test_llm.py --model qwen3-4b  # pick model by short name
+    uv run python scripts/test_llm.py --hf              # skip llama-server, hit HuggingFace API instead
+    uv run python scripts/test_llm.py --chat            # interactive chat loop after single test
 
 What this tests:
   1. Can llama-server start at all (dylib loading)
@@ -27,21 +27,21 @@ from pathlib import Path
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-REPO_ROOT = Path(__file__).parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 BINARY = REPO_ROOT / "desktop/src-tauri/binaries/llama-server-aarch64-apple-darwin"
 DYLIB_DIR = REPO_ROOT / "desktop/src-tauri/binaries"
 MODELS_DIR = Path.home() / "Library/Application Support/com.aimatrx.desktop/models"
 
 MODEL_ALIASES = {
-    "qwen3-4b":   "Qwen3-4B-Q4_K_M.gguf",
-    "qwen3-8b":   "Qwen3-8B-Q4_K_M.gguf",
+    "qwen3-4b": "Qwen3-4B-Q4_K_M.gguf",
+    "qwen3-8b": "Qwen3-8B-Q4_K_M.gguf",
     "qwen2.5-14b": "qwen2.5-14b-instruct-q4_k_m-00001-of-00003.gguf",
-    "phi4":       "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf",
-    "mistral":    "Mistral-Small-3.1-24B-Instruct-2503-Q4_K_M.gguf",
+    "phi4": "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf",
+    "mistral": "Mistral-Small-3.1-24B-Instruct-2503-Q4_K_M.gguf",
 }
 
 SERVER_PORT = 11434
-SERVER_URL  = f"http://127.0.0.1:{SERVER_PORT}"
+SERVER_URL = f"http://127.0.0.1:{SERVER_PORT}"
 HEALTH_TIMEOUT_S = 120
 
 # HuggingFace Inference API baseline — free tier, no key needed for public models
@@ -49,6 +49,7 @@ HF_API_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instru
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def find_model(alias: str | None) -> Path:
     if alias:
@@ -88,8 +89,9 @@ def http_get(url: str, timeout: int = 5) -> dict | None:
 
 def http_post(url: str, payload: dict, timeout: int = 30) -> dict | None:
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, method="POST",
-                                  headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        url, data=data, method="POST", headers={"Content-Type": "application/json"}
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
@@ -104,8 +106,9 @@ def http_post_stream(url: str, payload: dict):
     """POST with stream=True, yield decoded SSE text chunks."""
     payload = {**payload, "stream": True}
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, method="POST",
-                                  headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        url, data=data, method="POST", headers={"Content-Type": "application/json"}
+    )
     with urllib.request.urlopen(req, timeout=120) as resp:
         for raw_line in resp:
             line = raw_line.decode("utf-8", errors="replace").strip()
@@ -123,25 +126,34 @@ def http_post_stream(url: str, payload: dict):
 
 # ── llama-server tests ────────────────────────────────────────────────────────
 
+
 def start_server(model_path: Path) -> subprocess.Popen:
     if not BINARY.exists():
         print(f"[error] llama-server binary not found at {BINARY}")
-        print("  Expected: desktop/src-tauri/binaries/llama-server-aarch64-apple-darwin")
+        print(
+            "  Expected: desktop/src-tauri/binaries/llama-server-aarch64-apple-darwin"
+        )
         sys.exit(1)
 
     env = os.environ.copy()
     env["DYLD_LIBRARY_PATH"] = str(DYLIB_DIR)
-    env["LD_LIBRARY_PATH"]   = str(DYLIB_DIR)
+    env["LD_LIBRARY_PATH"] = str(DYLIB_DIR)
 
     args = [
         str(BINARY),
-        "-m", str(model_path),
-        "-ngl", "99",          # All layers to Metal GPU
-        "-c", "4096",          # Context window
-        "-t", "4",             # CPU threads (used for non-GPU ops)
-        "--host", "127.0.0.1",
-        "--port", str(SERVER_PORT),
-        "--jinja",             # Required for Qwen tool calling
+        "-m",
+        str(model_path),
+        "-ngl",
+        "99",  # All layers to Metal GPU
+        "-c",
+        "4096",  # Context window
+        "-t",
+        "4",  # CPU threads (used for non-GPU ops)
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(SERVER_PORT),
+        "--jinja",  # Required for Qwen tool calling
     ]
 
     print(f"\n[server] Starting llama-server on port {SERVER_PORT}")
@@ -242,6 +254,7 @@ def interactive_chat():
 
 # ── HuggingFace API baseline ──────────────────────────────────────────────────
 
+
 def test_huggingface():
     """
     Hit the HuggingFace Inference API (free tier, no key for most public models).
@@ -276,7 +289,9 @@ def test_huggingface():
             result = json.loads(resp.read())
             content = result["choices"][0]["message"]["content"]
             print(f"[hf] Response: {content!r}")
-            print("[hf] SUCCESS — HuggingFace API works. llama.cpp / dylib is the issue if local fails.")
+            print(
+                "[hf] SUCCESS — HuggingFace API works. llama.cpp / dylib is the issue if local fails."
+            )
             return True
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
@@ -284,7 +299,9 @@ def test_huggingface():
         if e.code == 503:
             print("[hf] Model is loading on HF side — try again in 20s")
         elif e.code == 429:
-            print("[hf] Rate limited — set HF_TOKEN env var with a free HuggingFace token")
+            print(
+                "[hf] Rate limited — set HF_TOKEN env var with a free HuggingFace token"
+            )
         return False
     except Exception as exc:
         print(f"[hf] Error: {exc}")
@@ -293,20 +310,45 @@ def test_huggingface():
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(description="Local LLM test script")
-    parser.add_argument("--model", "-m", help="Model alias: qwen3-4b, qwen3-8b, qwen2.5-14b, phi4, mistral")
-    parser.add_argument("--port", "-p", type=int, default=11434, help="Port for llama-server (default 11434)")
-    parser.add_argument("--hf", action="store_true", help="Test HuggingFace API instead of local server")
-    parser.add_argument("--hf-also", action="store_true", help="Test HuggingFace API IN ADDITION to local server")
-    parser.add_argument("--chat", action="store_true", help="Interactive chat loop after single test")
-    parser.add_argument("--no-server", action="store_true", help="Skip starting server — assume it is already running")
-    parser.add_argument("--list-models", action="store_true", help="List downloaded models and exit")
+    parser.add_argument(
+        "--model",
+        "-m",
+        help="Model alias: qwen3-4b, qwen3-8b, qwen2.5-14b, phi4, mistral",
+    )
+    parser.add_argument(
+        "--port",
+        "-p",
+        type=int,
+        default=11434,
+        help="Port for llama-server (default 11434)",
+    )
+    parser.add_argument(
+        "--hf", action="store_true", help="Test HuggingFace API instead of local server"
+    )
+    parser.add_argument(
+        "--hf-also",
+        action="store_true",
+        help="Test HuggingFace API IN ADDITION to local server",
+    )
+    parser.add_argument(
+        "--chat", action="store_true", help="Interactive chat loop after single test"
+    )
+    parser.add_argument(
+        "--no-server",
+        action="store_true",
+        help="Skip starting server — assume it is already running",
+    )
+    parser.add_argument(
+        "--list-models", action="store_true", help="List downloaded models and exit"
+    )
     args = parser.parse_args()
 
     global SERVER_PORT, SERVER_URL
     SERVER_PORT = args.port
-    SERVER_URL  = f"http://127.0.0.1:{SERVER_PORT}"
+    SERVER_URL = f"http://127.0.0.1:{SERVER_PORT}"
 
     # ── List models ──
     if args.list_models:
@@ -338,8 +380,12 @@ def main():
         # Wait for server to be healthy
         if not args.no_server:
             if proc.poll() is not None:
-                print(f"\n[error] llama-server exited immediately (code {proc.returncode})")
-                print("  This usually means a dylib is missing. Check the [llama] output above.")
+                print(
+                    f"\n[error] llama-server exited immediately (code {proc.returncode})"
+                )
+                print(
+                    "  This usually means a dylib is missing. Check the [llama] output above."
+                )
                 sys.exit(1)
 
         ready = wait_for_health()

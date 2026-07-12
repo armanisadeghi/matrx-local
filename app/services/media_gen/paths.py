@@ -132,7 +132,14 @@ def read_hf_token() -> str | None:
          injects the app-stored token (SQLite ``huggingface`` API key) into
          these at startup AND on save, and an explicitly user-set env var
          beats everything else — this is the primary source of truth.
-      2. huggingface_hub's own token store via ``get_token()`` — this picks up
+      2. The key_manager's in-memory cache of the app's stored keys — the SAME
+         store the env injection above comes from, read directly. Without this,
+         HF depends entirely on ``os.environ`` mutation (key_manager's
+         deprecated ``_inject`` shim, slated for removal), so it would silently
+         lose the user's token the day that shim goes — and it already loses it
+         to a startup race, when a download resumes before the injection runs.
+         Civitai already reads its key this way; HF now matches.
+      3. huggingface_hub's own token store via ``get_token()`` — this picks up
          a token written to the standard cache locations
          (``~/.cache/huggingface/token`` / ``~/.huggingface/token``) by a prior
          ``huggingface-cli login`` or by any hub call that cached credentials.
@@ -149,6 +156,15 @@ def read_hf_token() -> str | None:
         val = os.environ.get(var)
         if val and val.strip():
             return val.strip()
+
+    try:
+        from app.services.ai.key_manager import get_cached_user_keys  # noqa: PLC0415
+
+        stored = get_cached_user_keys().get("huggingface")
+    except Exception:  # noqa: BLE001 — cache unavailable must never break callers
+        stored = None
+    if stored and stored.strip():
+        return stored.strip()
 
     # Lazy import — huggingface_hub is only present once the AI packages are
     # installed (in-app installer). Never let its absence break this call.

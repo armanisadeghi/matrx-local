@@ -41,7 +41,7 @@ bound by the same contract).
 ## Known sharp edges
 
 - **Folder delete is destructive/untombstoned** (contract gap #2, open defect
-  `KNOWN_DEFECTS.md` MXL-D-002) — `delete_folder` hard-deletes locally with no
+  `FOUND_DEFECTS.md` MXL-D-002) — `delete_folder` hard-deletes locally with no
   per-note tombstones; an offline folder delete resurrects on `full_sync`.
 - **`full_sync` does not pull remote deletions** (gap #4) — the incremental
   `pull_changes` path is the delete-propagation channel.

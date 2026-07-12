@@ -1,6 +1,6 @@
 # Matrx Local — Download System Audit & Fix Plan
 
-> **Status:** open. Authored 2026-05-04 after a full audit. Tracked from AGENT_TASKS.md.
+> **Status:** open. Authored 2026-05-04 after a full audit. Tracked via `FOUND_DEFECTS.md` MXL-D-012/013/014 (holding) until promoted into `.matrx/AGENT_TASKS.md`.
 > Implementation is phased — Phase 1 alone unblocks the most user-visible breakage.
 > All references use `path:line` format.
 
@@ -324,7 +324,7 @@ Add **same-source backoff** as a follow-up: track host of each active download; 
 
 ---
 
-## Concrete next-step tasks (paste these into AGENT_TASKS.md)
+## Concrete next-step tasks (propose for `.matrx/AGENT_TASKS.md` after Arman approval)
 
 ```
 ## 🔴 Active Bugs & Regressions

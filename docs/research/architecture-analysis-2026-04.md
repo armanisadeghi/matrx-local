@@ -1,5 +1,7 @@
 # Architecture Analysis & Overhaul Plan
 
+> **Historical audit** (2026-04-10). Layer-boundary findings — see also [FOUND_DEFECTS.md](../../FOUND_DEFECTS.md) for tracked items. Index: [ARCHITECTURE.md](../official/ARCHITECTURE.md).
+
 > Generated 2026-04-10. Based on comprehensive analysis of the full codebase.
 
 ## Executive Summary

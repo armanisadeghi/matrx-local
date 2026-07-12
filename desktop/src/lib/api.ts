@@ -4995,6 +4995,26 @@ export async function listMediaLibraryItems(
  * attribute cannot carry the Authorization header).  The caller owns the
  * returned URL and must `URL.revokeObjectURL` it when done.
  */
+export class MediaFileError extends Error {
+  readonly status: number;
+  constructor(status: number, detail: string) {
+    super(detail);
+    this.name = "MediaFileError";
+    this.status = status;
+  }
+  /** The item is in the Private Vault and the vault is locked — NOT a failure:
+   * it becomes readable the moment the user unlocks. Callers must treat this as
+   * a retryable "locked" state, never as a missing item. */
+  get isVaultLocked(): boolean {
+    return this.status === 423;
+  }
+  /** The item is genuinely gone (unknown id, or the file was deleted on disk).
+   * Retrying can never succeed. */
+  get isGone(): boolean {
+    return this.status === 404 || this.status === 410;
+  }
+}
+
 export async function fetchMediaLibraryFile(
   baseUrl: string,
   itemId: string,
@@ -5006,12 +5026,15 @@ export async function fetchMediaLibraryFile(
   );
   if (!resp.ok) {
     const detail = await resp.text().catch(() => `HTTP ${resp.status}`);
+    // A locked vault is an expected, user-resolvable state — logging it at
+    // "error" is what turned one locked vault into 41 red lines in the issue
+    // report.
     emitClientLog(
-      "error",
+      resp.status === 423 ? "info" : "error",
       `[media-library] GET /file/${itemId} → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
       "engine",
     );
-    throw new Error(detail || `HTTP ${resp.status}`);
+    throw new MediaFileError(resp.status, detail || `HTTP ${resp.status}`);
   }
   const blob = await resp.blob();
   return URL.createObjectURL(blob);

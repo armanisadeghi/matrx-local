@@ -37,6 +37,7 @@ import {
   cancelImageGeneration as apiCancelImageGeneration,
   cancelVideoGenJob as apiCancelVideoGenJob,
   fetchMediaLibraryFile as apiFetchMediaLibraryFile,
+  MediaFileError,
   getVideoGenStatus,
   listVideoGenModels,
   listVideoGenJobs,
@@ -73,6 +74,7 @@ import type {
   CustomImageModelInspectResult,
 } from "@/lib/api";
 import { emitClientLog } from "@/hooks/use-unified-log";
+import { VAULT_UNLOCKED_EVENT } from "@/hooks/use-media-vault";
 
 const ENGINE_NOT_CONNECTED = "Engine not connected";
 // User-facing message for ACTION paths (download/load/generate/…) that cannot
@@ -513,6 +515,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const [imageJobThumbs, setImageJobThumbs] = useState<Record<string, string>>(
     {},
   );
+  /** Bumped when a vault unlock makes previously-locked thumbnails readable —
+   * the only thing that re-arms the thumbnail fetch effect. */
+  const [thumbRetryNonce, setThumbRetryNonce] = useState(0);
   const [loraList, setLoraList] = useState<ImageGenLoraList | null>(null);
   const [loraError, setLoraError] = useState<string | null>(null);
   const [loraDownloads, setLoraDownloads] = useState<Record<string, string>>(
@@ -544,6 +549,13 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const activeJobRef = useRef<VideoGenJob | null>(null);
   const videoResultsRef = useRef<Record<string, string>>({});
   const imageJobThumbsRef = useRef<Record<string, string>>({});
+  // Job ids whose thumbnail could not be fetched, and why. "pending" = in
+  // flight, "locked" = in the locked vault (retry after unlock), "gone" =
+  // permanently unfetchable (never retry). This is the negative cache that
+  // stops a dead id from being re-requested on every single render/mount.
+  const imageJobThumbFailuresRef = useRef<
+    Record<string, "pending" | "locked" | "gone">
+  >({});
   const refreshVideoRef = useRef<(() => Promise<void>) | null>(null);
   // Consecutive job-poll failures — after 3 (or an immediate 404) we synthesize
   // a terminal "failed" state so the poll interval tears down and the UI
@@ -1351,8 +1363,14 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     for (const pair of completedJobItems.split("\n")) {
       const [jobId, itemId] = pair.split("\t");
       if (!jobId || !itemId || imageJobThumbsRef.current[jobId]) continue;
+      // Never re-attempt an id we've already resolved as unfetchable. Without
+      // this, every mount re-fired every dead id — one vaulted history was
+      // enough to put 41 red 404s in the issue report, forever.
+      if (imageJobThumbFailuresRef.current[jobId]) continue;
+      imageJobThumbFailuresRef.current[jobId] = "pending";
       void apiFetchMediaLibraryFile(base, itemId)
         .then((url) => {
+          delete imageJobThumbFailuresRef.current[jobId];
           if (cancelled) {
             URL.revokeObjectURL(url);
             return;
@@ -1365,18 +1383,45 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
             return { ...prev, [jobId]: url };
           });
         })
-        .catch((e) => {
-          emitClientLog(
-            "warn",
-            `[media-gen] thumbnail fetch failed for job ${jobId}: ${String(e)}`,
-            "engine",
-          );
+        .catch((e: unknown) => {
+          // 423 = the item is in the LOCKED vault. Not a failure and not a
+          // missing item — it resolves on unlock, so remember it as "locked"
+          // and let the unlock listener below clear it for a retry. Anything
+          // else is permanent: record it and never ask again.
+          const locked = e instanceof MediaFileError && e.isVaultLocked;
+          imageJobThumbFailuresRef.current[jobId] = locked ? "locked" : "gone";
+          if (!locked) {
+            emitClientLog(
+              "warn",
+              `[media-gen] thumbnail unavailable for job ${jobId}: ${String(e)} — not retrying`,
+              "engine",
+            );
+          }
         });
     }
     return () => {
       cancelled = true;
     };
-  }, [completedJobItems]);
+  }, [completedJobItems, thumbRetryNonce]);
+
+  // Vault unlocked → the "locked" thumbnails just became readable. Drop only
+  // those markers (never the "gone" ones) and let the effect above refetch.
+  useEffect(() => {
+    const onUnlocked = () => {
+      let changed = false;
+      for (const [jobId, reason] of Object.entries(
+        imageJobThumbFailuresRef.current,
+      )) {
+        if (reason === "locked") {
+          delete imageJobThumbFailuresRef.current[jobId];
+          changed = true;
+        }
+      }
+      if (changed) setThumbRetryNonce((n) => n + 1);
+    };
+    window.addEventListener(VAULT_UNLOCKED_EVENT, onUnlocked);
+    return () => window.removeEventListener(VAULT_UNLOCKED_EVENT, onUnlocked);
+  }, []);
 
   const setSelectedImageModelId = useCallback((modelId: string | null) => {
     setSelectedImageModelIdState(modelId);

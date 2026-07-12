@@ -240,6 +240,12 @@ IMAGE_GEN_MODELS: list[ImageGenModel] = [
         # FluxImg2ImgPipeline (verified 0.37.1 + 0.39.0): image + strength.
         supports_img2img=True,
         lora_family="flux",
+        # Apache 2.0 BUT the HF repo is gated ("gated": "auto", verified against
+        # the Hub July 2026): downloads 401 unless the account has a token AND
+        # has accepted the repo terms. The only gated repo in this catalog —
+        # audited against huggingface.co/api/models/* — and missing this flag is
+        # what let a 33 GB download start and die on an unauthenticated 401.
+        requires_hf_token=True,
         tags=["fast", "legacy", "apache-2.0"],
     ),
     # ── SDXL-Turbo — instant previews on modest hardware ──────────────────────

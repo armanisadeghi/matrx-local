@@ -1,12 +1,20 @@
 # Agent Tasks
 
-Active worklist managed by agents. **See `AGENT_INSTRUCTIONS.md` for rules** — especially around task format, condensation, and when to ask the user.
+**Arman-approved worklist only.** If you are doing related work and see an open
+task here, take it. Discoveries that are **not** yet approved go in
+`FOUND_DEFECTS.md` (holding area) — do not invent tasks here without Arman.
+
+Rules: `AGENT_INSTRUCTIONS.md`. Inbox: `TASKS_FROM_USER.md`. Ask-Arman blockers:
+`.matrx/ARMAN_TASKS.md`.
 
 > Quick scan order for arriving agents:
 > 1. **Needs Clarification** below (questions waiting on the user)
 > 2. **Blocked** (waiting on external)
 > 3. **Active** (`ready` and `in-progress`)
 > 4. **Completed** (recent context, condensed)
+>
+> Root `AGENT_TASKS.md` was deleted 2026-07-12. Unique leftover backlog →
+> `FOUND_DEFECTS.md` § “Untriaged legacy backlog”.
 
 ---
 
@@ -43,7 +51,7 @@ right local runtime (encoder NER) — not llama-server / GGUF.
 plan doc "Decisions needed from Arman" section. Key constraint already decided
 by research: Python sidecar subsystem, NOT LLM catalog / llama-server.
 
-Also filed for Arman in `.arman/ARMAN_TASKS.md`.
+Also filed for Arman in `.matrx/ARMAN_TASKS.md`.
 
 ---
 
@@ -349,19 +357,19 @@ These were found, verified, and deliberately deferred:
 - [x] **Rust: LlmServerState mutex held across 120s health wait** — FIXED
   2026-07-10 (commit de04a3dbf, Phase 8): new `server::start_server` locks
   only around stop + install; static one-start-at-a-time guard; mid-start
-  stop kills by PID and trips the phase-3 ownership check. KNOWN_DEFECTS
+  stop kills by PID and trips the phase-3 ownership check. FOUND_DEFECTS
   MXL-D-005.
 - [ ] **Rust: audio capture is f32-only** — `build_input_stream` fails on
   I16/U16-default devices (common on Linux/ALSA); match `sample_format()`
   and convert. (`transcription/audio_capture.rs:69-102`) STAYS DEFERRED
-  (needs hardware). KNOWN_DEFECTS MXL-D-007.
+  (needs hardware). FOUND_DEFECTS MXL-D-007.
 - [x] **Rust: vulkaninfo VRAM parse order inverted** — FIXED 2026-07-10
   (commit 269b8e90f, Phase 8): verified `size =` really does precede
   DEVICE_LOCAL in real heap blocks; parser now order-independent per heap,
   validated with a standalone harness. Runtime confirmation on a real
-  AMD/Intel box still wanted (cfg'd out on macOS). KNOWN_DEFECTS MXL-D-006.
+  AMD/Intel box still wanted (cfg'd out on macOS). FOUND_DEFECTS MXL-D-006.
 - [ ] **Rust: floating overlay mixes physical/logical px** on scaled
-  secondary monitors (needs-hw-verification, KNOWN_DEFECTS MXL-D-008).
+  secondary monitors (needs-hw-verification, FOUND_DEFECTS MXL-D-008).
   The `sidecar_status` hardcoded-port half was FIXED 2026-07-10 (commit
   5ac3748e4) — now reads the discovery file.
 - [x] **Unmounted tool panels carry latent bugs** — RESOLVED 2026-07-10
@@ -369,19 +377,19 @@ These were found, verified, and deliberately deferred:
   (Tools.tsx routes only Monitoring/Generic; import graph verified zero
   importers; git history preserves them for any future re-wire).
   KeyValueField (live via ToolForm) got a real fix: stable row ids replace
-  index keys, editing happens on an id-keyed row array. KNOWN_DEFECTS
+  index keys, editing happens on an id-keyed row array. FOUND_DEFECTS
   MXL-D-015.
 - [x] **Engine: dead stub files** — DELETED 2026-07-10 (commit 2847904bd,
   Phase 8): app/services/{transcription,audio,files}/ and tts/player.py
   removed after repo-wide reference check incl. PyInstaller specs.
-  KNOWN_DEFECTS MXL-D-021.
+  FOUND_DEFECTS MXL-D-021.
 - [ ] **use-chat-tts**: chunks are serialized but `speakText` resolves at
   synthesis end, not playback drain — a small gap between sentences can
   remain; gapless append-mode scheduling is the follow-up. (MXL-D-019)
 - [x] **extension_auth reject-log window** — FIXED 2026-07-10 (commit
   637828ff7, Phase 8): quiet-gap re-WARN wired to the previously dead
   constant; state dict capped at 256 keys, longest-idle eviction.
-  KNOWN_DEFECTS MXL-D-020.
+  FOUND_DEFECTS MXL-D-020.
 - [~] **capabilities/setup pip installs break in frozen builds**
   (`sys.executable -m pip` is the sidecar binary) — partially fixed 2026-07-11:
   Settings → Capabilities (Whisper) now uses frozen-safe `--target` + SSE
@@ -390,12 +398,12 @@ These were found, verified, and deliberately deferred:
   (MXL-D-023)
 
 - [x] **Download-chunk-discard P0 re-verified & closed (2026-07-10, Phase 8)**
-  — Root AGENT_TASKS.md P0 claimed BOTH managers discard bytes. Current
+  — Legacy root P0 claimed BOTH managers discard bytes. Current
   code: Python was already fixed (manager.py:814 tmp open, :827 write
   before count, :873 tmp.replace(dest)); Rust internal path
   (dm_enqueue → download_part) was STILL discarding — fixed in commit
   a158612a7 (per-chunk write → .part tmp → fsync → atomic rename;
-  metadata.dest_dir now required, loud failure otherwise). KNOWN_DEFECTS
+  metadata.dest_dir now required, loud failure otherwise). FOUND_DEFECTS
   MXL-D-001; remaining audit phases tracked as MXL-D-012/013/014.
 
 
@@ -482,7 +490,7 @@ _(none)_
 ## Completed
 
 - [FEAT] matrx-local adopts matrx-ai 0.3.0 client-host seams (Phase 3) — 2026-07-10.
-  `matrx_ai.initialize(client_mode=True, ClientModeConfig)` → `matrx_ai.configure(api_key_resolver=…, conversation_store=…, model_catalog=…, get_jwt=…, server_url=…, source_app="matrx_local")` (engine.py; seam errors crash startup, no legacy fallback). `LocalConversationHandler` → `SQLiteConversationStore` (full ConversationStore protocol incl. new `get_conversation_data`; store-owned idempotency; loud logging on every failure path; `get_conversation_config` now raises on missing conversation per protocol). NEW `app/services/ai/model_catalog.py` (SqliteModelCatalog over the ai_models cache + wire_format enrichment from legacy endpoint tokens). NEW SqliteKeyResolver in key_manager (env-var-name → SQLite key; elevenlabs + fastino(PIONEER dual) added; os.environ shim KEPT but deprecated, removal note 2026-09-01). local_llm_registry: `AiModelManager._api_cache` pokes → `matrx_ai.catalog.register_runtime_model/unregister_runtime_model`; ImportError guard deleted. `ToolRegistryV2`→`ToolRegistry`, adapter `source_app`→`source_kind`, ToolDefinition `version`→`semver`. sync_engine.sync_models handles the reshaped `GET /api/ai-models` (endpoints/provider under `metadata.legacy`, api_class fallback, api_class/pricing/controls cached for the catalog). Root AGENT_TASKS.md circular-import task: RESOLVED-with-workaround (see Active upstream task). Tests: full suite 310 passed / 1 skipped incl. new `tests/smoke/test_ai_client_host.py` (mock-provider conversation round-trips through the REAL store+catalog on tmp SQLite; runtime-model registration). Engine sanity-boot on 22199: all seams wired, 108 tools, 58 catalog models all with explicit wire_format, /setup/debug problems=[]. /chat/ai is a 503 stub pending /ai-surface (see Active).
+  `matrx_ai.initialize(client_mode=True, ClientModeConfig)` → `matrx_ai.configure(api_key_resolver=…, conversation_store=…, model_catalog=…, get_jwt=…, server_url=…, source_app="matrx_local")` (engine.py; seam errors crash startup, no legacy fallback). `LocalConversationHandler` → `SQLiteConversationStore` (full ConversationStore protocol incl. new `get_conversation_data`; store-owned idempotency; loud logging on every failure path; `get_conversation_config` now raises on missing conversation per protocol). NEW `app/services/ai/model_catalog.py` (SqliteModelCatalog over the ai_models cache + wire_format enrichment from legacy endpoint tokens). NEW SqliteKeyResolver in key_manager (env-var-name → SQLite key; elevenlabs + fastino(PIONEER dual) added; os.environ shim KEPT but deprecated, removal note 2026-09-01). local_llm_registry: `AiModelManager._api_cache` pokes → `matrx_ai.catalog.register_runtime_model/unregister_runtime_model`; ImportError guard deleted. `ToolRegistryV2`→`ToolRegistry`, adapter `source_app`→`source_kind`, ToolDefinition `version`→`semver`. sync_engine.sync_models handles the reshaped `GET /api/ai-models` (endpoints/provider under `metadata.legacy`, api_class fallback, api_class/pricing/controls cached for the catalog). Legacy root circular-import task (tracker deleted 2026-07-12): RESOLVED-with-workaround (see Active upstream task). Tests: full suite 310 passed / 1 skipped incl. new `tests/smoke/test_ai_client_host.py` (mock-provider conversation round-trips through the REAL store+catalog on tmp SQLite; runtime-model registration). Engine sanity-boot on 22199: all seams wired, 108 tools, 58 catalog models all with explicit wire_format, /setup/debug problems=[]. /chat/ai is a 503 stub pending /ai-surface (see Active).
 
 - [FEAT] Tool registry unification, matrx-local side (Phase 4) — 2026-07-10.
   **One code-side truth:** new `app/tools/catalog.py` (108 entries) auto-built from dispatcher `TOOL_HANDLERS` + `tool_schemas` introspection; each entry carries canonical cloud name (`local_*` — the `tool.definition` name; 62 legacy names pinned verbatim, 49 of them live in Supabase bound to executor `matrx-local`; 46 generated `local_<snake_case>`, zero collisions verified against `tool.definition`), dispatcher name, input_schema (arg_model > introspection), category, tags, platform gating, timeout. `LOCAL_TOOL_MANIFEST` DELETED (no shims); consumers repointed: `local_tool_bridge` (registers all 108 under cloud names), engine Phase-A½ backfill, `GET /chat/local-tools`, local-DB `sync_tools` (62→108 rows).
@@ -507,7 +515,7 @@ _(none)_
   **Scraper retry-queue (S5):** `app/services/scraper/retry_queue.py` now uses exponential backoff (30s→cap 10min) + `registry.degraded("scraper_retry_queue", …)` on sustained remote failure, cleared on recovery; per-cycle remote errors demoted to DEBUG (killed the ~every-30s log flood). NOTE: used a dedicated `scraper_retry_queue` key rather than `"scraper"` so a remote-endpoint outage doesn't falsely mark local scraping degraded.
   **Log levels (S6/S7):** `notify.py` broadcast + plyer failures and `tts` download-progress-emit failure raised from DEBUG → WARNING.
   Verified: `import app.main`, `pytest tests/smoke -x -q` (118 passed/1 skipped), TTS 409 TestClient probes, read-only preflight decision-logic check (live 22140 engine + ancestors protected; live playwright driver/browsers excluded; aidream `run.py` excluded).
-- [FEAT] Media-generation overhaul (backend) — 2026-07-09. Image gen: catalog refreshed (FLUX.2-klein-4B default, Z-Image-Turbo, Qwen-Image; FLUX.1-dev + HunyuanDiT removed); weights now download through the universal DownloadManager (per-file `hf_hub_download` + dir-size polling → real progress on `/downloads/stream`) into `~/.matrx/image-models/<id>/` with a `.download-complete` marker; new `POST /image-gen/download`; `/load` is local-only (`local_files_only=True`, 409 `needs_download` when absent); `/status` gained `packages_version`/`packages_outdated`/`device`; installer pins bumped (torch>=2.6, diffusers>=0.39, transformers>=4.51, accelerate>=1.0) with an in-place upgrade path (`needs_upgrade()` — `POST /install` re-runs pip when diffusers < 0.39). Video gen (new): `app/services/video_gen/` + `/video-gen/*` (status/models/download/load/unload/generate→202 job_id, jobs list/detail, mp4 result) — Wan 2.2 TI2V-5B default, Wan 2.1 1.3B, LTX-Video; one job at a time; diffusers step-callback progress; mp4 via imageio-ffmpeg; history in `~/.matrx/generated/videos/jobs.json`; hard hardware gate (Apple Silicon ≥16GB unified or CUDA ≥8GB, never CPU) in shared `app/services/media_gen/hardware.py`. `DownloadCategory` gained `"video_gen"`. Legacy AGENT_TASKS items (download progress / VRAM gating / `~/.matrx/image-models` / video engine) closed.
+- [FEAT] Media-generation overhaul (backend) — 2026-07-09. Image gen: catalog refreshed (FLUX.2-klein-4B default, Z-Image-Turbo, Qwen-Image; FLUX.1-dev + HunyuanDiT removed); weights now download through the universal DownloadManager (per-file `hf_hub_download` + dir-size polling → real progress on `/downloads/stream`) into `~/.matrx/image-models/<id>/` with a `.download-complete` marker; new `POST /image-gen/download`; `/load` is local-only (`local_files_only=True`, 409 `needs_download` when absent); `/status` gained `packages_version`/`packages_outdated`/`device`; installer pins bumped (torch>=2.6, diffusers>=0.39, transformers>=4.51, accelerate>=1.0) with an in-place upgrade path (`needs_upgrade()` — `POST /install` re-runs pip when diffusers < 0.39). Video gen (new): `app/services/video_gen/` + `/video-gen/*` (status/models/download/load/unload/generate→202 job_id, jobs list/detail, mp4 result) — Wan 2.2 TI2V-5B default, Wan 2.1 1.3B, LTX-Video; one job at a time; diffusers step-callback progress; mp4 via imageio-ffmpeg; history in `~/.matrx/generated/videos/jobs.json`; hard hardware gate (Apple Silicon ≥16GB unified or CUDA ≥8GB, never CPU) in shared `app/services/media_gen/hardware.py`. `DownloadCategory` gained `"video_gen"`. Legacy download-progress / VRAM-gating / image-models-path / video-engine items closed.
 - [BUG] /extension/* auth log noise + misleading "JWT validation DISABLED" warning. The deployed binary fired (a) "JWT validation DISABLED — neither SUPABASE_JWT_SECRET nor SUPABASE_URL is configured" *while* SUPABASE_URL was actually configured (incoming tokens were HS256 but engine had no secret, so the bypass-to-degraded path was triggered with the wrong message), and (b) per-request "JWKS validation failed: kid …" + "missing Bearer token" WARNINGs every 2s during /extension/rpc polling, completely drowning the engine log. Split `_log_degraded_mode_once` into reason-specific variants (`no_paths` vs `hs256_no_secret`), added `_debug_log_jwks_failure` that suppresses repeats by `(kid, error_type)`, and added `_log_rejection` that logs the first miss as WARNING then demotes to DEBUG with a periodic 60s rate-summary at INFO. `app/api/extension_auth.py`. 2026-05-08
 - [BUG] /devices/permissions endpoint took 21s on every page hit (cold ``check_all_permissions`` runs 15 OS probes including macOS ``system_profiler SP{Audio,Camera,Bluetooth,AirPort}DataType``, which serialise on the private cfprefsd IPC). Frontend abort timeout was 15s so the call never completed → `console.error("Failed to load permissions:", err)` → `Failed to load permissions: {}` in the captured log (Error props are non-enumerable, JSON.stringify drops them). Added a 30s TTL in-process cache with single-flight refresh in `app/api/permissions_routes.py`, exposed `force_refresh=true` query param, invalidated the cache from the Windows grant route, bumped the frontend timeout to 35s, surfaced `forceRefresh` on `engine.getDevicePermissions()`, and routed permissions/ports error logs through `logWarn` so they capture `.message` and `.stack` instead of `{}`. 2026-05-08
 - [BUG] Frontend race on page mount: `engineStatus` flips to `"connected"` the moment REST is reachable, but `connectWebSocket()` runs slightly later in `use-engine.ts` (it waits for the Supabase session token). Pages that called `engine.invokeToolWs(...)` inside an `engineStatus === "connected"` `useEffect` would throw `WebSocket not connected` on first render. Added `engine.isWsConnected()` + `engine.waitForWs(timeoutMs)` and made `invokeToolWs` wait up to 3s for the upgrade before failing; `Ports.tsx` skips the tick if WS still isn't ready. `desktop/src/lib/api.ts`, `desktop/src/pages/Ports.tsx`. 2026-05-08

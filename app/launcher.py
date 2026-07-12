@@ -15,7 +15,7 @@ Surfaced over HTTP by app/api/admin_routes.py:
     POST /admin/diagnose   → write a diagnostic snapshot and return its path
 
 ────────────────────────────────────────────────────────────────────────────
-Ownership principle (NON-NEGOTIABLE — see ARCHITECTURE.md):
+Ownership principle (NON-NEGOTIABLE — see docs/official/lifecycle-ownership.md):
 
     Each level only touches its own children, AND when the parent triggers a
     start or stop, that level must cascade the same to its children before
@@ -57,7 +57,9 @@ logger = logging.getLogger(__name__)
 # Paths
 # ──────────────────────────────────────────────────────────────────────────────
 
-_HOME = Path(os.environ.get("USERPROFILE") or os.environ.get("HOME") or ".").expanduser()
+_HOME = Path(
+    os.environ.get("USERPROFILE") or os.environ.get("HOME") or "."
+).expanduser()
 DIAGNOSTICS_DIR = _HOME / ".matrx" / "diagnostics"
 
 # How many diagnostic snapshots to keep on disk before pruning oldest.
@@ -72,13 +74,13 @@ _MAX_DIAGNOSTICS = 50
 class ServiceState(str, Enum):
     """Lifecycle state of one managed service."""
 
-    PENDING = "pending"      # registered but not yet started
-    STARTING = "starting"    # start() in progress
-    READY = "ready"          # start() succeeded, healthy
-    DEGRADED = "degraded"    # running but reduced functionality (e.g. tunnel started but no URL captured)
-    STOPPING = "stopping"    # stop() in progress
-    STOPPED = "stopped"      # stop() succeeded, no longer running
-    FAILED = "failed"        # start() or stop() failed
+    PENDING = "pending"  # registered but not yet started
+    STARTING = "starting"  # start() in progress
+    READY = "ready"  # start() succeeded, healthy
+    DEGRADED = "degraded"  # running but reduced functionality (e.g. tunnel started but no URL captured)
+    STOPPING = "stopping"  # stop() in progress
+    STOPPED = "stopped"  # stop() succeeded, no longer running
+    FAILED = "failed"  # start() or stop() failed
 
 
 @dataclass
@@ -102,7 +104,12 @@ class ServiceRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        running_states = {ServiceState.STARTING, ServiceState.READY, ServiceState.DEGRADED, ServiceState.STOPPING}
+        running_states = {
+            ServiceState.STARTING,
+            ServiceState.READY,
+            ServiceState.DEGRADED,
+            ServiceState.STOPPING,
+        }
         uptime_s: Optional[float] = None
         if self.started_at and self.state in running_states:
             uptime_s = time.time() - self.started_at
@@ -224,7 +231,9 @@ class ServiceRegistry:
         """
         err_str = str(error)
         if isinstance(error, BaseException):
-            tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            tb = "".join(
+                traceback.format_exception(type(error), error, error.__traceback__)
+            )
         else:
             tb = None
         with self._lock:
@@ -428,7 +437,9 @@ def _capture_engine_process() -> dict[str, Any]:
                 "num_threads": p.num_threads(),
                 "num_open_files": num_open_files,
                 "create_time": p.create_time(),
-                "create_time_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(p.create_time())),
+                "create_time_iso": time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(p.create_time())
+                ),
             }
     except Exception as exc:
         return {"error": str(exc)}
@@ -439,20 +450,24 @@ def _capture_related_processes() -> list[dict[str, Any]]:
     patterns = ("matrx", "llama-server", "cloudflared", "aimatrx", "playwright")
     out: list[dict[str, Any]] = []
     try:
-        for proc in psutil.process_iter(["pid", "name", "cmdline", "create_time", "username"]):
+        for proc in psutil.process_iter(
+            ["pid", "name", "cmdline", "create_time", "username"]
+        ):
             try:
                 info = proc.info
                 cmd = " ".join(info.get("cmdline") or [])
                 name = (info.get("name") or "").lower()
                 hay = (cmd + " " + name).lower()
                 if any(pat in hay for pat in patterns):
-                    out.append({
-                        "pid": info["pid"],
-                        "name": info.get("name"),
-                        "user": info.get("username"),
-                        "cmdline": cmd[:300],
-                        "create_time": info.get("create_time"),
-                    })
+                    out.append(
+                        {
+                            "pid": info["pid"],
+                            "name": info.get("name"),
+                            "user": info.get("username"),
+                            "cmdline": cmd[:300],
+                            "create_time": info.get("create_time"),
+                        }
+                    )
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
     except Exception as exc:
@@ -465,11 +480,13 @@ def _capture_listening_ports() -> list[dict[str, Any]]:
     try:
         for c in psutil.net_connections(kind="inet"):
             if c.status == psutil.CONN_LISTEN and c.laddr:
-                out.append({
-                    "port": c.laddr.port,
-                    "addr": c.laddr.ip,
-                    "pid": c.pid,
-                })
+                out.append(
+                    {
+                        "port": c.laddr.port,
+                        "addr": c.laddr.ip,
+                        "pid": c.pid,
+                    }
+                )
     except (psutil.AccessDenied, Exception) as exc:
         return [{"error": str(exc)}]
     return out
@@ -478,7 +495,17 @@ def _capture_listening_ports() -> list[dict[str, Any]]:
 def _capture_env_subset() -> dict[str, str]:
     """Capture matrx/tauri/playwright env vars; redact obvious secrets."""
     prefixes = ("MATRX_", "TAURI_", "PLAYWRIGHT_", "SUPABASE_", "CLOUDFLARE_")
-    keys = {"PATH", "HOME", "USERPROFILE", "TEMP", "TMPDIR", "PYTHONUTF8", "PYTHONIOENCODING", "LANG", "LC_ALL"}
+    keys = {
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+        "TEMP",
+        "TMPDIR",
+        "PYTHONUTF8",
+        "PYTHONIOENCODING",
+        "LANG",
+        "LC_ALL",
+    }
     secret_markers = ("SECRET", "TOKEN", "KEY", "PASSWORD", "PASSWD")
     out: dict[str, str] = {}
     for k, v in os.environ.items():
@@ -503,13 +530,15 @@ def _capture_threads() -> list[dict[str, Any]]:
                 stack = stack[-20:]
             except Exception as exc:
                 stack = [f"<stack capture failed: {exc}>"]
-            out.append({
-                "tid": tid,
-                "name": t.name if t else "?",
-                "daemon": t.daemon if t else None,
-                "alive": t.is_alive() if t else None,
-                "stack": stack,
-            })
+            out.append(
+                {
+                    "tid": tid,
+                    "name": t.name if t else "?",
+                    "daemon": t.daemon if t else None,
+                    "alive": t.is_alive() if t else None,
+                    "stack": stack,
+                }
+            )
     except Exception as exc:
         return [{"error": str(exc)}]
     return out

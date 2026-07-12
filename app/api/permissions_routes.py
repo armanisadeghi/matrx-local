@@ -40,6 +40,8 @@ from app.services.permissions.checker import (
     check_speech_recognition,
     check_wifi,
     grant_windows_permissions,
+    request_screen_recording,
+    PermissionStatus,
 )
 from app.tools.session import ToolSession
 from app.tools.tools.audio import tool_list_audio_devices, tool_record_audio, tool_play_audio
@@ -284,6 +286,35 @@ async def grant_permissions():
         "total": 0,
         "failed": [],
         "message": "Permissions on this platform require user action in system settings and cannot be force-granted from the engine.",
+    }
+
+
+@router.post("/permissions/request/screen-recording")
+async def request_screen_recording_permission():
+    """Ask macOS for Screen Recording and return the resulting status.
+
+    Screen capture happens in the ENGINE process (`screencapture`), so the
+    engine is the process that needs the grant — and until it calls
+    CGRequestScreenCaptureAccess even once, macOS never lists it under Privacy
+    & Security → Screen Recording, leaving the user with a warning and no
+    switch to flip. This endpoint is what the UI's "Grant" button calls.
+
+    macOS may require an app restart before the new grant reads back as
+    granted; that's TCC cache behaviour, not a failure — hence `restart_hint`.
+    """
+    result = await request_screen_recording()
+    # The OS state may have just changed — a stale cached "not granted" here is
+    # exactly the kind of lie this whole fix exists to remove.
+    _invalidate_permissions_cache()
+    granted = result.status == PermissionStatus.GRANTED
+    return {
+        "permission": "screen_recording",
+        "status": result.status.value,
+        "granted": granted,
+        "user_details": result.user_details,
+        "user_instructions": result.user_instructions,
+        "deep_link": result.deep_link,
+        "restart_hint": not granted and PLATFORM["is_mac"],
     }
 
 

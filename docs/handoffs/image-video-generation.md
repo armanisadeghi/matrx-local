@@ -87,7 +87,7 @@ when touching media-gen UI; run before every release.
 
 ### 6. Platform issues found tonight (not media-gen, but real)
 - **Supabase SMTP is broken instance-wide** — all signup/reset emails fail
-  (KNOWN_DEFECTS.md MXL-D-028). Arman must fix SMTP in the Supabase
+  (FOUND_DEFECTS.md MXL-D-028). Arman must fix SMTP in the Supabase
   dashboard; until then no self-serve signups work in production.
 - aidream-side: `GET /api/ai-tools/app/matrx_local` 404, scraper queue 500
   (CURRENT_ERRORS.md T001/T008 — aidream repo sessions).
@@ -98,7 +98,7 @@ Model-LOAD phase isn't cancellable (cancel lands right after load);
 catalog entries are dev-trained (schnell compat unproven); vault
 auto-lock not configurable; vault arbitrary-file ingest (PDFs etc.) is
 designed-for but not exposed; packaged-build smoke gate in release.sh
-still unbuilt (LESSONS.md has the manual procedure).
+still unbuilt (docs/official/build-lessons.md has the manual procedure).
 
 ## Private vault — operational notes
 Escrow PRIVATE key: backed up by Arman (done, 2026-07-10). Public key

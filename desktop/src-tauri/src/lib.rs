@@ -41,7 +41,7 @@ struct FetchResponse {
 
 /// Kill orphaned engine sidecar processes from a previous session.
 ///
-/// **Ownership note (see ARCHITECTURE.md → Lifecycle):**
+/// **Ownership note (see docs/official/lifecycle-ownership.md):**
 /// This function ONLY targets the engine sidecar binaries. It does NOT
 /// touch cloudflared, llama-server, or any other service the engine owns.
 /// Each level of the ownership tree only kills its own children:
@@ -533,7 +533,7 @@ fn sigterm_then_kill(child: tauri_plugin_shell::process::CommandChild) {
 /// app's process name), so this subprocess can never accidentally kill us
 /// or any other parent app instance.
 ///
-/// **Ownership note (see ARCHITECTURE.md → Lifecycle):**
+/// **Ownership note (see docs/official/lifecycle-ownership.md):**
 /// In normal operation, the engine kills cloudflared during its own lifespan
 /// teardown — Rust does NOT reach across to kill the engine's children.
 /// This safety net is the ONE legitimate exception: it only fires AFTER

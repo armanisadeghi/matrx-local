@@ -219,6 +219,21 @@ class MediaVaultService:
             if library.is_valid_item_id(p.name.removesuffix(".meta.bin"))
         ]
 
+    @staticmethod
+    def has_item(item_id: str) -> bool:
+        """Is this id vaulted? Answerable with NO key — blob presence only, so a
+        locked vault can still say "yes, I hold it" (that lets /media-library
+        answer 423-locked instead of a lying 404). Leaks nothing beyond the
+        existence of an id the caller already knew."""
+        if not library.is_valid_item_id(item_id):
+            return False
+        return (_blobs_dir() / f"{item_id}.meta.bin").exists()
+
+    def is_unlocked(self) -> bool:
+        with self._lock:
+            self._autolock_if_stale()
+            return self._vmk is not None
+
     def _read_envelope(self, vmk: bytes, item_id: str) -> dict[str, Any]:
         meta_path = _blobs_dir() / f"{item_id}.meta.bin"
         if not meta_path.exists():

@@ -7,8 +7,12 @@ A 3-file pipeline for turning user thoughts into completed work. **Read this ful
 | File | Role | Who writes |
 |------|------|-----------|
 | `TASKS_FROM_USER.md` | Inbox. Free-form. | User drops, agents process. |
-| `AGENT_TASKS.md` | Active worklist. Structured. | Agents only. |
+| `AGENT_TASKS.md` (this folder) | **Arman-approved** active worklist. Structured. Path: `.matrx/AGENT_TASKS.md`. | Agents only (after approval / inbox promotion). |
+| `ARMAN_TASKS.md` (this folder) | Ask-Arman blockers. Agents file + ask in chat when blocked. | Agents write; Arman completes. |
 | `AGENT_INSTRUCTIONS.md` | This file. System rules. | Maintainers only. |
+
+Related (outside `.matrx/`): `FOUND_DEFECTS.md` = unapproved holding area;
+`CURRENT_ERRORS.md` = live error dumps. **Never enter `.arman/`** (Arman-private).
 
 ## The Flow
 

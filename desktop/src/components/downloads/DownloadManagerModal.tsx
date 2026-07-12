@@ -31,6 +31,7 @@ import {
   HardDrive,
 } from "lucide-react";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
+import { DownloadActionDialog } from "@/components/downloads/DownloadActionDialog";
 import { useClientLogSubscriber } from "@/hooks/use-unified-log";
 import type { DownloadEntry } from "@/lib/downloads/types";
 
@@ -271,12 +272,18 @@ function WaitingRow({
 function HistoryRow({
   entry,
   onRetry,
+  onResolve,
 }: {
   entry: DownloadEntry;
   onRetry?: (entry: DownloadEntry) => void;
+  onResolve?: (entry: DownloadEntry) => void;
 }) {
   const isCompleted = entry.status === "completed";
   const isFailed = entry.status === "failed";
+  // A failure the user can fix (no API key, unaccepted license, packages not
+  // installed) is NOT an error to display — it's a question to ask. It gets an
+  // amber "Action needed" button instead of a red string nobody can read.
+  const needsAction = isFailed && entry.resolution != null;
 
   return (
     <div className="group flex h-12 items-center gap-3 border-b border-border/60 px-4 transition-colors hover:bg-muted/50">
@@ -284,7 +291,13 @@ function HistoryRow({
       <div className="w-5 shrink-0">
         {isCompleted && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
         {isFailed && (
-          <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
+          <AlertCircle
+            className={
+              needsAction
+                ? "h-4 w-4 text-amber-600 dark:text-amber-500"
+                : "h-4 w-4 text-red-600 dark:text-red-400"
+            }
+          />
         )}
         {entry.status === "cancelled" && (
           <XCircle className="h-4 w-4 text-muted-foreground" />
@@ -302,9 +315,24 @@ function HistoryRow({
         </span>
       </div>
 
-      {/* Error message (only for failed) */}
-      <div className="w-48 shrink-0 truncate text-xs text-red-600 dark:text-red-400">
-        {isFailed ? (entry.error_msg ?? "Unknown error") : ""}
+      {/* Failure state: an ask (with a fix) or a real error (with its text) */}
+      <div className="w-48 shrink-0 text-xs">
+        {needsAction ? (
+          <button
+            onClick={() => onResolve?.(entry)}
+            className="truncate rounded px-2 py-1 font-medium text-amber-700 underline-offset-2 hover:underline dark:text-amber-500"
+            title={entry.resolution?.title}
+          >
+            Action needed — {entry.resolution?.action_label}
+          </button>
+        ) : (
+          <span
+            className="block truncate text-red-600 dark:text-red-400"
+            title={isFailed ? (entry.error_msg ?? "Unknown error") : undefined}
+          >
+            {isFailed ? (entry.error_msg ?? "Unknown error") : ""}
+          </span>
+        )}
       </div>
 
       {/* Size */}
@@ -467,8 +495,19 @@ export function DownloadManagerModal() {
     await Promise.allSettled(toCancel.map((d) => cancel(d.id)));
   }, [active, queued, cancel]);
 
+  /** The failed download whose "here's what to do" dialog is open, if any. */
+  const [resolveEntry, setResolveEntry] = useState<DownloadEntry | null>(null);
+
   const handleRetry = useCallback(
     (entry: DownloadEntry) => {
+      // Carry the metadata forward but NOT the previous failure's resolution —
+      // the engine stores it in metadata, and copying it into a fresh download
+      // would make a brand-new attempt start life already asking for help.
+      let metadata = entry.metadata ?? undefined;
+      if (metadata && "resolution" in metadata) {
+        const { resolution: _dropped, ...rest } = metadata;
+        metadata = rest;
+      }
       void enqueue({
         id: `${entry.id}-retry-${Date.now()}`,
         category: entry.category,
@@ -476,7 +515,7 @@ export function DownloadManagerModal() {
         display_name: entry.display_name,
         urls: entry.urls,
         priority: entry.priority,
-        ...(entry.metadata !== undefined ? { metadata: entry.metadata } : {}),
+        ...(metadata !== undefined ? { metadata } : {}),
       });
     },
     [enqueue],
@@ -601,9 +640,20 @@ export function DownloadManagerModal() {
           )}
           {history.length === 0 && <EmptyRow message="No history" />}
           {history.map((entry) => (
-            <HistoryRow key={entry.id} entry={entry} onRetry={handleRetry} />
+            <HistoryRow
+              key={entry.id}
+              entry={entry}
+              onRetry={handleRetry}
+              onResolve={setResolveEntry}
+            />
           ))}
         </div>
+
+        <DownloadActionDialog
+          entry={resolveEntry}
+          onClose={() => setResolveEntry(null)}
+          onRetry={handleRetry}
+        />
 
         {/* ── Log panel (collapsible) ─────────────────────────────────── */}
         <div className="shrink-0 border-t border-border">

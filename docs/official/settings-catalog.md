@@ -176,7 +176,7 @@ Legacy **Settings** page still exposes overlapping controls (e.g. theme with `se
 | Provider API keys (Anthropic, OpenAI, …) | `/settings/api-keys` | No |
 | Hugging Face token (GGUF / gated downloads) | `/settings/api-keys/huggingface` (+ Tauri `llm.json` fallback) | No |
 
-Detail for env vars: `ARCHITECTURE.md` (Environment Variables).
+Detail for env vars: [configuration.md](./configuration.md).
 
 ---
 

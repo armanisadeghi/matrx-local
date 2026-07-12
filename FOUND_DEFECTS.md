@@ -1,14 +1,24 @@
-# KNOWN_DEFECTS.md — Matrx Local
+# FOUND_DEFECTS.md — Matrx Local
 
-Platform-standard defect ledger. **Find-it-own-it:** every defect you spot gets an
-entry here the moment you spot it — no silent handoffs. When you fix one, flip its
-status to `fixed` with the commit; never delete entries (history is the point).
+> **Holding area — not an approved worklist.** Spot something while doing other
+> work? File it here with evidence, then keep going. Do **not** treat open entries
+> as assigned tasks.
+>
+> **Who acts on what**
+> - **Working agent (opportunistic):** If you hit an open entry and can fix it
+>   cleanly in scope, fix it and mark `fixed` (date + commit). That is fine while
+>   it is still only here.
+> - **Cleanup / promotion agent:** Does **not** silently implement open entries.
+>   Proposes ≤3 promotions into `.matrx/AGENT_TASKS.md` for Arman’s approval.
+> - **Any agent re-encountering an open entry:** Remind Arman — get approval to
+>   fix **now**, or promote it to an agent task. Do not keep rediscovering in silence.
+>
+> Fixed/closed entries stay for history (never delete). Related:
+> `.matrx/AGENT_TASKS.md` (Arman-approved work), `.matrx/ARMAN_TASKS.md` (ask Arman).
 
 Format: one defect per entry — id, area, symptom, evidence (file:line), status
-(`open` / `fixed` / `needs-hw-verification` / `blocked-external`), owner hint.
-
-Related trackers: `.matrx/AGENT_TASKS.md` (active worklist), `.arman/ARMAN_TASKS.md`
-(manual tasks), root `AGENT_TASKS.md` (read-only history).
+(`open` / `fixed` / `needs-hw-verification` / `blocked-external` / `wontfix`),
+owner hint.
 
 ---
 
@@ -178,7 +188,7 @@ Related trackers: `.matrx/AGENT_TASKS.md` (active worklist), `.arman/ARMAN_TASKS
 - **Area:** desktop / chat
 - **Symptom:** `ChatPanel` `.find()` miss (sync not complete) silently nulls
   `activeAgent`; next send proceeds agentless with no toast.
-- **Evidence:** root `AGENT_TASKS.md` (active bugs); `desktop/src` ChatPanel.
+- **Evidence:** previously root AGENT_TASKS (deleted 2026-07-12); `desktop/src` ChatPanel.
 - **Status:** open.
 - **Owner hint:** chat
 
@@ -262,7 +272,8 @@ Related trackers: `.matrx/AGENT_TASKS.md` (active worklist), `.arman/ARMAN_TASKS
 - **Area:** engine / upstream package
 - **Symptom:** importing `GenericOpenAIChat` cold hit a circular import; local LLM
   routing through matrx-ai was disabled.
-- **Evidence:** root `AGENT_TASKS.md` (blocked section); `docs/matrx-ai-generic-openai-port.md`.
+- **Evidence:** previously root AGENT_TASKS blocked section (deleted 2026-07-12);
+  `docs/matrx-ai-generic-openai-port.md`.
 - **Status:** fixed for matrx-local (2026-07-10, matrx-ai 0.3.0 migration, Phase 3):
   engine imports `matrx_ai.orchestrator` before any provider import (grep
   `import-order fix` in `app/services/ai/`), verified by
@@ -287,7 +298,7 @@ Related trackers: `.matrx/AGENT_TASKS.md` (active worklist), `.arman/ARMAN_TASKS
 - **Symptom:** full setup → record → transcript with the current Rust pipeline never
   confirmed on a real device (download, load, mic permission, wake word, streaming,
   session persistence).
-- **Evidence:** root `AGENT_TASKS.md` (active bugs).
+- **Evidence:** previously root AGENT_TASKS (deleted 2026-07-12).
 - **Status:** needs-hw-verification.
 - **Owner hint:** voice
 
@@ -306,3 +317,122 @@ Related trackers: `.matrx/AGENT_TASKS.md` (active worklist), `.arman/ARMAN_TASKS
   not fixable from this repo). Attempted to file in the matrx-feedback tracker;
   submission was permission-blocked, so it is recorded here.
 - **Owner hint:** platform / Supabase admin (Arman)
+
+### MXL-D-029 — matrx-ai `configure()` loaded `db/_registry.py` by file path → AI stack dead in EVERY packaged build
+- **Area:** aidream/packages/matrx-ai (upstream) + matrx-local engine boot
+- **Symptom:** `FileNotFoundError: .../_MEIxxxx/matrx_ai/db/_registry.py` at
+  `initialize_matrx_ai()`, killing Phase 1: "AI endpoints will not work",
+  `[launcher] ai_engine → ✗ FAILED`, then `tools → ⚠ degraded — 0 tools registered`.
+  The logged advice ("check SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY") was a red
+  herring — env config was never involved.
+- **Root cause:** `matrx_ai.configure()` used
+  `importlib.util.spec_from_file_location(Path(matrx_ai.__file__).parent / "db" / "_registry.py")`.
+  PyInstaller ships modules inside the PYZ archive — there is no `.py` on disk — so
+  the load could never succeed in a frozen sidecar. Dev (`uv run`) runs from source
+  and never saw it, which is why it shipped.
+- **Evidence:** `matrx_ai/__init__.py:146-155` (0.3.3, pre-fix); user crash log 2026-07-11.
+- **Status:** fixed. Upstream: plain `from matrx_ai.db._registry import configure_db`
+  (`db/__init__.py` is lazy/PEP-562, so the file-path hack it existed to avoid is
+  obsolete). matrx-local is immunized independently of the installed matrx-ai version
+  by pre-importing the module in `app/services/ai/engine.py` (configure() skips its
+  file-path load when the module is already in `sys.modules`), and the specs +
+  `scripts/build-sidecar.sh` now `collect-submodules matrx_ai` so lazily-imported
+  submodules are actually bundled.
+- **Owner hint:** publish the fixed matrx-ai, then raise the floor in `pyproject.toml`
+
+### MXL-D-030 — Vaulted media 404'd forever: `/media-library/file/{id}` didn't know the vault existed
+- **Area:** engine / media-library + media-vault, desktop / media-gen
+- **Symptom:** 41 red `404 Unknown media item` errors per session against items that
+  were in the Private Vault the whole time; thumbnails re-requested every dead id on
+  every mount, with no negative cache, forever.
+- **Root cause:** moving an item into the vault deletes the plaintext file, but job
+  history still holds the same item id, and `/media-library/file/{id}` only ever read
+  the plaintext library — so it answered "Unknown media item" about an item it held.
+- **Evidence:** `app/api/media_library_routes.py:74` (pre-fix), `desktop/src/hooks/use-media-gen.ts`
+  thumbnail effect; verified: all four ids from the user's log return `has_item() == True`.
+- **Status:** fixed. `/media-library/file/{id}` is now THE read path for any media id:
+  plaintext → 200, vaulted+unlocked → 200 (decrypted in memory), vaulted+locked → 423,
+  unknown → 404. Frontend keeps a negative cache (`locked` retries after unlock via
+  `VAULT_UNLOCKED_EVENT`; `gone` never retries). Pinned by `tests/smoke/test_media_vault.py`.
+- **Owner hint:** media-gen
+
+### MXL-D-031 — Download failures dead-ended the user: gated model, missing key, uninstalled packages all became a truncated red 401
+- **Area:** engine / downloads, desktop / downloads UI
+- **Symptom:** FLUX.1-schnell 401 "Cannot access gated repo"; Civitai 401; and
+  "huggingface_hub is not importable — run the in-app installer (POST /image-gen/install)"
+  (an HTTP verb, in end-user copy) — all rendered as one `truncate`d 48-unit red string
+  with a Retry button that reproduced the same failure.
+- **Root causes (four, all fixed):**
+  1. FLUX.1-schnell was missing `requires_hf_token=True` (it is the ONLY `gated: auto`
+     repo in the catalog — audited against the Hub), so no pre-check ever fired.
+  2. `main.py` started the download manager BEFORE `load_user_keys_into_env()`, so a
+     resumed HF download could read a token that wasn't injected yet and go out
+     unauthenticated.
+  3. `read_hf_token()` had no key_manager-cache fallback (Civitai already had one), so
+     HF depended entirely on the deprecated `os.environ` injection shim.
+  4. No failure taxonomy: the engine could not distinguish "no token" from "dead token"
+     from "license not accepted" — all three are a bare 401.
+- **Status:** fixed. New `app/services/downloads/failures.py` — a failure the user can
+  fix carries a `DownloadResolution` (title, plain-English message, one action), the
+  engine classifies HF 401/403 via a `whoami` probe, and the UI renders
+  `DownloadActionDialog` — an explanation plus a working button. Genuine errors (500,
+  network) pass through untouched and keep Retry. Also fixed the adjacent parity failure:
+  `civitai` was in the engine's `VALID_PROVIDERS` but missing from `api-key-patterns.ts`,
+  so the bulk `.env` import ignored the very key the error told users to set.
+- **Owner hint:** downloads
+
+### MXL-D-032 — Screen Recording reported "denied" for a permission the user was never offered
+- **Area:** engine / permissions, desktop / Setup Wizard + Permissions modal
+- **Symptom:** Setup Wizard: "Not granted: Screen Recording … Screen Recording=denied",
+  while the Permissions modal said "Not Requested" for the same permission on the same
+  screen. "Review & Grant" opened System Settings — where the engine was not listed, so
+  there was nothing to switch on. A true dead end.
+- **Root cause:** `CGPreflightScreenCaptureAccess()` returns false for BOTH "never asked"
+  and "denied"; `checker.py` collapsed both into `DENIED`. Nothing ever called
+  `CGRequestScreenCaptureAccess()`, which is the ONLY thing that registers a process in
+  System Settings → Screen Recording. Screen capture runs in the Python engine
+  (`screencapture`, `app/tools/tools/system.py`), so the engine is the process that needs
+  the grant — the frontend was reporting the Tauri window's status, a different principal.
+- **Evidence:** `checker.py:1151` (pre-fix), `setup_routes.py:395`, `use-permissions.ts:339`.
+- **Status:** fixed. Status is now honest (`not_determined` until we have actually asked;
+  `denied` only after an ask came back false, tracked by `~/.matrx/screen_recording_requested`),
+  `POST /devices/permissions/request/screen-recording` performs the real request, the UI
+  offers a real "Grant Access" button, and the frontend reads screen-recording status from
+  the engine so the wizard and the modal can no longer contradict each other.
+- **Owner hint:** permissions
+
+---
+
+## Untriaged legacy backlog (from deleted root `AGENT_TASKS.md`, 2026-07-12)
+
+Not Arman-approved. Not full defect entries yet. Bugs that already had `MXL-D-*`
+IDs above were **not** duplicated here. Weekly cleanup should promote, reject, or
+expand these into proper entries / agent tasks.
+
+### Gaps / features (were “Important Missing Features”)
+- Multimodal image input UI for local LLM — backend ready; missing attach/paste UI, base64 content arrays, mmproj download in DownloadManager.
+- Gemma 4 E2B/E4B native audio via llama.cpp — blocked on experimental libmtmd upstream; video input also WIP upstream.
+- Chat: “Local” tab routing to llama-server — `Chat.tsx` has no local mode; users must use the LLM page.
+- Image gen: FLUX.1 Dev token gate — **likely obsolete** (FLUX.1-dev removed from catalog 2026-07-09); confirm and drop or reframe.
+- Voice: no partial/streaming transcription results — Whisper waits for full chunks.
+- Voice: English-only hardcoded — expose language picker wired to settings.
+- Voice: transcription sessions not synced to cloud — `localStorage` only.
+- QA: Launch at login + tray minimize E2E on signed macOS/Windows builds.
+- QA: `headless_scraping` setting reaches Playwright `headless` in live scrape paths.
+
+### Tech debt
+- Split `Voice.tsx` (~2,800 lines) into `desktop/src/components/voice/*.tsx`.
+- Zustand (or equivalent) for shared app state — `App.tsx` prop-drills; defer until active bugs clear.
+- API key extras — rotation timestamps; optional OS keychain.
+- Configurations consistency gaps — see `docs/official/settings-catalog.md` §6 (theme live apply, `chatMaxConversations`, dual audio-device storage, wake keyword cloud vs Rust).
+- Dark mode full-app visual pass (modals, dropdowns, third-party wrappers).
+
+### Wishlist / future
+- ComfyUI sidecar evaluation; cloud AI relay; cloud-assigned scrape job queue.
+- Welcome cards → agent IDs + Settings favorites (product design first).
+- Proxy full E2E with `MAIN_SERVER` URL (see `.matrx/ARMAN_TASKS.md`).
+- Wake word: sherpa-onnx KWS when stable Rust bindings exist.
+- Wake-on-LAN / smart home APIs; reverse tunnel; real app icon before public launch.
+
+### Upstream / blocked (was root “Blocked”)
+- matrx-ai still assumes server-side paths in places — shipping confidence needs client-only/local paths verified. Much of this moved under matrx-ai 0.3.0 + `.matrx/AGENT_TASKS.md` upstream work; keep only what remains after triage.

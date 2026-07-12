@@ -1,5 +1,7 @@
 # AIDream API Endpoints
 
+> **Cloud server API** (AIDream), not the local matrx engine. Used by desktop UI via direct HTTPS. Index: [ARCHITECTURE.md](../official/ARCHITECTURE.md).
+
 Base URL: `https://<host>/api`
 
 All authenticated endpoints require an `Authorization: Bearer <jwt>` header.

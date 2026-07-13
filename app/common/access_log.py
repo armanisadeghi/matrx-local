@@ -27,10 +27,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Deque
 
-from app.config import LOG_DIR
+from app.config import LOG_DIR, MAX_LOG_FILE_SIZE
 
 ACCESS_LOG_PATH = Path(LOG_DIR) / "access.log"
 os.makedirs(ACCESS_LOG_PATH.parent, exist_ok=True)
+
+# Size-based rotation: access.log grew to 560 MB in the field (it had NO
+# rotation while system.log rotates at 10 MB) and contributed to a macOS
+# disk-writes resource exception against the engine. Same size cap as
+# system.log, two backups (access.log.1, access.log.2) ≈ 30 MB worst case.
+_MAX_BYTES = MAX_LOG_FILE_SIZE
+_BACKUPS = 2
+
+# Cached current file size so rotation doesn't stat() on every request.
+# Seeded from disk at import; drift (e.g. external truncation) only delays
+# or advances a rotation by one cycle — harmless.
+try:
+    _size = ACCESS_LOG_PATH.stat().st_size
+except OSError:
+    _size = 0
 
 # In-memory ring buffer so the SSE stream can push entries without a file read.
 _RING: Deque[dict] = deque(maxlen=500)
@@ -39,13 +54,29 @@ _RING: Deque[dict] = deque(maxlen=500)
 _SUBSCRIBERS: list[asyncio.Queue] = []
 
 
+def _rotate() -> None:
+    """access.log → access.log.1 → access.log.2 (oldest dropped)."""
+    for i in range(_BACKUPS, 1, -1):
+        src = ACCESS_LOG_PATH.with_name(f"{ACCESS_LOG_PATH.name}.{i - 1}")
+        if src.exists():
+            os.replace(src, ACCESS_LOG_PATH.with_name(f"{ACCESS_LOG_PATH.name}.{i}"))
+    if ACCESS_LOG_PATH.exists():
+        os.replace(ACCESS_LOG_PATH, ACCESS_LOG_PATH.with_name(f"{ACCESS_LOG_PATH.name}.1"))
+
+
 def _write_entry(entry: dict) -> None:
-    """Append one JSON-line to access.log and notify SSE subscribers."""
+    """Append one JSON-line to access.log (rotating at the size cap) and
+    notify SSE subscribers."""
+    global _size
     _RING.append(entry)
     line = json.dumps(entry, default=str)
     try:
+        if _size >= _MAX_BYTES:
+            _rotate()
+            _size = 0
         with open(ACCESS_LOG_PATH, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
+        _size += len(line) + 1
     except OSError:
         pass  # never crash the request pipeline over a log write
 

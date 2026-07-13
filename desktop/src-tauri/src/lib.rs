@@ -90,16 +90,30 @@ fn kill_orphaned_sidecars() {
             .args(["-TERM", "-f", ENGINE_PATTERN])
             .output();
         let matched = term.map(|o| o.status.success()).unwrap_or(false);
+        // Forensic honesty: pkill -f matches the FULL CMDLINE, so a hit can be
+        // any process whose argv merely mentions an engine binary name (a
+        // `tail -f …/matrx-engine.log`, an editor). Log what pkill proved —
+        // "matched something engine-like" — not more.
         lifecycle_log::log(&format!(
             "[orphan-sweep] pkill -TERM engine pattern → {}",
-            if matched { "MATCHED live engine process(es) — they were killed" } else { "no match (clean)" }
+            if matched {
+                "matched ≥1 process with an engine-like cmdline (SIGTERM sent)"
+            } else {
+                "no match (clean)"
+            }
         ));
         std::thread::sleep(std::time::Duration::from_millis(500));
         let kill = std::process::Command::new("pkill")
             .args(["-KILL", "-f", ENGINE_PATTERN])
             .output();
         if kill.map(|o| o.status.success()).unwrap_or(false) {
-            lifecycle_log::log("[orphan-sweep] pkill -KILL still matched — engine survived SIGTERM, force-killed");
+            // 500ms is far shorter than a legitimate engine teardown (~25s
+            // budget), so this line does NOT imply a hung engine — only that
+            // something engine-like was still alive when the SIGKILL pass ran.
+            lifecycle_log::log(
+                "[orphan-sweep] pkill -KILL still matched ≥1 engine-like process \
+                 500ms after SIGTERM (possibly mid-teardown); SIGKILL sent",
+            );
         }
         // NOTE: cloudflared is intentionally NOT killed here. It is the
         // engine's child, and the engine's preflight reclaims it on startup.

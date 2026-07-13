@@ -13,8 +13,12 @@
 //! story:
 //!   macOS   → ~/Library/Logs/MatrxLocal/lifecycle.log
 //!   Windows → %LOCALAPPDATA%\MatrxLocal\logs\lifecycle.log
-//!   Linux   → ~/.local/state/MatrxLocal/logs/lifecycle.log (XDG_STATE_HOME)
-//! (Mirrors `_platform_log_dir()` in app/config.py — keep the two in sync.)
+//!   Linux   → ~/.local/state/matrx-local/logs/lifecycle.log (XDG_STATE_HOME;
+//!             note the lowercase slug — Linux uses APP_NAME_SLUG)
+//! (Mirrors `_platform_log_dir()` in app/config.py — keep the two in sync.
+//! In dev/non-frozen runs the Python engine logs to <repo>/system/logs
+//! instead, so "beside system.log" holds for packaged builds — the ones
+//! this forensic log exists for.)
 //!
 //! The file rotates once at 5 MB (lifecycle events are rare; this cap exists
 //! only as a runaway guard). Writes are best-effort append-with-timestamp;
@@ -43,7 +47,8 @@ fn log_dir() -> Option<std::path::PathBuf> {
                 std::env::var_os("HOME")
                     .map(|h| std::path::PathBuf::from(h).join(".local").join("state"))
             })?;
-        Some(state_home.join("MatrxLocal").join("logs"))
+        // config.py uses the lowercase APP_NAME_SLUG on Linux.
+        Some(state_home.join("matrx-local").join("logs"))
     }
 }
 

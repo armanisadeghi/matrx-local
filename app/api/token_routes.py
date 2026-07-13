@@ -13,7 +13,6 @@ one it can validate beforehand.
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from typing import Any, Optional
 
@@ -30,17 +29,17 @@ router = APIRouter(prefix="/auth", tags=["auth-token"])
 
 
 def _broadcast_enabled() -> bool:
-    """Env-flag gate for the cross-component broadcast plumb.
+    """Gate for the cross-component broadcast plumb.
 
-    Mirrors the check used in app/main.py Phase 7 startup. Kept here as a
-    module-level helper so the login/logout hooks below don't drift from
-    the startup gate.
+    Delegates to the canonical `extension_broadcast_enabled` user-setting
+    gate (default ON) so login/logout hooks, Phase 7 startup, and the
+    publish path in extension_broadcast.py can never drift apart. The old
+    MATRX_BRIDGE_BROADCAST_ENABLED env var was removed — gating on it here
+    kept this path permanently dead.
     """
-    return os.environ.get("MATRX_BRIDGE_BROADCAST_ENABLED", "").lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    from app.api.extension_broadcast import is_broadcast_enabled
+
+    return is_broadcast_enabled()
 
 
 class TokenRequest(BaseModel):
@@ -94,8 +93,8 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
     # is already running. Idempotent for the same user_id (the helper
     # short-circuits when the user is already connected). For account
     # switches the old subscription is dropped explicitly so a stale
-    # channel for a previous user_id never lingers. Gated on
-    # MATRX_BRIDGE_BROADCAST_ENABLED so the plumb stays opt-in.
+    # channel for a previous user_id never lingers. Gated on the
+    # `extension_broadcast_enabled` user setting so the plumb stays opt-out-able.
     if _broadcast_enabled():
         try:
             from app.api.extension_broadcast import (
@@ -190,8 +189,8 @@ async def clear_token() -> dict[str, Any]:
     logger.info("[token_routes] JWT cleared (logout) user_id=%s", outgoing_user_id)
 
     # Cross-component broadcast disconnect — Case B of the lifecycle wiring.
-    # Mirrors the connect in POST /auth/token. Gated on
-    # MATRX_BRIDGE_BROADCAST_ENABLED to match the startup wiring.
+    # Mirrors the connect in POST /auth/token. Gated on the
+    # `extension_broadcast_enabled` user setting to match the startup wiring.
     if _broadcast_enabled() and outgoing_user_id:
         try:
             from app.api.extension_broadcast import disconnect_broadcast

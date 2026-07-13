@@ -772,8 +772,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Phase 7: Cross-component broadcast subscription.
     # Activates the inbound router (app/api/cross_component_router.py) so
     # wake hints from aidream and RPC envelopes from other components can
-    # reach this engine. Gated by MATRX_BRIDGE_BROADCAST_ENABLED so the
-    # plumb stays opt-in until Phase 3 of the cross-component plan lands.
+    # reach this engine. Gated by the `extension_broadcast_enabled` user
+    # setting (default ON) — the same gate extension_broadcast.py honors
+    # for publishes. The old MATRX_BRIDGE_BROADCAST_ENABLED env var was
+    # removed (.env notes the cutover); gating on it here left the
+    # subscribe path permanently dead while the setting claimed ON.
     #
     # Mixed-reality wiring: at startup we look up the persisted user_id
     # from the auth_tokens SQLite row. If a session is already present
@@ -784,11 +787,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # id latched here is stashed on app.state.broadcast_user_id so the
     # shutdown teardown can match the subscribe that started it.
     app.state.broadcast_user_id = None
-    if os.environ.get("MATRX_BRIDGE_BROADCAST_ENABLED", "").lower() in (
-        "1",
-        "true",
-        "yes",
-    ):
+    from app.api.extension_broadcast import is_broadcast_enabled
+
+    if is_broadcast_enabled():
         try:
             from app.api.extension_broadcast import connect_broadcast
             from app.services.local_db.repositories import TokenRepo
@@ -814,9 +815,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 exc_info=True,
             )
     else:
-        logger.debug(
+        logger.info(
             "[app/main.py] Phase 7: cross-component broadcast disabled "
-            "(MATRX_BRIDGE_BROADCAST_ENABLED not set)"
+            "(extension_broadcast_enabled=false in settings)"
         )
 
     # Phase 8: matrx-scheduler host (surface='desktop').

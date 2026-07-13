@@ -182,22 +182,6 @@ _(none)_
   field to stay byte-parity (v1/v2 publishers parse unchanged). Change lives
   in matrx-frontend — file/execute there. (= MXL-D-026)
 
-- [ ] **Folder delete is destructive and untombstoned (discovered 2026-07-10,
-  Phase 6 sync-contract audit)** — Analyzed 2026-07-10 — verified in code.
-  `DELETE /documents/folders/{folder_id}`
-  (`app/api/document_routes.py::delete_folder`) hard-deletes the local folder
-  directory (all note files) and fire-and-forgets ONE cloud
-  `delete_folder(folder_id)` call. The contained notes get NO SQLite
-  tombstones (`notes.is_deleted` stays 0 / rows keep `file_path`), so if the
-  cloud call fails (offline), the next `full_sync` sees "local file gone, no
-  tombstone" and RESURRECTS every note in the folder from the cloud. Fix
-  (route file was outside Phase 6 scope): on folder delete, soft-delete each
-  contained note's SQLite row (repo.soft_delete) and fire-and-forget
-  per-note `soft_delete_note` calls, so the existing full_sync
-  tombstone-propagation branch handles the offline case. Contract reference:
-  docs/SYNC_CONTRACT.md gap #2; enforcement pattern in
-  tests/parity/test_sync_contract.py. (= MXL-D-002)
-
 - [ ] **Stale "SQLite is the single source of truth" claims outside the sync
   subsystems (discovered 2026-07-10)** — Contradict the ratified replica
   doctrine (docs/SYNC_CONTRACT.md): `app/api/chat_routes.py:21`,
@@ -329,6 +313,9 @@ are condensed under Completed. Still open:
 ## Completed
 
 _(one line each, newest first; full detail in git history)_
+
+- [x] Notes + realtime sync overhaul (freeze, false conflicts, dead sync): paste/typing freeze fixed (deferred memoized markdown preview + 128KB guard + stable use-documents callbacks + memoized NoteList/FolderTree); realtime repointed public→workbench with created_by filter (was receiving ZERO events) + last_device_id echo suppression + on-subscribe catch-up pull; note_hashes now recorded only after a SUCCESSFUL push (offline-edit clobber risk); own-push guard in pull/full_sync kills self-conflicts; push collapsed to one upsert (was 5 round trips, 3 hitting graveyarded tables); all graveyarded-table client calls deleted (versions→local+history.row_versions trigger, devices/mappings/sync_log→local, shares→501+UI removed); engine-owned auto-sync loop (10-min tick + daily reconcile from stored auth token, launcher-registered); watcher auto-starts + loud on crash; identical-side conflicts auto-pruned; mappings dialog now shows local mappings (was always-empty cloud list). SYNC_CONTRACT.md amended; characterization pins updated (2026-07-13, commits 9f494a5dc..)
+- [x] Folder delete now tombstones contained notes in SQLite + per-note cloud soft-deletes + sync-state hash pruning — offline folder deletes no longer resurrect notes — closes MXL-D-002 (2026-07-13)
 
 - [x] Deleted stale untracked `specs/aimatrx-engine-*.spec` leftovers from disk (git already dropped them in 2e42a1134; the disk copies were the Hard Rule 6 edit-the-dead-set trap) — closes MXL-D-031 (2026-07-13)
 

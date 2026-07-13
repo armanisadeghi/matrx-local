@@ -77,6 +77,11 @@ def _blobs_dir() -> Path:
     return vault_dir() / "blobs"
 
 
+def _init_blob_path(item_id: str) -> Path:
+    """Encrypted img2img SOURCE image for a vaulted item (its own AAD)."""
+    return _blobs_dir() / f"{item_id}.init.bin"
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -271,6 +276,13 @@ class MediaVaultService:
         meta["file_name"] = envelope.get("file_name")
         meta["sha256"] = envelope.get("sha256")
         meta["vaulted_at"] = envelope.get("vaulted_at")
+        # Truth, not the inherited library sidecar: the client offers a full
+        # Remix (input image included) off this field, so it must reflect what
+        # is ACTUALLY in the vault. Items vaulted by an older build carry the
+        # field from their sidecar but have no encrypted source blob.
+        meta["init_image_file"] = (
+            f"{item_id}.init.png" if _init_blob_path(item_id).exists() else None
+        )
         return meta
 
     def read_file(self, item_id: str) -> tuple[bytes, str]:
@@ -303,6 +315,9 @@ class MediaVaultService:
                 return False
             blob.unlink(missing_ok=True)
             meta.unlink(missing_ok=True)
+            # The source image goes with it — leaving an orphaned encrypted blob
+            # behind would be a permanent, unreachable disk leak.
+            _init_blob_path(item_id).unlink(missing_ok=True)
             logger.info("[media_vault] Permanently deleted item %s", item_id)
             return True
 
@@ -328,7 +343,7 @@ class MediaVaultService:
         return results
 
     def _move_one(self, vmk: bytes, item_id: str) -> dict[str, Any]:
-        tmp_blob = tmp_meta = None
+        tmp_blob = tmp_meta = tmp_init = None
         try:
             if not library.is_valid_item_id(item_id):
                 raise VaultError(f"Invalid item id: {item_id}")
@@ -339,6 +354,15 @@ class MediaVaultService:
             file_bytes = src_path.read_bytes()
             file_sha = _sha256(file_bytes)
 
+            # The img2img SOURCE image comes into the vault WITH its result.
+            # library.delete_item() below destroys the plaintext original, so if
+            # we did not encrypt it here, vaulting an img2img image would
+            # permanently destroy the photo it was made from — silent data loss,
+            # and a Remix that can never be honest again.
+            init_path = library.get_init_image_path(item_id)
+            init_bytes = init_path.read_bytes() if init_path is not None else None
+            init_sha = _sha256(init_bytes) if init_bytes is not None else None
+
             library_meta = {k: v for k, v in meta.items() if k != "file_path"}
             envelope = {
                 "envelope_version": ENVELOPE_VERSION,
@@ -347,6 +371,7 @@ class MediaVaultService:
                 "content_type": library.content_type_for(str(meta["media_type"])),
                 "file_name": meta.get("file_name"),
                 "sha256": file_sha,
+                "init_image_sha256": init_sha,
                 "vaulted_at": datetime.now(timezone.utc).isoformat(),
                 "library_meta": library_meta,
             }
@@ -359,6 +384,24 @@ class MediaVaultService:
             tmp_meta = _blobs_dir() / f".tmp-{uuid.uuid4()}.meta.bin"
             _fsync_write(tmp_blob, enc_file)
             _fsync_write(tmp_meta, enc_meta)
+
+            if init_bytes is not None:
+                enc_init = crypto.encrypt_blob(
+                    vmk, init_bytes, crypto.init_image_aad(item_id)
+                )
+                tmp_init = _blobs_dir() / f".tmp-{uuid.uuid4()}.init.bin"
+                _fsync_write(tmp_init, enc_init)
+                if (
+                    _sha256(
+                        crypto.decrypt_blob(
+                            vmk,
+                            tmp_init.read_bytes(),
+                            crypto.init_image_aad(item_id),
+                        )
+                    )
+                    != init_sha
+                ):
+                    raise VaultError("Round-trip verification failed (init image)")
 
             # DECRYPT-VERIFY the on-disk ciphertext — full round trip.
             round_trip = crypto.decrypt_blob(
@@ -374,9 +417,11 @@ class MediaVaultService:
 
             os.replace(tmp_blob, _blobs_dir() / f"{item_id}.bin")
             os.replace(tmp_meta, _blobs_dir() / f"{item_id}.meta.bin")
-            tmp_blob = tmp_meta = None
+            if tmp_init is not None:
+                os.replace(tmp_init, _init_blob_path(item_id))
+            tmp_blob = tmp_meta = tmp_init = None
 
-            # Only now is the plaintext original deleted.
+            # Only now is the plaintext original deleted (result + init image).
             if not library.delete_item(item_id):
                 logger.warning(
                     "[media_vault] Library item %s vanished during move — "
@@ -385,10 +430,38 @@ class MediaVaultService:
             logger.info("[media_vault] Moved item %s into the vault", item_id)
             return {"item_id": item_id, "ok": True}
         except Exception as exc:  # noqa: BLE001 — per-item error report
-            for tmp in (tmp_blob, tmp_meta):
+            for tmp in (tmp_blob, tmp_meta, tmp_init):
                 if tmp is not None:
                     tmp.unlink(missing_ok=True)
             return {"item_id": item_id, "ok": False, "error": str(exc)}
+
+    def read_init_image(self, item_id: str) -> bytes:
+        """Decrypted img2img source image for a vaulted item (in memory only).
+
+        Raises VaultLockedError when locked and VaultError when this item has no
+        stored source image — the same contract as read_file.
+        """
+        with self._lock:
+            vmk = self._require_unlocked()
+            if not library.is_valid_item_id(item_id):
+                raise VaultError(f"Invalid item id: {item_id}")
+            path = _init_blob_path(item_id)
+            if not path.exists():
+                raise VaultError(f"No stored input image for vault item: {item_id}")
+            data = crypto.decrypt_blob(
+                vmk, path.read_bytes(), crypto.init_image_aad(item_id)
+            )
+            envelope = self._read_envelope(vmk, item_id)
+            expected = str(envelope.get("init_image_sha256") or "")
+            if expected and _sha256(data) != expected:
+                raise VaultError("Decrypted input image fails SHA-256 check")
+            return data
+
+    def has_init_image(self, item_id: str) -> bool:
+        """True when a vaulted item carries a stored source image (no key needed)."""
+        return (
+            library.is_valid_item_id(item_id) and _init_blob_path(item_id).exists()
+        )
 
     def restore_to_library(self, item_ids: list[str]) -> list[dict[str, Any]]:
         """Decrypt vault items back into the media library, verify the written
@@ -404,7 +477,7 @@ class MediaVaultService:
         return results
 
     def _restore_one(self, vmk: bytes, item_id: str) -> dict[str, Any]:
-        tmp_media = tmp_sidecar = None
+        tmp_media = tmp_sidecar = tmp_init = None
         try:
             if not library.is_valid_item_id(item_id):
                 raise VaultError(f"Invalid item id: {item_id}")
@@ -437,11 +510,36 @@ class MediaVaultService:
                     f"Library already has files for {item_id} — refusing to overwrite"
                 )
 
+            # The img2img SOURCE image comes back with the result. The sidecar
+            # names it, so restoring the sidecar without the file would leave a
+            # library item advertising an input image that 404s.
+            init_blob = _init_blob_path(item_id)
+            init_bytes: bytes | None = None
+            if init_blob.exists():
+                init_bytes = crypto.decrypt_blob(
+                    vmk, init_blob.read_bytes(), crypto.init_image_aad(item_id)
+                )
+                expected_init = str(envelope.get("init_image_sha256") or "")
+                if expected_init and _sha256(init_bytes) != expected_init:
+                    raise VaultError(
+                        "Decrypted input image fails SHA-256 check — refusing"
+                    )
+                library_meta["init_image_file"] = f"{item_id}.init.png"
+            else:
+                # No stored source image (a text-to-image item, or one vaulted by
+                # an older build). Never let the sidecar claim otherwise.
+                library_meta["init_image_file"] = None
+
             sidecar_bytes = json.dumps(library_meta, indent=2).encode("utf-8")
             tmp_media = directory / f".vault-restore-{uuid.uuid4()}.tmp"
             tmp_sidecar = directory / f".vault-restore-{uuid.uuid4()}.json.tmp"
             _fsync_write(tmp_media, file_bytes)
             _fsync_write(tmp_sidecar, sidecar_bytes)
+            if init_bytes is not None:
+                tmp_init = directory / f".vault-restore-{uuid.uuid4()}.init.tmp"
+                _fsync_write(tmp_init, init_bytes)
+                if tmp_init.read_bytes() != init_bytes:
+                    raise VaultError("Written input image fails verification")
 
             # Verify the on-disk plaintext before touching the vault copies.
             if _sha256(tmp_media.read_bytes()) != _sha256(file_bytes):
@@ -451,15 +549,18 @@ class MediaVaultService:
 
             os.replace(tmp_media, media_path)
             os.replace(tmp_sidecar, sidecar_path)
-            tmp_media = tmp_sidecar = None
+            if tmp_init is not None:
+                os.replace(tmp_init, directory / f"{item_id}.init.png")
+            tmp_media = tmp_sidecar = tmp_init = None
 
             # Only now are the vault copies deleted.
             blob_path.unlink(missing_ok=True)
             (_blobs_dir() / f"{item_id}.meta.bin").unlink(missing_ok=True)
+            init_blob.unlink(missing_ok=True)
             logger.info("[media_vault] Restored item %s to the library", item_id)
             return {"item_id": item_id, "ok": True}
         except Exception as exc:  # noqa: BLE001 — per-item error report
-            for tmp in (tmp_media, tmp_sidecar):
+            for tmp in (tmp_media, tmp_sidecar, tmp_init):
                 if tmp is not None:
                     tmp.unlink(missing_ok=True)
             return {"item_id": item_id, "ok": False, "error": str(exc)}

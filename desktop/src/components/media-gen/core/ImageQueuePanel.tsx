@@ -8,13 +8,17 @@
  *
  * Every layout shares the same semantics: up-next badge, optimistic
  * "Cancelling…" states, seed chips with reuse, and click-to-open of completed
- * jobs via the shared useImageJobLightbox (a click is never silently dead).
+ * jobs via the shared useImageJobLightbox (a click is never silently dead) —
+ * which lands in the app-wide lightbox with the full action set.
  * Reads MediaGenContext directly — no prop threading of jobs/thumbs.
  */
 
 import { AlertCircle, CheckCircle2, Loader2, X } from "lucide-react";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import type { ImageGenJob } from "@/lib/api";
+import { MediaThumb } from "@/components/media/MediaThumb";
+import type { MediaDescriptor } from "@/components/media/types";
+import { CopyButton } from "@/components/media/MediaInfoDialog";
 import {
   ErrorNote,
   InlineProgressBar,
@@ -106,21 +110,26 @@ function viewableProps(
   };
 }
 
-function JobRowList({
-  job,
-  thumbUrl,
-  onCancel,
-  onReuseSeed,
-  onOpen,
-  opening,
-}: {
+interface JobViewProps {
   job: ImageGenJob;
   thumbUrl: string | null;
+  /** Canonical descriptor — present once the job's bytes are available. */
+  descriptor: MediaDescriptor | null;
   onCancel: (jobId: string) => void;
   onReuseSeed: (seed: number) => void;
   onOpen: (job: ImageGenJob) => void;
   opening: boolean;
-}) {
+}
+
+function JobRowList({
+  job,
+  thumbUrl,
+  descriptor,
+  onCancel,
+  onReuseSeed,
+  onOpen,
+  opening,
+}: JobViewProps) {
   const active = job.status === "queued" || job.status === "running";
   const cancelling = active && !!job.cancel_requested;
   const viewable = job.status === "completed" && !!job.item_id;
@@ -135,17 +144,44 @@ function JobRowList({
         <div className="w-5 shrink-0">
           <JobStatusIcon job={job} opening={opening} />
         </div>
-        {thumbUrl && (
-          <img
-            src={thumbUrl}
-            alt="Generated"
-            className="h-10 w-10 rounded object-cover border shrink-0"
-          />
+        {descriptor ? (
+          // Canonical thumb — a queue thumbnail opens full size, right-clicks
+          // to every action, and shows its metadata, exactly like a library
+          // tile. Clicks are stopped from reaching the row (which opens the
+          // same viewer anyway, with the whole queue as the browse set).
+          <div onClick={(e) => e.stopPropagation()} className="shrink-0">
+            <MediaThumb
+              item={descriptor}
+              variant="icon"
+              onActivate={() => onOpen(job)}
+              className="h-10 w-10 rounded border"
+            />
+          </div>
+        ) : (
+          thumbUrl && (
+            <img
+              src={thumbUrl}
+              alt="Generated"
+              className="h-10 w-10 shrink-0 rounded border object-cover"
+            />
+          )
         )}
         <div className="min-w-0 flex-1">
-          <p className="truncate text-xs" title={job.prompt}>
-            {job.prompt || "(no prompt)"}
-          </p>
+          <div className="flex items-start gap-1.5">
+            <p className="min-w-0 flex-1 truncate text-xs" title={job.prompt}>
+              {job.prompt || "(no prompt)"}
+            </p>
+            {/* A queued/running job has no descriptor yet (no bytes), so the ⋯
+                menu cannot be its escape hatch — the prompt must be copyable
+                right here or it is unrecoverable. */}
+            {job.prompt && (
+              <CopyButton
+                value={job.prompt}
+                label="Copy prompt"
+                className="mt-0.5"
+              />
+            )}
+          </div>
           <p className="text-[10px] text-muted-foreground">
             {job.model_id || "—"} · {cancelling ? "cancelling…" : job.status}
             {job.status === "failed" && job.error ? ` — ${job.error}` : ""}
@@ -176,18 +212,12 @@ function JobRowList({
 function JobChip({
   job,
   thumbUrl,
+  descriptor,
   onCancel,
   onReuseSeed,
   onOpen,
   opening,
-}: {
-  job: ImageGenJob;
-  thumbUrl: string | null;
-  onCancel: (jobId: string) => void;
-  onReuseSeed: (seed: number) => void;
-  onOpen: (job: ImageGenJob) => void;
-  opening: boolean;
-}) {
+}: JobViewProps) {
   const viewable = job.status === "completed" && !!job.item_id;
   return (
     <div
@@ -197,7 +227,16 @@ function JobChip({
       {...viewableProps(job, onOpen)}
     >
       <div className="flex items-center gap-2">
-        {thumbUrl ? (
+        {descriptor ? (
+          <div onClick={(e) => e.stopPropagation()} className="shrink-0">
+            <MediaThumb
+              item={descriptor}
+              variant="icon"
+              onActivate={() => onOpen(job)}
+              className="h-9 w-9 rounded border"
+            />
+          </div>
+        ) : thumbUrl ? (
           <img
             src={thumbUrl}
             alt="Generated"
@@ -209,9 +248,14 @@ function JobChip({
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[11px]" title={job.prompt}>
-            {job.prompt || "(no prompt)"}
-          </p>
+          <div className="flex items-start gap-1">
+            <p className="min-w-0 flex-1 truncate text-[11px]" title={job.prompt}>
+              {job.prompt || "(no prompt)"}
+            </p>
+            {job.prompt && (
+              <CopyButton value={job.prompt} label="Copy prompt" />
+            )}
+          </div>
           <p className="truncate text-[10px] text-muted-foreground">
             {job.status === "queued" || job.status === "running"
               ? job.cancel_requested
@@ -246,45 +290,31 @@ function JobChip({
 
 function JobFeedCard({
   job,
-  thumbUrl,
+  descriptor,
   onCancel,
   onReuseSeed,
   onOpen,
   opening,
-}: {
-  job: ImageGenJob;
-  thumbUrl: string | null;
-  onCancel: (jobId: string) => void;
-  onReuseSeed: (seed: number) => void;
-  onOpen: (job: ImageGenJob) => void;
-  opening: boolean;
-}) {
+}: JobViewProps) {
   const active = job.status === "queued" || job.status === "running";
   const viewable = job.status === "completed" && !!job.item_id;
 
-  if (job.status === "completed" && thumbUrl) {
+  if (job.status === "completed" && descriptor) {
     return (
       <figure className="overflow-hidden rounded-xl border bg-card">
-        <button
-          type="button"
-          onClick={viewable ? () => onOpen(job) : undefined}
-          className={`block w-full ${viewable ? "cursor-zoom-in" : "cursor-default"}`}
-          aria-label="View image"
-          title={viewable ? "Click to view the image" : undefined}
-        >
-          <img
-            src={thumbUrl}
-            alt={job.prompt || "Generated image"}
-            className="w-full object-contain"
-          />
-        </button>
+        <MediaThumb
+          item={descriptor}
+          variant="gallery"
+          onActivate={() => onOpen(job)}
+          className="w-full"
+        />
         <figcaption className="space-y-1.5 px-4 py-3">
-          <p
-            className="text-xs leading-relaxed text-muted-foreground"
-            title={job.prompt}
-          >
-            {job.prompt || "(no prompt)"}
-          </p>
+          <div className="flex items-start gap-1.5">
+            <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
+              {job.prompt || "(no prompt)"}
+            </p>
+            {job.prompt && <CopyButton value={job.prompt} label="Copy prompt" />}
+          </div>
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
             {typeof job.seed === "number" && (
               <SeedChip seed={job.seed} onReuse={onReuseSeed} />
@@ -322,9 +352,18 @@ function JobFeedCard({
           <JobStatusIcon job={job} opening={opening} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-xs" title={job.prompt}>
-            {job.prompt || "(no prompt)"}
-          </p>
+          <div className="flex items-start gap-1.5">
+            <p className="min-w-0 flex-1 truncate text-xs" title={job.prompt}>
+              {job.prompt || "(no prompt)"}
+            </p>
+            {job.prompt && (
+              <CopyButton
+                value={job.prompt}
+                label="Copy prompt"
+                className="mt-0.5"
+              />
+            )}
+          </div>
           <p className="text-[10px] text-muted-foreground">
             {job.status === "failed" && job.error
               ? job.error
@@ -375,10 +414,9 @@ export function ImageQueuePanel({
   const { cancelImageJob, setImageForm } = actions;
 
   const reuseSeed = (seed: number) => setImageForm({ seedText: String(seed) });
-  const { openJob, openingJobId, lightboxElement } = useImageJobLightbox({
+  const { openJob, openingJobId, descriptorOf } = useImageJobLightbox({
     jobs: imageJobs,
     thumbs: imageJobThumbs,
-    onReuseSeed: reuseSeed,
   });
 
   if (imageJobs.length === 0 && !imageJobsError) return null;
@@ -393,6 +431,7 @@ export function ImageQueuePanel({
     const common = {
       job: j,
       thumbUrl: imageJobThumbs[j.job_id] ?? null,
+      descriptor: descriptorOf(j),
       onCancel,
       onReuseSeed: reuseSeed,
       onOpen: openJob,
@@ -421,7 +460,6 @@ export function ImageQueuePanel({
       ) : (
         <div className="space-y-2">{items}</div>
       )}
-      {lightboxElement}
     </div>
   );
 }

@@ -17,7 +17,7 @@
  * All operations are loud on failure; restore shows per-item results.
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import {
   AlertCircle,
   Check,
@@ -43,6 +43,8 @@ import type {
   MediaVaultState,
   MediaVaultActions,
 } from "@/hooks/use-media-vault";
+import { MediaItemThumb, viewingSetOf } from "@/components/media/MediaThumb";
+import { CopyButton } from "@/components/media/MediaInfoDialog";
 import { ErrorNote } from "./shared";
 
 // ── Password helpers ─────────────────────────────────────────────────────────
@@ -192,7 +194,7 @@ export function VaultUnlockForm({
 
 // ── Creation flow ────────────────────────────────────────────────────────────
 
-function VaultCreateFlow({
+export function VaultCreateFlow({
   actions,
   busy,
 }: {
@@ -299,70 +301,6 @@ function VaultCreateFlow({
         Create vault
       </Button>
     </div>
-  );
-}
-
-// ── Vault media preview (decrypted blob URL loader) ──────────────────────────
-
-function VaultMediaPreview({
-  item,
-  fileUrls,
-  getFileUrl,
-  className,
-}: {
-  item: MediaLibraryItem;
-  fileUrls: Record<string, string>;
-  getFileUrl: MediaVaultActions["getFileUrl"];
-  className?: string;
-}) {
-  const url = fileUrls[item.id] ?? null;
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!url) {
-      void getFileUrl(item.id).then((result) => {
-        if (!cancelled && result === null) setFailed(true);
-      });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [item.id, url, getFileUrl]);
-
-  if (failed) {
-    return (
-      <div
-        className={`flex items-center justify-center bg-muted/30 text-muted-foreground ${className ?? ""}`}
-      >
-        <AlertCircle className="h-5 w-5 opacity-40" />
-      </div>
-    );
-  }
-  if (!url) {
-    return (
-      <div
-        className={`flex items-center justify-center bg-muted/30 text-muted-foreground ${className ?? ""}`}
-      >
-        <Loader2 className="h-5 w-5 animate-spin opacity-40" />
-      </div>
-    );
-  }
-  if (item.media_type === "video") {
-    return (
-      <video
-        src={url}
-        className={className}
-        muted
-        loop
-        playsInline
-        onMouseEnter={(e) => void e.currentTarget.play().catch(() => undefined)}
-        onMouseLeave={(e) => e.currentTarget.pause()}
-      />
-    );
-  }
-  return (
-    <img src={url} alt={item.prompt.slice(0, 80)} className={className} />
   );
 }
 
@@ -564,6 +502,11 @@ function VaultGrid({
   actions: MediaVaultActions;
 }) {
   const { items, itemsLoading, busy, fileUrls } = vault;
+  // Every vault item whose bytes are decrypted — the lightbox's prev/next set.
+  const viewingSet = useMemo(
+    () => viewingSetOf(items, fileUrls, "vault"),
+    [items, fileUrls],
+  );
   const [selecting, setSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [restoring, setRestoring] = useState(false);
@@ -771,54 +714,68 @@ function VaultGrid({
           {items.map((item, index) => {
             const isSelected = selectedIds.has(item.id);
             return (
-              <button
+              <div
                 key={item.id}
-                onClick={(e) => {
-                  if (selecting) toggleSelect(item, index, e.shiftKey);
-                }}
-                className={`group relative rounded-lg border bg-card text-left overflow-hidden transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${
+                className={`group relative overflow-hidden rounded-lg border bg-card text-left transition-colors ${
                   isSelected
                     ? "border-violet-500 ring-1 ring-violet-500"
                     : "hover:border-violet-500/40"
-                } ${selecting ? "cursor-pointer" : "cursor-default"}`}
+                }`}
               >
                 <div className="relative aspect-square w-full overflow-hidden bg-muted/20">
-                  <VaultMediaPreview
+                  {/* Canonical thumb, source="vault": a vaulted image opens
+                      full-size, shows its metadata and offers the vault-correct
+                      actions (restore, permanent delete) — the same abilities as
+                      any other image, not a second-class one. */}
+                  <MediaItemThumb
                     item={item}
-                    fileUrls={fileUrls}
-                    getFileUrl={actions.getFileUrl}
-                    className="h-full w-full object-cover"
-                  />
-                  <span className="absolute left-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white flex items-center gap-1">
-                    {item.media_type === "video" ? (
-                      <Film className="h-2.5 w-2.5" />
-                    ) : (
-                      <ImageIcon className="h-2.5 w-2.5" />
-                    )}
-                    {item.width}×{item.height}
-                  </span>
-                  {selecting && (
-                    <span
-                      className={`absolute right-1.5 top-1.5 rounded p-0.5 ${
-                        isSelected
-                          ? "bg-violet-600 text-white"
-                          : "bg-black/50 text-white/80"
-                      }`}
-                    >
-                      {isSelected ? (
-                        <CheckSquare className="h-4 w-4" />
+                    source="vault"
+                    variant="card"
+                    viewingSet={viewingSet}
+                    chrome={selecting ? "none" : "full"}
+                    className="h-full w-full"
+                    {...(selecting
+                      ? { onActivate: () => toggleSelect(item, index, false) }
+                      : {})}
+                  >
+                    <span className="pointer-events-none absolute left-1.5 top-1.5 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+                      {item.media_type === "video" ? (
+                        <Film className="h-2.5 w-2.5" />
                       ) : (
-                        <Square className="h-4 w-4" />
+                        <ImageIcon className="h-2.5 w-2.5" />
                       )}
+                      {item.width}×{item.height}
                     </span>
-                  )}
+                    {selecting && (
+                      <span
+                        className={`pointer-events-none absolute right-1.5 top-1.5 rounded p-0.5 ${
+                          isSelected
+                            ? "bg-violet-600 text-white"
+                            : "bg-black/50 text-white/80"
+                        }`}
+                      >
+                        {isSelected ? (
+                          <CheckSquare className="h-4 w-4" />
+                        ) : (
+                          <Square className="h-4 w-4" />
+                        )}
+                      </span>
+                    )}
+                  </MediaItemThumb>
                 </div>
-                <div className="p-2.5">
-                  <p className="text-xs font-medium truncate" title={item.prompt}>
+                <div className="flex items-start gap-1.5 p-2.5">
+                  <p className="line-clamp-2 min-w-0 flex-1 break-words text-xs font-medium leading-snug">
                     {item.prompt || "(no prompt)"}
                   </p>
+                  {item.prompt && (
+                    <CopyButton
+                      value={item.prompt}
+                      label="Copy prompt"
+                      className="mt-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
+                    />
+                  )}
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>

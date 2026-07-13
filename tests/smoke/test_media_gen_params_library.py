@@ -199,6 +199,58 @@ def test_media_library_round_trip(client: TestClient, library_tmp) -> None:
     assert client.get("/media-library/items").json()["total"] == 0
 
 
+def test_media_library_init_image_round_trip(client: TestClient, library_tmp) -> None:
+    """The img2img SOURCE image is stored beside the result and served back.
+
+    This is what makes "Remix" honest: without it the client could restore every
+    setting except the input image the generation actually started from.
+    """
+    init_bytes = FAKE_PNG + b"\x00init"
+    item = library_tmp.save_generated_image(
+        FAKE_PNG,
+        model_id="stabilityai/sdxl-turbo",
+        prompt="img2img result",
+        negative_prompt="",
+        params={"has_init_image": True},
+        seed=7,
+        width=512,
+        height=512,
+        elapsed_seconds=0.01,
+        init_image_bytes=init_bytes,
+    )
+    item_id = item["id"]
+
+    listed = client.get("/media-library/items").json()["items"][0]
+    assert listed["init_image_file"] == f"{item_id}.init.png", (
+        "the client decides whether to offer a full Remix off this field"
+    )
+
+    r = client.get(f"/media-library/items/{item_id}/init-image")
+    assert r.status_code == 200
+    assert r.content == init_bytes
+    assert r.headers["content-type"].startswith("image/png")
+
+    # Deleting the item takes the source image with it — leaving the plaintext
+    # input behind after the user deleted (or vaulted) the result would be a leak.
+    init_path = Path(item["file_path"]).with_suffix("").with_name(f"{item_id}.init.png")
+    assert init_path.exists()
+    assert client.delete(f"/media-library/items/{item_id}").status_code == 200
+    assert not init_path.exists()
+    assert client.get(f"/media-library/items/{item_id}/init-image").status_code == 404
+
+
+def test_media_library_no_init_image_is_404(client: TestClient, library_tmp) -> None:
+    """A text-to-image item advertises no source image and 404s if asked."""
+    item = library_tmp.save_generated_image(
+        FAKE_PNG, model_id="m", prompt="txt2img", negative_prompt="",
+        params={}, seed=1, width=8, height=8, elapsed_seconds=0.0,
+    )
+    listed = client.get("/media-library/items").json()["items"][0]
+    assert listed["init_image_file"] is None
+    r = client.get(f"/media-library/items/{item['id']}/init-image")
+    assert r.status_code == 404
+
+
 def test_media_library_unknown_and_malicious_ids(client: TestClient, library_tmp) -> None:
     assert client.get(f"/media-library/file/{uuid.uuid4()}").status_code == 404
     # Non-uuid ids (e.g. traversal attempts) must 404, never touch the fs.

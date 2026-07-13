@@ -582,6 +582,7 @@ def test_job_record_carries_img2img_and_lora_fields(
     store = ImageJobStore()
     _, raw = _png_b64()
     sha = hashlib.sha256(raw).hexdigest()
+    assert store.put_init_image(raw) == sha
     job = store.create(
         prompt="x",
         model_id=SDXL_MODEL.model_id,
@@ -590,7 +591,6 @@ def test_job_record_carries_img2img_and_lora_fields(
         strength=0.4,
         loras=[{"id": "acme--style-sdxl", "scale": 0.9}],
     )
-    store.stash_init_image(job.job_id, raw)
 
     d = job.to_dict()
     assert d["has_init_image"] is True
@@ -599,20 +599,28 @@ def test_job_record_carries_img2img_and_lora_fields(
     assert d["loras"] == [{"id": "acme--style-sdxl", "scale": 0.9}]
     assert "init_image_b64" not in d and "init_image_bytes" not in d
 
-    # bytes stash: taken exactly once by the runner
-    assert store.take_init_image(job.job_id) == raw
-    assert store.take_init_image(job.job_id) is None
+    # Bytes are readable for as long as the job is pending — and idempotently,
+    # so a retry after a failed attempt still has its input image.
+    assert store.get_init_image(job.job_id) == raw
+    assert store.get_init_image(job.job_id) == raw
 
-    # persisted history round-trip keeps the fields (but never the bytes)
+    # The job record persists the sha only — never the bytes.
     history = json.loads(
         (tmp_path / "img-jobs" / "jobs.json").read_text(encoding="utf-8")
     )
-    assert history[0]["init_image_sha256"] == sha
-    assert history[0]["strength"] == 0.4
+    record = history["jobs"][0]
+    assert record["init_image_sha256"] == sha
+    assert record["strength"] == 0.4
+    assert "init_image_b64" not in record and "init_image_bytes" not in record
+
+    # The BYTES live beside it, content-addressed, so a restart can still run
+    # the job (a queued img2img job with no input is dead work).
     store2 = ImageJobStore()
     store2.load()
     j2 = store2.get(job.job_id)
     assert j2 is not None and j2.init_image_sha256 == sha and j2.loras
+    assert j2.status == "queued", "a restart must not kill a queued job"
+    assert store2.get_init_image(job.job_id) == raw
 
 
 def test_jobs_api_echoes_new_fields(
@@ -670,7 +678,7 @@ def test_jobs_api_echoes_new_fields(
     assert d["init_image_sha256"] == hashlib.sha256(raw).hexdigest()
     assert d["strength"] == 0.55
     assert d["loras"] == [{"id": lora_id, "scale": 0.7}]
-    assert store.take_init_image(job_id) == raw, "bytes must be stashed for the runner"
+    assert store.get_init_image(job_id) == raw, "bytes must be available to the runner"
 
 
 # ── /loras HTTP contract ──────────────────────────────────────────────────────

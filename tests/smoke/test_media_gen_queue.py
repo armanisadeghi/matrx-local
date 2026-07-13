@@ -315,9 +315,9 @@ def test_priority_next_persists_across_reload(
     # In-memory: C is the next queued job (front of the pending queue).
     assert store.next_queued().job_id == c.job_id  # type: ignore[union-attr]
 
-    # Reload from jobs.json: order AND the priority flag survive. (Statuses
-    # do NOT: by design load() marks any in-flight queued/running job as
-    # failed — jobs are never silently resurrected after a restart.)
+    # Reload from jobs.json: order, the priority flag, AND the pending work all
+    # survive. A restart is not the queue's fault — an unattended batch must
+    # still be there in the morning.
     store2 = ImageJobStore()
     store2.load()
     reloaded = {j.job_id: j for j in store2.recent()}
@@ -326,10 +326,20 @@ def test_priority_next_persists_across_reload(
     order = [j.job_id for j in store2.recent()]  # newest-first display order
     # _order on disk is [A, C, B] → recent() (reversed) is [B, C, A].
     assert order == [b.job_id, c.job_id, a.job_id]
-    # No job was resurrected as queued/running.
-    for job in reloaded.values():
-        assert job.status == "failed"
-        assert job.error == "Engine restarted while the job was in flight"
+
+    # B and C were queued and stay queued; A was caught mid-flight and goes
+    # BACK to the queue with its attempt counted (never silently destroyed).
+    assert reloaded[b.job_id].status == "queued"
+    assert reloaded[c.job_id].status == "queued"
+    assert reloaded[a.job_id].status == "queued"
+    assert reloaded[a.job_id].attempts == 1
+    assert "restart" in (reloaded[a.job_id].last_error or "").lower()
+
+    # Queue order after the restart is A → C → B: the interrupted job resumes
+    # first (it was already ahead of everything), and C keeps the "up next"
+    # slot it was given — which was always "next AFTER the running job".
+    assert [j.job_id for j in store2.pending()] == [a.job_id, c.job_id, b.job_id]
+    assert store2.next_queued().job_id == a.job_id  # type: ignore[union-attr]
 
 
 # ── HTTP contract ─────────────────────────────────────────────────────────────

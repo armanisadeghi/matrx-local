@@ -4281,6 +4281,166 @@ export interface ImageGenJob {
   item_id?: string | null;
   file_path?: string | null;
   created_at?: string;
+
+  // ── Batch (prompt matrix) ──────────────────────────────────────────────────
+  /** Set when the job belongs to a batch enqueued via POST /image-gen/jobs/batch. */
+  batch_id?: string | null;
+  /** Position within the batch (0-based) — also its run order. */
+  batch_index?: number;
+  batch_size?: number;
+  batch_label?: string | null;
+  /** The matrix variables this job realizes, e.g. `{ style: "noir" }`. */
+  variables?: Record<string, string>;
+  /** `style=noir · subject=cat` — the queue row's subtitle. */
+  combo_label?: string | null;
+
+  // ── Retry ─────────────────────────────────────────────────────────────────
+  /** Runs started so far (1 during the first attempt). */
+  attempts?: number;
+  max_attempts?: number;
+  /** True while the job is queued for ANOTHER attempt after a failure. */
+  retrying?: boolean;
+  /** Seconds of backoff left before the retry starts. */
+  retry_in_seconds?: number;
+  /** Error from the most recent failed attempt (set while it retries). */
+  last_error?: string | null;
+}
+
+/** One run of a batch: a full generate request plus its matrix identity.
+ *
+ * A type alias, not an interface: an interface cannot `extends` an indexed
+ * access type. Sourcing the request shape from generateImage's own parameter
+ * keeps it in lockstep with the engine contract without importing the hook
+ * layer (which would be an import cycle). */
+export type ImageGenBatchJobSpec = Parameters<typeof generateImage>[1] & {
+  /** The variable values this run realizes, e.g. `{ subject: "cat" }`. */
+  variables?: Record<string, string>;
+  /** Rendered summary, e.g. `subject=cat · style=noir`. */
+  combo_label?: string;
+};
+
+/** Roll-up of one batch — the queue UI shows this as a single row. */
+export interface ImageGenBatch {
+  batch_id: string;
+  label: string | null;
+  total: number;
+  queued: number;
+  running: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  /** completed + failed + cancelled. */
+  done: number;
+  /** True when nothing is queued or running any more. */
+  finished: boolean;
+  created_at: number;
+}
+
+export interface ImageGenQueueState {
+  /** True when the queue is not starting new jobs (the running one finishes). */
+  paused: boolean;
+  queued: number;
+  running: number;
+}
+
+/**
+ * Enqueue N jobs as ONE batch — what the prompt matrix submits.
+ *
+ * Every job is validated server-side BEFORE any is queued: a single bad run
+ * rejects the whole request naming the offending index. Half a sweep in the
+ * queue is worse than none.
+ */
+export async function enqueueImageGenBatch(
+  baseUrl: string,
+  req: { label?: string; jobs: ImageGenBatchJobSpec[] },
+): Promise<{ batch_id: string; job_ids: string[]; count: number }> {
+  return imageGenFetch<{ batch_id: string; job_ids: string[]; count: number }>(
+    imageGenUrl(baseUrl, "/jobs/batch"),
+    { method: "POST", body: JSON.stringify(req) },
+    // A 500-job batch is a big body and a lot of server-side validation.
+    60_000,
+  );
+}
+
+/** GET /image-gen/batches — per-batch roll-up, newest first. */
+export async function listImageGenBatches(
+  baseUrl: string,
+): Promise<ImageGenBatch[]> {
+  return imageGenFetch<ImageGenBatch[]>(imageGenUrl(baseUrl, "/batches"));
+}
+
+/**
+ * Cancel every unfinished job of a batch. Images the batch already produced
+ * are NOT deleted — cancelling the last 80 of a 120-image sweep must never
+ * destroy the 40 already made.
+ */
+export async function cancelImageGenBatch(
+  baseUrl: string,
+  batchId: string,
+): Promise<{ batch_id: string; cancelled: number; cancelling_job_id: string | null }> {
+  return imageGenFetch(
+    imageGenUrl(baseUrl, `/batches/${encodeURIComponent(batchId)}`),
+    { method: "DELETE" },
+  );
+}
+
+/** GET /image-gen/queue — paused flag + how much work is left. */
+export async function getImageGenQueueState(
+  baseUrl: string,
+): Promise<ImageGenQueueState> {
+  return imageGenFetch<ImageGenQueueState>(imageGenUrl(baseUrl, "/queue"));
+}
+
+/**
+ * Pause/resume the queue. A pause lets the RUNNING job finish (aborting a
+ * 90%-denoised generation to honour a pause would throw away the GPU minutes
+ * already spent); nothing new starts until resume.
+ */
+export async function setImageGenQueuePaused(
+  baseUrl: string,
+  paused: boolean,
+): Promise<ImageGenQueueState> {
+  return imageGenFetch<ImageGenQueueState>(
+    imageGenUrl(baseUrl, paused ? "/queue/pause" : "/queue/resume"),
+    { method: "POST" },
+  );
+}
+
+/**
+ * Reorder the pending queue (drag-and-drop). `jobIds` is the desired order of
+ * the QUEUED jobs; the running job is never moved, and ids that are no longer
+ * queued are ignored (the user dragged a row as it started running).
+ * Returns the resulting pending order.
+ */
+export async function reorderImageGenQueue(
+  baseUrl: string,
+  jobIds: string[],
+): Promise<ImageGenJob[]> {
+  return imageGenFetch<ImageGenJob[]>(
+    imageGenUrl(baseUrl, "/queue/reorder"),
+    { method: "POST", body: JSON.stringify({ job_ids: jobIds }) },
+  );
+}
+
+/** Requeue a failed or cancelled job with a fresh attempt budget. */
+export async function retryImageGenJob(
+  baseUrl: string,
+  jobId: string,
+): Promise<ImageGenJob> {
+  return imageGenFetch<ImageGenJob>(
+    imageGenUrl(baseUrl, `/jobs/${encodeURIComponent(jobId)}/retry`),
+    { method: "POST" },
+  );
+}
+
+/** Drop every finished job record. Media-library items are NOT deleted. */
+export async function clearFinishedImageGenJobs(
+  baseUrl: string,
+): Promise<{ removed: number }> {
+  return imageGenFetch<{ removed: number }>(
+    imageGenUrl(baseUrl, "/jobs/clear-finished"),
+    { method: "POST" },
+  );
 }
 
 /**
@@ -4674,6 +4834,18 @@ export interface VideoGenJob {
   error: string | null;
   prompt: string;
   model_id: string;
+  /**
+   * Media-library id once completed. The engine has always sent these fields
+   * (see app/api/video_gen_routes.py → VideoJobResponse); the client simply
+   * never typed them, which is why a generated video had no identity and could
+   * not be deleted, vaulted, inspected or remixed from the video surface.
+   */
+  item_id?: string | null;
+  seed?: number | null;
+  width?: number;
+  height?: number;
+  num_frames?: number;
+  fps?: number;
 }
 
 export interface VideoGenRequest {
@@ -4916,6 +5088,12 @@ export interface MediaLibraryItem {
   file_name: string;
   file_size_bytes: number;
   file_path: string;
+  /**
+   * Name of the stored img2img SOURCE image, when this item was generated from
+   * one. Non-null means fetchMediaInitImage() serves those bytes — the "Remix"
+   * action uses it to restore the input image, not just the settings.
+   */
+  init_image_file?: string | null;
 }
 
 export interface MediaLibraryListResponse {
@@ -5038,6 +5216,34 @@ export async function fetchMediaLibraryFile(
   }
   const blob = await resp.blob();
   return URL.createObjectURL(blob);
+}
+
+/**
+ * The img2img SOURCE image an item was generated from, as a Blob.
+ *
+ * Only call this when the item's `init_image_file` is non-null — the engine
+ * 404s otherwise. This is what makes "Remix" complete: the settings come from
+ * the sidecar, the input image comes from here.
+ */
+export async function fetchMediaInitImage(
+  baseUrl: string,
+  itemId: string,
+): Promise<Blob> {
+  const auth = await engine.getEngineAuthHeaders();
+  const resp = await fetch(
+    mediaLibraryUrl(baseUrl, `/items/${encodeURIComponent(itemId)}/init-image`),
+    { headers: new Headers({ ...auth }) },
+  );
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => `HTTP ${resp.status}`);
+    emitClientLog(
+      "error",
+      `[media-library] GET /items/${itemId}/init-image → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
+      "engine",
+    );
+    throw new MediaFileError(resp.status, detail || `HTTP ${resp.status}`);
+  }
+  return resp.blob();
 }
 
 export async function deleteMediaLibraryItem(

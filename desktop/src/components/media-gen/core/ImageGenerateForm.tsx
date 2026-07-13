@@ -18,7 +18,7 @@
  * pure views over it, configurable by layout-level props only.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
@@ -28,6 +28,7 @@ import {
   Image as ImageIcon,
   ImagePlus,
   KeyRound,
+  Layers,
   ListPlus,
   Loader2,
   Sparkles,
@@ -66,6 +67,16 @@ import {
   SeedInput,
   formatGb,
 } from "@/components/media-gen/shared";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  BatchQueuePanel,
+  PromptMatrixPanel,
+  PromptMatrixQueueBar,
+} from "./PromptMatrix";
 import type { ImageGenController } from "./imageController";
 
 // ── Prompt ───────────────────────────────────────────────────────────────────
@@ -846,6 +857,84 @@ export function ImageParamsLoading({ ctl }: { ctl: ImageGenController }) {
  * The complete vertical image generate form. Layouts that need a different
  * arrangement (Gallery popovers, Focus steps) compose the blocks directly.
  */
+// ── Single ⇄ Batch mode ──────────────────────────────────────────────────────
+
+/**
+ * Which mode the generate form is in. Persisted so it survives a reload — a
+ * user who works in batches should not have to re-pick it every session.
+ * localStorage (not context) because it is a lone boolean-ish preference, and
+ * the matrix STATE it reveals already lives in PromptMatrixContext.
+ */
+export type ImageGenMode = "single" | "batch";
+
+const MODE_KEY = "matrx-image-gen-mode";
+
+function readMode(): ImageGenMode {
+  return localStorage.getItem(MODE_KEY) === "batch" ? "batch" : "single";
+}
+
+export function useImageGenMode(): [ImageGenMode, (m: ImageGenMode) => void] {
+  const [mode, setModeState] = useState<ImageGenMode>(readMode);
+  const setMode = useCallback((m: ImageGenMode) => {
+    setModeState(m);
+    try {
+      localStorage.setItem(MODE_KEY, m);
+    } catch (err) {
+      // Non-fatal (the mode still applies this session) but never silent.
+      console.error("[media-gen] Could not persist the generate mode:", err);
+    }
+  }, []);
+  return [mode, setMode];
+}
+
+export function ImageGenModeToggle({
+  mode,
+  onChange,
+  queuedCount = 0,
+}: {
+  mode: ImageGenMode;
+  onChange: (mode: ImageGenMode) => void;
+  queuedCount?: number;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="inline-flex rounded-md border p-0.5">
+        <Button
+          variant={mode === "single" ? "secondary" : "ghost"}
+          size="sm"
+          className="h-6 gap-1.5 px-2 text-xs"
+          onClick={() => onChange("single")}
+        >
+          <ImageIcon className="h-3.5 w-3.5" />
+          Single
+        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={mode === "batch" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-6 gap-1.5 px-2 text-xs"
+              onClick={() => onChange("batch")}
+            >
+              <Layers className="h-3.5 w-3.5" />
+              Batch
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs">
+            Write one prompt with {"{{variables}}"}, give each variable a list of
+            options, and queue every combination in one go.
+          </TooltipContent>
+        </Tooltip>
+      </div>
+      {queuedCount > 0 && (
+        <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+          {queuedCount} in queue
+        </Badge>
+      )}
+    </div>
+  );
+}
+
 export function ImageGenerateForm({
   ctl,
   hideActions = false,
@@ -861,6 +950,9 @@ export function ImageGenerateForm({
   showHeader?: boolean;
   onSwitchModel?: () => void;
 }) {
+  const [mode, setMode] = useImageGenMode();
+  const batch = mode === "batch";
+
   return (
     <div className="space-y-4">
       {showHeader && (
@@ -870,13 +962,38 @@ export function ImageGenerateForm({
         />
       )}
       {!hideNotices && <ImageParamsErrorNotice ctl={ctl} />}
-      <ImagePromptField ctl={ctl} />
-      <ImageCommonSettings ctl={ctl} />
+
+      <ImageGenModeToggle
+        mode={mode}
+        onChange={setMode}
+        queuedCount={ctl.activeJobCount}
+      />
+
+      {/* In batch mode the matrix REPLACES the single prompt field: the
+          template, its variables and the strategy all live above the base
+          settings that every run in the batch shares. */}
+      {batch ? <PromptMatrixPanel ctl={ctl} /> : <ImagePromptField ctl={ctl} />}
+
+      {batch && (
+        <p className="text-[11px] text-muted-foreground">
+          Settings below apply to every run in the batch — except any you sweep
+          as a variable, which wins.
+        </p>
+      )}
+
+      <ImageCommonSettings ctl={ctl} showNegative={!batch} />
       <InputImageControl ctl={ctl} />
       <LoraStylesSection ctl={ctl} />
       <ImageAdvancedSection ctl={ctl} />
       {!hideNotices && <ImageFormNotices ctl={ctl} />}
-      {!hideActions && <ImageGenerateActions ctl={ctl} />}
+
+      {batch ? (
+        <PromptMatrixQueueBar ctl={ctl} />
+      ) : (
+        !hideActions && <ImageGenerateActions ctl={ctl} />
+      )}
+
+      {batch && <BatchQueuePanel />}
     </div>
   );
 }

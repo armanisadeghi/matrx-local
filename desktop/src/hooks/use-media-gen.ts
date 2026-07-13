@@ -34,6 +34,14 @@ import {
   enqueueImageGenJob as apiEnqueueImageGenJob,
   listImageGenJobs as apiListImageGenJobs,
   cancelImageGenJob as apiCancelImageGenJob,
+  enqueueImageGenBatch as apiEnqueueImageGenBatch,
+  listImageGenBatches as apiListImageGenBatches,
+  cancelImageGenBatch as apiCancelImageGenBatch,
+  getImageGenQueueState as apiGetImageGenQueueState,
+  setImageGenQueuePaused as apiSetImageGenQueuePaused,
+  reorderImageGenQueue as apiReorderImageGenQueue,
+  retryImageGenJob as apiRetryImageGenJob,
+  clearFinishedImageGenJobs as apiClearFinishedImageGenJobs,
   cancelImageGeneration as apiCancelImageGeneration,
   cancelVideoGenJob as apiCancelVideoGenJob,
   fetchMediaLibraryFile as apiFetchMediaLibraryFile,
@@ -63,6 +71,9 @@ import type {
   ImageGenModelInfo,
   ImageGenWorkflowPreset,
   ImageGenJob,
+  ImageGenBatch,
+  ImageGenBatchJobSpec,
+  ImageGenQueueState,
   ImageGenLoraList,
   MediaGenParams,
   MediaLoadResult,
@@ -75,6 +86,7 @@ import type {
 } from "@/lib/api";
 import { emitClientLog } from "@/hooks/use-unified-log";
 import { VAULT_UNLOCKED_EVENT } from "@/hooks/use-media-vault";
+import { onMediaItemsRemoved, onVaultLocked } from "@/lib/media-events";
 
 const ENGINE_NOT_CONNECTED = "Engine not connected";
 // User-facing message for ACTION paths (download/load/generate/…) that cannot
@@ -199,6 +211,15 @@ export interface SelectedLora {
 /** Fallback img2img strength when the params endpoint carries no default. */
 export const IMG2IMG_DEFAULT_STRENGTH = 0.6;
 
+/**
+ * Outcome of a batch enqueue. All-or-nothing on purpose: the engine validates
+ * every run before it queues any, so a rejected batch leaves the queue exactly
+ * as it was and the caller gets the reason to show.
+ */
+export type EnqueueBatchResult =
+  | { ok: true; batchId: string; count: number }
+  | { ok: false; error: string };
+
 export interface ImageFormState {
   view: MediaGenView;
   prompt: string;
@@ -282,6 +303,87 @@ function advancedJsonOf(advanced: Record<string, unknown>): string {
     : "";
 }
 
+// ── Remix ────────────────────────────────────────────────────────────────────
+
+/**
+ * The recorded generation of a past image — everything the engine's sidecar
+ * kept. Feeding this to `remixImageForm` rebuilds the form into exactly the
+ * state that produced it.
+ */
+export interface ImageRemixRecord {
+  prompt?: string;
+  negativePrompt?: string;
+  seed?: number | null;
+  width?: number;
+  height?: number;
+  /** The FULL resolved pipeline kwargs the engine recorded. */
+  params?: Record<string, unknown>;
+}
+
+/**
+ * Params the form models with a dedicated control. They are applied to those
+ * controls and MUST NOT also land in the advanced-JSON editor — sending a key
+ * as both a common param and an extra_param is a double-send the engine
+ * rejects.
+ */
+const FORM_OWNED_PARAM_KEYS = new Set([
+  "prompt",
+  "negative_prompt",
+  "width",
+  "height",
+  "num_inference_steps",
+  "guidance_scale",
+  "strength",
+  "loras",
+  "has_init_image",
+  "init_image_sha256",
+]);
+
+function numParamOf(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): number | null {
+  const v = params?.[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * True when a recorded param value is NOT safe to replay.
+ *
+ * The engine's sidecar records every kwarg it passed to the pipeline, and
+ * `json_sanitize` turns anything non-JSON (a torch dtype, a scheduler object)
+ * into its Python `repr` — e.g. `"<class 'torch.float16'>"`. Feeding that
+ * string back as an extra_param would 400 the generation. A remix keeps the
+ * model's real default for those keys instead of replaying a repr.
+ */
+function isUnreplayableValue(v: unknown): boolean {
+  return typeof v === "string" && /^<.*>$/.test(v.trim());
+}
+
+/** The LoRA selections recorded on a past generation (all enabled). */
+function recordedLoras(
+  params: Record<string, unknown> | undefined,
+): SelectedLora[] {
+  const raw = params?.["loras"];
+  if (!Array.isArray(raw)) return [];
+  const out: SelectedLora[] = [];
+  for (const entry of raw) {
+    if (entry && typeof entry === "object") {
+      const rec = entry as Record<string, unknown>;
+      const id = rec["id"];
+      if (typeof id === "string") {
+        const scale = rec["scale"];
+        out.push({
+          id,
+          scale: typeof scale === "number" ? scale : 1,
+          enabled: true,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 export interface MediaGenState {
   // ── Image ──────────────────────────────────────────────────────────────
   imageStatus: ImageGenStatus | null;
@@ -320,6 +422,14 @@ export interface MediaGenState {
   /** Image job queue, newest first (engine order). */
   imageJobs: ImageGenJob[];
   imageJobsError: string | null;
+  /**
+   * Whether the queue is draining, and how much is left. Null before the first
+   * fetch. `paused` is the master switch for unattended runs: the running job
+   * finishes, nothing new starts.
+   */
+  imageQueueState: ImageGenQueueState | null;
+  /** Per-batch roll-up (a prompt-matrix sweep is ONE row), newest first. */
+  imageBatches: ImageGenBatch[];
   /** jobId → object URL of a completed job's image (thumbnails). */
   imageJobThumbs: Record<string, string>;
   /** Installed + catalog LoRA adapters, or null before the first fetch. */
@@ -366,6 +476,8 @@ export interface MediaGenState {
 export interface MediaGenActions {
   // Image
   refreshImage: () => Promise<void>;
+  /** The latest fetched image model catalog (see getImageModels impl). */
+  getImageModels: () => ImageGenModelInfo[];
   loadImageModel: (modelId: string) => Promise<MediaLoadResult>;
   unloadImageModel: () => Promise<void>;
   downloadImageModel: (modelId: string) => Promise<boolean>;
@@ -393,6 +505,18 @@ export interface MediaGenActions {
    * and `imageForm.paramsError` is set — loud, never silent.
    */
   prepareImageGenerate: (model: ImageGenModelInfo) => Promise<void>;
+  /**
+   * REMIX: rebuild the image form into exactly the state that produced a past
+   * generation — prompt, negative prompt, seed, size, steps, guidance, img2img
+   * strength, LoRAs and every advanced pipeline kwarg the engine recorded.
+   *
+   * Call it AFTER `prepareImageGenerate(model)` has resolved (that fetches the
+   * model's parameter schema); this patch is applied on top of those defaults,
+   * so a parameter the model no longer accepts falls back to its default
+   * instead of poisoning the request. The input image is restored separately by
+   * the caller (its bytes come from the engine, not the sidecar).
+   */
+  remixImageForm: (record: ImageRemixRecord) => void;
   /** Reset the common controls to the current model's defaults. */
   resetImageCommon: () => void;
   /** Reset the advanced JSON to the current model's defaults. */
@@ -411,6 +535,28 @@ export interface MediaGenActions {
   ) => Promise<boolean>;
   /** Cancel a queued job / remove a finished one. */
   cancelImageJob: (jobId: string) => Promise<void>;
+  // Batches (prompt matrix) + queue control
+  /**
+   * Enqueue N runs as ONE batch — what the prompt matrix submits.
+   * The engine validates EVERY run before queueing any, so this either queues
+   * the whole sweep or none of it (`ok: false` with the reason).
+   */
+  enqueueImageBatch: (
+    jobs: ImageGenBatchJobSpec[],
+    label?: string,
+  ) => Promise<EnqueueBatchResult>;
+  /** Re-fetch the paused flag + per-batch roll-ups. */
+  refreshImageQueue: () => Promise<void>;
+  /** Pause/resume the queue. The RUNNING job always finishes. */
+  setImageQueuePaused: (paused: boolean) => Promise<void>;
+  /** Reorder the QUEUED jobs (drag-and-drop); the running job never moves. */
+  reorderImageQueue: (jobIds: string[]) => Promise<void>;
+  /** Requeue a failed/cancelled job with a fresh attempt budget. */
+  retryImageJob: (jobId: string) => Promise<void>;
+  /** Cancel every unfinished job of a batch. Finished images are kept. */
+  cancelImageBatch: (batchId: string) => Promise<void>;
+  /** Drop finished job records. Media-library items are NOT deleted. */
+  clearFinishedImageJobs: () => Promise<void>;
   // LoRA adapters
   /** Re-fetch installed + catalog LoRAs. Failures land in loraError (loud). */
   refreshLoras: () => Promise<void>;
@@ -512,6 +658,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     useState<ImageFormState>(INITIAL_IMAGE_FORM);
   const [imageJobs, setImageJobs] = useState<ImageGenJob[]>([]);
   const [imageJobsError, setImageJobsError] = useState<string | null>(null);
+  const [imageQueueState, setImageQueueState] =
+    useState<ImageGenQueueState | null>(null);
+  const [imageBatches, setImageBatches] = useState<ImageGenBatch[]>([]);
   const [imageJobThumbs, setImageJobThumbs] = useState<Record<string, string>>(
     {},
   );
@@ -556,6 +705,13 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const imageJobThumbFailuresRef = useRef<
     Record<string, "pending" | "locked" | "gone">
   >({});
+  // Job ids whose thumbnail bytes were served out of the (unlocked) vault —
+  // i.e. the fetch previously 423'd and only succeeded after an unlock. These
+  // are the decrypted images that must disappear the moment the vault locks.
+  const vaultBackedJobsRef = useRef<Set<string>>(new Set());
+  // Job ids whose thumbnail fetch has EVER been refused with a 423 — the marker
+  // that the item lives in the vault, not the plaintext library.
+  const imageJobThumbWasLockedRef = useRef<Set<string>>(new Set());
   const refreshVideoRef = useRef<(() => Promise<void>) | null>(null);
   // Consecutive job-poll failures — after 3 (or an immediate 404) we synthesize
   // a terminal "failed" state so the poll interval tears down and the UI
@@ -572,6 +728,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   // never a concurrent one-shot against the engine.
   const imageOneShotInFlightRef = useRef(false);
   const imageJobsRef = useRef<ImageGenJob[]>([]);
+  const imageModelsRef = useRef<ImageGenModelInfo[]>([]);
   const imagePresetsRef = useRef<ImageGenWorkflowPreset[]>([]);
   // Video enqueue run id — guards the brief "Starting…" phase so a cancel
   // issued before the job id exists doesn't get resurrected by a late 202.
@@ -652,6 +809,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         listImageGenPresets(base),
       ]);
       setImageStatus(status);
+      imageModelsRef.current = models; // sync now — remix reads it post-await
       setImageModels(models);
       setImagePresets(presets);
       setImageStatusError(null);
@@ -666,6 +824,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     // it reports its own error via imageJobsError.
     void refreshImageJobs();
   }, [refreshImageJobs]);
+
+  /** The latest fetched image model catalog, readable synchronously after an
+   * awaited refreshImage() (React state + its sync effect would still be stale
+   * at that point). */
+  const getImageModels = useCallback(() => imageModelsRef.current, []);
 
   const setImageForm = useCallback((patch: Partial<ImageFormState>) => {
     setImageFormState((prev) => ({ ...prev, ...patch }));
@@ -732,6 +895,41 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     },
     [fetchParams],
   );
+
+  const remixImageForm = useCallback((record: ImageRemixRecord) => {
+    setImageFormState((prev) => {
+      const p = record.params;
+      const steps = numParamOf(p, "num_inference_steps");
+      const guidance = numParamOf(p, "guidance_scale");
+      const strength = numParamOf(p, "strength");
+      // Advanced = the model's advanced defaults, with every key the ORIGINAL
+      // generation recorded overriding its default. Keys the form owns are
+      // excluded — they are applied to their own controls above.
+      const advancedDefaults = prev.defaults?.advanced ?? {};
+      const advanced: Record<string, unknown> = { ...advancedDefaults };
+      for (const [k, v] of Object.entries(p ?? {})) {
+        if (FORM_OWNED_PARAM_KEYS.has(k)) continue;
+        // Only keys the model actually accepts, and only values we can replay.
+        if (k in advancedDefaults && !isUnreplayableValue(v)) advanced[k] = v;
+      }
+      return {
+        ...prev,
+        view: "generate",
+        prompt: record.prompt ?? "",
+        negativePrompt: record.negativePrompt ?? "",
+        seedText:
+          typeof record.seed === "number" ? String(record.seed) : prev.seedText,
+        width: record.width ?? prev.width,
+        height: record.height ?? prev.height,
+        steps: steps ?? prev.steps,
+        guidance: guidance ?? prev.guidance,
+        strength:
+          strength ?? prev.defaults?.strength ?? IMG2IMG_DEFAULT_STRENGTH,
+        loras: recordedLoras(p),
+        advancedText: advancedJsonOf(advanced),
+      };
+    });
+  }, []);
 
   const resetImageCommon = useCallback(() => {
     setImageFormState((prev) => {
@@ -1127,6 +1325,174 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     [refreshImageJobs],
   );
 
+  // ── Batches (prompt matrix) + queue control ───────────────────────────────
+
+  const refreshImageQueue = useCallback(async () => {
+    const base = engine.engineUrl;
+    if (!base) return;
+    try {
+      const [state, batches] = await Promise.all([
+        apiGetImageGenQueueState(base),
+        apiListImageGenBatches(base),
+      ]);
+      setImageQueueState(state);
+      setImageBatches(batches);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      emitClientLog("warn", `[media-gen] queue state fetch failed: ${msg}`, "engine");
+    }
+  }, []);
+
+  const enqueueImageBatch = useCallback(
+    async (
+      jobs: ImageGenBatchJobSpec[],
+      label?: string,
+    ): Promise<EnqueueBatchResult> => {
+      const base = engine.engineUrl;
+      if (!base) {
+        logEngineNotConnected("enqueue image batch");
+        setImageGenError(ENGINE_NOT_CONNECTED_ACTION);
+        return { ok: false, error: ENGINE_NOT_CONNECTED_ACTION };
+      }
+      try {
+        const res = await apiEnqueueImageGenBatch(base, {
+          jobs,
+          ...(label !== undefined ? { label } : {}),
+        });
+        emitClientLog(
+          "info",
+          `[media-gen] queued batch ${res.batch_id} (${res.count} job(s))`,
+          "engine",
+        );
+        await Promise.all([refreshImageJobs(), refreshImageQueue()]);
+        return { ok: true, batchId: res.batch_id, count: res.count };
+      } catch (e) {
+        // LOUD: the whole batch was rejected (the engine validates every run
+        // before queueing any), so the user must see WHY — never a silent
+        // half-enqueued sweep.
+        const error = e instanceof Error ? e.message : "Failed to queue the batch";
+        setImageGenError(error);
+        return { ok: false, error };
+      }
+    },
+    [refreshImageJobs, refreshImageQueue],
+  );
+
+  const setImageQueuePaused = useCallback(
+    async (paused: boolean) => {
+      const base = engine.engineUrl;
+      if (!base) {
+        logEngineNotConnected("pause image queue");
+        setImageJobsError(ENGINE_NOT_CONNECTED_ACTION);
+        return;
+      }
+      // Optimistic — the toggle must feel instant even mid-generation.
+      setImageQueueState((prev) => (prev ? { ...prev, paused } : prev));
+      try {
+        setImageQueueState(await apiSetImageGenQueuePaused(base, paused));
+      } catch (e) {
+        setImageJobsError(
+          e instanceof Error ? e.message : "Failed to change the queue state",
+        );
+        await refreshImageQueue();
+      }
+    },
+    [refreshImageQueue],
+  );
+
+  const reorderImageQueue = useCallback(
+    async (jobIds: string[]) => {
+      const base = engine.engineUrl;
+      if (!base) {
+        logEngineNotConnected("reorder image queue");
+        setImageJobsError(ENGINE_NOT_CONNECTED_ACTION);
+        return;
+      }
+      // Optimistic reorder: the dragged row must land where it was dropped and
+      // STAY there. Reconciled against the engine's authoritative order below.
+      setImageJobs((prev) => {
+        const rank = new Map(jobIds.map((id, i) => [id, i]));
+        const queued = prev
+          .filter((j) => j.status === "queued")
+          .sort((a, b) => {
+            const ai = rank.get(a.job_id) ?? Number.MAX_SAFE_INTEGER;
+            const bi = rank.get(b.job_id) ?? Number.MAX_SAFE_INTEGER;
+            return ai - bi;
+          });
+        let q = 0;
+        return prev.map((j) =>
+          j.status === "queued" ? (queued[q++] as ImageGenJob) : j,
+        );
+      });
+      try {
+        await apiReorderImageGenQueue(base, jobIds);
+      } catch (e) {
+        setImageJobsError(
+          e instanceof Error ? e.message : "Failed to reorder the queue",
+        );
+      }
+      await refreshImageJobs();
+    },
+    [refreshImageJobs],
+  );
+
+  const retryImageJob = useCallback(
+    async (jobId: string) => {
+      const base = engine.engineUrl;
+      if (!base) {
+        logEngineNotConnected("retry image job");
+        setImageJobsError(ENGINE_NOT_CONNECTED_ACTION);
+        return;
+      }
+      try {
+        await apiRetryImageGenJob(base, jobId);
+      } catch (e) {
+        setImageJobsError(
+          e instanceof Error ? e.message : "Failed to retry the job",
+        );
+      }
+      await Promise.all([refreshImageJobs(), refreshImageQueue()]);
+    },
+    [refreshImageJobs, refreshImageQueue],
+  );
+
+  const cancelImageBatch = useCallback(
+    async (batchId: string) => {
+      const base = engine.engineUrl;
+      if (!base) {
+        logEngineNotConnected("cancel image batch");
+        setImageJobsError(ENGINE_NOT_CONNECTED_ACTION);
+        return;
+      }
+      try {
+        await apiCancelImageGenBatch(base, batchId);
+      } catch (e) {
+        setImageJobsError(
+          e instanceof Error ? e.message : "Failed to cancel the batch",
+        );
+      }
+      await Promise.all([refreshImageJobs(), refreshImageQueue()]);
+    },
+    [refreshImageJobs, refreshImageQueue],
+  );
+
+  const clearFinishedImageJobs = useCallback(async () => {
+    const base = engine.engineUrl;
+    if (!base) {
+      logEngineNotConnected("clear finished image jobs");
+      setImageJobsError(ENGINE_NOT_CONNECTED_ACTION);
+      return;
+    }
+    try {
+      await apiClearFinishedImageGenJobs(base);
+    } catch (e) {
+      setImageJobsError(
+        e instanceof Error ? e.message : "Failed to clear finished jobs",
+      );
+    }
+    await Promise.all([refreshImageJobs(), refreshImageQueue()]);
+  }, [refreshImageJobs, refreshImageQueue]);
+
   // ── LoRA adapters ─────────────────────────────────────────────────────────
   const refreshLoras = useCallback(async () => {
     const base = engine.engineUrl;
@@ -1295,6 +1661,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   );
 
   // Poll the image job queue every 2s ONLY while something is queued/running.
+  // Batch roll-ups and the paused flag ride along on the same tick — a second
+  // interval would just be a second way to hammer the engine.
   const hasActiveImageJobs = imageJobs.some(
     (j) => j.status === "queued" || j.status === "running",
   );
@@ -1302,9 +1670,17 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     if (!hasActiveImageJobs) return;
     const id = window.setInterval(() => {
       void refreshImageJobs();
+      void refreshImageQueue();
     }, 2000);
     return () => window.clearInterval(id);
-  }, [hasActiveImageJobs, refreshImageJobs]);
+  }, [hasActiveImageJobs, refreshImageJobs, refreshImageQueue]);
+
+  // One init fetch, so the paused flag is known before anything is queued (a
+  // queue left paused last session must not silently swallow new work).
+  // In the hook, NOT the page — a page-level init effect re-runs every render.
+  useEffect(() => {
+    void refreshImageQueue();
+  }, [refreshImageQueue]);
 
   // ── Model-load watchdog (image) ────────────────────────────────────────────
   // While the engine reports is_loading, poll status every 2s so (a) the
@@ -1368,9 +1744,12 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       // enough to put 41 red 404s in the issue report, forever.
       if (imageJobThumbFailuresRef.current[jobId]) continue;
       imageJobThumbFailuresRef.current[jobId] = "pending";
+      const wasLocked = imageJobThumbWasLockedRef.current.has(jobId);
       void apiFetchMediaLibraryFile(base, itemId)
         .then((url) => {
           delete imageJobThumbFailuresRef.current[jobId];
+          // Resolved only after an unlock → these bytes came out of the vault.
+          if (wasLocked) vaultBackedJobsRef.current.add(jobId);
           if (cancelled) {
             URL.revokeObjectURL(url);
             return;
@@ -1390,6 +1769,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
           // else is permanent: record it and never ask again.
           const locked = e instanceof MediaFileError && e.isVaultLocked;
           imageJobThumbFailuresRef.current[jobId] = locked ? "locked" : "gone";
+          if (locked) imageJobThumbWasLockedRef.current.add(jobId);
           if (!locked) {
             emitClientLog(
               "warn",
@@ -1422,6 +1802,90 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     window.addEventListener(VAULT_UNLOCKED_EVENT, onUnlocked);
     return () => window.removeEventListener(VAULT_UNLOCKED_EVENT, onUnlocked);
   }, []);
+
+  // The vault LOCKED. Any job thumbnail whose bytes came out of the vault is a
+  // decrypted image still on screen — revoking the URL does not blank an <img>
+  // that already rendered, so the thumbnails must be dropped from state. They
+  // are marked "locked", which the VAULT_UNLOCKED_EVENT listener above re-arms.
+  //
+  // We cannot tell from a job which items are vaulted, so we drop the thumbs of
+  // every job whose item is NOT in the plaintext library any more — those are
+  // exactly the ones that were served out of the vault.
+  useEffect(
+    () =>
+      onVaultLocked(() => {
+        const vaulted = imageJobsRef.current.filter(
+          (j) => j.item_id && vaultBackedJobsRef.current.has(j.job_id),
+        );
+        if (vaulted.length === 0) return;
+        for (const j of vaulted) {
+          imageJobThumbFailuresRef.current[j.job_id] = "locked";
+        }
+        setImageJobThumbs((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const j of vaulted) {
+            const url = next[j.job_id];
+            if (url) {
+              URL.revokeObjectURL(url);
+              delete next[j.job_id];
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+        vaultBackedJobsRef.current.clear();
+      }),
+    [],
+  );
+
+  // An item left the plaintext library (deleted, or moved into the vault).
+  // Every job whose result WAS that item must drop its thumbnail in the same
+  // tick — a stale blob URL here is exactly the partial state update that left
+  // deleted images visible in the queue and a dead id in the lightbox.
+  useEffect(
+    () =>
+      onMediaItemsRemoved(({ itemIds, reason }) => {
+        const gone = new Set(itemIds);
+        // The fresh one-shot result pane must not survive its own deletion.
+        setImageResult((prev) =>
+          prev && prev.itemId && gone.has(prev.itemId) ? null : prev,
+        );
+        const affected = imageJobsRef.current
+          .filter((j) => j.item_id && gone.has(j.item_id))
+          .map((j) => j.job_id);
+        if (affected.length === 0) return;
+        for (const jobId of affected) {
+          // Vaulted items come back on unlock; deleted ones never do.
+          imageJobThumbFailuresRef.current[jobId] =
+            reason === "vaulted" ? "locked" : "gone";
+          if (reason === "vaulted") {
+            // The item now lives in the vault, so any FUTURE thumbnail of it
+            // (refetched after an unlock) is decrypted vault bytes that must be
+            // dropped when the vault locks. Mark it now — the 423-on-fetch path
+            // is not the only way a thumb becomes vault-backed, and relying on
+            // that alone let a vault image survive a lock (was: a decrypted
+            // private image left on screen after locking).
+            imageJobThumbWasLockedRef.current.add(jobId);
+            vaultBackedJobsRef.current.add(jobId);
+          }
+        }
+        setImageJobThumbs((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const jobId of affected) {
+            const url = next[jobId];
+            if (url) {
+              URL.revokeObjectURL(url);
+              delete next[jobId];
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      }),
+    [],
+  );
 
   const setSelectedImageModelId = useCallback((modelId: string | null) => {
     setSelectedImageModelIdState(modelId);
@@ -1973,6 +2437,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     imageForm,
     imageJobs,
     imageJobsError,
+    imageQueueState,
+    imageBatches,
     imageJobThumbs,
     loraList,
     loraError,
@@ -1997,6 +2463,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const actions = useMemo<MediaGenActions>(
     () => ({
       refreshImage,
+      getImageModels,
       loadImageModel,
       unloadImageModel,
       downloadImageModel,
@@ -2009,12 +2476,20 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       clearImageQueueNotice,
       setImageForm,
       prepareImageGenerate,
+      remixImageForm,
       resetImageCommon,
       resetImageAdvanced,
       resetImageAll,
       refreshImageJobs,
       enqueueImageJob,
       cancelImageJob,
+      enqueueImageBatch,
+      refreshImageQueue,
+      setImageQueuePaused,
+      reorderImageQueue,
+      retryImageJob,
+      cancelImageBatch,
+      clearFinishedImageJobs,
       refreshLoras,
       downloadLora,
       deleteLora,
@@ -2041,6 +2516,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     }),
     [
       refreshImage,
+      getImageModels,
       loadImageModel,
       unloadImageModel,
       downloadImageModel,
@@ -2053,12 +2529,20 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       clearImageQueueNotice,
       setImageForm,
       prepareImageGenerate,
+      remixImageForm,
       resetImageCommon,
       resetImageAdvanced,
       resetImageAll,
       refreshImageJobs,
       enqueueImageJob,
       cancelImageJob,
+      enqueueImageBatch,
+      refreshImageQueue,
+      setImageQueuePaused,
+      reorderImageQueue,
+      retryImageJob,
+      cancelImageBatch,
+      clearFinishedImageJobs,
       refreshLoras,
       downloadLora,
       deleteLora,

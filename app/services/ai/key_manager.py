@@ -163,6 +163,9 @@ async def set_user_key(provider: str, key: str) -> None:
     from app.services.local_db.repositories import ApiKeysRepo
     repo = ApiKeysRepo()
     await repo.set(provider, key.strip())
+    # A new key invalidates the old verdict. Leaving it would show a green
+    # "verified" badge against a key nobody has ever checked.
+    await repo.clear_validation(provider)
     _user_keys[provider] = key.strip()
     _inject(provider, key.strip())
     logger.info("[key_manager] User key saved and activated for provider '%s'", provider)
@@ -179,6 +182,7 @@ async def delete_user_key(provider: str) -> None:
     from app.services.local_db.repositories import ApiKeysRepo
     repo = ApiKeysRepo()
     await repo.delete(provider)
+    await repo.clear_validation(provider)
     _user_keys.pop(provider, None)
     _erase(provider)
     logger.info("[key_manager] User key deleted and deactivated for provider '%s'", provider)

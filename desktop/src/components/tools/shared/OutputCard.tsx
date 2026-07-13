@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { MediaThumb } from "@/components/media/MediaThumb";
 import { Copy, Check, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -45,10 +46,20 @@ export function OutputCard({
 
   const renderContent = () => {
     if (format === "image" && imageData) {
+      // Canonical media: click → full-size viewer, right-click → the same
+      // action menu as any other image in the app, hover → info + "⋯". A tool
+      // output is not a lesser image than a generated one.
       return (
-        <img
-          src={`data:${imageMime};base64,${imageData}`}
-          alt={title ?? "Output"}
+        <MediaThumb
+          item={{
+            id: `tool-output-${title ?? "image"}`,
+            kind: "image",
+            url: `data:${imageMime};base64,${imageData}`,
+            itemId: null,
+            source: "result",
+            ...(title ? { fileName: `${title}.png` } : {}),
+          }}
+          variant="gallery"
           className="w-full rounded-lg"
         />
       );

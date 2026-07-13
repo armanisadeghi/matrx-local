@@ -17,37 +17,31 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
 import {
-  Check,
   ChevronLeft,
   ChevronRight,
-  Copy,
   Download,
   ImagePlus,
   Info,
+  Lock,
   Maximize,
   Maximize2,
   Minimize,
   Minus,
   Plus,
+  Repeat2,
   RotateCcw,
   Sprout,
-  Trash2,
   X,
 } from "lucide-react";
-
-// ── Frozen contract ──────────────────────────────────────────────────────────
-
-export interface LightboxItem {
-  id: string;
-  kind: "image" | "video";
-  /** Object/blob URL ready for <img>/<video>. */
-  url: string;
-  prompt?: string;
-  seed?: number | null;
-  /** Arbitrary metadata shown in the info panel (params JSON etc.). */
-  meta?: Record<string, unknown>;
-  title?: string;
-}
+import { useMediaActions } from "@/components/media/MediaActionsProvider";
+import { MediaOverflowMenu } from "@/components/media/MediaOverflowMenu";
+import { CopyButton } from "@/components/media/MediaInfoDialog";
+import {
+  capabilitiesOf,
+  extraParams,
+  mediaTitle,
+  type MediaDescriptor,
+} from "@/components/media/types";
 
 // ── Internals ────────────────────────────────────────────────────────────────
 
@@ -57,19 +51,6 @@ const BAR_HIDE_MS = 2000;
 
 function clampScale(s: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
-}
-
-/** Sensible download filename from the item's title/prompt/id. */
-function downloadName(item: LightboxItem): string {
-  const base =
-    (item.title || item.prompt || item.id)
-      .trim()
-      .slice(0, 48)
-      .replace(/[^a-zA-Z0-9-_ ]+/g, "")
-      .replace(/\s+/g, "-")
-      .replace(/^-+|-+$/g, "") || "matrx-media";
-  const ext = item.kind === "video" ? "mp4" : "png";
-  return `${base}.${ext}`;
 }
 
 /** requestFullscreen with WebKit fallback; rejections logged, never thrown. */
@@ -155,51 +136,28 @@ function BarButton({
   );
 }
 
-/** Small copy-to-clipboard button with a transient "copied" check. */
-function CopyValueButton({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        void navigator.clipboard.writeText(value).then(() => {
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1500);
-        });
-      }}
-      aria-label={label}
-      title={label}
-      className="text-zinc-400 hover:text-white transition-colors"
-    >
-      {copied ? (
-        <Check className="h-3.5 w-3.5 text-green-400" />
-      ) : (
-        <Copy className="h-3.5 w-3.5" />
-      )}
-    </button>
-  );
-}
-
 // ── Component ────────────────────────────────────────────────────────────────
 
+/**
+ * The full-viewport viewer. Rendered ONCE by MediaActionsProvider — surfaces
+ * never mount it; they call `actions.open(viewingSet, index)`.
+ *
+ * Every action lives here (via the shared "⋯" menu and the right-click menu),
+ * so a user who reached full-size from a 24px icon has the same abilities as
+ * one who came from the library grid.
+ */
 export function MediaLightbox({
   open,
   items,
   startIndex = 0,
   onClose,
-  onReuseSeed,
-  onDelete,
-  onUseAsInput,
 }: {
   open: boolean;
-  items: LightboxItem[];
+  items: MediaDescriptor[];
   startIndex?: number;
   onClose: () => void;
-  onReuseSeed?: (seed: number) => void;
-  onDelete?: (id: string) => void;
-  /** "Use as input" (img2img) action for image items. */
-  onUseAsInput?: (item: LightboxItem) => void;
 }): JSX.Element | null {
+  const mediaActions = useMediaActions();
   const [index, setIndex] = useState(0);
   const [scale, setScale] = useState(1);
   const [tx, setTx] = useState(0);
@@ -207,8 +165,19 @@ export function MediaLightbox({
   const [showInfo, setShowInfo] = useState(false);
   const [barVisible, setBarVisible] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [dragging, setDragging] = useState(false);
+  /**
+   * True while the pointer is over ANY chrome (top bar, chevrons, zoom bar).
+   *
+   * THE "it exits after ~3 images" BUG: the chrome auto-hides 2s after the last
+   * mouse move, and hidden chrome is `pointer-events-none`. Clicking Next
+   * repeatedly without moving the mouse let the timer fire between clicks — the
+   * next click passed straight THROUGH the invisible chevron to the stage
+   * backdrop, whose click handler closes the lightbox. Chrome under the pointer
+   * now stays interactive no matter what the idle timer does, so a click on a
+   * chevron always lands on the chevron.
+   */
+  const [hoveringChrome, setHoveringChrome] = useState(false);
 
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -242,12 +211,37 @@ export function MediaLightbox({
     setScale(1);
     setTx(0);
     setTy(0);
-    setConfirmingDelete(false);
     setBarVisible(true);
-    // items.length intentionally read once at open — the viewing set is
-    // snapshotted by the caller; live length changes are clamped via safeIndex.
+    // items.length intentionally read once at open — re-anchoring on a live
+    // set change is handled by the effect below, which is id-based.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, startIndex]);
+
+  /**
+   * Re-anchor on the CURRENT item id whenever the viewing set changes.
+   *
+   * The library's viewing set only contains items whose bytes have resolved, so
+   * it GROWS while the user is already paging (and SHRINKS on a delete/vault).
+   * An index into a shifting array silently points at a different image — the
+   * other half of the "it jumps out / skips around after a few images" report.
+   * Tracking the id makes the position mean what the user sees.
+   */
+  const currentIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (open && current) currentIdRef.current = current.id;
+  }, [open, current]);
+  const itemIdsKey = items.map((i) => i.id).join("\u0000");
+  useEffect(() => {
+    if (!open) return;
+    const id = currentIdRef.current;
+    if (!id) return;
+    const at = items.findIndex((i) => i.id === id);
+    // Not found = the item left the set (deleted/vaulted). The provider already
+    // pruned it and clamps the index, so leave the slot alone.
+    if (at >= 0) setIndex((prev) => (prev === at ? prev : at));
+    // itemIdsKey is the value that actually matters; `items` identity churns.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, itemIdsKey]);
 
   const goTo = useCallback(
     (dir: 1 | -1) => {
@@ -256,7 +250,6 @@ export function MediaLightbox({
       setScale(1);
       setTx(0);
       setTy(0);
-      setConfirmingDelete(false);
     },
     [count],
   );
@@ -396,8 +389,7 @@ export function MediaLightbox({
       switch (e.key) {
         case "Escape":
           e.preventDefault();
-          if (confirmingDelete) setConfirmingDelete(false);
-          else onClose();
+          onClose();
           break;
         case "ArrowLeft":
           e.preventDefault();
@@ -437,7 +429,7 @@ export function MediaLightbox({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, confirmingDelete, onClose, goTo, zoomToward, resetView, toggleFullscreen]);
+  }, [open, onClose, goTo, zoomToward, resetView, toggleFullscreen]);
 
   // Auto-hide chrome after mouse idle.
   const pokeBar = useCallback(() => {
@@ -459,39 +451,29 @@ export function MediaLightbox({
     };
   }, [open, pokeBar]);
 
-  const holdBar = useCallback(() => {
-    if (barTimerRef.current !== null) {
-      window.clearTimeout(barTimerRef.current);
-      barTimerRef.current = null;
-    }
-    setBarVisible(true);
-  }, []);
-
-  const handleDownload = useCallback(() => {
-    if (!current) return;
-    const a = document.createElement("a");
-    a.href = current.url;
-    a.download = downloadName(current);
-    a.click();
-  }, [current]);
-
-  const handleDelete = useCallback(() => {
-    if (!current || !onDelete) return;
-    if (!confirmingDelete) {
-      setConfirmingDelete(true);
-      return;
-    }
-    const deletedId = current.id;
-    setConfirmingDelete(false);
-    onDelete(deletedId);
-    if (count <= 1) {
-      onClose();
-    } else {
-      // Stay on the same slot; safeIndex clamps once the parent removes it.
-      setIndex((i) => Math.min(i, count - 2));
-      resetView();
-    }
-  }, [current, onDelete, confirmingDelete, count, onClose, resetView]);
+  /**
+   * Props every chrome container gets. Entering pins the chrome open (and
+   * cancels the idle timer); leaving re-arms it. This is what guarantees a
+   * click on a chevron can never fall through to the backdrop — see the
+   * hoveringChrome comment above.
+   */
+  const chromeHover = useMemo(
+    () => ({
+      onMouseEnter: () => {
+        if (barTimerRef.current !== null) {
+          window.clearTimeout(barTimerRef.current);
+          barTimerRef.current = null;
+        }
+        setBarVisible(true);
+        setHoveringChrome(true);
+      },
+      onMouseLeave: () => {
+        setHoveringChrome(false);
+        pokeBar();
+      },
+    }),
+    [pokeBar],
+  );
 
   // Neighbor preload (images only).
   const neighbors = useMemo(() => {
@@ -505,14 +487,16 @@ export function MediaLightbox({
   }, [items, safeIndex, count]);
 
   const metaJson = useMemo(() => {
-    if (!current?.meta || Object.keys(current.meta).length === 0) return null;
-    return JSON.stringify(current.meta, null, 2);
-  }, [current?.meta]);
+    if (!current) return null;
+    const rest = extraParams(current);
+    return Object.keys(rest).length > 0 ? JSON.stringify(rest, null, 2) : null;
+  }, [current]);
 
   if (!open || !current) return null;
 
-  const chromeVisible = barVisible || showInfo || confirmingDelete || dragging;
-  const heading = current.title || current.prompt || "";
+  const caps = capabilitiesOf(current);
+  const chromeVisible = barVisible || showInfo || dragging || hoveringChrome;
+  const heading = mediaTitle(current);
   const zoomPercent = Math.round(scale * 100);
 
   const overlay = (
@@ -526,7 +510,7 @@ export function MediaLightbox({
     >
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
       <div
-        onMouseEnter={holdBar}
+        {...chromeHover}
         className={`absolute inset-x-0 top-0 z-20 flex items-center gap-2 bg-gradient-to-b from-black/80 to-transparent px-3 py-2 transition-opacity duration-300 ${
           chromeVisible ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
@@ -549,52 +533,57 @@ export function MediaLightbox({
           >
             <Info className="h-4 w-4" />
           </BarButton>
-          <BarButton onClick={handleDownload} label="Download" title="Download">
+          {caps.canRemix && (
+            <BarButton
+              onClick={() => void mediaActions.remix(current)}
+              label="Remix"
+              title="Remix — reload everything that made this image"
+            >
+              <Repeat2 className="h-4 w-4" />
+            </BarButton>
+          )}
+          <BarButton
+            onClick={() => void mediaActions.download(current)}
+            label="Download"
+            title="Download"
+          >
             <Download className="h-4 w-4" />
           </BarButton>
-          {onReuseSeed && typeof current.seed === "number" && (
+          {caps.canReuseSeed && (
             <BarButton
-              onClick={() => onReuseSeed(current.seed as number)}
+              onClick={() => mediaActions.reuseSeed(current)}
               label="Reuse seed"
               title={`Reuse seed ${current.seed}`}
             >
               <Sprout className="h-4 w-4" />
             </BarButton>
           )}
-          {onUseAsInput && current.kind === "image" && (
+          {caps.canUseAsInput && (
             <BarButton
-              onClick={() => onUseAsInput(current)}
+              onClick={() => void mediaActions.useAsInput(current)}
               label="Use as input image"
               title="Use as the img2img input image"
             >
               <ImagePlus className="h-4 w-4" />
             </BarButton>
           )}
-          {onDelete &&
-            (confirmingDelete ? (
-              <span className="flex items-center gap-1 rounded-md bg-red-500/15 px-1.5 py-0.5">
-                <span className="text-[11px] font-medium text-red-300">
-                  Delete?
-                </span>
-                <BarButton
-                  onClick={handleDelete}
-                  label="Confirm delete"
-                  danger
-                >
-                  <Check className="h-4 w-4" />
-                </BarButton>
-                <BarButton
-                  onClick={() => setConfirmingDelete(false)}
-                  label="Cancel delete"
-                >
-                  <X className="h-4 w-4" />
-                </BarButton>
-              </span>
-            ) : (
-              <BarButton onClick={handleDelete} label="Delete" danger>
-                <Trash2 className="h-4 w-4" />
-              </BarButton>
-            ))}
+          {caps.canVault && (
+            <BarButton
+              onClick={() => void mediaActions.moveToVault(current)}
+              label="Move to Private"
+              title="Move into the Private vault"
+            >
+              <Lock className="h-4 w-4" />
+            </BarButton>
+          )}
+          {/* Everything else (copy image, copy prompt, show in folder, delete
+              with confirm, restore) — the SAME menu as right-click. */}
+          <MediaOverflowMenu
+            item={current}
+            tone="bar"
+            omit={["open", "info"]}
+            className="h-8 w-8"
+          />
           <BarButton
             onClick={toggleFullscreen}
             label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
@@ -618,8 +607,9 @@ export function MediaLightbox({
         <div
           ref={stageRef}
           onClick={(e) => {
-            // Backdrop click closes — only the stage itself, never the media.
-            if (e.target === e.currentTarget) onClose();
+            // Backdrop click closes — only the stage itself, never the media,
+            // and never a click that started on (now-hidden) chrome.
+            if (e.target === e.currentTarget && !hoveringChrome) onClose();
           }}
           className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden"
         >
@@ -630,6 +620,17 @@ export function MediaLightbox({
               src={current.url}
               alt={heading || "Generated media"}
               draggable={false}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                // Without stopPropagation the event reaches the context menu's
+                // own window-level dismiss listener, which closes the menu we
+                // just opened — a second right-click would appear to do nothing.
+                e.stopPropagation();
+                mediaActions.openContextMenu(current, {
+                  x: e.clientX,
+                  y: e.clientY,
+                });
+              }}
               onDoubleClick={handleDoubleClick}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
@@ -650,44 +651,73 @@ export function MediaLightbox({
               autoPlay
               loop
               src={current.url}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                // Without stopPropagation the event reaches the context menu's
+                // own window-level dismiss listener, which closes the menu we
+                // just opened — a second right-click would appear to do nothing.
+                e.stopPropagation();
+                mediaActions.openContextMenu(current, {
+                  x: e.clientX,
+                  y: e.clientY,
+                });
+              }}
               className="max-h-full max-w-full animate-in zoom-in-95 duration-200"
             />
           )}
 
-          {/* Prev / next chevrons */}
+          {/* Prev / next chevrons.
+
+              The hit area is a full-height strip, not just the round button:
+              paging through a set should not demand pixel-accurate aim. The
+              strip keeps pointer-events while the pointer is over it (see
+              chromeHover), so a rapid click-click-click never falls through to
+              the backdrop. */}
           {count > 1 && (
             <>
-              <button
-                type="button"
-                onClick={() => goTo(-1)}
-                onMouseEnter={holdBar}
-                aria-label="Previous (Left arrow)"
-                title="Previous (←)"
-                className={`absolute left-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-zinc-200 transition-opacity duration-300 hover:bg-black/70 hover:text-white ${
-                  chromeVisible ? "opacity-100" : "pointer-events-none opacity-0"
-                }`}
+              <div
+                {...chromeHover}
+                className="absolute inset-y-0 left-0 z-10 flex w-20 items-center justify-start pl-3"
               >
-                <ChevronLeft className="h-6 w-6" />
-              </button>
-              <button
-                type="button"
-                onClick={() => goTo(1)}
-                onMouseEnter={holdBar}
-                aria-label="Next (Right arrow)"
-                title="Next (→)"
-                className={`absolute right-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-zinc-200 transition-opacity duration-300 hover:bg-black/70 hover:text-white ${
-                  chromeVisible ? "opacity-100" : "pointer-events-none opacity-0"
-                }`}
+                <button
+                  type="button"
+                  onClick={() => goTo(-1)}
+                  aria-label="Previous (Left arrow)"
+                  title="Previous (←)"
+                  className={`rounded-full bg-black/50 p-2 text-zinc-200 transition-opacity duration-300 hover:bg-black/70 hover:text-white ${
+                    chromeVisible
+                      ? "opacity-100"
+                      : "pointer-events-none opacity-0"
+                  }`}
+                >
+                  <ChevronLeft className="h-6 w-6" />
+                </button>
+              </div>
+              <div
+                {...chromeHover}
+                className="absolute inset-y-0 right-0 z-10 flex w-20 items-center justify-end pr-3"
               >
-                <ChevronRight className="h-6 w-6" />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => goTo(1)}
+                  aria-label="Next (Right arrow)"
+                  title="Next (→)"
+                  className={`rounded-full bg-black/50 p-2 text-zinc-200 transition-opacity duration-300 hover:bg-black/70 hover:text-white ${
+                    chromeVisible
+                      ? "opacity-100"
+                      : "pointer-events-none opacity-0"
+                  }`}
+                >
+                  <ChevronRight className="h-6 w-6" />
+                </button>
+              </div>
             </>
           )}
 
           {/* Zoom controls (images only) */}
           {current.kind === "image" && (
             <div
-              onMouseEnter={holdBar}
+              {...chromeHover}
               className={`absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-lg bg-black/60 px-1 py-0.5 transition-opacity duration-300 ${
                 chromeVisible ? "opacity-100" : "pointer-events-none opacity-0"
               }`}
@@ -727,18 +757,27 @@ export function MediaLightbox({
           )}
         </div>
 
-        {/* Info panel */}
+        {/* Info panel.
+
+            Every text block wraps. The params dump excludes the prompt (which
+            the engine records inside the pipeline kwargs) — printing it there
+            as one unbreakable JSON line is what used to blow this 288px panel
+            out to ten page-widths of horizontal scroll. */}
         {showInfo && (
-          <div className="w-72 shrink-0 space-y-3 overflow-y-auto border-l border-white/10 bg-zinc-950/90 p-4 pt-14 animate-in slide-in-from-right duration-200">
-            <div className="space-y-1">
+          <div
+            {...chromeHover}
+            className="w-80 shrink-0 space-y-3 overflow-y-auto overflow-x-hidden border-l border-white/10 bg-zinc-950/90 p-4 pt-14 animate-in slide-in-from-right duration-200"
+          >
+            <div className="min-w-0 space-y-1">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
                   Prompt
                 </p>
                 {current.prompt && (
-                  <CopyValueButton
+                  <CopyButton
                     value={current.prompt}
                     label="Copy prompt"
+                    className="text-zinc-400 hover:text-white"
                   />
                 )}
               </div>
@@ -747,46 +786,86 @@ export function MediaLightbox({
               </p>
             </div>
 
+            {current.negativePrompt && (
+              <div className="min-w-0 space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                    Negative prompt
+                  </p>
+                  <CopyButton
+                    value={current.negativePrompt}
+                    label="Copy negative prompt"
+                    className="text-zinc-400 hover:text-white"
+                  />
+                </div>
+                <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-300">
+                  {current.negativePrompt}
+                </p>
+              </div>
+            )}
+
+            {current.modelId && (
+              <div className="min-w-0 space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                  Model
+                </p>
+                <p className="break-words font-mono text-[11px] text-zinc-300">
+                  {current.modelId}
+                </p>
+              </div>
+            )}
+
             {typeof current.seed === "number" && (
               <div className="space-y-1">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
                   Seed
                 </p>
                 <div className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2 py-1">
-                  <span className="flex-1 font-mono text-xs tabular-nums text-zinc-100">
+                  <span className="min-w-0 flex-1 break-all font-mono text-xs tabular-nums text-zinc-100">
                     {current.seed}
                   </span>
-                  <CopyValueButton
+                  <CopyButton
                     value={String(current.seed)}
                     label="Copy seed"
+                    className="text-zinc-400 hover:text-white"
                   />
-                  {onReuseSeed && (
-                    <button
-                      type="button"
-                      onClick={() => onReuseSeed(current.seed as number)}
-                      className="text-xs text-violet-400 hover:underline"
-                      title="Put this seed into the seed input to reproduce this result"
-                    >
-                      Reuse
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => mediaActions.reuseSeed(current)}
+                    className="shrink-0 text-xs text-violet-400 hover:underline"
+                    title="Put this seed into the seed input to reproduce this result"
+                  >
+                    Reuse
+                  </button>
                 </div>
               </div>
             )}
 
             {metaJson && (
-              <div className="space-y-1">
+              <div className="min-w-0 space-y-1">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
                     Details
                   </p>
-                  <CopyValueButton value={metaJson} label="Copy details JSON" />
+                  <CopyButton
+                    value={metaJson}
+                    label="Copy details JSON"
+                    className="text-zinc-400 hover:text-white"
+                  />
                 </div>
-                <pre className="max-h-64 overflow-auto rounded-md border border-white/10 bg-white/5 p-2 font-mono text-[10px] leading-snug text-zinc-300">
+                <pre className="max-h-64 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-white/10 bg-white/5 p-2 font-mono text-[10px] leading-snug text-zinc-300">
                   {metaJson}
                 </pre>
               </div>
             )}
+
+            <button
+              type="button"
+              onClick={() => mediaActions.info(current)}
+              className="w-full rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              Open full metadata
+            </button>
           </div>
         )}
       </div>

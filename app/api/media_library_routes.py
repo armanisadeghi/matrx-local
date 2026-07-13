@@ -55,6 +55,12 @@ class MediaLibraryItem(BaseModel):
     file_size_bytes: int
     file_path: str
     """Absolute path on this machine."""
+    init_image_file: str | None = None
+    """Name of the stored img2img source image, when this item was generated
+    from one. Non-null means GET /media-library/items/{id}/init-image serves
+    those bytes — which is what lets "Remix" restore the input image, not just
+    the settings. Null for text-to-image items (and for vaulted ones, whose
+    plaintext init image is destroyed along with the plaintext result)."""
 
 
 class MediaLibraryListResponse(BaseModel):
@@ -122,6 +128,42 @@ async def get_media_file(item_id: str) -> Response:
     except VaultError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return Response(content=data, media_type=content_type)
+
+
+@router.get("/items/{item_id}/init-image")
+async def get_media_init_image(item_id: str) -> Response:
+    """The img2img SOURCE image this item was generated from — what makes
+    "Remix" able to restore the input, not just the settings.
+
+    Same resolution contract as ``get_media_file``, so a vaulted id keeps
+    working instead of lying about not existing:
+
+      plaintext library hit  → 200 the source image
+      vaulted + unlocked     → 200 decrypted bytes (in memory, never on disk)
+      vaulted + locked       → 423 Locked
+      no source image        → 404 (a text-to-image item, or one generated
+                               before source images were stored)
+    """
+    path = library.get_init_image_path(item_id)
+    if path is not None:
+        return FileResponse(str(path), media_type="image/png", filename=path.name)
+
+    vault = get_vault_service()
+    if not vault.has_init_image(item_id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"No stored input image for media item: {item_id}",
+        )
+    try:
+        data = vault.read_init_image(item_id)
+    except VaultLockedError as exc:
+        raise HTTPException(
+            status_code=423,
+            detail="Item is in the locked Private Vault — unlock it to view.",
+        ) from exc
+    except VaultError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(content=data, media_type="image/png")
 
 
 @router.delete("/items/{item_id}")

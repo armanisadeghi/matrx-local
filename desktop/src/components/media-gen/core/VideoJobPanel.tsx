@@ -2,7 +2,9 @@
  * VideoJobPanel — the canonical video-job surfaces every layout previously
  * re-implemented:
  *  - ActiveVideoJobCard  the watched job's progress / cancel / dismiss card
- *  - VideoPlayback       playback <video> + Save-MP4 (+ optional expand)
+ *  - VideoPlayback       playback <video> with the CANONICAL media action set
+ *                        (right-click menu, info, download, delete, vault, …) —
+ *                        a generated video is media like any other
  *  - VideoJobsList       recent jobs in "list", "chips" or "feed" density
  *                        with cancel (queued/running) and Play/Show actions
  */
@@ -21,6 +23,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import type { VideoGenJob } from "@/lib/api";
+import { useMediaActions } from "@/components/media/MediaActionsProvider";
+import { MediaOverflowMenu } from "@/components/media/MediaOverflowMenu";
+import { CopyButton } from "@/components/media/MediaInfoDialog";
+import { descriptorFromVideoJob } from "@/components/media/types";
 import { InlineProgressBar } from "@/components/media-gen/shared";
 import type { VideoGenController } from "./videoController";
 
@@ -129,6 +135,13 @@ export function VideoPlayback({
   videoClassName?: string;
 }) {
   const url = ctl.playbackUrl;
+  const actions = useMediaActions();
+  const [{ jobs }] = useMediaGenApp();
+  const playingJob =
+    jobs.find((j) => j.job_id === ctl.playbackJobId) ?? null;
+  const descriptor =
+    url && playingJob ? descriptorFromVideoJob(playingJob, url) : null;
+
   if (url) {
     return (
       <div className="space-y-2">
@@ -139,31 +152,60 @@ export function VideoPlayback({
             autoPlay
             loop
             src={url}
+            onContextMenu={
+              descriptor
+                ? (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    actions.openContextMenu(descriptor, {
+                      x: e.clientX,
+                      y: e.clientY,
+                    });
+                  }
+                : undefined
+            }
             className={videoClassName}
           />
-          {onExpand && (
-            <button
-              type="button"
-              onClick={onExpand}
-              className="absolute right-2 top-2 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-1 text-[10px] text-white transition-colors hover:bg-black/75"
-              aria-label="Open video in the viewer"
-              title="Open in the full-screen viewer"
+          <div className="absolute right-2 top-2 flex items-center gap-1">
+            {onExpand && (
+              <button
+                type="button"
+                onClick={onExpand}
+                className="flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-1 text-[10px] text-white transition-colors hover:bg-black/75"
+                aria-label="Open video in the viewer"
+                title="Open in the full-screen viewer"
+              >
+                <Maximize2 className="h-3 w-3" />
+                Expand
+              </button>
+            )}
+            {/* A generated video gets the SAME action set as a generated image:
+                info & metadata, download, copy prompt, delete, move to Private,
+                reuse seed — plus right-click on the player itself. */}
+            {descriptor && (
+              <MediaOverflowMenu item={descriptor} tone="overlay" />
+            )}
+          </div>
+        </div>
+        {descriptor && (
+          <div className="flex items-start gap-2">
+            <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-muted-foreground">
+              {descriptor.prompt || "(no prompt)"}
+            </p>
+            {descriptor.prompt && (
+              <CopyButton value={descriptor.prompt} label="Copy prompt" />
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 shrink-0 text-xs"
+              onClick={() => void actions.download(descriptor)}
             >
-              <Maximize2 className="h-3 w-3" />
-              Expand
-            </button>
-          )}
-        </div>
-        <div className="flex items-center justify-end">
-          <a
-            href={url}
-            download={`matrx-video-${Date.now()}.mp4`}
-            className="inline-flex items-center text-xs text-violet-500 hover:underline"
-          >
-            <Download className="h-3.5 w-3.5 mr-1" />
-            Save MP4
-          </a>
-        </div>
+              <Download className="mr-1 h-3.5 w-3.5" />
+              Save MP4
+            </Button>
+          </div>
+        )}
       </div>
     );
   }
@@ -209,12 +251,16 @@ function VideoJobEntry({
           ) : (
             <Film className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           )}
-          <span
-            className="min-w-0 flex-1 truncate text-[11px]"
-            title={job.prompt}
-          >
+          <span className="min-w-0 flex-1 truncate text-[11px]" title={job.prompt}>
             {job.prompt || "(no prompt)"}
           </span>
+          {job.prompt && (
+            <CopyButton
+              value={job.prompt}
+              label="Copy prompt"
+              className="shrink-0"
+            />
+          )}
           {job.status === "completed" && (
             <button
               type="button"

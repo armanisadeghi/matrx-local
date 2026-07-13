@@ -1180,6 +1180,9 @@ class ImageGenService:
                 width=image.width,
                 height=image.height,
                 elapsed_seconds=elapsed,
+                # Stored beside the result so Remix restores the actual input
+                # image, not just a note that there was one.
+                init_image_bytes=init_image_bytes,
             )
 
             return GenerationResult(

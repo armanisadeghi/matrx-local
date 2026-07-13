@@ -73,6 +73,10 @@ import {
   OctagonX,
   CheckCheck,
   Timer,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Power,
+  ArrowDown,
 } from "lucide-react";
 import { isTauri } from "@/lib/sidecar";
 import { Button } from "@/components/ui/button";
@@ -2949,6 +2953,7 @@ interface SavedConversation {
 }
 
 const CONVERSATIONS_STORE_KEY = "llm-playground-conversations";
+const SIDEBAR_OPEN_KEY = "llm-playground-sidebar-open";
 const MAX_CONVERSATIONS = 50;
 
 function makeTitle(firstUserMsg: string): string {
@@ -2978,15 +2983,29 @@ function saveConversations(convs: SavedConversation[]): void {
 }
 
 // Model switcher used inside the inference header bar
-function ModelSwitcher() {
-  const [state, actions] = useLlmContext();
-  const { serverStatus, downloadedModels, isStarting, hardwareResult } = state;
-  const { startServer, stopServer, detectHardware, listModels } = actions;
-  const [switching, setSwitching] = useState(false);
-
-  useEffect(() => {
-    listModels();
-  }, [listModels]);
+/**
+ * Header model control: shows the loaded model, switches to another downloaded
+ * model, and unloads the model to free memory.
+ *
+ * Switching is owned by the parent (InferenceTab) — the swap tears the server
+ * down and back up, which unmounts this component mid-flight, so the in-flight
+ * flag has to live above it or the UI falls back to the "pick a model" screen.
+ */
+function ModelSwitcher({
+  onSwitch,
+  onUnload,
+  switching,
+  unloading,
+  busy,
+}: {
+  onSwitch: (filename: string) => void;
+  onUnload: () => void;
+  switching: boolean;
+  unloading: boolean;
+  busy: boolean;
+}) {
+  const [state] = useLlmContext();
+  const { serverStatus, downloadedModels, isStarting } = state;
 
   const matchedModel = downloadedModels.find((m) =>
     serverStatus?.model_path?.includes(m.filename),
@@ -2998,19 +3017,29 @@ function ModelSwitcher() {
     serverStatus?.model_path?.split("/").pop() ??
     "";
 
-  const handleSwitch = async (filename: string) => {
-    if (switching || isStarting) return;
-    setSwitching(true);
-    try {
-      const hw = hardwareResult ?? (await detectHardware());
-      await stopServer();
-      await startServer(filename, hw.recommended_gpu_layers);
-    } catch {
-      // error surfaced by server tab
-    } finally {
-      setSwitching(false);
-    }
-  };
+  const inFlight = switching || unloading || isStarting;
+
+  const unloadButton = (
+    <Button
+      size="sm"
+      variant="ghost"
+      className="h-6 px-1.5 text-xs text-muted-foreground gap-1 hover:text-destructive"
+      onClick={onUnload}
+      disabled={inFlight || busy}
+      title={
+        busy
+          ? "Finish generating before unloading"
+          : "Unload the model and free its memory"
+      }
+    >
+      {unloading ? (
+        <Loader2 className="h-3 w-3 animate-spin" />
+      ) : (
+        <Power className="h-3 w-3" />
+      )}
+      {unloading ? "Unloading…" : "Unload"}
+    </Button>
+  );
 
   if (downloadedModels.length <= 1) {
     return (
@@ -3019,6 +3048,7 @@ function ModelSwitcher() {
         <span className="font-medium truncate max-w-[160px]">
           {currentModel || "Running"}
         </span>
+        {unloadButton}
       </div>
     );
   }
@@ -3029,8 +3059,8 @@ function ModelSwitcher() {
       <select
         className="text-xs bg-transparent border-0 outline-none cursor-pointer font-medium text-foreground max-w-[200px] truncate"
         value={matchedModel?.filename ?? ""}
-        onChange={(e) => handleSwitch(e.target.value)}
-        disabled={switching || isStarting}
+        onChange={(e) => onSwitch(e.target.value)}
+        disabled={inFlight}
         title="Switch model"
       >
         {!matchedModel && (
@@ -3049,6 +3079,7 @@ function ModelSwitcher() {
           switching…
         </span>
       )}
+      {unloadButton}
     </div>
   );
 }
@@ -3459,7 +3490,15 @@ function SaveToNoteModal({
 
 function InferenceTab() {
   const [state, actions] = useLlmContext();
-  const { serverStatus, isStarting, hardwareResult, downloadedModels } = state;
+  const {
+    serverStatus,
+    isStarting,
+    startingModelName,
+    serverStartProgress,
+    serverLogs,
+    hardwareResult,
+    downloadedModels,
+  } = state;
   const { startServer, stopServer, detectHardware, listModels } = actions;
   const { user } = useAuth();
   const userId = user?.id ?? null;
@@ -3490,17 +3529,40 @@ function InferenceTab() {
     () => loadConversations()[0]?.id ?? null,
   );
 
+  // Sidebar collapse — persisted so the choice survives tab/page switches.
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(
+    () => localStorage.getItem(SIDEBAR_OPEN_KEY) !== "false",
+  );
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen((open) => {
+      localStorage.setItem(SIDEBAR_OPEN_KEY, String(!open));
+      return !open;
+    });
+  }, []);
+
   // ── Active conversation state ──────────────────────────────────────────
   const activeConv = conversations.find((c) => c.id === activeConvId) ?? null;
   const messages: ConversationMessage[] = activeConv?.messages ?? [];
   const [input, setInput] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const isGeneratingRef = useRef(false);
+  isGeneratingRef.current = isGenerating;
   const [error, setError] = useState<string | null>(null);
   const stopRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const userScrolledUpRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // ── Auto-scroll ("stick to bottom") ───────────────────────────────────
+  // The chat sticks to the bottom while streaming, and RELEASES the moment the
+  // user scrolls up. Intent is captured from the input events themselves
+  // (wheel / touch / keys), never from `scroll` events — a programmatic scroll
+  // fires `scroll` too, so scroll-based detection can't tell the user's scroll
+  // from our own and ends up fighting the user for the viewport.
+  const scrollViewportRef = useRef<HTMLElement | null>(null);
+  const stickToBottomRef = useRef(true);
+  const pointerDownRef = useRef(false);
+  const [isPinnedToBottom, setIsPinnedToBottom] = useState(true);
 
   // ── Message actions state ─────────────────────────────────────────────
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
@@ -3754,6 +3816,8 @@ function InferenceTab() {
   // below can read it without `mode` being in scope yet.
   const modeRef = useRef<string>("chat");
   const [switchingModel, setSwitchingModel] = useState(false);
+  const [switchTargetName, setSwitchTargetName] = useState<string | null>(null);
+  const [unloadingModel, setUnloadingModel] = useState(false);
   const [showPromptPicker, setShowPromptPicker] = useState(false);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const promptPickerRef = useRef<HTMLDivElement>(null);
@@ -4182,13 +4246,48 @@ function InferenceTab() {
     });
   };
 
-  const scrollToBottom = (force = false) => {
-    if (!force && userScrolledUpRef.current) return;
-    setTimeout(
-      () => bottomRef.current?.scrollIntoView({ behavior: "smooth" }),
-      50,
-    );
-  };
+  const setStick = useCallback((stick: boolean) => {
+    stickToBottomRef.current = stick;
+    setIsPinnedToBottom(stick);
+  }, []);
+
+  /**
+   * Scroll the chat to the bottom.
+   *
+   * `force` re-arms stick-to-bottom (used when the user sends a message —
+   * an explicit act of returning to the conversation's tail). Without it, this
+   * is a no-op whenever the user has scrolled up: their scroll position wins.
+   *
+   * The scroll is instant, not smooth. A smooth scroll is an animation that
+   * keeps writing scrollTop for hundreds of milliseconds, so a token arriving
+   * mid-animation would drag the viewport back down under the user's cursor.
+   */
+  const scrollToBottom = useCallback(
+    (force = false) => {
+      if (force) setStick(true);
+      if (!stickToBottomRef.current) return;
+      requestAnimationFrame(() => {
+        const viewport = scrollViewportRef.current;
+        if (!viewport || !stickToBottomRef.current) return;
+        viewport.scrollTop = viewport.scrollHeight;
+      });
+    },
+    [setStick],
+  );
+
+  const jumpToBottom = useCallback(() => {
+    setStick(true);
+    const viewport = scrollViewportRef.current;
+    if (viewport) {
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
+    }
+  }, [setStick]);
+
+  // Opening a conversation (or returning to chat mode) lands at its tail.
+  useEffect(() => {
+    if (mode !== "chat") return;
+    scrollToBottom(true);
+  }, [activeConvId, mode, scrollToBottom]);
 
   // ── Auto-resize composer textarea ────────────────────────────────────
   useEffect(() => {
@@ -4213,7 +4312,7 @@ function InferenceTab() {
     }
   }, [chatTts.isReadingAloud, readingMsgId]);
 
-  // ── Detect user scrolling up to pause auto-scroll ─────────────────────
+  // ── Stick-to-bottom: release on user scroll-up, re-arm at the bottom ───
   useEffect(() => {
     const root = scrollAreaRef.current;
     if (!root) return;
@@ -4221,14 +4320,68 @@ function InferenceTab() {
       "[data-radix-scroll-area-viewport]",
     ) as HTMLElement | null;
     if (!viewport) return;
-    const onScroll = () => {
-      const distFromBottom =
-        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-      userScrolledUpRef.current = distFromBottom > 80;
+    scrollViewportRef.current = viewport;
+
+    const AT_BOTTOM_PX = 32;
+    const atBottom = () =>
+      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <=
+      AT_BOTTOM_PX;
+
+    // User intent — read straight off the input event, so it lands before any
+    // scroll (and any auto-scroll) we might otherwise do on the same frame.
+    const release = () => {
+      if (stickToBottomRef.current) setStick(false);
     };
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) release();
+    };
+    const onTouchMove = () => release();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (["ArrowUp", "PageUp", "Home"].includes(e.key)) release();
+    };
+    // Dragging the scrollbar thumb or middle-click autoscroll: no wheel event,
+    // so fall back to position — safe here because the pointer is down.
+    const onPointerDown = () => {
+      pointerDownRef.current = true;
+    };
+    const onPointerUp = () => {
+      pointerDownRef.current = false;
+    };
+
+    // Re-arm only when the view is genuinely back at the bottom (whether the
+    // user scrolled there or our own auto-scroll did).
+    const onScroll = () => {
+      if (pointerDownRef.current && !atBottom()) {
+        if (stickToBottomRef.current) setStick(false);
+        return;
+      }
+      if (atBottom()) {
+        if (!stickToBottomRef.current) setStick(true);
+      } else if (stickToBottomRef.current && !isGeneratingRef.current) {
+        // Not streaming: any drift off the bottom is the user's doing.
+        setStick(false);
+      }
+    };
+
+    viewport.addEventListener("wheel", onWheel, { passive: true });
+    viewport.addEventListener("touchmove", onTouchMove, { passive: true });
+    viewport.addEventListener("keydown", onKeyDown);
+    // On the root, not the viewport: the scrollbar thumb is a sibling of the
+    // viewport, so a drag on it never reaches the viewport's listeners.
+    root.addEventListener("pointerdown", onPointerDown, { passive: true });
+    window.addEventListener("pointerup", onPointerUp, { passive: true });
     viewport.addEventListener("scroll", onScroll, { passive: true });
-    return () => viewport.removeEventListener("scroll", onScroll);
-  }, [mode]); // re-attach when switching to chat mode
+    return () => {
+      viewport.removeEventListener("wheel", onWheel);
+      viewport.removeEventListener("touchmove", onTouchMove);
+      viewport.removeEventListener("keydown", onKeyDown);
+      root.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", onPointerUp);
+      viewport.removeEventListener("scroll", onScroll);
+      pointerDownRef.current = false;
+      scrollViewportRef.current = null;
+    };
+  }, [mode, setStick]); // re-attach when switching to chat mode
 
   // ── Close pickers on outside click ────────────────────────────────────
   useEffect(() => {
@@ -4279,7 +4432,6 @@ function InferenceTab() {
     if (activeConvId) updateMessages(activeConvId, newMessages, systemPrompt);
     setIsGenerating(true);
     stopRef.current = false;
-    userScrolledUpRef.current = false;
     scrollToBottom(true);
 
     const chatMessages: ChatMessage[] = [
@@ -4370,7 +4522,6 @@ function InferenceTab() {
     updateMessages(activeConvId, newMessages, systemPrompt);
     setIsGenerating(true);
     stopRef.current = false;
-    userScrolledUpRef.current = false;
     scrollToBottom(true);
 
     let accumulated = "";
@@ -4421,8 +4572,12 @@ function InferenceTab() {
     }
   };
 
-  // ── Edit assistant message (in-place correction) ──────────────────────
-  const handleEditAssistant = (msgId: string, newContent: string) => {
+  // ── Save an edit in place (either role) ───────────────────────────────
+  // Rewrites the message and leaves the rest of the conversation intact — no
+  // truncation, no regeneration. This is the only non-destructive way to fix a
+  // typo in a user turn; `handleEditAndResend` deliberately discards everything
+  // after the edited message.
+  const handleSaveEdit = (msgId: string, newContent: string) => {
     if (!activeConvId) return;
     setEditingMsgId(null);
     setEditingContent("");
@@ -4464,19 +4619,40 @@ function InferenceTab() {
     }));
   };
 
-  // ── Switch model from composer ────────────────────────────────────────
+  // ── Switch model (composer picker + header switcher) ──────────────────
   const handleModelSwitch = async (filename: string) => {
-    if (switchingModel || isStarting) return;
+    if (switchingModel || unloadingModel || isStarting) return;
     setShowModelPicker(false);
     setSwitchingModel(true);
+    // The name is shown by the loading card while the server is down and
+    // `startingModelName` has not been published yet.
+    setSwitchTargetName(
+      downloadedModels.find((m) => m.filename === filename)?.name ?? filename,
+    );
     try {
       const hw = hardwareResult ?? (await detectHardware());
       await stopServer();
       await startServer(filename, hw.recommended_gpu_layers);
-    } catch {
-      // error surfaced elsewhere
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSwitchingModel(false);
+      setSwitchTargetName(null);
+    }
+  };
+
+  // ── Unload the model (free its memory) ────────────────────────────────
+  const handleUnloadModel = async () => {
+    if (switchingModel || unloadingModel || isStarting || isGenerating) return;
+    setUnloadingModel(true);
+    try {
+      await stopServer();
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUnloadingModel(false);
     }
   };
 
@@ -4540,7 +4716,6 @@ function InferenceTab() {
 
     updateMessages(convId, newMessages, systemPrompt);
     setIsGenerating(true);
-    userScrolledUpRef.current = false;
     scrollToBottom(true);
 
     let accumulated = "";
@@ -4658,7 +4833,6 @@ function InferenceTab() {
 
     updateMessages(convId, newMessages, systemPrompt);
     setIsGenerating(true);
-    userScrolledUpRef.current = false;
     scrollToBottom(true);
 
     let accumulated = "";
@@ -4750,6 +4924,24 @@ function InferenceTab() {
     }
   };
 
+  // ── Model is loading (first start, or a switch) ───────────────────────
+  // The server is down while a switch swaps models, so `port` is null here too.
+  // Without this branch the user gets the "pick a model" launch screen mid-swap,
+  // which reads as "nothing is selected" when in fact a model is loading.
+  if (!port && (isStarting || switchingModel)) {
+    return (
+      <div className="flex items-start justify-center h-full overflow-auto pt-10">
+        <div className="w-full max-w-md">
+          <ModelLoadingCard
+            modelName={startingModelName ?? switchTargetName}
+            progress={serverStartProgress}
+            logs={serverLogs}
+          />
+        </div>
+      </div>
+    );
+  }
+
   // ── No server running — launch screen ─────────────────────────────────
   if (!port) {
     return (
@@ -4769,12 +4961,6 @@ function InferenceTab() {
               <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
                 <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
                 <span>{error}</span>
-              </div>
-            )}
-            {isStarting && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
-                Starting confidential chat…
               </div>
             )}
             {downloadedModels.length === 0 ? (
@@ -4839,12 +5025,8 @@ function InferenceTab() {
                     </select>
                   </div>
                 </div>
-                <Button
-                  className="w-full"
-                  disabled={isStarting}
-                  onClick={handleStartServer}
-                >
-                  {isStarting ? "Starting…" : "Start Server"}
+                <Button className="w-full" onClick={handleStartServer}>
+                  Start Server
                 </Button>
               </>
             )}
@@ -4875,21 +5057,56 @@ function InferenceTab() {
           void restoreVoiceSystemPrompt();
         }}
       />
-      {/* ── Left sidebar: conversation list ── */}
-      <div className="w-56 shrink-0 flex flex-col border-r bg-muted/20">
-        <div className="flex items-center justify-between px-3 py-2.5 border-b">
-          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            Conversations
-          </span>
+      {/* ── Left sidebar: conversation list (collapsible) ── */}
+      {!sidebarOpen && (
+        <div className="w-10 shrink-0 flex flex-col items-center gap-1 border-r bg-muted/20 py-2">
           <Button
             size="icon"
             variant="ghost"
-            className="h-6 w-6"
+            className="h-7 w-7"
+            onClick={toggleSidebar}
+            title="Show conversations"
+          >
+            <PanelLeftOpen className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7"
             onClick={newConversation}
             title="New conversation"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="h-4 w-4" />
           </Button>
+        </div>
+      )}
+      <div
+        className={`${sidebarOpen ? "w-56" : "hidden"} shrink-0 flex flex-col border-r bg-muted/20`}
+      >
+        <div className="flex items-center justify-between gap-1 px-3 py-2.5 border-b">
+          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide truncate">
+            Conversations
+          </span>
+          <div className="flex items-center shrink-0">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-6 w-6"
+              onClick={newConversation}
+              title="New conversation"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-6 w-6"
+              onClick={toggleSidebar}
+              title="Hide conversations"
+            >
+              <PanelLeftClose className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
         <ScrollArea className="flex-1">
           <div className="p-1.5 space-y-0.5">
@@ -4977,7 +5194,13 @@ function InferenceTab() {
                 ),
               )}
             </div>
-            <ModelSwitcher />
+            <ModelSwitcher
+              onSwitch={(filename) => void handleModelSwitch(filename)}
+              onUnload={() => void handleUnloadModel()}
+              switching={switchingModel}
+              unloading={unloadingModel}
+              busy={isGenerating}
+            />
           </div>
           <div className="flex items-center gap-2">
             {(mode === "chat" || mode === "voice") && (
@@ -5039,256 +5262,34 @@ function InferenceTab() {
         {/* ── Chat mode ── */}
         {mode === "chat" && (
           <>
-            <ScrollArea className="flex-1" ref={scrollAreaRef}>
-              <div className="p-4 space-y-6 max-w-3xl mx-auto w-full">
-                {messages.length === 0 && (
-                  <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
-                    <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
-                      <MessageSquare className="h-6 w-6 text-primary/60" />
-                    </div>
-                    <p className="text-sm text-muted-foreground max-w-xs">
-                      Start a confidential chat. Messages stay on this device,
-                      and your history is saved automatically.
-                    </p>
-                  </div>
-                )}
-                {messages.map((msg) => (
-                  <div key={msg.id} className="group/msg">
-                    {msg.role === "assistant" ? (
-                      /* ── Assistant message: full-width, no avatar ── */
-                      <div className="w-full min-w-0">
-                        {editingMsgId === msg.id ? (
-                          <div className="space-y-2">
-                            <textarea
-                              ref={editTextareaRef}
-                              className="w-full rounded-xl border bg-background px-4 py-3 text-[0.9375rem] leading-[1.75] resize-none overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary/50"
-                              style={{
-                                fontFamily:
-                                  "var(--font-sans, ui-sans-serif, system-ui, -apple-system, sans-serif)",
-                              }}
-                              value={editingContent}
-                              onChange={(e) =>
-                                setEditingContent(e.target.value)
-                              }
-                              autoFocus
-                            />
-                            <div className="flex gap-2 justify-end">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-7 text-xs"
-                                onClick={() => {
-                                  setEditingMsgId(null);
-                                  setEditingContent("");
-                                }}
-                              >
-                                Cancel
-                              </Button>
-                              <Button
-                                size="sm"
-                                className="h-7 text-xs"
-                                disabled={!editingContent.trim()}
-                                onClick={() =>
-                                  handleEditAssistant(msg.id, editingContent)
-                                }
-                              >
-                                Save
-                              </Button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="rounded-xl px-4 py-3 bg-muted/40">
-                            <div
-                              className="chat-prose leading-[1.75]"
-                              style={{
-                                fontFamily:
-                                  "var(--font-sans, ui-sans-serif, system-ui, -apple-system, sans-serif)",
-                                fontSize: "0.9375rem",
-                              }}
-                            >
-                              <ReactMarkdown
-                                remarkPlugins={[remarkGfm]}
-                                components={{
-                                  pre: ({ children }) => (
-                                    <pre className="overflow-x-auto rounded-md bg-muted p-3 text-[0.8125rem] font-mono">
-                                      {children}
-                                    </pre>
-                                  ),
-                                  code: ({ className, children, ...props }) => {
-                                    const isInline = !className;
-                                    if (isInline) {
-                                      return (
-                                        <code
-                                          className="rounded bg-muted px-1.5 py-0.5 text-[0.8125rem] font-mono"
-                                          {...props}
-                                        >
-                                          {children}
-                                        </code>
-                                      );
-                                    }
-                                    return (
-                                      <code
-                                        className={`${className ?? ""} font-mono`}
-                                        {...props}
-                                      >
-                                        {children}
-                                      </code>
-                                    );
-                                  },
-                                }}
-                              >
-                                {msg.content}
-                              </ReactMarkdown>
-                              {msg.isStreaming && (
-                                <span className="inline-block h-4 w-0.5 bg-primary opacity-70 animate-pulse ml-0.5 align-middle" />
-                              )}
-                            </div>
-                          </div>
-                        )}
-                        {!msg.isStreaming &&
-                          editingMsgId !== msg.id &&
-                          msg.content && (
-                            <div className="flex items-center gap-0.5 mt-1 opacity-0 transition-opacity group-hover/msg:opacity-100 justify-start">
-                              <MsgCopyButton text={msg.content} />
-                              <button
-                                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-                                title="Retry — regenerate this response"
-                                disabled={isGenerating}
-                                onClick={() => handleRetry(msg.id)}
-                              >
-                                <RefreshCw className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
-                                title="Edit"
-                                onClick={() => {
-                                  setEditingMsgId(msg.id);
-                                  setEditingContent(msg.content);
-                                }}
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                className={`rounded-md p-1.5 transition-colors ${reactions[msg.id] === "up" ? "text-green-500" : "text-muted-foreground hover:text-foreground"}`}
-                                title="Good response"
-                                onClick={() => toggleReaction(msg.id, "up")}
-                              >
-                                <ThumbsUp className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                className={`rounded-md p-1.5 transition-colors ${reactions[msg.id] === "down" ? "text-red-500" : "text-muted-foreground hover:text-foreground"}`}
-                                title="Bad response"
-                                onClick={() => toggleReaction(msg.id, "down")}
-                              >
-                                <ThumbsDown className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
-                                title="Fork conversation from here"
-                                onClick={() => forkFromMessage(msg.id)}
-                              >
-                                <GitFork className="h-3.5 w-3.5" />
-                              </button>
-
-                              {/* Read aloud — play / pause / stop */}
-                              {!ttsActions ? (
-                                <button
-                                  disabled
-                                  className="rounded-md p-1.5 text-muted-foreground/40 cursor-not-allowed"
-                                  title="TTS unavailable"
-                                >
-                                  <Volume2 className="h-3.5 w-3.5" />
-                                </button>
-                              ) : (
-                                <>
-                                  {readingMsgId === msg.id ? (
-                                    <>
-                                      {/* Pause / Resume */}
-                                      <button
-                                        className="rounded-md p-1.5 text-primary transition-colors hover:text-primary/70"
-                                        title={
-                                          chatTts.isPaused
-                                            ? "Resume reading"
-                                            : "Pause reading"
-                                        }
-                                        onClick={() => {
-                                          if (chatTts.isPaused) {
-                                            chatTts.resumeReadAloud();
-                                          } else {
-                                            chatTts.pauseReadAloud();
-                                          }
-                                        }}
-                                      >
-                                        {chatTts.isPaused ? (
-                                          <Play className="h-3.5 w-3.5" />
-                                        ) : (
-                                          <Pause className="h-3.5 w-3.5" />
-                                        )}
-                                      </button>
-                                      {/* Stop */}
-                                      <button
-                                        className="rounded-md p-1.5 text-destructive transition-colors hover:text-destructive/70"
-                                        title="Stop reading"
-                                        onClick={() => {
-                                          chatTts.stopReadAloud();
-                                          setReadingMsgId(null);
-                                        }}
-                                      >
-                                        <VolumeX className="h-3.5 w-3.5" />
-                                      </button>
-                                    </>
-                                  ) : (
-                                    /* Play */
-                                    <button
-                                      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
-                                      title="Read aloud"
-                                      onClick={() => {
-                                        setReadingMsgId(msg.id);
-                                        chatTts.readCompleteMessage(
-                                          msg.content,
-                                        );
-                                      }}
-                                    >
-                                      <Volume2 className="h-3.5 w-3.5" />
-                                    </button>
-                                  )}
-                                </>
-                              )}
-
-                              {/* Divider */}
-                              <span className="w-px h-3.5 bg-border mx-0.5 self-center" />
-
-                              {/* Save this response as a note */}
-                              <button
-                                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
-                                title="Save response to Notes"
-                                onClick={() =>
-                                  openSaveNote("message", msg.content)
-                                }
-                              >
-                                <BookmarkPlus className="h-3.5 w-3.5" />
-                              </button>
-
-                              {/* Save full conversation as a note */}
-                              <button
-                                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
-                                title="Save full conversation to Notes"
-                                onClick={() => openSaveNote("conversation")}
-                              >
-                                <FileText className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          )}
+            <div className="relative flex-1 min-h-0 flex flex-col">
+              <ScrollArea className="flex-1" ref={scrollAreaRef}>
+                <div className="p-4 space-y-6 max-w-3xl mx-auto w-full">
+                  {messages.length === 0 && (
+                    <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+                      <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
+                        <MessageSquare className="h-6 w-6 text-primary/60" />
                       </div>
-                    ) : (
-                      /* ── User message: right-aligned bubble with avatar ── */
-                      <div className="flex gap-3 justify-end">
-                        <div className="max-w-[78%] min-w-0">
+                      <p className="text-sm text-muted-foreground max-w-xs">
+                        Start a confidential chat. Messages stay on this device,
+                        and your history is saved automatically.
+                      </p>
+                    </div>
+                  )}
+                  {messages.map((msg) => (
+                    <div key={msg.id} className="group/msg">
+                      {msg.role === "assistant" ? (
+                        /* ── Assistant message: full-width, no avatar ── */
+                        <div className="w-full min-w-0">
                           {editingMsgId === msg.id ? (
                             <div className="space-y-2">
                               <textarea
                                 ref={editTextareaRef}
-                                className="w-full rounded-xl border bg-background px-4 py-3 text-[0.9375rem] leading-relaxed resize-none overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary/50"
+                                className="w-full rounded-xl border bg-background px-4 py-3 text-[0.9375rem] leading-[1.75] resize-none overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary/50"
+                                style={{
+                                  fontFamily:
+                                    "var(--font-sans, ui-sans-serif, system-ui, -apple-system, sans-serif)",
+                                }}
                                 value={editingContent}
                                 onChange={(e) =>
                                   setEditingContent(e.target.value)
@@ -5312,28 +5313,79 @@ function InferenceTab() {
                                   className="h-7 text-xs"
                                   disabled={!editingContent.trim()}
                                   onClick={() =>
-                                    handleEditAndResend(msg.id, editingContent)
+                                    handleSaveEdit(msg.id, editingContent)
                                   }
                                 >
-                                  Save & Resend
+                                  Save
                                 </Button>
                               </div>
                             </div>
                           ) : (
-                            <div className="rounded-2xl px-4 py-3 text-[0.9375rem] leading-relaxed bg-primary text-primary-foreground rounded-tr-sm">
-                              <p className="whitespace-pre-wrap break-words">
-                                {msg.content}
-                              </p>
-                              {msg.isStreaming && (
-                                <span className="inline-block h-4 w-0.5 bg-current opacity-70 animate-pulse ml-0.5 align-middle" />
-                              )}
+                            <div className="rounded-xl px-4 py-3 bg-muted/40">
+                              <div
+                                className="chat-prose leading-[1.75]"
+                                style={{
+                                  fontFamily:
+                                    "var(--font-sans, ui-sans-serif, system-ui, -apple-system, sans-serif)",
+                                  fontSize: "0.9375rem",
+                                }}
+                              >
+                                <ReactMarkdown
+                                  remarkPlugins={[remarkGfm]}
+                                  components={{
+                                    pre: ({ children }) => (
+                                      <pre className="overflow-x-auto rounded-md bg-muted p-3 text-[0.8125rem] font-mono">
+                                        {children}
+                                      </pre>
+                                    ),
+                                    code: ({
+                                      className,
+                                      children,
+                                      ...props
+                                    }) => {
+                                      const isInline = !className;
+                                      if (isInline) {
+                                        return (
+                                          <code
+                                            className="rounded bg-muted px-1.5 py-0.5 text-[0.8125rem] font-mono"
+                                            {...props}
+                                          >
+                                            {children}
+                                          </code>
+                                        );
+                                      }
+                                      return (
+                                        <code
+                                          className={`${className ?? ""} font-mono`}
+                                          {...props}
+                                        >
+                                          {children}
+                                        </code>
+                                      );
+                                    },
+                                  }}
+                                >
+                                  {msg.content}
+                                </ReactMarkdown>
+                                {msg.isStreaming && (
+                                  <span className="inline-block h-4 w-0.5 bg-primary opacity-70 animate-pulse ml-0.5 align-middle" />
+                                )}
+                              </div>
                             </div>
                           )}
                           {!msg.isStreaming &&
                             editingMsgId !== msg.id &&
                             msg.content && (
-                              <div className="flex items-center gap-0.5 mt-1 opacity-0 transition-opacity group-hover/msg:opacity-100 justify-end">
+                              <div className="flex items-center gap-0.5 mt-1 opacity-0 transition-opacity group-hover/msg:opacity-100 justify-start">
                                 <MsgCopyButton text={msg.content} />
+                                <button
+                                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
+                                  title="Retry — regenerate this response"
+                                  disabled={isGenerating}
+                                  onClick={() => handleRetry(msg.id)}
+                                >
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                </button>
                                 <button
                                   className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
                                   title="Edit"
@@ -5344,21 +5396,231 @@ function InferenceTab() {
                                 >
                                   <Pencil className="h-3.5 w-3.5" />
                                 </button>
+                                <button
+                                  className={`rounded-md p-1.5 transition-colors ${reactions[msg.id] === "up" ? "text-green-500" : "text-muted-foreground hover:text-foreground"}`}
+                                  title="Good response"
+                                  onClick={() => toggleReaction(msg.id, "up")}
+                                >
+                                  <ThumbsUp className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  className={`rounded-md p-1.5 transition-colors ${reactions[msg.id] === "down" ? "text-red-500" : "text-muted-foreground hover:text-foreground"}`}
+                                  title="Bad response"
+                                  onClick={() => toggleReaction(msg.id, "down")}
+                                >
+                                  <ThumbsDown className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+                                  title="Fork conversation from here"
+                                  onClick={() => forkFromMessage(msg.id)}
+                                >
+                                  <GitFork className="h-3.5 w-3.5" />
+                                </button>
+
+                                {/* Read aloud — play / pause / stop */}
+                                {!ttsActions ? (
+                                  <button
+                                    disabled
+                                    className="rounded-md p-1.5 text-muted-foreground/40 cursor-not-allowed"
+                                    title="TTS unavailable"
+                                  >
+                                    <Volume2 className="h-3.5 w-3.5" />
+                                  </button>
+                                ) : (
+                                  <>
+                                    {readingMsgId === msg.id ? (
+                                      <>
+                                        {/* Pause / Resume */}
+                                        <button
+                                          className="rounded-md p-1.5 text-primary transition-colors hover:text-primary/70"
+                                          title={
+                                            chatTts.isPaused
+                                              ? "Resume reading"
+                                              : "Pause reading"
+                                          }
+                                          onClick={() => {
+                                            if (chatTts.isPaused) {
+                                              chatTts.resumeReadAloud();
+                                            } else {
+                                              chatTts.pauseReadAloud();
+                                            }
+                                          }}
+                                        >
+                                          {chatTts.isPaused ? (
+                                            <Play className="h-3.5 w-3.5" />
+                                          ) : (
+                                            <Pause className="h-3.5 w-3.5" />
+                                          )}
+                                        </button>
+                                        {/* Stop */}
+                                        <button
+                                          className="rounded-md p-1.5 text-destructive transition-colors hover:text-destructive/70"
+                                          title="Stop reading"
+                                          onClick={() => {
+                                            chatTts.stopReadAloud();
+                                            setReadingMsgId(null);
+                                          }}
+                                        >
+                                          <VolumeX className="h-3.5 w-3.5" />
+                                        </button>
+                                      </>
+                                    ) : (
+                                      /* Play */
+                                      <button
+                                        className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+                                        title="Read aloud"
+                                        onClick={() => {
+                                          setReadingMsgId(msg.id);
+                                          chatTts.readCompleteMessage(
+                                            msg.content,
+                                          );
+                                        }}
+                                      >
+                                        <Volume2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    )}
+                                  </>
+                                )}
+
+                                {/* Divider */}
+                                <span className="w-px h-3.5 bg-border mx-0.5 self-center" />
+
+                                {/* Save this response as a note */}
+                                <button
+                                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+                                  title="Save response to Notes"
+                                  onClick={() =>
+                                    openSaveNote("message", msg.content)
+                                  }
+                                >
+                                  <BookmarkPlus className="h-3.5 w-3.5" />
+                                </button>
+
+                                {/* Save full conversation as a note */}
+                                <button
+                                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+                                  title="Save full conversation to Notes"
+                                  onClick={() => openSaveNote("conversation")}
+                                >
+                                  <FileText className="h-3.5 w-3.5" />
+                                </button>
                               </div>
                             )}
                         </div>
-                        <div className="h-7 w-7 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
-                          <span className="text-xs font-semibold text-muted-foreground">
-                            U
-                          </span>
+                      ) : (
+                        /* ── User message: right-aligned bubble with avatar ── */
+                        <div className="flex gap-3 justify-end">
+                          <div className="max-w-[78%] min-w-0">
+                            {editingMsgId === msg.id ? (
+                              <div className="space-y-2">
+                                <textarea
+                                  ref={editTextareaRef}
+                                  className="w-full rounded-xl border bg-background px-4 py-3 text-[0.9375rem] leading-relaxed resize-none overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary/50"
+                                  value={editingContent}
+                                  onChange={(e) =>
+                                    setEditingContent(e.target.value)
+                                  }
+                                  autoFocus
+                                />
+                                <div className="flex gap-2 justify-end">
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 text-xs"
+                                    onClick={() => {
+                                      setEditingMsgId(null);
+                                      setEditingContent("");
+                                    }}
+                                  >
+                                    Cancel
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs"
+                                    disabled={!editingContent.trim()}
+                                    onClick={() =>
+                                      handleSaveEdit(msg.id, editingContent)
+                                    }
+                                    title="Rewrite this message and keep the rest of the conversation"
+                                  >
+                                    Save
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    className="h-7 text-xs"
+                                    disabled={
+                                      !editingContent.trim() || isGenerating
+                                    }
+                                    onClick={() =>
+                                      handleEditAndResend(
+                                        msg.id,
+                                        editingContent,
+                                      )
+                                    }
+                                    title="Rewrite this message and regenerate — everything after it is discarded"
+                                  >
+                                    Save & Resend
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="rounded-2xl px-4 py-3 text-[0.9375rem] leading-relaxed bg-primary text-primary-foreground rounded-tr-sm">
+                                <p className="whitespace-pre-wrap break-words">
+                                  {msg.content}
+                                </p>
+                                {msg.isStreaming && (
+                                  <span className="inline-block h-4 w-0.5 bg-current opacity-70 animate-pulse ml-0.5 align-middle" />
+                                )}
+                              </div>
+                            )}
+                            {!msg.isStreaming &&
+                              editingMsgId !== msg.id &&
+                              msg.content && (
+                                <div className="flex items-center gap-0.5 mt-1 opacity-0 transition-opacity group-hover/msg:opacity-100 justify-end">
+                                  <MsgCopyButton text={msg.content} />
+                                  <button
+                                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+                                    title="Edit"
+                                    onClick={() => {
+                                      setEditingMsgId(msg.id);
+                                      setEditingContent(msg.content);
+                                    }}
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              )}
+                          </div>
+                          <div className="h-7 w-7 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
+                            <span className="text-xs font-semibold text-muted-foreground">
+                              U
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-                <div ref={bottomRef} />
-              </div>
-            </ScrollArea>
+                      )}
+                    </div>
+                  ))}
+                  <div ref={bottomRef} />
+                </div>
+              </ScrollArea>
+
+              {/* Jump back to the live end of the conversation. Only shown when
+                the user has scrolled away from the bottom — auto-scroll is
+                paused for as long as this button is visible. */}
+              {!isPinnedToBottom && messages.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="absolute bottom-3 left-1/2 -translate-x-1/2 h-7 gap-1 rounded-full border shadow-md text-xs"
+                  onClick={jumpToBottom}
+                >
+                  <ArrowDown className="h-3 w-3" />
+                  {isGenerating ? "Jump to latest" : "Jump to bottom"}
+                </Button>
+              )}
+            </div>
 
             {/* Input area — composer with prompt/model selectors */}
             <div className="border-t p-3 shrink-0 bg-background">
@@ -6851,59 +7113,45 @@ function LocalModelsInner() {
       {/* Global HF token modal — shown when a download requires a token */}
       <HuggingFaceAccessModal />
 
-      <div className="shrink-0 px-6 pt-6 pb-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
-              <Cpu className="h-6 w-6 text-blue-500" />
-              Confidential Chat
-            </h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Private AI chat that runs on your device. Conversations stay on
-              your machine and are not sent to the cloud — so you can work with
-              sensitive material more comfortably.
-            </p>
-          </div>
-          {serverStatus?.running && (
-            <Badge className="bg-green-500/20 text-green-600 border-green-500/30 gap-1.5">
-              <Activity className="h-3 w-3" />
-              Confidential chat active · port {serverStatus.port}
-            </Badge>
-          )}
-        </div>
-      </div>
-
       <Tabs
         value={activeTab}
         onValueChange={setActiveTab}
-        className="flex-1 flex flex-col min-h-0 px-6"
+        className="flex-1 flex flex-col min-h-0 px-6 pt-4"
       >
-        <div className="min-w-0 shrink-0 overflow-x-auto">
-          <TabsList className="w-max justify-start">
-            <TabsTrigger value="inference" className="gap-1.5 shrink-0">
-              <MessageSquare className="h-3.5 w-3.5" />
-              Inference
-            </TabsTrigger>
-            <TabsTrigger value="setup" className="gap-1.5 shrink-0">
-              <Zap className="h-3.5 w-3.5" />
-              Setup
-            </TabsTrigger>
-            <TabsTrigger value="models" className="gap-1.5 shrink-0">
-              <HardDrive className="h-3.5 w-3.5" />
-              Models
-            </TabsTrigger>
-            <TabsTrigger value="server" className="gap-1.5 shrink-0">
-              <Server className="h-3.5 w-3.5" />
-              Server
-            </TabsTrigger>
-            <TabsTrigger value="hardware" className="gap-1.5 shrink-0">
-              <Cpu className="h-3.5 w-3.5" />
-              Hardware
-            </TabsTrigger>
-          </TabsList>
+        <div className="flex items-center gap-3 min-w-0 shrink-0">
+          <div className="min-w-0 overflow-x-auto">
+            <TabsList className="w-max justify-start">
+              <TabsTrigger value="inference" className="gap-1.5 shrink-0">
+                <MessageSquare className="h-3.5 w-3.5" />
+                Inference
+              </TabsTrigger>
+              <TabsTrigger value="setup" className="gap-1.5 shrink-0">
+                <Zap className="h-3.5 w-3.5" />
+                Setup
+              </TabsTrigger>
+              <TabsTrigger value="models" className="gap-1.5 shrink-0">
+                <HardDrive className="h-3.5 w-3.5" />
+                Models
+              </TabsTrigger>
+              <TabsTrigger value="server" className="gap-1.5 shrink-0">
+                <Server className="h-3.5 w-3.5" />
+                Server
+              </TabsTrigger>
+              <TabsTrigger value="hardware" className="gap-1.5 shrink-0">
+                <Cpu className="h-3.5 w-3.5" />
+                Hardware
+              </TabsTrigger>
+            </TabsList>
+          </div>
+          {serverStatus?.running && (
+            <Badge className="ml-auto shrink-0 bg-green-500/20 text-green-600 border-green-500/30 gap-1.5">
+              <Activity className="h-3 w-3" />
+              Active · port {serverStatus.port}
+            </Badge>
+          )}
         </div>
 
-        <div className="flex-1 min-h-0 pt-6 overflow-hidden">
+        <div className="flex-1 min-h-0 pt-4 overflow-hidden">
           <TabsContent value="setup" className="m-0 h-full overflow-auto">
             <SetupTab />
           </TabsContent>

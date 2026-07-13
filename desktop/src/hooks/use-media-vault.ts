@@ -33,6 +33,11 @@ import type {
   MediaVaultOpResult,
 } from "@/lib/api";
 import { emitClientLog } from "@/hooks/use-unified-log";
+import {
+  announceMediaItemsAdded,
+  announceMediaItemsRemoved,
+  announceVaultLocked,
+} from "@/lib/media-events";
 
 const ENGINE_NOT_CONNECTED = "Engine not connected";
 
@@ -63,8 +68,9 @@ export interface MediaVaultState {
 }
 
 export interface MediaVaultActions {
-  /** Re-fetch status (and items when unlocked). */
-  refresh: () => Promise<void>;
+  /** Re-fetch status (and items when unlocked). Returns the freshly-fetched
+   * status so a caller can act on it without waiting for a re-render. */
+  refresh: () => Promise<MediaVaultStatus | null>;
   /** Create the vault (creates AND unlocks). Returns error message or null. */
   create: (password: string) => Promise<string | null>;
   /**
@@ -112,6 +118,9 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
   const pendingFileFetches = useRef<Map<string, Promise<string | null>>>(
     new Map(),
   );
+  /** Incremented on every lock. A fetch that started before the current epoch
+   * must not install its (now-stale) decrypted blob URL. */
+  const lockEpochRef = useRef(0);
   useEffect(() => {
     fileUrlsRef.current = fileUrls;
   }, [fileUrls]);
@@ -130,11 +139,17 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
    * Flip state to locked, drop items, revoke URLs. NOT an error.
    */
   const handleLocked = useCallback(() => {
-    setStatus((prev) =>
-      prev ? { ...prev, unlocked: false } : prev,
-    );
+    setStatus((prev) => (prev ? { ...prev, unlocked: false } : prev));
     setItems([]);
     revokeAllUrls();
+    // Bump the epoch BEFORE announcing: any byte-fetch still in flight resolves
+    // into a stale epoch and throws its decrypted blob away instead of caching
+    // it (a decrypted image surviving a lock is the exact leak we are closing).
+    lockEpochRef.current += 1;
+    // Revoking a URL does not blank an <img> that is already on screen. Tell
+    // every other store (the lightbox, the info dialog, the job thumbnails) to
+    // drop its vault-derived bytes NOW.
+    announceVaultLocked();
   }, [revokeAllUrls]);
 
   const fetchItems = useCallback(async (): Promise<void> => {
@@ -180,9 +195,10 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
     }
   }, []);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<MediaVaultStatus | null> => {
     const s = await fetchStatus();
     if (s?.unlocked) await fetchItems();
+    return s;
   }, [fetchStatus, fetchItems]);
 
   const create = useCallback(
@@ -264,6 +280,14 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
       setBusy(true);
       try {
         const resp = await moveToMediaVault(base, itemIds);
+        // The moved items are GONE from the plaintext library. Announce the
+        // ones that actually moved so the library grid, the job thumbnails and
+        // any open lightbox drop them in the same tick — a partial state update
+        // here is what leaves a vaulted image rendering from a dead blob URL.
+        announceMediaItemsRemoved(
+          resp.results.filter((r) => r.ok).map((r) => r.item_id),
+          "vaulted",
+        );
         // New items landed in the vault — refresh count + list.
         await fetchStatus();
         await fetchItems();
@@ -309,6 +333,9 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
           }
           return next;
         });
+        // Restored items are plaintext library items again — pull them back
+        // into the library grid instead of leaving it stale until a refresh.
+        announceMediaItemsAdded([...restored]);
         await fetchStatus();
         return resp.results;
       } catch (e) {
@@ -336,6 +363,7 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
       }
       try {
         await deleteMediaVaultItem(base, itemId);
+        announceMediaItemsRemoved([itemId], "deleted");
         setItems((prev) => prev.filter((i) => i.id !== itemId));
         setFileUrls((prev) => {
           const url = prev[itemId];
@@ -409,9 +437,16 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
         console.error("[media-vault] file fetch blocked — engine not connected");
         return null;
       }
+      const epoch = lockEpochRef.current;
       const task = (async () => {
         try {
           const url = await fetchMediaVaultFile(base, itemId);
+          if (lockEpochRef.current !== epoch) {
+            // The vault locked while these bytes were in flight. Never cache a
+            // decrypted blob across a lock.
+            URL.revokeObjectURL(url);
+            return null;
+          }
           setFileUrls((prev) => ({ ...prev, [itemId]: url }));
           return url;
         } catch (e) {

@@ -9,9 +9,10 @@
  *    queue rail, and a horizontal filmstrip of recent library images.
  *  - Workflows and the full Library open in full-height dialogs.
  *
- * THIN layout shell: forms, pickers, queue chips, job cards and gates all
- * come from media-gen/core. Only the split-pane chrome, the filmstrip and
- * the multi-item canvas lightbox are Studio-specific.
+ * THIN layout shell: forms, pickers, queue chips, job cards and gates come from
+ * media-gen/core; every image (canvas, filmstrip) is a canonical MediaThumb and
+ * every action comes from useMediaActions(). Only the split-pane chrome is
+ * Studio-specific.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -20,7 +21,6 @@ import {
   Image as ImageIcon,
   Layers,
   Loader2,
-  Maximize2,
   Workflow,
   X,
 } from "lucide-react";
@@ -33,15 +33,25 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
-import { useMediaLibrary } from "@/hooks/use-media-library";
+import { useMediaLibraryApp } from "@/contexts/MediaLibraryContext";
 import type { MediaLibraryItem } from "@/lib/api";
-import { MediaLightbox } from "@/components/media-gen/MediaLightbox";
-import type { LightboxItem } from "@/components/media-gen/MediaLightbox";
+import { useMediaActions } from "@/components/media/MediaActionsProvider";
+import {
+  MediaItemThumb,
+  MediaThumb,
+  viewingSetOf,
+} from "@/components/media/MediaThumb";
+import { MediaOverflowMenu } from "@/components/media/MediaOverflowMenu";
+import { CopyButton } from "@/components/media/MediaInfoDialog";
+import {
+  descriptorFromLibraryItem,
+  descriptorFromResult,
+  type MediaDescriptor,
+} from "@/components/media/types";
 import { WorkflowSection } from "@/components/media-gen/WorkflowSection";
 import { MediaLibrarySection } from "@/components/media-gen/MediaLibrarySection";
 import { SeedChip, StillWorkingNote } from "@/components/media-gen/shared";
 import { useImageGenController } from "@/components/media-gen/core/imageController";
-import { pickedImageFromUrl } from "@/components/media-gen/core/pickedImage";
 import { useVideoGenController } from "@/components/media-gen/core/videoController";
 import {
   ImageGenGate,
@@ -134,7 +144,8 @@ export function VariantStudio() {
     activeJob,
     videoForm,
   } = state;
-  const { setImageForm, useImageAsInput } = actions;
+  const { setImageForm } = actions;
+  const mediaActions = useMediaActions();
 
   // ── Pure-presentation local state ────────────────────────────────────────
   const [mode, setMode] = useState<StudioMode>("image");
@@ -142,18 +153,13 @@ export function VariantStudio() {
   const [workflowsOpen, setWorkflowsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-  // Lightbox viewing set, snapshotted at open time.
-  const [lightbox, setLightbox] = useState<{
-    items: LightboxItem[];
-    index: number;
-  } | null>(null);
 
   const closePicker = useCallback(() => setPickerOpen(false), []);
   const imageCtl = useImageGenController({ onAfterSelect: closePicker });
   const videoCtl = useVideoGenController({ onAfterSelect: closePicker });
 
-  // ── Library filmstrip (own hook instance, images only, first 20) ─────────
-  const [libState, libActions] = useMediaLibrary();
+  // ── Library filmstrip (the ONE shared store, images only, first 20) ──────
+  const [libState, libActions] = useMediaLibraryApp();
   const { getFileUrl, refresh: refreshLibrary } = libActions;
   const filmstripItems = useMemo(
     () => libState.items.filter((i) => i.media_type === "image").slice(0, 20),
@@ -183,75 +189,37 @@ export function VariantStudio() {
     void refreshLibrary();
   }, [completedImageJobCount, refreshLibrary]);
 
-  // ── Lightbox plumbing (Studio-specific: filmstrip browse set) ────────────
-  const libraryItemToLightbox = useCallback(
-    (item: MediaLibraryItem, url: string): LightboxItem => ({
-      id: item.id,
-      kind: item.media_type,
-      url,
-      prompt: item.prompt,
-      seed: item.seed,
-      meta: {
-        model_id: item.model_id,
-        width: item.width,
-        height: item.height,
-        elapsed_seconds: item.elapsed_seconds,
-        created_at: item.created_at,
-        ...(item.negative_prompt
-          ? { negative_prompt: item.negative_prompt }
-          : {}),
-        ...(Object.keys(item.params ?? {}).length > 0
-          ? { params: item.params }
-          : {}),
-      },
-    }),
-    [],
-  );
+  // ── Viewing set: the fresh result first, then the filmstrip ─────────────
+  //
+  // Built from canonical descriptors — the lightbox, the context menu and the
+  // info dialog all speak this one shape, so an image opened from the canvas
+  // has exactly the same abilities as one opened from the Library tab.
+  const resultDescriptor = useMemo<MediaDescriptor | null>(() => {
+    if (!imageResult) return null;
+    return descriptorFromResult(imageResult, {
+      ...(imageForm.prompt.trim() ? { prompt: imageForm.prompt.trim() } : {}),
+      ...(imageCtl.model ? { modelId: imageCtl.model.model_id } : {}),
+    });
+  }, [imageResult, imageForm.prompt, imageCtl.model]);
 
-  const buildImageLightboxItems = useCallback((): LightboxItem[] => {
-    const arr: LightboxItem[] = [];
-    if (imageResult) {
-      arr.push({
-        id: imageResult.itemId ?? "fresh-result",
-        kind: "image",
-        url: `data:image/png;base64,${imageResult.b64}`,
-        ...(imageForm.prompt.trim() ? { prompt: imageForm.prompt.trim() } : {}),
-        seed: imageResult.seed,
-        meta: {
-          width: imageResult.width,
-          height: imageResult.height,
-          elapsed_seconds: imageResult.elapsed,
-          ...(imageResult.filePath ? { file_path: imageResult.filePath } : {}),
-        },
-        title: "Latest result",
-      });
-    }
-    for (const item of filmstripItems) {
-      if (imageResult?.itemId && item.id === imageResult.itemId) continue;
-      const url = libState.fileUrls[item.id];
-      if (!url) continue;
-      arr.push(libraryItemToLightbox(item, url));
-    }
-    return arr;
-  }, [
-    imageResult,
-    imageForm.prompt,
-    filmstripItems,
-    libState.fileUrls,
-    libraryItemToLightbox,
-  ]);
+  const viewingSet = useMemo<MediaDescriptor[]>(() => {
+    const strip = viewingSetOf(filmstripItems, libState.fileUrls, "library");
+    if (!resultDescriptor) return strip;
+    // The fresh result IS a library item once persisted — don't list it twice.
+    return [
+      resultDescriptor,
+      ...strip.filter((d) => d.itemId !== resultDescriptor.itemId),
+    ];
+  }, [filmstripItems, libState.fileUrls, resultDescriptor]);
 
-  const openImageLightboxAt = useCallback(
+  const openViewer = useCallback(
     (id: string | null) => {
-      const arr = buildImageLightboxItems();
-      if (arr.length === 0) return;
-      const idx = id ? arr.findIndex((x) => x.id === id) : 0;
-      setLightbox({ items: arr, index: idx >= 0 ? idx : 0 });
+      if (viewingSet.length === 0) return;
+      const idx = id ? viewingSet.findIndex((x) => x.id === id) : 0;
+      mediaActions.open(viewingSet, idx >= 0 ? idx : 0);
     },
-    [buildImageLightboxItems],
+    [viewingSet, mediaActions],
   );
-
-  const closeLightbox = useCallback(() => setLightbox(null), []);
 
   // ── Derived presentation values ──────────────────────────────────────────
   const isImage = mode === "image";
@@ -269,9 +237,11 @@ export function VariantStudio() {
         : null,
     [selectedItemId, libState.items],
   );
-  const selectedItemUrl = selectedItem
-    ? (libState.fileUrls[selectedItem.id] ?? null)
-    : null;
+  const selectedDescriptor = useMemo<MediaDescriptor | null>(() => {
+    if (!selectedItem) return null;
+    const url = libState.fileUrls[selectedItem.id];
+    return url ? descriptorFromLibraryItem(selectedItem, url, "library") : null;
+  }, [selectedItem, libState.fileUrls]);
 
   // ── Left-panel model indicator ───────────────────────────────────────────
   const modelIndicator = (() => {
@@ -323,24 +293,13 @@ export function VariantStudio() {
     ) : selectedItem ? (
       <div className="flex h-full w-full min-h-0 flex-col items-center gap-3 lg:flex-row lg:items-stretch">
         <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center">
-          {selectedItemUrl ? (
-            <button
-              type="button"
-              onClick={() => openImageLightboxAt(selectedItem.id)}
-              className="group relative flex max-h-full max-w-full cursor-zoom-in items-center justify-center"
-              aria-label="Expand image"
-              title="Click to expand"
-            >
-              <img
-                src={selectedItemUrl}
-                alt={selectedItem.prompt || "Library image"}
-                className="max-h-full max-w-full rounded-lg border object-contain"
-              />
-              <span className="pointer-events-none absolute right-2 top-2 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-1 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
-                <Maximize2 className="h-3 w-3" />
-                Expand
-              </span>
-            </button>
+          {selectedDescriptor ? (
+            <MediaThumb
+              item={selectedDescriptor}
+              variant="gallery"
+              viewingSet={viewingSet}
+              className="flex max-h-full max-w-full items-center justify-center rounded-lg border [&_img]:max-h-full [&_img]:w-auto [&_img]:object-contain"
+            />
           ) : (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -348,26 +307,32 @@ export function VariantStudio() {
             </div>
           )}
         </div>
-        {/* Metadata side strip */}
-        <div className="w-full shrink-0 space-y-2 rounded-lg border bg-card/60 p-3 lg:w-60 lg:overflow-y-auto">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold">Library image</p>
+        {/* Metadata side strip — the full prompt (wrapped + copyable, never a
+            dead end), the seed, and the canonical action menu. */}
+        <div className="w-full min-w-0 shrink-0 space-y-2 rounded-lg border bg-card/60 p-3 lg:w-60 lg:overflow-y-auto">
+          <div className="flex items-center justify-between gap-1">
+            <p className="min-w-0 flex-1 text-xs font-semibold">Library image</p>
+            {selectedDescriptor && (
+              <MediaOverflowMenu item={selectedDescriptor} omit={["open"]} />
+            )}
             <button
               type="button"
               onClick={() => setSelectedItemId(null)}
-              className="text-muted-foreground hover:text-foreground"
+              className="shrink-0 text-muted-foreground hover:text-foreground"
               aria-label="Back to latest result"
               title="Back to latest result"
             >
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
-          <p
-            className="text-[11px] leading-relaxed text-muted-foreground break-words"
-            title={selectedItem.prompt}
-          >
-            {selectedItem.prompt || "(no prompt)"}
-          </p>
+          <div className="flex items-start gap-1.5">
+            <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-muted-foreground">
+              {selectedItem.prompt || "(no prompt)"}
+            </p>
+            {selectedItem.prompt && (
+              <CopyButton value={selectedItem.prompt} label="Copy prompt" />
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-1.5">
             {selectedItem.seed !== null && (
               <SeedChip seed={selectedItem.seed} onReuse={imageCtl.reuseSeed} />
@@ -383,10 +348,26 @@ export function VariantStudio() {
             </p>
             <p>{new Date(selectedItem.created_at).toLocaleString()}</p>
           </div>
-          {Object.keys(selectedItem.params ?? {}).length > 0 && (
-            <pre className="max-h-32 overflow-auto rounded border bg-muted/30 p-2 font-mono text-[10px] leading-snug">
-              {JSON.stringify(selectedItem.params, null, 2)}
-            </pre>
+          {selectedDescriptor && (
+            <div className="flex gap-1.5">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 flex-1 text-xs"
+                onClick={() => void mediaActions.remix(selectedDescriptor)}
+                title="Reload everything that made this image"
+              >
+                Remix
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 flex-1 text-xs"
+                onClick={() => mediaActions.info(selectedDescriptor)}
+              >
+                Info
+              </Button>
+            </div>
           )}
           <Button
             size="sm"
@@ -407,7 +388,7 @@ export function VariantStudio() {
       </div>
     ) : imageResult ? (
       <div className="w-full max-w-3xl overflow-y-auto">
-        <ImageResultPane onOpenLightbox={() => openImageLightboxAt(null)} />
+        <ImageResultPane onOpenLightbox={() => openViewer(null)} />
       </div>
     ) : (
       <div className="flex flex-col items-center gap-3 text-muted-foreground">
@@ -617,47 +598,30 @@ export function VariantStudio() {
           ) : (
             <div className="flex gap-2 overflow-x-auto pb-1">
               {filmstripItems.map((item) => {
-                const url = libState.fileUrls[item.id] ?? null;
                 const active = selectedItemId === item.id;
                 return (
-                  <div key={item.id} className="group relative h-16 w-16 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedItemId(active ? null : item.id);
-                        void getFileUrl(item.id);
-                      }}
-                      className={`h-16 w-16 overflow-hidden rounded-md border transition-all ${
-                        active
-                          ? "border-violet-500 ring-2 ring-violet-500/40"
-                          : "hover:border-violet-500/50"
-                      }`}
-                      title={item.prompt || "(no prompt)"}
-                      aria-label={`Show ${item.prompt || "generated image"} on the canvas`}
-                    >
-                      {url ? (
-                        <img
-                          src={url}
-                          alt={item.prompt || "Generated image"}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <span className="flex h-full w-full items-center justify-center bg-muted/40">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                        </span>
-                      )}
-                    </button>
-                    {url && (
-                      <button
-                        type="button"
-                        onClick={() => openImageLightboxAt(item.id)}
-                        className="absolute right-0.5 top-0.5 rounded bg-black/60 p-0.5 text-white opacity-0 transition-opacity hover:bg-black/80 focus-visible:opacity-100 group-hover:opacity-100"
-                        aria-label={`Open ${item.prompt || "generated image"} in the viewer`}
-                        title="Open in the full-screen viewer"
-                      >
-                        <Maximize2 className="h-3 w-3" />
-                      </button>
-                    )}
+                  <div
+                    key={item.id}
+                    className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border transition-all ${
+                      active
+                        ? "border-violet-500 ring-2 ring-violet-500/40"
+                        : "hover:border-violet-500/50"
+                    }`}
+                  >
+                    {/* Canonical thumb. A click puts it on the canvas (Studio's
+                        model), and full size + every action stay one step away
+                        via "⋯" or right-click — a filmstrip frame is not a
+                        lesser image than a library card. */}
+                    <MediaItemThumb
+                      item={item}
+                      variant="filmstrip"
+                      viewingSet={viewingSet}
+                      chrome="menu"
+                      onActivate={() =>
+                        setSelectedItemId(active ? null : item.id)
+                      }
+                      className="h-full w-full"
+                    />
                   </div>
                 );
               })}
@@ -725,21 +689,6 @@ export function VariantStudio() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Full-power media viewer (filmstrip browse set) ──────────────── */}
-      <MediaLightbox
-        open={lightbox !== null}
-        items={lightbox?.items ?? []}
-        startIndex={lightbox?.index ?? 0}
-        onClose={closeLightbox}
-        onReuseSeed={isImage ? imageCtl.reuseSeed : videoCtl.reuseSeed}
-        onUseAsInput={(item) => {
-          void pickedImageFromUrl(item.url, `${item.id}.png`, (msg) =>
-            imageCtl.setLocalError(msg),
-          ).then((img) => {
-            if (img) useImageAsInput(img);
-          });
-        }}
-      />
     </div>
   );
 }

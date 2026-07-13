@@ -1,3 +1,4 @@
+import { MediaThumb } from "@/components/media/MediaThumb";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import {
@@ -695,10 +696,17 @@ function CameraCard({ perm }: { perm: PermissionInfo | null }) {
             {mode === "photo" ? "Photo Captured" : "Video Recorded"}
           </p>
           {mediaMime.startsWith("image/") ? (
-            <img
-              src={mediaSrc}
-              alt="Captured"
-              className="max-h-64 w-full rounded-md object-contain"
+            <MediaThumb
+              item={{
+                id: "device-capture",
+                kind: "image",
+                url: mediaSrc,
+                itemId: null,
+                source: "result",
+                fileName: "capture.png",
+              }}
+              variant="gallery"
+              className="max-h-64 w-full rounded-md [&_img]:max-h-64 [&_img]:object-contain"
             />
           ) : (
             <video
@@ -928,10 +936,17 @@ function ScreenRecordingCard({ perm }: { perm: PermissionInfo | null }) {
               : "Recording Complete"}
           </p>
           {mediaMime.startsWith("image/") ? (
-            <img
-              src={mediaSrc}
-              alt="Screenshot"
-              className="max-h-72 w-full rounded-md object-contain border"
+            <MediaThumb
+              item={{
+                id: "device-screenshot",
+                kind: "image",
+                url: mediaSrc,
+                itemId: null,
+                source: "result",
+                fileName: "screenshot.png",
+              }}
+              variant="gallery"
+              className="max-h-72 w-full rounded-md border [&_img]:max-h-72 [&_img]:object-contain"
             />
           ) : (
             <video

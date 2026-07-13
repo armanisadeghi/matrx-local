@@ -90,6 +90,17 @@ _Last updated: 2026-07-12 (hygiene pass: SMTP P0 + Full Disk Access added; FLUX.
 
 _(asks prepared by non-interactive `task-hygiene` runs land here)_
 
+- **Approve an official-docs edit for the new API-key validation surface.**
+  `docs/official/settings-catalog.md` is now stale in two ways and I can't edit
+  `docs/official/**` without your say-so:
+  1. New `AppSettings` blob key **`api_key_validation`** —
+     `{provider: {verdict, account, checked_at}}`, written by
+     `ApiKeysRepo.record_validation()`. Verdicts only; never a key value.
+  2. `VALID_PROVIDERS` gained **`elevenlabs`** and **`fastino`** (they were in
+     `PROVIDER_ENV_MAP` but not `VALID_PROVIDERS`, so PUT/bulk 422'd and they
+     were `.env`-only).
+  Say the word and I'll write both up.
+
 ---
 
 ## Future

@@ -353,6 +353,27 @@ class ImageJobResponse(BaseModel):
     (queue-first Generate). The UI labels such queued jobs "Up next"."""
     created_at: float = 0.0
 
+    # ── batch (prompt-matrix) grouping ────────────────────────────────────────
+    batch_id: str | None = None
+    """Set when the job belongs to a batch enqueued via POST /jobs/batch."""
+    batch_index: int = 0
+    batch_size: int = 0
+    batch_label: str | None = None
+    variables: dict[str, str] = {}
+    """The matrix variables this job realizes, e.g. {"style": "noir"}."""
+    combo_label: str | None = None
+    """`style=noir · subject=cat` — the queue row's subtitle."""
+
+    # ── retry ─────────────────────────────────────────────────────────────────
+    attempts: int = 0
+    max_attempts: int = 3
+    retrying: bool = False
+    """True while the job is queued for ANOTHER attempt after a failure."""
+    retry_in_seconds: float = 0.0
+    """Seconds of backoff left before the retry starts (0 when not backing off)."""
+    last_error: str | None = None
+    """Error from the most recent failed attempt (set while it retries)."""
+
 
 def _image_job_response(job) -> ImageJobResponse:
     d = job.to_dict()
@@ -382,6 +403,17 @@ def _image_job_response(job) -> ImageJobResponse:
         cancel_requested=d["cancel_requested"],
         priority=d.get("priority", "normal"),
         created_at=d["created_at"],
+        batch_id=d.get("batch_id"),
+        batch_index=d.get("batch_index", 0),
+        batch_size=d.get("batch_size", 0),
+        batch_label=d.get("batch_label"),
+        variables=d.get("variables", {}),
+        combo_label=d.get("combo_label"),
+        attempts=d.get("attempts", 0),
+        max_attempts=d.get("max_attempts", 3),
+        retrying=d.get("retrying", False),
+        retry_in_seconds=d.get("retry_in_seconds", 0.0),
+        last_error=d.get("last_error"),
     )
 
 
@@ -763,6 +795,9 @@ async def enqueue_image_job(req: EnqueueImageJobRequest) -> ImageJobEnqueuedResp
     )
 
     store = get_image_job_store()
+    if init_bytes is not None:
+        # Content-addressed on DISK, so a restart can still run this job.
+        init_sha = store.put_init_image(init_bytes)
     job = store.create(
         prompt=req.prompt,
         model_id=req.model_id,
@@ -779,9 +814,6 @@ async def enqueue_image_job(req: EnqueueImageJobRequest) -> ImageJobEnqueuedResp
         extra_params=dict(req.extra_params),
         priority=req.priority,
     )
-    if init_bytes is not None:
-        # Bytes live in memory only (jobs.json carries just the sha256).
-        store.stash_init_image(job.job_id, init_bytes)
     get_image_job_runner().ensure_running()
     return ImageJobEnqueuedResponse(job_id=job.job_id)
 
@@ -833,6 +865,280 @@ async def cancel_image_job(job_id: str) -> dict:
             "mid_flight": bool(info.get("mid_flight", False)),
         }
     return {"job_id": job_id, "outcome": outcome}
+
+
+# ── Batches (prompt matrix) + queue control ───────────────────────────────────
+
+
+class BatchJobSpec(GenerateRequest):
+    """One run of a batch — a full GenerateRequest plus its matrix identity."""
+
+    variables: dict[str, str] = Field(default_factory=dict)
+    """The variable values this run realizes, e.g. {"subject": "cat"}. Stored
+    on the job so the queue row is legible and the result is traceable back to
+    the combination that produced it."""
+    combo_label: str | None = None
+    """Rendered summary, e.g. `subject=cat · style=noir`."""
+
+
+class EnqueueBatchRequest(BaseModel):
+    label: str | None = Field(None, max_length=120)
+    """Human name for the batch, e.g. "Portrait sweep"."""
+    jobs: list[BatchJobSpec] = Field(..., min_length=1, max_length=2000)
+    """Every run, in the order they should execute. 2000 is a hard ceiling —
+    a matrix that expands past it is a mistake, not a plan."""
+
+
+class EnqueueBatchResponse(BaseModel):
+    batch_id: str
+    job_ids: list[str]
+    count: int
+
+
+class BatchSummaryResponse(BaseModel):
+    batch_id: str
+    label: str | None = None
+    total: int
+    queued: int
+    running: int
+    completed: int
+    failed: int
+    cancelled: int
+    done: int
+    finished: bool
+    created_at: float
+
+
+class QueueStateResponse(BaseModel):
+    paused: bool
+    queued: int
+    running: int
+
+
+class ReorderQueueRequest(BaseModel):
+    job_ids: list[str]
+    """The desired order of the QUEUED jobs. Ids that are unknown or no longer
+    queued are ignored (the user dragged a row as it started running); queued
+    jobs the caller omitted keep their relative position at the end."""
+
+
+@router.post("/jobs/batch", response_model=EnqueueBatchResponse, status_code=202)
+@safe_route("image_gen_enqueue_batch")
+async def enqueue_image_batch(req: EnqueueBatchRequest) -> EnqueueBatchResponse:
+    """Enqueue N jobs as ONE batch — the endpoint the prompt matrix submits to.
+
+    Every job is validated BEFORE any of them is queued: one bad run (unknown
+    model, undownloaded weights, bad LoRA, protected kwarg) rejects the whole
+    request with a 400/409 naming the offending run index. Half a sweep in the
+    queue is worse than none — the user would have to work out which runs made
+    it and hand-fix the rest.
+
+    The batch is then created atomically under one batch_id, so it can be
+    tracked, reordered, and cancelled as the single unit the user thinks in.
+    """
+    svc = get_image_gen_service()
+    if not svc.available:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Image generation not available: {svc.unavailable_reason}",
+        )
+
+    from app.services.media_gen.params import PROTECTED_PARAMS  # noqa: PLC0415
+
+    # ── validate EVERY job first — nothing is enqueued until all of them pass ──
+    validated: list[tuple[BatchJobSpec, bytes | None]] = []
+    for index, spec in enumerate(req.jobs):
+        where = f"job {index + 1} of {len(req.jobs)}"
+        model = svc.get_model(spec.model_id)
+        if model is None:
+            raise HTTPException(
+                status_code=404, detail=f"{where}: unknown model: {spec.model_id}"
+            )
+        if not svc.is_downloaded(spec.model_id):
+            return JSONResponse(  # type: ignore[return-value]
+                status_code=409,
+                content={
+                    "detail": f"{where}: model not downloaded ({spec.model_id})",
+                    "needs_download": True,
+                    "model_id": spec.model_id,
+                },
+            )
+        blocked = PROTECTED_PARAMS & set(spec.extra_params)
+        if blocked:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{where}: extra_params may not override protected "
+                f"parameter(s): {', '.join(sorted(blocked))}.",
+            )
+        try:
+            init_bytes, _sha = _validate_generation_inputs(spec, model)
+        except HTTPException as exc:
+            raise HTTPException(
+                status_code=exc.status_code, detail=f"{where}: {exc.detail}"
+            ) from exc
+        validated.append((spec, init_bytes))
+
+    from app.services.image_gen.jobs import (  # noqa: PLC0415
+        get_image_job_runner,
+        get_image_job_store,
+    )
+
+    store = get_image_job_store()
+    payloads: list[dict] = []
+    for spec, init_bytes in validated:
+        init_sha = store.put_init_image(init_bytes) if init_bytes is not None else None
+        payloads.append(
+            {
+                "prompt": spec.prompt,
+                "model_id": spec.model_id,
+                "negative_prompt": spec.negative_prompt,
+                "steps": spec.steps,
+                "guidance": spec.guidance,
+                "width": spec.width,
+                "height": spec.height,
+                "seed": spec.seed,
+                "has_init_image": init_bytes is not None,
+                "init_image_sha256": init_sha,
+                "strength": spec.strength,
+                "loras": [{"id": s.id, "scale": s.scale} for s in spec.loras],
+                "extra_params": dict(spec.extra_params),
+                "variables": dict(spec.variables),
+                "combo_label": spec.combo_label,
+            }
+        )
+
+    batch_id, jobs = store.create_batch(payloads, label=req.label)
+    get_image_job_runner().ensure_running()
+    return EnqueueBatchResponse(
+        batch_id=batch_id,
+        job_ids=[j.job_id for j in jobs],
+        count=len(jobs),
+    )
+
+
+@router.get("/batches", response_model=list[BatchSummaryResponse])
+async def list_image_batches() -> list[BatchSummaryResponse]:
+    """Per-batch roll-up, newest first — one row per sweep, not per image."""
+    from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+
+    return [
+        BatchSummaryResponse(**b.to_dict()) for b in get_image_job_store().batches()
+    ]
+
+
+@router.delete("/batches/{batch_id}")
+async def cancel_image_batch(batch_id: str) -> dict:
+    """Cancel every unfinished job of a batch (and the running one, mid-flight).
+
+    Completed jobs and their media-library items are untouched — cancelling the
+    remaining 80 of a 120-image sweep must never destroy the 40 already made.
+    """
+    from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+
+    store = get_image_job_store()
+    result = store.cancel_batch(batch_id)
+    if not result["found"]:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    running_job_id = result["running_job_id"]
+    if running_job_id:
+        store.request_cancel_running(running_job_id)
+        get_image_gen_service().request_cancel_job(running_job_id)
+    return {
+        "batch_id": batch_id,
+        "cancelled": result["cancelled"],
+        "cancelling_job_id": running_job_id,
+    }
+
+
+@router.get("/queue", response_model=QueueStateResponse)
+async def get_queue_state() -> QueueStateResponse:
+    """Whether the queue is draining, and how much is left."""
+    from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+
+    store = get_image_job_store()
+    pending = store.pending()
+    return QueueStateResponse(
+        paused=store.paused,
+        queued=sum(1 for j in pending if j.status == "queued"),
+        running=sum(1 for j in pending if j.status == "running"),
+    )
+
+
+@router.post("/queue/pause", response_model=QueueStateResponse)
+async def pause_queue() -> QueueStateResponse:
+    """Stop starting new jobs. The RUNNING job is allowed to finish — aborting
+    a generation that is 90% denoised to honour a pause would throw away the
+    GPU minutes already spent."""
+    from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+
+    get_image_job_store().set_paused(True)
+    return await get_queue_state()
+
+
+@router.post("/queue/resume", response_model=QueueStateResponse)
+async def resume_queue() -> QueueStateResponse:
+    """Resume draining, restarting the worker if it had exited."""
+    from app.services.image_gen.jobs import (  # noqa: PLC0415
+        get_image_job_runner,
+        get_image_job_store,
+    )
+
+    get_image_job_store().set_paused(False)
+    get_image_job_runner().ensure_running()
+    return await get_queue_state()
+
+
+@router.post("/queue/reorder", response_model=list[ImageJobResponse])
+@safe_route("image_gen_reorder_queue")
+async def reorder_queue(req: ReorderQueueRequest) -> list[ImageJobResponse]:
+    """Reorder the pending jobs (drag-and-drop). Returns the new queue order."""
+    from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+
+    store = get_image_job_store()
+    store.reorder(req.job_ids)
+    return [_image_job_response(j) for j in store.pending()]
+
+
+@router.post("/jobs/{job_id}/retry", response_model=ImageJobResponse)
+async def retry_image_job(job_id: str) -> ImageJobResponse:
+    """Requeue a failed or cancelled job with a fresh attempt budget.
+
+    409 when the job cannot run again — the only real case is an img2img job
+    whose input image has been swept from disk, which no number of retries can
+    fix.
+    """
+    from app.services.image_gen.jobs import (  # noqa: PLC0415
+        get_image_job_runner,
+        get_image_job_store,
+    )
+
+    store = get_image_job_store()
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status not in ("failed", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Only failed or cancelled jobs can be retried (this one is {job.status}).",
+        )
+    if not store.retry(job_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Job cannot be retried — its input image is no longer available.",
+        )
+    get_image_job_runner().ensure_running()
+    retried = store.get(job_id)
+    assert retried is not None
+    return _image_job_response(retried)
+
+
+@router.post("/jobs/clear-finished")
+async def clear_finished_jobs() -> dict:
+    """Drop every finished job record. Media-library items are NOT deleted."""
+    from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+
+    return {"removed": get_image_job_store().clear_finished()}
 
 
 # ── LoRAs ─────────────────────────────────────────────────────────────────────

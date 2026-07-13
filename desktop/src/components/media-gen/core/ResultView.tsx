@@ -26,7 +26,13 @@ export function ImageResultPane({
   onOpenLightbox?: () => void;
 }) {
   const [state, actions] = useMediaGenApp();
-  const { imageResult, imageGenerating, imageGenStartedAt, imageForm } = state;
+  const {
+    imageResult,
+    imageGenerating,
+    imageGenStartedAt,
+    imageForm,
+    selectedImageModelId,
+  } = state;
   const { clearImageResult, setImageForm, useImageAsInput } = actions;
 
   if (imageResult) {
@@ -36,6 +42,7 @@ export function ImageResultPane({
         onClear={clearImageResult}
         onReuseSeed={(seed) => setImageForm({ seedText: String(seed) })}
         {...(imageForm.prompt.trim() ? { prompt: imageForm.prompt.trim() } : {})}
+        {...(selectedImageModelId ? { modelId: selectedImageModelId } : {})}
         {...(onOpenLightbox !== undefined ? { onOpenLightbox } : {})}
         onUseAsInput={() =>
           useImageAsInput({

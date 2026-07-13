@@ -262,49 +262,37 @@ def filter_hf_repo_files(
     return kept
 
 
-async def _hf_token_is_valid(token: str) -> bool:
-    """Does Hugging Face still accept this token? One whoami call.
-
-    This is the ONLY way to tell "your token is dead" from "your token is fine
-    but you haven't accepted this model's license" — both arrive as a bare 401,
-    and telling a user to re-enter a key that is already correct is exactly the
-    dead end we're removing. Network trouble here answers "valid": we'd rather
-    send the user to the license page (harmless, and the far likelier cause)
-    than accuse a good token of being bad.
-    """
-    try:
-        from huggingface_hub import HfApi  # noqa: PLC0415
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: HfApi(token=token).whoami())
-        return True
-    except Exception as exc:  # noqa: BLE001
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-        if status in (401, 403):
-            return False
-        logger.warning(
-            "[downloads] HF whoami inconclusive (%s) — assuming the token is "
-            "valid and the model gate is unaccepted", exc,
-        )
-        return True
-
-
 async def _classify_hf_auth_failure(
     exc: BaseException, repo_id: str, token: Optional[str]
 ) -> BaseException:
     """Map a Hugging Face failure to the thing the user must actually do.
 
-    Returns an ActionableDownloadError for the three self-fixable cases, or the
-    ORIGINAL exception untouched for everything else — a 500 from HF or a dead
-    network is not the user's problem and must not be dressed up as one.
+    Distinguishing "your token is dead" from "your token is fine but you haven't
+    accepted this model's license" is the whole job here — both arrive as a bare
+    401, and telling a user to re-enter a key that is already correct is the dead
+    end we're removing. The answer comes from the shared key validator (whoami),
+    which is the single canonical "is this key real?" path for every provider.
+
+    Only a definitive `invalid` condemns the token. An `unknown` verdict (HF is
+    down, the network is out) sends the user to the license page instead —
+    harmless, and the far likelier cause.
     """
     status = getattr(getattr(exc, "response", None), "status_code", None)
     if status not in (401, 403):
         return exc
     if not token:
         return failures.hf_token_missing(repo_id)
-    if not await _hf_token_is_valid(token):
+
+    from app.services.ai.key_validation import validate_key  # noqa: PLC0415
+
+    result = await validate_key("huggingface", token)
+    if result.verdict == "invalid":
         return failures.hf_token_invalid(repo_id)
+    if result.verdict != "valid":
+        logger.warning(
+            "[downloads] HF token check inconclusive (%s) — assuming the token "
+            "is valid and the model gate is unaccepted", result.message,
+        )
     return failures.hf_gate_not_accepted(repo_id)
 
 

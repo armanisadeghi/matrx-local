@@ -1253,6 +1253,13 @@ import base64 as _base64
 
 _API_KEYS_SETTINGS_KEY = "api_keys"
 
+# Verdicts only — never a key value. Safe to log, safe to sync.
+_API_KEY_VALIDATION_KEY = "api_key_validation"
+
+# Must stay in sync with PROVIDER_ENV_MAP (app/services/ai/key_manager.py): a
+# provider missing here is unsettable through the API (PUT/bulk 422) and can
+# only be supplied via .env — which is exactly how elevenlabs and fastino were
+# stranded before.
 VALID_PROVIDERS: frozenset[str] = frozenset({
     "openai",
     "anthropic",
@@ -1264,6 +1271,8 @@ VALID_PROVIDERS: frozenset[str] = frozenset({
     "huggingface",
     # Civitai API key — model/LoRA downloads from civitai.com (image gen).
     "civitai",
+    "elevenlabs",
+    "fastino",
 })
 
 
@@ -1335,3 +1344,38 @@ class ApiKeysRepo:
         """Return True if a non-empty key is stored for this provider."""
         key = await self.get(provider)
         return bool(key and key.strip())
+
+    # ── Last-validation record ────────────────────────────────────────────
+    # Stored alongside the keys (never the key value itself — only the verdict)
+    # so the UI can show "verified 2 days ago" on load instead of an unknown
+    # state, and a key that has gone bad is visible without re-testing by hand.
+
+    async def get_validations(self) -> dict[str, dict[str, Any]]:
+        """Return {provider: {verdict, account, checked_at}} for every checked key."""
+        raw: dict[str, Any] = await self._settings.get(_API_KEY_VALIDATION_KEY, {})
+        return {k: v for k, v in raw.items() if isinstance(v, dict)}
+
+    async def record_validation(
+        self, provider: str, verdict: str, account: str | None
+    ) -> None:
+        """Persist the outcome of a validation check for one provider."""
+        async with _APP_SETTINGS_WRITE_LOCK:
+            all_settings = await self._settings.get_all()
+            raw = dict(all_settings.get(_API_KEY_VALIDATION_KEY) or {})
+            raw[provider] = {
+                "verdict": verdict,
+                "account": account,
+                "checked_at": _now(),
+            }
+            all_settings[_API_KEY_VALIDATION_KEY] = raw
+            await self._settings.save_all(all_settings)
+
+    async def clear_validation(self, provider: str) -> None:
+        """Drop a stale verdict — the key it described no longer exists."""
+        async with _APP_SETTINGS_WRITE_LOCK:
+            all_settings = await self._settings.get_all()
+            raw = dict(all_settings.get(_API_KEY_VALIDATION_KEY) or {})
+            if raw.pop(provider, None) is None:
+                return
+            all_settings[_API_KEY_VALIDATION_KEY] = raw
+            await self._settings.save_all(all_settings)

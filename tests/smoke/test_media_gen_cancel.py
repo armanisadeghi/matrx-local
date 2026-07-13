@@ -358,8 +358,12 @@ def test_worker_survives_crashing_job(
     runner = ImageJobRunner(store)
 
     async def main():
-        j1 = store.create(prompt="boom", model_id=MODEL.model_id)
-        j2 = store.create(prompt="after", model_id=MODEL.model_id)
+        # max_attempts=1 keeps this test about the ONE thing it pins: a crash
+        # must not kill the drain. The retry ladder itself (a crash normally
+        # gets 3 attempts with backoff) is pinned in
+        # tests/characterization/test_image_job_queue.py.
+        j1 = store.create(prompt="boom", model_id=MODEL.model_id, max_attempts=1)
+        j2 = store.create(prompt="after", model_id=MODEL.model_id, max_attempts=1)
         runner.ensure_running()
         deadline = time.monotonic() + 10.0
         while runner.active:

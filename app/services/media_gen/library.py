@@ -39,6 +39,10 @@ MediaType = Literal["image", "video"]
 _MEDIA_EXT: dict[str, str] = {"image": ".png", "video": ".mp4"}
 _MEDIA_CONTENT_TYPE: dict[str, str] = {"image": "image/png", "video": "video/mp4"}
 
+# The source image an img2img / image-to-video generation started from, saved
+# beside its result so "Remix" can restore the input, not just the settings.
+_INIT_IMAGE_SUFFIX = ".init.png"
+
 # uuid4 shape — item ids are validated before ANY filesystem lookup so a
 # crafted id can never traverse outside the library dirs.
 _ITEM_ID_RE = re.compile(
@@ -80,6 +84,11 @@ def json_sanitize(value: Any) -> Any:
     return repr(value)
 
 
+def _init_image_path(directory: Path, item_id: str) -> Path:
+    """Where an item's source (img2img / image-to-video) input image lives."""
+    return directory / f"{item_id}{_INIT_IMAGE_SUFFIX}"
+
+
 def _write_item(
     *,
     media_type: MediaType,
@@ -95,10 +104,17 @@ def _write_item(
     elapsed_seconds: float,
     num_frames: int | None = None,
     fps: int | None = None,
+    init_image_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     """Write the media file + sidecar atomically enough (media first, sidecar
     last — a crash between the two leaves an orphan media file that list()
-    ignores, never a sidecar pointing at nothing)."""
+    ignores, never a sidecar pointing at nothing).
+
+    ``init_image_bytes`` (the img2img / image-to-video source image) is stored
+    ALONGSIDE the result as ``<item_id>.init.png``. Without it, "Remix" — which
+    promises to reproduce exactly what made this image — could restore every
+    setting except the one input that mattered most.
+    """
     item_id = str(uuid.uuid4())
     ext = _MEDIA_EXT[media_type]
     directory = media_type_dir(media_type)
@@ -112,6 +128,25 @@ def _write_item(
             assert src_file is not None
             # Move into the library (same volume under ~/.matrx → atomic rename).
             shutil.move(str(src_file), str(media_path))
+
+        init_name: str | None = None
+        if init_image_bytes:
+            # Best-effort ON PURPOSE: the result is already on disk. Storing the
+            # source image is a convenience for Remix — it must never turn a
+            # successful generation into a failed one (e.g. ENOSPC writing this
+            # extra copy). The failure is LOUD in the log and the sidecar simply
+            # records no source image, so Remix tells the truth about it.
+            try:
+                init_path = _init_image_path(directory, item_id)
+                init_path.write_bytes(init_image_bytes)
+                init_name = init_path.name
+            except OSError as exc:
+                logger.error(
+                    "[media_library] Could not store the input image for %s: %s — "
+                    "the generation is kept; Remix will not be able to restore "
+                    "its source image",
+                    item_id, exc,
+                )
 
         meta: dict[str, Any] = {
             "id": item_id,
@@ -127,6 +162,7 @@ def _write_item(
             "created_at": datetime.now(timezone.utc).isoformat(),
             "file_name": media_path.name,
             "file_size_bytes": media_path.stat().st_size,
+            "init_image_file": init_name,
         }
         if media_type == "video":
             meta["num_frames"] = num_frames
@@ -154,9 +190,14 @@ def save_generated_image(
     width: int,
     height: int,
     elapsed_seconds: float,
+    init_image_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     """Persist a generated PNG + sidecar. Returns the sidecar metadata
-    (including ``file_path``). Raises on failure — callers surface it loudly."""
+    (including ``file_path``). Raises on failure — callers surface it loudly.
+
+    ``init_image_bytes`` is the img2img source image; it is saved beside the
+    result so Remix can restore the exact input.
+    """
     return _write_item(
         media_type="image",
         media_bytes=png_bytes,
@@ -169,6 +210,7 @@ def save_generated_image(
         width=width,
         height=height,
         elapsed_seconds=elapsed_seconds,
+        init_image_bytes=init_image_bytes,
     )
 
 
@@ -223,7 +265,22 @@ def _load_sidecar(path: Path) -> dict[str, Any] | None:
         )
         return None
     meta["file_path"] = str(media_path)
+    # An init image recorded but no longer on disk must not advertise itself as
+    # remixable — the client would get a 404 on a button it was told to show.
+    init_name = meta.get("init_image_file")
+    if init_name and not (path.parent / str(init_name)).exists():
+        meta["init_image_file"] = None
+    meta.setdefault("init_image_file", None)
     return meta
+
+
+def get_init_image_path(item_id: str) -> Path | None:
+    """The stored img2img source image for an item, or None when it has none."""
+    meta = get_item(item_id)
+    if meta is None or not meta.get("init_image_file"):
+        return None
+    path = Path(meta["file_path"]).parent / str(meta["init_image_file"])
+    return path if path.exists() else None
 
 
 def list_items(
@@ -261,7 +318,14 @@ def get_item(item_id: str) -> dict[str, Any] | None:
 
 
 def delete_item(item_id: str) -> bool:
-    """Delete an item's media file + sidecar. False when the id is unknown."""
+    """Delete an item's media file, sidecar AND stored init image. False when
+    the id is unknown.
+
+    The init image goes with it — both on a plain delete and on a vault move
+    (which deletes the plaintext original after encrypting it). Leaving the
+    source image behind after the user deleted or vaulted the result would be a
+    plaintext leak of exactly the content they asked us to remove.
+    """
     if not is_valid_item_id(item_id):
         return False
     with _lock:
@@ -272,6 +336,7 @@ def delete_item(item_id: str) -> bool:
             if sidecar.exists() or media.exists():
                 sidecar.unlink(missing_ok=True)
                 media.unlink(missing_ok=True)
+                _init_image_path(directory, item_id).unlink(missing_ok=True)
                 logger.info("[media_library] Deleted item %s (%s)", item_id, t)
                 return True
     return False

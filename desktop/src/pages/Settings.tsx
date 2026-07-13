@@ -10,6 +10,9 @@ import {
   Download,
   Loader2,
   CheckCircle2,
+  HelpCircle,
+  ShieldCheck,
+  XCircle,
   Cloud,
   CloudOff,
   ArrowUpFromLine,
@@ -99,12 +102,67 @@ import { Textarea } from "@/components/ui/textarea";
 
 type AuthActions = ReturnType<typeof useAuth>;
 
+/** Tri-state, mirroring the engine's ApiKeyValidation. `unknown` means we could
+ *  not reach the provider — it must never be rendered as "your key is bad". */
+type ApiKeyVerdict = "valid" | "invalid" | "unknown" | "unsupported";
+
+interface ApiKeyValidation {
+  provider: string;
+  verdict: ApiKeyVerdict;
+  message: string;
+  account: string | null;
+  status_code: number | null;
+}
+
 interface ApiKeyProviderStatus {
   provider: string;
   label: string;
   description: string;
   configured: boolean;
+  /** Provider exposes a free auth-only endpoint we can check the key against. */
+  testable: boolean;
+  last_verdict: ApiKeyVerdict | null;
+  last_account: string | null;
+  last_checked_at: string | null;
 }
+
+/** How each verdict renders. `unknown` is deliberately neutral-amber, not red:
+ *  we could not reach the provider, which is our problem, not the key's — and
+ *  showing red would send the user off to rotate a credential that works. */
+const VERDICT_STYLES: Record<
+  ApiKeyVerdict,
+  {
+    label: string;
+    Icon: typeof CheckCircle2;
+    className: string;
+    textClassName: string;
+  }
+> = {
+  valid: {
+    label: "Valid",
+    Icon: CheckCircle2,
+    className: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+    textClassName: "text-emerald-600 dark:text-emerald-400",
+  },
+  invalid: {
+    label: "Rejected",
+    Icon: XCircle,
+    className: "bg-red-500/15 text-red-600 dark:text-red-400",
+    textClassName: "text-red-600 dark:text-red-400",
+  },
+  unknown: {
+    label: "Couldn't check",
+    Icon: HelpCircle,
+    className: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+    textClassName: "text-amber-600 dark:text-amber-400",
+  },
+  unsupported: {
+    label: "Not testable",
+    Icon: HelpCircle,
+    className: "bg-muted text-muted-foreground",
+    textClassName: "text-muted-foreground",
+  },
+};
 
 interface SettingsProps {
   engineStatus: EngineStatus;
@@ -215,6 +273,15 @@ export function Settings({
   const [apiKeyMessages, setApiKeyMessages] = useState<
     Record<string, { ok: boolean; text: string }>
   >({});
+  const [apiKeyTesting, setApiKeyTesting] = useState<Record<string, boolean>>(
+    {},
+  );
+  // Live verdict from the current session's test, which supersedes the stored
+  // last_verdict on the provider row.
+  const [apiKeyVerdicts, setApiKeyVerdicts] = useState<
+    Record<string, ApiKeyValidation>
+  >({});
+  const [testingAllKeys, setTestingAllKeys] = useState(false);
 
   // Hardware profile state
   const [hardwareProfile, setHardwareProfile] =
@@ -684,43 +751,71 @@ export function Settings({
       const data = (await engine.get("/settings/api-keys")) as {
         providers: ApiKeyProviderStatus[];
       };
-      const providers = [...(data?.providers ?? [])];
-      // The Civitai row must always be offered (custom image models and LoRA
-      // styles download from Civitai). Older engine builds don't list it yet
-      // — synthesize the row so the key can still be saved via the same
-      // generic /settings/api-keys/civitai routes.
-      if (
-        providers.length > 0 &&
-        !providers.some((p) => p.provider === "civitai")
-      ) {
-        providers.push({
-          provider: "civitai",
-          label: "Civitai",
-          description:
-            "Used to download custom image models and LoRA styles from Civitai (required by many Civitai downloads).",
-          configured: false,
-        });
-      }
-      setApiKeyProviders(providers);
+      setApiKeyProviders([...(data?.providers ?? [])]);
     } catch {
       // Non-critical
     }
   }, [engineStatus]);
 
+  /** Ask the engine to check a key against the provider's free auth endpoint.
+   *  Costs nothing — these are whoami / model-list calls, never inference.
+   *  Pass a `key` to test a typed-but-unsaved value; omit it to test the
+   *  stored one. */
+  const handleApiKeyTest = useCallback(
+    async (provider: string, key?: string): Promise<ApiKeyValidation | null> => {
+      setApiKeyTesting((prev) => ({ ...prev, [provider]: true }));
+      try {
+        const result = (await engine.post(
+          `/settings/api-keys/${provider}/validate`,
+          key ? { key } : {},
+        )) as ApiKeyValidation;
+        setApiKeyVerdicts((prev) => ({ ...prev, [provider]: result }));
+        return result;
+      } catch (err) {
+        // The engine itself is unreachable. That says nothing about the key,
+        // so it is an `unknown`, never an `invalid`.
+        const result: ApiKeyValidation = {
+          provider,
+          verdict: "unknown",
+          message:
+            err instanceof Error
+              ? `Couldn't run the test: ${err.message}`
+              : "Couldn't run the test.",
+          account: null,
+          status_code: null,
+        };
+        setApiKeyVerdicts((prev) => ({ ...prev, [provider]: result }));
+        return result;
+      } finally {
+        setApiKeyTesting((prev) => ({ ...prev, [provider]: false }));
+      }
+    },
+    [],
+  );
+
+  const handleTestAllKeys = useCallback(async () => {
+    setTestingAllKeys(true);
+    try {
+      const data = (await engine.post(
+        "/settings/api-keys/validate-all",
+        {},
+      )) as { results: ApiKeyValidation[] };
+      setApiKeyVerdicts((prev) => {
+        const next = { ...prev };
+        for (const r of data?.results ?? []) next[r.provider] = r;
+        return next;
+      });
+    } catch {
+      // Per-row verdicts are unchanged; the user can retry individually.
+    } finally {
+      setTestingAllKeys(false);
+    }
+  }, []);
+
   const handleApiKeySave = useCallback(
     async (provider: string) => {
       const key = apiKeyInputs[provider]?.trim();
       if (!key) return;
-      if (provider === "huggingface" && key.length < 10) {
-        setApiKeyMessages((prev) => ({
-          ...prev,
-          [provider]: {
-            ok: false,
-            text: "That doesn't look like a valid Hugging Face token.",
-          },
-        }));
-        return;
-      }
       setApiKeySaving((prev) => ({ ...prev, [provider]: true }));
       setApiKeyMessages((prev) => ({
         ...prev,
@@ -755,6 +850,10 @@ export function Settings({
             }),
           3000,
         );
+        // Test the key we just saved. Catching a bad paste at the moment of
+        // saving is the whole point — a key that silently doesn't work until a
+        // download fails hours later is the failure mode we're removing.
+        void handleApiKeyTest(provider);
       } catch (err) {
         setApiKeyMessages((prev) => ({
           ...prev,
@@ -767,7 +866,7 @@ export function Settings({
         setApiKeySaving((prev) => ({ ...prev, [provider]: false }));
       }
     },
-    [apiKeyInputs],
+    [apiKeyInputs, handleApiKeyTest],
   );
 
   const handleApiKeyDelete = useCallback(async (provider: string) => {
@@ -776,9 +875,23 @@ export function Settings({
       await engine.delete(`/settings/api-keys/${provider}`);
       setApiKeyProviders((prev) =>
         prev.map((p) =>
-          p.provider === provider ? { ...p, configured: false } : p,
+          p.provider === provider
+            ? {
+                ...p,
+                configured: false,
+                last_verdict: null,
+                last_account: null,
+                last_checked_at: null,
+              }
+            : p,
         ),
       );
+      // The verdict described a key that no longer exists.
+      setApiKeyVerdicts((prev) => {
+        const next = { ...prev };
+        delete next[provider];
+        return next;
+      });
       setApiKeyMessages((prev) => ({
         ...prev,
         [provider]: { ok: true, text: "Key removed" },
@@ -845,6 +958,9 @@ export function Settings({
       setBulkResult(result);
       if (result.saved.length > 0) {
         await loadApiKeyStatus();
+        // Verify everything that just landed, so a stale key pasted from an old
+        // .env is caught here rather than at the first download.
+        void handleTestAllKeys();
         // Mirror the single-key save path: persist the HF token to llm.json
         // via Rust so downloads work even when the engine is unreachable.
         if (result.saved.includes("huggingface") && isTauri()) {
@@ -879,6 +995,7 @@ export function Settings({
     bulkEditedValues,
     bulkCustomMapping,
     loadApiKeyStatus,
+    handleTestAllKeys,
   ]);
 
   const handleTunnelToggle = async (enable: boolean) => {
@@ -1813,12 +1930,37 @@ export function Settings({
             <>
               <Card>
                 <CardHeader className="pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <KeyRound className="h-4 w-4 text-primary" />
-                    AI Provider API Keys
-                  </CardTitle>
+                  <div className="flex items-center justify-between gap-2">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <KeyRound className="h-4 w-4 text-primary" />
+                      AI Provider API Keys
+                    </CardTitle>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        testingAllKeys ||
+                        engineStatus !== "connected" ||
+                        !apiKeyProviders.some((p) => p.configured && p.testable)
+                      }
+                      onClick={() => void handleTestAllKeys()}
+                      className="shrink-0"
+                      title="Check every saved key against its provider. Free — no credits are used."
+                    >
+                      {testingAllKeys ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="h-3.5 w-3.5" />
+                      )}
+                      Test All
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent className="space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    Testing a key is free — it calls the provider's sign-in check
+                    (not the model), so it never uses credits.
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     Enter your own API keys to use AI providers directly from
                     this device. The Hugging Face entry is also used for local
@@ -2334,14 +2476,26 @@ export function Settings({
                     const visible = apiKeyVisible[p.provider] ?? false;
                     const saving = apiKeySaving[p.provider] ?? false;
                     const deleting = apiKeyDeleting[p.provider] ?? false;
+                    const testing =
+                      (apiKeyTesting[p.provider] ?? false) || testingAllKeys;
                     const msg = apiKeyMessages[p.provider];
                     const canSave = inputVal.trim().length > 0;
+                    // This session's verdict wins over the one persisted from a
+                    // previous run.
+                    const live = apiKeyVerdicts[p.provider];
+                    const verdict = live?.verdict ?? p.last_verdict ?? null;
+                    const account = live?.account ?? p.last_account ?? null;
+                    const style = verdict ? VERDICT_STYLES[verdict] : null;
+                    // Test the typed key if there is one, else the stored key.
+                    // Nothing to test only when both are absent.
+                    const canTest =
+                      p.testable && (canSave || p.configured) && !testing;
                     return (
                       <Card key={p.provider}>
                         <CardContent className="py-4">
                           <div className="flex items-start gap-3">
                             <div className="min-w-0 flex-1 space-y-2">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-sm font-medium">
                                   {p.label}
                                 </span>
@@ -2356,6 +2510,16 @@ export function Settings({
                                   >
                                     Not set
                                   </Badge>
+                                )}
+                                {style && (
+                                  <span
+                                    className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${style.className}`}
+                                    title={live?.message ?? undefined}
+                                  >
+                                    <style.Icon className="h-3.5 w-3.5" />
+                                    {style.label}
+                                    {account ? ` · ${account}` : ""}
+                                  </span>
                                 )}
                               </div>
                               <p className="text-xs text-muted-foreground">
@@ -2416,6 +2580,32 @@ export function Settings({
                                   )}
                                   Save
                                 </Button>
+                                {p.testable && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={!canTest}
+                                    onClick={() =>
+                                      void handleApiKeyTest(
+                                        p.provider,
+                                        canSave ? inputVal.trim() : undefined,
+                                      )
+                                    }
+                                    className="shrink-0"
+                                    title={
+                                      canSave
+                                        ? "Check the key you typed, without saving it"
+                                        : "Check the saved key against the provider"
+                                    }
+                                  >
+                                    {testing ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <ShieldCheck className="h-3.5 w-3.5" />
+                                    )}
+                                    Test
+                                  </Button>
+                                )}
                                 {p.configured && (
                                   <Button
                                     size="sm"
@@ -2440,6 +2630,13 @@ export function Settings({
                                   className={`text-xs ${msg.ok ? "text-green-500" : "text-destructive"}`}
                                 >
                                   {msg.text}
+                                </p>
+                              )}
+                              {live && (
+                                <p
+                                  className={`text-xs ${style?.textClassName ?? "text-muted-foreground"}`}
+                                >
+                                  {live.message}
                                 </p>
                               )}
                             </div>

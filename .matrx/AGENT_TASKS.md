@@ -330,6 +330,7 @@ are condensed under Completed. Still open:
 
 _(one line each, newest first; full detail in git history)_
 
+- [x] API-key validation: shared `app/services/ai/key_validation.py` provider→spec registry (free auth-only endpoints, tri-state valid/invalid/unknown/unsupported) + `POST /settings/api-keys/{provider}/validate` & `/validate-all` + Test / Test All buttons and verdict badges in Settings → API Keys; `downloads/manager.py` HF whoami one-off absorbed into it; `elevenlabs`+`fastino` added to `VALID_PROVIDERS` (were in `PROVIDER_ENV_MAP` only → PUT/bulk 422, `.env`-only) and to `api-key-patterns.ts` (2026-07-12)
 - [x] Docs now mandate `uv sync --all-extras` (CLAUDE.md dev commands + Hard Rule 5, README quick start) — fixes MXL-D-024 (2026-07-12)
 - [x] Screen Recording permission honesty: real `CGRequestScreenCaptureAccess` flow, `not_determined` vs `denied`, engine-side status — fixes MXL-D-032 (2026-07-11)
 - [x] Download-failure taxonomy (`downloads/failures.py` + `DownloadActionDialog`): gated repo / missing-dead token / license distinguished; civitai added to `api-key-patterns.ts` — fixes MXL-D-031 (2026-07-11)

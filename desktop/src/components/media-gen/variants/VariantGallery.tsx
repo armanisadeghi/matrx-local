@@ -14,25 +14,19 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   AlertCircle,
-  Check,
   ChevronDown,
-  Copy,
   Cpu,
   Film,
-  FolderOpen,
   Image as ImageIcon,
-  ImagePlus,
   ListPlus,
   Loader2,
   RefreshCw,
   Settings2,
   SlidersHorizontal,
   Sparkles,
-  Trash2,
   CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Popover,
@@ -47,23 +41,20 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
-import { useMediaLibrary } from "@/hooks/use-media-library";
-import type {
-  MediaLibraryActions,
-  MediaLibraryFilter,
-} from "@/hooks/use-media-library";
+import { useMediaLibraryApp } from "@/contexts/MediaLibraryContext";
+import type { MediaLibraryFilter } from "@/hooks/use-media-library";
 import type { MediaLibraryItem } from "@/lib/api";
+import { MediaItemThumb, viewingSetOf } from "@/components/media/MediaThumb";
+import { formatDate, type MediaDescriptor } from "@/components/media/types";
 import { ImageGenInstaller } from "../ImageGenInstaller";
 import {
   CancelableGenerateButton,
   ErrorNote,
   PromptCapacityHint,
   QueueNotice,
-  SeedChip,
 } from "../shared";
 import { useImageGenController } from "../core/imageController";
 import { useVideoGenController } from "../core/videoController";
-import { pickedImageFromUrl } from "../core/pickedImage";
 import { ImageStatusErrorCard } from "../core/gates";
 import { ImageModelPicker, VideoModelPicker } from "../core/ModelPicker";
 import {
@@ -85,345 +76,44 @@ import { ActiveVideoJobCard } from "../core/VideoJobPanel";
 
 type ComposerMode = "image" | "video";
 
-function formatBytes(bytes: number): string {
-  if (bytes <= 0) return "—";
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-/** Open the folder containing `path` in the OS file manager. */
-async function showInFolder(path: string): Promise<void> {
-  const dir = path.replace(/[/\\][^/\\]*$/, "");
-  const { open } = await import("@tauri-apps/plugin-shell");
-  await open(dir || path);
-}
-
-// ── Masonry tile (auth'd blob loader) ────────────────────────────────────────
+// ── Masonry tile ─────────────────────────────────────────────────────────────
+//
+// No bespoke image code here: MediaItemThumb IS the canonical tile (blob-URL
+// resolution, click → the app-wide lightbox, right-click → the canonical
+// context menu, hover → info + "⋯" with every action). The old GalleryTile and
+// GalleryDetailDialog were forks of the Library's — they drifted, and each was
+// missing actions the other had. They are gone.
 
 function GalleryTile({
   item,
-  fileUrls,
-  getFileUrl,
-  onOpen,
+  viewingSet,
 }: {
   item: MediaLibraryItem;
-  fileUrls: Record<string, string>;
-  getFileUrl: MediaLibraryActions["getFileUrl"];
-  onOpen: (item: MediaLibraryItem) => void;
+  viewingSet: MediaDescriptor[];
 }) {
-  const url = fileUrls[item.id] ?? null;
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!url) {
-      void getFileUrl(item.id).then((result) => {
-        if (!cancelled && result === null) setFailed(true);
-      });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [item.id, url, getFileUrl]);
-
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(item)}
-      className="group relative mb-3 block w-full break-inside-avoid overflow-hidden rounded-xl border bg-card text-left transition-colors hover:border-violet-500/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
-    >
-      {failed ? (
-        <div className="flex aspect-square w-full items-center justify-center bg-muted/30 text-muted-foreground">
-          <AlertCircle className="h-5 w-5 opacity-40" />
-        </div>
-      ) : !url ? (
-        <div
-          className="flex w-full items-center justify-center bg-muted/30 text-muted-foreground"
-          style={{
-            aspectRatio:
-              item.width > 0 && item.height > 0
-                ? `${item.width} / ${item.height}`
-                : "1 / 1",
-          }}
-        >
-          <Loader2 className="h-5 w-5 animate-spin opacity-40" />
-        </div>
-      ) : item.media_type === "video" ? (
-        <video
-          src={url}
-          className="w-full"
-          muted
-          loop
-          playsInline
-          onMouseEnter={(e) => {
-            void e.currentTarget.play().catch(() => undefined);
-          }}
-          onMouseLeave={(e) => e.currentTarget.pause()}
-        />
-      ) : (
-        <img
-          src={url}
-          alt={item.prompt.slice(0, 80)}
-          className="w-full"
-          loading="lazy"
-        />
-      )}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 translate-y-1 bg-gradient-to-t from-black/75 to-transparent p-2.5 pt-8 opacity-0 transition-all group-hover:translate-y-0 group-hover:opacity-100">
-        <p className="line-clamp-2 text-[11px] leading-snug text-white">
-          {item.prompt || "(no prompt)"}
-        </p>
-        <p className="mt-0.5 flex items-center gap-1 text-[10px] text-white/70">
-          {item.media_type === "video" ? (
-            <Film className="h-2.5 w-2.5" />
-          ) : (
-            <ImageIcon className="h-2.5 w-2.5" />
-          )}
-          {item.width}×{item.height} · {formatDate(item.created_at)}
-        </p>
-      </div>
-    </button>
-  );
-}
-
-// ── Detail dialog ────────────────────────────────────────────────────────────
-
-function GalleryDetailDialog({
-  item,
-  fileUrls,
-  getFileUrl,
-  onDelete,
-  onReuseSeed,
-  onUseAsInput,
-  onClose,
-}: {
-  item: MediaLibraryItem | null;
-  fileUrls: Record<string, string>;
-  getFileUrl: MediaLibraryActions["getFileUrl"];
-  onDelete: (itemId: string) => Promise<boolean>;
-  onReuseSeed: (item: MediaLibraryItem, seed: number) => void;
-  /** Routes an IMAGE item into the img2img input slot. */
-  onUseAsInput: (item: MediaLibraryItem, url: string) => void;
-  onClose: () => void;
-}) {
-  const [copied, setCopied] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const url = item ? (fileUrls[item.id] ?? null) : null;
-
-  useEffect(() => {
-    setCopied(false);
-    setConfirmingDelete(false);
-    setDeleting(false);
-    setActionError(null);
-  }, [item?.id]);
-
-  useEffect(() => {
-    const id = item?.id;
-    if (!id || url) return;
-    void getFileUrl(id);
-  }, [item?.id, url, getFileUrl]);
-
-  const handleCopyPrompt = useCallback(async () => {
-    if (!item) return;
-    try {
-      await navigator.clipboard.writeText(item.prompt);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch (e) {
-      setActionError(
-        e instanceof Error ? e.message : "Failed to copy to clipboard",
-      );
-    }
-  }, [item]);
-
-  const handleShowInFolder = useCallback(async () => {
-    if (!item) return;
-    try {
-      await showInFolder(item.file_path);
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Failed to open folder");
-    }
-  }, [item]);
-
-  const handleDelete = useCallback(async () => {
-    if (!item) return;
-    if (!confirmingDelete) {
-      setConfirmingDelete(true);
-      return;
-    }
-    setDeleting(true);
-    const ok = await onDelete(item.id);
-    setDeleting(false);
-    if (ok) onClose();
-    else setConfirmingDelete(false);
-  }, [item, confirmingDelete, onDelete, onClose]);
-
-  return (
-    <Dialog open={item !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[88vh] max-w-3xl overflow-y-auto">
-        {item && (
-          <>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 text-base">
-                {item.media_type === "video" ? (
-                  <Film className="h-4 w-4 text-violet-500" />
-                ) : (
-                  <ImageIcon className="h-4 w-4 text-violet-500" />
-                )}
-                {item.media_type === "video"
-                  ? "Generated video"
-                  : "Generated image"}
-                <Badge variant="outline" className="text-[10px]">
-                  {item.model_id}
-                </Badge>
-              </DialogTitle>
-              <DialogDescription className="text-xs">
-                {formatDate(item.created_at)} · {item.width}×{item.height} ·{" "}
-                {formatBytes(item.file_size_bytes)} ·{" "}
-                {item.elapsed_seconds.toFixed(1)}s
-              </DialogDescription>
-            </DialogHeader>
-
-            {!url ? (
-              <div className="flex aspect-video w-full items-center justify-center rounded-lg border bg-muted/20 text-muted-foreground">
-                <Loader2 className="h-6 w-6 animate-spin opacity-50" />
-              </div>
-            ) : item.media_type === "video" ? (
-              <video
-                src={url}
-                className="max-h-[52vh] w-full rounded-lg border bg-black/5 object-contain"
-                controls
-                playsInline
-              />
+    <div className="group mb-3 block w-full break-inside-avoid overflow-hidden rounded-xl border bg-card transition-colors hover:border-violet-500/50">
+      <MediaItemThumb
+        item={item}
+        variant="gallery"
+        viewingSet={viewingSet}
+        className="w-full"
+      >
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 translate-y-1 bg-gradient-to-t from-black/75 to-transparent p-2.5 pt-8 opacity-0 transition-all group-hover:translate-y-0 group-hover:opacity-100">
+          <p className="line-clamp-2 text-[11px] leading-snug text-white">
+            {item.prompt || "(no prompt)"}
+          </p>
+          <p className="mt-0.5 flex items-center gap-1 text-[10px] text-white/70">
+            {item.media_type === "video" ? (
+              <Film className="h-2.5 w-2.5" />
             ) : (
-              <img
-                src={url}
-                alt={item.prompt.slice(0, 80)}
-                className="max-h-[52vh] w-full rounded-lg border bg-black/5 object-contain"
-              />
+              <ImageIcon className="h-2.5 w-2.5" />
             )}
-
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <p className="text-xs font-medium text-muted-foreground">
-                  Prompt
-                </p>
-                <p className="break-words text-sm leading-relaxed">
-                  {item.prompt || "(no prompt)"}
-                </p>
-              </div>
-              {item.negative_prompt && (
-                <div className="space-y-1">
-                  <p className="text-xs font-medium text-muted-foreground">
-                    Negative prompt
-                  </p>
-                  <p className="break-words text-sm leading-relaxed">
-                    {item.negative_prompt}
-                  </p>
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-center gap-2">
-                {item.seed !== null && (
-                  <SeedChip
-                    seed={item.seed}
-                    onReuse={(seed) => onReuseSeed(item, seed)}
-                  />
-                )}
-                <span className="text-[11px] text-muted-foreground">
-                  {item.seed === null ? "Seed: random (not recorded)" : ""}
-                </span>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-xs font-medium text-muted-foreground">
-                  Parameters
-                </p>
-                <pre className="overflow-x-auto rounded-lg border bg-muted/20 p-3 text-[11px] leading-relaxed">
-                  {JSON.stringify(item.params, null, 2)}
-                </pre>
-              </div>
-
-              <p
-                className="break-all font-mono text-[10px] text-muted-foreground/70"
-                title="Saved in your media library"
-              >
-                {item.file_path}
-              </p>
-
-              {actionError && (
-                <ErrorNote
-                  message={actionError}
-                  onDismiss={() => setActionError(null)}
-                />
-              )}
-
-              <div className="flex flex-wrap gap-2 pt-1">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void handleCopyPrompt()}
-                >
-                  {copied ? (
-                    <Check className="mr-1.5 h-3.5 w-3.5 text-green-500" />
-                  ) : (
-                    <Copy className="mr-1.5 h-3.5 w-3.5" />
-                  )}
-                  {copied ? "Copied" : "Copy prompt"}
-                </Button>
-                {item.media_type === "image" && url && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onUseAsInput(item, url)}
-                    title="Use this image as the img2img input"
-                  >
-                    <ImagePlus className="mr-1.5 h-3.5 w-3.5" />
-                    Use as input
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void handleShowInFolder()}
-                >
-                  <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
-                  Show in folder
-                </Button>
-                <div className="flex-1" />
-                <Button
-                  size="sm"
-                  variant={confirmingDelete ? "destructive" : "outline"}
-                  disabled={deleting}
-                  onClick={() => void handleDelete()}
-                >
-                  {deleting ? (
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                  )}
-                  {confirmingDelete ? "Confirm delete" : "Delete"}
-                </Button>
-              </div>
-            </div>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
+            {item.width}×{item.height} · {formatDate(item.created_at)}
+          </p>
+        </div>
+      </MediaItemThumb>
+    </div>
   );
 }
 
@@ -462,10 +152,11 @@ export function VariantGallery() {
     clearImageQueueNotice,
     setImageForm,
     setVideoForm,
-    useImageAsInput,
   } = mediaGenActions;
 
-  const [library, libraryActions] = useMediaLibrary();
+  // The ONE app-level library store — shared with the Library tab and Studio,
+  // so a delete or vault move anywhere updates this feed too.
+  const [library, libraryActions] = useMediaLibraryApp();
   const {
     items,
     filter,
@@ -479,18 +170,20 @@ export function VariantGallery() {
     refresh: refreshLibrary,
     setFilter,
     loadMore,
-    getFileUrl,
-    deleteItem,
     clearError: clearLibraryError,
   } = libraryActions;
 
-  // Local UI state ONLY: mode toggle, popover/dialog open flags, selection.
+  const viewingSet = useMemo(
+    () => viewingSetOf(items, fileUrls, "library"),
+    [items, fileUrls],
+  );
+
+  // Local UI state ONLY: mode toggle, popover/dialog open flags.
   const [mode, setMode] = useState<ComposerMode>("image");
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [resultOpen, setResultOpen] = useState(false);
-  const [selected, setSelected] = useState<MediaLibraryItem | null>(null);
 
   const closePicker = useCallback(() => setModelPickerOpen(false), []);
   const imageCtl = useImageGenController({ onAfterSelect: closePicker });
@@ -583,35 +276,6 @@ export function VariantGallery() {
       await videoCtl.handleGenerate();
     }
   }, [isImage, imageCtl, videoCtl]);
-
-  const reuseSeedFromLibrary = useCallback(
-    (item: MediaLibraryItem, seed: number) => {
-      if (item.media_type === "video") {
-        setVideoForm({ seedText: String(seed) });
-        setMode("video");
-      } else {
-        setImageForm({ seedText: String(seed) });
-        setMode("image");
-      }
-      setSelected(null);
-    },
-    [setImageForm, setVideoForm],
-  );
-
-  const handleUseAsInputFromLibrary = useCallback(
-    (item: MediaLibraryItem, url: string) => {
-      void pickedImageFromUrl(url, item.file_name || `${item.id}.png`, (msg) =>
-        imageCtl.setLocalError(msg),
-      ).then((img) => {
-        if (img) {
-          useImageAsInput(img);
-          setMode("image");
-          setSelected(null);
-        }
-      });
-    },
-    [imageCtl, useImageAsInput],
-  );
 
   // ── Not-ready states ─────────────────────────────────────────────────────
   const packagesMissing = imageStatus !== null && !imageStatus.available;
@@ -1019,9 +683,7 @@ export function VariantGallery() {
                 <GalleryTile
                   key={item.id}
                   item={item}
-                  fileUrls={fileUrls}
-                  getFileUrl={getFileUrl}
-                  onOpen={setSelected}
+                  viewingSet={viewingSet}
                 />
               ))}
             </div>
@@ -1049,16 +711,6 @@ export function VariantGallery() {
       </div>
 
       {/* ══ Dialogs ═══════════════════════════════════════════════════════ */}
-      <GalleryDetailDialog
-        item={selected}
-        fileUrls={fileUrls}
-        getFileUrl={getFileUrl}
-        onDelete={deleteItem}
-        onReuseSeed={reuseSeedFromLibrary}
-        onUseAsInput={handleUseAsInputFromLibrary}
-        onClose={() => setSelected(null)}
-      />
-
       <Dialog
         open={resultOpen && imageResult !== null}
         onOpenChange={(open) => !open && setResultOpen(false)}

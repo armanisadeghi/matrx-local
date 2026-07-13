@@ -277,6 +277,14 @@ _PROVIDER_LABELS: dict[str, dict[str, str]] = {
         "label": "Civitai",
         "description": "API key for downloading custom image models and LoRAs from Civitai; sent only to civitai.com",
     },
+    "elevenlabs": {
+        "label": "ElevenLabs",
+        "description": "Text-to-speech voices; sent only to elevenlabs.io",
+    },
+    "fastino": {
+        "label": "Fastino",
+        "description": "Fastino / Pioneer models",
+    },
 }
 
 
@@ -285,6 +293,14 @@ class ApiKeyStatus(BaseModel):
     label: str
     description: str
     configured: bool
+    # Whether this provider's key can be checked against a free auth-only
+    # endpoint. False → the UI hides the Test button instead of offering one
+    # that can only ever answer "unsupported".
+    testable: bool = False
+    # The last verdict we recorded for this key, if it has ever been tested.
+    last_verdict: str | None = None
+    last_account: str | None = None
+    last_checked_at: str | None = None
 
 
 class ApiKeyStatusList(BaseModel):
@@ -301,16 +317,24 @@ async def list_api_key_status() -> ApiKeyStatusList:
 
     Never returns actual key values — only whether a key is set.
     """
+    from app.services.ai.key_validation import PROVIDER_SPECS
+
     repo = ApiKeysRepo()
+    validations = await repo.get_validations()
     statuses = []
     for provider in sorted(VALID_PROVIDERS):
         meta = _PROVIDER_LABELS.get(provider, {"label": provider.title(), "description": ""})
         configured = await repo.is_configured(provider)
+        last = validations.get(provider) or {}
         statuses.append(ApiKeyStatus(
             provider=provider,
             label=meta["label"],
             description=meta["description"],
             configured=configured,
+            testable=provider in PROVIDER_SPECS,
+            last_verdict=last.get("verdict"),
+            last_account=last.get("account"),
+            last_checked_at=last.get("checked_at"),
         ))
     return ApiKeyStatusList(providers=statuses)
 
@@ -419,3 +443,102 @@ async def set_api_keys_bulk(req: BulkApiKeyRequest) -> BulkApiKeyResult:
             errors[provider] = str(exc)
 
     return BulkApiKeyResult(saved=saved, skipped=skipped, errors=errors)
+
+
+# ── Key validation ─────────────────────────────────────────────────────────────
+#
+# "Is this key real?" — answered by calling the provider's own free, auth-only
+# endpoint (whoami / model list). No inference, no credits, no cost to the user.
+# The verdict is tri-state (valid / invalid / unknown / unsupported): a provider
+# outage or a dead network yields `unknown`, never `invalid`, because telling a
+# user their good key is bad sends them to rotate a working credential.
+#
+# These routes ALWAYS return 200 with the verdict in the body. A rejected key is
+# a successful *check*, not a failed request — and the desktop engine client
+# discards the response body on non-2xx, so a 400 here would reach the UI as an
+# unreadable "failed: 400" with the reason stripped off.
+
+class ValidateApiKeyRequest(BaseModel):
+    # Optional: validate a key the user has typed but not yet saved. Omitted →
+    # validate the key currently stored for this provider.
+    key: str | None = None
+
+
+class ApiKeyValidation(BaseModel):
+    provider: str
+    verdict: Literal["valid", "invalid", "unknown", "unsupported"]
+    message: str
+    account: str | None = None
+    status_code: int | None = None
+
+
+@router.post("/api-keys/{provider}/validate", response_model=ApiKeyValidation)
+async def validate_api_key(provider: str, req: ValidateApiKeyRequest | None = None) -> ApiKeyValidation:
+    """Check one provider's key against its free auth-only endpoint.
+
+    Validates the supplied `key` if given (so a typed-but-unsaved key can be
+    tested before committing it), otherwise the stored one.
+    """
+    if provider not in VALID_PROVIDERS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown provider '{provider}'. Valid: {sorted(VALID_PROVIDERS)}",
+        )
+
+    from app.services.ai.key_validation import validate_key, validate_stored_key
+
+    candidate = (req.key or "").strip() if req else ""
+    if candidate:
+        result = await validate_key(provider, candidate)
+    else:
+        result = await validate_stored_key(provider)
+
+    # Only record a verdict about the key we actually have stored. A verdict on
+    # an unsaved candidate describes a key that may never be saved.
+    repo = ApiKeysRepo()
+    if not candidate and result.verdict != "unsupported":
+        await repo.record_validation(provider, result.verdict, result.account)
+
+    return ApiKeyValidation(
+        provider=result.provider,
+        verdict=result.verdict,
+        message=result.message,
+        account=result.account,
+        status_code=result.status_code,
+    )
+
+
+class ValidateAllResult(BaseModel):
+    results: list[ApiKeyValidation]
+
+
+@router.post("/api-keys/validate-all", response_model=ValidateAllResult)
+async def validate_all_api_keys() -> ValidateAllResult:
+    """Check every stored key at once, concurrently. Free — bills nothing."""
+    from app.services.ai.key_validation import PROVIDER_SPECS, validate_many
+
+    repo = ApiKeysRepo()
+    stored = await repo.get_all()
+    # Only providers that have a key AND a way to test it.
+    testable = {
+        provider: key
+        for provider, key in stored.items()
+        if key and key.strip() and provider in PROVIDER_SPECS
+    }
+
+    results = await validate_many(testable)
+    for result in results:
+        await repo.record_validation(result.provider, result.verdict, result.account)
+
+    return ValidateAllResult(
+        results=[
+            ApiKeyValidation(
+                provider=r.provider,
+                verdict=r.verdict,
+                message=r.message,
+                account=r.account,
+                status_code=r.status_code,
+            )
+            for r in results
+        ]
+    )

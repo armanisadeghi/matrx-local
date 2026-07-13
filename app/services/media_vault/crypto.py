@@ -73,6 +73,15 @@ def meta_aad(item_id: str) -> bytes:
     return f"{item_id}:meta".encode("utf-8")
 
 
+def init_image_aad(item_id: str) -> bytes:
+    """AAD for the img2img SOURCE image stored beside a vaulted result.
+
+    Distinct from file_aad so a result blob and an init-image blob can never be
+    swapped for one another, even by an attacker who can move files around.
+    """
+    return f"{item_id}:init".encode("utf-8")
+
+
 # ── blob encrypt/decrypt (nonce || ciphertext+tag) ────────────────────────────
 
 def encrypt_blob(key: bytes, plaintext: bytes, aad: bytes) -> bytes:

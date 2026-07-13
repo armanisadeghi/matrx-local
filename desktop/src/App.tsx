@@ -57,6 +57,10 @@ import {
 } from "@/contexts/TranscriptionSessionsContext";
 import { DownloadManagerProvider } from "@/contexts/DownloadManagerContext";
 import { MediaGenProvider } from "@/contexts/MediaGenContext";
+import { PromptMatrixProvider } from "@/contexts/PromptMatrixContext";
+import { MediaLibraryProvider } from "@/contexts/MediaLibraryContext";
+import { MediaVaultProvider } from "@/contexts/MediaVaultContext";
+import { MediaActionsProvider } from "@/components/media/MediaActionsProvider";
 import { TtsProvider } from "@/contexts/TtsContext";
 import { DownloadManagerModal } from "@/components/downloads/DownloadManagerModal";
 import { engine } from "@/lib/api";
@@ -93,22 +97,38 @@ export default function App() {
     <ErrorBoundary>
       <DevTerminalProvider>
         <DownloadManagerProvider>
+          {/* Media: ONE library store, ONE vault store, ONE action set + the
+              app-wide lightbox / info dialog / context menu. Every image in the
+              app — icon, thumbnail, tile, result — routes through these, so
+              deleting or vaulting an item updates every surface at once. */}
           <MediaGenProvider>
-            <TtsProvider>
-              <LlmProvider>
-                <WakeWordProvider>
-                  <TranscriptionSessionsProvider>
-                    <PermissionsProvider>
-                      <AudioDevicesProvider>
-                        <TranscriptionProvider>
-                          <AppInner />
-                        </TranscriptionProvider>
-                      </AudioDevicesProvider>
-                    </PermissionsProvider>
-                  </TranscriptionSessionsProvider>
-                </WakeWordProvider>
-              </LlmProvider>
-            </TtsProvider>
+            {/* ONE prompt matrix, app-wide: a half-built sweep (ten hand-typed
+                options, a tuned strategy) must survive a tab switch. Inside
+                MediaGenProvider because it reads the model/LoRA catalog to
+                validate what each variable is allowed to sweep. */}
+            <PromptMatrixProvider>
+            <MediaLibraryProvider>
+              <MediaVaultProvider>
+                <MediaActionsProvider>
+                  <TtsProvider>
+                    <LlmProvider>
+                      <WakeWordProvider>
+                        <TranscriptionSessionsProvider>
+                          <PermissionsProvider>
+                            <AudioDevicesProvider>
+                              <TranscriptionProvider>
+                                <AppInner />
+                              </TranscriptionProvider>
+                            </AudioDevicesProvider>
+                          </PermissionsProvider>
+                        </TranscriptionSessionsProvider>
+                      </WakeWordProvider>
+                    </LlmProvider>
+                  </TtsProvider>
+                </MediaActionsProvider>
+              </MediaVaultProvider>
+            </MediaLibraryProvider>
+            </PromptMatrixProvider>
           </MediaGenProvider>
         </DownloadManagerProvider>
       </DevTerminalProvider>

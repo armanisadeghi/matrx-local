@@ -249,7 +249,10 @@ function QueueFooter({ onJump }: { onJump: (id: NavId) => void }) {
               </span>
               {runningImageJob && (
                 <>
-                  <span className="truncate max-w-[200px] hidden sm:inline">
+                  <span
+                    className="truncate max-w-[200px] hidden sm:inline"
+                    title={runningImageJob.prompt || "(no prompt)"}
+                  >
                     {runningImageJob.prompt || "(no prompt)"}
                   </span>
                   <span className="w-24 shrink-0">
@@ -310,7 +313,10 @@ function QueueFooter({ onJump }: { onJump: (id: NavId) => void }) {
                     : "Video failed"}
               </span>
               {activeJob.prompt && (
-                <span className="truncate max-w-[200px] hidden sm:inline">
+                <span
+                  className="truncate max-w-[200px] hidden sm:inline"
+                  title={activeJob.prompt}
+                >
                   {activeJob.prompt}
                 </span>
               )}

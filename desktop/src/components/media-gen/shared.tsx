@@ -37,10 +37,13 @@ import type { GeneratedImageResult } from "@/hooks/use-media-gen";
 import type { ImageGenJob } from "@/lib/api";
 import { engine, fetchMediaLibraryFile } from "@/lib/api";
 import { emitClientLog } from "@/hooks/use-unified-log";
-import { useMediaGenApp } from "@/contexts/MediaGenContext";
-import { pickedImageFromUrl } from "@/components/media-gen/core/pickedImage";
-import { MediaLightbox } from "@/components/media-gen/MediaLightbox";
-import type { LightboxItem } from "@/components/media-gen/MediaLightbox";
+import { useMediaActions } from "@/components/media/MediaActionsProvider";
+import { MediaOverflowMenu } from "@/components/media/MediaOverflowMenu";
+import {
+  descriptorFromJob,
+  descriptorFromResult,
+  type MediaDescriptor,
+} from "@/components/media/types";
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
 
@@ -1000,6 +1003,7 @@ export function GeneratedImageView({
   onClear,
   onReuseSeed,
   prompt,
+  modelId,
   meta,
   onOpenLightbox,
   onUseAsInput,
@@ -1008,48 +1012,45 @@ export function GeneratedImageView({
   onClear?: () => void;
   /** Puts the result's seed back into the form's seed input. */
   onReuseSeed?: (seed: number) => void;
-  /** The prompt used for this result — shown in the lightbox info panel. */
+  /** The prompt used for this result. */
   prompt?: string;
-  /** Extra generation params — shown in the lightbox info panel. */
+  /** The model used — makes the result remixable. */
+  modelId?: string;
+  /** Extra generation params — shown in the info panel. */
   meta?: Record<string, unknown>;
-  /** Overrides the click-to-expand behavior (e.g. multi-item lightbox). */
+  /** Overrides the click-to-expand behavior (e.g. multi-item viewing set). */
   onOpenLightbox?: () => void;
   /** Routes this result into the img2img input slot. */
   onUseAsInput?: () => void;
 }) {
-  const [lightboxOpen, setLightboxOpen] = useState(false);
-  const lightboxItems = useMemo<LightboxItem[]>(
-    () => [
-      {
-        id: result.itemId ?? "generated-result",
-        kind: "image",
-        url: `data:image/png;base64,${result.b64}`,
+  const actions = useMediaActions();
+  const descriptor = useMemo<MediaDescriptor>(
+    () =>
+      descriptorFromResult(result, {
         ...(prompt !== undefined ? { prompt } : {}),
-        seed: result.seed,
-        meta: {
-          width: result.width,
-          height: result.height,
-          elapsed_seconds: result.elapsed,
-          ...(result.filePath ? { file_path: result.filePath } : {}),
-          ...(meta ?? {}),
-        },
-      },
-    ],
-    [result, prompt, meta],
+        ...(modelId !== undefined ? { modelId } : {}),
+        ...(meta !== undefined ? { params: meta } : {}),
+      }),
+    [result, prompt, modelId, meta],
   );
+
   return (
     <div className="space-y-2">
       <button
         type="button"
         onClick={() =>
-          onOpenLightbox ? onOpenLightbox() : setLightboxOpen(true)
+          onOpenLightbox ? onOpenLightbox() : actions.openOne(descriptor)
         }
+        onContextMenu={(e) => {
+          e.preventDefault();
+          actions.openContextMenu(descriptor, { x: e.clientX, y: e.clientY });
+        }}
         className="group relative block w-full cursor-zoom-in"
         aria-label="Expand image"
-        title="Click to expand"
+        title="Click to expand · right-click for every action"
       >
         <img
-          src={`data:image/png;base64,${result.b64}`}
+          src={descriptor.url}
           alt="Generated image"
           className="w-full rounded-lg border object-contain"
         />
@@ -1058,17 +1059,8 @@ export function GeneratedImageView({
           Expand
         </span>
       </button>
-      {!onOpenLightbox && (
-        <MediaLightbox
-          open={lightboxOpen}
-          items={lightboxItems}
-          onClose={() => setLightboxOpen(false)}
-          {...(onReuseSeed !== undefined ? { onReuseSeed } : {})}
-          {...(onUseAsInput ? { onUseAsInput: () => onUseAsInput() } : {})}
-        />
-      )}
-      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground flex-wrap">
-        <span className="flex items-center gap-2 flex-wrap">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span className="flex flex-wrap items-center gap-2">
           <span className="tabular-nums">
             {result.width}×{result.height} · {result.elapsed.toFixed(1)}s
           </span>
@@ -1076,7 +1068,7 @@ export function GeneratedImageView({
             <SeedChip seed={result.seed} {...(onReuseSeed !== undefined ? { onReuse: onReuseSeed } : {})} />
           )}
         </span>
-        <div className="flex gap-2 shrink-0">
+        <div className="flex shrink-0 items-center gap-2">
           {onClear && (
             <Button size="sm" variant="ghost" onClick={onClear}>
               Clear
@@ -1096,16 +1088,14 @@ export function GeneratedImageView({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => {
-              const a = document.createElement("a");
-              a.href = `data:image/png;base64,${result.b64}`;
-              a.download = `matrx-image-${Date.now()}.png`;
-              a.click();
-            }}
+            onClick={() => void actions.download(descriptor)}
           >
             <Download className="h-3.5 w-3.5 mr-1.5" />
-            Download PNG
+            Download
           </Button>
+          {/* Everything else — remix, info, copy image, copy prompt, delete,
+              move to Private, show in folder — the SAME menu as everywhere. */}
+          <MediaOverflowMenu item={descriptor} />
         </div>
       </div>
       {result.filePath && (
@@ -1120,66 +1110,43 @@ export function GeneratedImageView({
   );
 }
 
-// ── Completed queue-job lightbox (shared across every queue panel) ───────────
-
-/** Build the lightbox metadata panel for a completed image job. */
-function jobLightboxItem(job: ImageGenJob, url: string): LightboxItem {
-  const meta: Record<string, unknown> = { model_id: job.model_id };
-  if (typeof job.elapsed_seconds === "number") {
-    meta.elapsed_seconds = job.elapsed_seconds;
-  }
-  if (job.file_path) meta.file_path = job.file_path;
-  if (job.params && Object.keys(job.params).length > 0) {
-    Object.assign(meta, job.params);
-  }
-  return {
-    id: job.job_id,
-    kind: "image",
-    url,
-    prompt: job.prompt,
-    seed: typeof job.seed === "number" ? job.seed : null,
-    meta,
-  };
-}
+// ── Completed queue-job viewer (shared across every queue panel) ────────────
 
 /**
  * THE click-to-open behavior for completed image-queue jobs, shared by every
  * queue panel (Images tab, Studio rail, Focus feed, Workspace list, Gallery
- * strip).  Clicking a completed job opens it in the MediaLightbox with the
- * panel's OTHER completed jobs as the prev/next set.
+ * strip). Clicking a completed job opens it in the app-wide lightbox with the
+ * panel's OTHER completed jobs as the prev/next set — and from there the user
+ * has the full action set (remix, info, copy, delete, vault, …), exactly as if
+ * they had opened it from the library grid.
  *
- * URL resolution: completed thumbnails are normally already cached in
- * `thumbs` (the media-gen hook fetches them). When one is missing the hook
- * fetches the bytes on demand — `openingJobId` is set while that fetch runs
- * so the row can show a brief loading state; a click is NEVER silently dead.
+ * URL resolution: completed thumbnails are normally already cached in `thumbs`
+ * (the media-gen hook fetches them). When one is missing the hook fetches the
+ * bytes on demand — `openingJobId` is set while that fetch runs so the row can
+ * show a brief loading state; a click is NEVER silently dead.
  *
- * Render `lightboxElement` once in the panel, call `openJob(job)` from the
- * row click handler (completed jobs only).
+ * Call `openJob(job)` from the row click handler (completed jobs only). There
+ * is nothing to mount: the lightbox lives in MediaActionsProvider.
  */
 export function useImageJobLightbox({
   jobs,
   thumbs,
-  onReuseSeed,
 }: {
   /** The panel's job list (any statuses — only completed ones are viewable). */
   jobs: ImageGenJob[];
   /** jobId → object URL cache (imageJobThumbs from the media-gen context). */
   thumbs: Record<string, string>;
-  onReuseSeed?: (seed: number) => void;
 }): {
   /** Open this (completed) job in the lightbox. No-op for other statuses. */
   openJob: (job: ImageGenJob) => void;
   /** Job id whose bytes are being fetched before opening, else null. */
   openingJobId: string | null;
-  /** Mount once in the panel. */
-  lightboxElement: ReactNode;
+  /** Descriptor for a job, when its bytes are available (for menus/thumbs). */
+  descriptorOf: (job: ImageGenJob) => MediaDescriptor | null;
 } {
+  const actions = useMediaActions();
   const [fetchedUrls, setFetchedUrls] = useState<Record<string, string>>({});
   const [openingJobId, setOpeningJobId] = useState<string | null>(null);
-  const [lightbox, setLightbox] = useState<{
-    items: LightboxItem[];
-    index: number;
-  } | null>(null);
 
   // Revoke only the object URLs THIS hook created (thumbs belong to the
   // media-gen context, which revokes its own).
@@ -1195,29 +1162,37 @@ export function useImageJobLightbox({
     };
   }, []);
 
+  const urlOf = useCallback(
+    (j: ImageGenJob): string | null =>
+      thumbs[j.job_id] ?? fetchedUrls[j.job_id] ?? null,
+    [thumbs, fetchedUrls],
+  );
+
+  const descriptorOf = useCallback(
+    (job: ImageGenJob): MediaDescriptor | null => {
+      if (job.status !== "completed" || !job.item_id) return null;
+      const url = urlOf(job);
+      return url ? descriptorFromJob(job, url) : null;
+    },
+    [urlOf],
+  );
+
   const openJob = useCallback(
     (job: ImageGenJob) => {
       if (job.status !== "completed" || !job.item_id) return;
-      const urlOf = (j: ImageGenJob): string | null =>
-        thumbs[j.job_id] ?? fetchedUrls[j.job_id] ?? null;
 
-      const openWith = (targetUrl: string, extra?: [string, string]) => {
-        const urls: Record<string, string> = {};
+      const openWith = (targetUrl: string) => {
+        const items: MediaDescriptor[] = [];
         for (const j of jobs) {
           if (j.status !== "completed" || !j.item_id) continue;
           const u = j.job_id === job.job_id ? targetUrl : urlOf(j);
-          if (u) urls[j.job_id] = u;
+          if (u) items.push(descriptorFromJob(j, u));
         }
-        if (extra) urls[extra[0]] = extra[1];
-        const viewable = jobs.filter(
-          (j) => j.status === "completed" && j.item_id && urls[j.job_id],
-        );
-        const items = viewable.map((j) => jobLightboxItem(j, urls[j.job_id]!));
         const index = Math.max(
           0,
-          viewable.findIndex((j) => j.job_id === job.job_id),
+          items.findIndex((d) => d.id === job.job_id),
         );
-        setLightbox({ items, index });
+        actions.open(items, index);
       };
 
       const known = urlOf(job);
@@ -1241,7 +1216,7 @@ export function useImageJobLightbox({
           setFetchedUrls((prev) =>
             prev[job.job_id] ? prev : { ...prev, [job.job_id]: url },
           );
-          openWith(url, [job.job_id, url]);
+          openWith(url);
         })
         .catch((e) => {
           emitClientLog(
@@ -1252,41 +1227,10 @@ export function useImageJobLightbox({
         })
         .finally(() => setOpeningJobId(null));
     },
-    [jobs, thumbs, fetchedUrls],
+    [jobs, urlOf, actions],
   );
 
-  const closeLightbox = useCallback(() => setLightbox(null), []);
-
-  // "Use as input": route the viewed image into the img2img input slot.
-  const [, mediaGenActions] = useMediaGenApp();
-  const { useImageAsInput } = mediaGenActions;
-  const handleUseAsInput = useCallback(
-    (item: LightboxItem) => {
-      void pickedImageFromUrl(item.url, `${item.id}.png`, (msg) =>
-        emitClientLog(
-          "error",
-          `[media-gen] use-as-input failed for ${item.id}: ${msg}`,
-          "engine",
-        ),
-      ).then((img) => {
-        if (img) useImageAsInput(img);
-      });
-    },
-    [useImageAsInput],
-  );
-
-  const lightboxElement = (
-    <MediaLightbox
-      open={lightbox !== null}
-      items={lightbox?.items ?? []}
-      startIndex={lightbox?.index ?? 0}
-      onClose={closeLightbox}
-      {...(onReuseSeed !== undefined ? { onReuseSeed } : {})}
-      onUseAsInput={handleUseAsInput}
-    />
-  );
-
-  return { openJob, openingJobId, lightboxElement };
+  return { openJob, openingJobId, descriptorOf };
 }
 
 /** Open an external URL via the Tauri shell when available, else a new tab. */

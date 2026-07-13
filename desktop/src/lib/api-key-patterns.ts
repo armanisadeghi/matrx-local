@@ -178,6 +178,29 @@ export const PROVIDER_PATTERNS: ProviderPattern[] = [
     ],
     label: "Cerebras",
   },
+
+  // ── ElevenLabs ────────────────────────────────────────────────────────────
+  {
+    names: ["elevenlabs", "eleven_labs", "11labs"],
+    envVarNames: [
+      "ELEVENLABS_API_KEY",
+      "ELEVEN_LABS_API_KEY",
+      "ELEVENLABS_KEY",
+    ],
+    label: "ElevenLabs",
+  },
+
+  // ── Fastino / Pioneer ─────────────────────────────────────────────────────
+  // Two env var names for one provider: matrx-ai resolves PIONEER_API_KEY
+  // first, FASTINO_API_KEY second.
+  {
+    names: ["fastino", "pioneer"],
+    envVarNames: [
+      "FASTINO_API_KEY",
+      "PIONEER_API_KEY",
+    ],
+    label: "Fastino",
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

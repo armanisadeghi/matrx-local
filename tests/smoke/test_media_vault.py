@@ -393,3 +393,95 @@ def test_auto_lock_after_inactivity(vault_env, monkeypatch: pytest.MonkeyPatch) 
     assert service.status()["unlocked"] is False, "must lazily auto-lock"
     with pytest.raises(vault_service_module.VaultLockedError):
         service.list_items()
+
+
+# ── the img2img source image survives the vault round trip ───────────────────
+
+FAKE_INIT_PNG = b"\x89PNG\r\n\x1a\n" + bytes(range(255, -1, -1)) * 4
+
+PASSWORD_INIT = "vault-init-image-pw"
+
+
+def test_init_image_survives_vault_round_trip(client: TestClient, vault_env) -> None:
+    """Vaulting an img2img image must NOT destroy the photo it was made from.
+
+    The move deletes the plaintext original (result AND source image), so the
+    source has to be encrypted into the vault with it. Before this, vaulting an
+    img2img result silently and permanently destroyed the user's input image —
+    and Remix, which promises to reproduce exactly what made the picture, could
+    never be honest about it again.
+    """
+    library = vault_env["library"]
+    item = library.save_generated_image(
+        FAKE_PNG,
+        model_id="stabilityai/sdxl-turbo",
+        prompt="made from a photo",
+        negative_prompt="",
+        params={"has_init_image": True},
+        seed=99,
+        width=512,
+        height=512,
+        elapsed_seconds=0.01,
+        init_image_bytes=FAKE_INIT_PNG,
+    )
+    item_id = item["id"]
+    blobs = vault_env["tmp"] / "vault" / "blobs"
+
+    assert client.post("/media-vault/create", json={"password": PASSWORD_INIT}).status_code == 200
+    assert client.post("/media-vault/move", json={"item_ids": [item_id]}).json()[
+        "results"
+    ][0]["ok"] is True
+
+    # The plaintext source image is gone from the library …
+    init_plaintext = Path(item["file_path"]).parent / f"{item_id}.init.png"
+    assert not init_plaintext.exists()
+    # … and its ciphertext is in the vault.
+    init_blob = blobs / f"{item_id}.init.bin"
+    assert init_blob.exists()
+    assert FAKE_INIT_PNG[:8] not in init_blob.read_bytes(), "must be ciphertext"
+
+    # Unlocked: the source image is served (decrypted in memory) and the
+    # listing advertises it, so the client offers a full Remix.
+    r = client.get(f"/media-library/items/{item_id}/init-image")
+    assert r.status_code == 200 and r.content == FAKE_INIT_PNG
+    listed = client.get("/media-vault/items").json()["items"][0]
+    assert listed["init_image_file"] == f"{item_id}.init.png"
+
+    # Locked: 423 (one unlock away), never a lying 404.
+    client.post("/media-vault/lock")
+    assert client.get(f"/media-library/items/{item_id}/init-image").status_code == 423
+
+    # Restore: the source image comes back to the library, byte-identical, and
+    # the sidecar names it truthfully.
+    client.post("/media-vault/unlock", json={"password": PASSWORD_INIT})
+    assert client.post("/media-vault/restore", json={"item_ids": [item_id]}).json()[
+        "results"
+    ][0]["ok"] is True
+    assert init_plaintext.read_bytes() == FAKE_INIT_PNG
+    sidecar = json.loads(
+        (Path(item["file_path"]).parent / f"{item_id}.json").read_text()
+    )
+    assert sidecar["init_image_file"] == f"{item_id}.init.png"
+    assert not init_blob.exists(), "vault copy must be gone after restore"
+    r = client.get(f"/media-library/items/{item_id}/init-image")
+    assert r.status_code == 200 and r.content == FAKE_INIT_PNG
+
+
+def test_vault_permanent_delete_takes_the_init_image(client: TestClient, vault_env) -> None:
+    """A permanent vault delete must not orphan the encrypted source image."""
+    library = vault_env["library"]
+    item = library.save_generated_image(
+        FAKE_PNG, model_id="m", prompt="p", negative_prompt="", params={},
+        seed=1, width=8, height=8, elapsed_seconds=0.0,
+        init_image_bytes=FAKE_INIT_PNG,
+    )
+    item_id = item["id"]
+    blobs = vault_env["tmp"] / "vault" / "blobs"
+    client.post("/media-vault/create", json={"password": PASSWORD_INIT})
+    client.post("/media-vault/move", json={"item_ids": [item_id]})
+    assert (blobs / f"{item_id}.init.bin").exists()
+
+    assert client.delete(f"/media-vault/items/{item_id}").status_code == 200
+    assert not (blobs / f"{item_id}.init.bin").exists(), "orphaned encrypted blob"
+    assert not (blobs / f"{item_id}.bin").exists()
+    assert client.get(f"/media-library/items/{item_id}/init-image").status_code == 404

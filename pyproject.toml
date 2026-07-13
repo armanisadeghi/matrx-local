@@ -56,15 +56,18 @@ dependencies = [
     # to ``matrx-<pkg>/v<x.y.z>`` (see aidream/.github/workflows/
     # publish-package.yml). There is intentionally no [tool.uv.sources]
     # path override — see the note further down near [tool.uv].
-    # ⚠️  PUBLISH BEFORE RELEASE / CI: matrx-ai 0.3.0 (and its NEW deps
-    # matrx-connect>=0.1.1, matrx-graph>=0.1.0, matrx-runtime>=0.0.1, plus
-    # matrx-utils>=1.0.20 / matrx-orm>=3.1.0) are NOT on PyPI yet — they only
-    # exist on aidream main. Until an operator tag-pushes them, `uv lock` /
-    # `uv sync` / CI clean installs CANNOT resolve these pins; the dev venv
-    # runs on wheels built from aidream (`uv build` + `uv pip install`).
-    "matrx-utils>=1.0.20",
-    "matrx-orm>=3.1.0",
-    "matrx-ai>=0.3.0",
+    # All matrx-* pins resolve from PyPI (publish wave completed 2026-07-13:
+    # matrx-ai 0.3.12, matrx-utils 2.0.0, matrx-orm 3.1.9, matrx-connect
+    # 0.1.3, matrx-graph 0.1.2, matrx-runtime 0.0.5). matrx-connect/graph/
+    # runtime arrive transitively via matrx-ai but are pinned explicitly so a
+    # future matrx-ai dependency reshuffle can't silently downgrade them past
+    # the floors the client-host guard in app/services/ai/engine.py assumes.
+    "matrx-utils>=2.0.0",
+    "matrx-orm>=3.1.9",
+    "matrx-ai>=0.3.12",
+    "matrx-connect>=0.1.3",
+    "matrx-graph>=0.1.2",
+    "matrx-runtime>=0.0.5",
     # matrx-scheduler — see the optional [scheduler] extra below. Kept OUT of
     # core on purpose: the Phase 8 host that uses it is gated off by default
     # (MATRX_LOCAL_SCHEDULER_ENABLED) and imports it lazily, so the engine runs

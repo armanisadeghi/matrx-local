@@ -37,7 +37,11 @@ _lang_tags_data = collect_data_files('language_tags')
 # If you add a dependency whose __init__ calls importlib.metadata.version(),
 # add it here. Missing packages are skipped, so an optional extra that is not
 # installed on this build machine will not break the build.
-_METADATA_PKGS = ['replicate', 'protobuf']
+# matrx-ai/matrx-utils metadata: app/services/ai/engine.py prints a startup
+# banner via importlib.metadata.version(); without .dist-info bundled every
+# packaged build lies 'matrx-ai = NOT INSTALLED' while the library works.
+_METADATA_PKGS = ['replicate', 'protobuf', 'matrx-ai', 'matrx-utils',
+                  'matrx-orm', 'matrx-connect', 'matrx-graph', 'matrx-runtime']
 _pkg_metadata = []
 for _pkg in _METADATA_PKGS:
     try:

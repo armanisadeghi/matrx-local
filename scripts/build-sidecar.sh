@@ -432,7 +432,8 @@ if tessdata:
 # (--copy-metadata hard-fails on missing packages, mirroring the specs'
 # try/except).
 import importlib.metadata
-for _pkg in ("replicate", "protobuf"):
+for _pkg in ("replicate", "protobuf", "matrx-ai", "matrx-utils",
+             "matrx-orm", "matrx-connect", "matrx-graph", "matrx-runtime"):
     try:
         importlib.metadata.metadata(_pkg)
         args += ["--copy-metadata", _pkg]

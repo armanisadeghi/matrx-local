@@ -178,7 +178,16 @@ import uvicorn
 from app.main import app
 from app.config import MATRX_HOME_DIR
 
-logger = logging.getLogger(__name__)
+# run.py logs through system_logger (file + console), NOT a bare module logger.
+# A bare logging.getLogger(__name__) here propagates to the root logger, whose
+# only handler is the WARNING+ bridge — every INFO line run.py emitted was a
+# black hole, and shutdown-path warnings were the only survivors. That silence
+# is exactly how the engine died invisibly ~12 times on 2026-07-11/12 (the
+# "forever loader" freezes): SIGTERM arrived, nothing was logged, the process
+# vanished. Lifecycle events MUST land in system.log.
+from app.common.system_logger import get_logger
+
+logger = get_logger()
 
 if getattr(sys, "frozen", False):
     BUNDLE_DIR = Path(sys.executable).parent
@@ -303,28 +312,45 @@ def create_tray_image() -> "Image.Image":
 def _build_log_config() -> dict:
     """Build uvicorn log_config.
 
-    - uvicorn.error  → our console format (startup/shutdown messages)
+    - uvicorn / uvicorn.error → NullHandler here; the real routing is the
+      _UvicornLogForwarder attached in start_server(), which sends every
+      uvicorn record through system_logger (file + console + sensitive-data
+      masking). uvicorn's lifecycle messages — "Started server", "Shutting
+      down", "Waiting for connections to close" — previously went to a
+      stdout-only handler, which in the packaged app meant they were INVISIBLE
+      in system.log. During the 2026-07-11/12 silent-death investigation,
+      "Shutting down" / "Waiting for connections to close" were exactly the
+      lines that would have identified the wedge in minutes.
     - uvicorn.access → suppressed entirely (our middleware already logs every request)
     """
-    from app.config import LOCAL_DEV
-
-    fmt = "%(levelname)s - %(message)s" if LOCAL_DEV else "%(asctime)s - %(levelname)s - %(message)s"
     return {
         "version": 1,
         "disable_existing_loggers": False,
-        "formatters": {
-            "default": {"format": fmt},
-        },
         "handlers": {
-            "default": {"class": "logging.StreamHandler", "stream": "ext://sys.stdout", "formatter": "default"},
-            "null":    {"class": "logging.NullHandler"},
+            "null": {"class": "logging.NullHandler"},
         },
         "loggers": {
-            "uvicorn":        {"handlers": ["default"], "level": "INFO",  "propagate": False},
-            "uvicorn.error":  {"handlers": ["default"], "level": "INFO",  "propagate": False},
-            "uvicorn.access": {"handlers": ["null"],    "level": "INFO",  "propagate": False},
+            "uvicorn":        {"handlers": ["null"], "level": "INFO", "propagate": False},
+            "uvicorn.error":  {"handlers": ["null"], "level": "INFO", "propagate": False},
+            "uvicorn.access": {"handlers": ["null"], "level": "INFO", "propagate": False},
         },
     }
+
+
+class _UvicornLogForwarder(logging.Handler):
+    """Forward uvicorn's log records into system_logger.
+
+    One pipeline: system_logger already owns the console handler, the rotating
+    system.log file handler, sensitive-data masking, and console dedup — so
+    uvicorn records get all of that for free and appear in the same places as
+    every other engine log line, prefixed with [uvicorn].
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            logger._log(record.levelno, "[uvicorn] " + record.getMessage())
+        except Exception:
+            pass  # logging must never take down the server
 
 
 _uvicorn_server: uvicorn.Server | None = None
@@ -340,16 +366,32 @@ def start_server(port: int) -> None:
         port=port,
         log_level="info",
         log_config=_build_log_config(),
+        # Cap the graceful-shutdown connection drain. The default (None) waits
+        # FOREVER for open connections — and this engine always has at least
+        # one infinite SSE stream open (/downloads/stream) plus WebSockets, so
+        # "wait for connections to drain" meant "never run lifespan teardown".
+        # Result on 2026-07-11/12: shutdown started (1012 WS close), teardown
+        # never ran, and the force-exit killed the process with zero teardown
+        # logs. 5s gives real in-flight requests a chance, then teardown runs.
+        timeout_graceful_shutdown=5,
     )
+    # uvicorn.Config.__init__ has already applied the dictConfig above, so the
+    # forwarder we attach now survives. Do NOT attach before Config creation —
+    # dictConfig replaces the uvicorn loggers' handlers.
+    forwarder = _UvicornLogForwarder(level=logging.INFO)
+    for _name in ("uvicorn", "uvicorn.error"):
+        logging.getLogger(_name).addHandler(forwarder)
     server = uvicorn.Server(config)
     _uvicorn_server = server
     try:
         server.run()
     finally:
+        logger.info("[shutdown] uvicorn server thread exited")
         _shutdown_event.set()
 
 
 def on_quit(icon: Icon, item: MenuItem) -> None:
+    logger.warning("[shutdown] Tray 'Quit' selected — beginning graceful shutdown")
     remove_discovery_file()
     icon.stop()
     if _uvicorn_server is not None:
@@ -459,26 +501,39 @@ def _wait_forever() -> None:
     finishes) instead of time.sleep(), so the thread wakes up immediately on
     SIGTERM rather than sleeping for up to 1 second before checking.
 
-    After receiving the shutdown signal, waits up to 10 seconds for the uvicorn
+    After receiving the shutdown signal, waits up to 25 seconds for the uvicorn
     server thread to complete its lifespan teardown (proxy stop, Playwright
-    close, SQLite close, etc.) before forcing exit.
+    close, SQLite close, etc.) before forcing exit. 25s matches the teardown
+    budget in _handle_exit (5s uvicorn drain + ~18s child teardowns + margin);
+    the previous 10s join routinely fired MID-teardown and os._exit(0)'d with
+    zero log output — that silent exit was the "engine vanished, UI spun
+    forever" bug of 2026-07-11/12. Every exit from this function now logs.
     """
     try:
         _shutdown_event.wait()
     except (KeyboardInterrupt, SystemExit):
         pass
 
+    logger.info("[shutdown] Main thread woke — waiting up to 25s for uvicorn lifespan teardown")
     remove_discovery_file()
     teardown_clean = True
     if _uvicorn_server is not None:
         _uvicorn_server.should_exit = True
         server_thread_ref = _server_thread
         if server_thread_ref is not None:
-            server_thread_ref.join(timeout=10)
+            server_thread_ref.join(timeout=25)
             teardown_clean = not server_thread_ref.is_alive()
     if not teardown_clean:
         # Lifespan teardown did not finish — clean up our own children.
+        logger.error(
+            "[shutdown] Lifespan teardown did NOT complete within 25s — "
+            "force-killing engine-owned children and exiting. This is a bug: "
+            "something blocked uvicorn's drain or a service teardown. "
+            "Check the last '[launcher]' lines above for the stuck service."
+        )
         _kill_child_subprocesses()
+    else:
+        logger.info("[shutdown] Teardown complete — engine exiting cleanly (pid=%d)", os.getpid())
     os._exit(0)
 
 
@@ -523,27 +578,58 @@ def setup_tray(port: int) -> None:
     _wait_forever()
 
 
+_exit_signal_logged = threading.Event()
+
+
 def _handle_exit(signum: int, frame: object) -> None:  # noqa: ARG001
     """Graceful shutdown: stop uvicorn (triggers lifespan teardown) then exit.
+
+    LOUD BY CONTRACT: the very first thing this handler does is log which
+    signal arrived. The engine died silently ~12 times on 2026-07-11/12
+    (SIGTERM → no log line anywhere → process gone → UI spun forever) and the
+    only forensic breadcrumb was uvicorn's incidental 1012 WebSocket close.
+    A shutdown that doesn't announce itself is indistinguishable from a crash.
 
     Telling uvicorn to shut down via server.should_exit lets the FastAPI
     lifespan teardown run (stops proxy on 22180, tunnel, scraper, SQLite, etc.)
     before the process terminates.  Setting _shutdown_event wakes the main
     thread from _wait_forever() so it can join the server thread and exit.
 
-    As a safety net, a background timer forces os._exit() after 25 seconds
+    As a safety net, a background timer forces os._exit() after 30 seconds
     even if the lifespan teardown hangs — this guarantees the process WILL
     die and prevents orphaned sidecar processes on user machines.
-    The 25s budget covers: wake-word 3s + scheduler 3s + doc-watcher 3s +
-    proxy 4s + tunnel 5s + scraper 5s + browsers 3s, with margin.
+    The 30s budget covers: uvicorn connection drain 5s (timeout_graceful_shutdown)
+    + wake-word 3s + scheduler 3s + doc-watcher 3s + proxy 4s + tunnel 5s +
+    scraper 5s + browsers 3s, with margin. Note that in sidecar mode Rust's
+    sigterm_then_kill escalates to SIGKILL after 20s regardless — this timer
+    is the standalone-mode (and belt-and-suspenders) guarantee.
     """
+    try:
+        sig_name = signal.Signals(signum).name
+    except ValueError:
+        sig_name = str(signum)
+    # Log once, loudly; repeat signals get a shorter line (no duplicate ladders).
+    if not _exit_signal_logged.is_set():
+        _exit_signal_logged.set()
+        logger.warning(
+            "[shutdown] Received %s (pid=%d) — beginning graceful shutdown: "
+            "uvicorn drain (≤5s) → lifespan teardown → exit. If no "
+            "'[shutdown] … complete' line follows, the teardown hung and the "
+            "force-exit watchdog fired.",
+            sig_name, os.getpid(),
+        )
+    else:
+        logger.warning("[shutdown] Received %s again — shutdown already in progress", sig_name)
+        return
+
     remove_discovery_file()
 
     if _uvicorn_server is not None:
         _uvicorn_server.should_exit = True
         _shutdown_event.set()
-        _schedule_force_exit(25)
+        _schedule_force_exit(30)
     else:
+        logger.warning("[shutdown] uvicorn server not yet created — exiting immediately")
         os._exit(0)
 
 

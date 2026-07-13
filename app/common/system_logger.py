@@ -292,6 +292,11 @@ class SystemLogger:
     def critical(self, message, *args, **kwargs):
         self._log(logging.CRITICAL, message, *args, **kwargs)
 
+    def exception(self, message, *args, **kwargs):
+        """ERROR with the current exception's traceback (stdlib-logger parity)."""
+        kwargs.setdefault("exc_info", True)
+        self._log(logging.ERROR, message, *args, **kwargs)
+
 
 # Create a global instance of the logger
 system_logger = SystemLogger()

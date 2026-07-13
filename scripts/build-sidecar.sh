@@ -379,7 +379,11 @@ args = [
     # absent from the bundle, `import google.protobuf` resolves via sys.path
     # to ~/.matrx/image-gen-packages' protobuf 7.x, which xai-sdk hard-rejects
     # ("Unsupported protobuf version" — killed matrx-ai init in v1.3.107).
-    # Bundling makes the FrozenImporter win. _upb is the C-ext backend.
+    # NOTE: bundling does NOT out-rank a copy in the prepended image-gen dir
+    # (PyInstaller 6 resolves via sys.path order; 'google' is a namespace
+    # package) — the runtime-hook purge is the shadowing defense. Bundling
+    # exists so the frozen app HAS protobuf once the dir is clean. _upb is
+    # the C-ext backend. Keep in sync with specs/*.spec.
     "--collect-submodules", "google.protobuf",
     "--hidden-import", "google._upb._message",
     # Cross-component scheduler host (optional extra, lazily imported, gated off

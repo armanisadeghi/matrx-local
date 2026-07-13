@@ -128,10 +128,19 @@ try:
             # Purge any protobuf copy older installs left here BEFORE the dir
             # enters sys.path. The engine bundles its own protobuf (xai-sdk
             # rejects protobuf 7 outright); a copy in this PREPENDED dir
-            # shadowed it and killed matrx-ai init on every packaged boot
+            # shadows it and killed matrx-ai init on every packaged boot
             # ("Unsupported protobuf version: 7.34.1", 2026-07-12). Mirrors
             # installer.py _purge_shadowing_protobuf — kept inline here
             # because this hook must not import app code.
+            #
+            # THE PURGE IS THE DEFENSE, NOT A NICETY: PyInstaller 6 resolves
+            # frozen imports through a sys.path hook IN PATH ORDER, and
+            # 'google' is a namespace package — a protobuf copy in this
+            # prepended dir WINS over the bundled one. So if the purge cannot
+            # complete (e.g. a running old engine still holds a _upb DLL on
+            # Windows), we must NOT inject the dir at all: booting without
+            # image-gen for one session beats booting with a dead AI stack.
+            _purge_failed = False
             try:
                 import shutil as _shutil
 
@@ -141,17 +150,41 @@ try:
                     if _p.exists()
                 ]
                 for _v in _victims:
-                    _shutil.rmtree(_v) if _v.is_dir() else _v.unlink()
-                    print(
-                        f"[runtime_hook] PURGED stale protobuf artifact {_v} "
-                        "(shadowed the engine's bundled protobuf; broke matrx-ai init)",
-                        file=sys.stderr,
-                    )
+                    try:
+                        _shutil.rmtree(_v) if _v.is_dir() else _v.unlink()
+                        print(
+                            f"[runtime_hook] PURGED stale protobuf artifact {_v} "
+                            "(it shadows the engine's protobuf and breaks matrx-ai init)",
+                            file=sys.stderr,
+                        )
+                    except Exception as _purge_exc:
+                        _purge_failed = True
+                        print(
+                            f"[runtime_hook] FAILED to purge protobuf artifact {_v}: "
+                            f"{_purge_exc!r}",
+                            file=sys.stderr,
+                        )
                 _g = _ig_dir / "google"
                 if _g.is_dir() and not any(_g.iterdir()):
                     _g.rmdir()
-            except Exception:
-                pass  # purge is best-effort; the bundled protobuf still wins via FrozenImporter
+            except Exception as _scan_exc:
+                _purge_failed = True
+                print(
+                    f"[runtime_hook] protobuf purge scan failed: {_scan_exc!r}",
+                    file=sys.stderr,
+                )
+
+            if _purge_failed:
+                print(
+                    f"[runtime_hook] NOT injecting {_ig_dir} into sys.path — a "
+                    "protobuf copy survived the purge and would shadow the "
+                    "engine's own (matrx-ai init would fail with 'Unsupported "
+                    "protobuf version'). Image/video generation is unavailable "
+                    "this session; restart the app (with no old engine running) "
+                    "to retry the purge.",
+                    file=sys.stderr,
+                )
+                break
 
             _ig_str = str(_ig_dir)
             if _ig_str not in sys.path:

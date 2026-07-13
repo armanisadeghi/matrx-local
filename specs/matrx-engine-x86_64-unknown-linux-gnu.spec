@@ -52,9 +52,16 @@ _matrx_ai_mods = collect_submodules('matrx_ai')
 # from the frozen bundle, `import google.protobuf` falls through to sys.path —
 # where the runtime hook has PREPENDED ~/.matrx/image-gen-packages, whose own
 # protobuf (7.x) xai-sdk hard-rejects: "Unsupported protobuf version" killed
-# matrx-ai init on every packaged boot of v1.3.107 (2026-07-12). Bundling it
-# makes the FrozenImporter win over any sys.path copy; copy_metadata above
-# keeps importlib.metadata.version('protobuf') truthful in the frozen app.
+# matrx-ai init on every packaged boot of v1.3.107 (2026-07-12).
+#
+# IMPORTANT — what this bundling does and does NOT do: PyInstaller 6 has no
+# meta_path FrozenImporter; frozen imports resolve through a sys.path hook IN
+# PATH ORDER, and 'google' is a PEP 420 namespace package, so a protobuf copy
+# in the PREPENDED image-gen dir would STILL win over this bundle. The actual
+# shadowing defense is the purge in hooks/runtime_hook.py + installer.py
+# (the hook refuses to inject the dir if a protobuf copy survives). This
+# bundling exists so the frozen app HAS a protobuf at all once the dir is
+# clean; copy_metadata keeps importlib.metadata.version('protobuf') truthful.
 # google._upb._message is protobuf's C-extension backend (also invisible to
 # static analysis; missing-module hiddenimports are warnings, not errors).
 _protobuf_mods = collect_submodules('google.protobuf') + ['google._upb._message']

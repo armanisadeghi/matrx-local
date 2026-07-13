@@ -26,9 +26,16 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: "pnpm dev",
+    // SMOKE_PREVIEW=1 tests the REAL production bundle (the artifact we ship)
+    // instead of the dev server. Worth the extra build: a boot crash can be
+    // introduced by minification/tree-shaking and be invisible in dev.
+    // reuseExistingServer must be false there — otherwise a stale `pnpm dev`
+    // on 1420 gets tested and the prod bundle silently never runs.
+    command: process.env.SMOKE_PREVIEW
+      ? "pnpm build && pnpm preview --port 1420 --strictPort"
+      : "pnpm dev",
     url: "http://localhost:1420",
-    reuseExistingServer: true,
-    timeout: 60_000,
+    reuseExistingServer: !process.env.SMOKE_PREVIEW,
+    timeout: process.env.SMOKE_PREVIEW ? 180_000 : 60_000,
   },
 });

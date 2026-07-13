@@ -200,3 +200,6 @@ desktop/src-tauri/binaries/.llama-server-version
 .DS_Store
 **/.DS_Store
 bg.pid
+
+# Smoke-run artifacts (scripts/smoke.sh) — logs and packaged-app output
+.smoke/

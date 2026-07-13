@@ -103,6 +103,50 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   at `/health` and/or add a cold-start grace timeout.
 - **Owner hint:** desktop core
 
+### MXL-D-029 — `tools` service degraded in packaged v1.3.105: "0 tools registered"
+- **Area:** engine / packaged sidecar
+- **Symptom:** live `/admin/status` on the shipped v1.3.105 build reports
+  `tools: degraded — 0 tools registered — AI tool calls will fail`.
+- **Evidence:** `curl /admin/status` against the running packaged engine
+  (2026-07-12); also in `~/.matrx/diagnostics/2026-07-12T14-52-43_ai_engine.json`.
+- **Status:** open. **Probably a cascade** of the `replicate` metadata crash
+  (fixed 2026-07-12 in `specs/matrx-engine-*.spec` — `ai_engine` failed at
+  import, so nothing registered tools). **Must be re-verified against a build
+  made AFTER that fix** before spending time on it: run
+  `./scripts/smoke.sh packaged` and read the `/admin/status` section. If tools
+  is still degraded, it is an independent bug.
+- **Owner hint:** engine core
+
+### MXL-D-030 — `/health` returns `{"status":"ok"}` while managed services are failed
+- **Area:** engine / API
+- **Symptom:** the packaged v1.3.105 engine answered `GET /health` with
+  `{"status":"ok","service":"matrx-local","version":"1.3.105"}` while
+  `ai_engine` was in `state=failed` and `tools` was `degraded`. Any consumer
+  gating on `/health` (the desktop UI, the smoke harness, matrx-extend) sees a
+  healthy engine that cannot actually do AI work.
+- **Evidence:** `app/api/routes.py` `/health` is a static payload; the real
+  per-service state lives in the launcher registry (`/admin/status`,
+  `app/api/admin_routes.py:74`). Reproduced live 2026-07-12.
+- **Status:** open. Suggested fix: have `/health` reflect registry state (e.g.
+  `ok` / `degraded` / `failed` + the failed service names) so a dead AI engine
+  cannot masquerade as healthy. `scripts/smoke.sh` works around this today by
+  checking `/admin/status` itself.
+- **Owner hint:** engine core
+
+### MXL-D-031 — Duplicate/stale `specs/aimatrx-engine-*.spec` files
+- **Area:** build
+- **Symptom:** `specs/` holds two parallel sets of PyInstaller specs —
+  `matrx-engine-*.spec` (the ones `scripts/build-sidecar.sh:234` actually uses)
+  and `aimatrx-engine-*.spec`, which nothing in `scripts/` or `.github/`
+  references. Hard Rule 6 says hidden imports must stay in sync across "all 4
+  spec files"; with 8 files present, an agent can easily edit the dead set and
+  ship a broken sidecar believing it fixed the build.
+- **Evidence:** `grep -rl aimatrx-engine scripts/ .github/` → no build
+  references. The `replicate` metadata fix (2026-07-12) was applied only to the
+  4 live `matrx-engine-*.spec` files.
+- **Status:** open. Delete the dead set, or document which is canonical.
+- **Owner hint:** build / Arman decision
+
 ## Cross-repo
 
 ### MXL-D-027 — Voice E2E unconfirmed on physical hardware

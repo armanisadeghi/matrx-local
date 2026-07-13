@@ -10,6 +10,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "test:boot": "playwright test boot.spec.ts",
+    "test:boot:prod": "SMOKE_PREVIEW=1 playwright test boot.spec.ts",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:setup": "node e2e/setup/create-test-user.mjs"

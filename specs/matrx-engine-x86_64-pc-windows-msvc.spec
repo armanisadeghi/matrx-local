@@ -27,6 +27,7 @@ from PyInstaller.utils.hooks import (
     collect_data_files,
     collect_dynamic_libs,
     collect_submodules,
+    copy_metadata,
 )
 
 # SPECPATH is injected by PyInstaller and equals the directory containing this
@@ -50,6 +51,23 @@ _lang_tags_data = collect_data_files('language_tags')
 # PyInstaller's static analysis sees NONE of those submodules. Missing
 # matrx_ai.db._registry killed the AI stack in every packaged build; collect
 # the whole package so no lazily-imported submodule can go missing again.
+# Packages that read their OWN installed metadata at import time, e.g.
+# replicate/__about__.py -> importlib.metadata.version("replicate"). PyInstaller
+# does not bundle .dist-info metadata unless told to, so these raise
+# PackageNotFoundError and kill the engine in the COMPILED sidecar only — dev
+# runs are fine, which is exactly what makes it easy to ship.
+# (v1.3.105 shipped with `replicate` missing: ai_engine -> state=failed on boot.)
+# If you add a dependency whose __init__ calls importlib.metadata.version(),
+# add it here. Missing packages are skipped, so an optional extra that is not
+# installed on this build machine will not break the build.
+_METADATA_PKGS = ['replicate']
+_pkg_metadata = []
+for _pkg in _METADATA_PKGS:
+    try:
+        _pkg_metadata += copy_metadata(_pkg)
+    except Exception:
+        pass  # optional/absent on this build host — nothing to copy
+
 _matrx_ai_mods = collect_submodules('matrx_ai')
 
 
@@ -61,7 +79,7 @@ a = Analysis(
         (os.path.join(_ROOT, 'app'), 'app'),
         (os.path.join(_ROOT, 'scraper-service/app'), 'scraper-service/app'),
         (os.path.join(_ROOT, 'pyproject.toml'), '.'),
-    ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data,
+    ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data + _pkg_metadata,
     hiddenimports=_matrx_ai_mods + [
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
         'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',

@@ -55,6 +55,7 @@ password in the Supabase dashboard and use recovery mode.
 
 | Spec | Coverage |
 |---|---|
+| `e2e/boot.spec.ts` | **The "does the app even start" guard.** Boots the app (unauthenticated + authenticated) and fails if the ErrorBoundary fallback renders or anything throws uncaught. Runs in CI on every push against the **production bundle**. |
 | `e2e/auth.spec.ts` | Login page renders unauthenticated; real email/password sign-in reaches the authenticated shell (sidebar nav). |
 | `e2e/media-gen.spec.ts` | `/media-generation` renders with the layout switcher; **all 5 layout variants mount without crashing** (Classic / Studio / Workspace / Gallery / Focus — catches mount-crash drift); Classic → Library tab renders; Private-vault panel opens and shows its create/unlock/unlocked UI (never creates or unlocks a vault). |
 

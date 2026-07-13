@@ -71,3 +71,15 @@ jobs:
 
       - name: TypeScript typecheck
         run: pnpm tsc -b
+
+      # v1.3.104 shipped a crash that killed the app on boot for every user.
+      # Typecheck passed and the bundle built — nothing here ever RENDERED the
+      # app. This step does: it boots the real production bundle in Chromium
+      # and fails if the ErrorBoundary shows or anything throws.
+      # The authenticated half of boot.spec.ts self-skips without a test
+      # account (desktop/.env.test), so this needs no secrets.
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Boot smoke (production bundle must render)
+        run: SMOKE_PREVIEW=1 pnpm exec playwright test boot.spec.ts --reporter=list

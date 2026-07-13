@@ -30,8 +30,260 @@ Last processed: **2026-07-09 12:26:31** (from Matrx Log export) · Last hygiene 
 <!-- Paste the next Matrx Log export below this line. -->
 
 ```
-(paste next export here)
-```
+=== Matrx Startup Log — 7/12/2026, 7:36:25 PM ===
+[stdout] [phase:starting] Engine initializing...
+
+[stdout] [phase:preflight] Checking for lingering processes from previous session...
+
+[stdout] [preflight] Scanning for lingering processes from previous session (services: engine, playwright_driver, playwright_browser, cloudflared)
+
+[stdout] [preflight]   user='armanisadeghi'  protected_pids=[26552, 26579, 26633]
+
+[stdout] [preflight]   engine        : ✓ clean (no lingering processes)
+
+[stdout] [preflight]   playwright_driver: ✓ clean (no lingering processes)
+
+[stdout] [preflight]   playwright_browser: ✓ clean (no lingering processes)
+
+[stdout] [preflight]   cloudflared   : ✓ clean (no lingering processes)
+
+[stdout] [preflight] Done: inspected=1057 orphans_found=0 killed=0 survived=0 protected=0 by_service={'engine': 0, 'playwright_driver': 0, 'playwright_browser': 0, 'cloudflared': 0}
+
+[stdout] [phase:port] Finding available port...
+
+[stdout] [preflight]   engine        : ✓ port 22140 (default)
+
+[stdout] [phase:port] Engine will bind to port 22140
+
+[stdout] [phase:server] Starting server...
+
+[stdout] INFO - Started server process [26633]
+
+[stdout] INFO - Waiting for application startup.
+
+[stdout] INFO - [app/main.py] ── Matrx Local startup ─────────────────────────────────────
+
+[stdout] INFO - [app/main.py] CORS allowed origins: ['https://aimatrx.com', 'https://www.aimatrx.com', 'https://appmatrx.com', 'https://www.appmatrx.com', 'https://mymatrx.com', 'https://www.mymatrx.com', 'https://codematrx.com', 'https://www.codematrx.com', 'https://matrxserver.com', 'https://www.matrxserver.com', 'https://ai-matrx-admin.vercel.app', 'https://ccmjgggbdngllppncmidllcjablcdepl.chromiumapp.org', 'http://localhost:1420', 'http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:5173', 'http://127.0.0.1:1420', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001', 'http://127.0.0.1:3002', 'http://127.0.0.1:5173', 'tauri://localhost', 'http://tauri.localhost']
+
+[stdout] [phase:database] Opening local database...
+
+[stdout] INFO - [app/main.py] Phase 0a: Opening local database...
+
+[stdout] INFO - [local_db] Connected to /Users/armanisadeghi/.matrx/matrx.db
+
+[stdout] INFO - [app/main.py] Phase 0a: Local database ready ✓ (/Users/armanisadeghi/.matrx/matrx.db)
+
+[stdout] [phase:database] Local database ready
+
+[stdout] INFO - [engine] JWT cache warmed from SQLite (user_id=4cf62e4e-2679-484f-b652-034e697418df)
+
+[stdout] DEBUG - [key_manager] Injected key for provider 'anthropic' into os.environ (deprecated shim)
+
+[stdout] DEBUG - [key_manager] Injected key for provider 'google' into os.environ (deprecated shim)
+
+[stdout] DEBUG - [key_manager] Injected key for provider 'cerebras' into os.environ (deprecated shim)
+
+[stdout] DEBUG - [key_manager] Injected key for provider 'xai' into os.environ (deprecated shim)
+
+[stdout] INFO - [key_manager] Loaded 4 user-stored API key(s) into resolver cache ✓
+
+[stdout] INFO - [app/main.py] Phase 0a: Loaded 4 user API key(s) into env ✓
+
+[stdout] INFO - [downloads] Manager started — MAX_CONCURRENT=3
+
+[stdout] INFO - [app/main.py] Phase 0a: Download manager started ✓
+
+[stdout] DEBUG - [image_gen_installer] dynamic_module_utils.py already patched — skipping
+
+[stdout] INFO - [app/main.py] Phase 0a: image-gen packages injected into sys.path ✓
+
+[stdout] INFO - [app/main.py] Phase 0a: media-gen service deps reloaded: image=True video=True
+
+[stdout] [phase:browsers] Checking browser engine...
+
+[stdout] INFO - [app/main.py] Phase 0b: Checking Playwright browsers...
+
+[stdout] DEBUG - [app/main.py] Playwright browsers already present at /Users/armanisadeghi/.matrx/playwright-browsers
+
+[stdout] INFO - [app/main.py] Phase 0b: Playwright browsers ready ✓
+
+[stdout] [phase:browsers] Browser engine ready
+
+[stdout] INFO - [app/main.py] Phase 0c: Probing platform capabilities...
+
+[stdout] INFO - [app/main.py] Phase 0c: Platform capabilities probed ✓
+
+[stdout] INFO - [app/main.py] Phase 0d: Detecting system hardware...
+
+[stdout] INFO - [app/main.py] Phase 0d: Hardware detection complete ✓
+
+[stdout] [phase:ai] Initializing AI engine...
+
+[stdout] INFO - [app/main.py] Phase 1: Initializing matrx-ai engine...
+
+[stdout] INFO - ============================================================
+
+[stdout] INFO - [engine] matrx-ai STARTUP — client-host mode
+
+[stdout] INFO - [engine]   matrx-ai   = NOT INSTALLED
+
+[stdout] INFO - [engine]   matrx-utils= NOT INSTALLED
+
+[stdout] INFO - [engine]   AIDREAM_SERVER_URL_LIVE  = https://server.app.matrxserver.com
+
+[stdout] ERROR - [app/main.py] Phase 1: matrx-ai initialization FAILED — AI endpoints will not work. Check SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in .env
+
+[stdout] Traceback (most recent call last):
+
+[stdout]   File "importlib/metadata/__init__.py", line 407, in from_name
+
+[stdout] StopIteration
+
+[stdout] 
+
+[stdout] During handling of the above exception, another exception occurred:
+
+[stdout] 
+
+[stdout] Traceback (most recent call last):
+
+[stdout]   File "app/main.py", line 452, in lifespan
+
+[stdout]     initialize_matrx_ai()
+
+[stdout]     ~~~~~~~~~~~~~~~~~~~^^
+
+[stdout]   File "app/services/ai/engine.py", line 208, in initialize_matrx_ai
+
+[stdout]     matrx_ai.configure(
+
+[stdout]     ~~~~~~~~~~~~~~~~~~^
+
+[stdout]         api_key_resolver=get_key_resolver(),
+
+[stdout]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+[stdout]     ...<6 lines>...
+
+[stdout]         source_app="matrx_local",
+
+[stdout]         ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+[stdout]     )
+
+[stdout]     ^
+
+[stdout]   File "matrx_ai/__init__.py", line 177, in configure
+
+[stdout]   File "pyimod02_importers.py", line 457, in exec_module
+
+[stdout]   File "matrx_ai/client_host/validate.py", line 17, in <module>
+
+[stdout]   File "pyimod02_importers.py", line 457, in exec_module
+
+[stdout]   File "matrx_ai/catalog/__init__.py", line 10, in <module>
+
+[stdout]   File "pyimod02_importers.py", line 457, in exec_module
+
+[stdout]   File "matrx_ai/catalog/controls.py", line 50, in <module>
+
+[stdout]   File "pyimod02_importers.py", line 457, in exec_module
+
+[stdout]   File "matrx_ai/catalog/models.py", line 64, in <module>
+
+[stdout]   File "pyimod02_importers.py", line 457, in exec_module
+
+[stdout]   File "matrx_ai/providers/__init__.py", line 49, in <module>
+
+[stdout]   File "pyimod02_importers.py", line 457, in exec_module
+
+[stdout]   File "matrx_ai/providers/replicate/__init__.py", line 1, in <module>
+
+[stdout]   File "pyimod02_importers.py", line 457, in exec_module
+
+[stdout]   File "matrx_ai/providers/replicate/replicate_image_api.py", line 12, in <module>
+
+[stdout]   File "pyimod02_importers.py", line 457, in exec_module
+
+[stdout]   File "replicate/__init__.py", line 1, in <module>
+
+[stdout]   File "pyimod02_importers.py", line 457, in exec_module
+
+[stdout]   File "replicate/client.py", line 22, in <module>
+
+[stdout]   File "pyimod02_importers.py", line 457, in exec_module
+
+[stdout]   File "replicate/__about__.py", line 3, in <module>
+
+[stdout]   File "importlib/metadata/__init__.py", line 987, in version
+
+[stdout]   File "importlib/metadata/__init__.py", line 960, in distribution
+
+[stdout]   File "importlib/metadata/__init__.py", line 409, in from_name
+
+[stdout] importlib.metadata.PackageNotFoundError: No package metadata was found for replicate
+
+[stdout] [phase:ai] AI engine init FAILED
+
+[stdout] ERROR - [app.launcher] [launcher] ai_engine → ✗ FAILED — No package metadata was found for replicate
+
+[stdout] ERROR - [app.launcher] [launcher] ai_engine → diagnostic snapshot: /Users/armanisadeghi/.matrx/diagnostics/2026-07-12T19-36-18_ai_engine.json
+
+[stdout] INFO - [app/main.py] Phase 1b: Mounting host-owned /ai surface...
+
+[stdout] INFO - [ai_routes] host-owned /ai surface built (heartbeat=5.0s)
+
+[stdout] INFO - [app/main.py] Phase 1b: /ai surface mounted at /ai and /chat/ai ✓
+
+[stdout] [phase:tools] Loading tool registry...
+
+[stdout] INFO - [app/main.py] Phase 2: Loading tool registry...
+
+[stdout] WARNING - [engine] matrx-ai not initialized — skipping tool registry load. Call initialize_matrx_ai() first.
+
+[stdout] INFO - [app/main.py] Phase 2: Tool registry loaded ✓
+
+[stdout] [phase:tools] Tool registry loaded
+
+[stdout] WARNING - [app.launcher] [launcher] tools → ⚠ degraded — 0 tools registered — AI tool calls will fail
+
+[stdout] INFO - [app/main.py] Phase 2b: Starting background data sync...
+
+[stdout] INFO - [sync_engine] Background sync started (interval=600s)
+
+[stdout] INFO - [app/main.py] Phase 2b: Background sync started ✓
+
+[stdout] [phase:scraper] Starting scraper engine...
+
+[stdout] INFO - [app/main.py] Phase 3: Starting scraper engine...
+
+[stdout] INFO - [downloads] STATE | active=0 queued=0 completed=11 fails=3 cancelled=2 bandwidth_bps=0 peak_bps=0 active_slots=1 max_concurrent=3 | active=[] queued=[] fails=[{"id": "2f704646-7762-403b-9f28-78629fb645d2", "filename": "civitai--580857-2674760", "error_msg": "Civitai API key required or invalid \u2014 add your key under Settings \u2192 API Keys \u2192 Civitai, then retry the download."}, {"id": "18add2b4-b22a-4d15-a752-033bb1ebae0b", "filename": "black-forest-labs--FLUX.1-schnell", "error_msg": "Hugging Face download failed for black-forest-labs/FLUX.1-schnell: 401 Client Error. (Request ID: Root=1-6a507376-5dc496f13b17fc5a1ce87a95;0b69f50d-7a0a-4018-ae18-242d4203d089)\n\nCannot access gated repo for url https://huggingface.co/black-forest-labs/FLUX.1-schnell/resolve/main/model_index.json.\nAccess to model black-forest-labs/FLUX.1-schnell is restricted. You must have access to it and be authenticated to access it. Please log in."}, {"id": "f98e0567-12e3-4c0c-b217-0543eb293b41", "filename": "Tongyi-MAI--Z-Image-Turbo", "error_msg": "huggingface_hub is not importable \u2014 the AI packages are not installed. Run the in-app installer (POST /image-gen/install) before downloading model weights."}]
+
+[stdout] INFO - [sync_engine] Models synced: 53 cached (0 removed)
+
+[stdout] INFO - [sync_engine] Agents synced: 494 agents in unified catalog
+
+[stdout] INFO - [sync_engine] Tools synced: 108 cached
+
+[stdout] INFO - [app/main.py] Phase 3: Scraper engine started ✓
+
+[stdout] [phase:scraper] Scraper engine ready
+
+[stdout] INFO - [app/main.py] Phase 4: HTTP proxy enabled=True
+
+[stdout] [phase:proxy] Starting local HTTP proxy...
+
+[stdout] INFO - [app/main.py] Phase 4: Starting proxy on 127.0.0.1:22180...
+
+[stdout] INFO - [app/main.py] Phase 4: HTTP proxy started ✓ on port 22180
+
+[stdout] [phase:proxy] HTTP proxy ready on port 22180
+
+[stdout] INFO - [app/main.py] Phase 5: Tunnel enabled=True
+
+[stdout] [phase:tunnel] Starting Cloudflare tunnel...
+
+=== END ===```
 
 ---
 

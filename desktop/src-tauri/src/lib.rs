@@ -17,6 +17,8 @@ use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
+mod lifecycle_log;
+
 mod transcription;
 use transcription::commands::*;
 use transcription::wake_word::WakeWordState; // needed for WakeWordState::new() in .manage()
@@ -80,13 +82,25 @@ fn kill_orphaned_sidecars() {
         // line, so a substring of the executable path is enough.
         const ENGINE_PATTERN: &str = "Matrx Engine|matrx-engine|aimatrx-engine";
 
-        let _ = std::process::Command::new("pkill")
+        // pkill exit code 0 = at least one process matched (i.e. we actually
+        // killed something). Log the sweep either way, but flag real kills —
+        // this sweep SIGTERMs any running engine, so an unexplained engine
+        // death should be attributable to this line in lifecycle.log.
+        let term = std::process::Command::new("pkill")
             .args(["-TERM", "-f", ENGINE_PATTERN])
             .output();
+        let matched = term.map(|o| o.status.success()).unwrap_or(false);
+        lifecycle_log::log(&format!(
+            "[orphan-sweep] pkill -TERM engine pattern → {}",
+            if matched { "MATCHED live engine process(es) — they were killed" } else { "no match (clean)" }
+        ));
         std::thread::sleep(std::time::Duration::from_millis(500));
-        let _ = std::process::Command::new("pkill")
+        let kill = std::process::Command::new("pkill")
             .args(["-KILL", "-f", ENGINE_PATTERN])
             .output();
+        if kill.map(|o| o.status.success()).unwrap_or(false) {
+            lifecycle_log::log("[orphan-sweep] pkill -KILL still matched — engine survived SIGTERM, force-killed");
+        }
         // NOTE: cloudflared is intentionally NOT killed here. It is the
         // engine's child, and the engine's preflight reclaims it on startup.
         // Killing it from Rust during a normal shutdown races against the
@@ -106,16 +120,24 @@ fn kill_orphaned_sidecars() {
         // (cloudflared, etc.) without us having to name them explicitly —
         // that is the engine signaling its children via process-tree
         // termination, not Rust reaching across.
+        let mut any_killed = false;
         for image in [
             "matrx-engine-x86_64-pc-windows-msvc.exe",
             "matrx-engine.exe",
             "aimatrx-engine-x86_64-pc-windows-msvc.exe",
             "aimatrx-engine.exe",
         ] {
-            let _ = std::process::Command::new("taskkill")
+            let out = std::process::Command::new("taskkill")
                 .args(["/F", "/T", "/IM", image])
                 .output();
+            if out.map(|o| o.status.success()).unwrap_or(false) {
+                any_killed = true;
+            }
         }
+        lifecycle_log::log(&format!(
+            "[orphan-sweep] taskkill engine images → {}",
+            if any_killed { "MATCHED live engine process(es) — they were killed" } else { "no match (clean)" }
+        ));
         // NOTE: cloudflared.exe is intentionally NOT killed here. /T above
         // already cascades to it as a child of the engine process tree. A
         // standalone taskkill /IM cloudflared.exe would also kill cloudflared
@@ -355,6 +377,7 @@ async fn start_sidecar(
         .spawn()
         .map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
 
+    lifecycle_log::log(&format!("[start_sidecar] engine spawned, pid {}", child.pid()));
     *state.child.lock().unwrap() = Some(child);
 
     // Forward sidecar output to Tauri logs AND to the frontend via events.
@@ -394,6 +417,15 @@ async fn start_sidecar(
                 }
                 CommandEvent::Terminated(status) => {
                     let msg = format!("[terminated] Process exited: {:?}", status);
+                    // Durable record of EVERY engine exit Rust observes — with
+                    // the exit code/signal. An engine death with no matching
+                    // [graceful-shutdown]/[stop_sidecar]/[orphan-sweep] line
+                    // above it in lifecycle.log means an outside actor
+                    // (OS kill, crash, external signal) took it down.
+                    lifecycle_log::log(&format!(
+                        "[engine-exit] engine process terminated: code={:?} signal={:?}",
+                        status.code, status.signal
+                    ));
                     eprintln!("[engine] {}", msg);
                     {
                         let mut lines = log_lines.lock().unwrap();
@@ -419,6 +451,10 @@ async fn start_sidecar(
 #[tauri::command]
 async fn stop_sidecar(state: tauri::State<'_, SidecarState>) -> Result<(), String> {
     let child = state.child.lock().unwrap().take();
+    lifecycle_log::log(&format!(
+        "[stop_sidecar] frontend invoked stop_sidecar command (held child pid: {})",
+        child.as_ref().map(|c| c.pid().to_string()).unwrap_or_else(|| "none".into())
+    ));
     // sigterm_then_kill std::thread::sleep-waits up to 20s — run it on a
     // blocking thread so it doesn't pin a tokio worker and starve other
     // commands (status polls, health checks) for the whole shutdown wait.
@@ -452,7 +488,13 @@ fn sigterm_then_kill(child: tauri_plugin_shell::process::CommandChild) {
     // Send SIGTERM — gives Python's signal handler time to run lifespan teardown.
     // SAFETY: kill(2) with SIGTERM is safe; the PID comes from our own child.
     let term_sent = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } == 0;
+    lifecycle_log::log(&format!(
+        "[sigterm_then_kill] SIGTERM → engine pid {} ({})",
+        pid,
+        if term_sent { "delivered; waiting up to 20s for clean exit" } else { "delivery FAILED — process already gone?" }
+    ));
 
+    let mut exited_cleanly = false;
     if term_sent {
         // Wait up to 20 seconds for clean exit. The Python lifespan teardown
         // budget is ~25s total (wake-word 3s + scheduler 3s + proxy 4s + tunnel 5s
@@ -463,10 +505,24 @@ fn sigterm_then_kill(child: tauri_plugin_shell::process::CommandChild) {
             std::thread::sleep(Duration::from_millis(100));
             // kill(pid, 0) = existence check; ESRCH means the process exited.
             let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
-            if !alive || Instant::now() >= deadline {
+            if !alive {
+                exited_cleanly = true;
+                break;
+            }
+            if Instant::now() >= deadline {
                 break;
             }
         }
+    }
+
+    if exited_cleanly {
+        lifecycle_log::log(&format!("[sigterm_then_kill] engine pid {} exited cleanly after SIGTERM", pid));
+    } else {
+        lifecycle_log::log(&format!(
+            "[sigterm_then_kill] engine pid {} did NOT exit within 20s — escalating to SIGKILL \
+             (its lifespan teardown hung; check system.log for the last [shutdown]/[launcher] lines)",
+            pid
+        ));
     }
 
     // Final guarantee: SIGKILL if it did not exit in time (or SIGTERM failed).
@@ -484,6 +540,7 @@ fn sigterm_then_kill(child: tauri_plugin_shell::process::CommandChild) {
 #[cfg(not(unix))]
 fn sigterm_then_kill(child: tauri_plugin_shell::process::CommandChild) {
     let pid = child.pid();
+    lifecycle_log::log(&format!("[sigterm_then_kill] taskkill /F /T → engine pid {}", pid));
 
     // Kill the entire process tree with /F (force) /T (tree) — this terminates
     // Playwright chromium children, uvicorn workers, and any other subprocesses.
@@ -543,6 +600,10 @@ fn sigterm_then_kill(child: tauri_plugin_shell::process::CommandChild) {
 /// runs to completion, every pkill below is a no-op (nothing left to match).
 /// It is the parachute, not the primary chute.
 fn spawn_detached_shutdown_safety_net() {
+    lifecycle_log::log(
+        "[safety-net] detached shutdown safety net spawned — pkill -TERM at T+1s, \
+         pkill -KILL at T+26s for any engine/cloudflared/llama-server strays",
+    );
     #[cfg(unix)]
     {
         let script = "\
@@ -636,6 +697,7 @@ fn spawn_detached_shutdown_safety_net() {
 /// crashes. It is the load-bearing guarantee that quit always shuts down
 /// the sidecars; the per-step kills below are belt-and-suspenders.
 fn graceful_shutdown_sync(
+    reason: &str,
     sidecar_state: &SidecarState,
     transcription_state: &TranscriptionState,
     llm_process: &llm::commands::LlmProcessHandle,
@@ -646,8 +708,17 @@ fn graceful_shutdown_sync(
     // Idempotent guard: if already called (e.g. tray quit fires ExitRequested too),
     // skip the second run to avoid double-kill and spurious lock contention.
     if SHUTDOWN_DONE.swap(true, Ordering::SeqCst) {
+        lifecycle_log::log(&format!(
+            "[graceful-shutdown] second trigger ignored (already shutting down): {}",
+            reason
+        ));
         return;
     }
+    // `reason` says WHO initiated the shutdown — window close, Cmd+Q, tray
+    // quit, update restart. Without it, an engine death is unattributable
+    // (the 2026-07-11/12 investigation found ~12 engine kills with no record
+    // of which path sent them).
+    lifecycle_log::log(&format!("[graceful-shutdown] initiated: {}", reason));
 
     // STEP 0 (LOAD-BEARING): Spawn a detached subprocess that will pkill all
     // managed sidecar processes on a 5-second SIGTERM-then-SIGKILL ladder.
@@ -927,6 +998,7 @@ async fn restart_for_update(
     recording_state: tauri::State<'_, RecordingState>,
 ) -> Result<(), String> {
     graceful_shutdown_sync(
+        "restart_for_update command (auto-updater installed an update; app will relaunch)",
         &sidecar_state,
         &transcription_state,
         &llm_process,
@@ -1323,6 +1395,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                         let ww = app_handle.try_state::<WakeWordAppState>();
                         let rec = app_handle.try_state::<RecordingState>();
                         graceful_shutdown_sync(
+                            "tray menu 'Quit' selected",
                             &sidecar,
                             &transcription,
                             &llm_proc,
@@ -1820,6 +1893,7 @@ pub fn run() {
                             let ww = app_handle.try_state::<WakeWordAppState>();
                             let rec = app_handle.try_state::<RecordingState>();
                             graceful_shutdown_sync(
+                                "main window closed with close-to-tray disabled (user quit via window X)",
                                 &sidecar,
                                 &transcription,
                                 &llm_proc,
@@ -1901,6 +1975,7 @@ pub fn run() {
                             let ww = app_handle.try_state::<WakeWordAppState>();
                             let rec = app_handle.try_state::<RecordingState>();
                             graceful_shutdown_sync(
+                                "RunEvent::ExitRequested — native OS quit (Cmd+Q / Activity Monitor / logout / system shutdown)",
                                 &sidecar,
                                 &transcription,
                                 &llm_proc,

@@ -467,11 +467,51 @@ async def update_folder(
 @router.delete("/folders/{folder_id}")
 async def delete_folder(folder_id: str, request: Request) -> dict[str, str]:
     _configure_sync(request)
+    repo = _get_notes_repo()
 
     for f in file_manager.list_folders():
         fid = _folder_id_for_name(f)
         if fid == folder_id:
+            # Tombstone every contained note BEFORE removing the directory
+            # (MXL-D-002). Without SQLite tombstones, an offline folder delete
+            # left full_sync seeing "local file gone, no tombstone" and it
+            # RESURRECTED every contained note from the cloud. With the
+            # tombstones, the existing full_sync branch propagates the deletes
+            # when connectivity returns; the per-note cloud soft-deletes below
+            # cover the online case immediately.
+            contained = [
+                nf for nf in file_manager.scan_all()
+                if Path(nf["file_path"]).parts[:1] == (f,)
+            ]
+            for nf in contained:
+                row = await repo.get_by_file_path(nf["file_path"])
+                if row is None:
+                    row = await repo.get(_note_id_for_path(nf["file_path"]))
+                del_id = row["id"] if row else _note_id_for_path(nf["file_path"])
+                try:
+                    await repo.soft_delete(del_id)
+                except Exception:
+                    logger.warning(
+                        "Could not tombstone note %s during folder delete",
+                        nf["file_path"], exc_info=True,
+                    )
+                if sync_engine.is_configured:
+                    _fire_and_forget(supabase_docs.soft_delete_note(del_id))
+
             file_manager.delete_folder(f)
+
+            # Drop the last-synced hashes for the removed files so sync state
+            # doesn't keep tracking paths that no longer exist.
+            try:
+                state = file_manager.load_sync_state()
+                hashes = state.get("note_hashes", {})
+                removed = [nf["file_path"] for nf in contained]
+                if any(fp in hashes for fp in removed):
+                    for fp in removed:
+                        hashes.pop(fp, None)
+                    file_manager.save_sync_state(state)
+            except Exception:
+                logger.warning("Could not prune sync-state hashes on folder delete", exc_info=True)
             break
 
     if sync_engine.is_configured:

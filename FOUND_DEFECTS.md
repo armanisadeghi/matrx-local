@@ -189,6 +189,120 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   info, download, copy prompt) — still strictly better than today.
 - **Owner hint:** small; mirror what the image branch already does.
 
+## Engine lifecycle / loud-failure doctrine (root-caused 2026-07-13 from Arman's "image system freezes" report)
+
+> Investigation summary: the packaged engine NEVER wedges while alive (every
+> logged request in every steady session completes in ms, image-gen and
+> media-library included). Arman's "everything shows a forever loader until I
+> kill the app" state is a LIVE UI over a DEAD/half-dead engine. Log signature
+> of every occurrence (system.log, ~12 times Jul 11–12): `WebSocket closed
+> normally (1012)` (= uvicorn began shutdown) → ≤1 more heartbeat → total
+> silence, NO lifespan-teardown lines, NO `/admin/shutdown` POST, no watchdog
+> warning — engine force-exits silently ~10–25s later. MXL-D-036..041 are the
+> pieces that make this both possible and invisible.
+
+### MXL-D-036 — Engine shutdown is silent: signal handler logs nothing, uvicorn shutdown messages go to stdout only
+- **Area:** run.py / logging
+- **Symptom:** a SIGTERM'd engine leaves ZERO trace in system.log of who/why —
+  the only clue is uvicorn's 1012 WS close logged incidentally by app code.
+- **Evidence:** `run.py` `_handle_exit()` (≈line 526) sets `should_exit` +
+  `_schedule_force_exit(25)` without a single log line; `_build_log_config()`
+  (≈line 302) routes `uvicorn.error` ("Shutting down", "Waiting for
+  connections to close") to a stdout StreamHandler only — invisible in the
+  packaged app's system.log. The parent-watchdog warning path DOES log, and
+  those warnings are absent from every freeze → trigger was a direct signal.
+- **Status:** open. Analyzed 2026-07-13 — verified in code + logs.
+- **Owner hint:** one-liner class fix: log `[shutdown] signal %d received
+  (pid …)` in `_handle_exit`, and add the file handler to uvicorn.error.
+
+### MXL-D-037 — Graceful shutdown wedges behind uvicorn's infinite drain (open SSE/WS), then force-exit kills teardown silently
+- **Area:** run.py / uvicorn config
+- **Symptom:** on shutdown with an open `/downloads/stream` SSE or WS
+  connection, uvicorn waits FOREVER for connections to drain
+  (`timeout_graceful_shutdown` not set), lifespan teardown never runs, and
+  `_schedule_force_exit(25)` `os._exit()`s with no teardown logs and no
+  "Shutdown complete". Every hard freeze on Jul 11–12 shows this signature;
+  clean quits (no SSE open) show the full teardown sequence.
+- **Evidence:** `run.py:337` `uvicorn.Config(...)` has no
+  `timeout_graceful_shutdown`; system.log sessions ending 21:15:57 /
+  21:57:53 / 16:38:29 / 14:50:56 (Jul 12) all lack teardown lines that the
+  14:14 / 14:52 / 19:43 clean shutdowns have.
+- **Status:** open. Analyzed 2026-07-13 — verified in code + logs.
+- **Owner hint:** set `timeout_graceful_shutdown=5` and log loudly when the
+  force-exit timer fires (it currently fires invisibly).
+
+### MXL-D-038 — UI shows infinite loaders over a dead engine (models, media library, everything) — the "app lies" bug
+- **Area:** desktop frontend
+- **Symptom:** when the engine process is gone (port refused), Models /
+  Files / media pages spin forever with no error and no recovery CTA. The
+  health checker in `use-engine.ts` (≈line 407) already flips status to
+  "disconnected" within ≤10s — but data hooks/pages don't consume it, and
+  fetch rejections land in perpetual `loading` states. This is what Arman
+  experiences as "the whole image system gets stuck"; kill+relaunch "fixes"
+  it because it respawns the engine.
+- **Evidence:** engine-side logs prove the engine was dead during every
+  freeze window while the UI stayed up (no request arrivals, port down);
+  access.log shows zero slow/hung image-gen or media-library requests in
+  live sessions. Frontend: `use-engine.ts:404-429` knows `disconnected`;
+  media/model hooks don't render it.
+- **Status:** open. Analyzed 2026-07-13 — verified from logs + use-engine.ts;
+  per-hook loading-state audit still needed.
+- **Owner hint:** global "engine disconnected" gate/banner + every data hook
+  must resolve `loading → error` on fetch rejection.
+
+### MXL-D-039 — Something SIGTERMs the engine mid-session without any Rust graceful path running (trigger still unidentified)
+- **Area:** desktop Rust / lifecycle
+- **Symptom:** ~12× on Jul 11–12 the engine received a shutdown signal while
+  the user was actively working (e.g. Jul 12 21:15:55, seconds after browsing
+  the media library) — with NO `/admin/shutdown` POST (so
+  `graceful_shutdown_sync` didn't run), no watchdog "parent gone" warning,
+  no new engine spawned after. Candidate senders (all direct-SIGTERM paths):
+  `stop_sidecar` command (`sigterm_then_kill` with no admin POST),
+  `kill_orphaned_sidecars` `pkill -f matrx-engine` from a second app-instance
+  launch, the detached shutdown safety net, or the app process dying without
+  a crash report. One real app crash was captured the same evening
+  (`aimatrx-desktop-2026-07-12-193925.ips`, GGML atexit SIGABRT during
+  AEQuit — the known race, still occurring on 1.3.105).
+- **Evidence:** system.log freeze signatures above; DiagnosticReports;
+  `lib.rs:74` (pkill), `lib.rs:413-427` (stop_sidecar → sigterm_then_kill),
+  `lib.rs:540` (safety net).
+- **Status:** open — needs MXL-D-036's loud logging (log signal + sender pid
+  via `SA_SIGINFO`-equivalent: `signal.sigwaitinfo`/`si_pid` or at minimum
+  log which Rust path killed) to identify on next occurrence.
+- **Owner hint:** every Rust kill path must log WHY to the unified log
+  before sending the signal (mirror the `[llm-autostart]`/`[llm-cmd]`
+  pattern that already exists for llama-server).
+
+### MXL-D-040 — matrx-ai init FAILS on every packaged boot (missing `replicate` dist-info / "Unsupported protobuf version: 7.34.1") and adds ~17s to startup
+- **Area:** packaging / specs
+- **Symptom:** every engine boot Jul 12 evening logged "Phase 1: matrx-ai
+  initialization FAILED — AI endpoints will not work";
+  `importlib.metadata.PackageNotFoundError: No package metadata was found
+  for replicate` (via matrx_ai → providers → replicate `__about__.py`), and
+  diagnostic snapshots show "Unsupported protobuf version: 7.34.1". The
+  failing import chain also burns ~17s of boot before failing, extending the
+  window where the UI spins against a not-yet-serving engine.
+- **Evidence:** `~/.matrx/diagnostics/2026-07-12T21-53-10_ai_engine.json`
+  and 3 more same-evening snapshots; system.log 21:52:52→21:53:10.
+- **Status:** open. Analyzed 2026-07-13 — from live packaged-app logs;
+  needs `copy_metadata('replicate')` (+ protobuf pin/metadata) in all 4
+  specs + build-sidecar fallback per Hard Rule 6.
+- **Owner hint:** packaging; boot smoke should assert ai_engine reaches
+  `ready`, not just that the process starts.
+
+### MXL-D-041 — access.log grows unbounded (560 MB) and tripped a macOS disk-writes resource exception
+- **Area:** logging
+- **Symptom:** `~/Library/Logs/MatrxLocal/access.log` is 560 MB (system.log
+  rotates at 10 MB; access.log never rotates). macOS filed a "disk writes"
+  resource exception against Matrx Engine (8.59 GB dirtied / 3h). Poller
+  endpoints (`/tunnel/status`, `/proxy/status`, `/cloud/debug`,
+  `/tools/list` — 40k each per 200k lines) dominate.
+- **Evidence:** `ls -la ~/Library/Logs/MatrxLocal/`; `/Library/Logs/
+  DiagnosticReports/Matrx Engine_2026-07-12-222458_….diag`.
+- **Status:** open. Analyzed 2026-07-13 — verified on disk.
+- **Owner hint:** RotatingFileHandler for access.log + skip/aggregate the
+  4 poller paths.
+
 ## Cross-repo
 
 ### MXL-D-027 — Voice E2E unconfirmed on physical hardware

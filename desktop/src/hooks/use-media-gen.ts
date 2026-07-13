@@ -818,7 +818,14 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       // API error. Normalize to the sentinel so the reconnect retry effect
       // arms — the raw "Failed to fetch" string never matched it, so a
       // mid-session engine death left the page stuck on the error card with
-      // no auto-recovery (part of MXL-D-038).
+      // no auto-recovery (part of MXL-D-038). The raw exception is ALWAYS
+      // logged first — the sentinel rebrand must never hide a real bug
+      // (a TypeError from response-parsing code would otherwise vanish).
+      emitClientLog(
+        "error",
+        `[media-gen] image status refresh failed: ${String(e)}`,
+        "engine",
+      );
       setImageStatusError(
         e instanceof TypeError
           ? ENGINE_NOT_CONNECTED
@@ -1958,6 +1965,12 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     } catch (e) {
       // Same sentinel normalization as refreshImage — a dead engine must arm
       // the reconnect retry, not park on a "Failed to fetch" card forever.
+      // Raw exception logged first so the rebrand never hides a real bug.
+      emitClientLog(
+        "error",
+        `[media-gen] video status refresh failed: ${String(e)}`,
+        "engine",
+      );
       setVideoStatusError(
         e instanceof TypeError
           ? ENGINE_NOT_CONNECTED
@@ -2395,6 +2408,20 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     void refreshVideo();
     void refreshLoras();
   }, [refreshImage, refreshVideo, refreshLoras]);
+
+  // Reload whenever the engine (re)connects — recovery keyed on CONNECTIVITY,
+  // not on an exact error string. Without this, a transient HTTP error during
+  // engine warm-up (or any non-sentinel failure) permanently disarmed the
+  // string-gated retry below and the page parked on a stale error card.
+  useEffect(
+    () =>
+      engine.on("connected", () => {
+        void refreshImage();
+        void refreshVideo();
+        void refreshLoras();
+      }),
+    [refreshImage, refreshVideo, refreshLoras],
+  );
 
   // While the engine URL is not yet available, retry — engine.engineUrl is set
   // outside React state and isn't reactive.  Gated on the specific error string

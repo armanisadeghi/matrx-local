@@ -3973,7 +3973,7 @@ export class MediaGenHttpError extends Error {
 }
 
 function mediaGenTimeoutError(
-  surface: "image-gen" | "video-gen",
+  surface: "image-gen" | "video-gen" | "media-library",
   method: string,
   url: string,
   timeoutMs: number,
@@ -5125,11 +5125,21 @@ async function mediaLibraryFetch<T>(
   // forever with no error. Dead engines already reject fast (TypeError);
   // this cap covers the wedged-process case. Callers may pass their own
   // signal to override.
-  const resp = await fetch(url, {
-    signal: AbortSignal.timeout(MEDIA_GEN_TIMEOUT_MS),
-    ...options,
-    headers: mergedHeaders,
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      signal: AbortSignal.timeout(MEDIA_GEN_TIMEOUT_MS),
+      ...options,
+      headers: mergedHeaders,
+    });
+  } catch (e) {
+    // Translate the abort like imageGenFetch does — a raw DOMException
+    // renders as WebKit's "The operation timed out." with no context.
+    if (isAbortTimeout(e)) {
+      throw mediaGenTimeoutError("media-library", method, url, MEDIA_GEN_TIMEOUT_MS);
+    }
+    throw e;
+  }
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     let detail = body;

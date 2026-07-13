@@ -309,16 +309,29 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
   // so `loading` (initialized true) never cleared unless a job-completion
   // effect happened to fire — with a dead engine, none did, and the Library
   // tab showed "Loading media library…" forever. The shipped
-  // forever-spinner bug of 2026-07-11/12 (MXL-D-038).
+  // forever-spinner bug of 2026-07-11/12 (MXL-D-038). At app boot this
+  // provider mounts before engine discovery, so the mount call usually just
+  // records ENGINE_NOT_CONNECTED — the "connected" subscription below is
+  // what performs the real first load.
   useEffect(() => {
     void fetchPage(0, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Engine-reconnect retry — narrowly gated on the ENGINE_NOT_CONNECTED
-  // sentinel (fetchPage normalizes network-level failures to it), same
-  // pattern as use-media-vault. Clears itself the moment a fetch succeeds
-  // (error → null) or fails for a non-connection reason.
+  // THE recovery path: reload whenever the engine (re)connects. Keying
+  // recovery on CONNECTIVITY instead of an exact error string is what makes
+  // it survive every failure flavor — a transient 500 during engine warm-up,
+  // a timeout from a hung engine, or the user dismissing the error note
+  // would each permanently disarm a string-gated retry loop.
+  useEffect(
+    () => engine.on("connected", () => void fetchPage(0, true)),
+    [fetchPage],
+  );
+
+  // Belt-and-suspenders while the engine is genuinely unreachable: retry on
+  // the ENGINE_NOT_CONNECTED sentinel (fetchPage normalizes network-level
+  // failures to it), same pattern as use-media-vault. Covers the case where
+  // the engine comes back without a fresh WebSocket "connected" event.
   useEffect(() => {
     if (error !== ENGINE_NOT_CONNECTED) return;
     const id = setInterval(() => {

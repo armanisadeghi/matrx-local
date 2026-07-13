@@ -50,7 +50,7 @@ export function EngineDownBanner({
   return (
     <div
       role="alert"
-      className="flex items-center gap-3 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm"
+      className="flex shrink-0 items-center gap-3 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm"
     >
       <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
       <div className="min-w-0 flex-1">

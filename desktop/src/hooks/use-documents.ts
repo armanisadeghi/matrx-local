@@ -19,7 +19,6 @@ import type {
   CreateNoteData,
   SyncStatus,
   SyncResult,
-  DocShare,
   ConflictDetail,
 } from "@/lib/api";
 import type { EngineStatus } from "@/hooks/use-engine";
@@ -31,7 +30,6 @@ export interface DocumentsState {
   notes: DocNote[];
   activeNote: DocNote | null;
   versions: DocVersion[];
-  shares: DocShare[];
   syncStatus: SyncStatus | null;
   conflicts: ConflictDetail[];
   activeFolderId: string | null;
@@ -48,7 +46,6 @@ const INITIAL_STATE: DocumentsState = {
   notes: [],
   activeNote: null,
   versions: [],
-  shares: [],
   syncStatus: null,
   conflicts: [],
   activeFolderId: null,
@@ -65,6 +62,13 @@ export function useDocuments(
   engineStatus?: EngineStatus,
 ) {
   const [state, setState] = useState<DocumentsState>(INITIAL_STATE);
+  // Callbacks read transient state (activeNote, activeFolderId) through this
+  // ref instead of closing over `state`. Closing over state put it in every
+  // useCallback dep array, so EVERY keystroke (which updates activeNote)
+  // recreated every action — cascading re-renders through NoteList/FolderTree
+  // and defeating memoization (a real contributor to the paste-freeze bug).
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const mountedRef = useRef(true);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track pending flush so we can await it on unmount and not discard unsaved edits
@@ -177,7 +181,7 @@ export function useDocuments(
         update({ saving: true, error: null });
         const note = await engine.createNote(userId ?? "local", data);
         await loadTree();
-        await loadNotes(state.activeFolderId);
+        await loadNotes(stateRef.current.activeFolderId);
         update({ saving: false, activeNote: note });
         return note;
       } catch (err) {
@@ -188,7 +192,7 @@ export function useDocuments(
         return null;
       }
     },
-    [engineReady, userId, state.activeFolderId, update, loadTree, loadNotes],
+    [engineReady, userId, update, loadTree, loadNotes],
   );
 
   // ── Update note (debounced for content, immediate for metadata) ──────────
@@ -203,8 +207,8 @@ export function useDocuments(
 
       if (data.content !== undefined) {
         update({
-          activeNote: state.activeNote
-            ? { ...state.activeNote, content: data.content }
+          activeNote: stateRef.current.activeNote
+            ? { ...stateRef.current.activeNote, content: data.content }
             : null,
         });
       }
@@ -233,7 +237,7 @@ export function useDocuments(
           update({ saving: false });
           if (data.label || data.folder_id || data.folder_name) {
             await loadTree();
-            await loadNotes(state.activeFolderId);
+            await loadNotes(stateRef.current.activeFolderId);
           }
         } catch (err) {
           update({
@@ -268,15 +272,7 @@ export function useDocuments(
         }
       }, 1000);
     },
-    [
-      engineReady,
-      userId,
-      state.activeNote,
-      state.activeFolderId,
-      update,
-      loadTree,
-      loadNotes,
-    ],
+    [engineReady, userId, update, loadTree, loadNotes],
   );
 
   // ── Delete note ──────────────────────────────────────────────────────────
@@ -288,14 +284,14 @@ export function useDocuments(
         await engine.deleteNote(noteId, userId ?? "local");
         update({ activeNote: null, versions: [] });
         await loadTree();
-        await loadNotes(state.activeFolderId);
+        await loadNotes(stateRef.current.activeFolderId);
       } catch (err) {
         update({
           error: err instanceof Error ? err.message : "Failed to delete",
         });
       }
     },
-    [engineReady, userId, state.activeFolderId, update, loadTree, loadNotes],
+    [engineReady, userId, update, loadTree, loadNotes],
   );
 
   // ── Create folder ────────────────────────────────────────────────────────
@@ -347,26 +343,18 @@ export function useDocuments(
           ...(folderId != null ? { folder_id: folderId } : {}),
           folder_name: folderName,
         });
-        if (state.activeNote?.id === noteId) {
+        if (stateRef.current.activeNote?.id === noteId) {
           update({ activeNote: updatedNote });
         }
         await loadTree();
-        await loadNotes(state.activeFolderId);
+        await loadNotes(stateRef.current.activeFolderId);
       } catch (err) {
         update({
           error: err instanceof Error ? err.message : "Failed to move note",
         });
       }
     },
-    [
-      engineReady,
-      userId,
-      state.activeNote,
-      state.activeFolderId,
-      update,
-      loadTree,
-      loadNotes,
-    ],
+    [engineReady, userId, update, loadTree, loadNotes],
   );
 
   // ── Rename note ──────────────────────────────────────────────────────────
@@ -378,10 +366,10 @@ export function useDocuments(
         const updatedNote = await engine.updateNote(noteId, userId ?? "local", {
           label,
         });
-        if (state.activeNote?.id === noteId) {
+        if (stateRef.current.activeNote?.id === noteId) {
           update({ activeNote: updatedNote });
         }
-        await loadNotes(state.activeFolderId);
+        await loadNotes(stateRef.current.activeFolderId);
         await loadTree();
       } catch (err) {
         update({
@@ -389,15 +377,7 @@ export function useDocuments(
         });
       }
     },
-    [
-      engineReady,
-      userId,
-      state.activeNote,
-      state.activeFolderId,
-      update,
-      loadNotes,
-      loadTree,
-    ],
+    [engineReady, userId, update, loadNotes, loadTree],
   );
 
   // ── Delete folder ────────────────────────────────────────────────────────
@@ -407,7 +387,7 @@ export function useDocuments(
       if (!engineReady) return;
       try {
         await engine.deleteFolder(folderId, userId ?? "local");
-        if (state.activeFolderId === folderId) {
+        if (stateRef.current.activeFolderId === folderId) {
           update({ activeFolderId: null, activeNote: null });
         }
         await loadTree();
@@ -418,7 +398,7 @@ export function useDocuments(
         });
       }
     },
-    [engineReady, userId, state.activeFolderId, update, loadTree, loadNotes],
+    [engineReady, userId, update, loadTree, loadNotes],
   );
 
   // ── Revert note — requires cloud sync (needs userId) ────────────────────
@@ -453,7 +433,7 @@ export function useDocuments(
         update({ syncing: true, error: null });
         const result = await engine.triggerSync(userId, mode);
         await loadTree();
-        await loadNotes(state.activeFolderId);
+        await loadNotes(stateRef.current.activeFolderId);
         const syncStatus = await engine.getSyncStatus(userId);
         update({ syncing: false, syncStatus, lastSyncResult: result });
         return result;
@@ -465,7 +445,7 @@ export function useDocuments(
         return null;
       }
     },
-    [engineReady, userId, state.activeFolderId, update, loadTree, loadNotes],
+    [engineReady, userId, update, loadTree, loadNotes],
   );
 
   const loadSyncStatus = useCallback(async () => {
@@ -511,7 +491,7 @@ export function useDocuments(
         await loadConflicts();
         await loadSyncStatus();
         await loadTree();
-        await loadNotes(state.activeFolderId);
+        await loadNotes(stateRef.current.activeFolderId);
       } catch (err) {
         update({
           error:
@@ -522,7 +502,6 @@ export function useDocuments(
     [
       engineReady,
       userId,
-      state.activeFolderId,
       update,
       loadConflicts,
       loadSyncStatus,
@@ -536,7 +515,7 @@ export function useDocuments(
       if (!engineReady) return;
       try {
         await engine.setNoteExcluded(noteId, userId ?? "local", excluded);
-        await loadNotes(state.activeFolderId);
+        await loadNotes(stateRef.current.activeFolderId);
       } catch (err) {
         update({
           error:
@@ -546,18 +525,8 @@ export function useDocuments(
         });
       }
     },
-    [engineReady, userId, state.activeFolderId, update, loadNotes],
+    [engineReady, userId, update, loadNotes],
   );
-
-  const loadShares = useCallback(async () => {
-    if (!engineReady || !userId) return;
-    try {
-      const shares = await engine.listShares(userId);
-      update({ shares });
-    } catch {
-      // Non-critical
-    }
-  }, [engineReady, userId, update]);
 
   // ── Initial load — engine connection is all that's needed ────────────────
 
@@ -634,6 +603,5 @@ export function useDocuments(
     loadConflicts,
     resolveConflict,
     setNoteExcluded,
-    loadShares,
   };
 }

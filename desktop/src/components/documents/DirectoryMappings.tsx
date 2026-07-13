@@ -61,14 +61,20 @@ export function DirectoryMappings({
     }
   };
 
-  const handleDelete = async (mappingId: string, folderId: string, localPath: string) => {
+  const handleDelete = async (folderId: string, localPath: string) => {
     try {
-      await engine.deleteMapping(mappingId, userId, folderId, localPath);
+      // Mappings are local-only; the path id segment is vestigial.
+      await engine.deleteMapping("local", userId, folderId, localPath);
       await loadMappings();
     } catch (err) {
       console.error("Failed to delete mapping:", err);
     }
   };
+
+  // local_mappings is Record<folder_id, local_path[]> — flatten for display.
+  const activeMappings = Object.entries(mappings?.local_mappings ?? {}).flatMap(
+    ([folderId, paths]) => paths.map((p) => ({ folder_id: folderId, local_path: p })),
+  );
 
   // Flatten folder tree for the select dropdown
   const flatFolders: { id: string; name: string; path: string }[] = [];
@@ -110,46 +116,45 @@ export function DirectoryMappings({
           </div>
         ) : (
           <>
-            {/* Existing mappings */}
-            {mappings?.cloud_mappings &&
-              mappings.cloud_mappings.length > 0 && (
-                <div className="mb-4">
-                  <h4 className="text-xs font-medium text-muted-foreground mb-2">
-                    Active Mappings
-                  </h4>
-                  <div className="flex flex-col gap-1">
-                    {mappings.cloud_mappings.map((m) => {
-                      const folder = flatFolders.find(
-                        (f) => f.id === m.folder_id,
-                      );
-                      return (
-                        <div
-                          key={m.id}
-                          className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+            {/* Existing mappings — from local_mappings. The old UI listed the
+                (graveyarded) cloud_mappings, which was always empty, so saved
+                mappings were invisible and undeletable. */}
+            {activeMappings.length > 0 && (
+              <div className="mb-4">
+                <h4 className="text-xs font-medium text-muted-foreground mb-2">
+                  Active Mappings
+                </h4>
+                <div className="flex flex-col gap-1">
+                  {activeMappings.map((m) => {
+                    const folder = flatFolders.find(
+                      (f) => f.id === m.folder_id,
+                    );
+                    return (
+                      <div
+                        key={`${m.folder_id}:${m.local_path}`}
+                        className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+                      >
+                        <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
+                        <span className="font-medium">
+                          {folder?.name ?? m.folder_id}
+                        </span>
+                        <span className="text-muted-foreground mx-1">→</span>
+                        <HardDrive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="flex-1 truncate text-xs font-mono text-muted-foreground">
+                          {m.local_path}
+                        </span>
+                        <button
+                          onClick={() => handleDelete(m.folder_id, m.local_path)}
+                          className="text-muted-foreground hover:text-destructive"
                         >
-                          <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
-                          <span className="font-medium">
-                            {folder?.name ?? m.folder_id}
-                          </span>
-                          <span className="text-muted-foreground mx-1">→</span>
-                          <HardDrive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                          <span className="flex-1 truncate text-xs font-mono text-muted-foreground">
-                            {m.local_path}
-                          </span>
-                          <button
-                            onClick={() =>
-                              handleDelete(m.id, m.folder_id, m.local_path)
-                            }
-                            className="text-muted-foreground hover:text-destructive"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
-              )}
+              </div>
+            )}
 
             {/* Add new mapping */}
             <div className="border-t pt-3">

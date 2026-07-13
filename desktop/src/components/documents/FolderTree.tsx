@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, memo } from "react";
 import {
   Folder,
   FolderOpen,
@@ -37,7 +37,8 @@ interface InlineRenameState {
   value: string;
 }
 
-export function FolderTree({
+// memo: skips per-keystroke re-renders from the Documents page (see NoteList).
+export const FolderTree = memo(function FolderTree({
   folders,
   activeFolderId,
   unfiledCount,
@@ -349,4 +350,4 @@ export function FolderTree({
         })()}
     </>
   );
-}
+});

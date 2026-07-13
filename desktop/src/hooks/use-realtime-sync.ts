@@ -1,26 +1,46 @@
 /**
  * Supabase Realtime subscription for notes sync.
  *
- * Subscribes to changes on the `notes` and `note_folders` tables,
- * then notifies the engine to pull updates and refresh the UI.
+ * Subscribes to changes on `workbench.notes` / `workbench.note_folders`
+ * (NOT `public` — the notes tables moved to the workbench schema in the
+ * 2026-06 cloud reorganization; both tables are in the supabase_realtime
+ * publication and RLS-filtered to the signed-in user via `created_by`).
+ * On an event, the engine pulls the note to the local file and the UI
+ * refreshes.
+ *
+ * Echo suppression: every engine push stamps `last_device_id` on the cloud
+ * row. An incoming event whose `last_device_id` matches THIS device is our
+ * own save bouncing back — the file pull is skipped (the UI still gets a
+ * cheap refresh notification for list ordering).
  *
  * Critical invariant: a Realtime pull must NEVER overwrite a local edit that
  * is currently in-flight (debounce timer pending). Callers signal this by
  * calling `markNoteEditing(noteId)` / `markNoteIdle(noteId)`. While a note
  * is marked as editing, remote pull events for that note are deferred and
  * re-checked after a short backoff instead of being applied immediately.
+ * (The engine has its own last-resort guard: pulls of rows last written by
+ * this device are skipped server-side too.)
+ *
+ * Catch-up: on every successful (re)subscribe, one incremental
+ * `pullChanges` runs so edits made while this device was offline are not
+ * lost to the missed-events window.
  */
 
 import { useEffect, useRef, useCallback } from "react";
 import supabase from "@/lib/supabase";
 import { engine } from "@/lib/api";
 import type { RealtimeChannel } from "@supabase/supabase-js";
+import type { SyncResult } from "@/lib/api";
 
 interface UseRealtimeSyncOptions {
   userId: string | null;
   enabled: boolean;
+  /** This device's sync id (SyncStatus.device_id) — used to skip self-echoes. */
+  deviceId: string | null;
   onNoteChange?: (noteId: string, eventType: string) => void;
   onFolderChange?: (folderId: string, eventType: string) => void;
+  /** Fired after the on-subscribe catch-up pull completes with changes. */
+  onCatchUp?: (result: SyncResult) => void;
 }
 
 /** Notes currently being edited locally — Realtime pulls are suppressed for these. */
@@ -42,16 +62,16 @@ const DEFERRED_PULL_DELAY_MS = 2000;
 export function useRealtimeSync({
   userId,
   enabled,
+  deviceId,
   onNoteChange,
   onFolderChange,
+  onCatchUp,
 }: UseRealtimeSyncOptions) {
   const channelRef = useRef<RealtimeChannel | null>(null);
-  const callbacksRef = useRef({ onNoteChange, onFolderChange });
-  callbacksRef.current = { onNoteChange, onFolderChange };
-
-  // Track the timestamp of the most recent local push per note so we can
-  // suppress the Supabase echo that arrives shortly after our own push.
-  const recentPushesRef = useRef<Map<string, number>>(new Map());
+  const callbacksRef = useRef({ onNoteChange, onFolderChange, onCatchUp });
+  callbacksRef.current = { onNoteChange, onFolderChange, onCatchUp };
+  const deviceIdRef = useRef(deviceId);
+  deviceIdRef.current = deviceId;
 
   const cleanup = useCallback(() => {
     if (channelRef.current) {
@@ -72,23 +92,22 @@ export function useRealtimeSync({
         "postgres_changes",
         {
           event: "*",
-          schema: "public",
+          schema: "workbench",
           table: "notes",
-          filter: `user_id=eq.${userId}`,
+          filter: `created_by=eq.${userId}`,
         },
         async (payload) => {
+          const newRow = payload.new as Record<string, unknown> | null;
           const noteId =
-            ((payload.new as Record<string, unknown>)?.id as string) ||
+            (newRow?.id as string) ||
             ((payload.old as Record<string, unknown>)?.id as string);
 
           if (!noteId) return;
 
-          // Suppress self-echo: if this device pushed this note within the last
-          // 10 seconds the Realtime event is almost certainly our own update
-          // bouncing back. Skip the pull entirely.
-          const lastPush = recentPushesRef.current.get(noteId) ?? 0;
-          if (Date.now() - lastPush < 10_000) {
-            // Still notify UI (list may need refresh) but don't pull the file.
+          // Self-echo: this device's own push bouncing back. The local file
+          // already has this content — skip the pull, refresh the list only.
+          const device = deviceIdRef.current;
+          if (device && newRow && newRow.last_device_id === device) {
             callbacksRef.current.onNoteChange?.(noteId, payload.eventType);
             return;
           }
@@ -102,7 +121,7 @@ export function useRealtimeSync({
           // don't overwrite keystrokes that haven't been flushed yet.
           if (_editingNotes.has(noteId)) {
             setTimeout(async () => {
-              // Only pull if the note is still idle after the backoff.
+              // Only pull if the note is idle again after the backoff.
               if (_editingNotes.has(noteId)) return;
               try {
                 await engine.pullNote(noteId, userId);
@@ -128,9 +147,9 @@ export function useRealtimeSync({
         "postgres_changes",
         {
           event: "*",
-          schema: "public",
+          schema: "workbench",
           table: "note_folders",
-          filter: `user_id=eq.${userId}`,
+          filter: `created_by=eq.${userId}`,
         },
         (payload) => {
           const folderId =
@@ -144,7 +163,18 @@ export function useRealtimeSync({
       )
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
-          console.log("[realtime] Subscribed to notes changes");
+          console.log("[realtime] Subscribed to workbench notes changes");
+          // Catch up on anything missed while offline/unsubscribed.
+          engine
+            .pullChanges(userId)
+            .then((result) => {
+              if ((result.pulled ?? 0) > 0 || (result.conflicts ?? 0) > 0) {
+                callbacksRef.current.onCatchUp?.(result);
+              }
+            })
+            .catch(() => {
+              // Non-critical: manual sync remains available.
+            });
         } else if (status === "CHANNEL_ERROR") {
           console.warn("[realtime] Channel error — will retry");
         }
@@ -155,20 +185,5 @@ export function useRealtimeSync({
     return cleanup;
   }, [enabled, userId, cleanup]);
 
-  /**
-   * Call this after successfully pushing a note to Supabase so the Realtime
-   * echo from that push is suppressed.
-   */
-  const recordLocalPush = useCallback((noteId: string) => {
-    recentPushesRef.current.set(noteId, Date.now());
-    // Clean up old entries periodically so the map doesn't grow unbounded.
-    if (recentPushesRef.current.size > 200) {
-      const cutoff = Date.now() - 60_000;
-      for (const [id, ts] of recentPushesRef.current) {
-        if (ts < cutoff) recentPushesRef.current.delete(id);
-      }
-    }
-  }, []);
-
-  return { cleanup, recordLocalPush };
+  return { cleanup };
 }

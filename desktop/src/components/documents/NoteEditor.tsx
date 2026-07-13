@@ -1,4 +1,11 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import {
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  useDeferredValue,
+  memo,
+} from "react";
 import {
   Eye,
   Pencil,
@@ -19,6 +26,7 @@ import {
   Mic,
   Check,
   X,
+  FileWarning,
 } from "lucide-react";
 import { RecordingMicButton } from "@/components/recording/RecordingMicButton";
 import { RmsLevelBar } from "@/components/recording/RmsLevelBar";
@@ -38,6 +46,30 @@ interface NoteEditorProps {
 
 type ViewMode = "edit" | "preview" | "split";
 
+/**
+ * Above this size the live preview stops auto-rendering. Parsing + rendering
+ * markdown is synchronous main-thread work; a large paste in split view froze
+ * the whole webview long enough for the OS "wait or quit" dialog (the
+ * 2026-07 notes freeze). ~128 KB parses in well under a frame budget's worth
+ * of tolerance on target hardware; beyond it the user opts in explicitly.
+ */
+const PREVIEW_AUTO_RENDER_LIMIT = 128 * 1024;
+
+/**
+ * Memoized markdown preview. Two properties matter:
+ * - `memo` — toolbar/saving/dictation re-renders don't re-parse the document.
+ * - callers pass a DEFERRED content value, so keystrokes update the textarea
+ *   at input priority and the (expensive) re-parse happens at background
+ *   priority, coalescing rapid keystrokes into one parse.
+ */
+const NotePreview = memo(function NotePreview({ content }: { content: string }) {
+  return (
+    <div className="prose prose-sm dark:prose-invert max-w-none">
+      <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
+    </div>
+  );
+});
+
 export function NoteEditor({
   note,
   saving,
@@ -47,6 +79,12 @@ export function NoteEditor({
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [content, setContent] = useState(note.content ?? "");
   const [label, setLabel] = useState(note.label);
+  const [forcePreview, setForcePreview] = useState(false);
+  // Deferred: keystrokes commit to the textarea immediately; the markdown
+  // re-parse runs afterwards at background priority (see NotePreview).
+  const previewContent = useDeferredValue(content);
+  const previewBlocked =
+    content.length > PREVIEW_AUTO_RENDER_LIMIT && !forcePreview;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const prevNoteIdRef = useRef(note.id);
   const labelDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -151,6 +189,7 @@ export function NoteEditor({
       }
       setContent(note.content ?? "");
       setLabel(note.label);
+      setForcePreview(false);
       lastSyncedContentRef.current = note.content ?? "";
       prevNoteIdRef.current = note.id;
       return;
@@ -495,10 +534,30 @@ export function NoteEditor({
         )}
 
         {(viewMode === "preview" || viewMode === "split") && (
-          <div className="flex-1 overflow-auto p-4">
-            <div className="prose prose-sm dark:prose-invert max-w-none">
-              <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
-            </div>
+          <div
+            className={cn(
+              "flex-1 overflow-auto p-4 transition-opacity",
+              previewContent !== content && "opacity-60",
+            )}
+          >
+            {previewBlocked ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-muted-foreground">
+                <FileWarning className="h-8 w-8 opacity-40" />
+                <p className="text-sm">
+                  Live preview paused — this note is{" "}
+                  {Math.round(content.length / 1024)} KB and rendering it on
+                  every keystroke would freeze the editor.
+                </p>
+                <button
+                  onClick={() => setForcePreview(true)}
+                  className="rounded-md bg-primary/10 px-3 py-1.5 text-sm text-primary hover:bg-primary/20"
+                >
+                  Render preview anyway
+                </button>
+              </div>
+            ) : (
+              <NotePreview content={previewContent} />
+            )}
           </div>
         )}
       </div>

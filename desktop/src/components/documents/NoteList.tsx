@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, memo } from "react";
 import {
   FileText,
   Clock,
@@ -49,7 +49,10 @@ interface InlineRenameState {
   value: string;
 }
 
-export function NoteList({
+// memo: the Documents page re-renders on every editor keystroke (activeNote
+// updates). With stable list props (use-documents callbacks are stateRef-based)
+// this skips re-rendering the whole note list per keystroke.
+export const NoteList = memo(function NoteList({
   notes,
   folders,
   activeNoteId,
@@ -331,4 +334,4 @@ export function NoteList({
         })()}
     </>
   );
-}
+});

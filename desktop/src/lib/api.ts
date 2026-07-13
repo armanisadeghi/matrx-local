@@ -2294,29 +2294,9 @@ class EngineAPI {
     );
   }
 
-  /** List shares. */
-  async listShares(userId: string): Promise<DocShare[]> {
-    return this.docRequest("GET", "/shares", undefined, userId);
-  }
-
-  /** Create a share. */
-  async createShare(userId: string, data: CreateShareData): Promise<DocShare> {
-    return this.docRequest("POST", "/shares", data, userId);
-  }
-
-  /** Update a share. */
-  async updateShare(
-    shareId: string,
-    userId: string,
-    data: { permission?: string; is_public?: boolean },
-  ): Promise<DocShare> {
-    return this.docRequest("PUT", `/shares/${shareId}`, data, userId);
-  }
-
-  /** Delete a share. */
-  async deleteShare(shareId: string, userId: string): Promise<void> {
-    await this.docRequest("DELETE", `/shares/${shareId}`, undefined, userId);
-  }
+  // Note-share client methods removed 2026-07-13 — the cloud note_shares
+  // table was retired; the backend /shares routes return 501 until sharing
+  // returns via the platform iam permission system.
 
   /** List directory mappings. */
   async listMappings(userId: string): Promise<DocMappings> {
@@ -3234,28 +3214,6 @@ export interface DocVersion {
   _source?: "local" | "cloud";
 }
 
-export interface DocShare {
-  id: string;
-  note_id: string | null;
-  folder_id: string | null;
-  owner_id: string;
-  shared_with_id: string | null;
-  permission: string;
-  is_public: boolean;
-  public_token: string | null;
-  created_at: string;
-  updated_at: string;
-  _direction?: "owned" | "shared_with_me";
-}
-
-export interface CreateShareData {
-  note_id?: string;
-  folder_id?: string;
-  shared_with_id?: string;
-  permission?: string;
-  is_public?: boolean;
-}
-
 export interface SyncStatus {
   configured: boolean;
   device_id: string;
@@ -3294,12 +3252,6 @@ export interface ConflictList {
 }
 
 export interface DocMappings {
-  cloud_mappings: Array<{
-    id: string;
-    folder_id: string;
-    local_path: string;
-    device_id: string;
-  }>;
   local_mappings: Record<string, string[]>;
   device_id: string;
 }

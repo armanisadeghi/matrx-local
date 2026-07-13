@@ -8,7 +8,6 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Plus,
   Search,
-  Share2,
   FolderSync,
   History,
   Trash2,
@@ -26,7 +25,6 @@ import { NoteList } from "@/components/documents/NoteList";
 import { NoteEditor } from "@/components/documents/NoteEditor";
 import { SyncStatusBar } from "@/components/documents/SyncStatus";
 import { VersionHistory } from "@/components/documents/VersionHistory";
-import { ShareDialog } from "@/components/documents/ShareDialog";
 import { DirectoryMappings } from "@/components/documents/DirectoryMappings";
 import { ConflictResolver } from "@/components/documents/ConflictResolver";
 import type { EngineStatus } from "@/hooks/use-engine";
@@ -43,7 +41,6 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
   const [rightPanelTab, setRightPanelTab] = useState<
     "versions" | "tags" | "info"
   >("versions");
-  const [showShareDialog, setShowShareDialog] = useState(false);
   const [showMappingsDialog, setShowMappingsDialog] = useState(false);
   const [showConflictResolver, setShowConflictResolver] = useState(false);
   const [searchInput, setSearchInput] = useState("");
@@ -52,7 +49,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
   // Pull stable function refs out of the hook so the Realtime callbacks don't
   // capture the entire `docs` object (new reference every render → stale closures
   // and needless re-subscriptions).
-  const { loadTree, loadNotes, selectNote } = docs;
+  const { loadTree, loadNotes, selectNote, loadConflicts } = docs;
 
   // Keep the current activeNote ID in a ref so the Realtime callback always
   // has access to the latest value without being in the dep array.
@@ -66,6 +63,9 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
   useRealtimeSync({
     userId,
     enabled: engineStatus === "connected" && !!userId,
+    // Own-push echoes are identified by the device id stamped on every cloud
+    // write (SyncStatus.device_id); loads on init via loadSyncStatus.
+    deviceId: docs.syncStatus?.device_id ?? null,
     onNoteChange: useCallback(
       (_noteId: string, _eventType: string) => {
         loadTree();
@@ -81,6 +81,12 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
     onFolderChange: useCallback(() => {
       loadTree();
     }, [loadTree]),
+    // Catch-up pull found changes made while this device was offline.
+    onCatchUp: useCallback(() => {
+      loadTree();
+      loadNotes();
+      loadConflicts();
+    }, [loadTree, loadNotes, loadConflicts]),
   });
 
   const { updateNote } = docs;
@@ -194,19 +200,9 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
 
           {docs.activeNote && (
             <>
-              {userId && (
-                <button
-                  onClick={() => {
-                    docs.loadShares();
-                    setShowShareDialog(true);
-                  }}
-                  className="rounded-md p-1.5 hover:bg-accent text-muted-foreground hover:text-foreground"
-                  title="Share"
-                >
-                  <Share2 className="h-4 w-4" />
-                </button>
-              )}
-
+              {/* Note sharing UI removed 2026-07-13: the cloud note_shares
+                  table was retired; sharing returns via the platform iam
+                  permission system (backend /shares routes are 501). */}
               <button
                 onClick={() => setShowRightPanel(!showRightPanel)}
                 className={cn(
@@ -457,18 +453,6 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
           </div>
         )}
       </div>
-
-      {/* Share dialog */}
-      {showShareDialog && docs.activeNote && userId && (
-        <ShareDialog
-          noteId={docs.activeNote.id}
-          folderId={null}
-          userId={userId}
-          shares={docs.shares}
-          onClose={() => setShowShareDialog(false)}
-          onUpdate={() => docs.loadShares()}
-        />
-      )}
 
       {/* Directory mappings dialog */}
       {showMappingsDialog && (

@@ -67,14 +67,14 @@ export function BatchConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
+      <DialogContent className="max-h-[88vh] max-w-lg overflow-x-hidden overflow-y-auto">
+        <DialogHeader className="min-w-0">
           <DialogTitle className="flex items-center gap-2">
-            <Layers className="h-4 w-4" />
+            <Layers className="h-4 w-4 shrink-0" />
             Queue {total.toLocaleString()}{" "}
             {total === 1 ? "generation" : "generations"}?
           </DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="break-words leading-relaxed">
             They run one at a time, in the order shown. You can pause, reorder,
             or cancel the batch at any point — including after it starts.
           </DialogDescription>
@@ -195,7 +195,7 @@ function Stat({
   emphasize?: boolean;
 }) {
   return (
-    <div className="rounded-md border bg-muted/30 p-2">
+    <div className="min-w-0 rounded-md border bg-muted/30 p-2">
       <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
         {label}
       </p>
@@ -208,9 +208,11 @@ function Stat({
         {value}
       </p>
       {hint !== undefined && (
-        <p className="flex items-center gap-1 text-[10px] text-muted-foreground">
-          {label === "Est. time" && <Clock className="h-2.5 w-2.5" />}
-          {hint}
+        <p className="flex min-w-0 items-start gap-1 break-words text-[10px] leading-snug text-muted-foreground">
+          {label === "Est. time" && (
+            <Clock className="mt-0.5 h-2.5 w-2.5 shrink-0" />
+          )}
+          <span>{hint}</span>
         </p>
       )}
     </div>

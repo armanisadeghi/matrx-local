@@ -72,7 +72,9 @@ export function TemplateEditor({
         >
           {segments.map((seg, i) =>
             seg.kind === "text" ? (
-              <span key={i}>{seg.text}</span>
+              <span key={i} className="text-foreground">
+                {seg.text}
+              </span>
             ) : (
               <span
                 key={i}

@@ -237,6 +237,35 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   thread and keep the main thread in `_shutdown_event.wait()`; dev-only
   severity (end users always run sidecar mode).
 
+### MXL-D-043 — No dev/live isolation: a dev-run engine hijacks `~/.matrx/local.json` and shares all state with the installed app
+- **Area:** run.py / preflight / dev workflow (likely the MXL-D-039 trigger class)
+- **Symptom:** any `uv run python run.py` (Arman or ANY coding agent) uses the
+  same `~/.matrx` as the installed app: same discovery file, same `matrx.db`,
+  same `settings.json`. `run.py:826` writes the discovery file
+  **unconditionally** — even when `assign_engine_port` fell back to 22141
+  because the live engine owns 22140. From that moment every discovery-file
+  consumer (installed app's Rust `read_engine_port_from_discovery`,
+  matrx-extend, cloud round trips) routes to the dev engine running
+  uncommitted code. When the dev engine exits, the file points at a corpse and
+  the "live app" looks broken. Additionally, cross-instance kill paths
+  (`kill_orphaned_sidecars` `pkill -f matrx-engine`, `clean_orphans`) can kill
+  the other instance's tree. Net effect: dev testing corrupts live behavior,
+  live bugs get reported against code that wasn't at fault, and "fixes" get
+  validated against the wrong engine.
+- **Evidence:** `run.py:826` (unconditional `write_discovery_file(port)`),
+  `app/preflight.py:1073-1089` (second instance allowed, binds 22141, then
+  still clobbers the file), `desktop/src-tauri/src/lib.rs:164/976/1073`
+  (Rust hardcodes `~/.matrx/local.json`, ignores `MATRX_HOME_DIR`). Matches
+  MXL-D-039 live observation "possibly another active agent session".
+- **Status:** open. Analyzed 2026-07-13 — verified in code.
+- **Owner hint:** two-part fix: (1) dev-by-default isolation — when
+  `not getattr(sys, "frozen", False)` and no explicit `MATRX_HOME_DIR`, run.py
+  defaults home to `~/.matrx-dev` and port to 22150+, loudly; (2) discovery
+  guard — `write_discovery_file` must refuse to clobber a file whose recorded
+  pid is alive and answers `/health` at its recorded URL when that pid ≠ self.
+  Plus a CLAUDE.md hard rule + wrapper script so agents can't run the engine
+  un-isolated.
+
 ## Cross-repo
 
 ### MXL-D-027 — Voice E2E unconfirmed on physical hardware

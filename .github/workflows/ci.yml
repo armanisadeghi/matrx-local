@@ -77,9 +77,21 @@ jobs:
       # app. This step does: it boots the real production bundle in Chromium
       # and fails if the ErrorBoundary shows or anything throws.
       # The authenticated half of boot.spec.ts self-skips without a test
-      # account (desktop/.env.test), so this needs no secrets.
+      # account (desktop/.env.test), so no test-account secret is needed.
+      #
+      # But the SUPABASE vars ARE required: Vite inlines them at build time and
+      # the Login page cannot render without them, so a bundle built without
+      # them fails this step for a reason that has nothing to do with the app
+      # being broken. They are the same two values release.yml already injects
+      # (and the same ones that ship inside every binary — publishable, not
+      # secret). Locally these come from desktop/.env, which is gitignored;
+      # that is why this passes on a dev machine and failed the first time it
+      # ran in CI.
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Boot smoke (production bundle must render)
         run: SMOKE_PREVIEW=1 pnpm exec playwright test boot.spec.ts --reporter=list
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}

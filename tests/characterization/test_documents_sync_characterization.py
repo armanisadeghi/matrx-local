@@ -162,15 +162,6 @@ class FakeSupabase:
         self.notes[note_id] = row
         return row
 
-    async def list_versions(self, note_id: str) -> list[dict[str, Any]]:
-        return []
-
-    async def create_version(self, **kw: Any) -> None:
-        self.calls.append(("create_version", kw))
-
-    async def log_sync(self, **kw: Any) -> None:
-        self.calls.append(("log_sync", kw))
-
     async def soft_delete_note(self, note_id: str) -> None:
         self.calls.append(("soft_delete_note", {"note_id": note_id}))
 
@@ -260,42 +251,53 @@ def test_push_with_user_but_sb_unavailable_saves_locally_only(engine: SyncEngine
     result = _run(engine.push_note("n1", "Hello", "body", folder_name="Work"))
     assert result["_synced_to_cloud"] is False
     assert engine.fm.notes["Work/Hello.md"] == "body"
-    # Local sync-state hash is recorded even without cloud.
-    assert engine.fm.state["note_hashes"]["Work/Hello.md"] == content_hash("body")
+    # note_hashes means "hash at last SUCCESSFUL cloud sync" — it must NOT be
+    # recorded when nothing reached the cloud, or the next pull would treat
+    # the unsynced local edit as already-synced and clobber it with older
+    # remote content (contract amendment 2026-07-13).
+    assert "Work/Hello.md" not in engine.fm.state["note_hashes"]
     # No repo status write happens on the local-only path.
     assert engine._repo.status_calls == []
 
 
 def test_push_new_note_upserts_and_marks_synced(engine: SyncEngine) -> None:
     _configure(engine)
-    result = _run(engine.push_note("n1", "Hello", "body", is_new_note=True))
+    result = _run(engine.push_note("n1", "Hello", "body"))
     assert result["_synced_to_cloud"] is True
     assert [c[0] for c in engine.sb.calls if c[0] == "upsert_note"] == ["upsert_note"]
     assert engine._repo.status_calls == [("n1", "synced", content_hash("body"))]
+    # note_hashes recorded ONLY after the successful push.
+    assert engine.fm.state["note_hashes"]["General/Hello.md"] == content_hash("body")
     # sync_version from the cloud row advances local state.
     assert engine.fm.state["last_sync_version"] == 1
 
 
-def test_push_existing_note_updates_and_snapshots_prior_version(engine: SyncEngine) -> None:
+def test_push_existing_note_is_a_single_upsert(engine: SyncEngine) -> None:
+    """Every push is ONE atomic upsert (2026-07-13 amendment).
+
+    Cloud note_versions was graveyarded; history is captured by the
+    platform._version_capture trigger cloud-side and SQLite note_versions
+    locally. The old get_note -> create_version -> update_note dance is gone.
+    """
     _configure(engine)
     engine.sb.notes["n1"] = {"id": "n1", "label": "Hello", "content": "old body"}
     result = _run(engine.push_note("n1", "Hello", "new body"))
     assert result["_synced_to_cloud"] is True
-    kinds = [c[0] for c in engine.sb.calls]
-    # Prior content differs → a version snapshot precedes the update.
-    assert "create_version" in kinds and "update_note" in kinds
-    assert kinds.index("create_version") < kinds.index("update_note")
+    kinds = [c[0] for c in engine.sb.calls if c[0] != "set_jwt"]
+    assert kinds == ["upsert_note"]
     assert engine._repo.status_calls[-1] == ("n1", "synced", content_hash("new body"))
 
 
 def test_push_failure_marks_status_failed(engine: SyncEngine) -> None:
     _configure(engine)
     engine.sb.fail_pushes = True
-    result = _run(engine.push_note("n1", "Hello", "body", is_new_note=True))
+    result = _run(engine.push_note("n1", "Hello", "body"))
     # Local write succeeded; cloud flag stays False; status recorded as failed.
     assert result["_synced_to_cloud"] is False
     assert engine.fm.notes["General/Hello.md"] == "body"
     assert engine._repo.status_calls == [("n1", "failed", None)]
+    # The failed push must NOT be recorded as the last-synced hash.
+    assert "General/Hello.md" not in engine.fm.state["note_hashes"]
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +399,45 @@ def test_pull_of_remote_soft_delete_propagates_deletion(engine: SyncEngine) -> N
     assert fp not in engine.fm.notes
     assert fp not in engine.fm.state["note_hashes"]
     assert engine._repo.soft_deleted == ["dead-1"]
+
+
+def test_pull_skips_when_remote_is_own_devices_push(engine: SyncEngine) -> None:
+    """Own-push echo guard (2026-07-13): a remote row last written by THIS
+    device can never conflict with or overwrite newer local work — the local
+    divergence is simply an unsynced edit that will push on its own."""
+    _configure(engine)
+    fp = "General/n.md"
+    engine.fm.notes[fp] = "newer local draft"
+    engine.fm.state["note_hashes"][fp] = content_hash("what we pushed before")
+    note_id = _seed_remote(engine, fp, "what we pushed before")
+    engine.sb.notes[note_id]["last_device_id"] = "test-device"
+
+    result = _run(engine.pull_note(note_id))
+    assert result is not None and result.get("_skipped_own_push") is True
+    assert engine.fm.notes[fp] == "newer local draft"
+    assert engine.fm.conflicts_saved == []
+
+
+def test_pull_still_conflicts_when_remote_is_another_device(engine: SyncEngine) -> None:
+    _configure(engine)
+    fp = "General/n.md"
+    engine.fm.notes[fp] = "locally edited content"
+    engine.fm.state["note_hashes"][fp] = content_hash("what we synced before")
+    note_id = _seed_remote(engine, fp, "remote content")
+    engine.sb.notes[note_id]["last_device_id"] = "other-device"
+
+    result = _run(engine.pull_note(note_id))
+    assert result is not None and result.get("_conflict") is True
+    assert engine.fm.notes[fp] == "locally edited content"
+
+
+def test_prune_stale_conflicts_drops_identical_sides(engine: SyncEngine) -> None:
+    engine.fm.save_conflict("General/a.md", "same", "same", "conf-same")
+    engine.fm.save_conflict("General/b.md", "left", "right", "conf-diff")
+    engine.fm.list_conflicts = lambda: ["conf-same", "conf-diff"]  # type: ignore[method-assign]
+    pruned = engine.prune_stale_conflicts()
+    assert pruned == 1
+    assert engine.fm.conflicts_resolved == ["conf-same"]
 
 
 def test_pull_without_user_returns_none(engine: SyncEngine) -> None:

@@ -331,226 +331,18 @@ class SupabaseDocClient:
             "DELETE", "notes", params={"id": f"eq.{note_id}"}, schema=_WORKBENCH
         )
 
-    # ── Versions ─────────────────────────────────────────────────────────────
-
-    async def list_versions(self, note_id: str) -> list[dict[str, Any]]:
-        return await self._request(
-            "GET",
-            "note_versions",
-            params={
-                "note_id": f"eq.{note_id}",
-                "order": "version_number.desc",
-            },
-        )
-
-    async def create_version(
-        self,
-        note_id: str,
-        user_id: str,
-        content: str,
-        label: str,
-        version_number: int,
-        change_source: str = "desktop",
-        change_type: str | None = None,
-    ) -> dict[str, Any]:
-        body = {
-            "id": str(uuid4()),
-            "note_id": note_id,
-            "user_id": user_id,
-            "content": content,
-            "label": label,
-            "version_number": version_number,
-            "change_source": change_source,
-            "change_type": change_type,
-        }
-        rows = await self._request("POST", "note_versions", json_body=body)
-        return rows[0] if rows else body
-
-    async def get_version(
-        self, note_id: str, version_number: int
-    ) -> dict[str, Any] | None:
-        rows = await self._request(
-            "GET",
-            "note_versions",
-            params={
-                "note_id": f"eq.{note_id}",
-                "version_number": f"eq.{version_number}",
-            },
-        )
-        return rows[0] if rows else None
-
-    # ── Shares ───────────────────────────────────────────────────────────────
-
-    async def list_shares(
-        self, owner_id: str | None = None, shared_with_id: str | None = None
-    ) -> list[dict[str, Any]]:
-        params: dict[str, str] = {"order": "created_at.desc"}
-        if owner_id:
-            params["owner_id"] = f"eq.{owner_id}"
-        if shared_with_id:
-            params["shared_with_id"] = f"eq.{shared_with_id}"
-        return await self._request("GET", "note_shares", params=params)
-
-    async def create_share(
-        self,
-        owner_id: str,
-        permission: str = "read",
-        note_id: str | None = None,
-        folder_id: str | None = None,
-        shared_with_id: str | None = None,
-        is_public: bool = False,
-    ) -> dict[str, Any]:
-        import secrets
-
-        body: dict[str, Any] = {
-            "id": str(uuid4()),
-            "owner_id": owner_id,
-            "note_id": note_id,
-            "folder_id": folder_id,
-            "shared_with_id": shared_with_id,
-            "permission": permission,
-            "is_public": is_public,
-        }
-        if is_public:
-            body["public_token"] = secrets.token_urlsafe(32)
-        rows = await self._request("POST", "note_shares", json_body=body)
-        return rows[0] if rows else body
-
-    async def update_share(
-        self, share_id: str, updates: dict[str, Any]
-    ) -> dict[str, Any]:
-        rows = await self._request(
-            "PATCH",
-            "note_shares",
-            params={"id": f"eq.{share_id}"},
-            json_body=updates,
-        )
-        return rows[0] if rows else {}
-
-    async def delete_share(self, share_id: str) -> None:
-        await self._request("DELETE", "note_shares", params={"id": f"eq.{share_id}"})
-
-    # ── Devices ──────────────────────────────────────────────────────────────
-
-    async def register_device(
-        self,
-        user_id: str,
-        device_id: str,
-        device_name: str,
-        platform: str,
-        base_path: str,
-    ) -> dict[str, Any]:
-        body = {
-            "user_id": user_id,
-            "device_id": device_id,
-            "device_name": device_name,
-            "platform": platform,
-            "base_path": base_path,
-            "last_seen": "now()",
-            "is_active": True,
-        }
-        # Upsert on (user_id, device_id)
-        rows = await self._request(
-            "POST",
-            "note_devices",
-            json_body=body,
-            extra_headers={
-                "Prefer": "return=representation,resolution=merge-duplicates"
-            },
-        )
-        return rows[0] if rows else body
-
-    async def update_device_seen(self, user_id: str, device_id: str) -> None:
-        await self._request(
-            "PATCH",
-            "note_devices",
-            params={
-                "user_id": f"eq.{user_id}",
-                "device_id": f"eq.{device_id}",
-            },
-            json_body={"last_seen": "now()"},
-        )
-
-    async def list_devices(self, user_id: str) -> list[dict[str, Any]]:
-        return await self._request(
-            "GET",
-            "note_devices",
-            params={
-                "user_id": f"eq.{user_id}",
-                "is_active": "eq.true",
-                "order": "last_seen.desc",
-            },
-        )
-
-    # ── Directory Mappings ───────────────────────────────────────────────────
-
-    async def list_mappings(self, user_id: str, device_id: str) -> list[dict[str, Any]]:
-        return await self._request(
-            "GET",
-            "note_directory_mappings",
-            params={
-                "user_id": f"eq.{user_id}",
-                "device_id": f"eq.{device_id}",
-                "is_active": "eq.true",
-            },
-        )
-
-    async def create_mapping(
-        self,
-        user_id: str,
-        device_id: str,
-        folder_id: str,
-        local_path: str,
-    ) -> dict[str, Any]:
-        body = {
-            "id": str(uuid4()),
-            "user_id": user_id,
-            "device_id": device_id,
-            "folder_id": folder_id,
-            "local_path": local_path,
-        }
-        rows = await self._request("POST", "note_directory_mappings", json_body=body)
-        return rows[0] if rows else body
-
-    async def delete_mapping(self, mapping_id: str) -> None:
-        await self._request(
-            "DELETE",
-            "note_directory_mappings",
-            params={"id": f"eq.{mapping_id}"},
-        )
-
-    # ── Sync Log ─────────────────────────────────────────────────────────────
-
-    async def log_sync(
-        self,
-        user_id: str,
-        device_id: str,
-        action: str,
-        note_id: str | None = None,
-        folder_id: str | None = None,
-        sync_version: int | None = None,
-        content_hash: str | None = None,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        body = {
-            "user_id": user_id,
-            "device_id": device_id,
-            "action": action,
-            "note_id": note_id,
-            "folder_id": folder_id,
-            "sync_version": sync_version,
-            "content_hash": content_hash,
-            "details": details or {},
-        }
-        try:
-            await self._request(
-                "POST",
-                "note_sync_log",
-                json_body=body,
-                extra_headers={"Prefer": "return=minimal"},
-            )
-        except Exception:
-            logger.warning("Failed to write sync log", exc_info=True)
+    # NOTE (2026-07): the cloud aux tables this client used to talk to —
+    # note_versions, note_shares, note_devices, note_directory_mappings and
+    # note_sync_log — were moved to the `graveyard` schema during the cloud DB
+    # reorganization. Every request against them 404'd silently on each save.
+    # Their client methods are deleted, not stubbed:
+    #   - version history  → local SQLite `note_versions` (offline-capable) +
+    #     the cloud-side `platform._version_capture` trigger, which snapshots
+    #     every workbench.notes write into `history.row_versions`.
+    #   - devices / sync log → local-only (`.sync/state.json` device_id).
+    #   - directory mappings → local-only (`.sync/mappings.json`).
+    #   - shares → retired; the platform now models sharing via iam grants
+    #     (see the RLS policies on workbench.notes). Routes return 501.
 
     # ── Bulk fetch for sync ──────────────────────────────────────────────────
 
@@ -592,7 +384,7 @@ class SupabaseDocClient:
                 "created_by": f"eq.{user_id}",
                 "deleted_at": "is.null",
                 "select": "id,file_path,content_hash,sync_version,label,"
-                "folder_name,folder_id,updated_at",
+                "folder_name,folder_id,updated_at,last_device_id",
             },
             schema=_WORKBENCH,
         )

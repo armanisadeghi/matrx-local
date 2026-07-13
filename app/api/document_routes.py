@@ -102,6 +102,13 @@ def _configure_sync(request: Request) -> None:
     except HTTPException:
         pass
 
+    # Auto-start the external-edit file watcher on first documents traffic.
+    # It previously existed behind POST /sync/start-watcher, which no surface
+    # ever called — external edits and deletes were never detected. Idempotent
+    # (start_watcher no-ops while a task is live) and access-guarded.
+    if not sync_engine.watcher_active:
+        _fire_and_forget(sync_engine.start_watcher())
+
 
 def _fire_and_forget(coro) -> None:
     # Delegates to the shared retained helper — bare create_task results are
@@ -648,7 +655,6 @@ async def create_note(req: CreateNoteRequest, request: Request) -> dict[str, Any
             folder_id=req.folder_id,
             tags=req.tags,
             metadata=req.metadata,
-            is_new_note=True,
             file_path=file_path,
         ))
 
@@ -843,28 +849,14 @@ async def get_note_sync_status(note_id: str, request: Request) -> dict[str, Any]
 
 @router.get("/notes/{note_id}/versions")
 async def list_versions(note_id: str, request: Request) -> list[dict[str, Any]]:
-    """List version history for a note. Local versions always available;
-    cloud versions merged in when connected."""
-    _configure_sync(request)
+    """List version history for a note — local SQLite snapshots.
 
-    # Always return local versions — works fully offline
+    Cloud `note_versions` was graveyarded (2026-07); cloud-side history is now
+    captured by the `platform._version_capture` trigger into
+    `history.row_versions` and is not surfaced here.
+    """
     versions_repo = _get_versions_repo()
-    local_versions = await versions_repo.list_for_note(note_id)
-
-    # Optionally merge cloud versions if available
-    if sync_engine.is_configured:
-        try:
-            cloud_versions = await supabase_docs.list_versions(note_id)
-            # Merge: add cloud versions not already in local by version_number
-            local_numbers = {v.get("version_number") for v in local_versions}
-            for cv in cloud_versions:
-                if cv.get("version_number") not in local_numbers:
-                    local_versions.append({**cv, "_source": "cloud"})
-            local_versions.sort(key=lambda v: v.get("version_number", 0), reverse=True)
-        except Exception:
-            pass  # Cloud unavailable — local versions are sufficient
-
-    return local_versions
+    return await versions_repo.list_for_note(note_id)
 
 
 @router.post("/notes/{note_id}/revert")
@@ -872,16 +864,8 @@ async def revert_note(note_id: str, req: RevertRequest, request: Request) -> dic
     """Revert a note to a previous version. Works locally; no cloud required."""
     _configure_sync(request)
 
-    # Try local version first
     versions_repo = _get_versions_repo()
     version = await versions_repo.get_version(note_id, req.version_number)
-
-    # Fallback to cloud if local version not found
-    if not version and sync_engine.is_configured:
-        try:
-            version = await supabase_docs.get_version(note_id, req.version_number)
-        except Exception:
-            pass
 
     if not version:
         raise HTTPException(status_code=404, detail=f"Version {req.version_number} not found")
@@ -1016,6 +1000,9 @@ async def stop_watcher(request: Request) -> dict[str, str]:
 
 @router.get("/conflicts")
 async def list_conflicts(request: Request) -> dict[str, Any]:
+    # Drop residue conflicts whose two sides are byte-identical (lossless by
+    # definition) before presenting anything to the user.
+    sync_engine.prune_stale_conflicts()
     conflict_ids = file_manager.list_conflicts()
     details: list[dict[str, Any]] = []
     for note_id in conflict_ids:
@@ -1050,113 +1037,67 @@ async def resolve_conflict(
 
 
 # ---------------------------------------------------------------------------
-# Share endpoints (cloud-only — sharing metadata lives in Supabase)
+# Share endpoints — RETIRED (2026-07)
+#
+# The cloud `note_shares` table was graveyarded in the cloud DB reorganization;
+# the platform now models sharing through iam grants (see the RLS policies on
+# workbench.notes: iam.has_access('note', id, ...)). These endpoints returned
+# silent 404-backed failures for weeks. They now fail loudly until a proper
+# iam-backed sharing flow is built (tracked in .matrx/ARMAN_TASKS.md).
 # ---------------------------------------------------------------------------
+
+_SHARES_RETIRED_DETAIL = (
+    "Note sharing is temporarily unavailable: the legacy note_shares table was "
+    "retired. Sharing will return via the platform iam permission system."
+)
+
 
 @router.get("/shares")
 async def list_shares(request: Request) -> list[dict[str, Any]]:
-    _configure_sync(request)
-    if not sync_engine.is_configured:
-        return []
-    try:
-        user_id = _get_user_id(request)
-        owned = await supabase_docs.list_shares(owner_id=user_id)
-        shared_with_me = await supabase_docs.list_shares(shared_with_id=user_id)
-        return [
-            *[{**s, "_direction": "owned"} for s in owned],
-            *[{**s, "_direction": "shared_with_me"} for s in shared_with_me],
-        ]
-    except Exception:
-        # Previously returned an empty 200, which is indistinguishable from
-        # "no shares" and silently hid Supabase/network failures. The desktop
-        # caller (use-documents loadShares) wraps this in try/catch and treats
-        # a non-200 as non-critical, so surface the real failure as a 502.
-        logger.warning("Failed to list shares from Supabase", exc_info=True)
-        raise HTTPException(
-            status_code=502, detail="Failed to list shares from Supabase"
-        )
+    # Listing returns empty (nothing is shared) rather than erroring so the
+    # Documents page load path stays clean.
+    return []
 
 
 @router.post("/shares")
 async def create_share(req: ShareRequest, request: Request) -> dict[str, Any]:
-    _configure_sync(request)
-    if not sync_engine.is_configured:
-        raise HTTPException(status_code=503, detail="Cloud sync not configured — sharing requires Supabase")
-    user_id = _get_user_id(request)
-    return await supabase_docs.create_share(
-        owner_id=user_id,
-        note_id=req.note_id,
-        folder_id=req.folder_id,
-        shared_with_id=req.shared_with_id,
-        permission=req.permission,
-        is_public=req.is_public,
-    )
+    raise HTTPException(status_code=501, detail=_SHARES_RETIRED_DETAIL)
 
 
 @router.put("/shares/{share_id}")
 async def update_share(share_id: str, req: UpdateShareRequest, request: Request) -> dict[str, Any]:
-    _configure_sync(request)
-    updates: dict[str, Any] = {}
-    if req.permission is not None:
-        updates["permission"] = req.permission
-    if req.is_public is not None:
-        updates["is_public"] = req.is_public
-    if not updates:
-        return {"id": share_id}
-    return await supabase_docs.update_share(share_id, updates)
+    raise HTTPException(status_code=501, detail=_SHARES_RETIRED_DETAIL)
 
 
 @router.delete("/shares/{share_id}")
 async def delete_share(share_id: str, request: Request) -> dict[str, str]:
-    _configure_sync(request)
-    await supabase_docs.delete_share(share_id)
-    return {"status": "deleted"}
+    raise HTTPException(status_code=501, detail=_SHARES_RETIRED_DETAIL)
 
 
 # ---------------------------------------------------------------------------
 # Directory mapping endpoints
 # ---------------------------------------------------------------------------
 
+# Directory mappings are LOCAL-ONLY: they map cloud folder ids to extra local
+# directories on THIS machine, so a cloud copy never made sense — and the
+# `note_directory_mappings` table it used to mirror into was graveyarded.
+
 @router.get("/mappings")
 async def list_mappings(request: Request) -> dict[str, Any]:
-    _configure_sync(request)
-    user_id = _get_user_id_optional(request)
-
-    cloud_mappings: list[dict[str, Any]] = []
-    if sync_engine.is_configured and user_id:
-        try:
-            cloud_mappings = await supabase_docs.list_mappings(user_id, sync_engine.device_id)
-        except Exception:
-            pass
-
-    local_mappings = file_manager.load_local_mappings()
     return {
-        "cloud_mappings": cloud_mappings,
-        "local_mappings": local_mappings,
+        "local_mappings": file_manager.load_local_mappings(),
         "device_id": sync_engine.device_id,
     }
 
 
 @router.post("/mappings")
 async def create_mapping(req: MappingRequest, request: Request) -> dict[str, Any]:
-    _configure_sync(request)
-    user_id = _get_user_id_optional(request)
-
     local_mappings = file_manager.load_local_mappings()
     if req.folder_id not in local_mappings:
         local_mappings[req.folder_id] = []
     if req.local_path not in local_mappings[req.folder_id]:
         local_mappings[req.folder_id].append(req.local_path)
     file_manager.save_local_mappings(local_mappings)
-
-    if sync_engine.is_configured and user_id:
-        _fire_and_forget(supabase_docs.create_mapping(
-            user_id=user_id,
-            device_id=sync_engine.device_id,
-            folder_id=req.folder_id,
-            local_path=req.local_path,
-        ))
-
     return {"folder_id": req.folder_id, "local_path": req.local_path}
 
 
@@ -1167,8 +1108,6 @@ async def delete_mapping(
     folder_id: str | None = None,
     local_path: str | None = None,
 ) -> dict[str, str]:
-    _configure_sync(request)
-
     if folder_id and local_path:
         local_mappings = file_manager.load_local_mappings()
         if folder_id in local_mappings:
@@ -1176,10 +1115,6 @@ async def delete_mapping(
             if not local_mappings[folder_id]:
                 del local_mappings[folder_id]
             file_manager.save_local_mappings(local_mappings)
-
-    if sync_engine.is_configured:
-        _fire_and_forget(supabase_docs.delete_mapping(mapping_id))
-
     return {"status": "deleted"}
 
 

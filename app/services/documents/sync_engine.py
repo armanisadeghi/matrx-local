@@ -134,7 +134,6 @@ class SyncEngine:
         folder_id: str | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
-        is_new_note: bool = False,
         file_path: str | None = None,
     ) -> dict[str, Any]:
         """Push a single note to Supabase (public entry — serialized).
@@ -152,7 +151,6 @@ class SyncEngine:
                 folder_id=folder_id,
                 tags=tags,
                 metadata=metadata,
-                is_new_note=is_new_note,
                 file_path=file_path,
             )
 
@@ -165,7 +163,6 @@ class SyncEngine:
         folder_id: str | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
-        is_new_note: bool = False,
         file_path: str | None = None,
     ) -> dict[str, Any]:
         """Push a single note to Supabase. Local file must already be written.
@@ -193,11 +190,10 @@ class SyncEngine:
         file_path = self.fm.write_note(folder_name, label, content, file_path)
         c_hash = content_hash(content)
 
+        # Echo-suppression marker only — safe to set optimistically because it
+        # is only ever compared for EQUALITY against incoming remote content
+        # (matching hash → skip a redundant pull of identical bytes).
         self._last_push_hashes[file_path] = c_hash
-
-        state = self.fm.load_sync_state()
-        state["note_hashes"][file_path] = c_hash
-        self.fm.save_sync_state(state)
 
         result: dict[str, Any] = {
             "id": note_id,
@@ -213,84 +209,37 @@ class SyncEngine:
 
         if self.sb.available:
             try:
-                if is_new_note:
-                    result = await self.sb.upsert_note(
-                        note_id=note_id,
-                        user_id=self._user_id,
-                        label=label,
-                        content=content,
-                        folder_name=folder_name,
-                        folder_id=folder_id,
-                        file_path=file_path,
-                        tags=tags,
-                        metadata=metadata,
-                        device_id=self.device_id,
-                    )
-                else:
-                    existing = await self.sb.get_note(note_id)
-                    if existing:
-                        versions = await self.sb.list_versions(note_id)
-                        next_version = (
-                            (versions[0]["version_number"] + 1) if versions else 1
-                        )
-                        if existing.get("content") and existing["content"] != content:
-                            try:
-                                await self.sb.create_version(
-                                    note_id=note_id,
-                                    user_id=self._user_id,
-                                    content=existing["content"],
-                                    label=existing.get("label", label),
-                                    version_number=next_version,
-                                    change_source="desktop",
-                                    change_type="edit",
-                                )
-                            except Exception:
-                                logger.debug("Version snapshot failed (non-critical)")
-                        result = await self.sb.update_note(
-                            note_id,
-                            {
-                                "label": label,
-                                "content": content,
-                                "folder_name": folder_name,
-                                "folder_id": folder_id,
-                                "file_path": file_path,
-                                "tags": tags or [],
-                                "metadata": metadata or {},
-                            },
-                            device_id=self.device_id,
-                        )
-                    else:
-                        result = await self.sb.upsert_note(
-                            note_id=note_id,
-                            user_id=self._user_id,
-                            label=label,
-                            content=content,
-                            folder_name=folder_name,
-                            folder_id=folder_id,
-                            file_path=file_path,
-                            tags=tags,
-                            metadata=metadata,
-                            device_id=self.device_id,
-                        )
+                # Single atomic upsert. Cloud-side version history is captured
+                # by the `platform._version_capture` trigger on workbench.notes
+                # (history.row_versions); local history by SQLite note_versions.
+                # The old get_note → create_version → update_note dance cost 3
+                # extra round trips per save and pushed to a graveyarded table.
+                result = await self.sb.upsert_note(
+                    note_id=note_id,
+                    user_id=self._user_id,
+                    label=label,
+                    content=content,
+                    folder_name=folder_name,
+                    folder_id=folder_id,
+                    file_path=file_path,
+                    tags=tags,
+                    metadata=metadata,
+                    device_id=self.device_id,
+                )
 
                 result["_synced_to_cloud"] = True
 
+                # Record the last-SUCCESSFULLY-synced hash only now. Writing it
+                # before the push succeeded made a failed/offline push look
+                # synced, and the next pull would clobber the newer local file
+                # with older cloud content (contract: note_hashes == "hash at
+                # last successful sync", docs/SYNC_CONTRACT.md).
+                state = self.fm.load_sync_state()
+                state["note_hashes"][file_path] = c_hash
                 sv = result.get("sync_version", 0)
                 if sv and sv > state.get("last_sync_version", 0):
                     state["last_sync_version"] = sv
-                    self.fm.save_sync_state(state)
-
-                try:
-                    await self.sb.log_sync(
-                        user_id=self._user_id,
-                        device_id=self.device_id,
-                        action="push",
-                        note_id=note_id,
-                        sync_version=result.get("sync_version"),
-                        content_hash=c_hash,
-                    )
-                except Exception:
-                    pass
+                self.fm.save_sync_state(state)
 
                 repo = self._get_notes_repo()
                 await repo.set_sync_status(note_id, "synced", remote_hash=c_hash)
@@ -382,6 +331,19 @@ class SyncEngine:
             # silently fell through to an unconditional overwrite and ate the
             # local edit.
             if local_hash and remote_hash and local_hash != remote_hash:
+                # Own-push echo guard: if the remote row was last written by
+                # THIS device, the cloud holds nothing this machine doesn't
+                # already have — the local divergence is just a newer unsynced
+                # edit. Pulling would clobber it and conflicting would spam the
+                # user with a "conflict" against their own earlier save (the
+                # false-conflict storm of 2026-07). Skip; the edit propagates
+                # on its own push.
+                if note.get("last_device_id") == self.device_id:
+                    logger.debug(
+                        "Skipping pull of %s — remote is this device's own push",
+                        note_id,
+                    )
+                    return {**note, "_skipped_own_push": True}
                 local_unchanged_since_sync = (
                     last_known_hash is not None and local_hash == last_known_hash
                 )
@@ -499,7 +461,6 @@ class SyncEngine:
                     continue
 
                 try:
-                    is_new = note.get("sync_status") == "never_synced"
                     await self._push_note(
                         note_id=note["id"],
                         label=note.get("label", note.get("title", "")),
@@ -508,7 +469,6 @@ class SyncEngine:
                         folder_id=note.get("folder_id"),
                         tags=note.get("tags", []),
                         metadata=note.get("metadata", {}),
-                        is_new_note=is_new,
                         file_path=fp,
                     )
                     stats["pushed"] += 1
@@ -643,6 +603,24 @@ class SyncEngine:
                             file_path=fp,
                         )
                         stats["pushed"] += 1
+                elif remote.get("last_device_id") == self.device_id:
+                    # Divergence, but the cloud row was last written by THIS
+                    # device — no other device has contributed since our last
+                    # push, so the local file is simply newer unsynced work.
+                    # Raising a conflict here made the app accuse the user of
+                    # conflicting with their own saves. Push instead.
+                    content = self.fm.read_note(fp)
+                    if content is not None:
+                        await self._push_note(
+                            note_id=remote["id"],
+                            label=remote.get("label", local["label"]),
+                            content=content,
+                            folder_name=remote.get("folder_name", "General"),
+                            folder_id=remote.get("folder_id"),
+                            file_path=fp,
+                        )
+                        stats["pushed"] += 1
+
                 else:
                     local_content = self.fm.read_note(fp) or ""
                     try:
@@ -683,7 +661,6 @@ class SyncEngine:
                             content=content,
                             folder_name=(local_note or {}).get("folder_name") or folder,
                             folder_id=(local_note or {}).get("folder_id"),
-                            is_new_note=True,
                             file_path=fp,
                         )
                         stats["pushed"] += 1
@@ -695,16 +672,6 @@ class SyncEngine:
             )
             state["last_sync_version"] = max_sv
             self.fm.save_sync_state(state)
-
-            try:
-                await self.sb.log_sync(
-                    user_id=self._user_id,
-                    device_id=self.device_id,
-                    action="full_sync",
-                    details=stats,
-                )
-            except Exception:
-                pass
 
             return stats
 
@@ -718,27 +685,37 @@ class SyncEngine:
         if mapped_paths:
             self.fm.sync_to_mapped_dirs(file_path, mapped_paths)
 
-    # ── Device registration ──────────────────────────────────────────────────
+    # ── Device identity ──────────────────────────────────────────────────────
 
     async def register_device(self) -> dict[str, Any]:
-        if not self._user_id or not self.sb.available:
-            return {}
+        """Device identity is local-only.
 
-        try:
-            return await self.sb.register_device(
-                user_id=self._user_id,
-                device_id=self.device_id,
-                device_name=PLATFORM["hostname"] or "Unknown",
-                platform=PLATFORM["system"],
-                base_path=str(self.fm.base_dir),
-            )
-        except Exception:
-            return {}
+        The cloud `note_devices` registry was graveyarded in the 2026-07 cloud
+        DB reorganization; device_id lives in `.sync/state.json` and rides on
+        every push as `last_device_id` (own-echo detection).
+        """
+        return {
+            "device_id": self.device_id,
+            "device_name": PLATFORM["hostname"] or "Unknown",
+            "platform": PLATFORM["system"],
+            "base_path": str(self.fm.base_dir),
+            "cloud_registry": "retired",
+        }
 
     # ── File watcher integration ─────────────────────────────────────────────
 
+    @property
+    def watcher_active(self) -> bool:
+        return self._watch_task is not None and not self._watch_task.done()
+
     async def start_watcher(self) -> None:
-        if self._watch_task and not self._watch_task.done():
+        if self.watcher_active:
+            return
+        if notes_access_guard.is_degraded or not self.fm.base_dir.exists():
+            logger.warning(
+                "Document file watcher NOT started — notes dir inaccessible (%s)",
+                notes_access_guard.reason or str(self.fm.base_dir),
+            )
             return
         self._stop_event.clear()
         self._watch_task = asyncio.create_task(self._watch_loop())
@@ -817,6 +794,15 @@ class SyncEngine:
 
         except asyncio.CancelledError:
             pass
+        except Exception:
+            # A dead watcher must be loud — the UI shows "Watching" based on
+            # task liveness, and a silent crash here means external edits stop
+            # syncing with no signal to anyone.
+            logger.error(
+                "Document file watcher crashed — external-edit detection is OFF "
+                "until restart",
+                exc_info=True,
+            )
 
     async def _handle_external_delete(self, file_path: str) -> None:
         """Handle an externally deleted .md file.
@@ -920,7 +906,6 @@ class SyncEngine:
                             label=Path(file_path).stem,
                             content=content,
                             folder_name=folder,
-                            is_new_note=True,
                             file_path=file_path,
                         )
                 except Exception:
@@ -1050,7 +1035,6 @@ class SyncEngine:
                         content=remote_content,
                         folder_name=folder_name,
                         folder_id=folder_id,
-                        is_new_note=True,
                     )
                 except Exception:
                     pass
@@ -1067,19 +1051,36 @@ class SyncEngine:
 
         self.fm.resolve_conflict(note_id)
 
-        if self.is_configured and self._user_id:
-            try:
-                await self.sb.log_sync(
-                    user_id=self._user_id,
-                    device_id=self.device_id,
-                    action="conflict_resolved",
-                    note_id=note_id,
-                    details={"resolution": resolution},
-                )
-            except Exception:
-                pass
-
         return result
+
+    def prune_stale_conflicts(self) -> int:
+        """Drop conflicts whose local and remote snapshots are identical.
+
+        A conflict with byte-identical sides carries no decision for the user —
+        it is residue from an earlier detection bug (e.g. the pre-2026-07
+        own-push false conflicts). Removing it is lossless by definition.
+        Returns the number of conflicts pruned.
+        """
+        pruned = 0
+        for note_id in self.fm.list_conflicts():
+            conflict_dir = self.fm.base_dir / ".sync" / "conflicts" / note_id
+            local_file = conflict_dir / "local.md"
+            remote_file = conflict_dir / "remote.md"
+            try:
+                local_content = (
+                    local_file.read_text(encoding="utf-8") if local_file.exists() else None
+                )
+                remote_content = (
+                    remote_file.read_text(encoding="utf-8") if remote_file.exists() else None
+                )
+            except OSError:
+                continue
+            if local_content is not None and local_content == remote_content:
+                self.fm.resolve_conflict(note_id)
+                pruned += 1
+        if pruned:
+            logger.info("Pruned %d stale identical-content conflicts", pruned)
+        return pruned
 
     # ── Status ───────────────────────────────────────────────────────────────
 
@@ -1094,8 +1095,7 @@ class SyncEngine:
             "tracked_files": len(state.get("note_hashes", {})),
             "conflicts": conflicts,
             "conflict_count": len(conflicts),
-            "watcher_active": self._watch_task is not None
-            and not self._watch_task.done(),
+            "watcher_active": self.watcher_active,
             "base_dir": str(self.fm.base_dir),
             # Surface the macOS Full Disk Access / permission-denied condition
             # so the UI can prompt the user with an actionable message instead

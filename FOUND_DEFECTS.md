@@ -147,6 +147,48 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 - **Status:** open. Delete the dead set, or document which is canonical.
 - **Owner hint:** build / Arman decision
 
+### MXL-D-034 — Duplicated `formatBytes` / `CopyButton` / shell-open across the app
+
+- **Area:** frontend, code health
+- **Symptom:** The media canonicalization (v1.3.106) established one
+  `formatBytes`/`formatDate` (`components/media/types.ts`), one `CopyButton`
+  (`components/media/MediaInfoDialog.tsx`) and one shell-open (`MediaActions
+  Provider.showInFolder`). The rest of the app still carries forks that predate
+  it and will drift.
+- **Evidence:** `formatBytes` — `lib/utils.ts:8`, `components/DownloadProgress.tsx:126`,
+  `components/UpdateBanner.tsx:207`, `components/UpdateDialog.tsx:29`,
+  `components/downloads/DownloadManagerModal.tsx:40`,
+  `components/tools/panels/MonitoringPanel.tsx:52`, `pages/LocalModels.tsx:152`,
+  inline in `pages/Settings.tsx:2716`. `CopyButton` — `components/tools/ToolInfoPanel.tsx:38`,
+  `components/chat/ChatMessages.tsx:25`, `pages/LocalModels.tsx:206`.
+  Direct `import("@tauri-apps/plugin-shell")` — `pages/LocalModels.tsx:167`,
+  `pages/Devices.tsx:193`, `components/downloads/DownloadActionDialog.tsx:57`,
+  `components/SetupWizard.tsx:609`, `components/PermissionsModal.tsx:449`,
+  `hooks/use-permissions.ts:438`, `hooks/use-auth.ts:219`.
+- **Status:** open
+- **Analysis:** Analyzed 2026-07-12 — verified in code by an adversarial review
+  of the media refactor. Out of scope for that change (none of these render
+  media); filing rather than expanding the blast radius of a release.
+- **Owner hint:** whoever next touches downloads/settings — collapse onto the
+  canonical helpers as you go.
+
+### MXL-D-035 — Captured device VIDEO is not canonical media (photos are)
+
+- **Area:** frontend, media
+- **Symptom:** In `pages/Devices.tsx` a captured photo/screenshot routes through
+  the canonical `MediaThumb` (full screen, info, right-click menu, download),
+  but the video branch of the same conditional is still a raw `<video>` plus a
+  hand-rolled `<a download>`. Asymmetric: the same capture flow gives you the
+  full action set for a still and almost nothing for a clip.
+- **Evidence:** `desktop/src/pages/Devices.tsx` — image branch uses `MediaThumb`;
+  video branch renders `<video controls src={mediaSrc}>` with its own download
+  link (both occurrences, photo and screen-recording).
+- **Status:** open
+- **Analysis:** Analyzed 2026-07-12 — verified in code. A device capture has no
+  engine item id, so it would get the no-itemId capability set (full screen,
+  info, download, copy prompt) — still strictly better than today.
+- **Owner hint:** small; mirror what the image branch already does.
+
 ## Cross-repo
 
 ### MXL-D-027 — Voice E2E unconfirmed on physical hardware

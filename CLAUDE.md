@@ -13,9 +13,11 @@
 | App settings keys (`AppSettings`) | [docs/official/settings-catalog.md](docs/official/settings-catalog.md) |
 | Settings audit / known gaps | [docs/official/settings-audit.md](docs/official/settings-audit.md) |
 | CI, PyInstaller, Tauri build gotchas | [docs/official/build-lessons.md](docs/official/build-lessons.md) |
+| Token broker — scoped short-lived credentials (client primitive this repo must build + `token-broker-client` repo skill) | `/Users/armanisadeghi/code/common-docs/token-broker/FEATURE.md` — read before touching this feature in ANY repo |
 | Download pipeline (audit / defects) | [docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md](docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md) |
 | Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |
 | matrx-extend ↔ engine | [docs/MATRX_EXTEND_CONNECTION.md](docs/MATRX_EXTEND_CONNECTION.md) |
+| **Verify a startup/UI change actually runs** | **[docs/SMOKE_HARNESS.md](docs/SMOKE_HARNESS.md)** — `./scripts/smoke.sh` builds, launches, and hands you the logs |
 | Code-local rules | `app/tools/FEATURE.md`, `app/api/FEATURE.md`, `app/services/*/FEATURE.md` |
 | Defect holding area | [FOUND_DEFECTS.md](FOUND_DEFECTS.md) |
 | Approved agent work | [.matrx/AGENT_TASKS.md](.matrx/AGENT_TASKS.md) |
@@ -213,6 +215,7 @@ Never let a discovered issue go untracked. Prefer the right file; do not invent 
 - Work systematically, one task at a time
 - Track discoveries in `FOUND_DEFECTS.md`; execute approved work from `.matrx/AGENT_TASKS.md`
 - Production-grade only — no stubs, no TODOs, no placeholder logic
+- **Changed anything that runs at startup? A green typecheck is not evidence the app starts — run `./scripts/smoke.sh` (Windows: `scripts\smoke.ps1`), which builds/launches the app and hands you the logs. See [docs/SMOKE_HARNESS.md](docs/SMOKE_HARNESS.md).**
 - Keep solutions simple; avoid over-engineering
 - Keep going until done or stuck
 - OK to edit .env files — comment out, don't delete

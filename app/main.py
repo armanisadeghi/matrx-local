@@ -318,26 +318,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             exc_info=True,
         )
 
-    # Phase 0a (post3): Start the universal download manager.
-    # Must run after the database is connected (Phase 0a) because it reads
-    # any incomplete downloads from SQLite on startup for crash recovery — and
-    # after the API keys are loaded (post2 above), because it resumes those
-    # downloads the moment it starts.
-    _registry.starting("downloads")
-    try:
-        from app.services.downloads.manager import get_download_manager
-
-        dl_manager = get_download_manager()
-        await dl_manager.start()
-        logger.info("[app/main.py] Phase 0a: Download manager started ✓")
-        _registry.ready("downloads")
-    except Exception as exc:
-        logger.warning(
-            "[app/main.py] Phase 0a: Download manager failed to start (non-fatal)",
-            exc_info=True,
-        )
-        _registry.degraded("downloads", reason=f"start failed: {exc}")
-
     # Phase 0a (image-gen): If the user has previously installed image-gen packages
     # via the in-app installer, inject the packages directory into sys.path now so
     # torch/diffusers are importable in this process.  This is a no-op when the
@@ -393,6 +373,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "[app/main.py] Phase 0a: capability path injection failed (non-fatal)",
             exc_info=True,
         )
+
+    # Phase 0a (post3): Start the universal download manager.
+    # Must run after the database is connected (Phase 0a) because it reads
+    # any incomplete downloads from SQLite on startup for crash recovery — and
+    # after BOTH the API keys are loaded (post2) AND the image-gen/capability
+    # package paths are injected (blocks above), because start() resumes
+    # incomplete downloads the moment it runs. A resumed Hugging Face diffusers
+    # download imports huggingface_hub from the injected packages dir; when the
+    # manager started before the injection it failed with a false
+    # "AI packages are not installed" in the very session whose later log
+    # printed image=True video=True. Do not move this above the injections.
+    _registry.starting("downloads")
+    try:
+        from app.services.downloads.manager import get_download_manager
+
+        dl_manager = get_download_manager()
+        await dl_manager.start()
+        logger.info("[app/main.py] Phase 0a: Download manager started ✓")
+        _registry.ready("downloads")
+    except Exception as exc:
+        logger.warning(
+            "[app/main.py] Phase 0a: Download manager failed to start (non-fatal)",
+            exc_info=True,
+        )
+        _registry.degraded("downloads", reason=f"start failed: {exc}")
 
     # Phase 0b: Ensure Playwright browsers are installed (auto-installs if missing).
     # Browsers are NOT bundled in the PyInstaller binary (bundling causes macOS

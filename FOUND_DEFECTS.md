@@ -185,27 +185,9 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 > normally (1012)` (= uvicorn began shutdown) → ≤1 more heartbeat → total
 > silence. FIXED 2026-07-13: MXL-D-036 (silent shutdown), MXL-D-037 (infinite
 > drain), MXL-D-040 (protobuf/matrx-ai), MXL-D-041 (access.log) — one-line
-> records in .matrx/AGENT_TASKS.md § Completed. Still open below: MXL-D-038
-> remainder, MXL-D-039 trigger hunt, MXL-D-042.
-
-### MXL-D-038 — UI shows infinite loaders over a dead engine (models, media library, everything) — the "app lies" bug
-- **Area:** desktop frontend
-- **Symptom:** when the engine process is gone (port refused), Models /
-  Files / media pages spin forever with no error and no recovery CTA. The
-  health checker in `use-engine.ts` (≈line 407) already flips status to
-  "disconnected" within ≤10s — but data hooks/pages don't consume it, and
-  fetch rejections land in perpetual `loading` states. This is what Arman
-  experiences as "the whole image system gets stuck"; kill+relaunch "fixes"
-  it because it respawns the engine.
-- **Evidence:** engine-side logs prove the engine was dead during every
-  freeze window while the UI stayed up (no request arrivals, port down);
-  access.log shows zero slow/hung image-gen or media-library requests in
-  live sessions. Frontend: `use-engine.ts:404-429` knows `disconnected`;
-  media/model hooks don't render it.
-- **Status:** open. Analyzed 2026-07-13 — verified from logs + use-engine.ts;
-  per-hook loading-state audit still needed.
-- **Owner hint:** global "engine disconnected" gate/banner + every data hook
-  must resolve `loading → error` on fetch rejection.
+> records in .matrx/AGENT_TASKS.md § Completed. MXL-D-038 fixed 2026-07-13 too (EngineDownBanner +
+> media-library init-fetch/retry + sentinel normalization). Still open
+> below: MXL-D-039 trigger hunt, MXL-D-042.
 
 ### MXL-D-039 — Something SIGTERMs the engine mid-session without any Rust graceful path running (trigger still unidentified)
 - **Area:** desktop Rust / lifecycle
@@ -230,6 +212,14 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   unidentified — close this once one more occurrence is attributed.
 - **Owner hint:** wait for one occurrence, read
   `~/Library/Logs/MatrxLocal/lifecycle.log`.
+- **Live observations 2026-07-13 ~00:49 (during the fix session):** (1) after
+  `osascript quit`, the v1.3.107 engine SURVIVED the app quit for ≥30s (the
+  orphan bug, pre-fix build); (2) the app was RELAUNCHED by an unidentified
+  actor 8s after quitting (parent=launchd, no LaunchAgent, no login item —
+  possibly another active agent session on this machine, the Chrome
+  extension, or the updater). An app launch at 00:43 with no user action was
+  also observed. A phantom relauncher would explain mid-session engine churn;
+  the new lifecycle.log will attribute it on the next occurrence.
 
 ### MXL-D-042 — Standalone (non-sidecar) engine on macOS ignores SIGTERM while the pystray tray is active
 - **Area:** run.py / standalone mode

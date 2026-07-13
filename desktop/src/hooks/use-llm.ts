@@ -355,6 +355,51 @@ export function useLlm(): [LlmState, LlmActions] {
     };
     setupListeners();
 
+    // Reconcile an ALREADY-RUNNING llama-server with the Python engine.
+    // The auto-start path in lib.rs emits llm-server-ready during Tauri
+    // setup — before this hook mounts — and Tauri does not replay events to
+    // late listeners, so without this pass the engine never learns the
+    // server exists and agents cannot route to the local model. Retries
+    // cover the window where engine discovery (baseUrl) hasn't completed.
+    const reconcileEngineRegistration = async () => {
+      const RETRY_DELAY_MS = 3000;
+      const MAX_ATTEMPTS = 10;
+      for (let attempt = 0; attempt < MAX_ATTEMPTS && mounted; attempt++) {
+        try {
+          const status = await tauriInvoke<LlmServerStatus>(
+            "get_llm_server_status",
+          );
+          if (!status.running || !status.port) return; // nothing to reconcile
+          if (mounted) setServerStatus(status);
+          try {
+            const engineStatus = await engine.getLocalLlmStatus();
+            if (engineStatus.available && engineStatus.port === status.port) {
+              return; // engine already knows about this server
+            }
+          } catch {
+            // Engine not discovered yet — fall through to connect (which
+            // throws in that case) and retry on the next attempt.
+          }
+          await engine.connectLocalLlm(status.port, status.model_name ?? "");
+          console.log(
+            "[use-llm] Reconciled auto-started llama-server with engine (port",
+            status.port,
+            ")",
+          );
+          return;
+        } catch {
+          // Engine not up / not discovered yet — retry below.
+        }
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      }
+      if (mounted) {
+        console.warn(
+          "[use-llm] Could not register running llama-server with the engine after retries — local model will be unavailable to agents",
+        );
+      }
+    };
+    void reconcileEngineRegistration();
+
     return () => {
       mounted = false;
       // Also unlisten here so that if this effect re-runs (dependency change),

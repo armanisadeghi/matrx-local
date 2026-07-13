@@ -407,7 +407,10 @@ class EngineAPI {
    * Non-fatal — errors are caught and logged by the caller.
    */
   async connectLocalLlm(port: number, modelName: string): Promise<void> {
-    if (!this.baseUrl) return;
+    // Throw (don't silently no-op) when discovery hasn't completed — callers
+    // retry or surface the failure. A silent return here left auto-started
+    // llama-servers unregistered with the engine forever.
+    if (!this.baseUrl) throw new Error("Engine not discovered");
     const resp = await fetch(`${this.baseUrl}/chat/local-llm/connect`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

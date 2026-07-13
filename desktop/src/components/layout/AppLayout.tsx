@@ -2,6 +2,7 @@ import { useLocation } from "react-router-dom";
 import { AppSidebar } from "./AppSidebar";
 import { StatusBar } from "./StatusBar";
 import { QuickActionBar } from "./QuickActionBar";
+import { EngineDownBanner } from "@/components/EngineDownBanner";
 import { useDevTerminalHeight } from "@/components/DevTerminalPanel";
 import type { EngineStatus } from "@/hooks/use-engine";
 import type { TranscriptionState, TranscriptionActions } from "@/hooks/use-transcription";
@@ -24,6 +25,8 @@ interface AppLayoutProps {
   engineVersion?: string;
   onRefresh: () => void;
   onOpenMonitor?: () => void;
+  /** Full engine restart (stop → start → reconnect) — powers the down-banner. */
+  onRestartEngine: () => Promise<void> | void;
   user: User | null;
   onSignOut: () => void;
   // QuickActionBar props
@@ -63,6 +66,7 @@ export function AppLayout({
   engineVersion,
   onRefresh,
   onOpenMonitor,
+  onRestartEngine,
   user,
   onSignOut,
   isRecording,
@@ -114,6 +118,11 @@ export function AppLayout({
           onMarkAllRead={onMarkAllRead}
           onDismissNotification={onDismissNotification}
           onClearAllNotifications={onClearAllNotifications}
+        />
+        <EngineDownBanner
+          engineStatus={engineStatus}
+          onRestartEngine={onRestartEngine}
+          onOpenMonitor={onOpenMonitor ?? NOOP}
         />
         <main className="flex flex-1 flex-col overflow-hidden relative">
           {pages.map(({ path, element }) => (

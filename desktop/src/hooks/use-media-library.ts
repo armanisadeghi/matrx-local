@@ -153,11 +153,20 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
         setHasMore(offset + page.items.length < page.total);
         setError(null);
       } catch (e) {
+        // A TypeError from fetch is a network-level failure — the engine
+        // process is gone (connection refused), not an API error. Normalize
+        // it to the sentinel so the reconnect retry below arms; the raw
+        // "Failed to fetch" string never matched and the tab stayed dead
+        // until a full app restart.
         const msg =
-          e instanceof Error ? e.message : "Failed to load media library";
+          e instanceof TypeError
+            ? ENGINE_NOT_CONNECTED
+            : e instanceof Error
+              ? e.message
+              : "Failed to load media library";
         emitClientLog(
           "error",
-          `[media-library] list failed (offset ${offset}): ${msg}`,
+          `[media-library] list failed (offset ${offset}): ${String(e)}`,
           "engine",
         );
         setError(msg);
@@ -294,6 +303,29 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
   );
 
   const clearError = useCallback(() => setError(null), []);
+
+  // Init fetch — in the hook, on [] deps, per repo React rules. This was
+  // MISSING (the docstring promised it): nothing loaded the library on mount,
+  // so `loading` (initialized true) never cleared unless a job-completion
+  // effect happened to fire — with a dead engine, none did, and the Library
+  // tab showed "Loading media library…" forever. The shipped
+  // forever-spinner bug of 2026-07-11/12 (MXL-D-038).
+  useEffect(() => {
+    void fetchPage(0, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Engine-reconnect retry — narrowly gated on the ENGINE_NOT_CONNECTED
+  // sentinel (fetchPage normalizes network-level failures to it), same
+  // pattern as use-media-vault. Clears itself the moment a fetch succeeds
+  // (error → null) or fails for a non-connection reason.
+  useEffect(() => {
+    if (error !== ENGINE_NOT_CONNECTED) return;
+    const id = setInterval(() => {
+      void fetchPage(0, true);
+    }, 3000);
+    return () => clearInterval(id);
+  }, [error, fetchPage]);
 
   // Items restored OUT of the vault are library items again — pull them in.
   useEffect(() => onMediaItemsAdded(() => void fetchPage(0, true)), [fetchPage]);

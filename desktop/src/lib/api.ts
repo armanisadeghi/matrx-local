@@ -5120,7 +5120,16 @@ async function mediaLibraryFetch<T>(
     extra.forEach((value, key) => mergedHeaders.set(key, value));
   }
   const method = options?.method ?? "GET";
-  const resp = await fetch(url, { ...options, headers: mergedHeaders });
+  // Bounded like imageGenFetch: a plain fetch against a HUNG (not dead)
+  // engine never settles, and the Library list/delete would wait on it
+  // forever with no error. Dead engines already reject fast (TypeError);
+  // this cap covers the wedged-process case. Callers may pass their own
+  // signal to override.
+  const resp = await fetch(url, {
+    signal: AbortSignal.timeout(MEDIA_GEN_TIMEOUT_MS),
+    ...options,
+    headers: mergedHeaders,
+  });
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     let detail = body;

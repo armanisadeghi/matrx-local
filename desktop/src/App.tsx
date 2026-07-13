@@ -533,6 +533,7 @@ function AppInner() {
                     engineUrl={url}
                     engineVersion={engineVersion}
                     onRefresh={refresh}
+                    onRestartEngine={restartEngine}
                     user={auth.user}
                     onSignOut={auth.signOut}
                     isRecording={transcriptionState.isRecording}

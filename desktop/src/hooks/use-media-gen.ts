@@ -814,8 +814,17 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       setImagePresets(presets);
       setImageStatusError(null);
     } catch (e) {
+      // fetch TypeError = network-level failure (engine process gone), not an
+      // API error. Normalize to the sentinel so the reconnect retry effect
+      // arms — the raw "Failed to fetch" string never matched it, so a
+      // mid-session engine death left the page stuck on the error card with
+      // no auto-recovery (part of MXL-D-038).
       setImageStatusError(
-        e instanceof Error ? e.message : "Failed to load image generation",
+        e instanceof TypeError
+          ? ENGINE_NOT_CONNECTED
+          : e instanceof Error
+            ? e.message
+            : "Failed to load image generation",
       );
     } finally {
       setImageStatusLoading(false);
@@ -1947,8 +1956,14 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         }
       }
     } catch (e) {
+      // Same sentinel normalization as refreshImage — a dead engine must arm
+      // the reconnect retry, not park on a "Failed to fetch" card forever.
       setVideoStatusError(
-        e instanceof Error ? e.message : "Failed to load video generation",
+        e instanceof TypeError
+          ? ENGINE_NOT_CONNECTED
+          : e instanceof Error
+            ? e.message
+            : "Failed to load video generation",
       );
     } finally {
       setVideoStatusLoading(false);

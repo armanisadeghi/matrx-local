@@ -526,6 +526,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("sync_engine", exc)
 
+    # Phase 2c: Engine-owned notes auto-sync (documents ↔ workbench.notes).
+    # Credentials come from the persisted auth_tokens row, so this works even
+    # if the user never opens the Notes UI — the historical failure mode was
+    # months of no sync because everything hinged on frontend traffic.
+    _registry.starting("notes_sync")
+    try:
+        from app.services.documents.sync_engine import sync_engine as _doc_sync
+
+        await _doc_sync.start_background_sync()
+        logger.info("[app/main.py] Phase 2c: Notes auto-sync started ✓")
+        _registry.ready("notes_sync")
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 2c: Notes auto-sync FAILED to start — notes will only sync manually",
+            exc_info=True,
+        )
+        _registry.failed("notes_sync", exc)
+
     # Phase 3: Start scraper engine
     print("[phase:scraper] Starting scraper engine...", flush=True)
     logger.info("[app/main.py] Phase 3: Starting scraper engine...")
@@ -1038,6 +1056,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         from app.services.documents.sync_engine import sync_engine as _doc_sync
 
+        if _doc_sync.auto_sync_active:
+            _registry.stopping("notes_sync")
+            await asyncio.wait_for(_doc_sync.stop_background_sync(), timeout=3.0)
+            _registry.stopped("notes_sync")
+            logger.info("[app/main.py] Notes auto-sync stopped ✓")
         if _doc_sync._watch_task and not _doc_sync._watch_task.done():
             await asyncio.wait_for(_doc_sync.stop_watcher(), timeout=3.0)
             logger.info("[app/main.py] Document file watcher stopped ✓")

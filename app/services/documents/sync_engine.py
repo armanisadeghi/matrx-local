@@ -9,8 +9,11 @@ source of truth the replica converges to.
 - Local file is always written first; cloud propagation follows.
 - Supabase sync is best-effort — a failed network never blocks or fails a
   request; failed pushes are marked sync_status=failed and retried.
-- Sync is MANUALLY TRIGGERED ONLY — no automatic background sync
-  (plus the file watcher for external edits/deletes).
+- Sync runs AUTOMATICALLY: the engine-owned auto-sync loop (see
+  start_background_sync) does an incremental pull + pending push every tick
+  and a full reconcile daily, the file watcher catches external edits and
+  deletes, Supabase Realtime (frontend hook) pulls remote edits live, and
+  manual push/pull/bidirectional triggers remain available on top.
 - Three modes: push, pull, bidirectional.
 - Conflict detection uses content hashes and SQLite sync metadata.
 - Conflicts are NEVER destructive: both versions are preserved under
@@ -71,6 +74,9 @@ class SyncEngine:
         self._stop_event = asyncio.Event()
         self._sync_lock = asyncio.Lock()
         self._last_push_hashes: dict[str, str] = {}
+        self._auto_task: asyncio.Task | None = None
+        self._auto_stop = asyncio.Event()
+        self._auto_last_skip_reason: str | None = None
 
     @property
     def device_id(self) -> str:
@@ -731,6 +737,113 @@ class SyncEngine:
                 pass
             self._watch_task = None
         logger.info("Document file watcher stopped")
+
+    # ── Engine-owned background auto-sync ────────────────────────────────────
+    #
+    # Sync must not depend on the user opening the Notes UI. Historically the
+    # engine only configured itself (JWT + user_id) inside request handlers,
+    # so a user who never visited the Documents page got NO pulls, NO watcher,
+    # and pending pushes stranded for months. This loop makes the engine
+    # self-sufficient: credentials come from the persisted auth_tokens row
+    # (kept fresh by POST /auth/token on every login/refresh), the watcher is
+    # ensured, and an incremental pull + pending push runs every tick, with a
+    # full reconcile when the last one is older than _FULL_SYNC_MAX_AGE_S.
+
+    _FULL_SYNC_MAX_AGE_S = 24 * 3600
+
+    @property
+    def auto_sync_active(self) -> bool:
+        return self._auto_task is not None and not self._auto_task.done()
+
+    async def start_background_sync(self, interval_seconds: int = 600) -> None:
+        if self.auto_sync_active:
+            return
+        self._auto_stop.clear()
+        self._auto_task = asyncio.create_task(
+            self._auto_sync_loop(interval_seconds), name="notes-auto-sync"
+        )
+        logger.info(
+            "Notes auto-sync started (interval=%ss, full reconcile when older than %sh)",
+            interval_seconds,
+            self._FULL_SYNC_MAX_AGE_S // 3600,
+        )
+
+    async def stop_background_sync(self) -> None:
+        self._auto_stop.set()
+        if self._auto_task:
+            self._auto_task.cancel()
+            try:
+                await self._auto_task
+            except asyncio.CancelledError:
+                pass
+            self._auto_task = None
+        logger.info("Notes auto-sync stopped")
+
+    async def _auto_sync_loop(self, interval_seconds: int) -> None:
+        # First tick runs immediately so a fresh boot converges without
+        # waiting a full interval (matches local_db sync_engine behavior).
+        while not self._auto_stop.is_set():
+            try:
+                await self._auto_sync_tick()
+            except Exception:
+                logger.warning("Notes auto-sync tick crashed", exc_info=True)
+            try:
+                await asyncio.wait_for(
+                    self._auto_stop.wait(), timeout=interval_seconds
+                )
+            except asyncio.TimeoutError:
+                continue
+
+    async def _auto_sync_tick(self) -> None:
+        from app.services.local_db.repositories import TokenRepo
+
+        repo = TokenRepo()
+        row = await repo.get()
+        if not row or not row.get("access_token") or not row.get("user_id"):
+            if self._auto_last_skip_reason != "no_token":
+                logger.info(
+                    "Notes auto-sync idle — no signed-in user (will retry each tick)"
+                )
+                self._auto_last_skip_reason = "no_token"
+            return
+        if repo.is_expired(row):
+            if self._auto_last_skip_reason != "expired":
+                logger.warning(
+                    "Notes auto-sync idle — stored JWT is expired; waiting for the "
+                    "frontend to refresh it via POST /auth/token"
+                )
+                self._auto_last_skip_reason = "expired"
+            return
+        self._auto_last_skip_reason = None
+
+        # Re-configure every tick: the token rotates on refresh and configure()
+        # is idempotent/cheap.
+        self.configure(row["user_id"], row["access_token"])
+
+        if not self.watcher_active:
+            await self.start_watcher()
+
+        pull = await self.pull_changes()
+        push = await self.push_all()
+
+        state = self.fm.load_sync_state()
+        last_full = state.get("last_full_sync") or 0
+        full: dict[str, Any] | None = None
+        if (time.time() - last_full) > self._FULL_SYNC_MAX_AGE_S:
+            full = await self.full_sync()
+
+        moved = (
+            (pull.get("pulled") or 0)
+            + (pull.get("conflicts") or 0)
+            + (push.get("pushed") or 0)
+            + (push.get("failed") or 0)
+            + ((full or {}).get("pushed") or 0)
+            + ((full or {}).get("pulled") or 0)
+        )
+        if moved or (pull.get("error") or push.get("error") or (full or {}).get("error")):
+            logger.info(
+                "Notes auto-sync tick: pull=%s push=%s full=%s", pull, push, full
+            )
 
     async def _watch_loop(self) -> None:
         try:

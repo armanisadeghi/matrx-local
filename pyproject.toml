@@ -135,7 +135,11 @@ image-gen = [
     "transformers>=4.51",
     "accelerate>=1.0",
     "sentencepiece>=0.2.0",
-    "protobuf>=3.20.0",
+    # protobuf intentionally NOT listed: the engine already carries it as a
+    # core dep (via matrx-ai → xai-sdk, which hard-rejects protobuf 7). A
+    # second copy in the runtime image-gen dir shadowed the engine's and
+    # killed matrx-ai init in packaged builds ("Unsupported protobuf
+    # version: 7.34.1", 2026-07-12). See installer.py IMAGE_GEN_PACKAGES.
     "huggingface_hub>=0.22.0",
 ]
 all = [

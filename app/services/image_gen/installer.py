@@ -48,7 +48,13 @@ IMAGE_GEN_PACKAGES = [
     "transformers>=4.51",
     "accelerate>=1.0",
     "sentencepiece>=0.2.0",
-    "protobuf>=3.20.0",
+    # protobuf intentionally NOT installed here. The engine bundles its own
+    # (core dep via matrx-ai → xai-sdk, which hard-rejects protobuf 7). This
+    # dir is PREPENDED to sys.path, so a protobuf copy here shadowed the
+    # engine's and killed matrx-ai init on every packaged boot ("Unsupported
+    # protobuf version: 7.34.1", 2026-07-12). transformers' slow-tokenizer
+    # paths import the engine's bundled protobuf just fine.
+    # inject_image_gen_path() purges any copy left by older installs.
     "huggingface_hub>=0.22.0",
 ]
 
@@ -107,6 +113,53 @@ def needs_upgrade() -> bool:
     return _parse_version(installed) < MIN_DIFFUSERS_VERSION
 
 
+def _purge_shadowing_protobuf(pkg_dir: Path) -> None:
+    """Delete any protobuf copy from the managed image-gen dir — LOUDLY.
+
+    Older installs pip-installed protobuf into this dir (it was in
+    IMAGE_GEN_PACKAGES until 2026-07-13). Because the dir is PREPENDED to
+    sys.path, that copy shadowed the engine's own protobuf for importlib
+    metadata lookups — and, in frozen builds that failed to bundle
+    google.protobuf, for the module itself: xai-sdk then aborted with
+    "Unsupported protobuf version: 7.34.1" and matrx-ai init failed on every
+    packaged boot. The engine's bundled protobuf serves every consumer
+    (xai-sdk AND transformers), so a copy here is never correct.
+
+    Scream-and-fix per platform doctrine: every removal is logged at WARNING.
+    """
+    victims: list[Path] = []
+    victims += list(pkg_dir.glob("protobuf-*.dist-info"))
+    for sub in ("protobuf", "_upb"):
+        p = pkg_dir / "google" / sub
+        if p.exists():
+            victims.append(p)
+    if not victims:
+        return
+    import shutil  # noqa: PLC0415 — cold path, only when a stale copy exists
+
+    for v in victims:
+        try:
+            shutil.rmtree(v) if v.is_dir() else v.unlink()
+            logger.warning(
+                "[image_gen_installer] PURGED stale protobuf artifact %s from the "
+                "managed image-gen dir — it shadowed the engine's bundled protobuf "
+                "and broke matrx-ai init (see IMAGE_GEN_PACKAGES comment)", v,
+            )
+        except OSError as exc:
+            logger.error(
+                "[image_gen_installer] Could not purge shadowing protobuf artifact "
+                "%s: %s — matrx-ai init may fail with 'Unsupported protobuf version'",
+                v, exc,
+            )
+    # If google/ was only a protobuf namespace shell, drop the empty husk.
+    google_dir = pkg_dir / "google"
+    try:
+        if google_dir.is_dir() and not any(google_dir.iterdir()):
+            google_dir.rmdir()
+    except OSError:
+        pass
+
+
 def inject_image_gen_path() -> bool:
     """Add the managed packages dir to sys.path if the install is complete.
 
@@ -119,6 +172,10 @@ def inject_image_gen_path() -> bool:
     pkg_dir_path = get_image_gen_packages_dir()
     if not is_image_gen_installed():
         return False
+    try:
+        _purge_shadowing_protobuf(pkg_dir_path)
+    except Exception:
+        logger.exception("[image_gen_installer] protobuf purge failed — continuing")
     pkg_dir = str(pkg_dir_path)
     if pkg_dir not in sys.path:
         sys.path.insert(0, pkg_dir)

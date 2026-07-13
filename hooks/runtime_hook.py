@@ -125,6 +125,34 @@ try:
 
     for _ig_dir in _ig_dir_candidates:
         if (_ig_dir / ".install-complete").exists():
+            # Purge any protobuf copy older installs left here BEFORE the dir
+            # enters sys.path. The engine bundles its own protobuf (xai-sdk
+            # rejects protobuf 7 outright); a copy in this PREPENDED dir
+            # shadowed it and killed matrx-ai init on every packaged boot
+            # ("Unsupported protobuf version: 7.34.1", 2026-07-12). Mirrors
+            # installer.py _purge_shadowing_protobuf — kept inline here
+            # because this hook must not import app code.
+            try:
+                import shutil as _shutil
+
+                _victims = list(_ig_dir.glob("protobuf-*.dist-info"))
+                _victims += [
+                    _p for _p in (_ig_dir / "google" / "protobuf", _ig_dir / "google" / "_upb")
+                    if _p.exists()
+                ]
+                for _v in _victims:
+                    _shutil.rmtree(_v) if _v.is_dir() else _v.unlink()
+                    print(
+                        f"[runtime_hook] PURGED stale protobuf artifact {_v} "
+                        "(shadowed the engine's bundled protobuf; broke matrx-ai init)",
+                        file=sys.stderr,
+                    )
+                _g = _ig_dir / "google"
+                if _g.is_dir() and not any(_g.iterdir()):
+                    _g.rmdir()
+            except Exception:
+                pass  # purge is best-effort; the bundled protobuf still wins via FrozenImporter
+
             _ig_str = str(_ig_dir)
             if _ig_str not in sys.path:
                 sys.path.insert(0, _ig_str)

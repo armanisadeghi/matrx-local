@@ -38,7 +38,7 @@ _lang_tags_data = collect_data_files('language_tags')
 # If you add a dependency whose __init__ calls importlib.metadata.version(),
 # add it here. Missing packages are skipped, so an optional extra that is not
 # installed on this build machine will not break the build.
-_METADATA_PKGS = ['replicate']
+_METADATA_PKGS = ['replicate', 'protobuf']
 _pkg_metadata = []
 for _pkg in _METADATA_PKGS:
     try:
@@ -47,6 +47,18 @@ for _pkg in _METADATA_PKGS:
         pass  # optional/absent on this build host — nothing to copy
 
 _matrx_ai_mods = collect_submodules('matrx_ai')
+
+# google.protobuf is a namespace-package member PyInstaller does NOT collect
+# from the static import graph (xai-sdk pulls it lazily). When it is missing
+# from the frozen bundle, `import google.protobuf` falls through to sys.path —
+# where the runtime hook has PREPENDED ~/.matrx/image-gen-packages, whose own
+# protobuf (7.x) xai-sdk hard-rejects: "Unsupported protobuf version" killed
+# matrx-ai init on every packaged boot of v1.3.107 (2026-07-12). Bundling it
+# makes the FrozenImporter win over any sys.path copy; copy_metadata above
+# keeps importlib.metadata.version('protobuf') truthful in the frozen app.
+# google._upb._message is protobuf's C-extension backend (also invisible to
+# static analysis; missing-module hiddenimports are warnings, not errors).
+_protobuf_mods = collect_submodules('google.protobuf') + ['google._upb._message']
 
 
 a = Analysis(
@@ -58,7 +70,7 @@ a = Analysis(
         (os.path.join(_ROOT, 'scraper-service/app'), 'scraper-service/app'),
         (os.path.join(_ROOT, 'pyproject.toml'), '.'),
     ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data + _pkg_metadata,
-    hiddenimports=_matrx_ai_mods + [
+    hiddenimports=_matrx_ai_mods + _protobuf_mods + [
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
         'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',
         'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto',

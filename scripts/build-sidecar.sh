@@ -375,6 +375,13 @@ args = [
     # analysis sees none of it. A missing matrx_ai.db._registry killed the AI
     # stack in every packaged build — collect the whole package.
     "--collect-submodules", "matrx_ai",
+    # google.protobuf is a namespace-package member PyInstaller misses; when
+    # absent from the bundle, `import google.protobuf` resolves via sys.path
+    # to ~/.matrx/image-gen-packages' protobuf 7.x, which xai-sdk hard-rejects
+    # ("Unsupported protobuf version" — killed matrx-ai init in v1.3.107).
+    # Bundling makes the FrozenImporter win. _upb is the C-ext backend.
+    "--collect-submodules", "google.protobuf",
+    "--hidden-import", "google._upb._message",
     # Cross-component scheduler host (optional extra, lazily imported, gated off
     # by default) — bundle it so flipping MATRX_LOCAL_SCHEDULER_ENABLED works.
     "--hidden-import", "matrx_scheduler",
@@ -411,6 +418,22 @@ args = [
 tessdata = os.environ.get("TESSDATA_PATH_ARG", "")
 if tessdata:
     args += ["--add-data", tessdata]
+
+# Packages that read their OWN installed metadata at import time
+# (replicate/__about__.py -> importlib.metadata.version("replicate")).
+# PyInstaller does not bundle .dist-info unless told to; missing metadata
+# raises PackageNotFoundError in the COMPILED sidecar only (v1.3.105 shipped
+# that way: ai_engine -> state=failed on every boot). Keep in sync with
+# _METADATA_PKGS in specs/*.spec. Skipped when absent on the build host
+# (--copy-metadata hard-fails on missing packages, mirroring the specs'
+# try/except).
+import importlib.metadata
+for _pkg in ("replicate", "protobuf"):
+    try:
+        importlib.metadata.metadata(_pkg)
+        args += ["--copy-metadata", _pkg]
+    except importlib.metadata.PackageNotFoundError:
+        print(f"WARNING: {_pkg} not installed on build host — metadata not bundled")
 
 args.append("run.py")
 

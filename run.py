@@ -348,7 +348,14 @@ class _UvicornLogForwarder(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            logger._log(record.levelno, "[uvicorn] " + record.getMessage())
+            # Forward exc_info: uvicorn's "Exception in ASGI application"
+            # carries its traceback ONLY there — dropping it would log a bare
+            # one-liner and destroy the traceback everywhere.
+            logger._log(
+                record.levelno,
+                "[uvicorn] " + record.getMessage(),
+                exc_info=record.exc_info or None,
+            )
         except Exception:
             pass  # logging must never take down the server
 
@@ -476,7 +483,11 @@ def _start_parent_watchdog() -> None:
                 if _uvicorn_server is not None:
                     _uvicorn_server.should_exit = True
                 _shutdown_event.set()
-                _schedule_force_exit(10)
+                # 20s = the 15s sidecar teardown join in _wait_forever + 5s
+                # margin, so the join and child-kill actually get to run. The
+                # old 10s force-exit preempted the join mid-teardown — the
+                # very bug the 2026-07-13 shutdown overhaul removed elsewhere.
+                _schedule_force_exit(20)
                 return
 
     watchdog = threading.Thread(target=_watch, daemon=True, name="parent-watchdog")
@@ -494,6 +505,24 @@ def _has_system_tray() -> bool:
     return True
 
 
+def _teardown_join_seconds() -> int:
+    """How long the main thread waits for the lifespan teardown before it
+    force-kills our own children and exits.
+
+    SIDECAR MODE MUST STAY UNDER RUST'S 20s SIGKILL. Rust's sigterm_then_kill
+    escalates to SIGKILL 20s after SIGTERM, and its detached safety net only
+    pkills the engine/cloudflared/llama-server — NOT the Playwright driver +
+    chrome-headless-shell tree. If our join outlasted 20s, SIGKILL would land
+    before _kill_child_subprocesses() ever ran and the Playwright tree would
+    orphan — the exact leak that cleanup exists to prevent. 15s leaves a 5s
+    margin for the kill + exit path.
+
+    Standalone mode has no outer killer, so teardown gets the full documented
+    budget (5s uvicorn drain + ~18s child teardowns + margin).
+    """
+    return 15 if _is_tauri_sidecar() else 25
+
+
 def _wait_forever() -> None:
     """Block the main thread until SIGTERM, SIGINT, or the server exits.
 
@@ -501,12 +530,11 @@ def _wait_forever() -> None:
     finishes) instead of time.sleep(), so the thread wakes up immediately on
     SIGTERM rather than sleeping for up to 1 second before checking.
 
-    After receiving the shutdown signal, waits up to 25 seconds for the uvicorn
-    server thread to complete its lifespan teardown (proxy stop, Playwright
-    close, SQLite close, etc.) before forcing exit. 25s matches the teardown
-    budget in _handle_exit (5s uvicorn drain + ~18s child teardowns + margin);
-    the previous 10s join routinely fired MID-teardown and os._exit(0)'d with
-    zero log output — that silent exit was the "engine vanished, UI spun
+    After receiving the shutdown signal, waits up to _teardown_join_seconds()
+    for the uvicorn server thread to complete its lifespan teardown (proxy
+    stop, Playwright close, SQLite close, etc.) before forcing exit. The
+    previous fixed 10s join routinely fired MID-teardown and os._exit(0)'d
+    with zero log output — that silent exit was the "engine vanished, UI spun
     forever" bug of 2026-07-11/12. Every exit from this function now logs.
     """
     try:
@@ -514,22 +542,27 @@ def _wait_forever() -> None:
     except (KeyboardInterrupt, SystemExit):
         pass
 
-    logger.info("[shutdown] Main thread woke — waiting up to 25s for uvicorn lifespan teardown")
+    join_s = _teardown_join_seconds()
+    logger.info(
+        "[shutdown] Main thread woke — waiting up to %ds for uvicorn lifespan teardown",
+        join_s,
+    )
     remove_discovery_file()
     teardown_clean = True
     if _uvicorn_server is not None:
         _uvicorn_server.should_exit = True
         server_thread_ref = _server_thread
         if server_thread_ref is not None:
-            server_thread_ref.join(timeout=25)
+            server_thread_ref.join(timeout=join_s)
             teardown_clean = not server_thread_ref.is_alive()
     if not teardown_clean:
         # Lifespan teardown did not finish — clean up our own children.
         logger.error(
-            "[shutdown] Lifespan teardown did NOT complete within 25s — "
+            "[shutdown] Lifespan teardown did NOT complete within %ds — "
             "force-killing engine-owned children and exiting. This is a bug: "
             "something blocked uvicorn's drain or a service teardown. "
-            "Check the last '[launcher]' lines above for the stuck service."
+            "Check the last '[launcher]' lines above for the stuck service.",
+            join_s,
         )
         _kill_child_subprocesses()
     else:
@@ -604,31 +637,37 @@ def _handle_exit(signum: int, frame: object) -> None:  # noqa: ARG001
     sigterm_then_kill escalates to SIGKILL after 20s regardless — this timer
     is the standalone-mode (and belt-and-suspenders) guarantee.
     """
+    # ORDER MATTERS: arm the escape hatches FIRST, talk second. Logging and
+    # remove_discovery_file() both do blocking I/O (stdout pipe to the Tauri
+    # parent, flock'd file writes, local.json reads) — if any of that wedged
+    # BEFORE should_exit/_shutdown_event/force-exit were armed, the shutdown
+    # would never start and (in standalone mode, with no outer killer) the
+    # engine could hang forever. Guaranteed-death first, loudness second.
+    already = _exit_signal_logged.is_set()
+    _exit_signal_logged.set()
+    if not already:
+        if _uvicorn_server is not None:
+            _uvicorn_server.should_exit = True
+        _shutdown_event.set()
+        _schedule_force_exit(30)
+
     try:
         sig_name = signal.Signals(signum).name
     except ValueError:
         sig_name = str(signum)
-    # Log once, loudly; repeat signals get a shorter line (no duplicate ladders).
-    if not _exit_signal_logged.is_set():
-        _exit_signal_logged.set()
-        logger.warning(
-            "[shutdown] Received %s (pid=%d) — beginning graceful shutdown: "
-            "uvicorn drain (≤5s) → lifespan teardown → exit. If no "
-            "'[shutdown] … complete' line follows, the teardown hung and the "
-            "force-exit watchdog fired.",
-            sig_name, os.getpid(),
-        )
-    else:
+    if already:
         logger.warning("[shutdown] Received %s again — shutdown already in progress", sig_name)
         return
-
+    logger.warning(
+        "[shutdown] Received %s (pid=%d) — beginning graceful shutdown: "
+        "uvicorn drain (≤5s) → lifespan teardown → exit. If no "
+        "'[shutdown] … complete' line follows, the teardown hung and the "
+        "force-exit watchdog fired.",
+        sig_name, os.getpid(),
+    )
     remove_discovery_file()
 
-    if _uvicorn_server is not None:
-        _uvicorn_server.should_exit = True
-        _shutdown_event.set()
-        _schedule_force_exit(30)
-    else:
+    if _uvicorn_server is None:
         logger.warning("[shutdown] uvicorn server not yet created — exiting immediately")
         os._exit(0)
 

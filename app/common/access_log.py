@@ -55,7 +55,20 @@ _SUBSCRIBERS: list[asyncio.Queue] = []
 
 
 def _rotate() -> None:
-    """access.log → access.log.1 → access.log.2 (oldest dropped)."""
+    """access.log → access.log.1 → access.log.2 (oldest dropped).
+
+    A file far above the cap predates rotation entirely (the field one was
+    560 MB). Archiving it as .1 would RETAIN the disk pressure for weeks —
+    it only ages out after two more full 10 MB cycles — so oversized legacy
+    files are deleted outright instead of archived.
+    """
+    try:
+        legacy_oversized = ACCESS_LOG_PATH.stat().st_size > 2 * _MAX_BYTES
+    except OSError:
+        legacy_oversized = False
+    if legacy_oversized:
+        ACCESS_LOG_PATH.unlink(missing_ok=True)
+        return
     for i in range(_BACKUPS, 1, -1):
         src = ACCESS_LOG_PATH.with_name(f"{ACCESS_LOG_PATH.name}.{i - 1}")
         if src.exists():

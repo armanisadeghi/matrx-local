@@ -316,19 +316,23 @@ are condensed under Completed. Still open:
   and uv.lock is intentionally stale (still pins matrx-ai 0.1.26). After
   publishing: `uv lock && uv sync --extra all` and drop the `--no-sync`
   workaround note in tests/conftest.py if desired.
-- [ ] **Image-gen packages dir shadows venv deps (root-caused 2026-07-10)** —
-  `~/.matrx/image-gen-packages` is PREPENDED to sys.path
-  (`inject_image_gen_path`), and its protobuf 7.34.1 shadowed the venv's
-  protobuf 6 → xai-sdk import crash → AI engine init FAILED at boot.
-  Mitigated by an early `import google.protobuf` guard in
-  app/services/ai/engine.py + `[tool.uv] constraint-dependencies =
-  ["protobuf<7"]`. Real fix: the frozen build's runtime_hook injects before
-  any app import — audit which shared deps the image-gen dir can shadow and
-  either append (not prepend) or vendor-isolate them.
+- [ ] **Image-gen packages dir shadows venv deps — residual audit** — the
+  protobuf instance is FIXED (2026-07-13: google.protobuf bundled in the
+  frozen build via collect_submodules + copy_metadata in all 4 specs and the
+  build-sidecar fallback; protobuf removed from IMAGE_GEN_PACKAGES; stale
+  copies purged loudly at inject time — verified live). Remaining: audit
+  which OTHER shared deps the prepended runtime dir can shadow in dev mode
+  (frozen builds are protected by FrozenImporter precedence for bundled
+  packages; dev venvs are not) — e.g. huggingface_hub is both a core dep and
+  in IMAGE_GEN_PACKAGES.
 
 ## Completed
 
 _(one line each, newest first; full detail in git history)_
+
+- [x] Deleted stale untracked `specs/aimatrx-engine-*.spec` leftovers from disk (git already dropped them in 2e42a1134; the disk copies were the Hard Rule 6 edit-the-dead-set trap) — closes MXL-D-031 (2026-07-13)
+
+- [x] Silent-engine-death investigation + fixes (root cause of "image system frozen until app restart"): engine never wedges while alive — the freezes were a live UI over a dead engine. Fixed: loud signal-handler/shutdown logging + run.py logger black hole + uvicorn records into system.log (MXL-D-036), `timeout_graceful_shutdown=5` + 25s teardown join + every exit path logs (MXL-D-037, the old silent 10s `os._exit(0)` was the vanishing act), Rust `lifecycle.log` attributing every engine kill/spawn/exit with reason (MXL-D-039 instrumentation), access.log rotation at 10MB (MXL-D-041, was 560MB), google.protobuf bundling + runtime-dir purge fixing matrx-ai init failing every packaged boot (MXL-D-040), app-wide EngineDownBanner + hook loading→error fixes so a dead engine is announced instead of infinite spinners (MXL-D-038). Verified live: SIGTERM'd isolated engine → full shutdown narrative in system.log, clean exit ~1s; protobuf purge healed this machine (7.34.1 → bundled 6.33.5) (2026-07-13, commits ac73b7b62..)
 
 - [x] Canonical media layer (`desktop/src/components/media/`): ONE `MediaDescriptor` + `MediaThumb`/`MediaItemThumb` + app-wide lightbox/info-dialog/right-click menu + full action set (full screen, info, download, copy image, copy prompt, delete, vault, restore, use-as-input, **Remix**, show-in-folder, reuse-seed) behind `MediaActionsProvider`; deleted the forked Gallery/Library detail dialogs and per-surface blob loaders. Engine now stores the img2img source image beside the result and encrypts it into the vault (so vaulting never destroys it) — that is what makes Remix complete. One app-level library + vault store with cross-store removal/lock events, so delete / move-to-Private / restore / vault-lock update every surface in the same tick. Fixes: info-dialog 10-page horizontal scroll, lightbox exiting after ~3 images, truncated-prompt dead ends, non-canonical video surfaces. New defects filed: MXL-D-034, MXL-D-035 (2026-07-12, v1.3.106)
 - [x] API-key validation: shared `app/services/ai/key_validation.py` provider→spec registry (free auth-only endpoints, tri-state valid/invalid/unknown/unsupported) + `POST /settings/api-keys/{provider}/validate` & `/validate-all` + Test / Test All buttons and verdict badges in Settings → API Keys; `downloads/manager.py` HF whoami one-off absorbed into it; `elevenlabs`+`fastino` added to `VALID_PROVIDERS` (were in `PROVIDER_ENV_MAP` only → PUT/bulk 422, `.env`-only) and to `api-key-patterns.ts` (2026-07-12)

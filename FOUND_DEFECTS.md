@@ -133,20 +133,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   checking `/admin/status` itself.
 - **Owner hint:** engine core
 
-### MXL-D-031 — Duplicate/stale `specs/aimatrx-engine-*.spec` files
-- **Area:** build
-- **Symptom:** `specs/` holds two parallel sets of PyInstaller specs —
-  `matrx-engine-*.spec` (the ones `scripts/build-sidecar.sh:234` actually uses)
-  and `aimatrx-engine-*.spec`, which nothing in `scripts/` or `.github/`
-  references. Hard Rule 6 says hidden imports must stay in sync across "all 4
-  spec files"; with 8 files present, an agent can easily edit the dead set and
-  ship a broken sidecar believing it fixed the build.
-- **Evidence:** `grep -rl aimatrx-engine scripts/ .github/` → no build
-  references. The `replicate` metadata fix (2026-07-12) was applied only to the
-  4 live `matrx-engine-*.spec` files.
-- **Status:** open. Delete the dead set, or document which is canonical.
-- **Owner hint:** build / Arman decision
-
 ### MXL-D-034 — Duplicated `formatBytes` / `CopyButton` / shell-open across the app
 
 - **Area:** frontend, code health
@@ -197,39 +183,10 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 > kill the app" state is a LIVE UI over a DEAD/half-dead engine. Log signature
 > of every occurrence (system.log, ~12 times Jul 11–12): `WebSocket closed
 > normally (1012)` (= uvicorn began shutdown) → ≤1 more heartbeat → total
-> silence, NO lifespan-teardown lines, NO `/admin/shutdown` POST, no watchdog
-> warning — engine force-exits silently ~10–25s later. MXL-D-036..041 are the
-> pieces that make this both possible and invisible.
-
-### MXL-D-036 — Engine shutdown is silent: signal handler logs nothing, uvicorn shutdown messages go to stdout only
-- **Area:** run.py / logging
-- **Symptom:** a SIGTERM'd engine leaves ZERO trace in system.log of who/why —
-  the only clue is uvicorn's 1012 WS close logged incidentally by app code.
-- **Evidence:** `run.py` `_handle_exit()` (≈line 526) sets `should_exit` +
-  `_schedule_force_exit(25)` without a single log line; `_build_log_config()`
-  (≈line 302) routes `uvicorn.error` ("Shutting down", "Waiting for
-  connections to close") to a stdout StreamHandler only — invisible in the
-  packaged app's system.log. The parent-watchdog warning path DOES log, and
-  those warnings are absent from every freeze → trigger was a direct signal.
-- **Status:** open. Analyzed 2026-07-13 — verified in code + logs.
-- **Owner hint:** one-liner class fix: log `[shutdown] signal %d received
-  (pid …)` in `_handle_exit`, and add the file handler to uvicorn.error.
-
-### MXL-D-037 — Graceful shutdown wedges behind uvicorn's infinite drain (open SSE/WS), then force-exit kills teardown silently
-- **Area:** run.py / uvicorn config
-- **Symptom:** on shutdown with an open `/downloads/stream` SSE or WS
-  connection, uvicorn waits FOREVER for connections to drain
-  (`timeout_graceful_shutdown` not set), lifespan teardown never runs, and
-  `_schedule_force_exit(25)` `os._exit()`s with no teardown logs and no
-  "Shutdown complete". Every hard freeze on Jul 11–12 shows this signature;
-  clean quits (no SSE open) show the full teardown sequence.
-- **Evidence:** `run.py:337` `uvicorn.Config(...)` has no
-  `timeout_graceful_shutdown`; system.log sessions ending 21:15:57 /
-  21:57:53 / 16:38:29 / 14:50:56 (Jul 12) all lack teardown lines that the
-  14:14 / 14:52 / 19:43 clean shutdowns have.
-- **Status:** open. Analyzed 2026-07-13 — verified in code + logs.
-- **Owner hint:** set `timeout_graceful_shutdown=5` and log loudly when the
-  force-exit timer fires (it currently fires invisibly).
+> silence. FIXED 2026-07-13: MXL-D-036 (silent shutdown), MXL-D-037 (infinite
+> drain), MXL-D-040 (protobuf/matrx-ai), MXL-D-041 (access.log) — one-line
+> records in .matrx/AGENT_TASKS.md § Completed. Still open below: MXL-D-038
+> remainder, MXL-D-039 trigger hunt, MXL-D-042.
 
 ### MXL-D-038 — UI shows infinite loaders over a dead engine (models, media library, everything) — the "app lies" bug
 - **Area:** desktop frontend
@@ -264,44 +221,31 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   (`aimatrx-desktop-2026-07-12-193925.ips`, GGML atexit SIGABRT during
   AEQuit — the known race, still occurring on 1.3.105).
 - **Evidence:** system.log freeze signatures above; DiagnosticReports;
-  `lib.rs:74` (pkill), `lib.rs:413-427` (stop_sidecar → sigterm_then_kill),
-  `lib.rs:540` (safety net).
-- **Status:** open — needs MXL-D-036's loud logging (log signal + sender pid
-  via `SA_SIGINFO`-equivalent: `signal.sigwaitinfo`/`si_pid` or at minimum
-  log which Rust path killed) to identify on next occurrence.
-- **Owner hint:** every Rust kill path must log WHY to the unified log
-  before sending the signal (mirror the `[llm-autostart]`/`[llm-cmd]`
-  pattern that already exists for llama-server).
+  `lib.rs:74` (pkill), stop_sidecar → sigterm_then_kill, safety net.
+- **Status:** open — INSTRUMENTATION SHIPPED 2026-07-13: every Rust kill/
+  spawn/exit path now writes an attributed line to
+  `<log dir>/lifecycle.log` (new `lifecycle_log.rs`), and the Python side
+  logs every received signal (MXL-D-036 fix). On the NEXT mid-session death,
+  lifecycle.log + system.log together name the killer. Trigger itself still
+  unidentified — close this once one more occurrence is attributed.
+- **Owner hint:** wait for one occurrence, read
+  `~/Library/Logs/MatrxLocal/lifecycle.log`.
 
-### MXL-D-040 — matrx-ai init FAILS on every packaged boot (missing `replicate` dist-info / "Unsupported protobuf version: 7.34.1") and adds ~17s to startup
-- **Area:** packaging / specs
-- **Symptom:** every engine boot Jul 12 evening logged "Phase 1: matrx-ai
-  initialization FAILED — AI endpoints will not work";
-  `importlib.metadata.PackageNotFoundError: No package metadata was found
-  for replicate` (via matrx_ai → providers → replicate `__about__.py`), and
-  diagnostic snapshots show "Unsupported protobuf version: 7.34.1". The
-  failing import chain also burns ~17s of boot before failing, extending the
-  window where the UI spins against a not-yet-serving engine.
-- **Evidence:** `~/.matrx/diagnostics/2026-07-12T21-53-10_ai_engine.json`
-  and 3 more same-evening snapshots; system.log 21:52:52→21:53:10.
-- **Status:** open. Analyzed 2026-07-13 — from live packaged-app logs;
-  needs `copy_metadata('replicate')` (+ protobuf pin/metadata) in all 4
-  specs + build-sidecar fallback per Hard Rule 6.
-- **Owner hint:** packaging; boot smoke should assert ai_engine reaches
-  `ready`, not just that the process starts.
-
-### MXL-D-041 — access.log grows unbounded (560 MB) and tripped a macOS disk-writes resource exception
-- **Area:** logging
-- **Symptom:** `~/Library/Logs/MatrxLocal/access.log` is 560 MB (system.log
-  rotates at 10 MB; access.log never rotates). macOS filed a "disk writes"
-  resource exception against Matrx Engine (8.59 GB dirtied / 3h). Poller
-  endpoints (`/tunnel/status`, `/proxy/status`, `/cloud/debug`,
-  `/tools/list` — 40k each per 200k lines) dominate.
-- **Evidence:** `ls -la ~/Library/Logs/MatrxLocal/`; `/Library/Logs/
-  DiagnosticReports/Matrx Engine_2026-07-12-222458_….diag`.
-- **Status:** open. Analyzed 2026-07-13 — verified on disk.
-- **Owner hint:** RotatingFileHandler for access.log + skip/aggregate the
-  4 poller paths.
+### MXL-D-042 — Standalone (non-sidecar) engine on macOS ignores SIGTERM while the pystray tray is active
+- **Area:** run.py / standalone mode
+- **Symptom:** with the pystray icon running, the main thread lives inside the
+  AppKit run loop, so Python-level signal handlers never execute — `kill -TERM`
+  is silently ignored and the engine only dies to SIGKILL. Sidecar mode
+  (TAURI_SIDECAR=1, `_wait_forever()` path) is unaffected — verified live
+  2026-07-13: sidecar SIGTERM → full loud teardown in ~1s; standalone SIGTERM
+  → nothing, process alive 45s later.
+- **Evidence:** live test 2026-07-13 on this machine (engine pid 98729,
+  standalone, SIGTERM never reached `_handle_exit`); `run.py setup_tray()` →
+  `icon.run()` blocks the main thread in ObjC.
+- **Status:** open. Analyzed 2026-07-13 — reproduced live.
+- **Owner hint:** run `icon.run_detached()` or move the tray to a helper
+  thread and keep the main thread in `_shutdown_event.wait()`; dev-only
+  severity (end users always run sidecar mode).
 
 ## Cross-repo
 

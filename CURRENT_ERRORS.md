@@ -322,7 +322,7 @@ Last processed: **2026-07-09 12:26:31** (from Matrx Log export) · Last hygiene 
 -->
 
 - [x] **T001** ← E001 — Server-side (aidream): `GET /api/ai-tools/app/matrx_local` 404 — filed in aidream `FOUND_DEFECTS.md` + already an ask in `.matrx/ARMAN_TASKS.md` ("Reconcile AIDream server ↔ matrx-ai tool registry"). Client already degrades honestly (v1.3.92). (routed 2026-07-12)
-- [x] **T002** ← E002 — macOS Full Disk Access grant is an Arman action → added to `.matrx/ARMAN_TASKS.md` quick wins; degraded-state handling shipped in v1.3.93 (T004/T005). (routed 2026-07-12)
+- [x] **T002** ← E002 — macOS Full Disk Access grant is an Arman action → added to `.matrx/ARMAN_TASKS.md` quick wins; degraded-state handling shipped in v1.3.93 (T004/T005). (routed 2026-07-12) **2026-07-13:** the UI now actually PROMPTS — Documents renders `NotesAccessPrompt` (FDA explanation, System Settings deep-link, Check again + auto-poll) off `GET /notes/access`; also fixed the `sync/status` raw 500 (unguarded `.exists()` in `list_conflicts`). Tracker W8 (notes) row.
 - [x] **T006** ← E006 — Screen Recording grant already an ask in `.matrx/ARMAN_TASKS.md`; the Review & Grant path was fixed 2026-07-11 (MXL-D-032). (routed 2026-07-12)
 - [x] **T008** ← E008 — Server-side (aidream scraper service): persistent 500 on `/api/scraper/queue/pending` — filed in aidream `FOUND_DEFECTS.md`. Client hardening shipped v1.3.92. Local follow-up is T009. (routed 2026-07-12)
 - [x] **T003** ← E003 — Permission-denied is no longer misdiagnosed as corrupt sync state: `load_sync_state` only logs "Corrupt sync state, resetting" on `json.JSONDecodeError`; PermissionError returns defaults quietly. (resolved 2026-07-09, ships v1.3.93)

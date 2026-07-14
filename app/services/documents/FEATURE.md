@@ -17,6 +17,33 @@ contract conversation, not a test edit.
   auto-starts on documents traffic and in the auto-sync tick.
 - `file_manager.py` — note files under `~/matrx-notes/`, `.sync/state.json`
   checkpoint, `.sync/conflicts/<id>/{local,remote}.md`, access guard.
+
+## Access-degraded is a STATE, not an error stream (2026-07-13)
+
+When the OS blocks the notes dir (macOS without Full Disk Access, folder
+permissions, or a missing folder), `notes_access_guard` in `file_manager.py`
+is the single choke point:
+
+- **One WARN per degradation** + `registry.degraded("notes_sync", reason)`;
+  a successful op (or probe) clears back to READY. Never per-op ERROR spam.
+- Carries `kind` (`"permission"` | `"missing_dir"`) and a
+  **platform-appropriate** reason (FDA wording only on `darwin`).
+- Auto-sync skips quietly while degraded (`_access_skipped`) and lets one
+  probe op through per 60 s (`should_skip_sync`) → recovers WITHOUT restart.
+- **Read paths degrade, never raise.** `.exists()`/`.is_file()` stats are
+  themselves denied while degraded and must sit INSIDE the guard's
+  try/except (`list_conflicts`, `list_folders`, `load_local_mappings`);
+  an unguarded stat escaped `GET /notes/sync/status` as a raw 500 once.
+- API: `GET /notes/access` (state), `POST /notes/access/recheck`
+  (active probe; `create_dir` = the "Create folder" action), and
+  `notes_access_degraded/reason/kind` on `GET /notes/sync/status`.
+- UI: `desktop/src/components/documents/NotesAccessPrompt.tsx` renders the
+  full-page prompt on the Documents page (System Settings deep-link via the
+  permissions system, Check again + 10 s auto-poll). Never show empty lists
+  while degraded.
+
+Pinned by `tests/unit/test_notes_access_state.py` (engine) and
+`desktop/src/components/documents/notes-access-prompt.test.tsx` (UI).
 - `supabase_client.py` — the ONLY wire client for cloud `workbench.notes`.
   ALL remote↔local column mapping lives in `_normalize_note_row`
   (`created_by`↔`user_id`, `deleted_at`→`is_deleted`). Skipping it resurrects

@@ -134,7 +134,7 @@ def install_client_host_queue_guard() -> None:
 
     try:
         from matrx_ai._ext import has_ext
-        from matrx_ai.db._registry import get_base
+        from matrx_ai.db._registry import get_base, get_model
         from matrx_ai.db import persistence as db_persistence
         from matrx_ai.persistence import queue_helpers
         from matrx_ai.tools import dynamic_drain
@@ -144,15 +144,47 @@ def install_client_host_queue_guard() -> None:
 
     original = queue_helpers.get_coordinator
 
-    def _orm_bases_available() -> bool:
+    required_bases = (
+        "AgentMemoryBase",
+        "ObservationalMemoryBase",
+        "ObservationalMemoryEventBase",
+        "RequestBase",
+        "RequestSnapshotBase",
+        "ToolCallBase",
+        "ToolTraceBase",
+        "UserRequestBase",
+        "MessageBase",
+        "MediaBase",
+        "ConversationBase",
+        "PendingInjectionBase",
+    )
+    required_models = (
+        "Message",
+        "ToolCall",
+        "ToolTrace",
+        "Media",
+        "UserRequest",
+        "Request",
+        "RequestSnapshot",
+        "AgentMemory",
+        "ObservationalMemory",
+        "ObservationalMemoryEvent",
+        "Conversation",
+        "PendingInjection",
+    )
+
+    def _full_cx_orm_available() -> bool:
         try:
-            get_base("AgentMemoryBase")
+            for base_name in required_bases:
+                get_base(base_name)
+            for model_name in required_models:
+                get_model(model_name)
             return True
         except Exception:
             return False
 
     def _client_host_without_orm() -> bool:
-        return has_ext("conversation_store") and not _orm_bases_available()
+        return has_ext("conversation_store") and not _full_cx_orm_available()
 
     def _guarded_get_coordinator():
         if _client_host_without_orm():

@@ -23,7 +23,8 @@ logger = get_logger()
 
 router = APIRouter(prefix="/v1", tags=["openai-compatible"])
 
-_TIMEOUT = httpx.Timeout(connect=5.0, read=None, write=30.0, pool=5.0)
+_STREAM_TIMEOUT = httpx.Timeout(connect=5.0, read=None, write=30.0, pool=5.0)
+_NON_STREAM_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=30.0, pool=5.0)
 _HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -79,7 +80,11 @@ def _client_headers(request: Request) -> dict[str, str]:
 
 
 def _new_upstream_client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False)
+    return httpx.AsyncClient(timeout=_STREAM_TIMEOUT, follow_redirects=False)
+
+
+def _new_non_stream_upstream_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=_NON_STREAM_TIMEOUT, follow_redirects=False)
 
 
 def _normalize_chat_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -227,7 +232,7 @@ async def chat_completions(request: Request) -> Response:
         )
 
     try:
-        async with _new_upstream_client() as client:
+        async with _new_non_stream_upstream_client() as client:
             upstream = await client.post(
                 url,
                 json=forwarded,

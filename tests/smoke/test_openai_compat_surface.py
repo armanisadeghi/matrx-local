@@ -58,6 +58,7 @@ def _patch_upstream(
         return httpx.AsyncClient(transport=transport)
 
     monkeypatch.setattr(openai_compat_routes, "_new_upstream_client", _factory)
+    monkeypatch.setattr(openai_compat_routes, "_new_non_stream_upstream_client", _factory)
     return calls
 
 
@@ -184,7 +185,16 @@ def test_v1_surface_mounted_and_auth_gated_on_engine(
 ) -> None:
     r = http_public.get("/v1/models")
     assert r.status_code == 401
+    assert r.json()["error"]["code"] == "authorization_required"
+    assert r.json()["error"]["type"] == "authentication_error"
 
     r = http.get("/v1/models")
     assert r.status_code == 200
     assert r.json()["object"] == "list"
+
+
+def test_non_stream_proxy_uses_finite_read_timeout() -> None:
+    from app.api.openai_compat_routes import _NON_STREAM_TIMEOUT, _STREAM_TIMEOUT
+
+    assert _STREAM_TIMEOUT.read is None
+    assert _NON_STREAM_TIMEOUT.read == 300.0

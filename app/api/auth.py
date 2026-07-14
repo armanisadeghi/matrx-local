@@ -18,14 +18,13 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.common.system_logger import get_logger
-
-logger = get_logger()
-
 from app.api.remote_auth import (
     headers_indicate_tunnel,
     is_instance_owner,
     verify_supabase_token,
 )
+
+logger = get_logger()
 
 # ── Trust tiers ────────────────────────────────────────────────────────────
 #
@@ -104,6 +103,29 @@ _LOCAL_BOOTSTRAP_PREFIXES = (
 
 def _is_local_bootstrap(path: str) -> bool:
     return path in _LOCAL_BOOTSTRAP_PATHS or path.startswith(_LOCAL_BOOTSTRAP_PREFIXES)
+
+
+def _auth_error_response(
+    path: str,
+    *,
+    status_code: int,
+    message: str,
+    code: str,
+) -> JSONResponse:
+    """Return the auth error shape expected by the target surface."""
+    if path == "/v1" or path.startswith("/v1/"):
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "error": {
+                    "message": message,
+                    "type": "authentication_error",
+                    "param": None,
+                    "code": code,
+                }
+            },
+        )
+    return JSONResponse(status_code=status_code, content={"detail": message})
 
 
 # ---------------------------------------------------------------------------
@@ -271,9 +293,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 path,
                 via_tunnel,
             )
-            return JSONResponse(
+            return _auth_error_response(
+                path,
                 status_code=401,
-                content={"detail": "Authorization required"},
+                message="Authorization required",
+                code="authorization_required",
             )
 
         # Tunnel traffic is untrusted: require a cryptographically-verified
@@ -291,9 +315,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     request.method,
                     path,
                 )
-                return JSONResponse(
+                return _auth_error_response(
+                    path,
                     status_code=401,
-                    content={"detail": "Invalid or expired credentials"},
+                    message="Invalid or expired credentials",
+                    code="invalid_credentials",
                 )
             # Owner-only: a valid token from a *different* AI Matrx user must
             # not control this machine remotely.
@@ -303,9 +329,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     request.method,
                     path,
                 )
-                return JSONResponse(
+                return _auth_error_response(
+                    path,
                     status_code=403,
-                    content={"detail": "Not authorized for this instance"},
+                    message="Not authorized for this instance",
+                    code="not_authorized_for_instance",
                 )
             request.state.principal = user
 

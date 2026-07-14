@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -421,6 +422,41 @@ def test_error_semantics_match_aidream(ai_app):
             body = r.json()
             assert body["error"] == "tool_not_found"
             assert "no_such_tool_xyz" in body["message"]
+
+    asyncio.run(_run())
+
+
+def test_tool_call_decimal_values_persist(local_db):
+    """Tool logging accepts Decimal values from matrx-ai cost accounting."""
+    from app.services.ai.conversation_handler import SQLiteConversationStore
+
+    row_id = str(uuid.uuid4())
+    conversation_id = str(uuid.uuid4())
+
+    async def _run() -> None:
+        store = SQLiteConversationStore()
+        await store._write_tool_call(
+            row_id,
+            {
+                "conversation_id": conversation_id,
+                "tool_name": "local_system_info",
+                "status": "completed",
+                "success": True,
+                "duration_ms": Decimal("42"),
+                "cost_usd": Decimal("0.000123"),
+                "metadata": {"decimal_extra": Decimal("1.5")},
+            },
+            replace=True,
+        )
+        row = await local_db.fetchone(
+            "SELECT duration_ms, cost_usd, metadata FROM chat.tool_call WHERE id = ?",
+            (row_id,),
+        )
+        assert row is not None
+        data = dict(row)
+        assert data["duration_ms"] == 42
+        assert data["cost_usd"] == 0.000123
+        assert json.loads(data["metadata"])["decimal_extra"] == "1.5"
 
     asyncio.run(_run())
 

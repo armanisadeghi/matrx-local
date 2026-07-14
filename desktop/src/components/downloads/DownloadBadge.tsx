@@ -6,7 +6,7 @@
  * and a pulsing indicator when the size isn't known yet.
  */
 
-import { Download } from "lucide-react";
+import { AlertTriangle, Download } from "lucide-react";
 import { CircularProgress } from "@/components/downloads/CircularProgress";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 
@@ -16,13 +16,17 @@ interface DownloadBadgeProps {
 
 export function DownloadBadge({ className = "" }: DownloadBadgeProps) {
   const { downloads, activeCount, openModal } = useDownloadManager();
+  const actionNeededCount = downloads.filter(
+    (d) => d.status === "failed" && d.resolution != null,
+  ).length;
 
-  if (activeCount === 0) return null;
+  if (activeCount === 0 && actionNeededCount === 0) return null;
 
   const active = downloads.find((d) => d.status === "active");
   const queuedCount = downloads.filter((d) => d.status === "queued").length;
   const hasProgress = active && active.total_bytes > 0 && active.percent > 0;
   const pct = hasProgress ? Math.round(active.percent) : null;
+  const needsAction = actionNeededCount > 0;
 
   return (
     <button
@@ -37,12 +41,21 @@ export function DownloadBadge({ className = "" }: DownloadBadgeProps) {
         active:scale-95
         ${className}
       `}
-      title="View downloads"
-      aria-label={`${activeCount} active download${activeCount !== 1 ? "s" : ""}`}
+      title={needsAction ? "Downloads need your action" : "View downloads"}
+      aria-label={
+        needsAction
+          ? `${actionNeededCount} download${actionNeededCount !== 1 ? "s" : ""} need your action`
+          : `${activeCount} active download${activeCount !== 1 ? "s" : ""}`
+      }
     >
       {/* Progress indicator */}
       <span className="shrink-0 relative">
-        {hasProgress ? (
+        {needsAction ? (
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-60" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+          </span>
+        ) : hasProgress ? (
           <CircularProgress
             percent={active.percent}
             size={20}
@@ -58,11 +71,19 @@ export function DownloadBadge({ className = "" }: DownloadBadgeProps) {
         )}
       </span>
 
-      <Download className="h-3 w-3 text-muted-foreground shrink-0" />
+      {needsAction ? (
+        <AlertTriangle className="h-3 w-3 text-amber-500 shrink-0" />
+      ) : (
+        <Download className="h-3 w-3 text-muted-foreground shrink-0" />
+      )}
 
       {/* Text */}
       <span className="tabular-nums leading-none">
-        {pct !== null ? (
+        {needsAction ? (
+          <span className="text-amber-600 dark:text-amber-400 font-semibold">
+            {actionNeededCount} needs action
+          </span>
+        ) : pct !== null ? (
           <span className="text-foreground font-semibold">{pct}%</span>
         ) : (
           <span className="text-muted-foreground">Downloading</span>

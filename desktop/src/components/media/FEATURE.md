@@ -26,8 +26,8 @@ action that cannot run (no dead clicks), and never hides one that can.
 | Component | Use it for |
 |---|---|
 | `MediaThumb` | ANY image/video render. Click → lightbox, right-click → context menu, hover → info + "⋯". Variants: `icon`, `filmstrip`, `card`, `gallery`. |
-| `MediaItemThumb` | The same, for engine-persisted items — resolves the auth'd blob URL from the ONE library/vault store (a plain `<img src>` cannot carry the Authorization header). |
-| `MediaLightbox` | Full-screen viewer. Mounted **once**, by `MediaActionsProvider`. Surfaces call `actions.open(viewingSet, index)`. |
+| `MediaItemThumb` | Engine-persisted items. Placeholder first, then a capped self-healing sweep fills JPEG thumbs via `GET /media-library/thumb/{id}` (engine caches `<id>.thumb.jpg` on miss). Full bytes only for lightbox / download / remix. |
+| `MediaLightbox` | Full-screen viewer. Mounted **once**, by `MediaActionsProvider`. Surfaces call `actions.open(viewingSet, index, targetId?)`; pass the engine file id when known so the viewer anchors on that exact file, not just the current array slot. |
 | `MediaInfoDialog` | The metadata view. Also exports `CopyButton` and `PromptBlock`. |
 | `MediaContextMenu` / `MediaOverflowMenu` | Right-click and "⋯". Both render `buildMediaMenu()` — one list, so the abilities are identical. |
 | `MediaActionsProvider` | Owns every action + the app-wide overlays. `useMediaActions()`. |

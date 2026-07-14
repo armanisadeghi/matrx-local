@@ -1,11 +1,11 @@
 /**
  * TemplateEditor — a textarea that highlights {{variable}} tokens as you type.
  *
- * The technique is the standard one (CodeMirror, Notion, every prompt tool that
- * does this well): render a styled mirror div UNDER a textarea whose own text
- * is transparent, and keep the two in perfect typographic and scroll sync. The
- * user edits a real textarea — native caret, selection, undo, IME, spellcheck,
- * accessibility — and simply sees highlights behind it.
+ * The technique is the standard one: render a styled mirror div UNDER the
+ * textarea, but let the textarea draw the real text. The lower layer paints
+ * only token backgrounds, so the user gets native caret, selection, undo, IME,
+ * spellcheck, and accessibility without the visible text drifting away from the
+ * cursor.
  *
  * The mirror MUST match the textarea's font, padding, border and wrapping
  * exactly, or the highlight drifts from the text. That is why the geometry
@@ -72,19 +72,17 @@ export function TemplateEditor({
         >
           {segments.map((seg, i) =>
             seg.kind === "text" ? (
-              <span key={i} className="text-foreground">
-                {seg.text}
-              </span>
+              <span key={i}>{seg.text}</span>
             ) : (
               <span
                 key={i}
                 className={cn(
-                  "rounded px-0.5 font-medium",
+                  "rounded-[3px]",
                   seg.known
-                    ? "bg-primary/15 text-primary"
+                    ? "bg-primary/15 text-transparent"
                     : // An unknown token would generate a literal "{{style}}"
                       // into the image. Make it impossible to miss.
-                      "bg-destructive/15 text-destructive underline decoration-wavy",
+                      "bg-destructive/15 text-transparent shadow-[inset_0_-1px_0_hsl(var(--destructive))]",
                 )}
               >
                 {seg.text}
@@ -108,9 +106,7 @@ export function TemplateEditor({
             "ring-offset-background placeholder:text-muted-foreground",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
             "disabled:cursor-not-allowed disabled:opacity-50",
-            // The text itself is invisible; the mirror below shows it. The
-            // caret and selection stay native and visible.
-            "text-transparent selection:bg-primary/30 selection:text-transparent",
+            "selection:bg-primary/30",
           )}
         />
       </div>

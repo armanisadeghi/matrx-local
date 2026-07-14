@@ -16,7 +16,7 @@
  * so a delete or a vault move here updates every other surface in the same tick.
  */
 
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useRef } from "react";
 import {
   CheckSquare,
   Film,
@@ -38,7 +38,7 @@ import { useMediaLibraryApp } from "@/contexts/MediaLibraryContext";
 import { useMediaVaultApp } from "@/contexts/MediaVaultContext";
 import type { MediaLibraryFilter } from "@/hooks/use-media-library";
 import type { MediaLibraryItem } from "@/lib/api";
-import { MediaItemThumb, viewingSetOf } from "@/components/media/MediaThumb";
+import { MediaItemThumb } from "@/components/media/MediaThumb";
 import { CopyButton } from "@/components/media/MediaInfoDialog";
 import {
   VAULT_MOVE_REQUESTED_EVENT,
@@ -53,14 +53,14 @@ import { PrivateVaultPanel } from "./PrivateVaultPanel";
 function LibraryCard({
   item,
   index,
-  viewingSet,
+  viewingItems,
   selecting,
   selected,
   onToggleSelect,
 }: {
   item: MediaLibraryItem;
   index: number;
-  viewingSet: ReturnType<typeof viewingSetOf>;
+  viewingItems: MediaLibraryItem[];
   selecting: boolean;
   selected: boolean;
   onToggleSelect: (index: number, shiftKey: boolean) => void;
@@ -108,7 +108,7 @@ function LibraryCard({
           <MediaItemThumb
             item={item}
             variant="card"
-            viewingSet={viewingSet}
+            viewingItems={viewingItems}
             className="h-full w-full"
           >
             <span className="pointer-events-none absolute left-1.5 top-1.5 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
@@ -158,17 +158,8 @@ const FILTERS: { value: MediaLibraryFilter; label: string }[] = [
 
 export function MediaLibrarySection() {
   const [state, actions] = useMediaLibraryApp();
-  const { items, filter, loading, loadingMore, hasMore, error, fileUrls } =
-    state;
+  const { items, filter, loading, loadingMore, hasMore, error } = state;
   const { refresh, setFilter, loadMore, clearError } = actions;
-
-  // The lightbox viewing set: every item whose bytes have resolved. The
-  // lightbox re-anchors on the current item id as this grows, so paging never
-  // jumps when a later thumbnail finishes loading.
-  const viewingSet = useMemo(
-    () => viewingSetOf(items, fileUrls, "library"),
-    [items, fileUrls],
-  );
 
   // ── Private vault (the ONE shared store) ─────────────────────────────────
   const [vault, vaultActions] = useMediaVaultApp();
@@ -274,7 +265,11 @@ export function MediaLibrarySection() {
               {selecting ? "Cancel" : "Select"}
             </Button>
           )}
-          <Button size="sm" variant="outline" onClick={() => setVaultOpen(true)}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setVaultOpen(true)}
+          >
             <Lock className="mr-1.5 h-3.5 w-3.5" />
             Private
           </Button>
@@ -348,7 +343,7 @@ export function MediaLibrarySection() {
                 key={item.id}
                 item={item}
                 index={index}
-                viewingSet={viewingSet}
+                viewingItems={items}
                 selecting={selecting}
                 selected={selectedIds.has(item.id)}
                 onToggleSelect={toggleSelect}
@@ -379,10 +374,7 @@ export function MediaLibrarySection() {
 
       {/* Private vault panel — full-height dialog, reachable from every layout
           variant since they all reuse MediaLibrarySection. */}
-      <Dialog
-        open={vaultOpen}
-        onOpenChange={setVaultOpen}
-      >
+      <Dialog open={vaultOpen} onOpenChange={setVaultOpen}>
         <DialogContent className="flex h-[85vh] max-w-3xl flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
@@ -398,7 +390,6 @@ export function MediaLibrarySection() {
           </div>
         </DialogContent>
       </Dialog>
-
     </div>
   );
 }

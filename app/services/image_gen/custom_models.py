@@ -398,11 +398,24 @@ def _hf_headers() -> dict[str, str]:
 def _friendly_civitai_http_error(exc: httpx.HTTPStatusError, what: str) -> InspectError:
     code = exc.response.status_code
     if code in (401, 403):
+        if read_civitai_key():
+            if code == 401:
+                return InspectError(
+                    401,
+                    f"Civitai rejected the saved API key while resolving {what}. "
+                    "The key may have been revoked or regenerated — update it "
+                    "under Settings → API Keys → Civitai, then try again.",
+                )
+            return InspectError(
+                403,
+                f"Your Civitai key is connected, but Civitai says your account "
+                f"doesn't have access to {what}. Open the model page on Civitai "
+                "to unlock access, then try again.",
+            )
         return InspectError(
             401,
-            f"Civitai rejected the request for {what} ({code}) — a Civitai "
-            "API key is required or the configured one is invalid. Add your "
-            "key under Settings → API Keys → Civitai.",
+            f"Civitai requires an API key to resolve {what}. Add your key "
+            "under Settings → API Keys → Civitai, then try again.",
         )
     if code == 404:
         return InspectError(404, f"Civitai has no {what} (404) — check the URL/id.")
@@ -1006,6 +1019,10 @@ async def enqueue_custom_download(entry: dict[str, Any]) -> dict[str, Any]:
             "write_complete_marker": True,
             "dest_filename": entry["weight_name"],
         }
+        if entry.get("civitai_model_id") is not None:
+            metadata["model_page_url"] = (
+                f"https://civitai.com/models/{entry['civitai_model_id']}"
+            )
         urls = [str(entry["download_url"])]
 
     dl = await get_download_manager().enqueue(

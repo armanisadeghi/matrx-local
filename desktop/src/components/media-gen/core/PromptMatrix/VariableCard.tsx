@@ -12,7 +12,7 @@
  * tool people abandon.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -44,6 +44,16 @@ import type {
 import type { PromptMatrixActions } from "@/hooks/use-prompt-matrix";
 import { cn } from "@/lib/utils";
 
+const VARIABLE_NAME_CHARS = /[^A-Za-z0-9_\- ]/g;
+
+function cleanNameDraft(value: string): string {
+  return value.replace(VARIABLE_NAME_CHARS, "");
+}
+
+function normalizeDraft(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
 export function VariableCard<TJob>({
   variable,
   axis,
@@ -74,8 +84,36 @@ export function VariableCard<TJob>({
   } = useSortable({ id: variable.id });
 
   const [collapsed, setCollapsed] = useState(false);
+  const [nameDraft, setNameDraft] = useState(variable.name);
   const enabledCount = variable.options.filter((o) => o.enabled).length;
   const isParam = variable.binding.kind === "param";
+
+  useEffect(() => {
+    setNameDraft(variable.name);
+  }, [variable.name]);
+
+  const commitName = useCallback(() => {
+    const next = normalizeDraft(nameDraft);
+    if (next.length === 0) {
+      setNameDraft(variable.name);
+      return;
+    }
+    if (next !== variable.name) actions.renameVariable(variable.id, next);
+  }, [actions, nameDraft, variable.id, variable.name]);
+
+  const handleNameKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.currentTarget.blur();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        setNameDraft(variable.name);
+        e.currentTarget.blur();
+      }
+    },
+    [variable.name],
+  );
 
   /** Paste "a\nb\nc" into any option row → three options. */
   const handlePaste = useCallback(
@@ -141,16 +179,29 @@ export function VariableCard<TJob>({
           )}
         </Button>
 
-        <code
+        <div
           className={cn(
-            "rounded px-1.5 py-0.5 text-xs font-medium",
+            "flex min-w-0 max-w-[16rem] items-center rounded px-1.5 py-0.5 text-xs font-medium",
             isParam
               ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
               : "bg-primary/15 text-primary",
           )}
         >
-          {isParam ? variable.name : `{{${variable.name}}}`}
-        </code>
+          {!isParam && <span className="shrink-0">{"{{"}</span>}
+          <input
+            value={nameDraft}
+            onChange={(e) => setNameDraft(cleanNameDraft(e.target.value))}
+            onBlur={commitName}
+            onKeyDown={handleNameKeyDown}
+            aria-label={`Rename ${variable.name}`}
+            spellCheck={false}
+            className={cn(
+              "min-w-0 bg-transparent text-xs font-medium outline-none",
+              isParam ? "w-28" : "w-24",
+            )}
+          />
+          {!isParam && <span className="shrink-0">{"}}"}</span>}
+        </div>
 
         {strategy === "cartesian" && totalVariables > 1 && (
           <Tooltip>

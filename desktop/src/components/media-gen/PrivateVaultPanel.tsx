@@ -17,7 +17,7 @@
  * All operations are loud on failure; restore shows per-item results.
  */
 
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useRef } from "react";
 import {
   AlertCircle,
   Check,
@@ -43,7 +43,7 @@ import type {
   MediaVaultState,
   MediaVaultActions,
 } from "@/hooks/use-media-vault";
-import { MediaItemThumb, viewingSetOf } from "@/components/media/MediaThumb";
+import { MediaItemThumb } from "@/components/media/MediaThumb";
 import { CopyButton } from "@/components/media/MediaInfoDialog";
 import { ErrorNote } from "./shared";
 
@@ -55,13 +55,15 @@ function passwordStrength(pw: string): {
   label: string;
   tone: "weak" | "ok" | "strong";
 } {
-  if (pw.length < MIN_PASSWORD_LENGTH) return { label: "Too short", tone: "weak" };
+  if (pw.length < MIN_PASSWORD_LENGTH)
+    return { label: "Too short", tone: "weak" };
   let variety = 0;
   if (/[a-z]/.test(pw)) variety++;
   if (/[A-Z]/.test(pw)) variety++;
   if (/[0-9]/.test(pw)) variety++;
   if (/[^a-zA-Z0-9]/.test(pw)) variety++;
-  if (pw.length >= 12 && variety >= 3) return { label: "Strong", tone: "strong" };
+  if (pw.length >= 12 && variety >= 3)
+    return { label: "Strong", tone: "strong" };
   if (pw.length >= 10 && variety >= 2) return { label: "Good", tone: "ok" };
   return { label: "Weak — consider a longer mix of characters", tone: "weak" };
 }
@@ -501,12 +503,7 @@ function VaultGrid({
   vault: MediaVaultState;
   actions: MediaVaultActions;
 }) {
-  const { items, itemsLoading, busy, fileUrls } = vault;
-  // Every vault item whose bytes are decrypted — the lightbox's prev/next set.
-  const viewingSet = useMemo(
-    () => viewingSetOf(items, fileUrls, "vault"),
-    [items, fileUrls],
-  );
+  const { items, itemsLoading, busy } = vault;
   const [selecting, setSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [restoring, setRestoring] = useState(false);
@@ -643,9 +640,7 @@ function VaultGrid({
             size="sm"
             variant="ghost"
             className="h-7 text-xs"
-            onClick={() =>
-              setSelectedIds(new Set(items.map((i) => i.id)))
-            }
+            onClick={() => setSelectedIds(new Set(items.map((i) => i.id)))}
           >
             Select all
           </Button>
@@ -731,7 +726,7 @@ function VaultGrid({
                     item={item}
                     source="vault"
                     variant="card"
-                    viewingSet={viewingSet}
+                    viewingItems={items}
                     chrome={selecting ? "none" : "full"}
                     className="h-full w-full"
                     {...(selecting

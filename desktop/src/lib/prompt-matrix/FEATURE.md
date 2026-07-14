@@ -115,12 +115,14 @@ five layout variants inherit it rather than forking. State lives in
 split — template/variables/strategy sit **above** the model's base settings, and
 the run-count + Queue button **below** them.
 
-- `TemplateEditor` — highlights `{{tokens}}` via a mirror div under a
-  transparent-text textarea (native caret/undo/IME preserved). Unknown tokens are
-  flagged in red. The mirror's typography MUST match the textarea exactly
-  (`SHARED_BOX`) or the highlight drifts.
+- `TemplateEditor` — highlights `{{tokens}}` via a mirror div under a native
+  textarea. The textarea draws the real text and caret; the mirror paints only
+  token backgrounds. Unknown tokens are flagged in red. The mirror's typography
+  MUST match the textarea exactly (`SHARED_BOX`) or highlights drift.
 - `VariableCard` — sortable; paste a newline-separated list into any option row to
-  create many options at once.
+  create many options at once. Text-variable names are editable in-place and
+  rename the matching `{{token}}` everywhere in the template; parameter-variable
+  names are label-only.
 - `BatchConfirmDialog` — the count, a time estimate from **this machine's own**
   median generation time, and the actual first/last prompts. Nothing is queued
   without it.
@@ -131,7 +133,9 @@ the run-count + Queue button **below** them.
 - `BatchQueuePanel` — pause / drag-reorder / cancel-batch / retry, live.
 - **Library panel** — always visible above the variable cards. Save a pool or
   variable with **Save to library**; **Insert** drops it into the current
-  matrix. Path to `library.json` is shown and copyable.
+  matrix. Inserting a saved variable also inserts its `{{token}}` into the
+  prompt field when missing, so the option list is immediately active. Path to
+  `library.json` is shown and copyable.
 - **Templates menu** — save/load named matrices (on-disk `templates.json`);
   **export** / **import** JSON for chat/agent workflows.
 

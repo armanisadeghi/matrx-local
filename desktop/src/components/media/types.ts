@@ -79,6 +79,27 @@ export interface MediaDescriptor {
   initImageStored?: boolean;
 }
 
+/**
+ * The identity used for viewer focus. Persisted media must anchor on the
+ * engine's file id (`itemId`) even when the descriptor came from a queue job
+ * whose display id is the job id.
+ */
+export function mediaFocusId(d: MediaDescriptor): string {
+  return d.itemId ?? d.id;
+}
+
+export function mediaMatchesId(d: MediaDescriptor, id: string): boolean {
+  return d.id === id || d.itemId === id;
+}
+
+export function findMediaIndexById(
+  items: MediaDescriptor[],
+  id: string | null | undefined,
+): number {
+  if (!id) return -1;
+  return items.findIndex((d) => mediaMatchesId(d, id));
+}
+
 // ── Builders (the ONLY way a descriptor is constructed) ──────────────────────
 
 export function descriptorFromLibraryItem(

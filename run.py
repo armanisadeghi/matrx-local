@@ -846,7 +846,18 @@ def main() -> None:
     if hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, _handle_exit)
 
-    if _is_tauri_sidecar():
+    # Parent-death watchdog: self-terminate when the launching process dies, so
+    # the engine never survives as a port-squatting zombie.
+    #   • Sidecar: dies with the Tauri app (its original purpose).
+    #   • Dev engine: dies with the terminal / coding-agent that ran
+    #     `uv run python run.py`. Without this, ending that session reparents
+    #     the engine to launchd (PPID 1) and it runs forever holding its port —
+    #     the zombie engines that pile up on dev machines with many agents
+    #     (MXL-D-049). Dev engines are now on 22240+, so the zombie squats the
+    #     DEV range, but a zombie is still a zombie — kill it with its session.
+    #   • Explicit-live standalone (MATRX_LIVE_ENGINE=1) is intentionally exempt:
+    #     a deliberate live run may be meant to outlive its shell.
+    if _is_tauri_sidecar() or IS_DEV_ENGINE:
         _start_parent_watchdog()
 
     # ── Preflight ────────────────────────────────────────────────────────────

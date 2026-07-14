@@ -31,12 +31,10 @@ import {
   libraryEntryFromPool,
   libraryEntryFromVariable,
   parseMatrixImport,
-  poolFromLibraryEntry,
   randomSeed,
   sanitizeLibraryEntries,
   syncPoolsWithTokens,
   syncVariablesWithTokens,
-  variableFromLibraryEntry,
   type LibraryEntry,
   type MatrixImportResult,
   type MatrixOption,
@@ -61,6 +59,10 @@ import {
   saveWorkingSpec,
   type SavedTemplate,
 } from "@/lib/prompt-matrix/storage";
+import {
+  insertLibraryEntryInSpec,
+  renameVariableInSpec,
+} from "@/lib/prompt-matrix/edit";
 
 export interface PromptMatrixState {
   spec: MatrixSpec;
@@ -377,9 +379,9 @@ export function usePromptMatrix<TJob>(
 
   const renameVariable = useCallback(
     (variableId: string, name: string) => {
-      patchVariable(variableId, (v) => ({ ...v, name }));
+      setSpec((prev) => renameVariableInSpec(prev, variableId, name));
     },
-    [patchVariable],
+    [],
   );
 
   const toggleVariable = useCallback(
@@ -759,50 +761,7 @@ export function usePromptMatrix<TJob>(
     (entryId: string) => {
       const entry = library.find((e) => e.id === entryId);
       if (entry === undefined) return;
-      if (entry.kind === "pool") {
-        const pool = poolFromLibraryEntry(entry);
-        setSpec((prev) => {
-          const pools = prev.pools ?? [];
-          // Replace same-named pool options if present; else append.
-          const idx = pools.findIndex(
-            (p) => p.name.toLowerCase() === pool.name.toLowerCase(),
-          );
-          if (idx >= 0) {
-            const next = [...pools];
-            const existing = next[idx];
-            if (existing === undefined) return prev;
-            next[idx] = {
-              ...existing,
-              options: pool.options,
-              assign: pool.assign,
-              enabled: true,
-            };
-            return { ...prev, pools: next };
-          }
-          return { ...prev, pools: [...pools, pool] };
-        });
-        return;
-      }
-      const variable = variableFromLibraryEntry(entry);
-      setSpec((prev) => {
-        const idx = prev.variables.findIndex(
-          (v) =>
-            v.binding.kind === "text" &&
-            v.name.toLowerCase() === variable.name.toLowerCase(),
-        );
-        if (idx >= 0) {
-          const next = [...prev.variables];
-          const existing = next[idx];
-          if (existing === undefined) return prev;
-          next[idx] = { ...existing, options: variable.options, enabled: true };
-          return { ...prev, pools: prev.pools ?? [], variables: next };
-        }
-        return {
-          ...prev,
-          pools: prev.pools ?? [],
-          variables: [...prev.variables, variable],
-        };
-      });
+      setSpec((prev) => insertLibraryEntryInSpec(prev, entry));
     },
     [library],
   );

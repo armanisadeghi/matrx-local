@@ -19,7 +19,9 @@ Generated outputs:
 
     ~/.matrx/generated/videos/           — video job scratch dir + jobs.json history
     ~/.matrx/media/generated/images/     — media library: <uuid>.png + <uuid>.json
+                                           (+ <uuid>.thumb.jpg, self-healing)
     ~/.matrx/media/generated/videos/     — media library: <uuid>.mp4 + <uuid>.json
+                                           (+ <uuid>.thumb.jpg poster)
 
 Every successful generation is persisted into the media library
 (app/services/media_gen/library.py): the media file plus a JSON sidecar with

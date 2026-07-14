@@ -36,12 +36,14 @@ FAKE_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 @pytest.fixture(scope="module")
 def client() -> TestClient:
     from app.main import app
+
     # No context manager on purpose: lifespan must NOT run (it would start
     # engine services). Plain requests still traverse the middleware stack.
     return TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 
 # ── extra_params merge semantics (unit) ───────────────────────────────────────
+
 
 def test_merge_extra_params_user_values_win() -> None:
     base = {"prompt": "a cat", "num_inference_steps": 4, "guidance_scale": 1.0}
@@ -87,6 +89,7 @@ def test_validate_pipeline_kwargs_var_kwargs_passthrough() -> None:
 
 # ── params endpoints ──────────────────────────────────────────────────────────
 
+
 def test_image_params_endpoint_sdxl(client: TestClient) -> None:
     r = client.get("/image-gen/params/stabilityai/sdxl-turbo")
     assert r.status_code == 200, f"unexpected {r.status_code}: {r.text}"
@@ -102,7 +105,10 @@ def test_image_params_endpoint_sdxl(client: TestClient) -> None:
     for key in ("guidance_scale", "num_images_per_prompt", "eta", "guidance_rescale"):
         assert key in adv, f"advanced missing {key}: {adv}"
     from app.services.image_gen.models import IMAGE_GEN_MODELS
-    catalog = next(m for m in IMAGE_GEN_MODELS if m.model_id == "stabilityai/sdxl-turbo")
+
+    catalog = next(
+        m for m in IMAGE_GEN_MODELS if m.model_id == "stabilityai/sdxl-turbo"
+    )
     assert data["supports_negative_prompt"] == catalog.supports_negative_prompt
 
 
@@ -124,8 +130,16 @@ def test_video_params_endpoint(client: TestClient) -> None:
     assert r.status_code == 200, f"unexpected {r.status_code}: {r.text}"
     data = r.json()
     common = data["common"]
-    for key in ("steps", "guidance", "width", "height", "num_frames", "fps",
-                "negative_prompt", "seed"):
+    for key in (
+        "steps",
+        "guidance",
+        "width",
+        "height",
+        "num_frames",
+        "fps",
+        "negative_prompt",
+        "seed",
+    ):
         assert key in common, f"common missing {key}: {common}"
     assert common["num_frames"] >= 9
     assert common["fps"] >= 4
@@ -136,6 +150,7 @@ def test_video_params_endpoint(client: TestClient) -> None:
 
 def test_image_effective_params_matches_catalog() -> None:
     from app.services.image_gen.models import IMAGE_GEN_MODELS
+
     for model in IMAGE_GEN_MODELS:
         data = image_effective_params(model)
         assert data["common"]["steps"] == model.recommended_steps
@@ -145,10 +160,12 @@ def test_image_effective_params_matches_catalog() -> None:
 
 # ── media library round-trip ──────────────────────────────────────────────────
 
+
 @pytest.fixture()
 def library_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Point the media library at a throwaway dir for the duration of a test."""
     from app.services.media_gen import library
+
     monkeypatch.setattr(library, "generated_media_dir", lambda: tmp_path / "generated")
     return library
 
@@ -159,8 +176,13 @@ def test_media_library_round_trip(client: TestClient, library_tmp) -> None:
         model_id="stabilityai/sdxl-turbo",
         prompt="a fabricated test image",
         negative_prompt="blurry",
-        params={"num_inference_steps": 1, "guidance_scale": 0.0, "width": 512,
-                "height": 512, "custom_knob": 0.5},
+        params={
+            "num_inference_steps": 1,
+            "guidance_scale": 0.0,
+            "width": 512,
+            "height": 512,
+            "custom_knob": 0.5,
+        },
         seed=1234,
         width=512,
         height=512,
@@ -242,8 +264,15 @@ def test_media_library_init_image_round_trip(client: TestClient, library_tmp) ->
 def test_media_library_no_init_image_is_404(client: TestClient, library_tmp) -> None:
     """A text-to-image item advertises no source image and 404s if asked."""
     item = library_tmp.save_generated_image(
-        FAKE_PNG, model_id="m", prompt="txt2img", negative_prompt="",
-        params={}, seed=1, width=8, height=8, elapsed_seconds=0.0,
+        FAKE_PNG,
+        model_id="m",
+        prompt="txt2img",
+        negative_prompt="",
+        params={},
+        seed=1,
+        width=8,
+        height=8,
+        elapsed_seconds=0.0,
     )
     listed = client.get("/media-library/items").json()["items"][0]
     assert listed["init_image_file"] is None
@@ -251,7 +280,9 @@ def test_media_library_no_init_image_is_404(client: TestClient, library_tmp) -> 
     assert r.status_code == 404
 
 
-def test_media_library_unknown_and_malicious_ids(client: TestClient, library_tmp) -> None:
+def test_media_library_unknown_and_malicious_ids(
+    client: TestClient, library_tmp
+) -> None:
     assert client.get(f"/media-library/file/{uuid.uuid4()}").status_code == 404
     # Non-uuid ids (e.g. traversal attempts) must 404, never touch the fs.
     r = client.get("/media-library/file/..%2f..%2fetc%2fpasswd")
@@ -262,8 +293,15 @@ def test_media_library_pagination(client: TestClient, library_tmp) -> None:
     ids = []
     for i in range(3):
         item = library_tmp.save_generated_image(
-            FAKE_PNG, model_id="m", prompt=f"p{i}", negative_prompt="",
-            params={}, seed=i, width=8, height=8, elapsed_seconds=0.0,
+            FAKE_PNG,
+            model_id="m",
+            prompt=f"p{i}",
+            negative_prompt="",
+            params={},
+            seed=i,
+            width=8,
+            height=8,
+            elapsed_seconds=0.0,
         )
         ids.append(item["id"])
     r = client.get("/media-library/items", params={"limit": 2, "offset": 1})
@@ -272,12 +310,70 @@ def test_media_library_pagination(client: TestClient, library_tmp) -> None:
     assert len(body["items"]) == 2
 
 
+def _real_png_bytes(size: int = 64) -> bytes:
+    """A real decodeable PNG — FAKE_PNG is storage-only and cannot be thumbed."""
+    from PIL import Image
+    import io
+
+    img = Image.new("RGB", (size, size), color=(40, 120, 200))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_media_library_thumb_self_heals(client: TestClient, library_tmp) -> None:
+    """Missing .thumb.jpg is generated on GET, written to disk, and served.
+
+    This is the self-healing contract: no backfill job; the next thumb request
+    regenerates anything missing or deleted.
+    """
+    pytest.importorskip("PIL")
+    item = library_tmp.save_generated_image(
+        _real_png_bytes(128),
+        model_id="m",
+        prompt="thumb me",
+        negative_prompt="",
+        params={},
+        seed=1,
+        width=128,
+        height=128,
+        elapsed_seconds=0.0,
+    )
+    media_path = Path(item["file_path"])
+    thumb_path = media_path.with_name(f"{item['id']}.thumb.jpg")
+    # save_generated_image best-effort writes a thumb — delete it to prove heal.
+    thumb_path.unlink(missing_ok=True)
+    assert not thumb_path.exists()
+
+    r = client.get(f"/media-library/thumb/{item['id']}")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("image/jpeg")
+    assert len(r.content) > 100
+    assert thumb_path.is_file() and thumb_path.stat().st_size > 0
+
+    # Second request is a cache hit (same bytes on disk).
+    r2 = client.get(f"/media-library/thumb/{item['id']}")
+    assert r2.status_code == 200
+    assert r2.content == thumb_path.read_bytes()
+
+    # Delete takes the thumb with it.
+    assert client.delete(f"/media-library/items/{item['id']}").status_code == 200
+    assert not thumb_path.exists()
+    assert client.get(f"/media-library/thumb/{item['id']}").status_code == 404
+
+
+def test_media_library_thumb_unknown_id(client: TestClient) -> None:
+    assert client.get(f"/media-library/thumb/{uuid.uuid4()}").status_code == 404
+
+
 # ── image job queue ───────────────────────────────────────────────────────────
+
 
 @pytest.fixture()
 def job_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """A fresh ImageJobStore persisted into a throwaway dir (no worker)."""
     from app.services.image_gen import jobs
+
     monkeypatch.setattr(jobs, "generated_images_dir", lambda: tmp_path / "img-jobs")
     store = jobs.ImageJobStore()
     store.load()
@@ -324,18 +420,27 @@ def test_image_jobs_api_validation(client: TestClient) -> None:
     assert r.status_code == 200 and isinstance(r.json(), list)
 
     # Unknown model → 404 (or 503 when the AI packages are absent).
-    r = client.post("/image-gen/jobs", json={
-        "prompt": "test", "model_id": "__matrx_smoke_unknown_model__",
-    })
+    r = client.post(
+        "/image-gen/jobs",
+        json={
+            "prompt": "test",
+            "model_id": "__matrx_smoke_unknown_model__",
+        },
+    )
     assert r.status_code in (404, 503), f"got {r.status_code}: {r.text}"
 
     # extra_params cannot hijack the prompt — rejected before enqueue.
     from app.services.image_gen.models import IMAGE_GEN_MODELS
+
     real_model = IMAGE_GEN_MODELS[0].model_id
-    r = client.post("/image-gen/jobs", json={
-        "prompt": "test", "model_id": real_model,
-        "extra_params": {"prompt": "hijacked"},
-    })
+    r = client.post(
+        "/image-gen/jobs",
+        json={
+            "prompt": "test",
+            "model_id": real_model,
+            "extra_params": {"prompt": "hijacked"},
+        },
+    )
     # 400 = protected-param rejection; 409 = model not downloaded (checked
     # first); 503 = packages absent. All are loud, none enqueue.
     assert r.status_code in (400, 409, 503), f"got {r.status_code}: {r.text}"

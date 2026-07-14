@@ -92,3 +92,5 @@ export {
   type LibraryEntry,
   type LibraryEntryKind,
 } from "./library";
+
+export { insertLibraryEntryInSpec, renameVariableInSpec } from "./edit";

@@ -1489,6 +1489,7 @@ async def _download_lora_civitai(parsed: dict[str, Any]) -> LoraDownloadResponse
             "write_complete_marker": True,
             "dest_filename": weight_name,
             "lora_id": lora_id,
+            "model_page_url": f"https://civitai.com/models/{info['model_id']}",
         },
         priority=1,
     )

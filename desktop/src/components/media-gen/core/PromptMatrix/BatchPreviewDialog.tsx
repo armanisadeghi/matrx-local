@@ -119,14 +119,16 @@ export function BatchPreviewDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90vh] max-w-3xl flex-col gap-3 overflow-hidden">
+      <DialogContent className="flex max-h-[90vh] w-[min(96vw,48rem)] max-w-3xl flex-col gap-3 overflow-hidden">
         <DialogHeader className="min-w-0 shrink-0">
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="flex min-w-0 items-center gap-2 pr-6 leading-snug">
             <Eye className="h-4 w-4 shrink-0" />
-            Preview {runs.length.toLocaleString()}{" "}
-            {runs.length === 1 ? "run" : "runs"}
+            <span className="min-w-0 break-words">
+              Preview {runs.length.toLocaleString()}{" "}
+              {runs.length === 1 ? "run" : "runs"}
+            </span>
           </DialogTitle>
-          <DialogDescription className="break-words leading-relaxed">
+          <DialogDescription className="min-w-0 break-words leading-relaxed [overflow-wrap:anywhere]">
             Exact jobs from the real matrix build — same order, seeds, and
             prompts as Queue. Nothing has been sent yet. Uncheck anything you
             want to skip, then queue the rest.
@@ -195,14 +197,14 @@ export function BatchPreviewDialog({
         )}
 
         <ScrollArea className="min-h-0 flex-1 rounded-md border">
-          <ul className="divide-y">
+          <ul className="min-w-0 divide-y">
             {runs.map((run) => {
               const checked = selected.has(run.index);
               return (
                 <li
                   key={run.index}
                   className={cn(
-                    "flex gap-2 px-2.5 py-2",
+                    "flex min-w-0 gap-2 px-2.5 py-2",
                     !checked && "opacity-50",
                   )}
                 >
@@ -219,8 +221,8 @@ export function BatchPreviewDialog({
                     </span>
                   </label>
                   <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <code className="truncate text-[11px] text-primary">
+                    <div className="flex min-w-0 items-start gap-1.5">
+                      <code className="min-w-0 flex-1 whitespace-normal break-words text-[11px] leading-snug text-primary [overflow-wrap:anywhere]">
                         {run.label || "—"}
                       </code>
                       <Badge
@@ -230,11 +232,11 @@ export function BatchPreviewDialog({
                         seed {run.seed}
                       </Badge>
                     </div>
-                    <p className="whitespace-pre-wrap break-words text-xs leading-relaxed">
+                    <p className="whitespace-pre-wrap break-words text-xs leading-relaxed [overflow-wrap:anywhere]">
                       {run.prompt}
                     </p>
                     {run.negativePrompt.trim().length > 0 && (
-                      <p className="whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
+                      <p className="whitespace-pre-wrap break-words text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
                         <span className="font-medium">Neg: </span>
                         {run.negativePrompt}
                       </p>

@@ -2,6 +2,7 @@ import { useLocation } from "react-router-dom";
 import { AppSidebar } from "./AppSidebar";
 import { StatusBar } from "./StatusBar";
 import { QuickActionBar } from "./QuickActionBar";
+import { AppActionBanner } from "./AppActionBanner";
 import { EngineDownBanner } from "@/components/EngineDownBanner";
 import { useDevTerminalHeight } from "@/components/DevTerminalPanel";
 import type { EngineStatus } from "@/hooks/use-engine";
@@ -124,6 +125,7 @@ export function AppLayout({
           onRestartEngine={onRestartEngine}
           onOpenMonitor={onOpenMonitor ?? NOOP}
         />
+        <AppActionBanner engineStatus={engineStatus} />
         <main className="flex flex-1 flex-col overflow-hidden relative">
           {pages.map(({ path, element }) => (
             <div

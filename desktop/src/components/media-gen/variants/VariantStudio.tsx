@@ -53,10 +53,7 @@ import { MediaLibrarySection } from "@/components/media-gen/MediaLibrarySection"
 import { SeedChip, StillWorkingNote } from "@/components/media-gen/shared";
 import { useImageGenController } from "@/components/media-gen/core/imageController";
 import { useVideoGenController } from "@/components/media-gen/core/videoController";
-import {
-  ImageGenGate,
-  VideoGenGate,
-} from "@/components/media-gen/core/gates";
+import { ImageGenGate, VideoGenGate } from "@/components/media-gen/core/gates";
 import {
   ImageModelPicker,
   VideoModelPicker,
@@ -95,7 +92,10 @@ function ModeToggle({
   const base =
     "flex-1 flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors";
   return (
-    <div className="flex gap-1 rounded-lg border bg-muted/30 p-1" role="tablist">
+    <div
+      className="flex gap-1 rounded-lg border bg-muted/30 p-1"
+      role="tablist"
+    >
       <button
         type="button"
         role="tab"
@@ -160,7 +160,7 @@ export function VariantStudio() {
 
   // ── Library filmstrip (the ONE shared store, images only, first 20) ──────
   const [libState, libActions] = useMediaLibraryApp();
-  const { getFileUrl, refresh: refreshLibrary } = libActions;
+  const { getThumbUrl, refresh: refreshLibrary } = libActions;
   const filmstripItems = useMemo(
     () => libState.items.filter((i) => i.media_type === "image").slice(0, 20),
     [libState.items],
@@ -171,8 +171,15 @@ export function VariantStudio() {
   );
   useEffect(() => {
     if (!filmstripIds) return;
-    for (const id of filmstripIds.split("\n")) void getFileUrl(id);
-  }, [filmstripIds, getFileUrl]);
+    for (const id of filmstripIds.split("\n")) void getThumbUrl(id);
+  }, [filmstripIds, getThumbUrl]);
+
+  // Canvas / lightbox need full bytes for the selected filmstrip frame.
+  const { getFileUrl } = libActions;
+  useEffect(() => {
+    if (!selectedItemId) return;
+    void getFileUrl(selectedItemId);
+  }, [selectedItemId, getFileUrl]);
 
   // A fresh direct generation was persisted → the library has a new item.
   useEffect(() => {
@@ -216,7 +223,7 @@ export function VariantStudio() {
     (id: string | null) => {
       if (viewingSet.length === 0) return;
       const idx = id ? viewingSet.findIndex((x) => x.id === id) : 0;
-      mediaActions.open(viewingSet, idx >= 0 ? idx : 0);
+      mediaActions.open(viewingSet, idx >= 0 ? idx : 0, id ?? undefined);
     },
     [viewingSet, mediaActions],
   );
@@ -262,7 +269,9 @@ export function VariantStudio() {
             {name ?? "No model selected"}
           </p>
           <p className="truncate text-[10px] text-muted-foreground">
-            {loadedId ? `Loaded: ${loadedId}` : "Pick and load a model to start"}
+            {loadedId
+              ? `Loaded: ${loadedId}`
+              : "Pick and load a model to start"}
           </p>
         </div>
         <Button
@@ -311,7 +320,9 @@ export function VariantStudio() {
             dead end), the seed, and the canonical action menu. */}
         <div className="w-full min-w-0 shrink-0 space-y-2 rounded-lg border bg-card/60 p-3 lg:w-60 lg:overflow-y-auto">
           <div className="flex items-center justify-between gap-1">
-            <p className="min-w-0 flex-1 text-xs font-semibold">Library image</p>
+            <p className="min-w-0 flex-1 text-xs font-semibold">
+              Library image
+            </p>
             {selectedDescriptor && (
               <MediaOverflowMenu item={selectedDescriptor} omit={["open"]} />
             )}
@@ -566,7 +577,11 @@ export function VariantStudio() {
         )}
         {!isImage && (
           <div className="shrink-0 border-t px-4 py-2 empty:hidden">
-            <VideoJobsList ctl={videoCtl} layout="chips" heading="Recent videos" />
+            <VideoJobsList
+              ctl={videoCtl}
+              layout="chips"
+              heading="Recent videos"
+            />
           </div>
         )}
 
@@ -615,7 +630,7 @@ export function VariantStudio() {
                     <MediaItemThumb
                       item={item}
                       variant="filmstrip"
-                      viewingSet={viewingSet}
+                      viewingItems={filmstripItems}
                       chrome="menu"
                       onActivate={() =>
                         setSelectedItemId(active ? null : item.id)
@@ -634,7 +649,9 @@ export function VariantStudio() {
       <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{isImage ? "Image models" : "Video models"}</DialogTitle>
+            <DialogTitle>
+              {isImage ? "Image models" : "Video models"}
+            </DialogTitle>
             <DialogDescription>
               Download, load, and switch the model this studio works with.
             </DialogDescription>
@@ -688,7 +705,6 @@ export function VariantStudio() {
           </div>
         </DialogContent>
       </Dialog>
-
     </div>
   );
 }

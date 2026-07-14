@@ -20,6 +20,8 @@ import {
   lockMediaVault,
   listMediaVaultItems,
   fetchMediaVaultFile,
+  fetchMediaLibraryThumb,
+  MediaFileError,
   moveToMediaVault,
   restoreFromMediaVault,
   deleteMediaVaultItem,
@@ -32,6 +34,7 @@ import type {
   MediaVaultStatus,
   MediaVaultOpResult,
 } from "@/lib/api";
+import { createConcurrencyLimiter } from "@/lib/concurrency";
 import { emitClientLog } from "@/hooks/use-unified-log";
 import {
   announceMediaItemsAdded,
@@ -40,6 +43,7 @@ import {
 } from "@/lib/media-events";
 
 const ENGINE_NOT_CONNECTED = "Engine not connected";
+const THUMB_FETCH_CONCURRENCY = 6;
 
 /** Fired on the window whenever the vault transitions locked → unlocked.
  * Anything that gave up on a 423 (vault-locked) media read listens for this to
@@ -63,6 +67,8 @@ export interface MediaVaultState {
   busy: boolean;
   /** Real failures only — 423 (locked) and 403 (wrong password) never land here. */
   error: string | null;
+  /** itemId → small JPEG thumb (gallery). Full bytes stay in fileUrls. */
+  thumbUrls: Record<string, string>;
   /** itemId → object URL of decrypted bytes (blob URLs, owned by this hook). */
   fileUrls: Record<string, string>;
 }
@@ -102,6 +108,11 @@ export interface MediaVaultActions {
    * locked instead).
    */
   getFileUrl: (itemId: string) => Promise<string | null>;
+  /**
+   * Small JPEG thumb via /media-library/thumb (resolves vaulted ids).
+   * Capped concurrency; self-healing on the engine.
+   */
+  getThumbUrl: (itemId: string) => Promise<string | null>;
   clearError: () => void;
 }
 
@@ -112,25 +123,41 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
   const [itemsLoading, setItemsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
 
+  const thumbUrlsRef = useRef<Record<string, string>>({});
   const fileUrlsRef = useRef<Record<string, string>>({});
+  const pendingThumbFetches = useRef<Map<string, Promise<string | null>>>(
+    new Map(),
+  );
   const pendingFileFetches = useRef<Map<string, Promise<string | null>>>(
     new Map(),
+  );
+  const limitThumbFetch = useRef(
+    createConcurrencyLimiter(THUMB_FETCH_CONCURRENCY),
   );
   /** Incremented on every lock. A fetch that started before the current epoch
    * must not install its (now-stale) decrypted blob URL. */
   const lockEpochRef = useRef(0);
+  useEffect(() => {
+    thumbUrlsRef.current = thumbUrls;
+  }, [thumbUrls]);
   useEffect(() => {
     fileUrlsRef.current = fileUrls;
   }, [fileUrls]);
 
   /** Revoke every cached blob URL and clear the cache. */
   const revokeAllUrls = useCallback(() => {
+    for (const url of Object.values(thumbUrlsRef.current)) {
+      URL.revokeObjectURL(url);
+    }
     for (const url of Object.values(fileUrlsRef.current)) {
       URL.revokeObjectURL(url);
     }
+    thumbUrlsRef.current = {};
     fileUrlsRef.current = {};
+    setThumbUrls({});
     setFileUrls({});
   }, []);
 
@@ -173,27 +200,29 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
     }
   }, [handleLocked]);
 
-  const fetchStatus = useCallback(async (): Promise<MediaVaultStatus | null> => {
-    const base = engine.engineUrl;
-    if (!base) {
-      setError(ENGINE_NOT_CONNECTED);
-      setStatusLoading(false);
-      return null;
-    }
-    try {
-      const s = await getMediaVaultStatus(base);
-      setStatus(s);
-      setError(null);
-      return s;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to load vault status";
-      emitClientLog("error", `[media-vault] status failed: ${msg}`, "engine");
-      setError(msg);
-      return null;
-    } finally {
-      setStatusLoading(false);
-    }
-  }, []);
+  const fetchStatus =
+    useCallback(async (): Promise<MediaVaultStatus | null> => {
+      const base = engine.engineUrl;
+      if (!base) {
+        setError(ENGINE_NOT_CONNECTED);
+        setStatusLoading(false);
+        return null;
+      }
+      try {
+        const s = await getMediaVaultStatus(base);
+        setStatus(s);
+        setError(null);
+        return s;
+      } catch (e) {
+        const msg =
+          e instanceof Error ? e.message : "Failed to load vault status";
+        emitClientLog("error", `[media-vault] status failed: ${msg}`, "engine");
+        setError(msg);
+        return null;
+      } finally {
+        setStatusLoading(false);
+      }
+    }, []);
 
   const refresh = useCallback(async (): Promise<MediaVaultStatus | null> => {
     const s = await fetchStatus();
@@ -343,8 +372,13 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
           handleLocked();
           return null;
         }
-        const msg = e instanceof Error ? e.message : "Restore from vault failed";
-        emitClientLog("error", `[media-vault] restore failed: ${msg}`, "engine");
+        const msg =
+          e instanceof Error ? e.message : "Restore from vault failed";
+        emitClientLog(
+          "error",
+          `[media-vault] restore failed: ${msg}`,
+          "engine",
+        );
         setError(msg);
         return null;
       } finally {
@@ -434,7 +468,9 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
       if (pending) return pending;
       const base = engine.engineUrl;
       if (!base) {
-        console.error("[media-vault] file fetch blocked — engine not connected");
+        console.error(
+          "[media-vault] file fetch blocked — engine not connected",
+        );
         return null;
       }
       const epoch = lockEpochRef.current;
@@ -470,6 +506,54 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
     [handleLocked],
   );
 
+  const getThumbUrl = useCallback(
+    async (itemId: string): Promise<string | null> => {
+      const existing = thumbUrlsRef.current[itemId];
+      if (existing) return existing;
+      const pending = pendingThumbFetches.current.get(itemId);
+      if (pending) return pending;
+      const base = engine.engineUrl;
+      if (!base) {
+        console.error(
+          "[media-vault] thumb fetch blocked — engine not connected",
+        );
+        return null;
+      }
+      const epoch = lockEpochRef.current;
+      const task = limitThumbFetch.current(async () => {
+        try {
+          // /media-library/thumb resolves vaulted ids the same way /file does.
+          const url = await fetchMediaLibraryThumb(base, itemId);
+          if (lockEpochRef.current !== epoch) {
+            URL.revokeObjectURL(url);
+            return null;
+          }
+          setThumbUrls((prev) => ({ ...prev, [itemId]: url }));
+          return url;
+        } catch (e) {
+          if (
+            e instanceof VaultLockedError ||
+            (e instanceof MediaFileError && e.isVaultLocked)
+          ) {
+            handleLocked();
+            return null;
+          }
+          emitClientLog(
+            "error",
+            `[media-vault] thumb fetch failed for ${itemId}: ${String(e)}`,
+            "engine",
+          );
+          return null;
+        } finally {
+          pendingThumbFetches.current.delete(itemId);
+        }
+      });
+      pendingThumbFetches.current.set(itemId, task);
+      return task;
+    },
+    [handleLocked],
+  );
+
   const clearError = useCallback(() => setError(null), []);
 
   // ── Init fetch (in the hook, [] deps) ──────────────────────────────────────
@@ -490,6 +574,9 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
   // Revoke every object URL on final unmount to avoid leaks.
   useEffect(() => {
     return () => {
+      for (const url of Object.values(thumbUrlsRef.current)) {
+        URL.revokeObjectURL(url);
+      }
       for (const url of Object.values(fileUrlsRef.current)) {
         URL.revokeObjectURL(url);
       }
@@ -503,6 +590,7 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
     itemsLoading,
     busy,
     error,
+    thumbUrls,
     fileUrls,
   };
 
@@ -517,6 +605,7 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
       deleteItem,
       changePassword,
       getFileUrl,
+      getThumbUrl,
       clearError,
     }),
     [
@@ -529,6 +618,7 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
       deleteItem,
       changePassword,
       getFileUrl,
+      getThumbUrl,
       clearError,
     ],
   );

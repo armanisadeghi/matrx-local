@@ -52,17 +52,36 @@ import {
 } from "@/components/media-gen/PrivateVaultPanel";
 import { MediaInfoDialog } from "./MediaInfoDialog";
 import { MediaContextMenu } from "./MediaContextMenu";
-import { downloadName, type MediaDescriptor } from "./types";
+import {
+  downloadName,
+  findMediaIndexById,
+  mediaFocusId,
+  type MediaDescriptor,
+} from "./types";
 
 // ── Public contract ──────────────────────────────────────────────────────────
 
 export interface MediaActions {
   /** Open the lightbox on `items[index]` — the canonical full-size view. */
-  open: (items: MediaDescriptor[], index: number) => void;
+  open: (
+    items: MediaDescriptor[],
+    index: number,
+    targetId?: string,
+  ) => number | null;
+  /**
+   * Replace the open lightbox's item list while preserving focus by id.
+   * Used when sibling full-file URLs finish loading after a thumb-only grid
+   * open — no-op when the lightbox is closed.
+   */
+  replaceLightboxItems: (
+    items: MediaDescriptor[],
+    targetId?: string,
+    sessionId?: number,
+  ) => void;
   /** Open the lightbox on a single item (icons, previews, one-off results). */
-  openOne: (item: MediaDescriptor) => void;
+  openOne: (item: MediaDescriptor) => Promise<void>;
   /** Open the info/metadata dialog (full prompt, seed, every parameter). */
-  info: (item: MediaDescriptor) => void;
+  info: (item: MediaDescriptor) => Promise<void>;
   /** Open the right-click menu at a screen position. */
   openContextMenu: (
     item: MediaDescriptor,
@@ -181,15 +200,24 @@ export function MediaActionsProvider({
     getImageModels,
   } = mediaGenActions;
   const [, libraryActions] = useMediaLibraryApp();
-  const { deleteItem: deleteLibraryItem } = libraryActions;
+  const {
+    deleteItem: deleteLibraryItem,
+    getFileUrl: getLibraryFileUrl,
+  } = libraryActions;
   const [vault, vaultActions] = useMediaVaultApp();
-  const { deleteItem: deleteVaultItem, move: vaultMove, restore: vaultRestore } =
-    vaultActions;
+  const {
+    deleteItem: deleteVaultItem,
+    getFileUrl: getVaultFileUrl,
+    move: vaultMove,
+    restore: vaultRestore,
+  } = vaultActions;
 
   // ── Overlay state ────────────────────────────────────────────────────────
   const [lightbox, setLightbox] = useState<{
     items: MediaDescriptor[];
     index: number;
+    focusId: string | null;
+    sessionId: number;
   } | null>(null);
   const [infoItem, setInfoItem] = useState<MediaDescriptor | null>(null);
   const [menu, setMenu] = useState<{
@@ -198,6 +226,9 @@ export function MediaActionsProvider({
   } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastSeq = useRef(0);
+  const lightboxSessionSeq = useRef(0);
+  const viewerRequestSeq = useRef(0);
+  const infoRequestSeq = useRef(0);
 
   // ── Vault move flow (owned HERE so it works from every surface) ──────────
   const [unlockOpen, setUnlockOpen] = useState(false);
@@ -205,17 +236,14 @@ export function MediaActionsProvider({
   /** Ids waiting on a vault create/unlock before their move can run. */
   const pendingMoveIds = useRef<string[] | null>(null);
 
-  const notify = useCallback(
-    (message: string, kind: "ok" | "error" = "ok") => {
-      const id = ++toastSeq.current;
-      setToasts((prev) => [...prev, { id, message, kind }]);
-      window.setTimeout(
-        () => setToasts((prev) => prev.filter((t) => t.id !== id)),
-        kind === "error" ? 6000 : 2500,
-      );
-    },
-    [],
-  );
+  const notify = useCallback((message: string, kind: "ok" | "error" = "ok") => {
+    const id = ++toastSeq.current;
+    setToasts((prev) => [...prev, { id, message, kind }]);
+    window.setTimeout(
+      () => setToasts((prev) => prev.filter((t) => t.id !== id)),
+      kind === "error" ? 6000 : 2500,
+    );
+  }, []);
 
   const dismissToast = useCallback(
     (id: number) => setToasts((prev) => prev.filter((t) => t.id !== id)),
@@ -223,18 +251,28 @@ export function MediaActionsProvider({
   );
 
   /** Drop every overlay descriptor matching `isGone`, clamping the lightbox. */
-  const pruneOverlays = useCallback((isGone: (d: MediaDescriptor) => boolean) => {
-    setInfoItem((prev) => (prev && isGone(prev) ? null : prev));
-    setMenu((prev) => (prev && isGone(prev.item) ? null : prev));
-    setLightbox((prev) => {
-      if (!prev) return prev;
-      const kept = prev.items.filter((d) => !isGone(d));
-      if (kept.length === prev.items.length) return prev;
-      if (kept.length === 0) return null;
-      // Stay on the same slot; clamp when the tail was removed.
-      return { items: kept, index: Math.min(prev.index, kept.length - 1) };
-    });
-  }, []);
+  const pruneOverlays = useCallback(
+    (isGone: (d: MediaDescriptor) => boolean) => {
+      setInfoItem((prev) => (prev && isGone(prev) ? null : prev));
+      setMenu((prev) => (prev && isGone(prev.item) ? null : prev));
+      setLightbox((prev) => {
+        if (!prev) return prev;
+        const kept = prev.items.filter((d) => !isGone(d));
+        if (kept.length === prev.items.length) return prev;
+        if (kept.length === 0) return null;
+        // Stay on the same slot; clamp when the tail was removed.
+        const index = Math.min(prev.index, kept.length - 1);
+        const focused = kept[index];
+        return {
+          items: kept,
+          index,
+          focusId: prev.focusId ?? (focused ? mediaFocusId(focused) : null),
+          sessionId: prev.sessionId,
+        };
+      });
+    },
+    [],
+  );
 
   // An item that left the library/vault must vanish from every overlay that is
   // currently showing it — otherwise the lightbox keeps a revoked blob URL and
@@ -259,20 +297,100 @@ export function MediaActionsProvider({
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
-  const open = useCallback((items: MediaDescriptor[], index: number) => {
-    if (items.length === 0) return;
-    setLightbox({
-      items,
-      index: Math.min(Math.max(index, 0), items.length - 1),
-    });
-  }, []);
+  const resolveFullItem = useCallback(
+    async (item: MediaDescriptor): Promise<MediaDescriptor | null> => {
+      if (!item.itemId || item.source === "result") return item;
+      const url =
+        item.source === "vault"
+          ? await getVaultFileUrl(item.itemId)
+          : await getLibraryFileUrl(item.itemId);
+      if (!url) return null;
+      return { ...item, url };
+    },
+    [getLibraryFileUrl, getVaultFileUrl],
+  );
 
-  const openOne = useCallback(
-    (item: MediaDescriptor) => setLightbox({ items: [item], index: 0 }),
+  const open = useCallback(
+    (items: MediaDescriptor[], index: number, targetId?: string) => {
+      if (items.length === 0) return null;
+      viewerRequestSeq.current += 1;
+      const targetIndex = findMediaIndexById(items, targetId);
+      const clampedIndex =
+        targetIndex >= 0
+          ? targetIndex
+          : Math.min(Math.max(index, 0), items.length - 1);
+      const focused = items[clampedIndex];
+      if (!focused) return null;
+      const sessionId = ++lightboxSessionSeq.current;
+      setLightbox({
+        items,
+        index: clampedIndex,
+        focusId: targetId ?? mediaFocusId(focused),
+        sessionId,
+      });
+      return sessionId;
+    },
     [],
   );
 
-  const info = useCallback((item: MediaDescriptor) => setInfoItem(item), []);
+  const replaceLightboxItems = useCallback(
+    (items: MediaDescriptor[], targetId?: string, sessionId?: number) => {
+      setLightbox((prev) => {
+        if (!prev || items.length === 0) return prev;
+        if (sessionId !== undefined && prev.sessionId !== sessionId) {
+          return prev;
+        }
+        if (targetId && prev.focusId !== targetId) return prev;
+        if (prev.focusId && findMediaIndexById(items, prev.focusId) < 0) {
+          return prev;
+        }
+        return {
+          items,
+          // The lightbox owns live navigation state. Keep the provider's seed
+          // stable while background sibling file fetches expand the browse set;
+          // MediaLightbox re-anchors the visible item by exact file id.
+          index: Math.min(prev.index, items.length - 1),
+          focusId: prev.focusId,
+          sessionId: prev.sessionId,
+        };
+      });
+    },
+    [],
+  );
+
+  const openOne = useCallback(
+    async (item: MediaDescriptor) => {
+      const requestId = ++viewerRequestSeq.current;
+      const fullItem = await resolveFullItem(item);
+      if (requestId !== viewerRequestSeq.current) return;
+      if (!fullItem) {
+        notify("Could not load the full media file", "error");
+        return;
+      }
+      const sessionId = ++lightboxSessionSeq.current;
+      setLightbox({
+        items: [fullItem],
+        index: 0,
+        focusId: mediaFocusId(fullItem),
+        sessionId,
+      });
+    },
+    [resolveFullItem, notify],
+  );
+
+  const info = useCallback(
+    async (item: MediaDescriptor) => {
+      const requestId = ++infoRequestSeq.current;
+      const fullItem = await resolveFullItem(item);
+      if (requestId !== infoRequestSeq.current) return;
+      if (!fullItem) {
+        notify("Could not load the full media file", "error");
+        return;
+      }
+      setInfoItem(fullItem);
+    },
+    [resolveFullItem, notify],
+  );
 
   const openContextMenu = useCallback(
     (item: MediaDescriptor, position: { x: number; y: number }) =>
@@ -649,8 +767,7 @@ export function MediaActionsProvider({
             }
             notify(`Remixed — ${model.name}, input image and all settings`);
           } catch (e) {
-            const notStored =
-              e instanceof MediaFileError && e.status === 404;
+            const notStored = e instanceof MediaFileError && e.status === 404;
             notify(
               notStored
                 ? "Settings restored — but this image was made from an input image the engine did not keep, so add one back to reproduce it exactly."
@@ -709,6 +826,7 @@ export function MediaActionsProvider({
   const actions = useMemo<MediaActions>(
     () => ({
       open,
+      replaceLightboxItems,
       openOne,
       info,
       openContextMenu,
@@ -726,6 +844,7 @@ export function MediaActionsProvider({
     }),
     [
       open,
+      replaceLightboxItems,
       openOne,
       info,
       openContextMenu,
@@ -750,6 +869,7 @@ export function MediaActionsProvider({
         open={lightbox !== null}
         items={lightbox?.items ?? []}
         startIndex={lightbox?.index ?? 0}
+        startId={lightbox?.focusId ?? null}
         onClose={() => setLightbox(null)}
       />
       <MediaInfoDialog item={infoItem} onClose={() => setInfoItem(null)} />

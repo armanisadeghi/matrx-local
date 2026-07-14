@@ -21,8 +21,10 @@ import {
   parseMatrixImport,
   serializeMatrixExport,
 } from "./io";
+import { insertLibraryEntryInSpec, renameVariableInSpec } from "./edit";
 import type { ImageGenModelInfo } from "@/lib/api";
 import type { ImageGenerateInput } from "@/hooks/use-media-gen";
+import type { LibraryEntry } from "./library";
 import type {
   MatrixOption,
   MatrixPool,
@@ -591,6 +593,75 @@ describe("syncPoolsWithTokens", () => {
   it("drops an empty auto-created pool whose slots are gone", () => {
     const auto = pool("ghost", [""]);
     expect(syncPoolsWithTokens([auto], [], nextId)).toHaveLength(0);
+  });
+});
+
+// ── spec edits ──────────────────────────────────────────────────────────────
+
+describe("prompt matrix edits", () => {
+  it("renames a text variable and every matching template token", () => {
+    const subject = variable("subject", ["cat", "dog"]);
+    const out = renameVariableInSpec(
+      spec("a {{subject}} beside {{ Subject }}", [subject]),
+      subject.id,
+      "animal",
+    );
+
+    expect(out.fields[0]?.text).toBe("a {{animal}} beside {{animal}}");
+    expect(out.variables.map((v) => v.name)).toEqual(["animal"]);
+    expect(validateSpec(out).errors).toEqual([]);
+  });
+
+  it("renames a parameter variable without writing it into the prompt", () => {
+    const steps = variable("Steps", ["20", "30"], {
+      binding: { kind: "param", axisId: "steps" },
+    });
+    const out = renameVariableInSpec(spec("a cat", [steps]), steps.id, "Step Count");
+
+    expect(out.fields[0]?.text).toBe("a cat");
+    expect(out.variables[0]?.name).toBe("Step Count");
+  });
+
+  it("inserts a saved library variable into the prompt and variable list", () => {
+    const subject = variable("subject", ["cat"]);
+    const entry: LibraryEntry = {
+      id: "entry-style",
+      name: "style",
+      kind: "variable",
+      options: opts("noir", "watercolor"),
+      updatedAt: 1,
+    };
+
+    const out = insertLibraryEntryInSpec(spec("a {{subject}}", [subject]), entry);
+
+    expect(out.fields[0]?.text).toBe("a {{subject}} {{style}}");
+    expect(out.variables.map((v) => v.name)).toEqual(["subject", "style"]);
+    expect(out.variables[1]?.options.map((o) => o.value)).toEqual([
+      "noir",
+      "watercolor",
+    ]);
+    expect(validateSpec(out).errors).toEqual([]);
+  });
+
+  it("replaces an existing library variable's options and inserts its missing token", () => {
+    const style = variable("style", ["old"]);
+    const entry: LibraryEntry = {
+      id: "entry-style",
+      name: "style",
+      kind: "variable",
+      options: opts("noir", "watercolor"),
+      updatedAt: 1,
+    };
+
+    const out = insertLibraryEntryInSpec(spec("a portrait", [style]), entry);
+
+    expect(out.fields[0]?.text).toBe("a portrait {{style}}");
+    expect(out.variables).toHaveLength(1);
+    expect(out.variables[0]?.options.map((o) => o.value)).toEqual([
+      "noir",
+      "watercolor",
+    ]);
+    expect(validateSpec(out).errors).toEqual([]);
   });
 });
 

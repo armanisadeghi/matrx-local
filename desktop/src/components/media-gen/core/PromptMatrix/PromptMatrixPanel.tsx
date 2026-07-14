@@ -95,6 +95,13 @@ import { TemplateEditor } from "./TemplateEditor";
 import { VariableCard } from "./VariableCard";
 
 const EMPTY_ERRORS: ReadonlyMap<string, string> = new Map();
+const MAX_BATCH_LABEL_LENGTH = 120;
+
+function normalizeBatchLabel(label: string): string {
+  const trimmed = label.trim().replace(/\s+/g, " ");
+  if (trimmed.length <= MAX_BATCH_LABEL_LENGTH) return trimmed;
+  return `${trimmed.slice(0, MAX_BATCH_LABEL_LENGTH - 3).trimEnd()}...`;
+}
 
 /**
  * Live per-option validation against the axis each variable sweeps. Catching a
@@ -351,6 +358,9 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [templateName, setTemplateName] = useState("");
+  const setCappedTemplateName = useCallback((name: string) => {
+    setTemplateName(name.slice(0, MAX_BATCH_LABEL_LENGTH));
+  }, []);
 
   const baseInput = ctl.buildInput();
 
@@ -395,10 +405,11 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
       setSubmitting(true);
       setSubmitError(null);
       const jobs: ImageGenBatchJobSpec[] = runs.map((r) => r.job);
-      const label =
+      const rawLabel =
         templateName.trim().length > 0
           ? templateName.trim()
           : summarizeMatrix(spec);
+      const label = normalizeBatchLabel(rawLabel);
       const result = await enqueueImageBatch(jobs, label);
       setSubmitting(false);
       if (result.ok) {
@@ -483,18 +494,22 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
       {blockers.length > 0 && total > 0 && (
         <ul className="space-y-1 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
           {blockers.map((b) => (
-            <li key={b} className="flex gap-1.5">
+            <li key={b} className="flex min-w-0 gap-1.5">
               <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
-              <span>{b}</span>
+              <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+                {b}
+              </span>
             </li>
           ))}
         </ul>
       )}
 
       {submitError !== null && (
-        <div className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+        <div className="flex min-w-0 gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
           <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
-          <span>{submitError}</span>
+          <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+            {submitError}
+          </span>
         </div>
       )}
 
@@ -504,7 +519,7 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
           targetId={target.id}
           templates={state.templates}
           name={templateName}
-          onNameChange={setTemplateName}
+          onNameChange={setCappedTemplateName}
           onSave={actions.saveAsTemplate}
           onLoad={actions.loadTemplate}
           onDelete={actions.removeTemplate}
@@ -838,8 +853,11 @@ function TemplateMenu({
           <div className="flex gap-1.5">
             <Input
               value={name}
-              onChange={(e) => onNameChange(e.target.value)}
+              onChange={(e) =>
+                onNameChange(e.target.value.slice(0, MAX_BATCH_LABEL_LENGTH))
+              }
               placeholder="Portrait sweep"
+              maxLength={MAX_BATCH_LABEL_LENGTH}
               className="h-7 text-xs"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && name.trim().length > 0) onSave(name);
@@ -855,7 +873,8 @@ function TemplateMenu({
             </Button>
           </div>
           <p className="text-[10px] text-muted-foreground">
-            Also used as the batch name in the queue.
+            Also used as the batch name in the queue. Max{" "}
+            {MAX_BATCH_LABEL_LENGTH} characters.
           </p>
         </div>
 

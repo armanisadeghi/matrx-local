@@ -5,10 +5,12 @@ video generation services (app/services/media_gen/library.py):
 
   GET    /media-library/items?media_type=image|video&limit=&offset=
                                         — newest-first sidecar metadata
-  GET    /media-library/file/{item_id}  — the media bytes (use in <img>/<video>);
+  GET    /media-library/thumb/{item_id} — small JPEG for grids (self-healing:
+                                          generates + caches on miss)
+  GET    /media-library/file/{item_id}  — full media bytes (lightbox / download);
                                           resolves VAULTED ids too (423 when the
                                           vault is locked) — see get_media_file
-  DELETE /media-library/items/{item_id} — delete file + sidecar
+  DELETE /media-library/items/{item_id} — delete file + sidecar (+ thumb)
 
 Auth comes from the same Bearer-token AuthMiddleware that gates the
 /image-gen and /video-gen surfaces — no extra dependency here.
@@ -25,6 +27,7 @@ from pydantic import BaseModel
 
 from app.common.route_errors import safe_route
 from app.services.media_gen import library
+from app.services.media_gen import thumbs as media_thumbs
 from app.services.media_vault.service import (
     VaultError,
     VaultLockedError,
@@ -82,6 +85,66 @@ async def list_media_items(
         items=[MediaLibraryItem(**item) for item in items],
         total=total,
     )
+
+
+@router.get("/thumb/{item_id}")
+async def get_media_thumb(item_id: str) -> Response:
+    """Small JPEG for gallery / filmstrip / queue tiles.
+
+    Self-healing: if ``<id>.thumb.jpg`` is missing, this request generates it
+    from the full media, writes it beside the original, and returns it. The
+    client shows a placeholder until this succeeds — there is no separate
+    backfill. Vaulted + unlocked items get an in-memory JPEG (never written
+    as plaintext). Vaulted + locked → 423.
+    """
+    meta = library.get_item(item_id)
+    if meta is not None:
+        path = Path(meta["file_path"])
+        if not path.exists():
+            raise HTTPException(
+                status_code=410, detail="Media file no longer exists on disk"
+            )
+        try:
+            thumb_path = media_thumbs.ensure_thumb(meta)
+        except Exception as exc:  # noqa: BLE001 — surface generation failure
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not build thumbnail: {exc}",
+            ) from exc
+        return FileResponse(
+            str(thumb_path),
+            media_type="image/jpeg",
+            filename=thumb_path.name,
+        )
+
+    vault = get_vault_service()
+    if not vault.has_item(item_id):
+        raise HTTPException(status_code=404, detail=f"Unknown media item: {item_id}")
+    try:
+        data, content_type = vault.read_file(item_id)
+    except VaultLockedError as exc:
+        raise HTTPException(
+            status_code=423,
+            detail="Item is in the locked Private Vault — unlock it to view.",
+        ) from exc
+    except VaultError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # Videos in the vault: we only have encrypted mp4 bytes in memory; extracting
+    # a poster without a temp file is out of scope. Images are the common case.
+    if not content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=404,
+            detail="No thumbnail for vaulted video — open the full file instead.",
+        )
+    try:
+        jpeg = media_thumbs.thumb_bytes_for_vault_image(data)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not build thumbnail: {exc}",
+        ) from exc
+    return Response(content=jpeg, media_type="image/jpeg")
 
 
 @router.get("/file/{item_id}")

@@ -1120,10 +1120,9 @@ export function GeneratedImageView({
  * has the full action set (remix, info, copy, delete, vault, …), exactly as if
  * they had opened it from the library grid.
  *
- * URL resolution: completed thumbnails are normally already cached in `thumbs`
- * (the media-gen hook fetches them). When one is missing the hook fetches the
- * bytes on demand — `openingJobId` is set while that fetch runs so the row can
- * show a brief loading state; a click is NEVER silently dead.
+ * URL resolution: thumbnails are JPEG posters only. Opening a completed job
+ * always resolves `/media-library/file/{itemId}` so the lightbox receives the
+ * exact full engine media file.
  *
  * Call `openJob(job)` from the row click handler (completed jobs only). There
  * is nothing to mount: the lightbox lives in MediaActionsProvider.
@@ -1147,6 +1146,7 @@ export function useImageJobLightbox({
   const actions = useMediaActions();
   const [fetchedUrls, setFetchedUrls] = useState<Record<string, string>>({});
   const [openingJobId, setOpeningJobId] = useState<string | null>(null);
+  const openSeqRef = useRef(0);
 
   // Revoke only the object URLs THIS hook created (thumbs belong to the
   // media-gen context, which revokes its own).
@@ -1162,40 +1162,45 @@ export function useImageJobLightbox({
     };
   }, []);
 
-  const urlOf = useCallback(
+  const thumbUrlOf = useCallback(
     (j: ImageGenJob): string | null =>
       thumbs[j.job_id] ?? fetchedUrls[j.job_id] ?? null,
     [thumbs, fetchedUrls],
+  );
+  const fullUrlOf = useCallback(
+    (j: ImageGenJob): string | null => fetchedUrls[j.job_id] ?? null,
+    [fetchedUrls],
   );
 
   const descriptorOf = useCallback(
     (job: ImageGenJob): MediaDescriptor | null => {
       if (job.status !== "completed" || !job.item_id) return null;
-      const url = urlOf(job);
+      const url = thumbUrlOf(job);
       return url ? descriptorFromJob(job, url) : null;
     },
-    [urlOf],
+    [thumbUrlOf],
   );
 
   const openJob = useCallback(
     (job: ImageGenJob) => {
       if (job.status !== "completed" || !job.item_id) return;
+      const requestId = ++openSeqRef.current;
 
       const openWith = (targetUrl: string) => {
         const items: MediaDescriptor[] = [];
         for (const j of jobs) {
           if (j.status !== "completed" || !j.item_id) continue;
-          const u = j.job_id === job.job_id ? targetUrl : urlOf(j);
+          const u = j.job_id === job.job_id ? targetUrl : fullUrlOf(j);
           if (u) items.push(descriptorFromJob(j, u));
         }
         const index = Math.max(
           0,
           items.findIndex((d) => d.id === job.job_id),
         );
-        actions.open(items, index);
+        actions.open(items, index, job.item_id ?? undefined);
       };
 
-      const known = urlOf(job);
+      const known = fullUrlOf(job);
       if (known) {
         openWith(known);
         return;
@@ -1213,6 +1218,10 @@ export function useImageJobLightbox({
       setOpeningJobId(job.job_id);
       void fetchMediaLibraryFile(base, job.item_id)
         .then((url) => {
+          if (requestId !== openSeqRef.current) {
+            URL.revokeObjectURL(url);
+            return;
+          }
           setFetchedUrls((prev) =>
             prev[job.job_id] ? prev : { ...prev, [job.job_id]: url },
           );
@@ -1227,7 +1236,7 @@ export function useImageJobLightbox({
         })
         .finally(() => setOpeningJobId(null));
     },
-    [jobs, urlOf, actions],
+    [jobs, fullUrlOf, actions],
   );
 
   return { openJob, openingJobId, descriptorOf };

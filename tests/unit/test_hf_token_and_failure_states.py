@@ -19,6 +19,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from app.services.downloads import failures
@@ -222,6 +223,35 @@ def test_stale_civitai_rows(key_present, msg, expected):
     )
     assert res is not None
     assert res.code == expected
+
+
+def _civitai_http_status(status: int) -> httpx.HTTPStatusError:
+    req = httpx.Request("GET", "https://civitai.com/api/v1/models/123")
+    resp = httpx.Response(status, request=req)
+    return httpx.HTTPStatusError("civitai refused", request=req, response=resp)
+
+
+@pytest.mark.parametrize(
+    "status,key,expected",
+    [
+        (401, None, "requires an API key"),
+        (401, "civ_saved", "rejected the saved API key"),
+        (403, "civ_saved", "key is connected"),
+    ],
+)
+def test_civitai_inspect_errors_attribute_saved_key_correctly(monkeypatch, status, key, expected):
+    """The pre-download Civitai resolver must not collapse every 401/403 into
+    "add your key" — with a saved key, the ask is update the key or unlock
+    account access."""
+    from app.services.image_gen import custom_models
+
+    monkeypatch.setattr(custom_models, "read_civitai_key", lambda: key)
+
+    err = custom_models._friendly_civitai_http_error(
+        _civitai_http_status(status), "model 123"
+    )
+
+    assert expected in str(err)
 
 
 def test_stale_installer_message_becomes_packages_prompt():

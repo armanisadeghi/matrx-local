@@ -2,8 +2,9 @@
  * useMediaLibrary — data layer for the Media Generation "Library" tab.
  *
  * Lists every image/video the engine has persisted (`/media-library`),
- * fetches file bytes as auth'd blob URLs (a plain <img src> cannot carry the
- * Authorization header), and deletes items.
+ * resolves small gallery thumbs via a capped self-healing sweep
+ * (`/media-library/thumb/{id}`), and fetches full file bytes only when
+ * needed for lightbox / download / remix.
  *
  * React rules obeyed strictly (see repo CLAUDE.md → React Patterns):
  *  - `actions` is wrapped in useMemo and its callbacks are stable (useCallback).
@@ -18,9 +19,11 @@ import {
   engine,
   listMediaLibraryItems,
   fetchMediaLibraryFile,
+  fetchMediaLibraryThumb,
   deleteMediaLibraryItem,
 } from "@/lib/api";
 import type { MediaLibraryItem } from "@/lib/api";
+import { createConcurrencyLimiter } from "@/lib/concurrency";
 import { emitClientLog } from "@/hooks/use-unified-log";
 import {
   announceMediaItemsRemoved,
@@ -30,6 +33,8 @@ import {
 
 const ENGINE_NOT_CONNECTED = "Engine not connected";
 const PAGE_SIZE = 60;
+/** Parallel thumb GETs — enough to fill a viewport, not enough to stall the engine. */
+const THUMB_FETCH_CONCURRENCY = 6;
 
 export type MediaLibraryFilter = "all" | "image" | "video";
 
@@ -46,7 +51,12 @@ export interface MediaLibraryState {
   hasMore: boolean;
   /** List/delete error — null when healthy. */
   error: string | null;
-  /** itemId → object URL of fetched bytes (blob URLs, owned by this hook). */
+  /**
+   * itemId → object URL of a small JPEG thumb (gallery / filmstrip).
+   * Populated by the capped self-healing sweep — never full PNG/MP4 bytes.
+   */
+  thumbUrls: Record<string, string>;
+  /** itemId → object URL of full media bytes (lightbox / download). */
   fileUrls: Record<string, string>;
 }
 
@@ -58,8 +68,14 @@ export interface MediaLibraryActions {
   /** Append the next page. No-op when hasMore is false or already loading. */
   loadMore: () => Promise<void>;
   /**
-   * Resolve (and cache) an auth'd blob URL for an item's bytes.
-   * Returns null on failure — the failure is logged, never silent.
+   * Enqueue a gallery thumb for `itemId` (capped concurrency). The engine
+   * generates + caches the JPEG on miss. Returns null on failure — the tile
+   * keeps its placeholder and can retry later (self-healing).
+   */
+  getThumbUrl: (itemId: string) => Promise<string | null>;
+  /**
+   * Resolve (and cache) an auth'd blob URL for an item's FULL bytes.
+   * Lightbox / download / remix only — grids must use getThumbUrl.
    */
   getFileUrl: (itemId: string) => Promise<string | null>;
   /** Delete an item on the engine and drop it (and its blob URL) locally. */
@@ -75,6 +91,23 @@ export interface MediaLibraryActions {
   clearError: () => void;
 }
 
+function revokeUrlMap(
+  prev: Record<string, string>,
+  drop: ReadonlySet<string>,
+): Record<string, string> {
+  let changed = false;
+  const next = { ...prev };
+  for (const id of drop) {
+    const url = next[id];
+    if (url) {
+      URL.revokeObjectURL(url);
+      delete next[id];
+      changed = true;
+    }
+  }
+  return changed ? next : prev;
+}
+
 export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
   const [items, setItems] = useState<MediaLibraryItem[]>([]);
   const [filter, setFilterState] = useState<MediaLibraryFilter>("all");
@@ -82,15 +115,22 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
 
   // Refs so the stable callbacks always read the latest values.
   const filterRef = useRef<MediaLibraryFilter>("all");
   const itemsRef = useRef<MediaLibraryItem[]>([]);
+  const thumbUrlsRef = useRef<Record<string, string>>({});
   const fileUrlsRef = useRef<Record<string, string>>({});
-  // In-flight byte fetches, deduped per item id.
+  const pendingThumbFetches = useRef<Map<string, Promise<string | null>>>(
+    new Map(),
+  );
   const pendingFileFetches = useRef<Map<string, Promise<string | null>>>(
     new Map(),
+  );
+  const limitThumbFetch = useRef(
+    createConcurrencyLimiter(THUMB_FETCH_CONCURRENCY),
   );
   /** Bumped whenever items are removed. A byte-fetch that started before the
    * current epoch must not install a URL for an item that is now gone. */
@@ -98,6 +138,9 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
+  useEffect(() => {
+    thumbUrlsRef.current = thumbUrls;
+  }, [thumbUrls]);
   useEffect(() => {
     fileUrlsRef.current = fileUrls;
   }, [fileUrls]);
@@ -137,6 +180,18 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
           // blob nothing will render or revoke.
           removalEpochRef.current += 1;
           const keep = new Set(page.items.map((i) => i.id));
+          setThumbUrls((prev) => {
+            let changed = false;
+            const next = { ...prev };
+            for (const [id, url] of Object.entries(prev)) {
+              if (!keep.has(id)) {
+                URL.revokeObjectURL(url);
+                delete next[id];
+                changed = true;
+              }
+            }
+            return changed ? next : prev;
+          });
           setFileUrls((prev) => {
             let changed = false;
             const next = { ...prev };
@@ -197,6 +252,49 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
     await fetchPage(itemsRef.current.length, false);
   }, [fetchPage]);
 
+  const getThumbUrl = useCallback(
+    async (itemId: string): Promise<string | null> => {
+      const existing = thumbUrlsRef.current[itemId];
+      if (existing) return existing;
+      const pending = pendingThumbFetches.current.get(itemId);
+      if (pending) return pending;
+      const base = engine.engineUrl;
+      if (!base) {
+        console.error(
+          "[media-library] thumb fetch blocked — engine not connected",
+        );
+        return null;
+      }
+      const epoch = removalEpochRef.current;
+      const task = limitThumbFetch.current(async () => {
+        try {
+          const url = await fetchMediaLibraryThumb(base, itemId);
+          if (
+            removalEpochRef.current !== epoch &&
+            !itemsRef.current.some((i) => i.id === itemId)
+          ) {
+            URL.revokeObjectURL(url);
+            return null;
+          }
+          setThumbUrls((prev) => ({ ...prev, [itemId]: url }));
+          return url;
+        } catch (e) {
+          emitClientLog(
+            "error",
+            `[media-library] thumb fetch failed for ${itemId}: ${String(e)}`,
+            "engine",
+          );
+          return null;
+        } finally {
+          pendingThumbFetches.current.delete(itemId);
+        }
+      });
+      pendingThumbFetches.current.set(itemId, task);
+      return task;
+    },
+    [],
+  );
+
   const getFileUrl = useCallback(
     async (itemId: string): Promise<string | null> => {
       const existing = fileUrlsRef.current[itemId];
@@ -214,7 +312,10 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
       const task = (async () => {
         try {
           const url = await fetchMediaLibraryFile(base, itemId);
-          if (removalEpochRef.current !== epoch && !itemsRef.current.some((i) => i.id === itemId)) {
+          if (
+            removalEpochRef.current !== epoch &&
+            !itemsRef.current.some((i) => i.id === itemId)
+          ) {
             // The item was deleted / vaulted while its bytes were in flight.
             // Caching the URL now would leak it (nothing will ever render or
             // revoke it) and resurrect a dead id in the viewing set.
@@ -253,19 +354,8 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
       const ids = new Set(itemIds);
       itemsRef.current = itemsRef.current.filter((i) => !ids.has(i.id));
       setItems((prev) => prev.filter((i) => !ids.has(i.id)));
-      setFileUrls((prev) => {
-        let changed = false;
-        const next = { ...prev };
-        for (const id of ids) {
-          const url = next[id];
-          if (url) {
-            URL.revokeObjectURL(url);
-            delete next[id];
-            changed = true;
-          }
-        }
-        return changed ? next : prev;
-      });
+      setThumbUrls((prev) => revokeUrlMap(prev, ids));
+      setFileUrls((prev) => revokeUrlMap(prev, ids));
       announceMediaItemsRemoved(itemIds, reason);
     },
     [],
@@ -341,7 +431,10 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
   }, [error, fetchPage]);
 
   // Items restored OUT of the vault are library items again — pull them in.
-  useEffect(() => onMediaItemsAdded(() => void fetchPage(0, true)), [fetchPage]);
+  useEffect(
+    () => onMediaItemsAdded(() => void fetchPage(0, true)),
+    [fetchPage],
+  );
 
   // Another store removed items (the vault move announces; the vault's own
   // permanent delete announces). Drop them from the list and revoke their URLs.
@@ -358,7 +451,13 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
         if (!itemsRef.current.some((i) => ids.has(i.id))) {
           // Not ours (e.g. a vault-only permanent delete) — but a URL may still
           // be cached from a vault render; fall through to the revoke below.
-          if (!itemIds.some((id) => id in fileUrlsRef.current)) return;
+          if (
+            !itemIds.some(
+              (id) => id in fileUrlsRef.current || id in thumbUrlsRef.current,
+            )
+          ) {
+            return;
+          }
         }
         removalEpochRef.current += 1;
         itemsRef.current = itemsRef.current.filter((i) => !ids.has(i.id));
@@ -367,19 +466,8 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
             ? prev.filter((i) => !ids.has(i.id))
             : prev,
         );
-        setFileUrls((prev) => {
-          let changed = false;
-          const next = { ...prev };
-          for (const id of ids) {
-            const url = next[id];
-            if (url) {
-              URL.revokeObjectURL(url);
-              delete next[id];
-              changed = true;
-            }
-          }
-          return changed ? next : prev;
-        });
+        setThumbUrls((prev) => revokeUrlMap(prev, ids));
+        setFileUrls((prev) => revokeUrlMap(prev, ids));
       }),
     [],
   );
@@ -391,6 +479,7 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
     loadingMore,
     hasMore,
     error,
+    thumbUrls,
     fileUrls,
   };
 
@@ -399,6 +488,7 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
       refresh,
       setFilter,
       loadMore,
+      getThumbUrl,
       getFileUrl,
       deleteItem,
       removeItems,
@@ -408,6 +498,7 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
       refresh,
       setFilter,
       loadMore,
+      getThumbUrl,
       getFileUrl,
       deleteItem,
       removeItems,

@@ -145,7 +145,8 @@ def _write_item(
                     "[media_library] Could not store the input image for %s: %s — "
                     "the generation is kept; Remix will not be able to restore "
                     "its source image",
-                    item_id, exc,
+                    item_id,
+                    exc,
                 )
 
         meta: dict[str, Any] = {
@@ -173,9 +174,16 @@ def _write_item(
 
     logger.info(
         "[media_library] Saved %s item %s (%s, %d bytes)",
-        media_type, item_id, model_id, meta["file_size_bytes"],
+        media_type,
+        item_id,
+        model_id,
+        meta["file_size_bytes"],
     )
     meta["file_path"] = str(media_path)
+    # Best-effort gallery thumb. Failure is fine — GET /thumb self-heals.
+    from app.services.media_gen.thumbs import write_thumb_best_effort  # noqa: PLC0415
+
+    write_thumb_best_effort(meta)
     return meta
 
 
@@ -261,7 +269,8 @@ def _load_sidecar(path: Path) -> dict[str, Any] | None:
     if not meta.get("file_name") or not media_path.exists():
         logger.error(
             "[media_library] Sidecar %s points at missing media file %r — skipping",
-            path, meta.get("file_name"),
+            path,
+            meta.get("file_name"),
         )
         return None
     meta["file_path"] = str(media_path)
@@ -334,6 +343,11 @@ def delete_item(item_id: str) -> bool:
             sidecar = directory / f"{item_id}.json"
             media = directory / f"{item_id}{ext}"
             if sidecar.exists() or media.exists():
+                from app.services.media_gen.thumbs import (  # noqa: PLC0415
+                    delete_thumb_for_media,
+                )
+
+                delete_thumb_for_media(media)
                 sidecar.unlink(missing_ok=True)
                 media.unlink(missing_ok=True)
                 _init_image_path(directory, item_id).unlink(missing_ok=True)

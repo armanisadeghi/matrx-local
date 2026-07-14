@@ -44,7 +44,7 @@ import {
   clearFinishedImageGenJobs as apiClearFinishedImageGenJobs,
   cancelImageGeneration as apiCancelImageGeneration,
   cancelVideoGenJob as apiCancelVideoGenJob,
-  fetchMediaLibraryFile as apiFetchMediaLibraryFile,
+  fetchMediaLibraryThumb as apiFetchMediaLibraryThumb,
   MediaFileError,
   getVideoGenStatus,
   listVideoGenModels,
@@ -1355,7 +1355,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       setImageBatches(batches);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      emitClientLog("warn", `[media-gen] queue state fetch failed: ${msg}`, "engine");
+      emitClientLog(
+        "warn",
+        `[media-gen] queue state fetch failed: ${msg}`,
+        "engine",
+      );
     }
   }, []);
 
@@ -1386,7 +1390,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         // LOUD: the whole batch was rejected (the engine validates every run
         // before queueing any), so the user must see WHY — never a silent
         // half-enqueued sweep.
-        const error = e instanceof Error ? e.message : "Failed to queue the batch";
+        const error =
+          e instanceof Error ? e.message : "Failed to queue the batch";
         setImageGenError(error);
         return { ok: false, error };
       }
@@ -1736,9 +1741,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     }
   }, [imageLoadInFlight]);
 
-  // Fetch thumbnails for completed queue jobs (via the media-library file
-  // endpoint).  Gated on the joined "jobId:itemId" list of completed jobs so
-  // it re-runs only when that set actually changes.
+  // Fetch gallery thumbs for completed queue jobs (via /media-library/thumb —
+  // self-healing JPEG cache, not full PNG). Gated on the joined "jobId:itemId"
+  // list of completed jobs so it re-runs only when that set actually changes.
   const completedJobItems = useMemo(
     () =>
       imageJobs
@@ -1761,7 +1766,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       if (imageJobThumbFailuresRef.current[jobId]) continue;
       imageJobThumbFailuresRef.current[jobId] = "pending";
       const wasLocked = imageJobThumbWasLockedRef.current.has(jobId);
-      void apiFetchMediaLibraryFile(base, itemId)
+      void apiFetchMediaLibraryThumb(base, itemId)
         .then((url) => {
           delete imageJobThumbFailuresRef.current[jobId];
           // Resolved only after an unlock → these bytes came out of the vault.

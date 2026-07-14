@@ -44,8 +44,8 @@ import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { useMediaLibraryApp } from "@/contexts/MediaLibraryContext";
 import type { MediaLibraryFilter } from "@/hooks/use-media-library";
 import type { MediaLibraryItem } from "@/lib/api";
-import { MediaItemThumb, viewingSetOf } from "@/components/media/MediaThumb";
-import { formatDate, type MediaDescriptor } from "@/components/media/types";
+import { MediaItemThumb } from "@/components/media/MediaThumb";
+import { formatDate } from "@/components/media/types";
 import { ImageGenInstaller } from "../ImageGenInstaller";
 import {
   CancelableGenerateButton,
@@ -86,17 +86,17 @@ type ComposerMode = "image" | "video";
 
 function GalleryTile({
   item,
-  viewingSet,
+  viewingItems,
 }: {
   item: MediaLibraryItem;
-  viewingSet: MediaDescriptor[];
+  viewingItems: MediaLibraryItem[];
 }) {
   return (
     <div className="group mb-3 block w-full break-inside-avoid overflow-hidden rounded-xl border bg-card transition-colors hover:border-violet-500/50">
       <MediaItemThumb
         item={item}
         variant="gallery"
-        viewingSet={viewingSet}
+        viewingItems={viewingItems}
         className="w-full"
       >
         <div className="pointer-events-none absolute inset-x-0 bottom-0 translate-y-1 bg-gradient-to-t from-black/75 to-transparent p-2.5 pt-8 opacity-0 transition-all group-hover:translate-y-0 group-hover:opacity-100">
@@ -164,7 +164,6 @@ export function VariantGallery() {
     loadingMore,
     hasMore,
     error: libraryError,
-    fileUrls,
   } = library;
   const {
     refresh: refreshLibrary,
@@ -172,11 +171,6 @@ export function VariantGallery() {
     loadMore,
     clearError: clearLibraryError,
   } = libraryActions;
-
-  const viewingSet = useMemo(
-    () => viewingSetOf(items, fileUrls, "library"),
-    [items, fileUrls],
-  );
 
   // Local UI state ONLY: mode toggle, popover/dialog open flags.
   const [mode, setMode] = useState<ComposerMode>("image");
@@ -461,7 +455,9 @@ export function VariantGallery() {
                               "Video generation is not supported on this hardware."}
                           </p>
                         )}
-                      {modeStatusError && <ErrorNote message={modeStatusError} />}
+                      {modeStatusError && (
+                        <ErrorNote message={modeStatusError} />
+                      )}
                       <div className="max-h-80 overflow-y-auto pr-1">
                         {isImage ? (
                           <ImageModelPicker
@@ -488,7 +484,9 @@ export function VariantGallery() {
                   <PopoverTrigger asChild>
                     <button
                       type="button"
-                      disabled={isImage ? !imageCtl.defaults : !videoCtl.defaults}
+                      disabled={
+                        isImage ? !imageCtl.defaults : !videoCtl.defaults
+                      }
                       className="relative flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors hover:bg-muted/30 disabled:opacity-50"
                     >
                       <Settings2 className="h-3 w-3" />
@@ -530,7 +528,9 @@ export function VariantGallery() {
                   <PopoverTrigger asChild>
                     <button
                       type="button"
-                      disabled={isImage ? !imageCtl.defaults : !videoCtl.defaults}
+                      disabled={
+                        isImage ? !imageCtl.defaults : !videoCtl.defaults
+                      }
                       className="relative flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors hover:bg-muted/30 disabled:opacity-50"
                     >
                       <SlidersHorizontal className="h-3 w-3" />
@@ -648,7 +648,11 @@ export function VariantGallery() {
               </button>
             ))}
           </div>
-          <Button size="sm" variant="ghost" onClick={() => void refreshLibrary()}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void refreshLibrary()}
+          >
             <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
             Refresh
           </Button>
@@ -680,11 +684,7 @@ export function VariantGallery() {
           <>
             <div className="columns-2 gap-3 sm:columns-3 lg:columns-4 xl:columns-5">
               {items.map((item) => (
-                <GalleryTile
-                  key={item.id}
-                  item={item}
-                  viewingSet={viewingSet}
-                />
+                <GalleryTile key={item.id} item={item} viewingItems={items} />
               ))}
             </div>
             {hasMore && (

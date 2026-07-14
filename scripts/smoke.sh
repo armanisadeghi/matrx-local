@@ -148,7 +148,14 @@ find_app_binary() {
       [ -z "$app_dir" ] && return 1
       # Run the Mach-O directly, NOT `open -a`: `open` hands the process to
       # launchd and its stdout/stderr — the whole point — is lost.
-      find "$app_dir/Contents/MacOS" -type f -perm +111 2>/dev/null | head -1
+      #
+      # Contents/MacOS holds the SIDECARS too (cloudflared, llama-server), not
+      # just the app binary. A bare `head -1` can pick cloudflared, which exits
+      # in seconds printing "unable to find config file" — a phantom "app died
+      # on startup" that has nothing to do with the app. Exclude the known
+      # sidecars so we launch the actual Tauri binary (aimatrx-desktop).
+      find "$app_dir/Contents/MacOS" -type f -perm +111 2>/dev/null \
+        | grep -vE '/(cloudflared|llama-server|matrx-engine)[^/]*$' | head -1
       ;;
     windows)
       # tauri build leaves the runnable .exe in target/release; the NSIS/MSI
@@ -241,8 +248,17 @@ run_packaged() {
     [ "$OS" = "windows" ] && bundle_flag="--no-bundle"
     [ "$OS" = "linux" ] && bundle_flag="--no-bundle"
 
+    # tauri.conf.json sets createUpdaterArtifacts:true for the REAL release
+    # (release.yml signs the updater tarball with TAURI_SIGNING_PRIVATE_KEY).
+    # That flag forces the updater artifact even under `--bundles app`, so the
+    # build hard-fails on the missing key AFTER the .app is built — which is
+    # exactly the "does it start" signal we need. Override it OFF for the smoke
+    # build only, via Tauri's inline config merge; the committed config (and
+    # thus the real release) is untouched.
+    local no_updater_cfg='{"bundle":{"createUpdaterArtifacts":false}}'
+
     info "Packaging the desktop app (tauri build — several minutes)…"
-    if ! ( cd desktop && pnpm tauri build $bundle_flag ) >> "$build_log" 2>&1; then
+    if ! ( cd desktop && pnpm tauri build $bundle_flag --config "$no_updater_cfg" ) >> "$build_log" 2>&1; then
       record_fail "packaged: tauri build failed" "$(tail -30 "$build_log")"
       echo "Full build log: \`$build_log\`" >> "$SUMMARY"
       return 1

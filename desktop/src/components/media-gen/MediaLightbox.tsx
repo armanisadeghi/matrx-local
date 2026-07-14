@@ -39,6 +39,9 @@ import { CopyButton } from "@/components/media/MediaInfoDialog";
 import {
   capabilitiesOf,
   extraParams,
+  findMediaIndexById,
+  mediaFocusId,
+  mediaMatchesId,
   mediaTitle,
   type MediaDescriptor,
 } from "@/components/media/types";
@@ -140,7 +143,7 @@ function BarButton({
 
 /**
  * The full-viewport viewer. Rendered ONCE by MediaActionsProvider — surfaces
- * never mount it; they call `actions.open(viewingSet, index)`.
+ * never mount it; they call `actions.open(viewingSet, index, targetId?)`.
  *
  * Every action lives here (via the shared "⋯" menu and the right-click menu),
  * so a user who reached full-size from a 24px icon has the same abilities as
@@ -150,11 +153,13 @@ export function MediaLightbox({
   open,
   items,
   startIndex = 0,
+  startId = null,
   onClose,
 }: {
   open: boolean;
   items: MediaDescriptor[];
   startIndex?: number;
+  startId?: string | null;
   onClose: () => void;
 }): JSX.Element | null {
   const mediaActions = useMediaActions();
@@ -193,6 +198,8 @@ export function MediaLightbox({
   // Live transform values for the native wheel listener (avoids re-binding).
   const viewRef = useRef({ scale: 1, tx: 0, ty: 0 });
   viewRef.current = { scale, tx, ty };
+  const currentIdRef = useRef<string | null>(null);
+  const pendingStartIdRef = useRef<string | null>(null);
 
   const count = items.length;
   const safeIndex = count > 0 ? Math.min(Math.max(index, 0), count - 1) : 0;
@@ -207,7 +214,16 @@ export function MediaLightbox({
   // Re-seed on open / startIndex change.
   useEffect(() => {
     if (!open) return;
-    setIndex(Math.min(Math.max(startIndex, 0), Math.max(items.length - 1, 0)));
+    const targetIndex = findMediaIndexById(items, startId);
+    const nextIndex =
+      targetIndex >= 0
+        ? targetIndex
+        : Math.min(Math.max(startIndex, 0), Math.max(items.length - 1, 0));
+    const startItem = items[nextIndex];
+    const focus = startId ?? (startItem ? mediaFocusId(startItem) : null);
+    pendingStartIdRef.current = focus;
+    currentIdRef.current = focus;
+    setIndex(nextIndex);
     setScale(1);
     setTx(0);
     setTy(0);
@@ -215,7 +231,7 @@ export function MediaLightbox({
     // items.length intentionally read once at open — re-anchoring on a live
     // set change is handled by the effect below, which is id-based.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, startIndex]);
+  }, [open, startIndex, startId]);
 
   /**
    * Re-anchor on the CURRENT item id whenever the viewing set changes.
@@ -226,16 +242,23 @@ export function MediaLightbox({
    * other half of the "it jumps out / skips around after a few images" report.
    * Tracking the id makes the position mean what the user sees.
    */
-  const currentIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (open && current) currentIdRef.current = current.id;
+    if (!open || !current) return;
+    const pending = pendingStartIdRef.current;
+    if (pending) {
+      if (!mediaMatchesId(current, pending)) return;
+      pendingStartIdRef.current = null;
+    }
+    currentIdRef.current = mediaFocusId(current);
   }, [open, current]);
-  const itemIdsKey = items.map((i) => i.id).join("\u0000");
+  const itemIdsKey = items
+    .map((i) => `${i.id}:${i.itemId ?? ""}`)
+    .join("\u0000");
   useEffect(() => {
     if (!open) return;
     const id = currentIdRef.current;
     if (!id) return;
-    const at = items.findIndex((i) => i.id === id);
+    const at = findMediaIndexById(items, id);
     // Not found = the item left the set (deleted/vaulted). The provider already
     // pruned it and clamps the index, so leave the slot alone.
     if (at >= 0) setIndex((prev) => (prev === at ? prev : at));

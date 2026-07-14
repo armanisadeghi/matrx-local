@@ -67,20 +67,23 @@ export function BatchConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88vh] max-w-lg overflow-x-hidden overflow-y-auto">
+      <DialogContent className="flex max-h-[88vh] w-[min(96vw,42rem)] max-w-2xl flex-col overflow-hidden">
         <DialogHeader className="min-w-0">
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="flex min-w-0 items-center gap-2 pr-6 leading-snug">
             <Layers className="h-4 w-4 shrink-0" />
-            Queue {total.toLocaleString()}{" "}
-            {total === 1 ? "generation" : "generations"}?
+            <span className="min-w-0 break-words">
+              Queue {total.toLocaleString()}{" "}
+              {total === 1 ? "generation" : "generations"}?
+            </span>
           </DialogTitle>
-          <DialogDescription className="break-words leading-relaxed">
+          <DialogDescription className="min-w-0 break-words leading-relaxed [overflow-wrap:anywhere]">
             They run one at a time, in the order shown. You can pause, reorder,
             or cancel the batch at any point — including after it starts.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3">
+        <ScrollArea className="min-h-0 flex-1 pr-3">
+          <div className="space-y-3">
           {/* ── the numbers ────────────────────────────────────────────── */}
           <div className="grid grid-cols-3 gap-2">
             <Stat label="Runs" value={total.toLocaleString()} emphasize={large} />
@@ -113,14 +116,20 @@ export function BatchConfirmDialog({
           )}
 
           {plan.warnings.length > 0 && (
-            <ul className="space-y-1 rounded-md border bg-muted/40 p-2.5 text-xs text-muted-foreground">
-              {plan.warnings.map((w) => (
-                <li key={w} className="flex gap-1.5">
-                  <span aria-hidden>•</span>
-                  <span>{w}</span>
-                </li>
-              ))}
-            </ul>
+            <ScrollArea className="max-h-48 rounded-md border bg-muted/40">
+              <ul className="space-y-1 p-2.5 text-xs text-muted-foreground">
+                {plan.warnings.map((w) => (
+                  <li key={w} className="flex min-w-0 gap-1.5">
+                    <span aria-hidden className="shrink-0">
+                      •
+                    </span>
+                    <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+                      {w}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </ScrollArea>
           )}
 
           {/* ── what actually gets generated ───────────────────────────── */}
@@ -154,9 +163,10 @@ export function BatchConfirmDialog({
               )}
             </div>
           )}
-        </div>
+          </div>
+        </ScrollArea>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 border-t pt-3">
           <Button
             variant="ghost"
             onClick={() => onOpenChange(false)}
@@ -230,14 +240,18 @@ function RunPreview({
 }) {
   return (
     <div className="rounded-md border bg-muted/30 p-2">
-      <div className="flex items-center gap-1.5 pb-1">
-        <code className="truncate text-[11px] text-primary">{label || "—"}</code>
+      <div className="flex min-w-0 items-start gap-1.5 pb-1">
+        <code className="min-w-0 flex-1 whitespace-normal break-words text-[11px] leading-snug text-primary [overflow-wrap:anywhere]">
+          {label || "—"}
+        </code>
         <span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">
           seed {seed}
         </span>
       </div>
       <ScrollArea className="max-h-16">
-        <p className="whitespace-pre-wrap break-words text-xs">{prompt}</p>
+        <p className="whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]">
+          {prompt}
+        </p>
       </ScrollArea>
     </div>
   );

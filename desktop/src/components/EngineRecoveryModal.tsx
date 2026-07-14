@@ -284,8 +284,7 @@ export function EngineMonitor({
     }));
     setPorts(results);
 
-    for (let i = 0; i < scanPortsList.length; i++) {
-      const port = scanPortsList[i];
+    for (const port of scanPortsList) {
       try {
         let open = false;
         let detail = "";

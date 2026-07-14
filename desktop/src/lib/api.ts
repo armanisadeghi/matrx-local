@@ -7,9 +7,8 @@
 
 import { emitClientLog } from "@/hooks/use-client-log";
 import { getOwnedEngineUrl, discoverEnginePort } from "@/lib/sidecar";
-import { ENGINE_PORT_BASE, enginePortList } from "@/lib/engine-ports";
+import { enginePortList } from "@/lib/engine-ports";
 
-const DEFAULT_PORT = ENGINE_PORT_BASE;
 const DISCOVERY_PORTS = enginePortList();
 
 export interface EngineHealth {

@@ -206,15 +206,17 @@ export function deleteTemplate(id: string): void {
 /** Validate templates coming back from the on-disk engine store. */
 export function sanitizeSavedTemplates(raw: unknown[]): SavedTemplate[] {
   return raw
-    .filter(
-      (t: Partial<SavedTemplate>): t is SavedTemplate =>
-        typeof t?.id === "string" &&
-        typeof t?.name === "string" &&
-        typeof t?.targetId === "string" &&
-        isMatrixSpec(t?.spec) &&
-        typeof t?.createdAt === "number" &&
-        typeof t?.updatedAt === "number",
-    )
+    .filter((t): t is SavedTemplate => {
+      const c = t as Partial<SavedTemplate> | null | undefined;
+      return (
+        typeof c?.id === "string" &&
+        typeof c?.name === "string" &&
+        typeof c?.targetId === "string" &&
+        isMatrixSpec(c?.spec) &&
+        typeof c?.createdAt === "number" &&
+        typeof c?.updatedAt === "number"
+      );
+    })
     .map((t) => ({ ...t, spec: coerceSpec(t.spec) }))
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }

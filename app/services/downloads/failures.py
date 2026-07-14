@@ -120,17 +120,61 @@ def hf_token_invalid(repo_id: str) -> ActionableDownloadError:
 
 
 def civitai_key_required() -> ActionableDownloadError:
+    """Civitai 401/403 with NO key configured — the only case where 'add your
+    key' is the right ask."""
     return ActionableDownloadError(
         DownloadResolution(
             code="civitai_key_required",
             title="This download needs your Civitai API key",
             message=(
-                "Civitai refused the download because no valid API key is set. "
-                "Add your Civitai key, then start the download again."
+                "Civitai requires an API key for this download and none is set "
+                "yet. Add your Civitai key, then start the download again."
             ),
             action_kind="settings_api_keys",
             action_label="Add your Civitai key",
             provider="civitai",
+        )
+    )
+
+
+def civitai_key_rejected() -> ActionableDownloadError:
+    """Civitai 401 WITH a key attached — the key itself was refused. Telling
+    the user to 'add your key' when one is already saved is how you get eight
+    agents asking about a token that was set all along."""
+    return ActionableDownloadError(
+        DownloadResolution(
+            code="civitai_key_rejected",
+            title="Civitai rejected your API key",
+            message=(
+                "Civitai did not accept the key saved in this app — it may have "
+                "been revoked or regenerated. Replace it with a current key "
+                "from your Civitai account settings, then start the download "
+                "again."
+            ),
+            action_kind="settings_api_keys",
+            action_label="Update your Civitai key",
+            provider="civitai",
+        )
+    )
+
+
+def civitai_access_restricted(model_page_url: str | None = None) -> ActionableDownloadError:
+    """Civitai 403 WITH a valid-looking key — the account simply doesn't have
+    download rights to this file yet (early-access, membership-gated, or
+    restricted). The key is fine; the fix lives on the model page."""
+    return ActionableDownloadError(
+        DownloadResolution(
+            code="civitai_access_restricted",
+            title="This model is restricted on Civitai",
+            message=(
+                "Your Civitai key is connected, but this file is early-access "
+                "or restricted — your account doesn't have download rights to "
+                "it yet. Open the model page on Civitai to unlock access, then "
+                "start the download again."
+            ),
+            action_kind="open_url",
+            action_label="Open the model page on Civitai",
+            action_url=model_page_url or "https://civitai.com",
         )
     )
 

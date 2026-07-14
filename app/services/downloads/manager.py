@@ -932,7 +932,18 @@ class DownloadManager:
                         response.status_code in (401, 403)
                         and (entry.metadata or {}).get("civitai_download")
                     ):
-                        raise failures.civitai_key_required()
+                        # Attribute the refusal correctly — three distinct
+                        # user-fixable causes, three distinct asks. A blanket
+                        # "key required or invalid" told users with a working
+                        # key to re-enter it forever.
+                        key_present = bool(client.headers.get("authorization"))
+                        if not key_present:
+                            raise failures.civitai_key_required()
+                        if response.status_code == 401:
+                            raise failures.civitai_key_rejected()
+                        raise failures.civitai_access_restricted(
+                            (entry.metadata or {}).get("model_page_url")
+                        )
                     response.raise_for_status()
 
                     part_total = int(response.headers.get("content-length", 0))

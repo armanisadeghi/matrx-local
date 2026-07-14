@@ -32,6 +32,73 @@ _(none)_
 
 ## Active
 
+### TASK: Salvage-audit orphan branch — macOS DMG installer (`add-auto-update-system-Pl7Ak`)
+- **Status:** filed, not started. Approved by Arman 2026-07-14. `code analysis pending`.
+- **Created:** 2026-07-14
+- **Priority:** P2
+- **Source:** Arman — an agent left work stranded on a branch instead of merging to
+  main, so it never reached us. At some point this work was genuinely good; nobody
+  knows its current value. Mine it for what's still worth taking. **Do NOT merge the
+  branch and do NOT delete it** — produce an assessment + a cherry-pick/rebuild
+  recommendation for Arman.
+
+**The branch**
+- Remote: `origin/claude/add-auto-update-system-Pl7Ak` (local-only remote `origin`, GitHub `armanisadeghi/matrx-local`).
+- Single commit: `06ac6c50ebec1efd61e7b7a946f2ab00f926aa92` — "feat: add macOS DMG installer with drag-to-Applications experience", authored **2026-03-08** (~4 months stale; `main` has ~281 commits since the merge-base).
+- **Name is misleading:** despite "auto-update-system" in the branch name, the actual commit is a **macOS DMG installer** change, not an updater. Assess what's really there, not what the name implies.
+- Files touched (238+/5-): `.github/workflows/release.yml`, `desktop/src-tauri/tauri.conf.json`, `docs/installation-and-data-safety.md` (+215 lines, new), `scripts/release.sh`.
+
+**What to do**
+1. Read the full diff: `git diff $(git merge-base origin/main origin/claude/add-auto-update-system-Pl7Ak)..origin/claude/add-auto-update-system-Pl7Ak`.
+2. Compatibility test: for each touched file, compare the branch's version against
+   today's `main`. These are all release/packaging surfaces that have almost
+   certainly evolved — determine per-hunk whether the change is (a) already done a
+   better way on main, (b) obsolete, or (c) a still-missing capability worth having.
+3. Specifically assess the DMG drag-to-Applications installer UX and the
+   `installation-and-data-safety.md` doc — is a proper DMG installer experience
+   something main still lacks? Cross-check against current `tauri.conf.json` bundle
+   config and `scripts/release.sh` / `.github/workflows/release.yml`.
+4. **Deliverable:** a short report (append to this task or a `docs/` note) listing
+   each salvageable piece, whether it applies cleanly to current main, and a
+   recommended action (cherry-pick as-is / rebuild against current release flow /
+   discard). Do NOT apply changes without Arman's go-ahead — this is assess-only.
+5. After Arman acts on the report, the branch can be deleted (tracked separately).
+
+---
+
+### TASK: Salvage-audit orphan branch — sync-loop crash hardening (`fix-client-python-execution-BpvKX`)
+- **Status:** filed, not started. Approved by Arman 2026-07-14. `code analysis pending`.
+- **Created:** 2026-07-14
+- **Priority:** P2
+- **Source:** Arman — same situation as the DMG task above: good work stranded on a
+  branch, never merged, now of unknown current value. **Do NOT merge and do NOT
+  delete the branch** — assess and recommend.
+
+**The branch**
+- Remote: `origin/claude/fix-client-python-execution-BpvKX`.
+- Single commit: `c6ab976485f40af06e7da2c428b1220ad7906795` — "fix: remove unused import and harden sync loop against crashes", authored **2026-03-08** (~4 months stale).
+- **Name is misleading:** branch says "fix-client-python-execution" but the commit is
+  actually a **local-DB sync-loop hardening** change. Assess the real content.
+- Files touched (28+/7-): `app/services/local_db/database.py` (1 line),
+  `app/services/local_db/sync_engine.py` (crash-hardening around the sync loop).
+
+**What to do**
+1. Read the full diff: `git diff $(git merge-base origin/main origin/claude/fix-client-python-execution-BpvKX)..origin/claude/fix-client-python-execution-BpvKX`.
+2. This one is higher-value to check carefully — sync reliability is load-bearing and
+   the notes/file sync engine has been overhauled since March (see the notes-sync and
+   file_sync work). Determine whether the crash-hardening it adds to `sync_engine.py`
+   is: (a) already present/superseded on current main, (b) still a real gap, or (c)
+   conceptually right but needs re-implementing against the current sync engine.
+3. Cross-reference [docs/SYNC_CONTRACT.md](../docs/SYNC_CONTRACT.md) and the current
+   `app/services/file_sync/FEATURE.md` / local_db sync code — does the branch's
+   defensive pattern still make sense under the current architecture?
+4. **Deliverable:** a short report — is there a real robustness fix here worth
+   forward-porting? If yes, recommend the exact change against current code (as a new
+   fix, not a stale cherry-pick). If already covered, say so and clear the branch for
+   deletion. Assess-only; no changes without Arman's go-ahead.
+
+---
+
 ### TASK: Agent Browser Testing Surface (CDP-controllable Chromium for agents)
 - **Status:** filed, not started — long-term. Approved for backlog by Arman
   2026-07-14. `code analysis pending` (current-state audit done; build not scoped in code).

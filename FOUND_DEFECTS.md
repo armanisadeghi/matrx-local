@@ -294,6 +294,25 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   Prepped ask filed 2026-07-12 at the TOP of `.matrx/ARMAN_TASKS.md`.
 - **Owner hint:** platform / Supabase admin (Arman)
 
+### MXL-D-046 — auth_tokens.expires_at can claim "valid" for an actually-expired JWT
+
+- **Found:** 2026-07-13 during the chat-mirror RLS drill
+- **Symptom:** the persisted `auth_tokens` row on this machine had
+  `expires_at` in the FUTURE while the stored access token was actually
+  expired (PostgREST: `PGRST303 JWT expired`) and the stored refresh token
+  had been rotated away (`refresh_token_not_found`). Every engine-owned
+  sync loop that trusts `TokenRepo.is_expired()` (notes, chat mirror,
+  catalog agents) will run "configured" and burn a 401 per table per tick
+  until the frontend posts a fresh token — loud, but the skip-reason
+  ("expired") never fires, so the status endpoints claim a healthy login.
+- **Evidence:** live drill 2026-07-13: `is_expired()` false; direct
+  PostgREST GET → 401 PGRST303 on all tables; refresh grant → 400
+  refresh_token_not_found.
+- **Status:** open. Candidate fix: on a 401 from any sync client, mark the
+  stored token row invalid (or decode the JWT `exp` claim locally instead
+  of trusting the stored column) so the loops idle with a truthful reason.
+- **Owner hint:** auth / sync spine
+
 ### MXL-D-044 — Flaky full-suite ordering: test_runner_drains_a_whole_batch_unattended
 
 - **Found:** 2026-07-13 during Wave-0 verification run

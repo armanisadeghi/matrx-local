@@ -22,8 +22,18 @@
 
 ## Needs Clarification
 
+_(none)_
+
+---
+
+## Blocked
+
+_(none)_
+
+## Active
+
 ### TASK-001: Local GLiNER NER subsystem (URGENT)
-- **Status:** needs-clarification
+- **Status:** in-progress — approved by Arman 2026-07-13, assigned to agent (see `app/services/ner/`, `app/api/ner_routes.py`, `app/tools/tools/ner.py`, `tests/*ner*`)
 - **Created:** 2026-07-09
 - **Priority:** URGENT — cloud NER API volume is a major cost driver
 - **Source:** User: NER is critical; API costs are killing us at volume; need
@@ -41,27 +51,17 @@ right local runtime (encoder NER) — not llama-server / GGUF.
 **Plan doc**
 [`docs/GLINER_NER_INTEGRATION_PLAN.md`](../docs/GLINER_NER_INTEGRATION_PLAN.md)
 
-**Subtasks** (do not start coding until Arman approves)
-- [ ] Arman reviews plan + answers decision checklist in the doc
+**Subtasks**
+- [x] Arman reviews plan + answers decision checklist in the doc — approved 2026-07-13
 - [ ] P1: NER service + `/ner/extract[/batch]` + small/medium download + `local_extract_entities`
 - [ ] P2: queue/batching, DownloadManager `"ner"`, registry, capability probe
 - [ ] P3: GLiNER2 + PII presets + large/XXL gating + optional desktop UI
 - [ ] P4 (optional): ONNX/ORT fast path for default small model
 
 **Notes**
-**BLOCKED ON ARMAN — do not implement until reviewed.** Exact questions in the
-plan doc "Decisions needed from Arman" section. Key constraint already decided
-by research: Python sidecar subsystem, NOT LLM catalog / llama-server.
-
-Also filed for Arman in `.matrx/ARMAN_TASKS.md`.
-
----
-
-## Blocked
-
-_(none)_
-
-## Active
+Unblocked — Arman approved the plan 2026-07-13; build in progress. Key
+constraint from research: Python sidecar subsystem, NOT LLM catalog /
+llama-server.
 
 - [ ] **img2img + LoRA follow-ups (added 2026-07-10, image-gen img2img/LoRA
   build)** — shipped: `init_image_b64`/`strength`/`loras` on
@@ -307,6 +307,7 @@ are condensed under Completed. Still open:
 ## Completed
 
 _(one line each, newest first; full detail in git history)_
+- [ENH] **Canonical local DB mirror + chat sync (handoff `docs/handoffs/canonical-local-db-mirror.md`)**: generated structural mirror of cloud schemas (`schema_mirror/` + `scripts/generate_mirror_schema.py` → ATTACHed `~/.matrx/mirror/chat.db`), V10 cutover annihilated bespoke conversations/messages/user_requests/tool_call_logs, `SQLiteConversationStore`+repos write canonical `chat.*` + outbox, new `app/services/chat_sync/` engine (push parent-first w/ echo-back, keyset incremental pull, LWW + pending-outbox protection, tombstones), managed service `chat_sync`, `/chat/mirror/status|sync`; RLS drill passed all 22 chat tables after fixing missing grants on `chat.conversation_value` (aidream migration 0167, applied live); SYNC_CONTRACT gap #1 CLOSED; pinned by `tests/characterization/test_chat_mirror_characterization.py` — 2026-07-13
 - [BUG] MXL-D-030 fixed: `/health` now reflects launcher registry (ok/degraded/failed_services + service names), still HTTP 200 + probe-cheap (`app/api/routes.py`) — 2026-07-13
 - [BUG] Broadcast subscribe gate read removed env var `MATRX_BRIDGE_BROADCAST_ENABLED` — now gates on the `extension_broadcast_enabled` setting; cross-machine fallback revived (`app/main.py` Phase 7, `app/api/token_routes.py`) — 2026-07-13
 - [ENH] Engine-owned notes auto-sync loop (managed service `notes_sync`): persisted-JWT config, watcher ensure, 10-min incremental + daily full reconcile; verified live push 33/pull 2 to `workbench.notes` (`app/services/documents/sync_engine.py`) — 2026-07-13

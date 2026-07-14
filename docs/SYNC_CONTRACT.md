@@ -33,7 +33,7 @@ FIRST-ACCESS REPLICA — not a competing server.**
 |---|---|---|---|---|---|---|
 | **Notes (bodies + metadata)** | `.md` files under the notes dir + SQLite `notes` + cloud `workbench.notes` | **Bidirectional, automatic**: engine-owned auto-sync loop (10-min incremental pull + pending push, daily full reconcile, credentials from the persisted `auth_tokens` row), Supabase Realtime on `workbench.notes`/`note_folders` (frontend hook, own-device echoes skipped via `last_device_id`), auto-started file watcher, plus manual `push_all` / `pull_all` / `full_sync` / per-note triggers | Content-hash three-way compare against last-known-hash; a remote row whose `last_device_id` is THIS device can never conflict with or overwrite local work (own-push guard — local divergence is unsynced work and is pushed). Pushes of previously-synced notes are OPTIMISTIC-CONCURRENCY updates (conditional on the last-synced `content_hash`, live rows only) — a failed precondition conflicts instead of last-writer-winning; edit-vs-remote-delete resurrects the edit. Pathless (web-authored) cloud notes get a collision-free allocated local path, written back to the cloud row. Unprovable local state from another device → conflict saved to `.sync/conflicts/<id>/{local,remote}.md`, BOTH copies preserved. User resolves: `keep_local` / `keep_remote` / `merge` / `append` / `split` / `exclude` | Soft-delete both sides: SQLite `is_deleted=1`, cloud `deleted_at` (mapped to `is_deleted` at the wire boundary in `supabase_client._normalize_note_row`). Local offline deletes propagate on next `full_sync`; remote deletes arrive via `get_notes_since` and remove the local file + tombstone the row | `last_pull_at` (cloud `updated_at` watermark) in `.sync/state.json`; `platform._touch_row` stamps `updated_at` on EVERY write **including soft-delete PATCHes**, so `pull_changes` is truly incremental. (`sync_version` is a PER-ROW edit counter bumped only on content/label change — never use it as a global cursor; that bug made incremental pull blind to most remote edits and all deletes.) `full_sync` is a full reconciliation by design | Full: file written first, `sync_status` → `pending_push`/`failed`, retried by `push_all`/`full_sync` via `list_pending_push` |
 | **Note versions** | SQLite `note_versions` (local, offline-capable) + cloud `history.row_versions` via the `platform._version_capture` trigger on `workbench.notes` | Local snapshots on save; cloud history is trigger-captured server-side (the old push to `public.note_versions` 404'd — table graveyarded 2026-07, client calls deleted) | N/A — append-only history | N/A | version_number monotonic per note | Local version history works fully offline (migration V7) |
-| **Conversations / messages** | SQLite `conversations`, `messages`, `user_requests`, `tool_call_logs` via `LocalConversationHandler` | **Local-only (GAP — see below)** | N/A | Hard delete local (`ConversationsRepo.delete`) — no cloud counterpart to protect | None | Full local write, never leaves the machine |
+| **Chat system (conversations, messages, user_requests, tool_calls, media, artifacts, …)** | The CANONICAL LOCAL MIRROR: per-schema SQLite file `~/.matrx/mirror/chat.db` ATTACHed as `chat`, tables generated from the live cloud schema (`schema_mirror/snapshot.json` → `scripts/generate_mirror_schema.py` → `mirror_schema.py`). Local ids ARE the canonical cloud ids. Written by `SQLiteConversationStore` + `ConversationsRepo`/`MessagesRepo` (compat shapes preserved) | **Bidirectional, automatic** (2026-07-13): every local-origin write enqueues the `sync_queue` outbox; `app/services/chat_sync/engine.py` drains it as batched PostgREST upserts (parents before children) and pulls every `chat.*` table incrementally via keyset pagination on `(updated_at\|created_at, pk)` | Append-mostly; row-level LWW on `updated_at`, EXCEPT (a) a row with a pending outbox entry is never overwritten by a pull — the unpushed local change wins until it lands, and (b) message rows are never destroyed. Cloud-stamped push echoes are written back locally without re-enqueue (no echo loop) | Soft-delete both sides via `deleted_at`; `ConversationsRepo.delete` tombstones (repo reads filter live rows); nothing in the pull path ever hard-deletes | `sync_meta` rows keyed `chat.<table>`; keyset cursor JSON in `last_hash` | Full local write; outbox drains on reconnect (V10 migration also seeded the outbox with all pre-cutover local history) |
 | **Settings** | `~/.matrx/settings.json` + cloud `public.app_settings` (one row per user+instance) | **Bidirectional**, whole-blob | Timestamp compare (`updated_at`); newer side wins. Acceptable ONLY because the cloud row is scoped per-instance — the only competing writer for a row is this instance itself. Pull paths stamp the CLOUD timestamp locally (origin-echo suppression) so pull→push ping-pong cannot occur | N/A (blob upsert) | `updated_at` on both sides | Full: local JSON always writable; sync retried on next startup/trigger |
 | **Instance registry / heartbeat** | cloud `public.app_instances` | Push-only (register + heartbeat + tunnel URLs) | Upsert `on_conflict=user_id,instance_id` | `is_active` flag | `last_seen` | App runs; orphan state flagged loudly, never blocking |
 | **Notes device id / dir mappings / sync log / shares** | Local only: `.sync/state.json` (`device_id`), `.sync/mappings.json` | None — the cloud tables (`note_devices`, `note_directory_mappings`, `note_sync_log`, `note_shares`) were graveyarded 2026-07; all client calls deleted. Sharing UI removed; `/shares` write routes return 501 pending iam-based sharing | N/A | N/A | N/A | Fully local |
@@ -45,7 +45,20 @@ FIRST-ACCESS REPLICA — not a competing server.**
 
 ## How the pieces map to code
 
-Three sync subsystems, deliberately separate:
+**The canonical mirror doctrine (2026-07-13):** the local store for cloud-owned
+entity systems is a STRUCTURAL MIRROR of the canonical cloud schemas — same
+table names, same column names, SQLite-compatible types, RLS replaced by
+"this user's rows only". The DDL is GENERATED from a checked-in introspection
+snapshot of the live cloud DB (`schema_mirror/` + `scripts/
+generate_mirror_schema.py`), so drift is mechanically detectable
+(`--check`, plus loud runtime drift errors in `app/services/local_db/
+mirror.py`). Mirrored schemas live in per-schema files ATTACHed under the
+schema name, so local SQL uses the canonical qualified names
+(`chat.conversation`). The chat system was cut over 2026-07-13 (bespoke
+tables annihilated in migration V10); `workbench.*` and `ai.*` are captured
+in the snapshot and are follow-up cutovers.
+
+Four sync subsystems, deliberately separate:
 
 1. **`app/services/local_db/sync_engine.py`** — the pull-only replica engine.
    Pulls models/agents/tools from AIDream into SQLite on startup + every 10
@@ -65,6 +78,14 @@ Three sync subsystems, deliberately separate:
    from 9ca565245: `_save_local(updated_at=<cloud timestamp>)` on every pull
    path. Removing that parameter reintroduces an unreachable `in_sync` state
    and a last-writer-wins ping-pong across devices.
+4. **`app/services/chat_sync/`** — the chat-mirror subsystem.
+   `engine.py` (outbox drain + incremental keyset pull, LWW with
+   pending-outbox protection, engine-owned background loop with credentials
+   from the persisted `auth_tokens` row, managed service `chat_sync`),
+   `client.py` (PostgREST wire client for the `chat` schema profile —
+   pushes strip the cloud-trigger-owned columns `organization_id` /
+   `created_by` / `updated_by` / `version`). Status:
+   `GET /chat/mirror/status`; manual cycle: `POST /chat/mirror/sync`.
 
 Related local-first stores that ride their own queues: `scrape_pages`
 (scraper retry queue) and `downloads` (download manager).
@@ -108,8 +129,9 @@ through SQLite), not data ownership — they have been corrected.
 
 - Do NOT make SQLite (or the notes dir) authoritative over the cloud.
 - Do NOT delete the `sync_queue` table or `SyncMetaRepo`'s queue methods —
-  dormant today (see gaps), but it is the designated outbox for future
-  offline-write push pipelines (conversations first).
+  it IS the live outbox for the chat mirror (writers: `outbox.enqueue_change`
+  callers in the conversation store and repos). Remote-origin writes (pull /
+  echo apply paths in `chat_sync/engine.py`) must NEVER enqueue.
 - Do NOT auto-resolve conflicts destructively (no silent keep_remote /
   keep_local defaults, no hash-less overwrites).
 - Do NOT remove offline write paths or add hard dependencies on connectivity.
@@ -131,7 +153,7 @@ and note sync is fully automatic (engine auto-sync loop + Realtime + watcher).
 
 | # | Gap | Where | Status |
 |---|---|---|---|
-| 1 | **Conversations/messages are local-only forever.** `LocalConversationHandler` writes SQLite; no path pushes them to the cloud on reconnect. The `sync_queue` outbox table exists (schema V1) but has zero writers. | `app/services/ai/conversation_handler.py`, `app/services/local_db/schema.py` | Documented; a conversation-push pipeline is future work, deliberately NOT built in Phase 6 |
+| 1 | ~~Conversations/messages are local-only.~~ **CLOSED 2026-07-13**: the canonical chat mirror + `chat_sync` engine push local turns to `chat.*` and pull cloud conversations incrementally; the `sync_queue` outbox has real writers. Remaining nuance: conversation content flattens non-text message parts to text locally (`_normalize_message`), and `chat.request` rows are not produced by a client host (the user_request↔conversation link rides `user_request.metadata.conversation_id`). | `app/services/chat_sync/`, `app/services/ai/conversation_handler.py` | Closed; characterization-pinned (`test_chat_mirror_characterization.py`) |
 | 3 | **Settings conflict strategy is timestamp LWW,** not both-versions-preserved. Acceptable because the cloud row is per-instance (self vs self), but a frontend remote-edit feature would need real conflict handling. | `app/services/cloud_sync/settings_sync.py` | Documented as accepted divergence |
 | 4 | **`full_sync` does not pull remote deletions** — `get_all_notes_with_hashes` filters to live rows by design; a remotely-deleted note whose file still exists locally gets re-pushed (cloud row stays tombstoned; the delete then arrives via the next `pull_changes`). Eventually consistent, but a `full_sync`-only user sees deleted notes linger locally. | `app/services/documents/sync_engine.py::full_sync` | Documented; incremental path (`pull_changes`) is the delete-propagation channel |
 | 5 | **Stale "SQLite is the single source of truth" claims** remain in out-of-scope files: `app/api/chat_routes.py`, `app/services/ai/conversation_handler.py`, `app/config.py` (notes comment). | see left | Tracked in `.matrx/AGENT_TASKS.md` |

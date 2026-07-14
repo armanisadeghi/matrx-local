@@ -28,7 +28,38 @@ The docs and schemas already in this repo are NOT the spec — the cloud DB is.
 The repo drifted 3–4 months behind the platform; do not trust local docs or
 local table shapes over the live Supabase schema (project `txzxabzwovsujtloxrus`).
 
-## Where things stand (verified live 2026-07-13)
+## Progress log — 2026-07-13 (chat cutover SHIPPED)
+
+- **Mirror infrastructure built**: `schema_mirror/snapshot.json` (checked-in
+  introspection of live chat/workbench/ai — and now files — schemas) →
+  `scripts/generate_mirror_schema.py` → generated
+  `app/services/local_db/mirror_schema.py`. Per-schema SQLite files
+  (`~/.matrx/mirror/chat.db`) ATTACHed under the schema name, so local SQL is
+  literally `chat.conversation`. Loud drift detection (`--check` +
+  runtime ALTER/ERROR in `mirror.py`). The file-sync workstream already
+  extended it to `files.files`/`files.folders`.
+- **Chat cutover done**: `SQLiteConversationStore` + repos write canonical
+  `chat.*` rows; migration V10 copied bespoke data, seeded the outbox with
+  all local history, and DROPPED `conversations`/`messages`/`user_requests`/
+  `tool_call_logs`.
+- **Bidirectional sync live**: `app/services/chat_sync/` — outbox push
+  (batched upserts, parent-first, poison isolation, cloud echo-back) +
+  incremental keyset pull (per-table `sync_meta` checkpoints, row LWW,
+  pending-outbox protection, tombstones only). Managed service `chat_sync`
+  (main.py phase 2d); `GET /chat/mirror/status`, `POST /chat/mirror/sync`.
+- **RLS verified** (role-simulated drill, all 22 chat tables read+write with
+  a plain user JWT): one failure found and fixed — `chat.conversation_value`
+  had RLS policies but ZERO table grants (aidream migration
+  `0167_conversation_value_grants.sql`, applied live + verified).
+- Contract updated: docs/SYNC_CONTRACT.md (gap #1 CLOSED, subsystem #4).
+  Tests: `tests/characterization/test_chat_mirror_characterization.py`.
+- **Remaining** (see ARMAN_TASKS/questions): live end-to-end airplane-mode
+  drill with a signed-in desktop session (stored JWT+refresh were stale on
+  this machine); workbench/ai mirror cutovers; media/artifact byte handling
+  rides the file-sync handoff; matrx-ai 0.4.0 floor is unpublished so
+  `uv sync` fails repo-wide (pre-existing, not this workstream).
+
+## Where things stand (verified live 2026-07-13, pre-cutover)
 
 - Cloud is organized into namespaced schemas. The chat system is 22 tables in
   the `chat` schema: `conversation` (39 cols), `message` (26), `media`,

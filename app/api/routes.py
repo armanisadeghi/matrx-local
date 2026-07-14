@@ -121,9 +121,10 @@ async def health():
     if degraded:
         payload["degraded"] = degraded
 
-    # Remote app-config provenance: {tier, fetched_at, update_required} so the
-    # desktop UI / diagnostics can show "config: remote (2m ago)" vs
-    # "compiled defaults". Never allowed to break the liveness probe.
+    # Remote app-config provenance: {tier, fetched_at, update_required, notice}
+    # so the desktop UI / diagnostics can show "config: remote (2m ago)" vs
+    # "compiled defaults", gate on the version floor, and render the operator
+    # notice. Never allowed to break the liveness probe.
     try:
         from app.services.app_config import get_app_config_service
 

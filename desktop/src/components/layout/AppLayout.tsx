@@ -4,6 +4,8 @@ import { StatusBar } from "./StatusBar";
 import { QuickActionBar } from "./QuickActionBar";
 import { AppActionBanner } from "./AppActionBanner";
 import { EngineDownBanner } from "@/components/EngineDownBanner";
+import { AppConfigBanner } from "@/components/AppConfigBanner";
+import { useAppConfigStatus } from "@/hooks/use-app-config-status";
 import { useDevTerminalHeight } from "@/components/DevTerminalPanel";
 import type { EngineStatus } from "@/hooks/use-engine";
 import type { TranscriptionState, TranscriptionActions } from "@/hooks/use-transcription";
@@ -89,6 +91,7 @@ export function AppLayout({
 }: AppLayoutProps) {
   const location = useLocation();
   const terminalHeight = useDevTerminalHeight();
+  const appConfig = useAppConfigStatus(engineStatus);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -124,6 +127,11 @@ export function AppLayout({
           engineStatus={engineStatus}
           onRestartEngine={onRestartEngine}
           onOpenMonitor={onOpenMonitor ?? NOOP}
+        />
+        <AppConfigBanner
+          appConfig={appConfig}
+          updateState={updateState}
+          updateActions={updateActions}
         />
         <AppActionBanner engineStatus={engineStatus} />
         <main className="flex flex-1 flex-col overflow-hidden relative">

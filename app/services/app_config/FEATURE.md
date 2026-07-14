@@ -40,7 +40,7 @@ touching this feature in ANY repo.
   `start_background()` (initial fetch + 6h loop). Teardown stops the loop in
   Phase S1.
 - **Status:** `GET /health` carries `app_config: {tier, fetched_at,
-  update_required}`; `GET /admin/status` reflects the registry record.
+  update_required, notice}`; `GET /admin/status` reflects the registry record.
 - **Manual refresh:** `POST /admin/refresh-config` (local-bootstrap auth, like
   the other `/admin/*` routes) → `refresh_now()` → provenance payload.
 - **Consumers:** `aidream/client.py` (singleton rebuilt on URL change),
@@ -52,6 +52,13 @@ touching this feature in ANY repo.
 - **Version gate:** `update_required` compares the running app version to the
   row's `min_supported_app_version` (tolerant semver tuple compare) — a STATE
   surfaced on `/health` and `/admin/refresh-config`, never an error.
+- **Desktop UI:** `desktop/src/hooks/use-app-config-status.ts` polls
+  `/health` (60s, engine-connected only) and `AppConfigBanner`
+  (`desktop/src/components/AppConfigBanner.tsx`, mounted in `AppLayout`)
+  renders (a) a persistent non-blocking update-required strip wired into the
+  existing auto-update flow (`use-auto-update`), and (b) the operator
+  `notice` — shown once per content (hash of level|title|body persisted in
+  localStorage), styled by level, with optional "Learn more" link.
 
 ## Invariants
 
@@ -85,6 +92,9 @@ touching this feature in ANY repo.
 
 ## Change Log
 
+- **2026-07-14 — Desktop UI surface.** `/health` `app_config` now includes
+  `notice`; added `use-app-config-status` polling hook + `AppConfigBanner`
+  (update-required strip + once-per-content operator notice) in the Tauri UI.
 - **2026-07-14 — Created.** Full consumer implementation per the approved
   cross-repo spec: module, Phase 00 wiring, `/health` + `/admin/refresh-config`
   surfaces, consumer migration off the raw config constants, tests + release

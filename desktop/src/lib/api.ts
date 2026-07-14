@@ -11,9 +11,34 @@ import { enginePortList } from "@/lib/engine-ports";
 
 const DISCOVERY_PORTS = enginePortList();
 
+/** Operator broadcast carried by the remote app config (level-styled, shown once). */
+export interface AppConfigNotice {
+  level: "info" | "warning" | "critical";
+  title: string;
+  body: string;
+  url?: string | null;
+}
+
+/** Remote app-config provenance as reported on GET /health (`app_config`). */
+export interface AppConfigStatus {
+  /** Which precedence tier the applied config came from. */
+  tier: "env" | "remote" | "cache" | "defaults";
+  fetched_at: string | null;
+  /** True when the installed app version is below min_supported_app_version. */
+  update_required: boolean;
+  notice: AppConfigNotice | null;
+}
+
 export interface EngineHealth {
+  /** Liveness literal — always "ok" (matrx-extend pins it). */
   status: string;
+  /** Health detail: "ok" | "degraded" | "failed_services". */
+  health?: string;
   service: string;
+  version?: string;
+  failed?: string[];
+  degraded?: string[];
+  app_config?: AppConfigStatus;
 }
 
 export interface ToolInfo {
@@ -286,6 +311,21 @@ class EngineAPI {
     }
     const healed = await this.rediscover();
     return healed !== null;
+  }
+
+  /**
+   * Get the full /health JSON — health detail, failed/degraded services, and
+   * the remote app-config provenance ({tier, fetched_at, update_required,
+   * notice}). Distinct from isHealthy(): this reads the payload, that one
+   * only answers reachability.
+   */
+  async getHealth(): Promise<EngineHealth> {
+    if (!this.baseUrl) throw new Error("Engine not discovered");
+    const resp = await fetch(`${this.baseUrl}/health`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!resp.ok) throw new Error(`Health check failed: ${resp.status}`);
+    return resp.json();
   }
 
   /** Get the engine version string from the root endpoint. */

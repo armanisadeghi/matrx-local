@@ -167,12 +167,19 @@ class AppConfigService:
         return self._resolved.row.config.notice
 
     def status_payload(self) -> dict:
-        """Provenance summary for /health and /admin/refresh-config."""
+        """Provenance summary for /health and /admin/refresh-config.
+
+        ``notice`` carries the operator broadcast (or None) so the desktop UI
+        can render it without a second endpoint — it is part of the applied
+        config, so serving it here is free.
+        """
         r = self._resolved
+        notice = r.row.config.notice
         return {
             "tier": r.tier,
             "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
             "update_required": r.update_required,
+            "notice": notice.model_dump(mode="json") if notice else None,
         }
 
     # ------------------------------------------------------------------

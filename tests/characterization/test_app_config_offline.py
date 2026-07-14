@@ -64,4 +64,9 @@ def test_total_network_failure_boots_on_compiled_defaults(tmp_path: Path) -> Non
 
     # The status surface tells the truth.
     status = svc.status_payload()
-    assert status == {"tier": "defaults", "fetched_at": None, "update_required": False}
+    assert status == {
+        "tier": "defaults",
+        "fetched_at": None,
+        "update_required": False,
+        "notice": None,
+    }

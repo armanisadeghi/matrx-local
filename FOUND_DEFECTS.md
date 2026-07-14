@@ -117,22 +117,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   is still degraded, it is an independent bug.
 - **Owner hint:** engine core
 
-### MXL-D-030 — `/health` returns `{"status":"ok"}` while managed services are failed
-- **Area:** engine / API
-- **Symptom:** the packaged v1.3.105 engine answered `GET /health` with
-  `{"status":"ok","service":"matrx-local","version":"1.3.105"}` while
-  `ai_engine` was in `state=failed` and `tools` was `degraded`. Any consumer
-  gating on `/health` (the desktop UI, the smoke harness, matrx-extend) sees a
-  healthy engine that cannot actually do AI work.
-- **Evidence:** `app/api/routes.py` `/health` is a static payload; the real
-  per-service state lives in the launcher registry (`/admin/status`,
-  `app/api/admin_routes.py:74`). Reproduced live 2026-07-12.
-- **Status:** open. Suggested fix: have `/health` reflect registry state (e.g.
-  `ok` / `degraded` / `failed` + the failed service names) so a dead AI engine
-  cannot masquerade as healthy. `scripts/smoke.sh` works around this today by
-  checking `/admin/status` itself.
-- **Owner hint:** engine core
-
 ### MXL-D-034 — Duplicated `formatBytes` / `CopyButton` / shell-open across the app
 
 - **Area:** frontend, code health

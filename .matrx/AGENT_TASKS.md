@@ -313,6 +313,15 @@ are condensed under Completed. Still open:
 ## Completed
 
 _(one line each, newest first; full detail in git history)_
+- [BUG] MXL-D-030 fixed: `/health` now reflects launcher registry (ok/degraded/failed_services + service names), still HTTP 200 + probe-cheap (`app/api/routes.py`) — 2026-07-13
+- [BUG] Broadcast subscribe gate read removed env var `MATRX_BRIDGE_BROADCAST_ENABLED` — now gates on the `extension_broadcast_enabled` setting; cross-machine fallback revived (`app/main.py` Phase 7, `app/api/token_routes.py`) — 2026-07-13
+- [ENH] Engine-owned notes auto-sync loop (managed service `notes_sync`): persisted-JWT config, watcher ensure, 10-min incremental + daily full reconcile; verified live push 33/pull 2 to `workbench.notes` (`app/services/documents/sync_engine.py`) — 2026-07-13
+- [BUG] Download manager resumed HF downloads before image-gen sys.path injection → false "AI packages are not installed"; start reordered after injections (`app/main.py` Phase 0a) — 2026-07-13
+- [BUG] Auto-started llama-server never registered with the engine (llm-server-ready fired before React listener); on-mount reconciliation added (`desktop/src/hooks/use-llm.ts`) — 2026-07-13
+- [BUG] Packaged banner "matrx-ai = NOT INSTALLED" was a copy_metadata omission — matrx-* dist-info bundled in all 4 specs + build fallback — 2026-07-13
+- [BUG] Civitai 401/403 conflation: now distinguishes no-key / key-rejected / access-restricted with correct actions (`app/services/downloads/`) — 2026-07-13
+- [ENH] File-management tools Move/Copy/Delete(trash-first)/Rename/Mkdir + Edit replace_all; catalog 108→113, cloud `tool.definition`/`tool.binding` updated via tool_sync changeset, drift clean — 2026-07-13
+- [ENH] matrx-* floors bumped to the published wave (matrx-ai 0.3.12, matrx-utils 2.0.0, matrx-orm 3.1.9 + explicit connect/graph/runtime pins); publish-gate comments retired — 2026-07-13
 
 - [x] Notes + realtime sync overhaul (freeze, false conflicts, dead sync): paste/typing freeze fixed (deferred memoized markdown preview + 128KB guard + stable use-documents callbacks + memoized NoteList/FolderTree); realtime repointed public→workbench with created_by filter (was receiving ZERO events) + last_device_id echo suppression + on-subscribe catch-up pull; note_hashes now recorded only after a SUCCESSFUL push (offline-edit clobber risk); own-push guard in pull/full_sync kills self-conflicts; push collapsed to one upsert (was 5 round trips, 3 hitting graveyarded tables); all graveyarded-table client calls deleted (versions→local+history.row_versions trigger, devices/mappings/sync_log→local, shares→501+UI removed); engine-owned auto-sync loop (10-min tick + daily reconcile from stored auth token, launcher-registered); watcher auto-starts + loud on crash; identical-side conflicts auto-pruned; mappings dialog now shows local mappings (was always-empty cloud list). SYNC_CONTRACT.md amended; characterization pins updated (2026-07-13, commits 9f494a5dc..)
 - [x] Folder delete now tombstones contained notes in SQLite + per-note cloud soft-deletes + sync-state hash pruning — offline folder deletes no longer resurrect notes — closes MXL-D-002 (2026-07-13)

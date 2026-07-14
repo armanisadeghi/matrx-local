@@ -129,11 +129,24 @@ if IS_DEV_ENGINE:
         _os.environ.setdefault("MATRX_PORT_BASE", "22240")
     _os.environ.setdefault("MATRX_SKIP_ORPHAN_SCAN", "1")
     _os.environ.setdefault("MATRX_INSTANCE_SALT", "dev")
+    # Cloud COORDINATION isolation (not just local isolation). The delegation
+    # client and the cross-component broadcast subscription both attach to the
+    # per-USER channel `matrx-local-bridge:<user_id>` and to the user-scoped
+    # pending-calls ledger — neither is instance-scoped. So a logged-in dev
+    # engine would race the installed app for the SAME delegated tool calls and
+    # RPC-over-broadcast work (double-execution, 409 resume races), handing back
+    # false pass/fail signals during live testing. Default a dev engine to
+    # coordination-SILENT: it serves its own loopback (a dev frontend on this
+    # machine reaches it directly) but never claims cloud-dispatched work.
+    # Override with MATRX_CLOUD_PARTICIPATION=1 to deliberately opt a dev engine
+    # into the shared channel (Tier 2 will make that targetable per instance).
+    _os.environ.setdefault("MATRX_CLOUD_PARTICIPATION", "0")
     print(
         "[phase:isolation] DEV ENGINE (source run, not the packaged sidecar) — "
         f"isolated from the installed app: home={_os.environ['MATRX_HOME_DIR']}, "
         f"ports={_os.environ.get('MATRX_PORT') or _os.environ.get('MATRX_PORT_BASE', '22140') + '+'}, "
-        "orphan scan off, instance id salted. "
+        "orphan scan off, instance id salted, cloud coordination "
+        f"{'ON (override)' if _os.environ.get('MATRX_CLOUD_PARTICIPATION') == '1' else 'OFF'}. "
         "Set MATRX_LIVE_ENGINE=1 to run in the live position on purpose.",
         flush=True,
     )

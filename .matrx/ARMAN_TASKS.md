@@ -80,6 +80,7 @@ _Skim and check off or delete. Agents: do not open `.arman/` — leave that to A
 
 ## Done
 
+- [x] REMOVED "Grant Screen Recording" — not a lead-developer task, it's an END-USER OS-permission grant that was hiding a missing feature (the app should proactively notify + deep-link the user to the grant page, not ask Arman). Folded into the "Proactive in-app permission + API-key prompts" AGENT task (Screen Recording added explicitly) and MXL-D-048 broadened to OS permissions + the urgent-notification pattern (Arman, 2026-07-14)
 - [x] Approved official-docs update for the API-key-validation surface — `settings-catalog.md` § Engine settings gained the `api_key_validation` blob key (verdicts only, user-supplied keys) + `elevenlabs`/`fastino` in `VALID_PROVIDERS`; also added the desktop security-posture doctrine to CLAUDE.md (Arman approved + requested, 2026-07-14)
 - [x] Approved official-docs update for dev/live isolation (MXL-D-043) — `configuration.md` gained a Dev/live isolation section + 4 env-var rows (`MATRX_PORT_BASE`/`MATRX_LIVE_ENGINE`/`MATRX_INSTANCE_SALT`/`MATRX_HOME_DIR`), `settings-catalog.md` proxy-port + engine-port rows updated (Arman approved, agent applied, 2026-07-14)
 - [x] matrx-files 0.1.5 deployed to files.matrxserver.com via deploy.sh (Arman, 2026-07-14) — verified: image version check passed, health green, /files/sync/* now 401 (live) — W3 cloud side ON

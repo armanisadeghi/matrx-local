@@ -37,7 +37,8 @@ interface UseRealtimeSyncOptions {
   enabled: boolean;
   /** This device's sync id (SyncStatus.device_id) — used to skip self-echoes. */
   deviceId: string | null;
-  onNoteChange?: (noteId: string, eventType: string) => void;
+  /** selfEcho=true means the event is this device's own push bouncing back. */
+  onNoteChange?: (noteId: string, eventType: string, selfEcho: boolean) => void;
   onFolderChange?: (folderId: string, eventType: string) => void;
   /** Fired after the on-subscribe catch-up pull completes with changes. */
   onCatchUp?: (result: SyncResult) => void;
@@ -104,16 +105,32 @@ export function useRealtimeSync({
 
           if (!noteId) return;
 
+          // Soft deletes arrive as UPDATEs with deleted_at set. Handle them
+          // BEFORE the self-echo check: pulling a tombstone is idempotent
+          // (the engine's delete branch is safe to re-run), and deletes made
+          // on other devices can carry OUR device id when we were the last
+          // content writer — the echo check would wrongly swallow them.
+          if (newRow && newRow.deleted_at != null) {
+            try {
+              await engine.pullNote(noteId, userId);
+            } catch {
+              // 404 = already gone locally — fine.
+            }
+            callbacksRef.current.onNoteChange?.(noteId, "DELETE", false);
+            return;
+          }
+
           // Self-echo: this device's own push bouncing back. The local file
-          // already has this content — skip the pull, refresh the list only.
+          // already has this content — skip the pull; the UI gets a cheap
+          // list-refresh signal flagged as a self-echo.
           const device = deviceIdRef.current;
           if (device && newRow && newRow.last_device_id === device) {
-            callbacksRef.current.onNoteChange?.(noteId, payload.eventType);
+            callbacksRef.current.onNoteChange?.(noteId, payload.eventType, true);
             return;
           }
 
           if (payload.eventType === "DELETE") {
-            callbacksRef.current.onNoteChange?.(noteId, payload.eventType);
+            callbacksRef.current.onNoteChange?.(noteId, payload.eventType, false);
             return;
           }
 
@@ -128,7 +145,7 @@ export function useRealtimeSync({
               } catch {
                 // Non-critical: will sync on next full sync
               }
-              callbacksRef.current.onNoteChange?.(noteId, payload.eventType);
+              callbacksRef.current.onNoteChange?.(noteId, payload.eventType, false);
             }, DEFERRED_PULL_DELAY_MS);
             return;
           }
@@ -140,7 +157,7 @@ export function useRealtimeSync({
             // Non-critical: will sync on next full sync
           }
 
-          callbacksRef.current.onNoteChange?.(noteId, payload.eventType);
+          callbacksRef.current.onNoteChange?.(noteId, payload.eventType, false);
         },
       )
       .on(
@@ -168,7 +185,11 @@ export function useRealtimeSync({
           engine
             .pullChanges(userId)
             .then((result) => {
-              if ((result.pulled ?? 0) > 0 || (result.conflicts ?? 0) > 0) {
+              if (
+                (result.pulled ?? 0) > 0 ||
+                (result.conflicts ?? 0) > 0 ||
+                (result.deleted ?? 0) > 0
+              ) {
                 callbacksRef.current.onCatchUp?.(result);
               }
             })

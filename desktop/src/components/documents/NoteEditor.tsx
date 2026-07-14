@@ -157,6 +157,7 @@ export function NoteEditor({
         ? content + "\n\n" + dictationText.trim()
         : dictationText.trim();
     }
+    contentRef.current = newContent;
     setContent(newContent);
     onChange(newContent);
     setShowDictation(false);
@@ -177,8 +178,12 @@ export function NoteEditor({
   // Documents' reload). Ignoring same-id updates left the editor showing
   // stale text, and the next local keystroke pushed that stale content back,
   // clobbering the remote edit. Only resync when the user has no unsaved
-  // local divergence (lastSyncedContentRef tracks what we last loaded).
+  // local divergence (lastSyncedContentRef tracks what we last loaded;
+  // contentRef mirrors the textarea state so the decision is synchronous —
+  // deciding inside a setState updater forced side effects like the label
+  // reset to run unconditionally, clobbering in-progress renames).
   const lastSyncedContentRef = useRef<string>(note.content ?? "");
+  const contentRef = useRef<string>(note.content ?? "");
   useEffect(() => {
     if (note.id !== prevNoteIdRef.current) {
       // Cancel any pending label debounce from the previous note before
@@ -191,33 +196,36 @@ export function NoteEditor({
       setLabel(note.label);
       setForcePreview(false);
       lastSyncedContentRef.current = note.content ?? "";
+      contentRef.current = note.content ?? "";
       prevNoteIdRef.current = note.id;
       return;
     }
     const incoming = note.content ?? "";
-    if (incoming !== lastSyncedContentRef.current) {
-      // Remote change for the visible note. Apply it only when the local
-      // draft hasn't diverged from the last synced state — otherwise the
-      // user is mid-edit and the conflict path (or their save) wins.
-      setContent((current) => {
-        if (incoming === current) {
-          // Echo of our own debounced save round-tripping — just advance the
-          // synced marker so future remote edits are still recognized.
-          lastSyncedContentRef.current = incoming;
-          return current;
-        }
-        if (current === lastSyncedContentRef.current) {
-          lastSyncedContentRef.current = incoming;
-          return incoming;
-        }
-        return current;
-      });
-      setLabel(note.label);
+    if (incoming === lastSyncedContentRef.current) return;
+
+    if (incoming === contentRef.current) {
+      // Echo of our own debounced save round-tripping — just advance the
+      // synced marker so future remote edits are still recognized.
+      lastSyncedContentRef.current = incoming;
+      return;
     }
+    if (contentRef.current === lastSyncedContentRef.current) {
+      // Genuine remote change and no local divergence — apply it.
+      lastSyncedContentRef.current = incoming;
+      contentRef.current = incoming;
+      setContent(incoming);
+      // Only follow the remote label when the user isn't mid-rename.
+      if (!labelDebounceRef.current) {
+        setLabel(note.label);
+      }
+    }
+    // Otherwise the user is mid-edit: their draft (and its upcoming save or
+    // the conflict path) wins; do not touch content or label.
   }, [note.id, note.content, note.label]);
 
   const handleContentChange = useCallback(
     (value: string) => {
+      contentRef.current = value;
       setContent(value);
       onChange(value);
     },
@@ -266,6 +274,7 @@ export function NoteEditor({
         after +
         content.substring(end);
 
+      contentRef.current = newContent;
       setContent(newContent);
       onChange(newContent);
 

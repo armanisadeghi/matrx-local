@@ -49,7 +49,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
   // Pull stable function refs out of the hook so the Realtime callbacks don't
   // capture the entire `docs` object (new reference every render → stale closures
   // and needless re-subscriptions).
-  const { loadTree, loadNotes, selectNote, loadConflicts } = docs;
+  const { loadTree, refreshNotes, selectNote, loadConflicts } = docs;
 
   // Keep the current activeNote ID in a ref so the Realtime callback always
   // has access to the latest value without being in the dep array.
@@ -67,16 +67,17 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
     // write (SyncStatus.device_id); loads on init via loadSyncStatus.
     deviceId: docs.syncStatus?.device_id ?? null,
     onNoteChange: useCallback(
-      (_noteId: string, _eventType: string) => {
+      (noteId: string, _eventType: string, selfEcho: boolean) => {
         loadTree();
-        loadNotes();
-        // Reload the active note if it's the one that changed.
-        const activeId = activeNoteIdRef.current;
-        if (activeId) {
-          selectNote(activeId);
+        refreshNotes();
+        // Reload the active note only when IT changed and the change is not
+        // this device's own save echoing back — refetching on self-echoes
+        // raced in-flight keystrokes with slightly stale file content.
+        if (!selfEcho && noteId === activeNoteIdRef.current) {
+          selectNote(noteId);
         }
       },
-      [loadTree, loadNotes, selectNote],
+      [loadTree, refreshNotes, selectNote],
     ),
     onFolderChange: useCallback(() => {
       loadTree();
@@ -84,9 +85,9 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
     // Catch-up pull found changes made while this device was offline.
     onCatchUp: useCallback(() => {
       loadTree();
-      loadNotes();
+      refreshNotes();
       loadConflicts();
-    }, [loadTree, loadNotes, loadConflicts]),
+    }, [loadTree, refreshNotes, loadConflicts]),
   });
 
   const { updateNote } = docs;

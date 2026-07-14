@@ -70,6 +70,7 @@ export function useDocuments(
   const stateRef = useRef(state);
   stateRef.current = state;
   const mountedRef = useRef(true);
+  const lastSelectFailedRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track pending flush so we can await it on unmount and not discard unsaved edits
   const pendingSaveRef = useRef<{
@@ -125,6 +126,14 @@ export function useDocuments(
     [engineReady, userId, update],
   );
 
+  // Refresh the list under the CURRENT filter (folder + search). Realtime
+  // callbacks must use this instead of bare loadNotes(), which lists ALL
+  // notes and silently discards the active folder/search filter.
+  const refreshNotes = useCallback(async () => {
+    const { activeFolderId, searchQuery } = stateRef.current;
+    await loadNotes(activeFolderId, searchQuery || undefined);
+  }, [loadNotes]);
+
   // ── Select folder ────────────────────────────────────────────────────────
 
   const selectFolder = useCallback(
@@ -153,6 +162,7 @@ export function useDocuments(
       try {
         const note = await engine.getNote(noteId, userId ?? "local");
         update({ activeNote: note });
+        lastSelectFailedRef.current = false;
 
         // Load version history — works locally now, no userId required
         engine
@@ -164,9 +174,17 @@ export function useDocuments(
             if (mountedRef.current) update({ versions: [] });
           });
       } catch (err) {
-        update({
-          error: err instanceof Error ? err.message : "Failed to load note",
-        });
+        // A vanished note (deleted remotely, pulled tombstone) must not stay
+        // open in the editor — the next keystroke would recreate it.
+        const msg = err instanceof Error ? err.message : "Failed to load note";
+        if (msg.includes("Note not found")) {
+          lastSelectFailedRef.current = true;
+          if (stateRef.current.activeNote?.id === noteId) {
+            update({ activeNote: null, versions: [] });
+          }
+        } else {
+          update({ error: msg });
+        }
       }
     },
     [engineReady, userId, update],
@@ -220,6 +238,21 @@ export function useDocuments(
       const pending = pendingSaveRef.current;
       if (pending && pending.noteId === noteId) {
         data = { ...pending.data, ...data };
+      } else if (pending && saveTimerRef.current) {
+        // Switching notes mid-debounce: flush the OTHER note's pending save
+        // NOW. Overwriting the shared timer used to silently drop that save
+        // and leak the note in the realtime editing-suppression set forever.
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+        pendingSaveRef.current = null;
+        engine
+          .updateNote(pending.noteId, userId ?? "local", pending.data)
+          .catch((err) => {
+            console.warn("[docs] Cross-note flush save failed:", err);
+          })
+          .finally(() => {
+            markNoteIdle(pending.noteId);
+          });
       }
 
       if (immediate) {
@@ -586,6 +619,7 @@ export function useDocuments(
     isLocalOnly: !userId,
     loadTree,
     loadNotes,
+    refreshNotes,
     selectFolder,
     search,
     selectNote,

@@ -3220,7 +3220,7 @@ export interface DocVersion {
 export interface SyncStatus {
   configured: boolean;
   device_id: string;
-  last_sync_version: number;
+  last_pull_at: string | null;
   last_full_sync: number | null;
   tracked_files: number;
   conflicts: string[];
@@ -3235,6 +3235,7 @@ export interface SyncResult {
   pushed?: number;
   pulled?: number;
   conflicts?: number;
+  deleted?: number;
   unchanged?: number;
   skipped?: number;
   failed?: number;

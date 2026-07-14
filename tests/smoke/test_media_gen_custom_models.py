@@ -123,11 +123,36 @@ def _http_401(url: str) -> httpx.HTTPStatusError:
 
 
 def test_parse_ref_variants() -> None:
-    assert cm.parse_ref("acme/dream-xl") == {"kind": "hf", "repo_id": "acme/dream-xl"}
+    assert cm.parse_ref("acme/dream-xl") == {
+        "kind": "hf",
+        "repo_id": "acme/dream-xl",
+        "weight_name": None,
+    }
     assert cm.parse_ref("https://huggingface.co/acme/dream-xl/tree/main") == {
         "kind": "hf",
         "repo_id": "acme/dream-xl",
+        "weight_name": None,
     }
+    # A deep file URL names the exact weight — capture it so the user isn't
+    # forced to re-pick a file they just pasted (subdirs preserved).
+    assert cm.parse_ref(
+        "https://huggingface.co/acme/dream-xl/resolve/main/pytorch_lora_weights.safetensors"
+    ) == {
+        "kind": "hf",
+        "repo_id": "acme/dream-xl",
+        "weight_name": "pytorch_lora_weights.safetensors",
+    }
+    assert cm.parse_ref(
+        "https://huggingface.co/acme/dream-xl/blob/main/sub/dir/my_lora.safetensors"
+    ) == {
+        "kind": "hf",
+        "repo_id": "acme/dream-xl",
+        "weight_name": "sub/dir/my_lora.safetensors",
+    }
+    # A non-weight deep path (e.g. the config) resolves to the repo only.
+    assert cm.parse_ref(
+        "https://huggingface.co/acme/dream-xl/blob/main/model_index.json"
+    ) == {"kind": "hf", "repo_id": "acme/dream-xl", "weight_name": None}
     assert cm.parse_ref("12345") == {
         "kind": "civitai",
         "model_id": 12345,
@@ -687,3 +712,33 @@ def test_lora_download_accepts_hf_url(
     assert data["lora_id"] == "acme--neon-lora"
     assert data["source"] == "hf"
     assert fake_download_manager[0]["metadata"]["hf_repo_id"] == "acme/neon-lora"
+
+
+def test_lora_download_deep_hf_url_uses_captured_weight(
+    client: TestClient,
+    lora_store: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_download_manager: list[dict],
+) -> None:
+    """A deep HF file URL must install in ONE step — the weight captured from
+    the URL flows into the resolver, so the user is never re-asked to pick a
+    file they already pointed us at."""
+    from app.api import image_gen_routes
+
+    seen: dict[str, Any] = {}
+
+    async def fake_resolve(repo_id: str, weight_name: str | None):
+        seen["repo_id"] = repo_id
+        seen["weight_name"] = weight_name
+        return weight_name or "fallback.safetensors", "sdxl"
+
+    monkeypatch.setattr(image_gen_routes, "_resolve_lora_weight", fake_resolve)
+    r = client.post(
+        "/image-gen/loras/download",
+        json={
+            "repo_id": "https://huggingface.co/acme/neon-lora/resolve/main/neon_v2.safetensors"
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert seen == {"repo_id": "acme/neon-lora", "weight_name": "neon_v2.safetensors"}
+    assert r.json()["weight_name"] == "neon_v2.safetensors"

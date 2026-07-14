@@ -90,8 +90,9 @@ def build_table_entry(schema: str, name: str, spec: dict) -> dict:
         + f"{pk_clause}\n)"
     )
     names = {c["name"] for c in cols}
+    # SQLite attaches the schema qualifier to the index name, not the table.
     indexes = [
-        f'CREATE INDEX IF NOT EXISTS "idx_{name}_{ic}" ON "{schema}"."{name}" ("{ic}")'
+        f'CREATE INDEX IF NOT EXISTS "{schema}"."idx_{name}_{ic}" ON "{name}" ("{ic}")'
         for ic in _INDEX_CANDIDATES
         if ic in names and ic not in pk
     ]

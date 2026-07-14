@@ -17,6 +17,7 @@ import aiosqlite
 
 from app.config import LOCAL_DB_PATH, MATRX_HOME_DIR
 from app.common.system_logger import get_logger
+from app.services.local_db.mirror import attach_and_ensure_mirror
 from app.services.local_db.schema import MIGRATIONS
 
 logger = get_logger()
@@ -67,6 +68,11 @@ class LocalDatabase:
         await self._db.execute("PRAGMA synchronous=NORMAL")
 
         await self._run_migrations()
+
+        # Attach the structural mirror of the canonical cloud schemas
+        # (chat.conversation etc. — see app/services/local_db/mirror.py).
+        await attach_and_ensure_mirror(self._db, self.path)
+
         logger.info("[local_db] Connected to %s", self.path)
 
     async def close(self) -> None:

@@ -37,10 +37,10 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_memory_user_id\" ON \"chat\".\"agent_memory\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_memory_created_by\" ON \"chat\".\"agent_memory\" (\"created_by\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_memory_updated_at\" ON \"chat\".\"agent_memory\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_memory_created_at\" ON \"chat\".\"agent_memory\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_memory_user_id\" ON \"agent_memory\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_memory_created_by\" ON \"agent_memory\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_memory_updated_at\" ON \"agent_memory\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_memory_created_at\" ON \"agent_memory\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -69,11 +69,11 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": False,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_plan_conversation_id\" ON \"chat\".\"agent_plan\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_plan_user_id\" ON \"chat\".\"agent_plan\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_plan_created_by\" ON \"chat\".\"agent_plan\" (\"created_by\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_plan_updated_at\" ON \"chat\".\"agent_plan\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_plan_created_at\" ON \"chat\".\"agent_plan\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_plan_conversation_id\" ON \"agent_plan\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_plan_user_id\" ON \"agent_plan\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_plan_created_by\" ON \"agent_plan\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_plan_updated_at\" ON \"agent_plan\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_plan_created_at\" ON \"agent_plan\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -106,10 +106,10 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_run_user_id\" ON \"chat\".\"agent_run\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_run_created_by\" ON \"chat\".\"agent_run\" (\"created_by\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_run_updated_at\" ON \"chat\".\"agent_run\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_run_created_at\" ON \"chat\".\"agent_run\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_run_user_id\" ON \"agent_run\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_run_created_by\" ON \"agent_run\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_run_updated_at\" ON \"agent_run\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_run_created_at\" ON \"agent_run\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -153,11 +153,11 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": False,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_task_conversation_id\" ON \"chat\".\"agent_task\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_task_user_id\" ON \"chat\".\"agent_task\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_task_created_by\" ON \"chat\".\"agent_task\" (\"created_by\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_task_updated_at\" ON \"chat\".\"agent_task\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_agent_task_created_at\" ON \"chat\".\"agent_task\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_task_conversation_id\" ON \"agent_task\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_task_user_id\" ON \"agent_task\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_task_created_by\" ON \"agent_task\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_task_updated_at\" ON \"agent_task\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_task_created_at\" ON \"agent_task\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -196,11 +196,11 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_artifact_conversation_id\" ON \"chat\".\"artifact\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_artifact_user_id\" ON \"chat\".\"artifact\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_artifact_created_by\" ON \"chat\".\"artifact\" (\"created_by\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_artifact_updated_at\" ON \"chat\".\"artifact\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_artifact_created_at\" ON \"chat\".\"artifact\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_artifact_conversation_id\" ON \"artifact\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_artifact_user_id\" ON \"artifact\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_artifact_created_by\" ON \"artifact\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_artifact_updated_at\" ON \"artifact\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_artifact_created_at\" ON \"artifact\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -227,9 +227,9 @@ MIRROR_TABLES = {
             "cursor_col": "created_at",
             "has_deleted_at": False,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_code_edit_conversation_id\" ON \"chat\".\"code_edit\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_code_edit_user_id\" ON \"chat\".\"code_edit\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_code_edit_created_at\" ON \"chat\".\"code_edit\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_edit_conversation_id\" ON \"code_edit\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_edit_user_id\" ON \"code_edit\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_edit_created_at\" ON \"code_edit\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -261,10 +261,10 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": False,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_code_message_file_conversation_id\" ON \"chat\".\"code_message_file\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_code_message_file_user_id\" ON \"chat\".\"code_message_file\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_code_message_file_updated_at\" ON \"chat\".\"code_message_file\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_code_message_file_created_at\" ON \"chat\".\"code_message_file\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_message_file_conversation_id\" ON \"code_message_file\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_message_file_user_id\" ON \"code_message_file\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_message_file_updated_at\" ON \"code_message_file\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_message_file_created_at\" ON \"code_message_file\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -316,9 +316,9 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_conversation_created_by\" ON \"chat\".\"conversation\" (\"created_by\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_conversation_updated_at\" ON \"chat\".\"conversation\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_conversation_created_at\" ON \"chat\".\"conversation\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_conversation_created_by\" ON \"conversation\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_conversation_updated_at\" ON \"conversation\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_conversation_created_at\" ON \"conversation\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -352,10 +352,10 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_conversation_value_conversation_id\" ON \"chat\".\"conversation_value\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_conversation_value_created_by\" ON \"chat\".\"conversation_value\" (\"created_by\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_conversation_value_updated_at\" ON \"chat\".\"conversation_value\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_conversation_value_created_at\" ON \"chat\".\"conversation_value\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_conversation_value_conversation_id\" ON \"conversation_value\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_conversation_value_created_by\" ON \"conversation_value\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_conversation_value_updated_at\" ON \"conversation_value\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_conversation_value_created_at\" ON \"conversation_value\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -379,9 +379,9 @@ MIRROR_TABLES = {
             "cursor_col": "created_at",
             "has_deleted_at": True,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_media_conversation_id\" ON \"chat\".\"media\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_media_user_id\" ON \"chat\".\"media\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_media_created_at\" ON \"chat\".\"media\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_media_conversation_id\" ON \"media\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_media_user_id\" ON \"media\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_media_created_at\" ON \"media\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -420,10 +420,10 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_message_conversation_id\" ON \"chat\".\"message\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_message_created_by\" ON \"chat\".\"message\" (\"created_by\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_message_updated_at\" ON \"chat\".\"message\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_message_created_at\" ON \"chat\".\"message\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_message_conversation_id\" ON \"message\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_message_created_by\" ON \"message\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_message_updated_at\" ON \"message\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_message_created_at\" ON \"message\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -467,11 +467,11 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_observational_memory_conversation_id\" ON \"chat\".\"observational_memory\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_observational_memory_user_id\" ON \"chat\".\"observational_memory\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_observational_memory_created_by\" ON \"chat\".\"observational_memory\" (\"created_by\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_observational_memory_updated_at\" ON \"chat\".\"observational_memory\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_observational_memory_created_at\" ON \"chat\".\"observational_memory\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_conversation_id\" ON \"observational_memory\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_user_id\" ON \"observational_memory\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_created_by\" ON \"observational_memory\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_updated_at\" ON \"observational_memory\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_created_at\" ON \"observational_memory\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -502,9 +502,9 @@ MIRROR_TABLES = {
             "cursor_col": "created_at",
             "has_deleted_at": False,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_observational_memory_event_conversation_id\" ON \"chat\".\"observational_memory_event\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_observational_memory_event_user_id\" ON \"chat\".\"observational_memory_event\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_observational_memory_event_created_at\" ON \"chat\".\"observational_memory_event\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_event_conversation_id\" ON \"observational_memory_event\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_event_user_id\" ON \"observational_memory_event\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_event_created_at\" ON \"observational_memory_event\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -532,9 +532,9 @@ MIRROR_TABLES = {
             "cursor_col": "created_at",
             "has_deleted_at": False,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_pending_injection_conversation_id\" ON \"chat\".\"pending_injection\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_pending_injection_user_id\" ON \"chat\".\"pending_injection\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_pending_injection_created_at\" ON \"chat\".\"pending_injection\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_pending_injection_conversation_id\" ON \"pending_injection\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_pending_injection_user_id\" ON \"pending_injection\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_pending_injection_created_at\" ON \"pending_injection\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -572,8 +572,8 @@ MIRROR_TABLES = {
             "cursor_col": "created_at",
             "has_deleted_at": True,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_request_conversation_id\" ON \"chat\".\"request\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_request_created_at\" ON \"chat\".\"request\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_conversation_id\" ON \"request\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_created_at\" ON \"request\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -599,8 +599,8 @@ MIRROR_TABLES = {
             "cursor_col": "created_at",
             "has_deleted_at": False,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_request_snapshot_conversation_id\" ON \"chat\".\"request_snapshot\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_request_snapshot_created_at\" ON \"chat\".\"request_snapshot\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_snapshot_conversation_id\" ON \"request_snapshot\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_snapshot_created_at\" ON \"request_snapshot\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -661,11 +661,11 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_tool_call_conversation_id\" ON \"chat\".\"tool_call\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_tool_call_user_id\" ON \"chat\".\"tool_call\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_tool_call_created_by\" ON \"chat\".\"tool_call\" (\"created_by\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_tool_call_updated_at\" ON \"chat\".\"tool_call\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_tool_call_created_at\" ON \"chat\".\"tool_call\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_call_conversation_id\" ON \"tool_call\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_call_user_id\" ON \"tool_call\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_call_created_by\" ON \"tool_call\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_call_updated_at\" ON \"tool_call\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_call_created_at\" ON \"tool_call\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -696,9 +696,9 @@ MIRROR_TABLES = {
             "cursor_col": "created_at",
             "has_deleted_at": False,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_tool_trace_conversation_id\" ON \"chat\".\"tool_trace\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_tool_trace_user_id\" ON \"chat\".\"tool_trace\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_tool_trace_created_at\" ON \"chat\".\"tool_trace\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_trace_conversation_id\" ON \"tool_trace\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_trace_user_id\" ON \"tool_trace\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_trace_created_at\" ON \"tool_trace\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -740,10 +740,10 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_user_request_user_id\" ON \"chat\".\"user_request\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_user_request_created_by\" ON \"chat\".\"user_request\" (\"created_by\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_user_request_updated_at\" ON \"chat\".\"user_request\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_user_request_created_at\" ON \"chat\".\"user_request\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_request_user_id\" ON \"user_request\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_request_created_by\" ON \"user_request\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_request_updated_at\" ON \"user_request\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_request_created_at\" ON \"user_request\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -771,11 +771,11 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": False,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_user_todo_conversation_id\" ON \"chat\".\"user_todo\" (\"conversation_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_user_todo_user_id\" ON \"chat\".\"user_todo\" (\"user_id\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_user_todo_created_by\" ON \"chat\".\"user_todo\" (\"created_by\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_user_todo_updated_at\" ON \"chat\".\"user_todo\" (\"updated_at\")",
-                "CREATE INDEX IF NOT EXISTS \"idx_user_todo_created_at\" ON \"chat\".\"user_todo\" (\"created_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_todo_conversation_id\" ON \"user_todo\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_todo_user_id\" ON \"user_todo\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_todo_created_by\" ON \"user_todo\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_todo_updated_at\" ON \"user_todo\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_todo_created_at\" ON \"user_todo\" (\"created_at\")"
             ],
             "pk": [
                 "id"
@@ -803,7 +803,7 @@ MIRROR_TABLES = {
             "cursor_col": "updated_at",
             "has_deleted_at": False,
             "index_sql": [
-                "CREATE INDEX IF NOT EXISTS \"idx_user_usage_summary_updated_at\" ON \"chat\".\"user_usage_summary\" (\"updated_at\")"
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_usage_summary_updated_at\" ON \"user_usage_summary\" (\"updated_at\")"
             ],
             "pk": [
                 "user_id"

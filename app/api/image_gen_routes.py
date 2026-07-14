@@ -1224,8 +1224,8 @@ async def _resolve_lora_weight(
     except ImportError:
         raise HTTPException(
             status_code=503,
-            detail="huggingface_hub is not installed — run the AI package "
-            "installer first (POST /image-gen/install).",
+            detail="The AI packages aren’t installed yet — install them once "
+            "from the app, then add this LoRA.",
         )
     from app.services.image_gen.loras import guess_base_family  # noqa: PLC0415
     from app.services.media_gen.paths import read_hf_token  # noqa: PLC0415
@@ -1406,7 +1406,11 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
             source="hf",
         )
 
-    weight_name, base_family = await _resolve_lora_weight(repo_id, req.weight_name)
+    # A deep HF file URL already named the exact weight (parse_ref captured it);
+    # an explicit req.weight_name still wins. Either way the user is never forced
+    # to re-pick a file they already pointed us at.
+    weight_hint = req.weight_name or parsed.get("weight_name")
+    weight_name, base_family = await _resolve_lora_weight(repo_id, weight_hint)
     # Metadata sidecar first — the LoRA shows up as pending (installed=false)
     # immediately; the DownloadManager marker flips it to installed.
     write_lora_meta(

@@ -271,11 +271,16 @@ _CIVITAI_SHORT_RE = re.compile(r"^civitai:(\d+)(?:@(\d+))?$")
 
 
 def parse_ref(ref: str) -> dict[str, Any]:
-    """Classify a user ref → {"kind": "hf", "repo_id": ...} or
-    {"kind": "civitai", "model_id": int|None, "version_id": int|None}.
+    """Classify a user ref → {"kind": "hf", "repo_id": ..., "weight_name": ...}
+    or {"kind": "civitai", "model_id": int|None, "version_id": int|None}.
 
-    Accepted: HF repo id (org/name), HF URL, Civitai model/version URL,
-    bare Civitai model id (all-digits), "civitai:<model>[@<version>]".
+    Accepted (the user never needs an exact URL — just the id or ANY link that
+    contains it):
+      * HF repo id (org/name) or any HF URL — a model page, a tree/blob page, or
+        a deep ``…/resolve|blob|raw/<rev>/<file>.safetensors`` link (the exact
+        weight is captured into ``weight_name`` so it isn't re-asked).
+      * bare Civitai model id (all-digits), ``civitai:<model>[@<version>]``, or
+        any civitai.com / .red / .green model / model-version / download URL.
     Raises InspectError(400) for anything unresolvable — with the reason.
     """
     r = (ref or "").strip()
@@ -352,7 +357,14 @@ def parse_ref(ref: str) -> dict[str, Any]:
             if len(segs) >= 2 and segs[0] not in ("datasets", "spaces", "api"):
                 repo_id = f"{segs[0]}/{segs[1]}"
                 if _HF_REPO_RE.match(repo_id):
-                    return {"kind": "hf", "repo_id": repo_id}
+                    # A deep file URL (…/resolve|blob|raw/<rev>/<path>.safetensors)
+                    # already names the exact weight — capture it so the user is
+                    # never forced to re-pick a file they just pasted.
+                    return {
+                        "kind": "hf",
+                        "repo_id": repo_id,
+                        "weight_name": _hf_weight_from_segments(segs),
+                    }
             raise InspectError(
                 400,
                 f"Unrecognized Hugging Face URL '{ref}' — expected a model "
@@ -366,13 +378,29 @@ def parse_ref(ref: str) -> dict[str, Any]:
         )
 
     if _HF_REPO_RE.match(r) and ".." not in r:
-        return {"kind": "hf", "repo_id": r}
+        return {"kind": "hf", "repo_id": r, "weight_name": None}
 
     raise InspectError(
         400,
         f"Could not interpret '{ref}' as a Hugging Face repo id/URL or a "
         "Civitai model/version URL/id.",
     )
+
+
+def _hf_weight_from_segments(segs: list[str]) -> str | None:
+    """Extract the repo-relative weight path from a deep HF URL's path segments.
+
+    ``[org, name, ("resolve"|"blob"|"raw"), <rev>, *path]`` →
+    ``"/".join(path)`` when it names a ``.safetensors`` file, else None. The
+    returned value is exactly what ``hf_hub_download(filename=...)`` and the
+    HF sibling listing use (subdirectories preserved), so it validates cleanly
+    against the repo's file list downstream.
+    """
+    if len(segs) >= 5 and segs[2] in ("resolve", "blob", "raw"):
+        rel = "/".join(segs[4:])
+        if rel.lower().endswith(".safetensors"):
+            return rel
+    return None
 
 
 # ── HTTP (mocked in tests — everything network goes through here) ────────────

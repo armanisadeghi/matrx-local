@@ -63,6 +63,65 @@ Unblocked — Arman approved the plan 2026-07-13; build in progress. Key
 constraint from research: Python sidecar subsystem, NOT LLM catalog /
 llama-server.
 
+### Proactive in-app permission + API-key prompts (Full Disk Access, HF token, and generalize to others)
+- **Status:** open — code analysis pending (backend confirmed, frontend gap confirmed 2026-07-13)
+- **Created:** 2026-07-13
+- **Priority:** P1 — user-facing trust/UX issue, not just a missing grant
+
+**Goal**
+When a feature needs a macOS permission the user hasn't granted, the app must
+proactively show a clear, well-designed in-app explanation of *why* it's
+needed and a one-click path to grant it — right when the user reaches that
+feature. Never rely on a generic error or a task list to communicate this.
+
+**Why**
+Arman has NOT granted Full Disk Access on purpose — not an oversight. Notes
+sync silently degrades instead of the app explaining itself. Confirmed in
+code: `app/services/documents/file_manager.py:33-55` raises `NotesAccessError`
+→ `app/main.py:1357-1366` turns it into a clean 503, but on the frontend,
+`desktop/src/components/documents/SyncStatus.tsx` and `NoteEditor.tsx` never
+reference `full_disk_access` or catch this 503 to prompt for the permission.
+Contrast with the existing generic permission system
+(`desktop/src/components/PermissionsModal.tsx` +
+`desktop/src/hooks/use-permissions.ts`, which already models
+`full_disk_access` as a permission with `checkFullDiskAccessPermission` /
+`requestFullDiskAccessPermission` from `tauri-plugin-macos-permissions-api`)
+— that system exists but nothing in the Notes flow calls it. This is a
+reusable pattern gap, not a one-off: any feature gated on an ungranted
+permission should surface the same kind of contextual nudge.
+
+**Suggested approach**
+1. Design one reusable "permission needed" UI primitive (banner/card, not a
+   blocking modal) that takes a permission key + short feature-specific
+   copy, and offers a "Grant Access" button wired to `use-permissions.ts`'s
+   existing request path.
+2. Wire the Notes/Documents surface to catch the 503 (or proactively check
+   `full_disk_access` status on mount) and render it via that primitive.
+3. Audit other permission-gated features (`desktop/src/lib/api.ts:908-937` —
+   ReadFile/WriteFile/ListDirectory/Messages/etc.) for the same silent-degrade
+   gap; wire each entry point that can hit one of these calls.
+4. Keep the existing Setup Wizard flow as the "grant everything up front"
+   path; this is the complementary "remind me contextually later if I
+   skipped it" path.
+
+**Notes**
+Filed from an Arman ask-Arman-tasks hygiene pass (2026-07-13) — Arman's
+answer to "have you granted Full Disk Access" was that the ask itself was
+wrong: the app should be asking *him*, contextually, not showing up as a
+line item he has to remember. Do not just re-word the ARMAN_TASKS entry —
+this is real product work.
+
+Scope widened same day (2026-07-13, MXL-D-048): the same complaint applies
+to API keys, not just macOS permissions — "Add your Hugging Face token" was
+listed in ARMAN_TASKS the same way, and went stale (see MXL-D-047 — the key
+was already added). Any feature that needs a key/permission the user hasn't
+granted must self-detect and prompt contextually, in-app, per user — never
+via a person-to-person checklist. Downloads already do this well for HF/
+Civitai keys (`app/services/downloads/failures.py`, `hf_token_missing` /
+`hf_gate_not_accepted`) — that's the pattern to extend to other entry points
+(e.g. starting a chat/agent action that needs a provider key before the
+request fails) and to Full Disk Access.
+
 - [ ] **img2img + LoRA follow-ups (added 2026-07-10, image-gen img2img/LoRA
   build)** — shipped: `init_image_b64`/`strength`/`loras` on
   /image-gen/generate + /image-gen/jobs, `supports_img2img`/`img2img_strength`/
@@ -307,6 +366,8 @@ are condensed under Completed. Still open:
 ## Completed
 
 _(one line each, newest first; full detail in git history)_
+- [BUG] MXL-D-046 fixed: `TokenRepo.is_expired` now decodes the JWT `exp` claim (stored `expires_at` carried the ~7-day session expiry while the access token was dead — every sync loop ran "configured" into guaranteed 401s); confirmed live then fixed (`app/services/local_db/repositories.py`) — 2026-07-13
+- [BUG] MXL-D-043 fixed: dev/live worlds fully isolated — source-run engines self-isolate (run.py guard: `~/.matrx-dev`, ports 22240-22259, orphan sweep off, salted cloud instance id, model caches symlinked, proxy 22280, diagnostics in dev home, trayless so SIGTERM works — sidesteps MXL-D-042 for dev); discovery-file clobber + non-owner-update guards in preflight (pinned by `tests/characterization/test_discovery_guard.py`); debug Rust reads dev world + never pkills packaged engines (a likely MXL-D-039 trigger); frontend port base via `desktop/src/lib/engine-ports.ts`; `scripts/dev.sh` (+`--fresh`/`--live`); CLAUDE.md Hard Rule 9 + `docs/TESTING_LADDER.md`. Verified live: two dev engines coexisted with the guard holding (2nd bound 22241, discovery owner unchanged), live `~/.matrx` untouched, SIGTERM → clean death 1s; 170 characterization + 265 smoke tests green — 2026-07-13
 - [ENH] **Canonical local DB mirror + chat sync (handoff `docs/handoffs/canonical-local-db-mirror.md`)**: generated structural mirror of cloud schemas (`schema_mirror/` + `scripts/generate_mirror_schema.py` → ATTACHed `~/.matrx/mirror/chat.db`), V10 cutover annihilated bespoke conversations/messages/user_requests/tool_call_logs, `SQLiteConversationStore`+repos write canonical `chat.*` + outbox, new `app/services/chat_sync/` engine (push parent-first w/ echo-back, keyset incremental pull, LWW + pending-outbox protection, tombstones), managed service `chat_sync`, `/chat/mirror/status|sync`; RLS drill passed all 22 chat tables after fixing missing grants on `chat.conversation_value` (aidream migration 0167, applied live); SYNC_CONTRACT gap #1 CLOSED; pinned by `tests/characterization/test_chat_mirror_characterization.py` — 2026-07-13
 - [BUG] MXL-D-030 fixed: `/health` now reflects launcher registry (ok/degraded/failed_services + service names), still HTTP 200 + probe-cheap (`app/api/routes.py`) — 2026-07-13
 - [BUG] Broadcast subscribe gate read removed env var `MATRX_BRIDGE_BROADCAST_ENABLED` — now gates on the `extension_broadcast_enabled` setting; cross-machine fallback revived (`app/main.py` Phase 7, `app/api/token_routes.py`) — 2026-07-13

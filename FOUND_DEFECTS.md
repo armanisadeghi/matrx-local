@@ -262,6 +262,14 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   extension, or the updater). An app launch at 00:43 with no user action was
   also observed. A phantom relauncher would explain mid-session engine churn;
   the new lifecycle.log will attribute it on the next occurrence.
+- **Update 2026-07-13 (MXL-D-043 fix):** one candidate trigger class is now
+  eliminated — dev sessions. Pre-fix, ANY `uv run python run.py` or
+  `pnpm tauri:dev` shared `~/.matrx` with the installed app; debug-Rust
+  `kill_orphaned_sidecars` pkilled packaged engine names (never its own child
+  in dev), and dev engines clobbered the live discovery file. Dev world is now
+  fully isolated (`~/.matrx-dev`, ports 22240+, sweeps off — CLAUDE.md Hard
+  Rule 9). If mid-session deaths STOP recurring after this date, this was the
+  trigger; if one recurs, lifecycle.log still attributes it.
 
 ### MXL-D-042 — Standalone (non-sidecar) engine on macOS ignores SIGTERM while the pystray tray is active
 - **Area:** run.py / standalone mode
@@ -278,35 +286,10 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 - **Owner hint:** run `icon.run_detached()` or move the tray to a helper
   thread and keep the main thread in `_shutdown_event.wait()`; dev-only
   severity (end users always run sidecar mode).
-
-### MXL-D-043 — No dev/live isolation: a dev-run engine hijacks `~/.matrx/local.json` and shares all state with the installed app
-- **Area:** run.py / preflight / dev workflow (likely the MXL-D-039 trigger class)
-- **Symptom:** any `uv run python run.py` (Arman or ANY coding agent) uses the
-  same `~/.matrx` as the installed app: same discovery file, same `matrx.db`,
-  same `settings.json`. `run.py:826` writes the discovery file
-  **unconditionally** — even when `assign_engine_port` fell back to 22141
-  because the live engine owns 22140. From that moment every discovery-file
-  consumer (installed app's Rust `read_engine_port_from_discovery`,
-  matrx-extend, cloud round trips) routes to the dev engine running
-  uncommitted code. When the dev engine exits, the file points at a corpse and
-  the "live app" looks broken. Additionally, cross-instance kill paths
-  (`kill_orphaned_sidecars` `pkill -f matrx-engine`, `clean_orphans`) can kill
-  the other instance's tree. Net effect: dev testing corrupts live behavior,
-  live bugs get reported against code that wasn't at fault, and "fixes" get
-  validated against the wrong engine.
-- **Evidence:** `run.py:826` (unconditional `write_discovery_file(port)`),
-  `app/preflight.py:1073-1089` (second instance allowed, binds 22141, then
-  still clobbers the file), `desktop/src-tauri/src/lib.rs:164/976/1073`
-  (Rust hardcodes `~/.matrx/local.json`, ignores `MATRX_HOME_DIR`). Matches
-  MXL-D-039 live observation "possibly another active agent session".
-- **Status:** open. Analyzed 2026-07-13 — verified in code.
-- **Owner hint:** two-part fix: (1) dev-by-default isolation — when
-  `not getattr(sys, "frozen", False)` and no explicit `MATRX_HOME_DIR`, run.py
-  defaults home to `~/.matrx-dev` and port to 22150+, loudly; (2) discovery
-  guard — `write_discovery_file` must refuse to clobber a file whose recorded
-  pid is alive and answers `/health` at its recorded URL when that pid ≠ self.
-  Plus a CLAUDE.md hard rule + wrapper script so agents can't run the engine
-  un-isolated.
+- **Update 2026-07-13 (MXL-D-043 fix):** severity further reduced — DEV
+  engines now skip the tray entirely (`run.py setup_tray` dev guard) and die
+  cleanly on SIGTERM (verified live: 1s teardown). The bug now only affects
+  an intentional `MATRX_LIVE_ENGINE=1` standalone run with a tray — rare.
 
 ### MXL-D-045 — Notes bulk sync holds the engine-wide lock for the whole reconcile; the first pathless import (~800 web notes) can stall saves/deletes for minutes
 
@@ -386,24 +369,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   engines, or wrap write+enqueue pairs in explicit BEGIN IMMEDIATE.
 - **Owner hint:** local_db / sync spine
 
-### MXL-D-046 — auth_tokens.expires_at can claim "valid" for an actually-expired JWT
-
-- **Found:** 2026-07-13 during the chat-mirror RLS drill
-- **Symptom:** the persisted `auth_tokens` row on this machine had
-  `expires_at` in the FUTURE while the stored access token was actually
-  expired (PostgREST: `PGRST303 JWT expired`) and the stored refresh token
-  had been rotated away (`refresh_token_not_found`). Every engine-owned
-  sync loop that trusts `TokenRepo.is_expired()` (notes, chat mirror,
-  catalog agents) will run "configured" and burn a 401 per table per tick
-  until the frontend posts a fresh token — loud, but the skip-reason
-  ("expired") never fires, so the status endpoints claim a healthy login.
-- **Evidence:** live drill 2026-07-13: `is_expired()` false; direct
-  PostgREST GET → 401 PGRST303 on all tables; refresh grant → 400
-  refresh_token_not_found.
-- **Status:** open. Candidate fix: on a 401 from any sync client, mark the
-  stored token row invalid (or decode the JWT `exp` claim locally instead
-  of trusting the stored column) so the loops idle with a truthful reason.
-- **Owner hint:** auth / sync spine
 
 ### MXL-D-044 — Flaky full-suite ordering: test_runner_drains_a_whole_batch_unattended
 

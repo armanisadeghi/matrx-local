@@ -13,7 +13,10 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from app.common.system_logger import get_logger
 from app.services.local_db.database import get_db, LocalDatabase
+
+logger = get_logger()
 
 # ------------------------------------------------------------------
 # Helpers
@@ -792,7 +795,33 @@ class TokenRepo:
         await self._db.commit()
 
     def is_expired(self, token_row: dict[str, Any]) -> bool:
+        """True when the ACCESS token is expired.
+
+        The JWT's own ``exp`` claim is the source of truth — the stored
+        ``expires_at`` column has been observed carrying the SESSION
+        (refresh-token) expiry (~7 days) while the access token was already
+        dead, which made every engine-owned sync loop run "configured" into
+        guaranteed 401s (MXL-D-046). The column is only a fallback for rows
+        whose token cannot be decoded.
+        """
+        import base64
+        import json as _json
         import time
+
+        token = token_row.get("access_token")
+        if isinstance(token, str) and token.count(".") == 2:
+            try:
+                payload_b64 = token.split(".")[1]
+                payload_b64 += "=" * (-len(payload_b64) % 4)
+                claims = _json.loads(base64.urlsafe_b64decode(payload_b64))
+                exp = claims.get("exp")
+                if exp is not None:
+                    return int(time.time()) >= int(exp)
+            except Exception:
+                logger.warning(
+                    "[auth_tokens] could not decode JWT exp claim — falling back "
+                    "to the stored expires_at column (known to over-report)"
+                )
         expires_at = token_row.get("expires_at")
         if not expires_at:
             return False

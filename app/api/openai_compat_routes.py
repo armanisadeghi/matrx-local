@@ -8,12 +8,14 @@ Supabase JWT for this instance owner. Do not add these routes to _PUBLIC_PATHS.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.common.system_logger import get_logger
@@ -266,6 +268,23 @@ def _get_tts_service():
     return get_tts_service()
 
 
+async def _transcribe_audio_file(
+    file_path: str,
+    *,
+    model: str,
+    language: str | None,
+):
+    from app.tools.session import ToolSession
+    from app.tools.tools.audio import tool_transcribe_audio
+
+    return await tool_transcribe_audio(
+        ToolSession(working_dir=os.path.dirname(file_path)),
+        file_path=file_path,
+        model=model,
+        language=language,
+    )
+
+
 @router.post("/audio/speech")
 async def audio_speech(request: Request) -> Response:
     try:
@@ -365,3 +384,74 @@ async def audio_speech(request: Request) -> Response:
             "X-TTS-Sample-Rate": str(result.sample_rate),
         },
     )
+
+
+@router.post("/audio/transcriptions")
+async def audio_transcriptions(
+    file: UploadFile = File(...),
+    model: str = Form(default="base"),
+    language: str | None = Form(default=None),
+    response_format: str = Form(default="json"),
+) -> Response:
+    normalized_format = (response_format or "json").lower()
+    if normalized_format not in {"json", "text", "verbose_json"}:
+        return _openai_error(
+            "Only response_format values 'json', 'text', and 'verbose_json' are currently supported.",
+            status_code=400,
+            code="unsupported_response_format",
+            param="response_format",
+        )
+
+    local_model = "base" if model == "whisper-1" else model
+    suffix = os.path.splitext(file.filename or "")[1] or ".audio"
+    tmp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = tmp.name
+            while chunk := await file.read(1024 * 1024):
+                tmp.write(chunk)
+
+        result = await _transcribe_audio_file(
+            tmp_path,
+            model=local_model,
+            language=language,
+        )
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                logger.debug("[openai_compat] could not delete transcription temp file", exc_info=True)
+
+    from app.tools.types import ToolResultType
+
+    if result.type == ToolResultType.ERROR:
+        metadata = result.metadata or {}
+        code = (
+            "missing_dependency"
+            if metadata.get("fix_capability_id") == "transcription"
+            else "transcription_failed"
+        )
+        status = 503 if code == "missing_dependency" else 500
+        return _openai_error(
+            result.output or "Local transcription failed.",
+            status_code=status,
+            code=code,
+        )
+
+    metadata = result.metadata or {}
+    text = str(metadata.get("text") or "").strip()
+    if normalized_format == "text":
+        return Response(content=text, media_type="text/plain")
+
+    body: dict[str, Any] = {"text": text}
+    if normalized_format == "verbose_json":
+        body.update(
+            {
+                "task": "transcribe",
+                "language": metadata.get("language"),
+                "duration": None,
+                "segments": metadata.get("segments", []),
+            }
+        )
+    return JSONResponse(content=body)

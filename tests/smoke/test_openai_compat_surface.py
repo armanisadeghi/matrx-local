@@ -288,3 +288,103 @@ def test_audio_speech_rejects_unsupported_format(v1_app: FastAPI):
         assert r.json()["error"]["code"] == "unsupported_response_format"
 
     asyncio.run(_run())
+
+
+def test_audio_transcription_returns_json(
+    v1_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.api import openai_compat_routes
+    from app.tools.types import ToolResult
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_transcribe(file_path: str, *, model: str, language: str | None):
+        captured["exists_during_call"] = __import__("os").path.exists(file_path)
+        captured["model"] = model
+        captured["language"] = language
+        return ToolResult(
+            output="Transcription (en):\n\nhello there",
+            metadata={
+                "text": "hello there",
+                "language": "en",
+                "segments": [{"start": 0.0, "end": 1.0, "text": "hello there"}],
+            },
+        )
+
+    monkeypatch.setattr(openai_compat_routes, "_transcribe_audio_file", _fake_transcribe)
+
+    async def _run() -> None:
+        async with _client(v1_app) as client:
+            r = await client.post(
+                "/v1/audio/transcriptions",
+                data={
+                    "model": "whisper-1",
+                    "language": "en",
+                    "response_format": "verbose_json",
+                },
+                files={"file": ("sample.wav", b"fake wav", "audio/wav")},
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["text"] == "hello there"
+        assert body["language"] == "en"
+        assert body["segments"][0]["text"] == "hello there"
+
+    asyncio.run(_run())
+    assert captured == {"exists_during_call": True, "model": "base", "language": "en"}
+
+
+def test_audio_transcription_text_format(
+    v1_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.api import openai_compat_routes
+    from app.tools.types import ToolResult
+
+    async def _fake_transcribe(file_path: str, *, model: str, language: str | None):
+        return ToolResult(output="", metadata={"text": "plain text"})
+
+    monkeypatch.setattr(openai_compat_routes, "_transcribe_audio_file", _fake_transcribe)
+
+    async def _run() -> None:
+        async with _client(v1_app) as client:
+            r = await client.post(
+                "/v1/audio/transcriptions",
+                data={"model": "base", "response_format": "text"},
+                files={"file": ("sample.wav", b"fake wav", "audio/wav")},
+            )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/plain")
+        assert r.text == "plain text"
+
+    asyncio.run(_run())
+
+
+def test_audio_transcription_missing_dependency_error(
+    v1_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.api import openai_compat_routes
+    from app.tools.types import ToolResult, ToolResultType
+
+    async def _fake_transcribe(file_path: str, *, model: str, language: str | None):
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output="Whisper is not installed",
+            metadata={"fix_capability_id": "transcription"},
+        )
+
+    monkeypatch.setattr(openai_compat_routes, "_transcribe_audio_file", _fake_transcribe)
+
+    async def _run() -> None:
+        async with _client(v1_app) as client:
+            r = await client.post(
+                "/v1/audio/transcriptions",
+                data={"model": "base"},
+                files={"file": ("sample.wav", b"fake wav", "audio/wav")},
+            )
+        assert r.status_code == 503
+        assert r.json()["error"]["code"] == "missing_dependency"
+
+    asyncio.run(_run())

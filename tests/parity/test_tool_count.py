@@ -33,6 +33,7 @@ SNAPSHOT_FILE = (
 # runtime; the catalog declaration is the advertised contract). Extend this
 # list when adding a new OS-specific tool.
 EXPECTED_DARWIN_ONLY = {
+    "MacApps",  # mega-tool: every member action is darwin-gated
     "AppleScript",
     "ListEmails", "SendEmail", "GetEmailAccounts",
     "ListMessages", "ListConversations", "SendMessage",

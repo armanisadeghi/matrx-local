@@ -190,10 +190,20 @@ def _norm_params(params: Any) -> str:
     return json.dumps(params or {}, sort_keys=True)
 
 
+def _catalog_params(entry: CatalogEntry) -> dict[str, Any]:
+    """The shape stored in tool.definition.parameters for this entry.
+
+    Action-enum mega-tools carry a dedicated flat cloud dialect
+    (``cloud_parameters``, incl. ``$variants``); plain tools store their
+    standard input_schema unchanged."""
+    return entry.cloud_parameters or entry.input_schema
+
+
 @dataclass
 class ToolDiff:
     new: list[CatalogEntry] = field(default_factory=list)
     changed: list[tuple[CatalogEntry, dict[str, Any]]] = field(default_factory=list)
+    retired: list[CatalogEntry] = field(default_factory=list)  # legacy, collapsed into mega-tools
     removed: list[dict[str, Any]] = field(default_factory=list)
     ok: list[str] = field(default_factory=list)
     unverified: list[str] = field(default_factory=list)  # names-only mode
@@ -203,7 +213,9 @@ class ToolDiff:
 
     @property
     def has_drift(self) -> bool:
-        return bool(self.new or self.changed or self.removed or self.collisions)
+        return bool(
+            self.new or self.changed or self.retired or self.removed or self.collisions
+        )
 
 
 def compute_diff(cloud: CloudState) -> ToolDiff:
@@ -213,6 +225,15 @@ def compute_diff(cloud: CloudState) -> ToolDiff:
 
     for entry in sorted(catalog, key=lambda e: e.cloud_name):
         row = cloud.tools.get(entry.cloud_name)
+
+        if not entry.advertised:
+            # Legacy tool collapsed into a mega-tool: still dispatchable, but
+            # the cloud row must be RETIRED (binding deactivated). Only counts
+            # as drift while the cloud still has an active binding for it.
+            if row is not None:
+                diff.retired.append(entry)
+            continue
+
         if row is None:
             if (
                 cloud.all_definition_names is not None
@@ -225,7 +246,7 @@ def compute_diff(cloud: CloudState) -> ToolDiff:
                 diff.new.append(entry)
         elif cloud.names_only:
             diff.unverified.append(entry.cloud_name)
-        elif _norm_params(row.get("parameters")) != _norm_params(entry.input_schema):
+        elif _norm_params(row.get("parameters")) != _norm_params(_catalog_params(entry)):
             diff.changed.append((entry, row))
         else:
             diff.ok.append(entry.cloud_name)
@@ -260,6 +281,12 @@ def print_report(diff: ToolDiff) -> None:
         print(f"\n  ~ CHANGED — parameters differ ({len(diff.changed)})")
         for entry, _row in diff.changed:
             print(f"      ~ {entry.cloud_name}")
+    if diff.retired:
+        section(
+            "×", "RETIRED — legacy tool collapsed into a mega-tool; cloud "
+            "binding still active (changeset deactivates it)",
+            [e.cloud_name for e in diff.retired],
+        )
     if diff.removed:
         section(
             "-", "REMOVED — bound in cloud, absent from catalog (never auto-deleted)",
@@ -290,7 +317,7 @@ def print_field_diff(diff: ToolDiff) -> None:
         print("  cloud parameters:")
         print("    " + _norm_params(row.get("parameters")))
         print("  catalog parameters:")
-        print("    " + _norm_params(entry.input_schema))
+        print("    " + _norm_params(_catalog_params(entry)))
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +347,7 @@ def _new_tool_sql(entry: CatalogEntry) -> str:
         [
             _sql_str(entry.cloud_name),
             _sql_str(entry.description),
-            _sql_jsonb(entry.input_schema),
+            _sql_jsonb(_catalog_params(entry)),
             _sql_str(entry.category),
             _sql_text_array(entry.tags),
             _sql_str(DEFINITION_DEFAULTS["source_kind"]),
@@ -347,7 +374,7 @@ def _changed_tool_sql(entry: CatalogEntry) -> str:
     return (
         f"-- CHANGED: {entry.cloud_name} — parameters updated to match the code catalog\n"
         f"UPDATE tool.definition\n"
-        f"   SET parameters = {_sql_jsonb(entry.input_schema)},\n"
+        f"   SET parameters = {_sql_jsonb(_catalog_params(entry))},\n"
         f"       updated_at = now()\n"
         f" WHERE name = {_sql_str(entry.cloud_name)};\n"
     )
@@ -363,6 +390,25 @@ def _collision_sql(name: str) -> str:
         f"-- SELECT id, {_sql_str(EXECUTOR_NAME)}, true FROM tool.definition\n"
         f"--  WHERE name = {_sql_str(name)}\n"
         f"-- ON CONFLICT DO NOTHING;\n"
+    )
+
+
+def _retired_tool_sql(entry: CatalogEntry) -> str:
+    """ACTIVE retirement — legacy tool collapsed into an action-enum mega-tool.
+
+    Unlike REMOVED (a tool that vanished from the code, suggestion only),
+    RETIRED is an intentional, reviewed transition: the handler still exists
+    and is reachable through its mega-tool, so deactivating the flat binding
+    is safe and required (no dual registrations — cloud is canon)."""
+    return (
+        f"-- RETIRED: '{entry.cloud_name}' collapsed into a mega-tool "
+        f"(dispatcher: {entry.dispatcher_name})\n"
+        f"UPDATE tool.binding b SET is_active = false, updated_at = now()\n"
+        f"  FROM tool.definition d\n"
+        f" WHERE d.id = b.tool_id AND d.name = {_sql_str(entry.cloud_name)}\n"
+        f"   AND b.executor_name = {_sql_str(EXECUTOR_NAME)};\n"
+        f"UPDATE tool.definition SET is_active = false, updated_at = now()\n"
+        f" WHERE name = {_sql_str(entry.cloud_name)};\n"
     )
 
 
@@ -388,6 +434,7 @@ def emit_changeset(diff: ToolDiff, out_path: Path) -> None:
         f"-- cloud baseline: {diff.cloud_source}\n"
         f"-- catalog: {len(get_catalog())} tools; "
         f"NEW={len(diff.new)} CHANGED={len(diff.changed)} "
+        f"RETIRED={len(diff.retired)} "
         f"COLLISIONS={len(diff.collisions)} REMOVED={len(diff.removed)} "
         f"OK={len(diff.ok)} UNVERIFIED={len(diff.unverified)}\n"
         f"--\n"
@@ -406,6 +453,8 @@ def emit_changeset(diff: ToolDiff, out_path: Path) -> None:
         parts.append(_collision_sql(name) + "\n")
     for entry, _row in diff.changed:
         parts.append(_changed_tool_sql(entry) + "\n")
+    for entry in diff.retired:
+        parts.append(_retired_tool_sql(entry) + "\n")
     for row in diff.removed:
         parts.append(_removed_tool_sql(row) + "\n")
     parts.append("COMMIT;\n")
@@ -419,6 +468,7 @@ def emit_changeset(diff: ToolDiff, out_path: Path) -> None:
     print(f"Changeset written: {out_path}")
     print(
         f"  NEW={len(diff.new)} CHANGED={len(diff.changed)} "
+        f"RETIRED={len(diff.retired)} "
         f"COLLISIONS={len(diff.collisions)} REMOVED(suggested)={len(diff.removed)}"
     )
 

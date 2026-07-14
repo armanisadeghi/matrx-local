@@ -117,7 +117,7 @@ def test_sync_tools_caches_full_catalog(
         assert sorted(by_id) == sorted(e.cloud_name for e in get_catalog()), (
             "tools table does not mirror the tool catalog exactly"
         )
-        assert len(rows) == 115  # catalog size pinned by the registry gate too
+        assert len(rows) == 134  # 115 legacy + 19 mega-tools (W7); pinned by the registry gate too
         assert all(r["source"] == "local" for r in by_id.values())
         # id == name for local tools (current behavior).
         assert all(r["id"] == r["name"] for r in by_id.values())
@@ -140,7 +140,7 @@ def test_sync_tools_is_idempotent(
         assert first is not None and second is not None
         assert first["last_hash"] == second["last_hash"]
         row = await db.fetchone("SELECT COUNT(*) AS cnt FROM tools")
-        assert row["cnt"] == 115
+        assert row["cnt"] == 134
 
     run_scenario(tmp_path, monkeypatch, scenario)
 

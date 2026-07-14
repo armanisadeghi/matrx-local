@@ -323,6 +323,21 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "ListSpeechLocales": tool_list_speech_locales,
 }
 
+# ── Action-enum mega-tools (W7 collapse) ────────────────────────────────────
+# One dispatcher entry per action group (File, Shell, Window, …). These WRAP
+# the legacy handlers above via dispatch() — the legacy PascalCase names stay
+# dispatchable for existing surfaces (extension RPC) during the transition,
+# but the advertised registry (catalog advertised=True + cloud rows) is
+# mega-tools only. Spec + fan-out live in app/tools/actions.py.
+from app.tools.actions import ACTION_GROUPS, make_group_handler  # noqa: E402
+
+for _group in ACTION_GROUPS.values():
+    if _group.dispatcher_name in TOOL_HANDLERS:  # pragma: no cover — guarded by parity tests
+        raise RuntimeError(
+            f"action group {_group.dispatcher_name!r} collides with a legacy dispatcher tool"
+        )
+    TOOL_HANDLERS[_group.dispatcher_name] = make_group_handler(_group)
+
 TOOL_NAMES: list[str] = sorted(TOOL_HANDLERS.keys())
 
 

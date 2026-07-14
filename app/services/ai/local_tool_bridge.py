@@ -469,26 +469,36 @@ def _schema_to_param_dict(input_schema: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_local_tool_definitions() -> list[Any]:
-    """Build a ToolDefinition for every catalog tool.
+    """Build a ToolDefinition for every ADVERTISED catalog tool.
 
     ``tool_type=EXTERNAL_HANDLER`` + ``source_kind="matrx_local"`` routes
     execution to the LocalToolBridge handlers registered in ``register()`` —
     the same path a server-provided definition would take. Descriptions here
     are the code-side fallback; when the server registry is reachable its
     (DB-canonical) definitions win and this backfill only fills gaps.
+
+    W7 action collapse: only advertised entries (the action-enum mega-tools)
+    get definitions — mirroring the cloud registry, where the flat legacy
+    rows are retired. Legacy handlers stay registered for EXECUTION (fan-in
+    from older cloud rows during the transition), but the local agent loop
+    advertises the same collapsed surface the platform does. Mega-tools carry
+    their flat cloud dialect (incl. ``$variants``) verbatim.
     """
     from matrx_ai.tools.models import ToolDefinition, ToolType
 
-    from app.tools.catalog import get_catalog
+    from app.tools.catalog import get_advertised_catalog
 
     defs: list[Any] = []
-    for entry in get_catalog():
+    for entry in get_advertised_catalog():
         try:
             defs.append(
                 ToolDefinition(
                     name=entry.cloud_name,
                     description=entry.description,
-                    parameters=_schema_to_param_dict(entry.input_schema),
+                    parameters=(
+                        entry.cloud_parameters
+                        or _schema_to_param_dict(entry.input_schema)
+                    ),
                     tool_type=ToolType.EXTERNAL_HANDLER,
                     source_kind="matrx_local",
                     category=entry.category,

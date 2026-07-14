@@ -125,6 +125,7 @@ async def list_local_tools() -> dict[str, Any]:
                 "platforms": list(entry.platforms) if entry.platforms else None,
                 "registered": tool_def is not None,
                 "timeout_seconds": entry.timeout_seconds,
+                "advertised": entry.advertised,
             })
 
         registered_count = sum(1 for t in tools_out if t["registered"])

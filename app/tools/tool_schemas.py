@@ -65,6 +65,12 @@ TOOL_CATEGORIES: dict[str, list[str]] = {
     "Photos": ["SearchPhotos", "GetPhoto"],
     "Location": ["GetLocation"],
     "Speech Recognition": ["TranscribeWithSpeech", "ListSpeechLocales"],
+    # Action-enum mega-tools (W7 collapse) — the advertised surface.
+    "Actions": [
+        "File", "Shell", "Window", "Process", "Input", "Audio", "Clipboard",
+        "Screen", "System", "Browser", "Web", "Net", "Monitor", "Schedule",
+        "Documents", "Media", "Ner", "MacApps", "WindowsPs",
+    ],
 }
 
 # Reverse lookup: tool name → category
@@ -166,6 +172,25 @@ def generate_tool_schema(tool_name: str) -> dict[str, Any] | None:
     handler = TOOL_HANDLERS.get(tool_name)
     if handler is None:
         return None
+
+    # Action-enum mega-tools take **tool_input (nothing to introspect); their
+    # composed schema lives on the catalog entry. Deferred import — the
+    # catalog imports generate_tool_schema for LEGACY names only, so this
+    # cannot recurse.
+    from app.tools.actions import ACTION_GROUPS
+
+    if tool_name in ACTION_GROUPS:
+        from app.tools.catalog import get_by_dispatcher_name
+
+        entry = get_by_dispatcher_name(tool_name)
+        if entry is None:  # pragma: no cover — catalog build guarantees presence
+            return None
+        return {
+            "name": tool_name,
+            "description": entry.description,
+            "category": _TOOL_TO_CATEGORY.get(tool_name, "Actions"),
+            "input_schema": entry.input_schema,
+        }
 
     sig = _handler_signature(handler)
     docstring = inspect.getdoc(handler) or f"Execute the {tool_name} tool."

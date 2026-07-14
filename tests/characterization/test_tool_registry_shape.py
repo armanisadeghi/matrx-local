@@ -165,11 +165,14 @@ def test_snapshot_counts() -> None:
     """Headline counts — makes count drift obvious at a glance."""
     snap = _snapshot()
     counts = {k: len(v) for k, v in snap.items()}
+    # 115 legacy tools + 19 action-enum mega-tools (W7 collapse). The mega
+    # handlers are factory-made in app/tools/actions.py, not tool_* source
+    # functions — hence source_tool_functions stays at 115.
     assert counts == {
-        "dispatcher_tool_names": 115,
-        "catalog_cloud_names": 115,
+        "dispatcher_tool_names": 134,
+        "catalog_cloud_names": 134,
         "source_tool_functions": 115,
-        "dispatcher_handler_function_names": 115,
+        "dispatcher_handler_function_names": 134,
         "orphan_source_functions": 0,
     }, (
         f"TOOL SURFACE COUNTS CHANGED: {counts}. If intentional, update this "

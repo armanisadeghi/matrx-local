@@ -727,6 +727,14 @@ class CatalogEntry:
     timeout_seconds: float
     platforms: tuple[str, ...] | None
     version: str = CATALOG_VERSION
+    # W7 action collapse: mega-tools (advertised=True) are what the platform
+    # sees; legacy per-tool entries stay dispatchable but unadvertised during
+    # the transition and their cloud rows are retired via tool_sync.
+    advertised: bool = True
+    # Flat cloud dialect (per-prop `required` bools + $variants) stored in
+    # tool.definition.parameters for action-enum mega-tools. None → the
+    # standard input_schema IS the cloud shape (legacy tools).
+    cloud_parameters: dict[str, Any] | None = None
 
 
 _SNAKE_RE_1 = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
@@ -755,6 +763,7 @@ def _build_catalog() -> tuple[CatalogEntry, ...]:
     # Deferred import: tool_schemas imports the dispatcher; importing it at
     # module level here is safe, but deferring keeps catalog import light and
     # mirrors dispatcher.list_tool_specs().
+    from app.tools.actions import ACTION_GROUPS, build_group_schemas, group_members
     from app.tools.tool_schemas import generate_tool_schema
 
     unknown_meta = sorted(set(_META) - set(TOOL_HANDLERS))
@@ -764,10 +773,21 @@ def _build_catalog() -> tuple[CatalogEntry, ...]:
             "A dispatcher tool was renamed or removed without updating the catalog."
         )
 
+    members = group_members()  # legacy dispatcher name → owning mega-tool
+    orphans = sorted(set(TOOL_HANDLERS) - set(members) - set(ACTION_GROUPS))
+    if orphans:
+        raise RuntimeError(
+            f"dispatcher tools not covered by any action group: {orphans}. "
+            "Every legacy tool must belong to exactly one ACTION_GROUPS entry "
+            "(app/tools/actions.py) — add it to a group or create one."
+        )
+
     entries: list[CatalogEntry] = []
     seen_cloud: dict[str, str] = {}
 
     for dispatcher_name in sorted(TOOL_HANDLERS):
+        if dispatcher_name in ACTION_GROUPS:
+            continue  # mega-tools are appended below, composed from legacy entries
         handler = TOOL_HANDLERS[dispatcher_name]
         meta = _META.get(dispatcher_name, ToolMeta())
 
@@ -807,9 +827,39 @@ def _build_catalog() -> tuple[CatalogEntry, ...]:
                 handler=handler,
                 timeout_seconds=meta.timeout_seconds,
                 platforms=meta.platforms,
+                advertised=False,  # legacy tool: collapsed into a mega-tool
             )
         )
 
+    # ── Action-enum mega-tools (the ADVERTISED surface) ─────────────────────
+    by_dispatcher = {e.dispatcher_name: e for e in entries}
+    for group_name in sorted(ACTION_GROUPS):
+        group = ACTION_GROUPS[group_name]
+        if group.cloud_name in seen_cloud:
+            raise RuntimeError(
+                f"mega-tool cloud name {group.cloud_name!r} collides with "
+                f"legacy tool {seen_cloud[group.cloud_name]}"
+            )
+        seen_cloud[group.cloud_name] = group.dispatcher_name
+        composed = build_group_schemas(group, by_dispatcher.get)
+        entries.append(
+            CatalogEntry(
+                cloud_name=group.cloud_name,
+                dispatcher_name=group.dispatcher_name,
+                description=composed["description"],
+                category=group.category,
+                tags=group.tags,
+                input_schema=composed["input_schema"],
+                arg_model=None,
+                handler=TOOL_HANDLERS[group.dispatcher_name],
+                timeout_seconds=composed["timeout_seconds"],
+                platforms=composed["platforms"],
+                advertised=True,
+                cloud_parameters=composed["cloud_parameters"],
+            )
+        )
+
+    entries.sort(key=lambda e: e.dispatcher_name)
     return tuple(entries)
 
 
@@ -826,6 +876,13 @@ def get_catalog() -> tuple[CatalogEntry, ...]:
         _BY_CLOUD.update({e.cloud_name: e for e in _CATALOG})
         _BY_DISPATCHER.update({e.dispatcher_name: e for e in _CATALOG})
     return _CATALOG
+
+
+def get_advertised_catalog() -> tuple[CatalogEntry, ...]:
+    """Only the advertised surface — the action-enum mega-tools. This is what
+    the cloud registry (tool.definition/tool.binding) and every tool-list
+    consumer should present; legacy entries remain dispatchable only."""
+    return tuple(e for e in get_catalog() if e.advertised)
 
 
 def get_by_cloud_name(name: str) -> CatalogEntry | None:
@@ -851,6 +908,7 @@ def catalog_hash() -> str:
                 "category": e.category,
                 "platforms": e.platforms,
                 "version": e.version,
+                "advertised": e.advertised,
             }
             for e in get_catalog()
         ],

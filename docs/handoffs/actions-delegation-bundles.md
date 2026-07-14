@@ -74,11 +74,12 @@ local models, local codebase."
 ~~No `ui.ui_surface` row has `executor_name='matrx-local'`.~~ FIXED —
 `matrx-local/desktop` is live (aidream 0170). The cloud registry now carries
 19 action-enum mega-tools bound to `matrx-local` (115 flat rows retired),
-9 desktop bundles with member edges, and surface defaults. What's still
-missing for end-to-end delegation: a matrx-ai RELEASE carrying
-`desktop-native`/`load_desktop_tools` (sits as aidream local commit
-`f99caf82b`), the suspend/resume client half in the engine (step 5), and
-the acceptance drill (step 6).
+9 desktop bundles with member edges, and surface defaults. matrx-ai 0.4.2
+(desktop-native + load_desktop_tools) is RELEASED and live on the server
+(2026-07-14). Step 5 (suspend/resume client half) is DONE and E2E-verified
+against the live server — see the step-5 progress log below. Remaining:
+step 6 residue (aidream deploy of the wake publish; matrx-frontend declaring
+desktop-native on web turns; Arman's at-the-keyboard drill).
 
 ## Progress log (2026-07-14, W7 agent — steps 1-4 DONE + EXERCISED)
 
@@ -151,44 +152,92 @@ windows=1. `matrx-local/desktop` surface defaults:
   "(Windows only) (Windows only)"). Descriptions are DB-canonical — fix
   with a one-line UPDATE whenever convenient.
 
-## Remaining work queue
+## Progress log (2026-07-14, W7 step-5 agent — step 5 DONE + E2E-EXERCISED LIVE)
 
-### 5. Suspend/resume client half in matrx-local (NOT STARTED)
-When a cloud agent delegates a desktop tool: matrx-local (via Broadcast rpc /
-tunnel) executes with the existing `tool` command primitive, then POSTs
-`/conversations/{id}/tool_results` and `/resume` on `continuation_needed` —
-port matrx-extend's `dispatch.ts` logic into the engine (Python, in the
-cross-component router path) so the desktop works headless (no UI required).
-Set `max_client_wait_seconds` per tool class (slow desktop ops: downloads,
-media gen, long shell commands).
+### ✅ 5. Suspend/resume client half in matrx-local (DONE, matrx-local `df261762a`)
 
-Open design question the next agent must answer first: HOW does the
-delegated-call notification reach a headless desktop? matrx-extend receives
-the suspension inside the stream it opened; a headless desktop is not in the
-stream. Candidates: (a) aidream emits a Broadcast rpc envelope to the
-desktop's channel when a matrx-local-bound call suspends (server-side work
-in aidream), (b) the desktop polls pending delegated calls. Inspect
-`_suspend_for_delegation` (`matrx_ai/orchestrator/executor.py:464-526`) and
-`app/api/cross_component_router.py` before writing anything. Then: execute
-via the existing `tool` command primitive (mega names ARE dispatcher names
-now: File/Shell/… — the Broadcast rpc path dispatches by PascalCase, cloud
-names by the local bridge), POST `/conversations/{id}/tool_results`, then
-`/resume` on `continuation_needed`. Set `max_client_wait_seconds` per tool
-class (downloads, media gen, long shell).
+**Mechanism chosen: hybrid poll + broadcast wake, one sweep path.** The
+`chat.tool_call` ledger has NO executor column (verified: only
+`is_client_delegated`; the merge-time binding is discarded pre-persist), so
+"which calls are mine" is answered client-side by tool name
+(`catalog.get_by_cloud_name`). Discovery:
+1. **Poll (primary/correctness):** `GET /ai/user/pending_calls` — already
+   existed server-side, deployed on the live server, zero new surface.
+   Default 15 s (`MATRX_DELEGATION_POLL_INTERVAL`).
+2. **Broadcast wake (latency):** aidream publishes `kind:"wake"` /
+   `action:"tool_call.delegated"` on `matrx-local-bridge:<uid>` when a turn
+   suspends. Hint-only; the sweep re-reads the ledger. aidream LOCAL commit
+   `57b38fba1` (publisher `publish_delegation_wake` + spine settle hook in
+   `aidream/services/runtime/conversation.py::_settle_completed` — aidream
+   server code, **NO matrx-ai release needed**; needs an aidream DEPLOY,
+   NOT pushed per coordination rules). Until deployed, latency = poll tick.
 
-### 6. Verification (acceptance) — GATED on a matrx-ai release
-**Gate:** publish matrx-ai (>0.4.0) carrying `desktop-native` +
-`load_desktop_tools` (aidream local commit `f99caf82b`), deploy the server,
-bump matrx-local's floor. Also observe the aidream startup tool-drift gate
-green on first boot (declaration ↔ DB row parity was constructed but not
-boot-verified).
-Then, from the web app with the desktop online: an agent turn advertises
-`load_desktop_tools`, loads `desktop-files`, calls
-`local_file(action="move", …)`, the call suspends → executes on this
-machine → resumes, and the file actually moved on disk. Then the same over
-Broadcast with the tunnel down. Pin the merge behavior with a
-characterization test on the aidream side (surface `matrx-local/desktop`
-yields delegated bindings, not drops).
+Engine pieces (`app/services/delegation/`, FEATURE.md there is canonical):
+`DelegationApiClient` (pending_calls / tool_results / resume-with-drain,
+injectable transport), `DelegationEngine` (managed service `delegation`,
+Phase 2f, execute-once/deliver-until-acknowledged, single-flight resume per
+user_request_id + bounded resume_conflict retry, per-mega client-side
+execution timeouts — Shell 900 s, Web/Media/Audio 600 s, Browser 300 s,
+default 120 s), wake routing in `cross_component_router._handle_wake`.
+The resume body declares `surface: matrx-local/desktop` + `desktop-native`
+so re-delegation survives the merge. `max_client_wait_seconds` server
+column: default is a 30-day abandonment TTL (NOT a deadline) — no per-tool
+rows needed; tighten only if a tool ever needs a shorter bound.
+
+**Verified (EXERCISED):**
+- 15 characterization tests (`tests/unit/test_delegation_client.py`) pin the
+  round trip vs a MockTransport aidream (real dispatcher execution); full
+  unit+characterization suite 240 green.
+- Dev-isolated engine boot: Phase 2f `delegation → ready`, fresh-home idles
+  as a STATE ("no signed-in user"), SIGTERM stops the sweep cleanly.
+- **FULL E2E AGAINST THE LIVE SERVER, headless (2026-07-14):** started a
+  real `Matrx Chat` turn on server.app.matrxserver.com with
+  `client: {surface: "matrx-local/desktop", capabilities: ["desktop-native"]}`
+  (matrx-ai 0.4.2 accepted it) → model called `local_file(action=list)` →
+  `tool_delegated` + `suspended_awaiting_client` → the REAL DelegationEngine
+  swept, skipped Arman's 5 stale foreign pending calls (`user`/`war_room_*`),
+  executed the listing on this machine, POSTed tool_results
+  (continuation_needed=true), resumed, drained 26 events — and the final
+  assistant message quoted the real marker filename. Ledger row cleared.
+  Conversation: `3471c8a4-1d84-4d39-9f28-38d3dea81dca`.
+- Cosmetic finding filed in aidream FOUND_DEFECTS (`36c30fe6e`):
+  `output_chars: 0` on dict-shaped delegated outputs (content reaches the
+  model fine).
+
+### 6. Verification (acceptance) — protocol PROVEN; two gaps to the web-app UX
+The old gate (matrx-ai release) is CLEARED — 0.4.2 is live and the E2E drill
+above proves surface+capability+delegate+execute+resume end to end. What
+remains:
+1. **aidream deploy** carrying `57b38fba1` (wake publish) — until then the
+   desktop runs on poll latency (≤15 s), which is functional.
+2. **matrx-frontend does NOT yet declare `desktop-native` on web turns**
+   (verified 2026-07-14: no capability-envelope wiring, only tunnel-routing
+   references), so a plain web-app chat cannot delegate desktop tools yet.
+   Work item spawned for matrx-frontend: presence via `app_instances` →
+   add `desktop-native` to `client.capabilities` on start AND resume when
+   the desktop is online.
+3. Arman's at-the-keyboard drill (script below) once #2 lands; plus the
+   aidream-side merge characterization test (surface `matrx-local/desktop`
+   yields delegated bindings, not drops) is still worth pinning.
+
+#### Arman's acceptance drill (after the frontend declares desktop-native)
+1. Launch the installed desktop app (or `./scripts/dev.sh --live` with the
+   app quit), signed in. Confirm in the engine log:
+   `Phase 2f: Delegation client started ✓` and no `[delegation] idle` line.
+2. In the web app, new chat, send:
+   *"Create a file at ~/Desktop/delegation-test.txt using the local_file
+   tool (action='write'), content 'hello from the cloud', then confirm."*
+3. Watch the web UI: the turn should end quietly (suspend), then continue
+   by itself within ~15 s (instantly once the wake publish is deployed).
+4. Watch the engine log for the sequence:
+   `[delegation] sweep requested: broadcast wake …` (only post-deploy) →
+   `[delegation] executing local_file …` →
+   `[delegation] result delivered … continuation_needed=True` →
+   `[delegation] resume streamed to completion …`.
+5. Verify `~/Desktop/delegation-test.txt` exists on disk with the content —
+   that is the acceptance: a MUTATING desktop action from a web turn.
+6. Repeat with the tunnel disabled (Settings) to confirm the flow is
+   tunnel-independent (it is — everything is outbound HTTPS + Broadcast).
 
 ## Contracts
 

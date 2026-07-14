@@ -32,32 +32,29 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## API keys / credentials
 
-### MXL-D-047 — HF token is stored but a download still 401'd; possible resolver/startup-race bug
-- **Area:** `app/services/ai/key_manager.py`, `app/services/media_gen/paths.py::read_hf_token`
-- **Symptom:** Arman confirms he already added his Hugging Face token in
-  Settings → API Keys, but a download previously behaved as if no token was
-  configured. Verified directly against `~/.matrx/matrx.db` (2026-07-13,
-  read-only, no secret values printed): `app_settings.settings.api_keys`
-  contains a `huggingface` entry, 147 chars, `enc:v1:`-prefixed (properly
-  keychain-encrypted) — the key IS present in the correct store. So either
-  (a) the key was added after the failing download and the app is fine and
-  this is stale, or (b) there is a real resolver/injection bug.
-- **Evidence of a plausible real bug:** `key_manager.py:137-140` (docstring
-  on `read_hf_token`) already documents a KNOWN race: "it already loses it to
-  a startup race, when a download resumes before the injection runs." That
-  race was never confirmed fixed for HF specifically (a related but distinct
-  race — image-gen sys.path ordering — was fixed 2026-07-13 per
-  `.matrx/AGENT_TASKS.md` Completed). `load_user_keys_into_env()` must run
-  and populate `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN` (or the in-memory cache)
-  BEFORE any resumed/queued download reaches `read_hf_token()` in
-  `downloads/manager.py:1052`.
+### MXL-D-051 — Engine ignores SIGTERM and /admin/shutdown while an HF snapshot download is active
+- **Area:** `app/main.py` lifespan teardown ordering / `app/services/downloads/manager.py::_download_hf_snapshot`
+- **Symptom:** With a Hugging Face snapshot download in flight, both
+  `POST /admin/shutdown` (200, "self-signal SIGTERM after response flushes")
+  and a direct `kill -TERM <engine pid>` were accepted and then NOTHING
+  happened — the engine kept serving /health and downloading for minutes; the
+  downloads periodic STATE log kept ticking, proving lifespan teardown never
+  reached `DownloadManager.stop()`.
+- **Evidence:** Observed live 2026-07-13 on a `./scripts/dev.sh --live`
+  source engine (v1.3.110) during the FLUX.1-schnell 33.7 GB snapshot
+  download: shutdown POST + two SIGTERMs ignored while the download kept
+  streaming. Suspects: uvicorn graceful shutdown blocked by the snapshot
+  polling task/executor (`_download_hf_snapshot` runs `_dir_size_bytes` in
+  the default executor every second plus a worker thread doing
+  `hf_hub_download`), or something earlier in the teardown chain blocking
+  before downloads stop.
 - **Status:** open
-- **Analysis stamp:** Unverified — from docs/logs only. Needs a live repro:
-  start the engine fresh with the HF key already stored, immediately queue/
-  resume a gated-model download, and confirm `read_hf_token()` returns
-  non-None on the first attempt (not just on retry).
-- **Owner hint:** whoever picks this up should NOT ask Arman to re-enter the
-  key — the key is confirmed present and correctly stored.
+- **Analysis stamp:** Analyzed 2026-07-13 — reproduced live; not yet
+  root-caused in code.
+- **Owner hint:** this is the "app won't quit / ended unexpectedly" class —
+  Hard Rule 0 territory. Verify teardown order in `app/main.py` and make
+  `DownloadManager.stop()` also set the cancel flags of active download
+  slots so the HF poll loop exits promptly.
 
 ### MXL-D-048 — Ask-Arman checklist items for user-fixable app config are the wrong pattern
 - **Area:** `.matrx/ARMAN_TASKS.md` process / task-hygiene skill, and any

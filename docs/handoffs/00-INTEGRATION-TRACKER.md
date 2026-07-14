@@ -29,6 +29,7 @@ no external users yet. Everything aims at: make the system actually work.
 | W5 | GLiNER local NER | `docs/handoffs/gliner-local-ner.md` | ✅ Code + cloud registry DONE (`0f4d1c729`, `927b75a17`); handoff groomed | Real GLiNER2-base drill: install NER runtime, download model, run `/ner/extract` + tool invocation |
 | W6 | matrx-extend health schema | (matrx-extend repo) | ✅ DONE, verified by coordinator (`status` literal kept; optional `health` field added) | — |
 | W7 | **Actions / delegation / tool bundles alignment** | `docs/handoffs/actions-delegation-bundles.md` | 📋 Handoff WRITTEN (research done: delegation engine already recognizes matrx-local; blocker is the missing `ui.ui_surface` row + no capability/loader + flat 115-tool registry) | Dispatch to an agent (or Arman review first) — step 1 (seed surface row) unblocks everything |
+| W8 | **Errors→Prompts UX (downloads)** | — (done; see AGENT_TASKS Completed, MXL-D-047 line) | ✅ DONE + EXERCISED LIVE 2026-07-13: every HF call attaches the app-stored token at request time (raw GGUF path, model_repo analysis, NER; snapshot path already did); HF/Civitai auth refusals → `DownloadResolution` states with exact attribution (token-present gated 401 → license/pending, NEVER "re-enter your token"); actionable failures log INFO `[action-needed]` (no red ERROR, engine + client), STATE log splits `action_needed` from `fails`; stale pre-taxonomy rows re-triaged in `_load_history` (verified on Arman's real store: FLUX→`hf_gate_not_accepted`, Z-Image→`ai_packages_missing`, Civitai blanket copy→key flows); UI: first-class "Needs your action" prompt cards atop the Downloads panel (action button + "Check again & retry"), DownloadActionDialog annihilated; FLUX.1-schnell re-trigger downloaded AUTHENTICATED with his stored token; 20 unit tests (`tests/unit/test_hf_token_and_failure_states.py`); commits `98de4438d`, `2d0ba7db8`, `42802d1d0` | Remaining: MXL-D-051 (engine ignores SIGTERM//admin/shutdown during an active HF snapshot download — reproduced live, filed); optional: extend the same state-not-error doctrine to non-download surfaces (`/image-gen/download` pre-check 400 is plain text, not a resolution) |
 
 ## Standing gates & environment facts
 
@@ -39,8 +40,9 @@ no external users yet. Everything aims at: make the system actually work.
 - FLUX.1-schnell: gated on HF **per-account**; the app's gentle-card flow is
   the correct per-user UX. CDN-mirroring Apache-2.0 weights is the zero-
   friction path — candidate follow-up under W3/downloads.
-- Old pre-actionable-failure download rows still show raw red error strings
-  in status logs — purge/re-render legacy rows (small task, unassigned).
+- ~~Old pre-actionable-failure download rows show raw red error strings~~ —
+  DONE (W8, 2026-07-13): stale rows are re-triaged onto the resolution
+  taxonomy at startup and render as prompts.
 
 ## Collisions
 

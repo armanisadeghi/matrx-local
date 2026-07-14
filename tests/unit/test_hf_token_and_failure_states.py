@@ -202,6 +202,13 @@ def test_stale_row_repo_id_recovered_from_message_text():
     "key_present,msg,expected",
     [
         (False, "401 Unauthorized from Civitai", "civitai_key_required"),
+        # the pre-taxonomy blanket message, observed live in stale rows
+        (
+            False,
+            "Civitai API key required or invalid — add your key under "
+            "Settings → API Keys → Civitai, then retry the download.",
+            "civitai_key_required",
+        ),
         (True, "401 Unauthorized from Civitai", "civitai_key_rejected"),
         (True, "403 Forbidden", "civitai_access_restricted"),
     ],

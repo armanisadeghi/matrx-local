@@ -277,7 +277,11 @@ def retriage_stale_failure(
         return ai_packages_missing().resolution
 
     if md.get("civitai_download") and (
-        "401" in low or "403" in low or "unauthorized" in low or "forbidden" in low
+        "401" in low or "403" in low or "unauthorized" in low
+        or "forbidden" in low
+        # the pre-taxonomy blanket message ("Civitai API key required or
+        # invalid — add your key under Settings → API Keys → Civitai")
+        or "api key required or invalid" in low
     ):
         if not civitai_key_present:
             return civitai_key_required().resolution

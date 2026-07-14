@@ -3,7 +3,7 @@ status: code-shipped-needs-live-verification
 updated: 2026-07-14
 repos: [matrx-local]
 owner-context: OpenAI-compatible /v1 endpoint over local models — "the user's machine becomes a little worker", reachable locally and remotely
-next-gate: Live second-device OpenAI SDK drill through the Cloudflare tunnel using a real Supabase JWT and a running local model.
+next-gate: Tunnel drill — second-device OpenAI SDK call through the Cloudflare tunnel (live engine was not running 2026-07-14, so the tunnel leg is still unexercised) + real llama-server chat streaming.
 ---
 
 # OpenAI-compatible local endpoint — work order
@@ -34,8 +34,9 @@ local and remote use. OpenAI SDKs should pass the Supabase JWT as the
 ## Remaining work
 
 1. **Live verification gate:** From a second device or phone hotspot, call `OpenAI(base_url="https://<tunnel-url>/v1", api_key="<supabase_jwt>")` and verify `client.chat.completions.create(model="local/<name>", stream=True)` streams tokens from a running local llama-server. Also verify a different user's valid JWT gets 403.
-2. **Loopback SDK drill:** Run the same stock OpenAI SDK calls over `http://127.0.0.1:<engine-port>/v1` with a Supabase JWT: chat streaming, chat non-streaming, models, speech, transcription, and embeddings.
-3. **Real-service audio/RAG drill:** Exercise `/v1/audio/speech` against a downloaded Kokoro model, `/v1/audio/transcriptions` against an actual audio file with Whisper installed, and `/v1/embeddings` with `uv sync --extra embeddings` and a real fastembed model download. Current coverage mocks those local services.
+2. **Loopback SDK drill — DONE 2026-07-14** (stock `openai` 2.36.0 SDK against a dev engine, real Supabase JWT as api_key): `/v1/models` ✓ (served `local/BAAI/bge-small-en-v1.5`; no chat model — no llama-server on the machine), speech ✓, embeddings ✓, transcription ✓, auth envelope ✓. Chat streaming returned the intended clean 503 `local_model_not_available` (llama-server absent) — real llama-server streaming remains item 1.
+3. **Real-service audio/RAG drill — DONE 2026-07-14:** `/v1/audio/speech` synthesized real Kokoro WAV (128,044 bytes RIFF); `/v1/audio/transcriptions` ran real Whisper (auto-downloaded `base.pt`, 145 MB) and transcribed the Kokoro WAV back verbatim ("The quick brown fox jumps over the lazy dog."); `/v1/embeddings` ran real fastembed (already installed) → 2 vectors, dim 384.
+3a. **SDK default `encoding_format` breaks embeddings:** the official OpenAI Python SDK sends `encoding_format="base64"` by default; the endpoint only supports `float` and 400s (`unsupported_encoding_format`), so the stock SDK call fails unless the caller passes `encoding_format="float"` explicitly. Support base64 (it's just base64-packed little-endian float32) or the most common SDK path stays broken.
 4. **Settings UX:** Add Settings -> Local API UI showing loopback URL, tunnel URL when active, curl snippets, OpenAI Python/JS snippets, current auth requirement, active model, and copy buttons. Do not put `/v1/*` in `_PUBLIC_PATHS`.
 5. **matrx-frontend/mobile consumption:** In the frontend repo, surface remote machine endpoints from `app_instances` and let model pickers label "Your computer (local/<name>)"; this repo's contract is `/v1/models` plus `app_instances.tunnel_url`.
 6. **Packaging and installer policy:** Decide whether embeddings stays developer-only optional extra or gets an in-app capability installer and PyInstaller hidden-import/data treatment. Delete this item when packaged builds can either install/use fastembed or show a deliberate "not installed" capability prompt.
@@ -46,13 +47,10 @@ local and remote use. OpenAI SDKs should pass the Supabase JWT as the
 
 ## Remaining work — verification
 
-- Not yet exercised: a booted engine serving real `/v1` OpenAI SDK calls.
-- Not yet exercised: Cloudflare tunnel from another network/device.
+- EXERCISED 2026-07-14 (loopback, dev engine, stock openai SDK 2.36.0, real Supabase JWT): `/v1/models`, `/v1/audio/speech` (real Kokoro), `/v1/audio/transcriptions` (real Whisper), `/v1/embeddings` (real fastembed, `encoding_format="float"`), and the auth envelope (no token → OpenAI-shaped 401 `authorization_required`; over loopback a merely-present invalid Bearer passes per the documented presence-only loopback posture in `app/api/remote_auth.py` — strict Supabase verification applies to tunnel traffic).
+- Not yet exercised: Cloudflare tunnel from another network/device (live engine was not running during the 2026-07-14 drill; no `~/.matrx/local.json`).
 - Not yet exercised: wrong-owner Supabase JWT rejection on tunnel traffic.
-- Not yet exercised: real llama-server streaming through `/v1/chat/completions`.
-- Not yet exercised: real Kokoro speech synthesis through `/v1/audio/speech`.
-- Not yet exercised: real Whisper transcription through `/v1/audio/transcriptions`.
-- Not yet exercised: real fastembed inference through `/v1/embeddings`.
+- Not yet exercised: real llama-server streaming through `/v1/chat/completions` (no llama-server binary/model on the drill machine; endpoint returned the designed 503 `local_model_not_available`).
 - Not yet exercised: packaged PyInstaller sidecar behavior for optional embeddings/transcription dependencies.
 
 ## Progress log
@@ -63,3 +61,4 @@ local and remote use. OpenAI SDKs should pass the Supabase JWT as the
 - 2026-07-14: Exercised with `UV_PYTHON=3.13 uv run --frozen ruff check app/api/openai_compat_routes.py tests/smoke/test_openai_compat_surface.py` — passed.
 - 2026-07-14: Exercised with `UV_PYTHON=3.13 uv run --frozen python -m py_compile app/main.py app/api/openai_compat_routes.py tests/smoke/test_openai_compat_surface.py` — passed.
 - 2026-07-14: Adjacent `tests/smoke/test_ai_surface.py` was green earlier after the ORM guard fixes, but later broader runs were interrupted by unrelated active mirror/file-sync work in the same checkout. Treat current `/v1` verification as focused smoke/unit coverage, not an end-to-end engine drill.
+- 2026-07-14 (verification agent, W4 drill): loopback OpenAI SDK drill against a real booted dev engine — models/speech/transcription/embeddings all real-service green, auth envelope verified (401 no-token; loopback presence posture confirmed by design), chat = clean 503 without llama-server. Found item 3a (SDK default base64 encoding_format 400s). Tunnel leg NOT run — live engine down. `test_ai_surface.py` + `test_openai_compat_surface.py` 24/24 green on the same checkout.

@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -58,6 +59,17 @@ _PUSH_BATCH = 50
 _PUSH_LIMIT_PER_CYCLE = 1000
 
 
+_DEAD_LETTER_ATTEMPTS = 5
+
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _looks_like_uuid(value: str) -> bool:
+    return bool(_UUID_RE.match(value or ""))
+
+
 def _parse_ts(value: Any) -> datetime | None:
     if not value or not isinstance(value, str):
         return None
@@ -84,6 +96,7 @@ class ChatSyncEngine:
         self._auto_last_skip_reason: str | None = None
         self._interval = DEFAULT_INTERVAL
         self._last_cycle: dict[str, Any] = {}
+        self._warned_no_cursor: dict[str, bool] = {}
 
     # ------------------------------------------------------------------
     # Configuration
@@ -106,8 +119,14 @@ class ChatSyncEngine:
         if not self.is_configured:
             raise RuntimeError("chat sync engine not configured (no user/JWT)")
         async with self._sync_lock:
-            pushed = await self._push_pending()
+            # PULL FIRST. Push is an unconditional upsert (the cloud has no
+            # row-version predicate), so the only LWW the cloud gets is what
+            # we enforce here: learn the cloud's newer rows first — the apply
+            # guard keeps genuinely-newer local pending edits — and only then
+            # push what is still pending. Push-first would let a device that
+            # was offline for a week blindly clobber a week of cloud edits.
             pulled = await self._pull_changes()
+            pushed = await self._push_pending()
         summary = {
             "pushed": pushed,
             "pulled": pulled,
@@ -124,7 +143,8 @@ class ChatSyncEngine:
         db = get_db()
         rows = await db.fetchall(
             "SELECT id, entity_type, entity_id, attempts FROM sync_queue "
-            "WHERE entity_type LIKE 'chat.%' ORDER BY created_at LIMIT ?",
+            "WHERE entity_type LIKE 'chat.%' AND action != 'dead' "
+            "ORDER BY created_at LIMIT ?",
             (_PUSH_LIMIT_PER_CYCLE,),
         )
         if not rows:
@@ -173,27 +193,56 @@ class ChatSyncEngine:
         spec = MIRROR_TABLES[_SCHEMA][table]
         pk = spec["pk"][0]
 
+        sent = failed = 0
         payloads: list[tuple[dict[str, Any], dict[str, Any]]] = []  # (queue_row, payload)
         for entry in entries:
+            entity_id = entry["entity_id"]
+            if not _looks_like_uuid(entity_id):
+                # Legacy localStorage-era ids (`<epoch>-<rand>`) can never
+                # land in a uuid-typed cloud column — dead-letter instead of
+                # retrying a guaranteed 22P02 forever. The row stays local.
+                logger.error(
+                    "[chat_sync] chat.%s id %r is not a UUID — cloud cannot store "
+                    "it; DEAD-LETTERED (row remains local-only)",
+                    table, entity_id,
+                )
+                await self._dead_letter(entry["id"])
+                failed += 1
+                continue
             local = await db.fetchone(
                 f'SELECT * FROM "{_SCHEMA}"."{table}" WHERE "{pk}" = ?',
-                (entry["entity_id"],),
+                (entity_id,),
             )
             if local is None:
                 logger.warning(
                     "[chat_sync] outbox row for chat.%s %s has no local row — dropping",
-                    table, entry["entity_id"],
+                    table, entity_id,
                 )
                 await self._meta.remove_from_queue(entry["id"])
                 continue
-            payload = encode_local_row(_SCHEMA, table, dict(local), strip=_STRIP_COLUMNS)
+            local_row = dict(local)
+            # Never push rows attributed to a DIFFERENT user (shared rows
+            # pulled under this user's RLS, or rows from a previous account
+            # on this machine). Pushing them either RLS-403s forever or, on
+            # insert, re-attributes another user's content to this account.
+            owner = local_row.get("created_by") or local_row.get("user_id")
+            if owner and self._user_id and owner != self._user_id:
+                logger.error(
+                    "[chat_sync] chat.%s %s belongs to user %s (signed in: %s) — "
+                    "DEAD-LETTERED, not pushed. Local edits to other users' rows "
+                    "do not sync from this device.",
+                    table, entity_id, owner, self._user_id,
+                )
+                await self._dead_letter(entry["id"])
+                failed += 1
+                continue
+            payload = encode_local_row(_SCHEMA, table, local_row, strip=_STRIP_COLUMNS)
             # NOT NULL ownership column some child tables carry; local rows
-            # written before sign-in may lack it.
-            if "user_id" in spec["columns"] and payload.get("user_id") is None:
+            # written before sign-in may lack it (None or legacy '').
+            if "user_id" in spec["columns"] and not payload.get("user_id"):
                 payload["user_id"] = self._user_id
             payloads.append((entry, payload))
 
-        sent = failed = 0
         for i in range(0, len(payloads), _PUSH_BATCH):
             batch = payloads[i : i + _PUSH_BATCH]
             try:
@@ -227,14 +276,40 @@ class ChatSyncEngine:
                         if row_exc.is_auth:
                             raise
                         failed += 1
+                        attempts = entry["attempts"] + 1
                         await self._meta.increment_attempts(entry["id"])
                         logger.error(
                             "[chat_sync] PUSH FAILED chat.%s id=%s attempts=%d "
                             "HTTP %s: %s",
-                            table, entry["entity_id"], entry["attempts"] + 1,
+                            table, entry["entity_id"], attempts,
                             row_exc.status_code, row_exc.body,
                         )
+                        # Permanent 4xx after repeated tries can never succeed
+                        # with the same payload; dead-letter so poison rows
+                        # cannot starve the 1000-row push window forever.
+                        if row_exc.is_permanent and attempts >= _DEAD_LETTER_ATTEMPTS:
+                            logger.error(
+                                "[chat_sync] chat.%s id=%s DEAD-LETTERED after %d "
+                                "permanent failures — inspect via /chat/mirror/status",
+                                table, entry["entity_id"], attempts,
+                            )
+                            await self._dead_letter(entry["id"])
+        if failed:
+            await self._meta.set_last_sync(
+                f"{_SCHEMA}.{table}",
+                status="error",
+                last_hash=await self._current_cursor_json(f"{_SCHEMA}.{table}"),
+                error_message=f"push: {failed} row(s) failed this cycle",
+            )
         return sent, failed
+
+    async def _dead_letter(self, queue_id: int) -> None:
+        db = get_db()
+        await db.execute(
+            "UPDATE sync_queue SET action='dead', attempts=attempts+1 WHERE id = ?",
+            (queue_id,),
+        )
+        await db.commit()
 
     async def _apply_cloud_echo(self, table: str, returned: list[dict[str, Any]]) -> None:
         """Write cloud-stamped rows (trigger-filled columns, cloud updated_at)
@@ -255,6 +330,14 @@ class ChatSyncEngine:
         for table, spec in MIRROR_TABLES[_SCHEMA].items():
             cursor_col = spec["cursor_col"]
             if cursor_col is None:
+                if not self._warned_no_cursor.get(table):
+                    logger.warning(
+                        "[chat_sync] chat.%s has no updated_at/created_at column — "
+                        "NOT pulled (no incremental cursor possible)",
+                        table,
+                    )
+                    self._warned_no_cursor[table] = True
+                results[table] = {"skipped": "no_cursor_column"}
                 continue
             entity = f"{_SCHEMA}.{table}"
             try:
@@ -371,40 +454,53 @@ class ChatSyncEngine:
                 table, unknown,
             )
 
-        local = await db.fetchone(
-            f'SELECT * FROM "{_SCHEMA}"."{table}" WHERE "{pk}" = ?', (str(row_id),)
+        # The pending-outbox / LWW decision lives INSIDE the upsert statement.
+        # A separate check-then-write pair leaves an event-loop-yield-wide
+        # window in which a request handler can commit a fresh local edit that
+        # this write would then silently overwrite (and the next push would
+        # publish the overwritten state — permanent loss). One SQL statement
+        # is atomic on the shared connection; no interleave is possible.
+        #
+        # Guard semantics:
+        #   echo: apply unless the row changed again locally mid-push (a
+        #         fresh outbox entry exists) — the new local change wins.
+        #   pull: apply only if the remote row is strictly newer than the
+        #         local one (timestamps normalized: local uses ...Z, cloud
+        #         uses ...+00:00 — same instant must compare equal).
+        entity_type = f"{_SCHEMA}.{table}"
+        no_pending_sql = (
+            "NOT EXISTS (SELECT 1 FROM main.sync_queue q "
+            "WHERE q.entity_type = ? AND q.entity_id = ?)"
         )
-        if local is not None:
-            pending = await db.fetchone(
-                "SELECT 1 FROM sync_queue WHERE entity_type = ? AND entity_id = ?",
-                (f"{_SCHEMA}.{table}", str(row_id)),
+        if source == "echo":
+            guard_sql = no_pending_sql
+            guard_params: tuple[Any, ...] = (entity_type, str(row_id))
+        elif "updated_at" in spec["columns"]:
+            # Remote strictly newer applies (even over a pending local edit —
+            # it lost LWW; the surviving queue entry then pushes back the
+            # merged row, a harmless echo). Remote older/equal never applies.
+            guard_sql = (
+                f"replace(COALESCE(excluded.updated_at, ''), 'Z', '+00:00') > "
+                f'replace(COALESCE("{table}".updated_at, \'\'), \'Z\', \'+00:00\')'
             )
-            if source == "echo":
-                # Our own push coming back cloud-stamped: apply it verbatim —
-                # UNLESS the row changed again locally mid-push (a fresh
-                # outbox entry exists); then the new local change wins until
-                # the next push.
-                if pending:
-                    return False
-            elif "updated_at" in spec["columns"]:
-                remote_ts = _parse_ts(decoded.get("updated_at"))
-                local_ts = _parse_ts(dict(local).get("updated_at"))
-                if pending and not (remote_ts and local_ts and remote_ts > local_ts):
-                    # Local unpushed change wins until it lands.
-                    return False
-                if remote_ts and local_ts and remote_ts <= local_ts:
-                    return False
+            guard_params = ()
+        else:
+            # Append-only tables (created_at cursor): apply unless a local
+            # pending change exists for the same row.
+            guard_sql = no_pending_sql
+            guard_params = (entity_type, str(row_id))
 
         cols = list(decoded.keys())
         col_sql = ", ".join(f'"{c}"' for c in cols)
         placeholders = ", ".join("?" for _ in cols)
         update_sql = ", ".join(f'"{c}" = excluded."{c}"' for c in cols if c != pk)
+        before = db.db.total_changes
         await db.execute(
             f'INSERT INTO "{_SCHEMA}"."{table}" ({col_sql}) VALUES ({placeholders}) '
-            f'ON CONFLICT("{pk}") DO UPDATE SET {update_sql}',
-            tuple(decoded[c] for c in cols),
+            f'ON CONFLICT("{pk}") DO UPDATE SET {update_sql} WHERE {guard_sql}',
+            tuple(decoded[c] for c in cols) + guard_params,
         )
-        return True
+        return db.db.total_changes > before
 
     # ------------------------------------------------------------------
     # Background loop — engine-owned, creds from the persisted token row
@@ -473,7 +569,12 @@ class ChatSyncEngine:
     async def get_status(self) -> dict[str, Any]:
         db = get_db()
         pending = await db.fetchone(
-            "SELECT COUNT(*) AS cnt FROM sync_queue WHERE entity_type LIKE 'chat.%'"
+            "SELECT COUNT(*) AS cnt FROM sync_queue "
+            "WHERE entity_type LIKE 'chat.%' AND action != 'dead'"
+        )
+        dead = await db.fetchone(
+            "SELECT COUNT(*) AS cnt FROM sync_queue "
+            "WHERE entity_type LIKE 'chat.%' AND action = 'dead'"
         )
         tables: dict[str, Any] = {}
         for meta in await self._meta.get_all_sync_status():
@@ -490,6 +591,7 @@ class ChatSyncEngine:
             "auto_sync_active": self.auto_sync_active,
             "interval_seconds": self._interval,
             "pending_outbox": pending["cnt"] if pending else 0,
+            "dead_letter": dead["cnt"] if dead else 0,
             "last_cycle": self._last_cycle,
             "tables": tables,
         }

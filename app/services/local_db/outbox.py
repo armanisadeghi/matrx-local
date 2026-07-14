@@ -31,8 +31,11 @@ async def enqueue_change(
     """Record that a mirrored row changed locally and needs a cloud push.
 
     Loud on failure but never raises — a broken outbox must not take down
-    the user-facing write that triggered it (the row is still saved locally;
-    the daily reconcile pass is the backstop).
+    the user-facing write that triggered it (the row is still saved locally).
+    NOTE: there is no reconcile pass for the chat mirror yet, so a swallowed
+    enqueue failure means that specific change never reaches the cloud (the
+    ERROR log below is the only trace). A mirror-vs-outbox reconcile sweep
+    is tracked in FOUND_DEFECTS (MXL-D-049).
     """
     entity_type = f"{schema}.{table}"
     try:

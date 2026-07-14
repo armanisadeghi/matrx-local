@@ -30,6 +30,64 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ---
 
+## API keys / credentials
+
+### MXL-D-047 — HF token is stored but a download still 401'd; possible resolver/startup-race bug
+- **Area:** `app/services/ai/key_manager.py`, `app/services/media_gen/paths.py::read_hf_token`
+- **Symptom:** Arman confirms he already added his Hugging Face token in
+  Settings → API Keys, but a download previously behaved as if no token was
+  configured. Verified directly against `~/.matrx/matrx.db` (2026-07-13,
+  read-only, no secret values printed): `app_settings.settings.api_keys`
+  contains a `huggingface` entry, 147 chars, `enc:v1:`-prefixed (properly
+  keychain-encrypted) — the key IS present in the correct store. So either
+  (a) the key was added after the failing download and the app is fine and
+  this is stale, or (b) there is a real resolver/injection bug.
+- **Evidence of a plausible real bug:** `key_manager.py:137-140` (docstring
+  on `read_hf_token`) already documents a KNOWN race: "it already loses it to
+  a startup race, when a download resumes before the injection runs." That
+  race was never confirmed fixed for HF specifically (a related but distinct
+  race — image-gen sys.path ordering — was fixed 2026-07-13 per
+  `.matrx/AGENT_TASKS.md` Completed). `load_user_keys_into_env()` must run
+  and populate `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN` (or the in-memory cache)
+  BEFORE any resumed/queued download reaches `read_hf_token()` in
+  `downloads/manager.py:1052`.
+- **Status:** open
+- **Analysis stamp:** Unverified — from docs/logs only. Needs a live repro:
+  start the engine fresh with the HF key already stored, immediately queue/
+  resume a gated-model download, and confirm `read_hf_token()` returns
+  non-None on the first attempt (not just on retry).
+- **Owner hint:** whoever picks this up should NOT ask Arman to re-enter the
+  key — the key is confirmed present and correctly stored.
+
+### MXL-D-048 — Ask-Arman checklist items for user-fixable app config are the wrong pattern
+- **Area:** `.matrx/ARMAN_TASKS.md` process / task-hygiene skill, and any
+  feature that gates on a missing key/permission
+- **Symptom:** Items like "Add your Hugging Face token" or "Grant Full Disk
+  Access" were listed in `.matrx/ARMAN_TASKS.md` as things to manually ask
+  Arman to go do via a settings page — but the app already has (or should
+  have, see MXL-D-046-adjacent "Proactive in-app permission prompts" task in
+  `.matrx/AGENT_TASKS.md`) the exact context needed to prompt the user
+  gently, in place, the moment a feature needs that config. Turning a
+  self-service, in-app, per-user config gap into a person-to-person "ask
+  Arman" checklist item is itself the bug — it hides a real UX gap behind a
+  manual workaround, and produces stale/wrong asks (see MXL-D-047) when the
+  checklist drifts from reality.
+- **Rule going forward:** `task-hygiene`/agents must not file "add your X
+  key" or "grant Y permission" as an `.matrx/ARMAN_TASKS.md` item UNLESS
+  there's a specific reason the app itself cannot prompt for it (e.g. a
+  literal external dashboard action like Supabase SMTP). If the app should
+  be able to self-serve this, file the missing prompt/UX as an
+  `.matrx/AGENT_TASKS.md` bug instead.
+- **Status:** open
+- **Analysis stamp:** Unverified — from docs/logs only (process finding, not
+  code-verified beyond the two examples in this pass).
+- **Owner hint:** fold into the same effort as the "Proactive in-app
+  permission prompts" task (`.matrx/AGENT_TASKS.md`) — generalize that
+  task's scope from permissions to API keys too, since the failure mode is
+  identical (silent degrade / raw error instead of a contextual nudge).
+
+---
+
 ## Downloads (audit 2026-05-04 remainder — see docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md)
 
 ### MXL-D-012 — Download progress freezes / 0% on chunked-encoding sources
@@ -293,6 +351,40 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 - **Status:** blocked-external — only fixable in the Supabase Auth dashboard.
   Prepped ask filed 2026-07-12 at the TOP of `.matrx/ARMAN_TASKS.md`.
 - **Owner hint:** platform / Supabase admin (Arman)
+
+### MXL-D-049 — Chat mirror has no reconcile pass; a swallowed outbox enqueue is a permanent silent gap
+- **Area:** `app/services/chat_sync/`, `app/services/local_db/outbox.py`
+- **Symptom:** `enqueue_change` deliberately never raises (a broken outbox
+  must not fail the user-facing write), but unlike notes (daily `full_sync`)
+  the chat mirror has NO periodic reconcile that re-derives missing outbox
+  entries from mirror state. A swallowed enqueue = that row never pushes,
+  with one ERROR log as the only trace. Same gap means locally-committed
+  writes torn from their enqueue by a crash (single shared aiosqlite
+  connection, `commit=False` batching) are never repaired.
+- **Evidence:** `outbox.py::enqueue_change` docstring (updated 2026-07-13);
+  adversarial review 2026-07-13 confirmed no reconcile path exists.
+- **Status:** open. Candidate: nightly sweep comparing mirror rows
+  (`updated_at > last successful push watermark`) against outbox +
+  cloud-echo state; or per-row `dirty` column maintained in the same
+  statement as the write.
+- **Owner hint:** chat_sync
+
+### MXL-D-050 — Sync loops' commits on the shared aiosqlite connection can tear other writers' transactions
+- **Area:** `app/services/local_db/database.py` (singleton connection),
+  amplified by `app/services/chat_sync/engine.py` per-page/per-queue-row commits
+- **Symptom:** every subsystem shares ONE aiosqlite connection; any
+  `commit()` commits whatever statements other coroutines have executed so
+  far. Multi-statement write flows using `commit=False` batching
+  (mirror write + outbox enqueue) are not actually atomic — a sync-loop
+  commit interleaved between them persists the first half; a crash in that
+  window leaves a mirror change with no outbox entry (see MXL-D-049).
+  Pre-existing architecture-wide hazard; chat_sync multiplies commit
+  frequency by orders of magnitude.
+- **Evidence:** adversarial review 2026-07-13; `database.py` singleton;
+  engine commits in `_apply_cloud_echo`/pull pages/queue ops.
+- **Status:** open. Candidate: dedicated aiosqlite connection for the sync
+  engines, or wrap write+enqueue pairs in explicit BEGIN IMMEDIATE.
+- **Owner hint:** local_db / sync spine
 
 ### MXL-D-046 — auth_tokens.expires_at can claim "valid" for an actually-expired JWT
 

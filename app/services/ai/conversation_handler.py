@@ -274,9 +274,20 @@ class SQLiteConversationStore:
 
         # `completed.messages` is the FULL conversation history on every turn.
         # Derive a deterministic id from (conversation, position) so re-persisting
-        # the history each turn is idempotent — only genuinely new positions insert.
+        # the history each turn is idempotent — only genuinely new positions
+        # insert. CRITICAL: dedupe by POSITION, not just id — a conversation
+        # pulled from the cloud (web-created) or written via data_routes has
+        # ids that can never match the uuid5 scheme, and id-only dedupe would
+        # duplicate the entire history on every turn (and push the duplicates).
+        pos_rows = await db.fetchall(
+            "SELECT position FROM chat.message WHERE conversation_id = ?",
+            (conv_id,),
+        )
+        occupied = {r["position"] for r in pos_rows}
         now = _now()
         for position, msg in enumerate(raw_messages):
+            if position in occupied:
+                continue
             norm = _normalize_message(msg)
             if norm is None:
                 continue
@@ -419,15 +430,18 @@ class SQLiteConversationStore:
             _to_sql_value(row[c], _TOOL_CALL_COLUMNS.get(c, "TEXT")) for c in columns
         )
         # ON CONFLICT upsert keeps columns from the start row that the update
-        # dict doesn't carry (INSERT OR REPLACE would null them out), and
-        # metadata merges so start-time extras survive partial updates.
+        # dict doesn't carry (INSERT OR REPLACE would null them out);
+        # metadata merges so start-time extras survive partial updates; and
+        # created_at is insert-only — matrx-ai update dicts don't carry it,
+        # so letting it through here falsified every completed tool call's
+        # birth timestamp with the update time.
         update_sql = ", ".join(
             '"metadata" = json_patch(COALESCE("metadata", \'{}\'), '
             'COALESCE(excluded."metadata", \'{}\'))'
             if c == "metadata"
             else f'"{c}" = excluded."{c}"'
             for c in columns
-            if c != "id"
+            if c not in ("id", "created_at")
         )
         await db.execute(
             f'INSERT INTO chat.tool_call ({col_sql}) VALUES ({placeholders}) '

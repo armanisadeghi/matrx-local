@@ -304,6 +304,10 @@ class ConversationsRepo:
             "model": conv.get("model", ""),
         }
         owner = conv.get("user_id") or await TokenRepo(self._db).get_owner_user_id()
+        metadata: dict[str, Any] = {}
+        if conv.get("server_conversation_id") and conv["server_conversation_id"] != conv["id"]:
+            # Legacy aidream server-conversation link — preserved, not discarded.
+            metadata["legacy_server_conversation_id"] = conv["server_conversation_id"]
         await self._db.execute(
             """INSERT INTO chat.conversation
                (id, title, config, status, initial_agent_id, source_app,
@@ -312,7 +316,7 @@ class ConversationsRepo:
                 metadata, variables, overrides, cache_state,
                 source_feature, exclude_from_kg)
                VALUES (?, ?, ?, 'active', ?, 'matrx_local', ?, ?, ?, 0, 0,
-                       0, 'standard', 'private', 1, '{}', '{}', '{}', '{}', '', 0)""",
+                       0, 'standard', 'private', 1, ?, '{}', '{}', '{}', '', 0)""",
             (
                 conv["id"],
                 conv.get("title", "New conversation"),
@@ -321,6 +325,7 @@ class ConversationsRepo:
                 owner,
                 conv.get("created_at") or now,
                 conv.get("updated_at") or now,
+                _json_dumps(metadata),
             ),
         )
         await enqueue_change("chat", "conversation", conv["id"], self._db, commit=False)
@@ -344,6 +349,14 @@ class ConversationsRepo:
             # Merge into the existing config JSON without clobbering other keys.
             sets.append("config = json_patch(COALESCE(config, '{}'), ?)")
             params.append(_json_dumps(config_updates))
+        if updates.get("server_conversation_id"):
+            # Legacy aidream server-conversation link — the local id IS the
+            # canonical id now, but callers that still send this mapping get
+            # it preserved instead of silently discarded.
+            sets.append("metadata = json_patch(COALESCE(metadata, '{}'), ?)")
+            params.append(_json_dumps(
+                {"legacy_server_conversation_id": updates["server_conversation_id"]}
+            ))
         if not sets:
             return
         sets.append("updated_at = ?")
@@ -357,7 +370,10 @@ class ConversationsRepo:
         await self._db.commit()
 
     async def delete(self, conv_id: str) -> None:
-        """Soft-delete (tombstone) — mirrors cloud semantics; never lose rows."""
+        """Soft-delete (tombstone) the conversation AND its messages — the
+        bespoke schema cascade-deleted messages; the mirror keeps that
+        contract with tombstones so dead conversations' messages neither
+        show up locally nor keep syncing as live rows."""
         from app.services.local_db.outbox import enqueue_change
 
         now = _now()
@@ -366,6 +382,17 @@ class ConversationsRepo:
             "WHERE id = ? AND deleted_at IS NULL",
             (now, now, conv_id),
         )
+        msg_rows = await self._db.fetchall(
+            "SELECT id FROM chat.message WHERE conversation_id = ? AND deleted_at IS NULL",
+            (conv_id,),
+        )
+        await self._db.execute(
+            "UPDATE chat.message SET deleted_at = ?, updated_at = ? "
+            "WHERE conversation_id = ? AND deleted_at IS NULL",
+            (now, now, conv_id),
+        )
+        for r in msg_rows:
+            await enqueue_change("chat", "message", r["id"], self._db, commit=False)
         await enqueue_change("chat", "conversation", conv_id, self._db, commit=False)
         await self._db.commit()
 

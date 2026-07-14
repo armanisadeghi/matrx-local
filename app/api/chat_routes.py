@@ -402,14 +402,15 @@ async def trigger_chat_mirror_sync() -> dict[str, Any]:
     from app.services.local_db.repositories import TokenRepo
 
     engine = get_chat_sync_engine()
-    if not engine.is_configured:
-        token_repo = TokenRepo()
-        row = await token_repo.get()
-        if not row or not row.get("access_token") or not row.get("user_id"):
-            raise HTTPException(status_code=401, detail="No signed-in user — sign in first")
-        if token_repo.is_expired(row):
-            raise HTTPException(status_code=401, detail="Stored JWT expired — refresh via POST /auth/token")
-        engine.configure(row["user_id"], row["access_token"])
+    # Always re-read the persisted token: an engine configured with an older
+    # JWT would otherwise run a full cycle of guaranteed 401s.
+    token_repo = TokenRepo()
+    row = await token_repo.get()
+    if not row or not row.get("access_token") or not row.get("user_id"):
+        raise HTTPException(status_code=401, detail="No signed-in user — sign in first")
+    if token_repo.is_expired(row):
+        raise HTTPException(status_code=401, detail="Stored JWT expired — refresh via POST /auth/token")
+    engine.configure(row["user_id"], row["access_token"])
     logger.info("[chat_routes /mirror/sync] Manual chat mirror sync triggered")
     summary = await engine.sync_cycle()
     return {"status": "ok", **summary}

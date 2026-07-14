@@ -132,15 +132,31 @@ class LocalDatabase:
             if version <= current_version:
                 continue
             logger.info("[local_db] Applying migration v%d ...", version)
-            # Execute each statement in the migration
-            for stmt in sql.split(";\n"):
-                stmt = stmt.strip()
-                if stmt:
-                    await self.db.execute(stmt)
-            await self.db.execute(
-                "INSERT INTO _migrations (version) VALUES (?)", (version,)
-            )
-            await self.db.commit()
+            try:
+                # Execute each statement in the migration
+                for stmt in sql.split(";\n"):
+                    stmt = stmt.strip()
+                    if stmt:
+                        await self.db.execute(stmt)
+                await self.db.execute(
+                    "INSERT INTO _migrations (version) VALUES (?)", (version,)
+                )
+                await self.db.commit()
+            except Exception:
+                # Roll back the partial migration so a later unrelated
+                # commit() on this shared connection can't persist a
+                # half-applied migration without its version row (which
+                # would poison every subsequent boot).
+                logger.error(
+                    "[local_db] Migration v%d FAILED — rolling back", version,
+                    exc_info=True,
+                )
+                try:
+                    await self.db.rollback()
+                except Exception:
+                    logger.error("[local_db] rollback after failed migration also failed",
+                                 exc_info=True)
+                raise
             logger.info("[local_db] Migration v%d applied ✓", version)
 
 

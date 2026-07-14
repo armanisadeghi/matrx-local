@@ -486,7 +486,11 @@ INSERT OR IGNORE INTO chat.conversation
 SELECT id, title,
        json_object('mode', mode, 'route_mode', route_mode, 'model', COALESCE(model, '')),
        'active', agent_id, 'matrx_local', created_at, updated_at,
-       0, 0, 0, 'standard', 'private', 1, '{}', '{}', '{}', '{}', '', 0
+       0, 0, 0, 'standard', 'private', 1,
+       CASE WHEN server_conversation_id IS NOT NULL
+            THEN json_object('legacy_server_conversation_id', server_conversation_id)
+            ELSE '{}' END,
+       '{}', '{}', '{}', '', 0
 FROM conversations;
 INSERT OR IGNORE INTO chat.message
     (id, conversation_id, role, position, status, content, metadata, error,
@@ -536,17 +540,62 @@ SELECT id, conversation_id, user_request_id, status,
        created_at, updated_at, 1
 FROM tool_call_logs;
 INSERT INTO sync_queue (entity_type, entity_id, action, payload)
-SELECT 'chat.conversation', id, 'upsert', '{}' FROM conversations;
+SELECT 'chat.conversation', c.id, 'upsert', '{}' FROM conversations c
+WHERE c.server_conversation_id IS NULL
+  AND length(c.id) = 36 AND substr(c.id,9,1)='-' AND substr(c.id,14,1)='-'
+  AND substr(c.id,19,1)='-' AND substr(c.id,24,1)='-'
+  AND NOT EXISTS (SELECT 1 FROM sync_queue q
+                  WHERE q.entity_type='chat.conversation' AND q.entity_id=c.id);
 INSERT INTO sync_queue (entity_type, entity_id, action, payload)
-SELECT 'chat.message', id, 'upsert', '{}' FROM messages;
+SELECT 'chat.message', m.id, 'upsert', '{}' FROM messages m
+WHERE length(m.id) = 36 AND substr(m.id,9,1)='-' AND substr(m.id,14,1)='-'
+  AND substr(m.id,19,1)='-' AND substr(m.id,24,1)='-'
+  AND EXISTS (SELECT 1 FROM sync_queue q
+              WHERE q.entity_type='chat.conversation' AND q.entity_id=m.conversation_id)
+  AND NOT EXISTS (SELECT 1 FROM sync_queue q
+                  WHERE q.entity_type='chat.message' AND q.entity_id=m.id);
 INSERT INTO sync_queue (entity_type, entity_id, action, payload)
-SELECT 'chat.user_request', id, 'upsert', '{}' FROM user_requests;
+SELECT 'chat.user_request', r.id, 'upsert', '{}' FROM user_requests r
+WHERE length(r.id) = 36 AND substr(r.id,9,1)='-' AND substr(r.id,14,1)='-'
+  AND substr(r.id,19,1)='-' AND substr(r.id,24,1)='-'
+  AND EXISTS (SELECT 1 FROM sync_queue q
+              WHERE q.entity_type='chat.conversation' AND q.entity_id=r.conversation_id)
+  AND NOT EXISTS (SELECT 1 FROM sync_queue q
+                  WHERE q.entity_type='chat.user_request' AND q.entity_id=r.id);
 INSERT INTO sync_queue (entity_type, entity_id, action, payload)
-SELECT 'chat.tool_call', id, 'upsert', '{}' FROM tool_call_logs;
-DROP TABLE tool_call_logs;
-DROP TABLE user_requests;
-DROP TABLE messages;
-DROP TABLE conversations
+SELECT 'chat.tool_call', t.id, 'upsert', '{}' FROM tool_call_logs t
+WHERE length(t.id) = 36 AND substr(t.id,9,1)='-' AND substr(t.id,14,1)='-'
+  AND substr(t.id,19,1)='-' AND substr(t.id,24,1)='-'
+  AND EXISTS (SELECT 1 FROM sync_queue q
+              WHERE q.entity_type='chat.conversation' AND q.entity_id=t.conversation_id)
+  AND NOT EXISTS (SELECT 1 FROM sync_queue q
+                  WHERE q.entity_type='chat.tool_call' AND q.entity_id=t.id)
+"""
+
+# ------------------------------------------------------------------
+# Migration 12: annihilate the bespoke chat tables.
+#
+# Deliberately a SEPARATE migration from the V10 copy: SQLite transactions
+# spanning the main DB and an ATTACHed WAL database are not atomic as a
+# set, so copy-and-drop in one commit risks (crash-window) persisting the
+# DROPs while losing the copies — the user's whole chat history. Split,
+# the failure modes are safe: V10 is INSERT OR IGNORE + NOT EXISTS guards
+# (idempotent re-run), and V11 only runs after V10 committed and recorded.
+#
+# Seeding rules (V10): only UUID-shaped ids reach the outbox (the cloud pk
+# is uuid — legacy localStorage ids can never push), and conversations that
+# already exist server-side under a DIFFERENT id (server_conversation_id
+# set, preserved in metadata.legacy_server_conversation_id) are not pushed
+# — pushing them under their local id would duplicate the conversation.
+# Children only seed when their conversation seeded (RLS authorizes
+# children through the conversation row).
+# ------------------------------------------------------------------
+
+_V12_CHAT_BESPOKE_DROP = """
+DROP TABLE IF EXISTS tool_call_logs;
+DROP TABLE IF EXISTS user_requests;
+DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS conversations
 """
 
 # ------------------------------------------------------------------
@@ -608,4 +657,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (9, _V9_DOWNLOADS),
     (10, _V10_CHAT_MIRROR_CUTOVER),
     (11, _V11_FILE_SYNC_STATE),
+    (12, _V12_CHAT_BESPOKE_DROP),
 ]

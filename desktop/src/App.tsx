@@ -11,6 +11,7 @@ import { Ports } from "@/pages/Ports";
 import { Settings } from "@/pages/Settings";
 import { Devices } from "@/pages/Devices";
 import { Chat } from "@/pages/Chat";
+import { CloudChat } from "@/pages/CloudChat";
 import { Login } from "@/pages/Login";
 import { OAuthPending } from "@/pages/OAuthPending";
 import { AuthCallback } from "@/pages/AuthCallback";
@@ -391,6 +392,7 @@ function AppInner() {
         path: "/chat",
         element: <Chat engineStatus={status} engineUrl={url} tools={tools} />,
       },
+      { path: "/cloud-chat", element: <CloudChat /> },
       {
         path: "/notes",
         element: (

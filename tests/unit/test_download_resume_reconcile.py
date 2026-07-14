@@ -96,3 +96,17 @@ def test_validate_catalog_flags_missing_key_and_dupes(monkeypatch) -> None:
     problems = loras.validate_catalog()
     assert any("license" in p for p in problems)
     assert any("duplicate" in p for p in problems)
+
+
+def test_validate_catalog_never_raises_on_non_dict_entry(monkeypatch) -> None:
+    """A non-dict entry (stray string / None from an editing slip) is the exact
+    mistake this guard exists to catch — it must be REPORTED, never crash import
+    (calling .get() on it would AttributeError out of module load)."""
+    from app.services.image_gen import loras
+
+    monkeypatch.setattr(
+        loras, "CURATED_LORA_CATALOG", ["civitai:123@456", None, ("t",)]
+    )
+    problems = loras.validate_catalog()  # must not raise
+    assert len(problems) == 3
+    assert all("not a dict" in p for p in problems)

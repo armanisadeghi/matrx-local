@@ -153,6 +153,13 @@ def test_parse_ref_variants() -> None:
     assert cm.parse_ref(
         "https://huggingface.co/acme/dream-xl/blob/main/model_index.json"
     ) == {"kind": "hf", "repo_id": "acme/dream-xl", "weight_name": None}
+    # Multi-segment revisions (refs/pr/N) must not fold the ref into the file.
+    assert (
+        cm.parse_ref(
+            "https://huggingface.co/acme/dream-xl/resolve/refs/pr/1/w.safetensors"
+        )["weight_name"]
+        == "w.safetensors"
+    )
     assert cm.parse_ref("12345") == {
         "kind": "civitai",
         "model_id": 12345,

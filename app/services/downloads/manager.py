@@ -1495,71 +1495,89 @@ class DownloadManager:
             resumed = present = broken = 0
             for row in rows:
                 dl_id = row["id"]
-                urls = json.loads(row["urls"] or "[]")
-                metadata_raw = row["metadata"]
-                metadata = json.loads(metadata_raw) if metadata_raw else None
                 filename = row["filename"]
+                # PER-ROW ISOLATION: one corrupt row (unparseable urls/metadata
+                # JSON, a failing UPDATE) must NEVER abort the whole reconcile —
+                # rows are ordered by priority, so a single poisoned high-prio
+                # row would otherwise strand every lower-priority genuinely
+                # incomplete download, this boot and every future one. Isolate,
+                # log, keep going.
+                try:
+                    metadata_raw = row["metadata"]
+                    metadata = json.loads(metadata_raw) if metadata_raw else None
 
-                # ── Already downloaded → never re-fetch, just settle as done ──
-                if artifact_present(metadata, filename):
-                    now = _now()
+                    # ── Already downloaded → never re-fetch, settle as done ──
+                    if artifact_present(metadata, filename):
+                        now = _now()
+                        await db.execute(
+                            "UPDATE downloads SET status='completed', bytes_done=total_bytes, "
+                            "part_current=part_total, updated_at=?, completed_at=? WHERE id=?",
+                            (now, now, dl_id),
+                        )
+                        entry = self._entry_from_row(row, status="completed")
+                        entry.bytes_done = entry.total_bytes
+                        entry.part_current = entry.part_total  # DB parity (not "part 1 of N")
+                        entry.completed_at = now
+                        self._entries[dl_id] = entry
+                        await self._broadcast(ProgressEvent(
+                            id=dl_id,
+                            category=entry.category,
+                            filename=entry.filename,
+                            display_name=entry.display_name,
+                            status="completed",
+                            bytes_done=entry.total_bytes,
+                            total_bytes=entry.total_bytes,
+                            percent=100.0,
+                            part_current=entry.part_total,
+                            part_total=entry.part_total,
+                            updated_at=now,
+                        ))
+                        present += 1
+                        logger.info(
+                            "[downloads] Already present on disk — settling as completed, "
+                            "NOT re-downloading: %s", filename,
+                        )
+                        continue
+
+                    # ── Malformed row that can never download → fail it loudly ──
+                    if not (metadata or {}).get("dest_dir"):
+                        now = _now()
+                        err = "download record has no destination — cannot resume"
+                        await db.execute(
+                            "UPDATE downloads SET status='failed', updated_at=?, error_msg=? WHERE id=?",
+                            (now, err, dl_id),
+                        )
+                        # Surface it in the UI now (present-branch parity) rather
+                        # than staying invisible until the next restart.
+                        failed_entry = self._entry_from_row(row, status="failed")
+                        failed_entry.error_msg = err
+                        self._entries[dl_id] = failed_entry
+                        broken += 1
+                        logger.warning(
+                            "[downloads] Dropping unresumable row (no dest_dir): %s (id=%s)",
+                            filename, dl_id,
+                        )
+                        continue
+
+                    # ── Genuinely incomplete → re-queue (restart from scratch) ──
+                    entry = self._entry_from_row(row, status="queued")
                     await db.execute(
-                        "UPDATE downloads SET status='completed', bytes_done=total_bytes, "
-                        "part_current=part_total, updated_at=?, completed_at=? WHERE id=?",
-                        (now, now, dl_id),
+                        "UPDATE downloads SET status='queued', bytes_done=0, part_current=1, updated_at=? WHERE id=?",
+                        (_now(), dl_id),
                     )
-                    entry = self._entry_from_row(row, status="completed")
-                    entry.bytes_done = entry.total_bytes
-                    entry.completed_at = now
                     self._entries[dl_id] = entry
-                    await self._broadcast(ProgressEvent(
-                        id=dl_id,
-                        category=entry.category,
-                        filename=entry.filename,
-                        display_name=entry.display_name,
-                        status="completed",
-                        bytes_done=entry.total_bytes,
-                        total_bytes=entry.total_bytes,
-                        percent=100.0,
-                        part_current=entry.part_total,
-                        part_total=entry.part_total,
-                        updated_at=now,
-                    ))
-                    present += 1
+                    self._cancel_flags[dl_id] = asyncio.Event()
+                    self._insert_pending(dl_id, row["priority"], row["created_at"])
+                    resumed += 1
                     logger.info(
-                        "[downloads] Already present on disk — settling as completed, "
-                        "NOT re-downloading: %s", filename,
+                        "[downloads] Resuming incomplete download: %s (priority=%d)",
+                        entry.filename, row["priority"],
                     )
-                    continue
-
-                # ── Malformed row that can never download → fail it, loudly ──
-                if not (metadata or {}).get("dest_dir"):
-                    now = _now()
-                    await db.execute(
-                        "UPDATE downloads SET status='failed', updated_at=?, error_msg=? WHERE id=?",
-                        (now, "download record has no destination — cannot resume", dl_id),
-                    )
-                    broken += 1
+                except Exception as row_exc:  # noqa: BLE001 — isolate one bad row
                     logger.warning(
-                        "[downloads] Dropping unresumable row (no dest_dir): %s (id=%s)",
-                        filename, dl_id,
+                        "[downloads] Skipping unreconcilable download row %s (id=%s): %s",
+                        filename, dl_id, row_exc, exc_info=True,
                     )
-                    continue
-
-                # ── Genuinely incomplete → re-queue (restart from scratch) ──
-                entry = self._entry_from_row(row, status="queued")
-                await db.execute(
-                    "UPDATE downloads SET status='queued', bytes_done=0, part_current=1, updated_at=? WHERE id=?",
-                    (_now(), dl_id),
-                )
-                self._entries[dl_id] = entry
-                self._cancel_flags[dl_id] = asyncio.Event()
-                self._insert_pending(dl_id, row["priority"], row["created_at"])
-                resumed += 1
-                logger.info(
-                    "[downloads] Resuming incomplete download: %s (priority=%d)",
-                    entry.filename, row["priority"],
-                )
 
             await db.commit()
             if present or resumed or broken:

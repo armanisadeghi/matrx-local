@@ -410,10 +410,15 @@ def validate_catalog() -> list[str]:
     problems: list[str] = []
     seen_repo_ids: set[str] = set()
     for i, e in enumerate(CURATED_LORA_CATALOG):
-        label = e.get("repo_id") or e.get("name") or f"index {i}"
+        # isinstance FIRST — a non-dict entry (a bare string / tuple / stray
+        # None from an editing slip) is the exact authoring mistake this guard
+        # exists to catch, and calling .get() on it would raise AttributeError
+        # straight out of module import and take down the whole image-gen
+        # surface. Never touch the entry before proving it's a dict.
         if not isinstance(e, dict):
             problems.append(f"entry {i} is not a dict")
             continue
+        label = e.get("repo_id") or e.get("name") or f"index {i}"
         missing = [k for k in _REQUIRED_CATALOG_KEYS if not e.get(k)]
         if missing:
             problems.append(f"'{label}' missing required key(s): {', '.join(missing)}")
@@ -425,7 +430,11 @@ def validate_catalog() -> list[str]:
     return problems
 
 
-_catalog_problems = validate_catalog()
+try:
+    _catalog_problems = validate_catalog()
+except Exception as _exc:  # noqa: BLE001 — a validator that crashes import is worse than a bad entry
+    logger.error("[image_gen] validate_catalog() crashed at import: %s", _exc)
+    _catalog_problems = []
 if _catalog_problems:
     logger.error(
         "[image_gen] CURATED_LORA_CATALOG has %d malformed entr%s — they will be "

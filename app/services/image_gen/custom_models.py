@@ -390,16 +390,29 @@ def parse_ref(ref: str) -> dict[str, Any]:
 def _hf_weight_from_segments(segs: list[str]) -> str | None:
     """Extract the repo-relative weight path from a deep HF URL's path segments.
 
-    ``[org, name, ("resolve"|"blob"|"raw"), <rev>, *path]`` →
+    ``[org, name, ("resolve"|"blob"|"raw"), <rev...>, *path]`` →
     ``"/".join(path)`` when it names a ``.safetensors`` file, else None. The
     returned value is exactly what ``hf_hub_download(filename=...)`` and the
     HF sibling listing use (subdirectories preserved), so it validates cleanly
     against the repo's file list downstream.
+
+    The revision can itself contain slashes — ``refs/pr/1``, ``refs/convert/…`` —
+    so a fixed ``segs[3]`` revision assumption would fold the ref into the
+    filename and mis-resolve. When the revision starts with ``refs`` we consume
+    the 3-segment ref form. This is a best-effort HINT: if it's still wrong the
+    caller falls back to auto-resolution, never a hard failure.
     """
-    if len(segs) >= 5 and segs[2] in ("resolve", "blob", "raw"):
-        rel = "/".join(segs[4:])
-        if rel.lower().endswith(".safetensors"):
-            return rel
+    if len(segs) < 5 or segs[2] not in ("resolve", "blob", "raw"):
+        return None
+    rest = segs[3:]
+    # refs/pr/<n>, refs/convert/<x>, … → revision is 3 segments; else 1.
+    if rest and rest[0] == "refs" and len(rest) >= 4:
+        rest = rest[3:]
+    else:
+        rest = rest[1:]
+    rel = "/".join(rest)
+    if rel.lower().endswith(".safetensors"):
+        return rel
     return None
 
 

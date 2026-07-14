@@ -1213,9 +1213,15 @@ class LoraDownloadResponse(BaseModel):
 
 
 async def _resolve_lora_weight(
-    repo_id: str, weight_name: str | None
+    repo_id: str, weight_name: str | None, *, weight_is_hint: bool = False
 ) -> tuple[str, str]:
     """Resolve (weight_name, base_family) from live HF repo metadata.
+
+    ``weight_is_hint=True`` marks a weight that was auto-captured from a deep
+    URL rather than typed by the user: if it doesn't match a real repo file we
+    fall back to auto-resolution instead of failing, so a slightly-off link
+    (e.g. an exotic HF revision) still installs. An explicitly-typed
+    ``weight_name`` (hint=False) is still validated strictly.
 
     Module-level on purpose (tests stub it). Raises HTTPException with a
     clear message on every failure path."""
@@ -1244,15 +1250,18 @@ async def _resolve_lora_weight(
         for s in (info.siblings or [])
         if s.rfilename.endswith(".safetensors")
     ]
-    if weight_name:
-        if weight_name not in candidates:
-            raise HTTPException(
-                status_code=400,
-                detail=f"'{weight_name}' is not a .safetensors file in "
-                f"{repo_id}. Available: {', '.join(candidates) or 'none'}",
-            )
+    if weight_name and weight_name in candidates:
         chosen = weight_name
+    elif weight_name and not weight_is_hint:
+        # User typed an exact weight that isn't there → tell them, don't guess.
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{weight_name}' is not a .safetensors file in "
+            f"{repo_id}. Available: {', '.join(candidates) or 'none'}",
+        )
     else:
+        # No weight, OR a URL-derived hint that didn't match a real file →
+        # auto-resolve from the repo's actual .safetensors list.
         if not candidates:
             raise HTTPException(
                 status_code=400,
@@ -1290,8 +1299,10 @@ async def list_image_loras() -> LorasResponse:
     )
 
     items = list_loras()
-    installed_repo_ids = {m["repo_id"] for m in items if m["installed"]}
-    installed_ids = {m["id"] for m in items if m["installed"]}
+    # .get() (not m[...]) so a single odd row can't 500 the endpoint BEFORE the
+    # isolated builder loop below even runs.
+    installed_repo_ids = {m.get("repo_id") for m in items if m.get("installed")}
+    installed_ids = {m.get("id") for m in items if m.get("installed")}
 
     # FAULT ISOLATION: one malformed row must NEVER blank the whole panel.
     # A single bad catalog/installed entry used to raise KeyError/ValidationError
@@ -1407,10 +1418,16 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
         )
 
     # A deep HF file URL already named the exact weight (parse_ref captured it);
-    # an explicit req.weight_name still wins. Either way the user is never forced
-    # to re-pick a file they already pointed us at.
-    weight_hint = req.weight_name or parsed.get("weight_name")
-    weight_name, base_family = await _resolve_lora_weight(repo_id, weight_hint)
+    # an explicit req.weight_name still wins. The URL-captured value is a SOFT
+    # hint — if it doesn't match a real file (exotic revision, etc.) resolution
+    # falls back to auto-pick instead of failing, so the user is never forced to
+    # re-pick a file they already pointed us at.
+    url_weight = parsed.get("weight_name")
+    weight_name, base_family = await _resolve_lora_weight(
+        repo_id,
+        req.weight_name or url_weight,
+        weight_is_hint=req.weight_name is None and url_weight is not None,
+    )
     # Metadata sidecar first — the LoRA shows up as pending (installed=false)
     # immediately; the DownloadManager marker flips it to installed.
     write_lora_meta(

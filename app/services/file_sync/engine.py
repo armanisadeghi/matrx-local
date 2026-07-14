@@ -83,7 +83,12 @@ def _clean_rel_path(cloud_path: str) -> str | None:
     parts = [p for p in cloud_path.replace("\\", "/").split("/") if p not in ("", ".")]
     if not parts or any(p == ".." for p in parts):
         return None
-    if parts[0] == _SYNC_ADMIN_DIR:
+    # Windows drive/ADS separators can re-anchor a path — never representable.
+    if any(":" in p for p in parts):
+        return None
+    # Case-insensitive filesystems (macOS default, Windows) would let
+    # ".SYNC/…" collide with the admin dir.
+    if parts[0].casefold() == _SYNC_ADMIN_DIR:
         return None
     return "/".join(parts)
 
@@ -151,6 +156,7 @@ class FileSyncEngine:
             folders = await self._pull_folders()
             pulled = await self._pull_changes()
             pushed = await self._drain_pending()
+            recaptured = await self._retry_conflict_captures()
             hydrated = 0
             if self.mode == "full":
                 hydrated = await self._backfill_hydration()
@@ -159,6 +165,7 @@ class FileSyncEngine:
             "folders": folders,
             "pulled": pulled,
             "pushed": pushed,
+            "conflict_captures_retried": recaptured,
             "hydration_enqueued": hydrated,
             "at": _now_iso(),
         }
@@ -175,6 +182,11 @@ class FileSyncEngine:
         except FileSyncHTTPError as exc:
             logger.error("[file_sync] PULL FAILED for files.folders — %s", exc)
             return {"error": exc.status_code}
+        if payload.get("truncated"):
+            logger.error(
+                "[file_sync] the folder listing was TRUNCATED by the service — "
+                "the local folder tree is incomplete until the feed grows a cursor"
+            )
         applied = 0
         for entry in payload.get("folders", []):
             await self._index.upsert_remote_folder(entry)
@@ -258,6 +270,16 @@ class FileSyncEngine:
 
         state = await self._index.get_state(file_id)
         rel = _clean_rel_path(entry.get("file_path") or "")
+        if rel is not None:
+            # Belt-and-suspenders containment: the joined path must resolve
+            # inside the Files root (symlinked segments could still escape).
+            root = self.root.resolve()
+            try:
+                contained = (root / rel).resolve().is_relative_to(root)
+            except OSError:
+                contained = False
+            if not contained:
+                rel = None
         if rel is None:
             logger.error(
                 "[file_sync] cloud path %r (id=%s) is not representable locally — "
@@ -270,18 +292,7 @@ class FileSyncEngine:
 
         checksum = entry.get("checksum")
         if state is None:
-            # New remote file — enters as a pointer; full mode hydrates in
-            # the backfill pass.
-            await self._ensure_placeholder(rel)
-            await self._index.upsert_state(
-                file_id,
-                rel_path=rel,
-                local_state="pointer",
-                local_hash=EMPTY_SHA256,
-                local_size=0,
-                last_synced_hash=None,
-            )
-            return "applied"
+            return await self._adopt_remote_file(file_id, rel, entry)
 
         # Remote rename/move: relocate the local file or placeholder.
         if state["rel_path"] != rel:
@@ -297,6 +308,25 @@ class FileSyncEngine:
             # divergence stays queued as a push.
             return "applied"
 
+        # Remote content changed while a local delete is queued: the edit
+        # wins over the delete (notes doctrine) — drop the delete and fall
+        # back to a pointer so the new content hydrates on access/backfill.
+        if state.get("pending_op") == "delete":
+            logger.warning(
+                "[file_sync] %s changed in cloud while a local delete was queued — "
+                "the remote edit wins; delete dropped", state["rel_path"],
+            )
+            await self._ensure_placeholder(state["rel_path"])
+            await self._index.upsert_state(
+                file_id,
+                local_state="pointer",
+                pending_op=None,
+                local_hash=EMPTY_SHA256,
+                local_size=0,
+                last_synced_hash=None,
+            )
+            return "applied"
+
         # Remote content changed. Locally modified too?
         abs_path = self.root / state["rel_path"]
         locally_modified = await self._is_locally_modified(state, abs_path)
@@ -305,12 +335,95 @@ class FileSyncEngine:
             return "conflict"
         # Clean local copy — re-hydrate to the new content.
         try:
-            await self.hydrate(file_id, priority=0)
+            await self._hydrate(file_id, force=True)
         except Exception as exc:
             logger.error(
                 "[file_sync] re-hydration of %s (%s) failed: %s — will retry next cycle",
                 state["rel_path"], file_id, exc,
             )
+        return "applied"
+
+    async def _adopt_remote_file(
+        self, file_id: str, rel: str, entry: dict[str, Any]
+    ) -> str:
+        """First sight of a cloud file: adopt whatever already occupies its
+        local path instead of blindly claiming it as an empty pointer —
+        pre-existing local content must never be misrecorded as a
+        placeholder (that misrecording is what let hydration overwrite it)."""
+        checksum = entry.get("checksum")
+        abs_path = self.root / rel
+
+        # A local-born row already holds this path (created offline / watcher).
+        existing = await self._index.get_state_by_path(rel)
+        if existing is not None and existing["file_id"] != file_id:
+            if not existing["file_id"].startswith(LOCAL_ID_PREFIX):
+                logger.error(
+                    "[file_sync] cloud files %s and %s both claim local path %s — "
+                    "index updated for the feed row only; disk untouched",
+                    existing["file_id"], file_id, rel,
+                )
+                return "applied"
+            local_hash = existing.get("local_hash")
+            await self._index.delete_state(existing["file_id"])
+            if abs_path.exists():
+                current, size = await asyncio.to_thread(_sha256_file, abs_path)
+                if checksum and current == checksum:
+                    await self._index.upsert_state(
+                        file_id, rel_path=rel, local_state="synced",
+                        pending_op=None, local_hash=current, local_size=size,
+                        local_mtime=abs_path.stat().st_mtime,
+                        last_synced_hash=checksum,
+                    )
+                    return "applied"
+                # Same path, different content on both sides: conflict.
+                await self._index.upsert_state(
+                    file_id, rel_path=rel, local_state="pending_push",
+                    local_hash=current, local_size=size,
+                    last_synced_hash=None,
+                )
+                await self._capture_conflict(
+                    file_id,
+                    {"file_id": file_id, "rel_path": rel, "local_state": "pending_push"},
+                    entry,
+                )
+                return "conflict"
+            # Row without a file (pending upload of a gone file) — fall through.
+
+        if abs_path.exists() and abs_path.is_file():
+            size = abs_path.stat().st_size
+            if size > 0:
+                current, size = await asyncio.to_thread(_sha256_file, abs_path)
+                if checksum and current == checksum:
+                    await self._index.upsert_state(
+                        file_id, rel_path=rel, local_state="synced",
+                        pending_op=None, local_hash=current, local_size=size,
+                        local_mtime=abs_path.stat().st_mtime,
+                        last_synced_hash=checksum,
+                    )
+                    return "applied"
+                await self._index.upsert_state(
+                    file_id, rel_path=rel, local_state="pending_push",
+                    local_hash=current, local_size=size,
+                    last_synced_hash=None,
+                )
+                await self._capture_conflict(
+                    file_id,
+                    {"file_id": file_id, "rel_path": rel, "local_state": "pending_push"},
+                    entry,
+                )
+                return "conflict"
+
+        # Clean adoption: nothing (or an empty file) on disk — a pointer.
+        await self._ensure_placeholder(rel)
+        await self._index.upsert_state(
+            file_id,
+            rel_path=rel,
+            local_state="pointer",
+            pending_op=None,
+            local_hash=EMPTY_SHA256,
+            local_size=0,
+            last_synced_hash=None,
+        )
         return "applied"
 
     async def _apply_remote_tombstone(
@@ -398,6 +511,20 @@ class FileSyncEngine:
         conflicts_dir = self.root / _SYNC_ADMIN_DIR / "conflicts" / file_id
         conflicts_dir.mkdir(parents=True, exist_ok=True)
         remote_name = entry.get("file_name") or posixpath.basename(entry.get("file_path") or file_id)
+        # Snapshot the LOCAL copy too (first-capture-wins, like the notes
+        # engine) so a later keep_remote can never erase the local edit.
+        local_abs = self.root / state["rel_path"]
+        local_copy = conflicts_dir / f"local_{remote_name}"
+        if local_abs.exists() and not local_copy.exists():
+            try:
+                import shutil
+
+                await asyncio.to_thread(shutil.copy2, str(local_abs), str(local_copy))
+            except OSError as exc:
+                logger.error(
+                    "[file_sync] could not snapshot the local copy of %s into the "
+                    "conflict capture: %s", state["rel_path"], exc,
+                )
         remote_copy = conflicts_dir / f"remote_{remote_name}"
         try:
             await self._download_to(file_id, remote_copy, expected_checksum=entry.get("checksum"))
@@ -407,13 +534,49 @@ class FileSyncEngine:
                 "— conflict recorded; remote copy will be retried next cycle",
                 state["rel_path"], exc,
             )
+        # pending_op MUST clear: a queued upload draining after this would be
+        # a silent keep_local (last-writer-wins on user content — forbidden).
         await self._index.upsert_state(
-            file_id, local_state="conflict", error="remote_and_local_both_changed"
+            file_id, local_state="conflict", pending_op=None,
+            error="remote_and_local_both_changed",
         )
         logger.warning(
             "[file_sync] CONFLICT: %s changed locally AND in the cloud — both copies "
             "preserved (%s)", state["rel_path"], conflicts_dir,
         )
+
+    async def _retry_conflict_captures(self, limit: int = 5) -> int:
+        """A conflict whose remote copy failed to download retries here each
+        cycle until the capture exists (the 'retried next cycle' promise)."""
+        conflicts = await self._index.list_by_state("conflict", limit=100)
+        retried = 0
+        for state in conflicts:
+            file_id = state["file_id"]
+            conflicts_dir = self.root / _SYNC_ADMIN_DIR / "conflicts" / file_id
+            has_remote = conflicts_dir.exists() and any(
+                p.name.startswith("remote_") for p in conflicts_dir.iterdir()
+            )
+            if has_remote:
+                continue
+            if retried >= limit:
+                break
+            remote = await self._index.get_remote_file(file_id)
+            if not remote or remote.get("deleted_at"):
+                continue
+            name = remote.get("file_name") or posixpath.basename(remote.get("file_path") or file_id)
+            try:
+                conflicts_dir.mkdir(parents=True, exist_ok=True)
+                await self._download_to(
+                    file_id, conflicts_dir / f"remote_{name}",
+                    expected_checksum=remote.get("checksum"),
+                )
+                retried += 1
+            except Exception as exc:
+                logger.error(
+                    "[file_sync] conflict remote-capture retry failed for %s: %s",
+                    state["rel_path"], exc,
+                )
+        return retried
 
     # ------------------------------------------------------------------
     # Placeholders + hydration
@@ -438,9 +601,13 @@ class FileSyncEngine:
             raise RuntimeError(f"matrx-files returned no usable URL for {file_id}")
         manager = get_download_manager()
         dest.parent.mkdir(parents=True, exist_ok=True)
+        # The checksum is part of the idempotency key: the manager treats a
+        # completed entry with an existing dest as done, so re-hydrating an
+        # UPDATED file must present a new key or it would keep stale bytes.
+        content_key = (expected_checksum or "na")[:12]
         entry = await manager.enqueue(
             category="file_sync",
-            filename=f"{file_id}:{dest.name}",
+            filename=f"{file_id}:{content_key}:{dest.name}",
             display_name=str(dest.relative_to(self.root) if dest.is_relative_to(self.root) else dest.name),
             urls=[url],
             metadata={"dest_dir": str(dest.parent), "dest_filename": dest.name, "file_id": file_id},
@@ -468,8 +635,19 @@ class FileSyncEngine:
                 )
 
     async def hydrate(self, file_id_or_path: str, *, priority: int = 10) -> Path:
+        """Public entry point (tools, REST): serialized against the sync
+        cycle so a pull can never interleave with an on-demand fetch."""
+        async with self._sync_lock:
+            return await self._hydrate(file_id_or_path, priority=priority)
+
+    async def _hydrate(
+        self, file_id_or_path: str, *, priority: int = 10, force: bool = False
+    ) -> Path:
         """Fetch real bytes for a pointer (or stale) file and return its
-        absolute path. Safe to call on an already-hydrated file (no-op)."""
+        absolute path. Safe to call on an already-hydrated file (no-op).
+        NEVER overwrites local modifications — a pointer that gained content
+        (or a hydrated file that diverged) becomes a conflict, not a loss.
+        Callers must hold ``_sync_lock``."""
         if not self.is_configured:
             await self._configure_from_token()
         state = await self._index.get_state(file_id_or_path)
@@ -483,18 +661,26 @@ class FileSyncEngine:
         remote = await self._index.get_remote_file(file_id)
         checksum = (remote or {}).get("checksum")
         abs_path = self.root / state["rel_path"]
-        if (
-            state["local_state"] in ("synced", "pending_push", "conflict")
-            and abs_path.exists()
-            and state["local_state"] != "pointer"
-        ):
+        if not force and state["local_state"] in ("synced", "pending_push", "conflict") and abs_path.exists():
             if state.get("last_synced_hash") == checksum or state["local_state"] != "synced":
                 return abs_path
+        # The download replaces abs_path atomically — so anything the user
+        # put there must be conflict-captured FIRST, never overwritten.
+        if not force and await self._is_locally_modified(state, abs_path):
+            await self._capture_conflict(
+                file_id, state, remote or {"file_path": state["rel_path"]}
+            )
+            await get_db().commit()
+            raise RuntimeError(
+                f"{state['rel_path']} has local changes AND newer cloud content — "
+                "captured as a conflict (.sync/conflicts); resolve it instead of hydrating"
+            )
         await self._download_to(file_id, abs_path, expected_checksum=checksum)
         local_hash, size = await asyncio.to_thread(_sha256_file, abs_path)
         await self._index.upsert_state(
             file_id,
             local_state="synced",
+            pending_op=None,
             local_hash=local_hash,
             local_size=size,
             local_mtime=abs_path.stat().st_mtime,
@@ -510,7 +696,7 @@ class FileSyncEngine:
         count = 0
         for state in pointers:
             try:
-                await self.hydrate(state["file_id"])
+                await self._hydrate(state["file_id"])
                 count += 1
             except Exception as exc:
                 logger.error(
@@ -530,6 +716,15 @@ class FileSyncEngine:
         sent = failed = 0
         for state in pending:
             op = state["pending_op"]
+            if state["local_state"] == "conflict":
+                # Defense in depth: a conflicted row must never auto-push —
+                # that would be silent last-writer-wins on user content.
+                logger.error(
+                    "[file_sync] conflicted row %s still had pending_op=%r — "
+                    "clearing; the user resolves conflicts", state["rel_path"], op,
+                )
+                await self._index.upsert_state(state["file_id"], pending_op=None)
+                continue
             try:
                 if op == "upload":
                     await self._push_upload(state)
@@ -580,8 +775,11 @@ class FileSyncEngine:
                 f"ceiling ({_UPLOAD_MAX_BYTES / 1e9:.1f} GB); presigned uploads are a "
                 "planned follow-up"
             )
-        content = await asyncio.to_thread(abs_path.read_bytes)
-        local_hash = hashlib.sha256(content).hexdigest()
+        def _read_and_hash() -> tuple[bytes, str]:
+            data = abs_path.read_bytes()
+            return data, hashlib.sha256(data).hexdigest()
+
+        content, local_hash = await asyncio.to_thread(_read_and_hash)
         resp = await self._client.upload(
             file_path=state["rel_path"],
             content=content,
@@ -615,16 +813,28 @@ class FileSyncEngine:
             )
         except FileSyncHTTPError as exc:
             logger.warning("[file_sync] post-upload record fetch failed (%s) — the next pull realigns", exc)
-        await self._index.upsert_state(
+        # Guarded completion: if the file changed again locally while the
+        # upload was in flight (the watcher re-stamped local_hash), the fresh
+        # edit must stay pending — an unconditional flip to 'synced' would
+        # orphan it as never-pushed.
+        finalized = await self._index.finalize_if_hash_unchanged(
             cloud_id,
+            expected_local_hash=local_hash,
             local_state="synced",
             pending_op=None,
-            local_hash=local_hash,
             local_size=size,
             local_mtime=abs_path.stat().st_mtime,
             last_synced_hash=checksum,
             error=None,
         )
+        if not finalized:
+            # The row moved on mid-upload; record what DID land so the next
+            # drain pushes only the delta.
+            await self._index.upsert_state(cloud_id, last_synced_hash=checksum)
+            logger.info(
+                "[file_sync] %s changed again during upload — the newer edit stays queued",
+                state["rel_path"],
+            )
 
     async def _push_delete(self, state: dict[str, Any]) -> None:
         if state["file_id"].startswith(LOCAL_ID_PREFIX):
@@ -703,7 +913,13 @@ class FileSyncEngine:
             ):
                 # Debounce editor save patterns (delete-then-rename).
                 await asyncio.sleep(0.5)
-                for change_type, change_path in changes:
+                # Deletes first so a same-batch delete+add pair is seen as a
+                # rename (find_pending_delete_by_hash needs the delete row).
+                ordered = sorted(
+                    changes,
+                    key=lambda c: 0 if c[0] == watchfiles.Change.deleted else 1,
+                )
+                for change_type, change_path in ordered:
                     try:
                         await self._handle_watch_event(change_type, change_path)
                     except Exception:
@@ -730,13 +946,24 @@ class FileSyncEngine:
             return
         if path.is_dir():
             return
-        if path.name.startswith(".") and path.name.endswith(".part"):
+        # The DownloadManager streams to "<name>.part" then renames — a
+        # partial download must never classify as a local edit/new file.
+        if path.name.endswith(".part"):
             return
 
         state = await self._index.get_state_by_path(rel)
 
         if change_type == watchfiles.Change.deleted:
             if state is None:
+                return
+            if state["local_state"] == "conflict":
+                # The unseen remote copy must survive a local delete of a
+                # conflicted file — the conflict stays open for the user.
+                logger.warning(
+                    "[file_sync] conflicted file %s was deleted locally — the "
+                    "conflict stays open (.sync/conflicts holds both copies)",
+                    rel,
+                )
                 return
             if state["file_id"].startswith(LOCAL_ID_PREFIX):
                 await self._index.delete_state(state["file_id"])
@@ -776,6 +1003,16 @@ class FileSyncEngine:
                 return  # placeholder churn
             if local_hash == state.get("local_hash") and state.get("pending_op") is None:
                 return  # no real change
+            if state["local_state"] == "conflict":
+                # Track the new bytes but never re-arm a push — a conflicted
+                # row only moves through resolve_conflict.
+                await self._index.upsert_state(
+                    state["file_id"],
+                    local_hash=local_hash,
+                    local_size=size,
+                    local_mtime=mtime,
+                )
+                return
             await self._index.upsert_state(
                 state["file_id"],
                 local_state="pending_push",
@@ -820,28 +1057,29 @@ class FileSyncEngine:
         """keep_local → push the local copy; keep_remote → hydrate the cloud
         copy over it. Both leave the .sync/conflicts capture in place until
         it succeeds."""
-        state = await self._index.get_state(file_id)
-        if state is None or state["local_state"] != "conflict":
-            raise FileNotFoundError(f"no open conflict for {file_id}")
-        if resolution == "keep_local":
-            abs_path = self.root / state["rel_path"]
-            if not abs_path.exists():
-                raise FileNotFoundError(f"local copy of {state['rel_path']} is gone")
-            await self._index.upsert_state(
-                file_id, local_state="pending_push", pending_op="upload", error=None
-            )
-            result = await self._drain_pending()
-        elif resolution == "keep_remote":
-            await self._index.upsert_state(
-                file_id, local_state="synced", pending_op=None,
-                last_synced_hash=None, error=None,
-            )
-            await self.hydrate(file_id)
-            result = {"hydrated": True}
-        else:
-            raise ValueError(f"unknown resolution {resolution!r} (keep_local|keep_remote)")
-        await get_db().commit()
-        return {"file_id": file_id, "resolution": resolution, **result}
+        async with self._sync_lock:
+            state = await self._index.get_state(file_id)
+            if state is None or state["local_state"] != "conflict":
+                raise FileNotFoundError(f"no open conflict for {file_id}")
+            if resolution == "keep_local":
+                abs_path = self.root / state["rel_path"]
+                if not abs_path.exists():
+                    raise FileNotFoundError(f"local copy of {state['rel_path']} is gone")
+                await self._index.upsert_state(
+                    file_id, local_state="pending_push", pending_op="upload", error=None
+                )
+                result = await self._drain_pending()
+            elif resolution == "keep_remote":
+                # No pre-flip: the row stays 'conflict' until the forced
+                # hydration SUCCEEDS (its success path writes synced +
+                # last_synced_hash). A failed download leaves the conflict
+                # open instead of stranding a mislabeled 'synced' row.
+                await self._hydrate(file_id, force=True)
+                result = {"hydrated": True}
+            else:
+                raise ValueError(f"unknown resolution {resolution!r} (keep_local|keep_remote)")
+            await get_db().commit()
+            return {"file_id": file_id, "resolution": resolution, **result}
 
     # ------------------------------------------------------------------
     # Background loop

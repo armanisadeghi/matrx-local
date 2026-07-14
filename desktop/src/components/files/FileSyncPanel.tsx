@@ -74,8 +74,10 @@ export function FileSyncPanel() {
   }
 
   const counts = status?.counts;
-  const lastCycleAt = status?.last_cycle
-    ? new Date(status.last_cycle * 1000).toLocaleTimeString()
+  const lastCycleIso =
+    status?.last_cycle && "at" in status.last_cycle ? status.last_cycle.at : null;
+  const lastCycleAt = lastCycleIso
+    ? new Date(lastCycleIso).toLocaleTimeString()
     : null;
   const mode = status?.mode ?? "pointers";
 

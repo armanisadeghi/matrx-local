@@ -151,6 +151,21 @@ class FileSyncIndex:
                 (*fields.values(), file_id),
             )
 
+    async def finalize_if_hash_unchanged(
+        self, file_id: str, *, expected_local_hash: str, **fields: Any
+    ) -> bool:
+        """Optimistic completion write: apply ``fields`` only when the row's
+        local_hash still equals what was pushed. Returns False when a newer
+        local edit landed mid-push (the caller leaves it queued)."""
+        db = get_db()
+        fields["updated_at"] = _now_iso()
+        sets = ", ".join(f"{c} = ?" for c in fields)
+        cursor = await db.execute(
+            f"UPDATE file_sync_state SET {sets} WHERE file_id = ? AND local_hash = ?",
+            (*fields.values(), file_id, expected_local_hash),
+        )
+        return bool(getattr(cursor, "rowcount", 0))
+
     async def delete_state(self, file_id: str) -> None:
         await get_db().execute(
             "DELETE FROM file_sync_state WHERE file_id = ?", (file_id,)

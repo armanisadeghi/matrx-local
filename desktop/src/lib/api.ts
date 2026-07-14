@@ -7,9 +7,10 @@
 
 import { emitClientLog } from "@/hooks/use-client-log";
 import { getOwnedEngineUrl, discoverEnginePort } from "@/lib/sidecar";
+import { ENGINE_PORT_BASE, enginePortList } from "@/lib/engine-ports";
 
-const DEFAULT_PORT = 22140;
-const DISCOVERY_PORTS = Array.from({ length: 20 }, (_, i) => DEFAULT_PORT + i);
+const DEFAULT_PORT = ENGINE_PORT_BASE;
+const DISCOVERY_PORTS = enginePortList();
 
 export interface EngineHealth {
   status: string;
@@ -3326,16 +3327,24 @@ export interface FileSyncStatus {
   cursor: string | null;
   last_sync_status: string | null;
   last_sync_error: string | null;
-  last_cycle: number | null;
+  // {} until the first cycle of this process completes.
+  last_cycle: FileSyncCycleSummary | Record<string, never>;
 }
 
 export interface FileSyncCycleSummary {
   mode: FileSyncMode;
-  folders: number;
-  pulled: number;
-  pushed: number;
+  folders: { applied?: number; error?: number };
+  pulled: {
+    applied?: number;
+    tombstones?: number;
+    conflicts?: number;
+    pages?: number;
+    error?: number;
+  };
+  pushed: { sent: number; failed: number };
+  conflict_captures_retried: number;
   hydration_enqueued: number;
-  at: number;
+  at: string;
 }
 
 export interface FileSyncConflict {

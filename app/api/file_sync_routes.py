@@ -93,4 +93,13 @@ async def file_sync_mode(body: ModeRequest) -> dict:
     engine = get_file_sync_engine()
     if body.mode == "off":
         await engine.stop_watcher()
+    else:
+        # Apply immediately instead of waiting out the loop interval: start
+        # the watcher and kick one cycle in the background (errors land in
+        # the engine's own loud logs + status).
+        import asyncio
+
+        if await engine._configure_from_token():
+            await engine.start_watcher()
+            asyncio.create_task(engine.sync_cycle())
     return {"mode": body.mode}

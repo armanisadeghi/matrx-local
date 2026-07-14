@@ -80,6 +80,22 @@ access." The cloud DB is the spec — never local docs or local table shapes
 - Unit/characterization only (NOT exercised end-to-end): dead-letter lane,
   mid-push-edit echo protection, poison-row isolation, LWW conflict paths.
 
+- **MXL-D-052 fixed (2026-07-13): AI/tool messages now actually reach the
+  cloud.** The store wrote `source='model'` for every non-user role, but the
+  canonical vocabulary (aidream `db/models/chat.py` `Message.source`
+  default `'user'` + live `cx_message_source_check`) is
+  user/agent_template/system — `source` records the row's ORIGIN, `role`
+  carries authorship (cloud has 11.6k role=assistant/source=user rows). So
+  every assistant/tool push 400'd and dead-lettered: synced conversations
+  held only the user's turns. Fixed all three write sites to `'user'`
+  (`MessagesRepo.create`, `conversation_handler.persist_completed_request`,
+  the V10 cutover CASE) and added migration V13 (remap existing rows,
+  resurrect dead-letters, re-enqueue with the V10 UUID/legacy-conversation
+  guards). Exercised live: dev-world module-level drill — V13 remapped the
+  7 poisoned rows, push sent 7/7 (0 failed), rows verified in live
+  `chat.message` with source='user' and roles intact; outbox empty. Pinned
+  by 2 tests in `tests/characterization/test_chat_mirror_characterization.py`.
+
 ## Remaining work (ordered)
 
 1. **Per-user mirror partitioning (Arman-approved: "per user! yes")** —

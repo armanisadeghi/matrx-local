@@ -333,31 +333,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   Prepped ask filed 2026-07-12 at the TOP of `.matrx/ARMAN_TASKS.md`.
 - **Owner hint:** platform / Supabase admin (Arman)
 
-### MXL-D-052 — Chat-sync push of AI messages rejected by cloud `cx_message_source_check` (`source='model'` not allowed)
-- **Area:** `app/services/chat_sync/` push path ↔ cloud `cx_message.source` constraint
-- **Symptom:** Every locally-created ASSISTANT message fails to push: the
-  batch POST to `chat.message` gets HTTP 400 `23514 new row for relation
-  "message" violates check constraint "cx_message_source_check"`, then each
-  per-row retry fails the same way (3 attempts, PUSH FAILED). User/system
-  rows push fine, so a synced conversation in the cloud has the user's turns
-  but none of the AI's.
-- **Evidence:** W1/W4 verification drill 2026-07-14 — dev engine log after
-  one `/ai/chat` turn: `[chat_sync] batch push to chat.message failed (HTTP
-  400) … cx_message_source_check` then `PUSH FAILED chat.message
-  id=3aff30a3-… attempts=3`. Local mirror rows carry
-  `SELECT DISTINCT source FROM message` → `user`, `system`, `model`; live
-  constraint (queried 2026-07-14) is
-  `CHECK (source = ANY (ARRAY['user','agent_template','system']))` — `model`
-  is not in the set. Either the local store must write a cloud-legal source
-  for assistant turns, the push must map `model`→ an allowed value, or the
-  cloud constraint must admit `model` (decide against aidream's canonical
-  vocabulary; `cx_message.source` in aidream is user/agent_template/system
-  while `role` carries model authorship).
-- **Status:** open. Analyzed 2026-07-14 — verified in logs + live constraint
-  query; root-cause vocabulary mismatch confirmed, fix direction needs the
-  W2 owner (or Arman) to pick which side changes.
-- **Owner hint:** chat_sync (W2)
-
 ### MXL-D-049 — Chat mirror has no reconcile pass; a swallowed outbox enqueue is a permanent silent gap
 - **Area:** `app/services/chat_sync/`, `app/services/local_db/outbox.py`
 - **Symptom:** `enqueue_change` deliberately never raises (a broken outbox

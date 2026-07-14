@@ -32,6 +32,46 @@ _(none)_
 
 ## Active
 
+### TASK: Agent Browser Testing Surface (CDP-controllable Chromium for agents)
+- **Status:** filed, not started — long-term. Approved for backlog by Arman
+  2026-07-14. `code analysis pending` (current-state audit done; build not scoped in code).
+- **Created:** 2026-07-14
+- **Priority:** P2 (long-term; unblocks agents diagnosing localhost UIs)
+- **Source:** User — need agents working inside the app to actively test
+  websites/UIs, run localhost dev servers, and diagnose problems in a real browser.
+
+**Goal**
+Expose the Playwright/Chromium already bundled in `scraper-service/` as a
+first-class, agent-driven **CDP browser tool surface** (navigate/click/type/eval/
+screenshot/console/network/DOM), backed by a long-lived headed session, so agents
+can drive and diagnose sites — especially local `localhost` dev servers.
+
+**Key insights (full detail in plan doc)**
+- The current `<iframe>` "Browser" tab is useless because it *embeds* pages as
+  child frames → blocked by X-Frame-Options / CSP `frame-ancestors`. Not an
+  engine problem.
+- We already ship a Chromium-class engine (Tauri webview) AND a real
+  CDP-drivable Chromium (Playwright in `scraper-service/browser_pool.py`).
+- A native webview panel is the WRONG fix here — humans can browse in it, but
+  agents can't introspect/control it. Agents need **CDP**, which Playwright is.
+- Real project = "expose the Chromium we already bundle as an agent tool
+  surface," NOT "embed a browser."
+- Being LOCAL is the whole point: agent runs `pnpm dev` + drives Chromium at
+  `localhost` — no tunnel/CORS/deploy.
+- Packaging catch: Chromium is **NOT bundled** — `build-sidecar.sh:225`
+  auto-installs Playwright browsers at runtime (~150 MB). Bundle-vs-download is
+  an open Arman decision.
+
+**Plan doc**
+[`docs/AGENT_BROWSER_TESTING_PLAN.md`](../docs/AGENT_BROWSER_TESTING_PLAN.md)
+
+**Blocked-on / decisions (see plan doc "Open questions")**
+- Bundle Chromium in installer vs. managed first-run download-as-a-STATE?
+- Headed visible window MVP vs. in-app screencast required for v1?
+- Origin/port allowlist policy for agent-driven browsing?
+
+---
+
 ### TASK-001: Local GLiNER NER subsystem (URGENT)
 - **Status:** in-progress — approved by Arman 2026-07-13, assigned to agent (see `app/services/ner/`, `app/api/ner_routes.py`, `app/tools/tools/ner.py`, `tests/*ner*`)
 - **Created:** 2026-07-09
@@ -321,14 +361,6 @@ are condensed under Completed. Still open:
   matrx-connect's detach-on-disconnect keeps the local turn running to
   completion (burning local compute). Wire emitter.cancel via a small
   request registry when needed.
-- [x] **DONE 2026-07-13 — Upstream (matrx-ai 0.4.0): client-host writes reach
-  the WriteCoordinator + Turn-Boundary Inbox reads cxm** — fixed at the
-  source: `get_coordinator()` and `drain_pending_injections` now short-circuit
-  when a conversation_store is configured; the tool registry gained a
-  `tool_source` seam + a derived server-backed fetch. The host-side
-  `engine.install_client_host_coordinator_guard()` monkeypatch was DELETED
-  with the `matrx-ai>=0.4.0` floor bump. Pinned upstream by
-  `tests/client_host/test_no_db_streaming_with_tool.py` (zero-ORM invariant).
 - [ ] **Upstream (aidream/packages/matrx-ai): providers ↔ orchestrator circular
   import still present in 0.3.0** — a COLD `import matrx_ai.providers...`
   dies (`providers/__init__` → `unified_client` → `orchestrator/__init__` →
@@ -366,6 +398,7 @@ are condensed under Completed. Still open:
 ## Completed
 
 _(one line each, newest first; full detail in git history)_
+- [FEAT] Upstream matrx-ai 0.4.0 client-host writes reach the WriteCoordinator + Turn-Boundary Inbox reads cxm; host-side coordinator-guard monkeypatch DELETED with the >=0.4.0 floor bump; pinned by `tests/client_host/test_no_db_streaming_with_tool.py` — 2026-07-13
 - [BUG] MXL-D-052 fixed (chat_sync, W2): local mirror wrote `source='model'` for AI/tool turns while the canonical vocabulary (aidream `Message.source` default + cloud `cx_message_source_check`) is user/agent_template/system — `source` is row ORIGIN, `role` carries authorship — so every assistant message 400'd on push and dead-lettered; fixed all three write sites (`MessagesRepo.create`, `conversation_handler.persist_completed_request`, V10 cutover CASE) to `'user'`, added V13 repair migration (remaps rows, resurrects dead-letters, re-enqueues with UUID/legacy-conversation guards); verified live: dev-world module-level drill pushed all 7 previously-rejected messages to the cloud (sent=7 failed=0, rows confirmed in live `chat.message` with source='user', roles intact); 2 pins in `tests/characterization/test_chat_mirror_characterization.py` — 2026-07-13
 - [BUG] Notes access-degraded UX fixed (Errors→Prompts, tracker W8 notes row): Documents page now shows a first-class `NotesAccessPrompt` (FDA explanation + System Settings deep-link via the permissions system, Check again + 10s auto-poll, Create-folder for missing dir) instead of silently empty lists; engine adds `GET /notes/access` + `POST /notes/access/recheck` (guard gains kind + platform-appropriate reason) and a live-found raw 500 in `GET /notes/sync/status` (unguarded `.exists()` in `list_conflicts`) is fixed; chmod-000 drill verified degrade→recover without restart; 12 pytest + 3 vitest pins — 2026-07-13
 - [BUG] MXL-D-047 fixed (Errors→Prompts, tracker W8): every HF call now resolves the stored token AT REQUEST TIME from the app key store (raw-URL GGUF path, model_repo analysis, NER snapshot — the HF-snapshot path already did); HF/Civitai auth refusals classify into `DownloadResolution` states with exact attribution (token-present gated 401 → "accept the license" / "access pending", never "re-enter your token"); actionable failures log INFO `[action-needed]` (engine + client), STATE log splits `action_needed` from `fails`; stale pre-taxonomy failure rows re-triaged onto the taxonomy in `_load_history`; UI renders first-class "Needs your action" prompt cards (action button + "Check again & retry") atop the Downloads panel, DownloadActionDialog annihilated. Verified live (`--live` engine, Arman's real store): stale FLUX row → `hf_gate_not_accepted` with his token present, re-triggered FLUX.1-schnell downloads authenticated; 20 unit tests pin it (`tests/unit/test_hf_token_and_failure_states.py`) — 2026-07-13

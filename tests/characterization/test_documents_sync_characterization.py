@@ -150,6 +150,11 @@ class FakeSupabase:
     def set_jwt(self, jwt: str) -> None:
         self.calls.append(("set_jwt", {"jwt": jwt}))
 
+    async def list_folders(self, user_id: str) -> list[dict[str, Any]]:
+        # No remote folders in the fake — the push-time folder resolver falls
+        # back to a null folder_id (folder_name carries the organization).
+        return []
+
     async def get_note(self, note_id: str) -> dict[str, Any] | None:
         return self.notes.get(note_id)
 

@@ -42,7 +42,7 @@ All rows below use storage: **localStorage** key `matrx-settings` unless noted.
 | Headless scraping | `headlessScraping` | `headless_scraping` | boolean | `true` | Yes |
 | Scrape delay | `scrapeDelay` | `scrape_delay` | string / coerced to number in cloud | `"1.0"` | Yes |
 | Proxy enabled | `proxyEnabled` | `proxy_enabled` | boolean | `true` | Yes |
-| Proxy port | `proxyPort` | `proxy_port` | number | `22180` | Yes |
+| Proxy port | `proxyPort` | `proxy_port` | number | `22180` (live) / `22280` (dev) — port-base-derived, `MATRX_PORT_BASE + 40` | Yes |
 | Tunnel enabled | `tunnelEnabled` | `tunnel_enabled` | boolean | `false` | Yes |
 | File sync mode | `fileSyncMode` | `file_sync_mode` | `off` \| `pointers` \| `full` | `"pointers"` | Yes |
 | Notification sound | `notificationSound` | `notification_sound` | boolean | `true` | Yes |
@@ -162,7 +162,8 @@ Legacy **Settings** page still exposes overlapping controls (e.g. theme with `se
 
 | Concern | Location | Cloud |
 |---------|----------|-------|
-| Engine listen port | `MATRX_PORT`, discovery, `~/.matrx/local.json` | No |
+| Engine listen port | `MATRX_PORT` / `MATRX_PORT_BASE`, discovery, `~/.matrx/local.json` (live) or `~/.matrx-dev/local.json` (dev). Scan range 22140–22159 live / 22240–22259 dev — see [configuration.md](./configuration.md) § Dev/live isolation | No |
+| Dev/live world (home, ports, instance salt, orphan sweeps) | `MATRX_LIVE_ENGINE`, `MATRX_INSTANCE_SALT`, `MATRX_HOME_DIR` — auto-selected; [configuration.md](./configuration.md) § Dev/live isolation (MXL-D-043) | No |
 | `API_KEY` | `.env` | No |
 | `SCRAPER_API_KEY`, `SCRAPER_SERVER_URL` | `.env` | No |
 | `DATABASE_URL` (local PG cache) | `.env` | No |
@@ -176,6 +177,16 @@ Legacy **Settings** page still exposes overlapping controls (e.g. theme with `se
 | Forbidden URL patterns | `/settings/forbidden-urls` | No |
 | Provider API keys (Anthropic, OpenAI, …) | `/settings/api-keys` | No |
 | Hugging Face token (GGUF / gated downloads) | `/settings/api-keys/huggingface` (+ Tauri `llm.json` fallback) | No |
+| API-key validation verdicts | `POST /settings/api-keys/{provider}/validate` \| `/validate-all`; persisted by `ApiKeysRepo.record_validation()` under the `api_key_validation` AppSettings blob key | Yes (verdicts only) |
+
+**`api_key_validation`** — shape `{provider: {verdict, account, checked_at}}`,
+where `verdict ∈ valid | invalid | unknown | unsupported`. It records **verdicts
+only for keys the USER supplied** — never a key value, and never a key the core
+system needs. (Core requires only the public Supabase publishable key — see
+[CLAUDE.md](../../CLAUDE.md); any private provider key is user-set.)
+`VALID_PROVIDERS` currently includes `anthropic`, `openai`, `google`, `cerebras`,
+`xai`, `huggingface`, `civitai`, **`elevenlabs`**, **`fastino`** (the last two
+were previously in `PROVIDER_ENV_MAP` only, so PUT/bulk saves 422'd for them).
 
 Detail for env vars: [configuration.md](./configuration.md).
 

@@ -1,6 +1,6 @@
 # Current App Errors — Matrx Local
 
-Last processed: **2026-07-09 12:26:31** (from Matrx Log export) · Last hygiene pass: 2026-07-12 (Inbox empty; T001/T002/T006/T008 routed out; only T009 remains open)
+Last processed: **2026-07-14** (from Matrx Log export) · Last hygiene pass: 2026-07-14 (Inbox cleared — the 2026-07-12 startup-log paste was an entirely PRE-FIX build: replicate/matrx-ai init crash + tools-degraded cascade + NOT-INSTALLED banner all fixed 2026-07-13; Civitai/FLUX/Z-Image download states = MXL-D-047, fixed. Live build now v1.3.111. Only T009 remains open.)
 
 > **Error-dump inbox.** Arman pastes raw log exports (often hundreds of lines,
 > hours after the fact — this is a shipped app, re-testing needs a new build)
@@ -29,7 +29,11 @@ Last processed: **2026-07-09 12:26:31** (from Matrx Log export) · Last hygiene 
 
 <!-- Paste the next Matrx Log export below this line. -->
 
-```
+_(empty — last paste triaged 2026-07-14: all signatures were pre-fix build noise already resolved; see hygiene note at top.)_
+
+<!-- ARCHIVED pre-fix paste removed 2026-07-14 — full log preserved in git history (CURRENT_ERRORS.md @ 735a8bf10). Every line mapped to a fixed defect: replicate PackageNotFoundError → MXL-D-040; NOT-INSTALLED banner → copy_metadata fix; tools degraded → MXL-D-029 cascade; download fails → MXL-D-047. -->
+
+<!-- former paste start:
 === Matrx Startup Log — 7/12/2026, 7:36:25 PM ===
 [stdout] [phase:starting] Engine initializing...
 
@@ -283,7 +287,9 @@ Last processed: **2026-07-09 12:26:31** (from Matrx Log export) · Last hygiene 
 
 [stdout] [phase:tunnel] Starting Cloudflare tunnel...
 
-=== END ===```
+=== END ===
+former paste end -->
+
 
 ---
 

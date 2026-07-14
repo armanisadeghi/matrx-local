@@ -81,6 +81,15 @@ bound by the same contract).
   optimistically makes offline edits look synced and lets pulls clobber them.
 - Cloud is durable truth; local is the first-access replica the user actually
   touches. Never invert that.
+- **Never push the local `folder_id` verbatim.** `document_routes._folder_id_for_name`
+  mints a deterministic uuid5-of-name; the cloud's `workbench.note_folders.id`
+  is a random uuid4, so the local id is (almost) never a real folder row and
+  trips `notes_folder_id_fkey` → PostgREST **409**. `_push_note` runs every
+  folder_id through `_resolve_remote_folder_id` first: keep it only if it's a
+  live remote folder, else match by folder NAME to a real id, else push
+  **null** (the `folder_name` text column carries the organization). The
+  desktop never fabricates a cloud folder from a push. Cached ~60s; a lookup
+  failure resolves to null and never blocks the push.
 
 ## Known sharp edges
 

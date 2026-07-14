@@ -78,6 +78,16 @@ class SyncEngine:
         self._auto_stop = asyncio.Event()
         self._auto_last_skip_reason: str | None = None
         self._auto_last_token: str | None = None
+        # Remote folder resolution cache (id-set + name→id), short TTL. The
+        # local folder_id is a deterministic uuid5 of the folder NAME (see
+        # document_routes._folder_id_for_name) and almost never matches the
+        # cloud's uuid4 note_folders.id, so pushing it verbatim violates
+        # notes_folder_id_fkey → PostgREST 409. We resolve to a real remote
+        # folder (by id-presence, else by name) or fall back to NULL — the
+        # folder_name column carries the organization regardless.
+        self._folder_cache_ids: set[str] = set()
+        self._folder_cache_by_name: dict[str, str] = {}
+        self._folder_cache_at: float = 0.0
 
     @property
     def device_id(self) -> str:
@@ -200,6 +210,57 @@ class SyncEngine:
                 force=force,
             )
 
+    async def _resolve_remote_folder_id(
+        self, folder_id: str | None, folder_name: str | None
+    ) -> str | None:
+        """Map a note's local folder to a folder_id that EXISTS in
+        workbench.note_folders, or ``None``.
+
+        The local folder_id is a uuid5 of the folder name and is not a real
+        cloud folder row, so sending it verbatim in a push violates
+        ``notes_folder_id_fkey`` (PostgREST → HTTP 409). Resolution order:
+          1. If the given folder_id is already a live remote folder, keep it
+             (notes created on the frontend carry a real uuid4).
+          2. Otherwise match by folder name (case-insensitive) to a live
+             remote folder and use its real id.
+          3. Otherwise return ``None`` — push with a null folder_id; the
+             ``folder_name`` text column preserves the organization and the FK
+             is satisfied. No cloud folder is fabricated from the desktop.
+        Best-effort: any lookup failure resolves to ``None`` so a folder
+        service hiccup never blocks a note push.
+        """
+        if not folder_id and not folder_name:
+            return None
+        if not self._user_id:
+            return None
+
+        now = time.monotonic()
+        if now - self._folder_cache_at > 60.0:
+            try:
+                remote_folders = await self.sb.list_folders(self._user_id)
+            except Exception:
+                logger.debug("Folder resolve: list_folders failed", exc_info=True)
+                remote_folders = []
+                # Keep any prior cache; only refresh the timestamp on success.
+            else:
+                self._folder_cache_ids = {
+                    f["id"] for f in remote_folders if f.get("id")
+                }
+                self._folder_cache_by_name = {
+                    str(f.get("name", "")).strip().lower(): f["id"]
+                    for f in remote_folders
+                    if f.get("id") and f.get("name")
+                }
+                self._folder_cache_at = now
+
+        if folder_id and folder_id in self._folder_cache_ids:
+            return folder_id
+        if folder_name:
+            match = self._folder_cache_by_name.get(folder_name.strip().lower())
+            if match:
+                return match
+        return None
+
     async def _push_note(
         self,
         note_id: str,
@@ -273,13 +334,19 @@ class SyncEngine:
                     else None
                 )
 
+                # Never push the local uuid5 folder_id verbatim — it is not a
+                # real note_folders row and trips notes_folder_id_fkey (409).
+                remote_folder_id = await self._resolve_remote_folder_id(
+                    folder_id, folder_name
+                )
+
                 upsert_body = dict(
                     note_id=note_id,
                     user_id=self._user_id,
                     label=label,
                     content=content,
                     folder_name=folder_name,
-                    folder_id=folder_id,
+                    folder_id=remote_folder_id,
                     file_path=file_path,
                     tags=tags,
                     metadata=metadata,
@@ -294,7 +361,7 @@ class SyncEngine:
                             "label": label,
                             "content": content,
                             "folder_name": folder_name,
-                            "folder_id": folder_id,
+                            "folder_id": remote_folder_id,
                             "file_path": file_path,
                             "tags": tags or [],
                             "metadata": metadata or {},
@@ -349,13 +416,29 @@ class SyncEngine:
                 repo = self._get_notes_repo()
                 await repo.set_sync_status(note_id, "synced", remote_hash=c_hash)
 
-            except Exception:
-                logger.warning(
-                    "Supabase push failed for note %s — saved locally only; "
-                    "marking sync_status=failed (will retry on next push).",
-                    note_id,
-                    exc_info=True,
-                )
+            except Exception as exc:
+                # Expected, actionable cloud rejections (HTTP 4xx: auth,
+                # constraint, validation) are STATES, not crashes — one concise
+                # line, no traceback. The note stays sync_status=failed and
+                # retries silently; a full stack trace on every boot is noise.
+                # Reserve tracebacks (DEBUG) for genuinely unexpected failures.
+                import httpx as _httpx
+
+                if isinstance(exc, _httpx.HTTPStatusError):
+                    logger.warning(
+                        "Supabase push for note %s rejected (HTTP %s) — saved "
+                        "locally, will retry.",
+                        note_id,
+                        exc.response.status_code,
+                    )
+                    logger.debug("push rejection detail for %s", note_id, exc_info=True)
+                else:
+                    logger.warning(
+                        "Supabase push failed for note %s — saved locally only; "
+                        "marking sync_status=failed (will retry on next push).",
+                        note_id,
+                        exc_info=True,
+                    )
                 # Make the failure visible in state, not just the logs, so the
                 # note is picked up again by list_pending_push. Best-effort —
                 # a failing status write must not mask the original push error.

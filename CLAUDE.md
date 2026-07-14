@@ -32,6 +32,24 @@ Matrx Local is a **Tauri v2 desktop app** (Rust + React) with a **Python/FastAPI
 
 **Not a Next.js/Vercel project.** Stack: Tauri v2 (Rust), React 19, TS 7.0 (native compiler), Vite 6, Tailwind 3.4 + shadcn/ui (`darkMode: "class"`), Python 3.13+/FastAPI/Uvicorn, Supabase Auth, pnpm (desktop), uv (Python).
 
+## Security posture — everything here ships to the user
+
+This is a downloaded desktop app, so **there is no trusted server**: the Python
+engine, the Rust host, and the React UI all run on the user's machine and are
+fully inspectable. Treat every layer — including "server-side" Python — as
+client code.
+
+- **Never bundle a secret or private API key.** No service-role key, no signing
+  secret, no dev-owned provider key — anything shipped is effectively public.
+- **The core must run on public creds only** — the Supabase **publishable** key
+  (RLS-scoped). A single user OAuth grants each user exactly what they're
+  entitled to; RLS + `SECURITY DEFINER` RPCs enforce it.
+- **Anything needing elevated/approved access goes through aidream's grant
+  system** (server-issued, scoped, short-lived — e.g. the token broker), never a
+  credential baked into the app.
+- Any feature that seems to need a private key is either misconfigured or is a
+  key **the user** supplies for themselves — prompt them in-app; never ship it.
+
 ## Key Entry Points
 
 - **Python:** `run.py` → `app/main.py` → `app/tools/dispatcher.py` (tools in `app/tools/tools/`)

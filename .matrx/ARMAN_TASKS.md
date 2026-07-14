@@ -1,6 +1,6 @@
 # Arman Tasks — Matrx Local
 
-_Last updated: 2026-07-14 (matrx-files 0.1.5 DEPLOYED + verified live (sync endpoints 401); file_sync_mode catalog approved+synced; stale tool-registry reconcile ask deleted — solved by matrx-ai 0.4.x W1 work, server fetch verified live)_
+_Last updated: 2026-07-14 (step-7 pass: both official-docs asks APPROVED + applied — dev/live isolation env vars in configuration.md, api_key_validation + elevenlabs/fastino in settings-catalog.md; desktop security-posture doctrine added to CLAUDE.md; continuing asks one-by-one)_
 
 > **Ask-Arman list for agents — NOT Arman's personal inbox.** These are things
 > only Arman can do (secrets, accounts, dashboards, decisions). When one blocks
@@ -19,21 +19,17 @@ _Last updated: 2026-07-14 (matrx-files 0.1.5 DEPLOYED + verified live (sync endp
 
 ---
 
+> **Boundary rule (Arman, 2026-07-14, emphatic):** this file is for
+> **lead-developer** actions ONLY — secrets you hold, accounts/dashboards you
+> control, purchases, canonical decisions. A **user** action (grant an OS
+> permission, add their own API key, accept a license) NEVER belongs here.
+> Filing one is an agent hiding a missing feature behind the user: if the app
+> needs it, the app must fire an urgent in-app notification and deep-link the
+> user to the exact grant page — one click. Re-filing a user action here is the
+> bug. See MXL-D-048 + the "Proactive in-app permission + API-key prompts" task.
+
 ## Active (ranked — quickest wins first within priority)
 
-- [ ] **Approve official-docs update for dev/live isolation** (~2 min) — The
-      MXL-D-043 fix added env vars (`MATRX_PORT_BASE`, `MATRX_LIVE_ENGINE`,
-      `MATRX_INSTANCE_SALT`) and changed the `proxy_port` default to be
-      port-base-derived (22180 live / 22280 dev). `docs/official/configuration.md`
-      and `docs/official/settings-catalog.md` are now stale, and agents may not
-      edit `docs/official/**` without your approval. Ask: reply "yes, update
-      official docs for MXL-D-043" and any agent can sync them from
-      `docs/TESTING_LADDER.md` (the non-official source of truth).
-- [ ] **Grant Screen Recording** (~1 min) — Setup Wizard → Review & Grant →
-      Grant Access. This now actually calls `CGRequestScreenCaptureAccess` in
-      the engine (the process that runs `screencapture`), which is what finally
-      lists it in System Settings → Privacy & Security → Screen Recording.
-      macOS may need an app restart before it reads back as granted.
 - [ ] **Train “Hey Matrix” OWW model** — [`docs/wake-word-training.md`](../docs/wake-word-training.md)
 - [ ] **Windows EV code-signing cert** — Before broad public launch (SmartScreen).
 - [ ] **`MAIN_SERVER` URL** — For a future “real” proxy proof test (callback from server). Pick canonical production base URL.
@@ -47,18 +43,7 @@ _Last updated: 2026-07-14 (matrx-files 0.1.5 DEPLOYED + verified live (sync endp
 
 ## Pending Arman review
 
-_(asks prepared by non-interactive `task-hygiene` runs land here)_
-
-- **Approve an official-docs edit for the new API-key validation surface.**
-  `docs/official/settings-catalog.md` is now stale in two ways and I can't edit
-  `docs/official/**` without your say-so:
-  1. New `AppSettings` blob key **`api_key_validation`** —
-     `{provider: {verdict, account, checked_at}}`, written by
-     `ApiKeysRepo.record_validation()`. Verdicts only; never a key value.
-  2. `VALID_PROVIDERS` gained **`elevenlabs`** and **`fastino`** (they were in
-     `PROVIDER_ENV_MAP` but not `VALID_PROVIDERS`, so PUT/bulk 422'd and they
-     were `.env`-only).
-  Say the word and I'll write both up.
+_(asks prepared by non-interactive `task-hygiene` runs land here — none pending; the API-key-validation ask was promoted into ranked Active 2026-07-14)_
 
 ---
 
@@ -95,6 +80,8 @@ _Skim and check off or delete. Agents: do not open `.arman/` — leave that to A
 
 ## Done
 
+- [x] Approved official-docs update for the API-key-validation surface — `settings-catalog.md` § Engine settings gained the `api_key_validation` blob key (verdicts only, user-supplied keys) + `elevenlabs`/`fastino` in `VALID_PROVIDERS`; also added the desktop security-posture doctrine to CLAUDE.md (Arman approved + requested, 2026-07-14)
+- [x] Approved official-docs update for dev/live isolation (MXL-D-043) — `configuration.md` gained a Dev/live isolation section + 4 env-var rows (`MATRX_PORT_BASE`/`MATRX_LIVE_ENGINE`/`MATRX_INSTANCE_SALT`/`MATRX_HOME_DIR`), `settings-catalog.md` proxy-port + engine-port rows updated (Arman approved, agent applied, 2026-07-14)
 - [x] matrx-files 0.1.5 deployed to files.matrxserver.com via deploy.sh (Arman, 2026-07-14) — verified: image version check passed, health green, /files/sync/* now 401 (live) — W3 cloud side ON
 - [x] file_sync_mode added to official settings catalog (Arman approved 2026-07-14)
 

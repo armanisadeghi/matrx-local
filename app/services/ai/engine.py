@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import os
 import re
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -138,6 +139,7 @@ def install_client_host_queue_guard() -> None:
         from matrx_ai.db import persistence as db_persistence
         from matrx_ai.persistence import queue_helpers
         from matrx_ai.tools import dynamic_drain
+        from matrx_ai.tools.logger import ToolExecutionLogger
     except Exception:
         logger.warning("[engine] could not install matrx-ai queue guard", exc_info=True)
         return
@@ -201,6 +203,28 @@ def install_client_host_queue_guard() -> None:
             return None
         return await original_rollup(user_request_id)
 
+    # The tool-lifecycle background sweep (started unconditionally by matrx-ai's
+    # handle_tool_calls, every 5 min) reaps stale/expired cx_tool_call rows via
+    # abandon_stale_running_rows() / expire_delegated_calls(). Both go straight
+    # to the cx ORM (_cxm()), which matrx-local NEVER configures in client-host
+    # mode → DBNotConfiguredError every sweep, logged as a red traceback in the
+    # user's app forever. There is nothing for a desktop client to reap: the
+    # authoritative cx_tool_call table lives on the server, not here. Neutralize
+    # both reapers to no-ops (return 0, their normal "nothing swept" result)
+    # while ORM-less; a host that DOES register the cx bases keeps the real path.
+    original_abandon = ToolExecutionLogger.abandon_stale_running_rows
+    original_expire = ToolExecutionLogger.expire_delegated_calls
+
+    async def _guarded_abandon_stale_running_rows(self, *args: Any, **kwargs: Any) -> int:
+        if _client_host_without_orm():
+            return 0
+        return await original_abandon(self, *args, **kwargs)
+
+    async def _guarded_expire_delegated_calls(self, *args: Any, **kwargs: Any) -> int:
+        if _client_host_without_orm():
+            return 0
+        return await original_expire(self, *args, **kwargs)
+
     original_drain = dynamic_drain.drain_pending_injections
     original_rollup = db_persistence.apply_authoritative_user_request_rollup
     queue_helpers.get_coordinator = _guarded_get_coordinator
@@ -208,6 +232,8 @@ def install_client_host_queue_guard() -> None:
     db_persistence.apply_authoritative_user_request_rollup = (
         _guarded_apply_authoritative_user_request_rollup
     )
+    ToolExecutionLogger.abandon_stale_running_rows = _guarded_abandon_stale_running_rows
+    ToolExecutionLogger.expire_delegated_calls = _guarded_expire_delegated_calls
     _queue_guard_installed = True
     logger.info("[engine] matrx-ai client-host queue guard installed ✓")
 

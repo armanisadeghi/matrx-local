@@ -334,10 +334,20 @@ class HuggingFaceProvider(ModelRepoProvider):
         capacity_gb = compute_effective_capacity_gb(hardware) if hardware else None
         hw_label = describe_hardware(hardware) if hardware else None
 
+        # Attach the stored Hugging Face token, resolved AT REQUEST TIME from
+        # the app key store (read_hf_token) — gated repos (e.g. Llama GGUFs)
+        # are inspectable only with it, and telling a user who configured a
+        # token that "only public models are supported" is a dead end.
+        from app.services.media_gen.paths import read_hf_token  # noqa: PLC0415
+        hf_token = read_hf_token()
+        headers = dict(_CLIENT_HEADERS)
+        if hf_token:
+            headers["Authorization"] = f"Bearer {hf_token}"
+
         async with httpx.AsyncClient(
             follow_redirects=True,
             timeout=20.0,
-            headers=_CLIENT_HEADERS,
+            headers=headers,
         ) as client:
             # blobs=true is required for the API to include per-file sizes on
             # `siblings`; without it every size reads 0 and all RAM-fit
@@ -346,14 +356,23 @@ class HuggingFaceProvider(ModelRepoProvider):
             resp = await client.get(api_url)
 
         if resp.status_code == 401 or resp.status_code == 403:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"Repository '{repo_id}' is private or requires authentication. "
-                    "Only public models are supported. If this model exists, the author "
-                    "may need to make it public first."
-                ),
-            )
+            # Attribution matters: with a token attached this is a gate/license
+            # state, NOT a credentials problem — never ask a user with a
+            # configured token to add one.
+            if hf_token:
+                detail = (
+                    f"'{repo_id}' is a gated model and your Hugging Face "
+                    "account doesn't have access to it yet. Open the model "
+                    f"page (https://huggingface.co/{repo_id}), accept its "
+                    "license or request access, then try again."
+                )
+            else:
+                detail = (
+                    f"'{repo_id}' is gated or private on Hugging Face. Add "
+                    "your Hugging Face token under Settings → API Keys → "
+                    "Hugging Face, then try again."
+                )
+            raise HTTPException(status_code=422, detail=detail)
         if resp.status_code == 404:
             raise HTTPException(
                 status_code=404,

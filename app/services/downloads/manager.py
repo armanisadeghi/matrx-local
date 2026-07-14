@@ -293,7 +293,36 @@ async def _classify_hf_auth_failure(
             "[downloads] HF token check inconclusive (%s) — assuming the token "
             "is valid and the model gate is unaccepted", result.message,
         )
+    # Token is fine → the gate is the problem. HF distinguishes "you never
+    # asked" from "you asked and the authors haven't approved yet" only in the
+    # error text ("awaiting a review" / "pending"). Different asks: accept the
+    # license vs. just wait.
+    exc_text = str(exc).lower()
+    if "awaiting" in exc_text or "pending" in exc_text:
+        return failures.hf_gate_pending(repo_id)
     return failures.hf_gate_not_accepted(repo_id)
+
+
+def _is_hf_url(url: str) -> bool:
+    """True when ``url`` points at the Hugging Face Hub itself (where the
+    stored token must be attached) — NOT their signed CDN hosts, which embed
+    auth in the URL and must never receive the bearer token."""
+    try:
+        host = httpx.URL(url).host or ""
+    except Exception:  # noqa: BLE001 — malformed URL: just don't attach auth
+        return False
+    return host in ("huggingface.co", "hf.co", "www.huggingface.co")
+
+
+def _hf_repo_from_url(url: str) -> Optional[str]:
+    """``https://huggingface.co/<org>/<name>/resolve/main/x.gguf`` → ``org/name``."""
+    try:
+        parts = [p for p in (httpx.URL(url).path or "").split("/") if p]
+    except Exception:  # noqa: BLE001
+        return None
+    if len(parts) >= 2 and parts[0] != "api":
+        return f"{parts[0]}/{parts[1]}"
+    return None
 
 
 # SSE subscriber queue type
@@ -695,12 +724,13 @@ class DownloadManager:
                     updated_at=entry.updated_at,
                     bandwidth_bps=self._bandwidth_bps,
                 ))
-                # A failure the user is expected to resolve is not an engine
-                # error — log it as a warning, without a stack trace, so it
-                # stops showing up as a red ERROR in the issue report.
+                # A failure the user is expected to resolve is not an error at
+                # all — it is a STATE ("token missing", "license not accepted").
+                # Log it at INFO with the [action-needed] marker, no stack
+                # trace, so it never reads like a crash in the log or the UI.
                 if resolution is not None:
-                    logger.warning(
-                        "[downloads] NEEDS USER ACTION: %s (id=%s code=%s) — %s",
+                    logger.info(
+                        "[downloads] [action-needed] %s (id=%s code=%s) — %s",
                         entry.filename, dl_id, resolution["code"],
                         resolution["message"],
                     )
@@ -798,6 +828,19 @@ class DownloadManager:
             civitai_key = read_civitai_key()
             if civitai_key:
                 request_headers["Authorization"] = f"Bearer {civitai_key}"
+        elif any(_is_hf_url(u) for u in urls):
+            # Hugging Face direct-URL downloads (GGUF weights via resolve/main,
+            # wake-word models, …) must carry the stored token exactly like the
+            # snapshot path does — resolved AT REQUEST TIME from the app key
+            # store (read_hf_token: env-injected app key → key-manager cache →
+            # hub cache). Without this, gated GGUF repos 401 with HF's
+            # "please log in" page even though the user's token is configured.
+            # httpx drops the Authorization header on the cross-origin redirect
+            # to HF's signed CDN, which is exactly right.
+            from app.services.media_gen.paths import read_hf_token  # noqa: PLC0415
+            hf_token = read_hf_token()
+            if hf_token:
+                request_headers["Authorization"] = f"Bearer {hf_token}"
 
         async with httpx.AsyncClient(
             follow_redirects=True,
@@ -943,6 +986,21 @@ class DownloadManager:
                             raise failures.civitai_key_rejected()
                         raise failures.civitai_access_restricted(
                             (entry.metadata or {}).get("model_page_url")
+                        )
+                    if response.status_code in (401, 403) and _is_hf_url(url):
+                        # Same attribution contract as the snapshot path: a
+                        # gated-repo refusal is a request to the user (accept
+                        # the license / add or fix the token), never a raw 401.
+                        from app.services.media_gen.paths import read_hf_token  # noqa: PLC0415
+                        await response.aread()
+                        exc = httpx.HTTPStatusError(
+                            f"HTTP {response.status_code} from Hugging Face",
+                            request=response.request,
+                            response=response,
+                        )
+                        repo_id = _hf_repo_from_url(url) or entry.display_name
+                        raise await _classify_hf_auth_failure(
+                            exc, repo_id, read_hf_token()
                         )
                     response.raise_for_status()
 
@@ -1276,15 +1334,23 @@ class DownloadManager:
             {"id": e.id, "filename": e.filename, "priority": e.priority}
             for e in sorted(queued_entries, key=lambda x: (-x.priority, x.created_at))
         ]
+        # Failures split by kind: rows carrying a resolution are waiting on the
+        # USER (a state, logged as [action-needed] with the code, never the raw
+        # error text); rows without one are genuine errors and keep their text.
+        action_needed_info = [
+            {"id": e.id, "filename": e.filename,
+             "code": (e.resolution or {}).get("code")}
+            for e in failed_entries if e.resolution is not None
+        ]
         failed_info = [
             {"id": e.id, "filename": e.filename, "error_msg": e.error_msg}
-            for e in failed_entries
+            for e in failed_entries if e.resolution is None
         ]
 
         logger.info(
             "[downloads] STATE | active=%d queued=%d completed=%d fails=%d cancelled=%d "
             "bandwidth_bps=%.0f peak_bps=%.0f active_slots=%d max_concurrent=%d | "
-            "active=%s queued=%s fails=%s",
+            "active=%s queued=%s fails=%s action_needed=%s",
             len(active_entries),
             len(queued_entries),
             len(completed_entries),
@@ -1297,6 +1363,7 @@ class DownloadManager:
             json.dumps(active_info),
             json.dumps(queued_info),
             json.dumps(failed_info),
+            json.dumps(action_needed_info),
         )
 
     # ------------------------------------------------------------------
@@ -1411,7 +1478,20 @@ class DownloadManager:
             logger.warning("[downloads] Failed to resume incomplete downloads: %s", exc, exc_info=True)
 
     async def _load_history(self) -> None:
-        """Load completed/failed/cancelled history rows for the UI (last 50)."""
+        """Load completed/failed/cancelled history rows for the UI (last 50).
+
+        Failed rows written before the actionable-failure taxonomy existed
+        carry only a raw ``error_msg`` and replayed as red errors on every
+        start. Re-triage them here: a recognizable user-fixable message gets a
+        ``resolution`` attached (persisted), so old rows render through the
+        same prompt UI as new failures.
+        """
+        # Key presence read ONCE, from the same request-time sources the
+        # download paths use — attribution must never claim "add your token"
+        # to a user whose token is configured.
+        from app.services.media_gen.paths import read_civitai_key, read_hf_token  # noqa: PLC0415
+        hf_token_present = read_hf_token() is not None
+        civitai_key_present = read_civitai_key() is not None
         try:
             db = get_db()
             rows = await db.fetchall(
@@ -1441,6 +1521,21 @@ class DownloadManager:
                     completed_at=row["completed_at"],
                     metadata=metadata,
                 )
+                if entry.status == "failed" and entry.resolution is None:
+                    triaged = failures.retriage_stale_failure(
+                        entry.error_msg,
+                        entry.metadata,
+                        hf_token_present=hf_token_present,
+                        civitai_key_present=civitai_key_present,
+                    )
+                    if triaged is not None:
+                        entry.set_resolution(triaged.to_dict())
+                        await self._persist(entry)
+                        logger.info(
+                            "[downloads] [action-needed] re-triaged stale failure "
+                            "%s (id=%s) → %s",
+                            entry.filename, entry.id, triaged.code,
+                        )
                 self._entries[row["id"]] = entry
         except Exception as exc:
             logger.warning("[downloads] Failed to load history: %s", exc, exc_info=True)

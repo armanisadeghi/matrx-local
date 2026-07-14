@@ -19,6 +19,8 @@ remote 500'd. Those keep their raw message and their Retry button.
 
 from __future__ import annotations
 
+import re as _re
+
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
@@ -179,6 +181,28 @@ def civitai_access_restricted(model_page_url: str | None = None) -> ActionableDo
     )
 
 
+def hf_gate_pending(repo_id: str) -> ActionableDownloadError:
+    """HF 403 on a gated repo where the user HAS requested access but approval
+    is still pending (manual-review gates). Nothing is wrong with the token and
+    re-accepting the license does nothing — the user just has to wait, and the
+    app owes them that fact instead of an error."""
+    return ActionableDownloadError(
+        DownloadResolution(
+            code="hf_gate_pending",
+            title="Your access request is still pending",
+            message=(
+                f"You have already requested access to “{repo_id}”, but its "
+                "authors haven't approved it yet. There is nothing to fix — "
+                "check the model page for your request status and try the "
+                "download again once access is granted."
+            ),
+            action_kind="open_url",
+            action_label="Check your request on Hugging Face",
+            action_url=f"https://huggingface.co/{repo_id}",
+        )
+    )
+
+
 def ai_packages_missing() -> ActionableDownloadError:
     """The old message told the user to “Run the in-app installer (POST
     /image-gen/install)”. An HTTP verb. In end-user copy."""
@@ -195,3 +219,83 @@ def ai_packages_missing() -> ActionableDownloadError:
             action_label="Install the AI packages",
         )
     )
+
+
+# ── Re-triage of stale failure rows ─────────────────────────────────────────
+#
+# Failure rows written BEFORE this taxonomy existed carry only a raw
+# ``error_msg`` (a truncated 401 string, an HTML "please log in" page, an HTTP
+# verb in user copy). Every app start replayed them to the log and the UI as
+# red errors. ``retriage_stale_failure`` maps a recognizable old message onto
+# the taxonomy so those rows render through the same prompt UI as new failures.
+# Unrecognizable messages return None and stay what they are: real errors.
+
+_HF_GATED_PATTERNS = (
+    "access to model",          # "Access to model X is restricted"
+    "gated repo",               # GatedRepoError text / "Cannot access gated repo"
+    "restricted. you must have access",
+    "please log in",            # unauthenticated variant of the gate message
+    "must be authenticated",
+)
+_HF_HOST_MARKERS = ("huggingface.co", "hf.co", "hugging face")
+_AI_PACKAGES_PATTERNS = (
+    "run the in-app installer",            # the old pre-taxonomy message
+    "huggingface_hub is required",
+    "no module named 'huggingface_hub'",
+    "no module named 'diffusers'",
+    "ai packages",
+)
+
+
+def _repo_id_from_text(text: str) -> str | None:
+    m = _re.search(r"(?:huggingface\.co/|hf\.co/|api/models/|Access to model )"
+                   r"([\w.\-]+/[\w.\-]+)", text)
+    return m.group(1).rstrip(".,:") if m else None
+
+
+def retriage_stale_failure(
+    error_msg: str | None,
+    metadata: dict[str, Any] | None,
+    *,
+    hf_token_present: bool,
+    civitai_key_present: bool,
+) -> DownloadResolution | None:
+    """Map a pre-taxonomy failure row's raw error text onto the resolution
+    catalog, or None when the message isn't a recognizable user-fixable state.
+
+    Attribution mirrors the live classifiers: an HF gate failure with a token
+    configured NOW asks for license acceptance, never for the token the user
+    already set; without a token it asks for the token. (No network calls here
+    — this runs during startup hydration.)
+    """
+    if not error_msg:
+        return None
+    low = error_msg.lower()
+    md = metadata or {}
+
+    if any(p in low for p in _AI_PACKAGES_PATTERNS):
+        return ai_packages_missing().resolution
+
+    if md.get("civitai_download") and (
+        "401" in low or "403" in low or "unauthorized" in low or "forbidden" in low
+    ):
+        if not civitai_key_present:
+            return civitai_key_required().resolution
+        if "403" in low or "forbidden" in low:
+            return civitai_access_restricted(md.get("model_page_url")).resolution
+        return civitai_key_rejected().resolution
+
+    is_hf = bool(md.get("hf_repo_id")) or any(h in low for h in _HF_HOST_MARKERS)
+    looks_gated = any(p in low for p in _HF_GATED_PATTERNS) or (
+        is_hf and ("401" in low or "403" in low)
+    )
+    if is_hf and looks_gated:
+        repo_id = str(md.get("hf_repo_id") or _repo_id_from_text(error_msg)
+                      or "this model")
+        if not hf_token_present:
+            return hf_token_missing(repo_id).resolution
+        if "awaiting" in low or "pending" in low:
+            return hf_gate_pending(repo_id).resolution
+        return hf_gate_not_accepted(repo_id).resolution
+
+    return None

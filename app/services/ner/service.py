@@ -397,11 +397,16 @@ class NerService:
             shutil.rmtree(dest)
         dest.mkdir(parents=True, exist_ok=True)
         (dest / SNAPSHOT_COMPLETE_MARKER).unlink(missing_ok=True)
+        # Token resolved at request time from the app key store — every HF
+        # call attaches it (avoids unauthenticated rate limits and keeps
+        # gated-repo behavior consistent with the DownloadManager).
+        from app.services.media_gen.paths import read_hf_token  # noqa: PLC0415
         snapshot_download(
             repo_id=spec.repo_id,
             local_dir=str(dest),
             local_dir_use_symlinks=False,
             ignore_patterns=["*.md", ".git*", "onnx/*", "openvino/*", "flax/*"],
+            token=read_hf_token(),
         )
         (dest / SNAPSHOT_COMPLETE_MARKER).write_text(spec.repo_id)
 

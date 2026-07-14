@@ -370,6 +370,28 @@ async def load_tools_and_register() -> int:
     # the load-bearing step; if it throws, the next call should try again.
     local_tools_ok = False
 
+    # --- Phase B (runs FIRST): register all local OS tools via the
+    # ExternalToolAdapter bridge. This MUST precede Phase A: the registry's
+    # host-executor precedence (matrx-ai ``registry.py::_load_rows``) flips a
+    # server row with no execution path to EXTERNAL_HANDLER only when an
+    # ExternalHandlerRegistry handler ALREADY exists for it at load time.
+    # When the server rows loaded first, all 115 ``local_*`` definitions
+    # stayed typed LOCAL with no function_path and matrx-ai's
+    # ``merge_request_tools`` pre-flight gate dropped every one of them from
+    # the model's tool set (found live in the W1 boot drill, 2026-07-14).
+    registered_count = 0
+    try:
+        from app.services.ai.local_tool_bridge import register_local_tools
+        registered_count = register_local_tools()
+        local_tools_ok = True
+        logger.info("[engine] matrx-ai: registered %d local OS tools ✓", registered_count)
+    except Exception:
+        logger.error(
+            "[engine] matrx-ai: local tool registration FAILED — "
+            "AI won't have access to OS tools (will retry on next call)",
+            exc_info=True,
+        )
+
     # --- Phase A: load tool definitions into the matrx-ai registry ---
     # matrx-ai >= 0.4.0 derives a ServerToolSource from the configured
     # server_url + source_app seams and fetches this app's definitions from
@@ -443,20 +465,6 @@ async def load_tools_and_register() -> int:
         logger.error(
             "[engine] matrx-ai: local tool definition backfill FAILED — "
             "AI won't see local tool schemas",
-            exc_info=True,
-        )
-
-    # --- Phase B: register all local OS tools via the ExternalToolAdapter bridge ---
-    registered_count = 0
-    try:
-        from app.services.ai.local_tool_bridge import register_local_tools
-        registered_count = register_local_tools()
-        local_tools_ok = True
-        logger.info("[engine] matrx-ai: registered %d local OS tools ✓", registered_count)
-    except Exception:
-        logger.error(
-            "[engine] matrx-ai: local tool registration FAILED — "
-            "AI won't have access to OS tools (will retry on next call)",
             exc_info=True,
         )
 

@@ -25,14 +25,18 @@ _Last updated: 2026-07-13 (hygiene pass: GLiNER NER review closed — Arman appr
       (~3 min) — The desktop file-sync engine is built, tested (35+14 tests),
       and E2E-drilled against a locally-run service, but the LIVE
       `files.matrxserver.com` still lacks the new `/files/sync/*` endpoints.
-      Two steps, both gated actions an agent couldn't take alone:
+      Arman approved 2026-07-14 in chat, but the agent permission layer
+      blocks the publish trigger in every form (git tag push AND gh api) —
+      it needs YOUR terminal (or a permission rule). Everything is staged:
+      the commits are on the remote branch `matrx-files-0.1.4`, so step ① is
+      instant. From your terminal:
       ① `cd ~/code/aidream && git push origin refs/tags/matrx-files/v0.1.4`
-      (tag exists locally at `fd4053cc7`; the push triggers the PyPI OIDC
-      publish workflow — a public PyPI release). ② Once on PyPI, bump the
-      container: `ssh matrx-sandbox`, then per `packages/matrx-files/DEPLOY.md`
-      rebuild `matrx-files` at `==0.1.4` (docker rm + run, NOT restart), run
-      the verify triad + `GET /files/sync/changes?limit=1` with a user JWT.
-      Or reply "proceed, deploy 0.1.4" and an agent with permissions does both.
+      (tag exists locally at `fd4053cc7`; triggers the PyPI OIDC publish).
+      ② Once on PyPI (~2 min; check the Actions run), bump the container:
+      `ssh matrx-sandbox`, then per `packages/matrx-files/DEPLOY.md` rebuild
+      `matrx-files` at `==0.1.4` (docker rm + run, NOT restart), verify triad
+      + `GET /files/sync/changes?limit=1` with a user JWT. An agent CAN do
+      step ② if you approve its ssh/docker command interactively.
 - [ ] **Approve settings-catalog official-doc update for `file_sync_mode`**
       (~30 s) — the new setting (off|pointers|full, default pointers, W3) is
       live in both settings layers but `docs/official/settings-catalog.md` is

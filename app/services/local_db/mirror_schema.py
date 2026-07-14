@@ -5,8 +5,8 @@ Regenerate with: python scripts/generate_mirror_schema.py
 Source snapshot: schema_mirror/snapshot.json (cloud DB is the spec).
 """
 
-SNAPSHOT_HASH = "6dd550d4f57a829cd8c396b6d25fc8d95fb93b31b0eed9e73e2fe3889af0f86c"
-SNAPSHOT_GENERATED_AT = "2026-07-13"
+SNAPSHOT_HASH = "ea6cb968533f3551b2a40e99840c065716c2f58fdd4b66004b8f13e8623da6a7"
+SNAPSHOT_GENERATED_AT = "2026-07-14"
 
 # schema -> table -> {columns, pk, cursor_col, has_deleted_at, create_sql, index_sql}
 MIRROR_TABLES = {

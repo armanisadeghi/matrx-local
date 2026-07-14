@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-07-13",
+ "generated_at": "2026-07-14",
  "schemas": {
   "ai": {
    "api": {
@@ -8789,7 +8789,7 @@
      "id"
     ]
    },
-   "udt_picklist_items": {
+   "udt_structured_list_items": {
     "columns": [
      {
       "data_type": "uuid",
@@ -8909,7 +8909,7 @@
      "id"
     ]
    },
-   "udt_picklists": {
+   "udt_structured_lists": {
     "columns": [
      {
       "data_type": "uuid",

@@ -59,6 +59,11 @@ interface BlockAccumulatorEntry {
   text: string;
 }
 
+interface MessageContentExtractionSource {
+  primary: unknown;
+  fallback?: unknown;
+}
+
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -362,14 +367,23 @@ function extractTextFromRecord(record: Record<string, unknown> | null): string |
     readString(record.text) ??
     readString(record.content) ??
     readString(record.markdown) ??
+    readString(record.rawMarkdown) ??
     readString(record.value) ??
     readString(record.output) ??
-    readString(record.transcript)
+    readString(record.transcript) ??
+    readString(record.code) ??
+    readString(record.source)
   );
 }
 
 function renderBlockText(blockType: string, content: string | null, data: Record<string, unknown> | null): string | null {
-  const direct = content ?? extractTextFromRecord(data);
+  const direct =
+    content ??
+    (blockType === "consolidated_reasoning" && Array.isArray(data?.reasoning_texts)
+      ? (data.reasoning_texts as unknown[]).filter((item): item is string => typeof item === "string").join("\n\n")
+      : null) ??
+    (blockType === "table" ? readString(data?.rawMarkdown) : null) ??
+    extractTextFromRecord(data);
   if (direct) {
     if (blockType === "code") {
       const language = readString(data?.language) ?? "";
@@ -383,6 +397,8 @@ function renderBlockText(blockType: string, content: string | null, data: Record
 
   const url =
     readString(data?.url) ??
+    readString(data?.src) ??
+    readString(data?.imageUrl) ??
     readString(data?.cdn_url) ??
     readString(data?.signed_url) ??
     readString(data?.download_url);
@@ -467,6 +483,14 @@ function contentPartToExtracted(part: unknown): ExtractedContent {
   return { answer: split.answer, reasoning: split.reasoning, diagnostics: [] };
 }
 
+function hasDisplayableContent(extracted: ExtractedContent): boolean {
+  return (
+    extracted.answer.trim().length > 0 ||
+    extracted.reasoning.trim().length > 0 ||
+    extracted.diagnostics.length > 0
+  );
+}
+
 function extractMessageContent(content: unknown): ExtractedContent {
   if (typeof content === "string") {
     const split = splitInlineReasoning(content);
@@ -491,6 +515,12 @@ function extractMessageContent(content: unknown): ExtractedContent {
   return { answer: split.answer.trim(), reasoning: split.reasoning.trim(), diagnostics: [] };
 }
 
+function extractMessageContentWithFallback(source: MessageContentExtractionSource): ExtractedContent {
+  const primary = extractMessageContent(source.primary);
+  if (hasDisplayableContent(primary) || source.fallback === undefined) return primary;
+  return extractMessageContent(source.fallback);
+}
+
 function conversationRowToConversation(row: CloudConversationRow): Conversation {
   const createdAt = row.created_at ?? new Date().toISOString();
   const updatedAt = row.updated_at ?? createdAt;
@@ -510,7 +540,10 @@ function conversationRowToConversation(row: CloudConversationRow): Conversation 
 }
 
 function messageRowToChatMessage(row: CloudMessageRow): ChatMessage {
-  const extracted = extractMessageContent(row.content ?? row.user_content);
+  const extracted = extractMessageContentWithFallback({
+    primary: row.content,
+    fallback: row.user_content,
+  });
   const errRecord = readRecord(row.error);
   const error =
     readString(errRecord?.user_message) ??
@@ -534,6 +567,19 @@ function sortConversations(items: Conversation[]): Conversation[] {
   );
 }
 
+function isDefaultConversationTitle(title: string | undefined): boolean {
+  const normalized = title?.trim().toLowerCase();
+  return !normalized || normalized === "new conversation" || normalized === "new chat";
+}
+
+function mergeMessagesById(existing: ChatMessage[], hydrated: ChatMessage[]): ChatMessage[] {
+  const hydratedIds = new Set(hydrated.map((message) => message.id));
+  const optimistic = existing.filter((message) => !hydratedIds.has(message.id));
+  return [...hydrated, ...optimistic].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+  );
+}
+
 function mergeRemoteConversations(
   current: Conversation[],
   remoteRows: CloudConversationRow[],
@@ -551,12 +597,19 @@ function mergeRemoteConversations(
     return {
       ...remoteConversation,
       id: existing.id,
+      title:
+        isDefaultConversationTitle(remoteConversation.title) && !isDefaultConversationTitle(existing.title)
+          ? existing.title
+          : remoteConversation.title,
       messages: existing.messages.length > 0 ? existing.messages : remoteConversation.messages,
       created_at: existing.created_at || remoteConversation.created_at,
       updated_at:
         new Date(existing.updated_at).getTime() > new Date(remoteConversation.updated_at).getTime()
           ? existing.updated_at
           : remoteConversation.updated_at,
+      ...(remoteConversation.description ?? existing.description
+        ? { description: remoteConversation.description ?? existing.description }
+        : {}),
     };
   });
 
@@ -680,7 +733,7 @@ export function useCloudChat() {
         .select("*")
         .eq("conversation_id", serverConversationId)
         .is("deleted_at", null)
-        .eq("is_visible_to_user", true)
+        .or("is_visible_to_user.is.null,is_visible_to_user.eq.true")
         .order("position", { ascending: true })
         .order("created_at", { ascending: true })
         .limit(200);
@@ -692,7 +745,7 @@ export function useCloudChat() {
           conversation.id === id
             ? {
                 ...conversation,
-                messages,
+                messages: mergeMessagesById(conversation.messages, messages),
               }
             : conversation,
         ),
@@ -737,20 +790,42 @@ export function useCloudChat() {
 
   const deleteConversation = useCallback(
     (id: string) => {
+      const target = conversationsRef.current.find((conversation) => conversation.id === id);
       setConversations((prev) => prev.filter((conversation) => conversation.id !== id));
       if (activeConversationId === id) setActiveConversationId(null);
+      if (target?.serverConversationId) {
+        void supabase
+          .schema("chat")
+          .from("conversation")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("id", target.serverConversationId)
+          .then(({ error }) => {
+            if (error) setRequestError(error.message);
+          });
+      }
     },
     [activeConversationId],
   );
 
   const renameConversation = useCallback((id: string, title: string) => {
+    const target = conversationsRef.current.find((conversation) => conversation.id === id);
     setConversations((prev) =>
       prev.map((conversation) =>
         conversation.id === id
           ? { ...conversation, title, updated_at: new Date().toISOString() }
-          : conversation,
+        : conversation,
       ),
     );
+    if (target?.serverConversationId) {
+      void supabase
+        .schema("chat")
+        .from("conversation")
+        .update({ title, updated_at: new Date().toISOString() })
+        .eq("id", target.serverConversationId)
+        .then(({ error }) => {
+          if (error) setRequestError(error.message);
+        });
+    }
   }, []);
 
   const sendMessage = useCallback(
@@ -920,6 +995,14 @@ export function useCloudChat() {
             .map((entry) => entry.text),
         ]);
 
+      const combinedAnswer = () =>
+        mergeText([
+          splitInlineReasoning(rawAnswer).answer,
+          ...[...answerRenderBlocks.values()]
+            .sort((a, b) => a.index - b.index)
+            .map((entry) => entry.text),
+        ]);
+
       const updateReasoning = (status?: string) => {
         updateAssistant({
           reasoning: combinedReasoning(),
@@ -930,8 +1013,8 @@ export function useCloudChat() {
       const applyAnswerText = (nextRawAnswer: string) => {
         rawAnswer = nextRawAnswer;
         const split = splitInlineReasoning(rawAnswer);
-        accumulated = split.answer;
         inlineReasoning = split.reasoning;
+        accumulated = combinedAnswer();
         updateAssistant({
           content: accumulated,
           reasoning: combinedReasoning(),
@@ -941,12 +1024,7 @@ export function useCloudChat() {
       };
 
       const applyRenderAnswerBlocks = () => {
-        if (rawAnswer) return;
-        accumulated = mergeText(
-          [...answerRenderBlocks.values()]
-            .sort((a, b) => a.index - b.index)
-            .map((entry) => entry.text),
-        );
+        accumulated = combinedAnswer();
         updateAssistant({ content: accumulated });
       };
 
@@ -1094,11 +1172,17 @@ export function useCloudChat() {
                   readString(record?.signed_url) ||
                   readString(record?.download_url);
                 if (urlValue && type === "image_output") {
-                  accumulated += `${accumulated ? "\n\n" : ""}![Generated image](${urlValue})`;
-                  updateAssistant({ content: accumulated });
+                  answerRenderBlocks.set(`data-${eventCount}-${type}`, {
+                    index: eventCount,
+                    text: `![Generated image](${urlValue})`,
+                  });
+                  applyRenderAnswerBlocks();
                 } else if (urlValue) {
-                  accumulated += `${accumulated ? "\n\n" : ""}[Generated ${type.replace("_output", "")}](${urlValue})`;
-                  updateAssistant({ content: accumulated });
+                  answerRenderBlocks.set(`data-${eventCount}-${type}`, {
+                    index: eventCount,
+                    text: `[Generated ${type.replace("_output", "")}](${urlValue})`,
+                  });
+                  applyRenderAnswerBlocks();
                 }
               } else if (
                 type === "search_error" ||
@@ -1196,7 +1280,7 @@ export function useCloudChat() {
                       ? "Reasoning..."
                       : undefined,
                   );
-                } else if (event.data.status === "complete" || !answerRenderBlocks.has(blockId)) {
+                } else if (!(rawAnswer && (blockType === "text" || blockType === "markdown"))) {
                   answerRenderBlocks.set(blockId, {
                     index: event.data.blockIndex,
                     text: blockText,

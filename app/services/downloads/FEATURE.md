@@ -74,5 +74,6 @@ and the resolution-catalog contract. Extend it with every new failure kind.
 
 ## Known defects
 
-- MXL-D-051 (`FOUND_DEFECTS.md`): engine ignores SIGTERM / `/admin/shutdown`
-  while an HF snapshot download is active.
+- MXL-D-051 (`FOUND_DEFECTS.md`): a `--live` source engine ignores SIGTERM /
+  `/admin/shutdown` (even idle; SIGINT works) — surfaced during this
+  feature's live verification, not download-specific.

@@ -32,29 +32,30 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## API keys / credentials
 
-### MXL-D-051 — Engine ignores SIGTERM and /admin/shutdown while an HF snapshot download is active
-- **Area:** `app/main.py` lifespan teardown ordering / `app/services/downloads/manager.py::_download_hf_snapshot`
-- **Symptom:** With a Hugging Face snapshot download in flight, both
-  `POST /admin/shutdown` (200, "self-signal SIGTERM after response flushes")
-  and a direct `kill -TERM <engine pid>` were accepted and then NOTHING
-  happened — the engine kept serving /health and downloading for minutes; the
-  downloads periodic STATE log kept ticking, proving lifespan teardown never
-  reached `DownloadManager.stop()`.
-- **Evidence:** Observed live 2026-07-13 on a `./scripts/dev.sh --live`
-  source engine (v1.3.110) during the FLUX.1-schnell 33.7 GB snapshot
-  download: shutdown POST + two SIGTERMs ignored while the download kept
-  streaming. Suspects: uvicorn graceful shutdown blocked by the snapshot
-  polling task/executor (`_download_hf_snapshot` runs `_dir_size_bytes` in
-  the default executor every second plus a worker thread doing
-  `hf_hub_download`), or something earlier in the teardown chain blocking
-  before downloads stop.
+### MXL-D-051 — Live-position source engine ignores SIGTERM and /admin/shutdown (SIGINT works)
+- **Area:** `run.py` / `app/main.py` signal handling under `MATRX_LIVE_ENGINE=1`
+- **Symptom:** A `./scripts/dev.sh --live` source engine ignored
+  `POST /admin/shutdown` (200 accepted, "self-signal SIGTERM after response
+  flushes") and multiple direct `kill -TERM` — first observed during an
+  active HF snapshot download, but ALSO reproduced fully idle afterwards, so
+  the download is not the trigger. No signal-handler log line ever appeared
+  despite the loud-shutdown instrumentation. `kill -INT` shut it down
+  immediately. A plain dev-mode engine (`./scripts/dev.sh`, no --live) died
+  cleanly from SIGTERM in ~6s the same day.
+- **Evidence:** Observed live 2026-07-13/14 (engine v1.3.110, source run,
+  live position): 1x /admin/shutdown + 2x SIGTERM ignored mid-download; 1x
+  /admin/shutdown + 1x SIGTERM ignored while idle; SIGINT → clean exit
+  (left one orphaned quick-tunnel cloudflared child, killed manually).
 - **Status:** open
-- **Analysis stamp:** Analyzed 2026-07-13 — reproduced live; not yet
-  root-caused in code.
-- **Owner hint:** this is the "app won't quit / ended unexpectedly" class —
-  Hard Rule 0 territory. Verify teardown order in `app/main.py` and make
-  `DownloadManager.stop()` also set the cancel flags of active download
-  slots so the HF poll loop exits promptly.
+- **Analysis stamp:** Analyzed 2026-07-14 — reproduced live twice; not yet
+  root-caused in code. Note the memory/task note "trayless so SIGTERM works"
+  (MXL-D-042/043 work) — the live-position path may reintroduce whatever
+  swallows SIGTERM.
+- **Owner hint:** Hard Rule 0 territory ("app won't quit / ended
+  unexpectedly"). Compare signal-handler installation between dev and
+  MATRX_LIVE_ENGINE=1 paths in run.py; also verify the engine's SIGTERM
+  handler vs uvicorn's, and that /admin/shutdown's self-signal actually
+  sends a signal the process has a handler for.
 
 ### MXL-D-048 — Ask-Arman checklist items for user-fixable app config are the wrong pattern
 - **Area:** `.matrx/ARMAN_TASKS.md` process / task-hygiene skill, and any

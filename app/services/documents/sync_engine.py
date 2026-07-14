@@ -135,6 +135,12 @@ class SyncEngine:
     def is_configured(self) -> bool:
         return bool(self._user_id and self.sb.available)
 
+    @property
+    def sync_lock(self) -> asyncio.Lock:
+        """The engine-wide sync mutex, for callers (routes) whose file/tombstone
+        mutations must not interleave with an in-flight bulk sync."""
+        return self._sync_lock
+
     def _get_notes_repo(self):
         from app.services.local_db.repositories import NotesRepo
         return NotesRepo()

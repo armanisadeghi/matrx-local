@@ -27,7 +27,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-from app.services.documents.file_manager import file_manager, content_hash, _safe_filename
+from app.services.documents.file_manager import file_manager, content_hash
 from app.services.documents.supabase_client import supabase_docs
 from app.services.documents.sync_engine import sync_engine
 from app.services.local_db.repositories import NotesRepo, NoteVersionsRepo
@@ -212,30 +212,8 @@ def _note_id_for_path(file_path: str) -> str:
 
 
 def _unique_file_path(folder_name: str, label: str) -> str:
-    """Return a relative file_path that does not yet exist on disk.
-
-    If ``folder/label.md`` is taken, appends _2, _3 … _99, then falls back to
-    a short UTC timestamp suffix to guarantee uniqueness.
-
-    Returns the *relative* path string (e.g. ``"General/My_Note.md"``).
-    """
-    base_path = file_manager.note_path(folder_name, label)
-    if not base_path.exists():
-        return file_manager.relative_path(base_path)
-
-    safe_label = _safe_filename(label)
-    folder_dir = file_manager.folder_path(folder_name)
-    folder_dir.mkdir(parents=True, exist_ok=True)
-
-    for n in range(2, 100):
-        candidate = folder_dir / f"{safe_label}_{n}.md"
-        if not candidate.exists():
-            return file_manager.relative_path(candidate)
-
-    # Ultimate fallback: append a compact UTC timestamp
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    candidate = folder_dir / f"{safe_label}_{ts}.md"
-    return file_manager.relative_path(candidate)
+    """Collision-free relative path — canonical impl lives in file_manager."""
+    return file_manager.unique_file_path(folder_name, label)
 
 
 def _local_folder_tree() -> dict[str, Any]:
@@ -469,6 +447,19 @@ async def delete_folder(folder_id: str, request: Request) -> dict[str, str]:
     _configure_sync(request)
     repo = _get_notes_repo()
 
+    # Hold the sync lock: deleting files + writing tombstones must not
+    # interleave with a full_sync/pull that snapshotted the old state — the
+    # race re-pulled just-deleted notes and erased the fresh tombstones.
+    async with sync_engine.sync_lock:
+        await _delete_folder_locked(folder_id, repo)
+
+    if sync_engine.is_configured:
+        _fire_and_forget(supabase_docs.delete_folder(folder_id))
+
+    return {"status": "deleted"}
+
+
+async def _delete_folder_locked(folder_id: str, repo: NotesRepo) -> None:
     for f in file_manager.list_folders():
         fid = _folder_id_for_name(f)
         if fid == folder_id:
@@ -496,7 +487,9 @@ async def delete_folder(folder_id: str, request: Request) -> dict[str, str]:
                         nf["file_path"], exc_info=True,
                     )
                 if sync_engine.is_configured:
-                    _fire_and_forget(supabase_docs.soft_delete_note(del_id))
+                    _fire_and_forget(
+                        supabase_docs.soft_delete_note(del_id, sync_engine.device_id)
+                    )
 
             file_manager.delete_folder(f)
 
@@ -513,11 +506,6 @@ async def delete_folder(folder_id: str, request: Request) -> dict[str, str]:
             except Exception:
                 logger.warning("Could not prune sync-state hashes on folder delete", exc_info=True)
             break
-
-    if sync_engine.is_configured:
-        _fire_and_forget(supabase_docs.delete_folder(folder_id))
-
-    return {"status": "deleted"}
 
 
 # ---------------------------------------------------------------------------
@@ -625,11 +613,13 @@ async def get_note(note_id: str, request: Request) -> dict[str, Any]:
                     return _enrich_record_from_sqlite(record, sqlite_note2)
                 return record
 
-    # Tertiary: non-blocking cloud fallback with short timeout
+    # Tertiary: non-blocking cloud fallback with short timeout. A soft-deleted
+    # remote row is NOT a note — returning it kept remotely-deleted notes open
+    # in the editor, and the next keystroke recreated them.
     if sync_engine.is_configured:
         try:
             remote = await asyncio.wait_for(supabase_docs.get_note(note_id), timeout=5.0)
-            if remote:
+            if remote and not remote.get("is_deleted"):
                 _fire_and_forget(sync_engine.pull_note(note_id))
                 return remote
         except (asyncio.TimeoutError, Exception):
@@ -728,12 +718,16 @@ async def update_note(
                 break
 
     if existing_record is None:
-        # Non-blocking cloud fallback with short timeout — never blocks local
+        # Non-blocking cloud fallback with short timeout — never blocks local.
+        # Tombstoned remote rows are treated as not-found: resurrecting them
+        # from a PUT recreated notes the user deleted on another device.
         if sync_engine.is_configured:
             try:
                 existing_record = await asyncio.wait_for(
                     supabase_docs.get_note(note_id), timeout=5.0
                 )
+                if existing_record and existing_record.get("is_deleted"):
+                    existing_record = None
             except (asyncio.TimeoutError, Exception):
                 pass
         if existing_record is None:
@@ -830,21 +824,26 @@ async def delete_note(note_id: str, request: Request) -> dict[str, str]:
     _configure_sync(request)
     repo = _get_notes_repo()
 
-    # Primary: SQLite knows the exact file_path — no scan needed.
-    sqlite_note = await repo.get(note_id)
-    if sqlite_note and sqlite_note.get("file_path"):
-        file_manager.delete_note(sqlite_note["file_path"])
-    else:
-        # Legacy fallback: scan for a UUID5-matched file.
-        for f in file_manager.scan_all():
-            if _note_id_for_path(f["file_path"]) == note_id:
-                file_manager.delete_note(f["file_path"])
-                break
+    # Sync lock: file removal + tombstone must not interleave with an
+    # in-flight full_sync/pull holding a pre-delete snapshot.
+    async with sync_engine.sync_lock:
+        # Primary: SQLite knows the exact file_path — no scan needed.
+        sqlite_note = await repo.get(note_id)
+        if sqlite_note and sqlite_note.get("file_path"):
+            file_manager.delete_note(sqlite_note["file_path"])
+        else:
+            # Legacy fallback: scan for a UUID5-matched file.
+            for f in file_manager.scan_all():
+                if _note_id_for_path(f["file_path"]) == note_id:
+                    file_manager.delete_note(f["file_path"])
+                    break
 
-    await repo.soft_delete(note_id)
+        await repo.soft_delete(note_id)
 
     if sync_engine.is_configured:
-        _fire_and_forget(supabase_docs.soft_delete_note(note_id))
+        _fire_and_forget(
+            supabase_docs.soft_delete_note(note_id, sync_engine.device_id)
+        )
 
     return {"status": "deleted"}
 

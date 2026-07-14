@@ -187,3 +187,33 @@ def test_probe_permission_denied_then_recovers(
 def test_probe_healthy_dir_is_clean(guard: _NotesAccessGuard, tmp_path: Path) -> None:
     snap = probe_notes_access(tmp_path)
     assert snap == {"degraded": False, "reason": None, "kind": None}
+
+
+# ---------------------------------------------------------------------------
+# Read paths must degrade, never raise (found live 2026-07-13: an unguarded
+# .exists() stat in list_conflicts escaped GET /notes/sync/status as a raw
+# 500 while the notes dir was unreadable — the exact endpoint the UI's
+# access prompt depends on)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or os.geteuid() == 0, reason="chmod-based denial needs non-root POSIX"
+)
+def test_read_paths_degrade_instead_of_raising(
+    guard: _NotesAccessGuard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    notes = tmp_path / "notes"
+    (notes / ".sync" / "conflicts").mkdir(parents=True)
+    fm = fm_mod.DocumentFileManager()
+    monkeypatch.setattr(
+        type(fm), "base_dir", property(lambda self: notes), raising=False
+    )
+    notes.chmod(0)
+    try:
+        assert fm.list_conflicts() == []
+        assert fm.list_folders() == []
+        assert fm.load_local_mappings() == {}
+    finally:
+        notes.chmod(0o755)
+    assert guard.is_degraded and guard.kind == "permission"

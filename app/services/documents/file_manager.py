@@ -460,9 +460,11 @@ class DocumentFileManager:
         return False
 
     def list_folders(self) -> list[str]:
-        if not self.base_dir.exists():
-            return []
         try:
+            # .exists() stats through the parent — on macOS without Full Disk
+            # Access even that stat is denied, so it must sit inside the guard.
+            if not self.base_dir.exists():
+                return []
             folders = sorted(
                 d.name
                 for d in self.base_dir.iterdir()
@@ -628,9 +630,14 @@ class DocumentFileManager:
 
     def list_conflicts(self) -> list[str]:
         """List note IDs that have unresolved conflicts."""
-        if not self._conflicts_dir.exists():
-            return []
         try:
+            # The .exists() stat itself is denied when the notes dir is
+            # unreadable (macOS without Full Disk Access) — unguarded, that
+            # PermissionError escaped through GET /notes/sync/status as a raw
+            # 500 while degraded, the exact endpoint the UI's access prompt
+            # depends on.
+            if not self._conflicts_dir.exists():
+                return []
             return [d.name for d in self._conflicts_dir.iterdir() if d.is_dir()]
         except PermissionError as e:
             notes_access_guard.note_denied(
@@ -745,13 +752,13 @@ class DocumentFileManager:
         """
         _ensure_dirs()
         mappings_file = self._mappings_file()
-        if mappings_file.is_file():
-            try:
+        try:
+            if mappings_file.is_file():
                 return json.loads(mappings_file.read_text(encoding="utf-8"))
-            except PermissionError as e:
-                notes_access_guard.note_denied(e, "reading local mappings")
-            except (json.JSONDecodeError, OSError):
-                pass
+        except PermissionError as e:
+            notes_access_guard.note_denied(e, "reading local mappings")
+        except (json.JSONDecodeError, OSError):
+            pass
         return {}
 
     def save_local_mappings(self, mappings: dict[str, list[str]]) -> None:

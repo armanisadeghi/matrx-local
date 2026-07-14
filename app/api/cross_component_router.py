@@ -209,12 +209,42 @@ async def _dispatch_rpc(envelope: CrossComponentEnvelope, user_id: str) -> None:
 
 
 def _handle_wake(envelope: CrossComponentEnvelope) -> None:
-    """Phase 3c pending. Logs the wake hint; Phase 3c claims the sch_task."""
+    """Route a wake hint by action.
+
+    - ``tool_call.delegated`` — aidream suspended an agent turn on one or more
+      tool calls bound to this desktop. The payload is a HINT only (never
+      trusted for execution): trigger an immediate delegation sweep, which
+      re-reads the durable ledger via ``GET /ai/user/pending_calls``.
+    - ``sch_task.due`` — scheduler wake; Phase 3c pending (claim deferred).
+    """
     payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+
+    if envelope.action == "tool_call.delegated":
+        conversation_id = payload.get("conversationId")
+        logger.info(
+            "[cross-component] delegation wake received (conversation=%s) — sweeping",
+            conversation_id,
+        )
+        try:
+            from app.services.delegation import get_delegation_engine
+
+            get_delegation_engine().request_sweep(
+                f"broadcast wake (conversation={conversation_id})"
+            )
+        except Exception:
+            logger.error(
+                "[cross-component] delegation wake could not trigger a sweep — "
+                "the poll interval remains the backstop",
+                exc_info=True,
+            )
+        return
+
     task_id = payload.get("taskId")
     if not isinstance(task_id, str) or not task_id:
         logger.warning(
-            "[cross-component] wake envelope missing taskId in payload: %r",
+            "[cross-component] wake envelope (action=%s) has no known routing and "
+            "no taskId in payload: %r",
+            envelope.action,
             envelope.payload,
         )
         return

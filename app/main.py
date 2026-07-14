@@ -611,6 +611,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("file_sync", exc)
 
+    # Phase 2f: Cloud tool-call delegation client (suspend/resume, headless).
+    # Sweeps GET /ai/user/pending_calls for delegated calls bound to this
+    # desktop, executes them via the canonical dispatcher, POSTs results to
+    # the aidream server, and resumes the suspended agent loop. The Phase 7
+    # broadcast subscription feeds it low-latency wake hints; the poll is the
+    # correctness backstop. See app/services/delegation/FEATURE.md.
+    _registry.starting("delegation")
+    try:
+        from app.services.delegation import get_delegation_engine
+
+        await get_delegation_engine().start_background()
+        logger.info("[app/main.py] Phase 2f: Delegation client started ✓")
+        _registry.ready("delegation")
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 2f: Delegation client FAILED to start — cloud "
+            "agent turns cannot delegate tools to this desktop",
+            exc_info=True,
+        )
+        _registry.failed("delegation", exc)
+
     # Phase 3: Start scraper engine
     print("[phase:scraper] Starting scraper engine...", flush=True)
     logger.info("[app/main.py] Phase 3: Starting scraper engine...")
@@ -1162,6 +1183,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except (asyncio.TimeoutError, Exception) as exc:
             logger.warning("[app/main.py] File sync did not stop cleanly: %s", exc)
             _registry.stopped("file_sync")
+
+    from app.services.delegation import get_delegation_engine as _get_delegation
+
+    _delegation = _get_delegation()
+    if _delegation.active:
+        _registry.stopping("delegation")
+        try:
+            await asyncio.wait_for(_delegation.stop_background(), timeout=3.0)
+            _registry.stopped("delegation")
+            logger.info("[app/main.py] Delegation client stopped ✓")
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.warning("[app/main.py] Delegation client did not stop cleanly: %s", exc)
+            _registry.stopped("delegation")
 
     if _doc_sync.watcher_active:
         try:

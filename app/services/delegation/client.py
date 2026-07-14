@@ -121,10 +121,28 @@ class DelegationApiClient:
 
     async def list_pending_calls(self, jwt: str) -> list[dict[str, Any]]:
         """GET /ai/user/pending_calls — every delegated call awaiting this user,
-        across all conversations. Caller filters to the tools this desktop owns."""
+        across all conversations. Caller filters to the tools this desktop owns.
+
+        Sends this engine's ``instance_id`` (Tier 2, see
+        docs/TIER2_DESKTOP_INSTANCE_TARGETING.md): once the server filters by
+        the conversation's bound ``app_instance_id``, a delegated call bound to
+        ANOTHER desktop (e.g. the installed app vs a dev build) is not returned
+        here — killing the double-claim race. Forward-compatible: a server that
+        does not yet filter simply ignores the param. Best-effort — a resolve
+        failure omits the param and falls back to today's user-scoped behavior.
+        """
         url = f"{self._base_url}/ai/user/pending_calls"
+        params: dict[str, str] = {}
+        try:
+            from app.services.cloud_sync.instance_manager import get_instance_manager
+
+            iid = get_instance_manager().instance_id
+            if iid:
+                params["instance_id"] = iid
+        except Exception:
+            logger.debug("[delegation] could not resolve instance_id for pending_calls", exc_info=True)
         async with self._client() as http:
-            resp = await http.get(url, headers=self._headers(jwt))
+            resp = await http.get(url, headers=self._headers(jwt), params=params or None)
         if resp.status_code != 200:
             raise DelegationApiError(
                 resp.status_code,

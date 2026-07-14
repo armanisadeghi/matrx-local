@@ -14,6 +14,32 @@ matrx-extend's client half (`src/lib/tools/dispatch.ts`) is the reference
 implementation for a stream-attached client; this service is the
 headless/poll variant.
 
+## Coordination participation gate (`MATRX_CLOUD_PARTICIPATION`)
+
+Delegation is **USER-scoped, not instance-scoped**: `GET /ai/user/pending_calls`
+returns every delegated call for the account and the ledger has no executor
+column, so a call is claimed by whichever `matrx-local` engine recognizes the
+tool name. Two engines on one account (the installed app + a source-run dev
+engine) therefore **race for the same call** — double-execution and 409 resume
+races that hand back false pass/fail signals during live testing.
+
+Guard: `app.config.CLOUD_PARTICIPATION_ENABLED` (env `MATRX_CLOUD_PARTICIPATION`,
+default `1`). When `0`, this engine is **coordination-silent** — Phase 2f
+(delegation client) is not started and Phase 7 / `connect_broadcast` do not
+attach to the per-user bridge channel, so it never claims cloud-dispatched work.
+`run.py`'s dev isolation defaults source-run engines to `0`; the packaged app
+leaves it `1`. A dev engine is still fully usable over its own loopback (a dev
+frontend on the same machine reaches it directly). Deliberately opting a dev
+engine INTO the shared channel (`MATRX_CLOUD_PARTICIPATION=1`) currently makes
+it race the installed app — instance-scoped targeting (so the frontend can pick
+which desktop drives) is the planned Tier 2 follow-up.
+
+Tier 2 (instance-scoped targeting so a dev desktop and the installed app never
+claim each other's work — reusing `cx_conversation.app_instance_id` from the
+compute-target picker): design in
+[docs/TIER2_DESKTOP_INSTANCE_TARGETING.md](../../../docs/TIER2_DESKTOP_INSTANCE_TARGETING.md).
+The client already sends `?instance_id=` on the poll (forward-compatible).
+
 ## The pipeline
 
 ```

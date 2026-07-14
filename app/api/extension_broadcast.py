@@ -111,6 +111,22 @@ async def connect_broadcast(user_id: str) -> None:
 
     Idempotent: connecting an already-connected user_id is a no-op.
     """
+    # Cloud coordination isolation (dev): a coordination-silent engine must not
+    # attach to the per-USER bridge channel at all — every subscriber executes
+    # the SAME delegation wakes and RPC-over-broadcast work, so a dev engine on
+    # this account would race the installed app and hand back false signals.
+    # run.py defaults MATRX_CLOUD_PARTICIPATION=0 for source-run engines.
+    from app.config import CLOUD_PARTICIPATION_ENABLED
+
+    if not CLOUD_PARTICIPATION_ENABLED:
+        logger.info(
+            "[extension_broadcast] connect_broadcast(user=%s) SKIPPED — cloud "
+            "coordination disabled (MATRX_CLOUD_PARTICIPATION=0, dev isolation). "
+            "This engine stays off the shared bridge channel.",
+            user_id,
+        )
+        return
+
     if not is_broadcast_enabled():
         _log_disabled(f"connect_broadcast(user_id={user_id})")
         return

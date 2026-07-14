@@ -617,20 +617,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # the aidream server, and resumes the suspended agent loop. The Phase 7
     # broadcast subscription feeds it low-latency wake hints; the poll is the
     # correctness backstop. See app/services/delegation/FEATURE.md.
-    _registry.starting("delegation")
-    try:
-        from app.services.delegation import get_delegation_engine
+    from app.config import CLOUD_PARTICIPATION_ENABLED
 
-        await get_delegation_engine().start_background()
-        logger.info("[app/main.py] Phase 2f: Delegation client started ✓")
-        _registry.ready("delegation")
-    except Exception as exc:
-        logger.error(
-            "[app/main.py] Phase 2f: Delegation client FAILED to start — cloud "
-            "agent turns cannot delegate tools to this desktop",
-            exc_info=True,
+    if not CLOUD_PARTICIPATION_ENABLED:
+        # Dev isolation (run.py): a coordination-silent engine never claims the
+        # user's cloud-dispatched delegated tool calls — that would race the
+        # installed app and corrupt live-test signals. This is a STATE, not a
+        # failure.
+        _registry.starting("delegation")
+        _registry.stopped("delegation")
+        logger.info(
+            "[app/main.py] Phase 2f: Delegation client DISABLED "
+            "(MATRX_CLOUD_PARTICIPATION=0 — dev coordination isolation). "
+            "This engine will not claim cloud-delegated tool calls."
         )
-        _registry.failed("delegation", exc)
+    else:
+        _registry.starting("delegation")
+        try:
+            from app.services.delegation import get_delegation_engine
+
+            await get_delegation_engine().start_background()
+            logger.info("[app/main.py] Phase 2f: Delegation client started ✓")
+            _registry.ready("delegation")
+        except Exception as exc:
+            logger.error(
+                "[app/main.py] Phase 2f: Delegation client FAILED to start — cloud "
+                "agent turns cannot delegate tools to this desktop",
+                exc_info=True,
+            )
+            _registry.failed("delegation", exc)
 
     # Phase 3: Start scraper engine
     print("[phase:scraper] Starting scraper engine...", flush=True)
@@ -893,7 +908,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.broadcast_user_id = None
     from app.api.extension_broadcast import is_broadcast_enabled
 
-    if is_broadcast_enabled():
+    if not CLOUD_PARTICIPATION_ENABLED:
+        logger.info(
+            "[app/main.py] Phase 7: cross-component broadcast SKIPPED — cloud "
+            "coordination disabled (MATRX_CLOUD_PARTICIPATION=0, dev isolation). "
+            "This engine stays off the shared per-user bridge channel."
+        )
+    elif is_broadcast_enabled():
         try:
             from app.api.extension_broadcast import connect_broadcast
             from app.services.local_db.repositories import TokenRepo

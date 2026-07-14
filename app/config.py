@@ -100,6 +100,21 @@ ALLOWED_ORIGIN_REGEX = (
 CLOUDFLARE_TUNNEL_TOKEN = os.getenv("CLOUDFLARE_TUNNEL_TOKEN", "")
 TUNNEL_ENABLED = os.getenv("TUNNEL_ENABLED", "False").lower() in ("true", "1")
 
+# ---------------------------------------------------------------------------
+# Cloud coordination participation.
+# When True (the packaged/live default), this engine attaches to the per-user
+# cloud bridge channel `matrx-local-bridge:<user_id>` and claims cloud-
+# dispatched work: the delegation client (suspend/resume of agent turns) and
+# RPC-over-broadcast. Both are USER-scoped, not instance-scoped, so two engines
+# on one account race for the same work. run.py's dev isolation defaults a
+# source-run engine to False (coordination-silent) so a dev build never steals
+# the installed app's delegated tool calls during live testing. Override with
+# MATRX_CLOUD_PARTICIPATION=1. See app/services/delegation/FEATURE.md.
+# ---------------------------------------------------------------------------
+CLOUD_PARTICIPATION_ENABLED = os.getenv(
+    "MATRX_CLOUD_PARTICIPATION", "1"
+).lower() in ("true", "1")
+
 # Remote scraper server — all DB access goes through this API, never directly.
 # Authenticated users' Supabase JWTs are accepted by the server — no API key needed for users.
 # SCRAPER_API_KEY is for server-to-server calls only (your own .env, never shipped to users).

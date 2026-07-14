@@ -19,6 +19,7 @@ import asyncio
 import base64
 import json as _json
 import logging
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,7 +28,12 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-from app.services.documents.file_manager import file_manager, content_hash
+from app.services.documents.file_manager import (
+    content_hash,
+    file_manager,
+    notes_access_guard,
+    probe_notes_access,
+)
 from app.services.documents.supabase_client import supabase_docs
 from app.services.documents.sync_engine import sync_engine
 from app.services.local_db.repositories import NotesRepo, NoteVersionsRepo
@@ -962,6 +968,53 @@ async def revert_note(note_id: str, req: RevertRequest, request: Request) -> dic
 # ---------------------------------------------------------------------------
 # Sync endpoints — explicit user-triggered sync operations
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Notes access health — the STATE behind the UI's Full-Disk-Access prompt.
+#
+# Access-degraded (macOS without Full Disk Access, bad folder permissions, or
+# a missing notes folder) is a state, not an error stream: the guard in
+# file_manager.py logs once and flips the notes_sync registry service to
+# DEGRADED; these endpoints let the UI render a first-class prompt and offer
+# "Check again" / "Create folder" actions instead of empty lists and 500s.
+# ---------------------------------------------------------------------------
+
+
+class AccessRecheckRequest(BaseModel):
+    # "Create folder" action for the missing_dir case (Windows/Linux, or a
+    # user-deleted notes dir). On macOS-without-FDA the mkdir itself is
+    # denied, so this degrades to the permission prompt — never a crash.
+    create_dir: bool = False
+
+
+def _access_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **snapshot,
+        "base_dir": str(file_manager.base_dir),
+        "platform": sys.platform,
+    }
+
+
+@router.get("/access")
+async def notes_access_status() -> dict[str, Any]:
+    """Current notes-directory access state (no filesystem probe)."""
+    return _access_payload(notes_access_guard.snapshot())
+
+
+@router.post("/access/recheck")
+async def notes_access_recheck(req: AccessRecheckRequest | None = None) -> dict[str, Any]:
+    """Actively re-probe the notes directory ("Check again" button).
+
+    Clears the degraded state the moment access is restored — no engine
+    restart needed. With ``create_dir`` it also creates a missing notes
+    folder ("Create folder" button).
+    """
+    create = bool(req.create_dir) if req is not None else False
+    snapshot = await asyncio.to_thread(
+        probe_notes_access, file_manager.base_dir, create_missing=create
+    )
+    return _access_payload(snapshot)
+
 
 @router.get("/sync/status")
 async def sync_status(request: Request) -> dict[str, Any]:

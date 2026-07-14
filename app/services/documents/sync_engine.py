@@ -1520,6 +1520,7 @@ class SyncEngine:
             # of silently showing an empty, non-syncing notes list.
             "notes_access_degraded": notes_access_guard.is_degraded,
             "notes_access_reason": notes_access_guard.reason,
+            "notes_access_kind": notes_access_guard.kind,
         }
 
 

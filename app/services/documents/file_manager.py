@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -44,10 +45,19 @@ logger = logging.getLogger(__name__)
 # successful op clears it back to READY) or a modest recheck interval elapses.
 
 _NOTES_SERVICE = "notes_sync"
-_DEGRADED_REASON = (
-    "macOS denied access to ~/Documents — grant Full Disk Access in "
-    "System Settings > Privacy & Security"
-)
+# Platform-appropriate, user-actionable reason for a permission denial.
+# macOS: the fix is Full Disk Access. Windows/Linux: FDA does not exist —
+# the fix is folder permissions/ownership, so say that instead.
+if sys.platform == "darwin":
+    _DEGRADED_REASON = (
+        "macOS denied access to ~/Documents — grant Full Disk Access in "
+        "System Settings > Privacy & Security"
+    )
+else:
+    _DEGRADED_REASON = (
+        "The operating system denied access to the notes folder — check the "
+        "folder's permissions and ownership"
+    )
 # While degraded, let one probe op through this often to detect restored access.
 _RECHECK_INTERVAL_S = 60.0
 
@@ -88,6 +98,7 @@ class _NotesAccessGuard:
         self._lock = threading.Lock()
         self._degraded = False
         self._reason: str | None = None
+        self._kind: str | None = None  # "permission" | "missing_dir"
         self._last_denied_at = 0.0
 
     def note_denied(self, exc: BaseException, op: str) -> None:
@@ -96,6 +107,7 @@ class _NotesAccessGuard:
             already = self._degraded
             self._degraded = True
             self._reason = _DEGRADED_REASON
+            self._kind = "permission"
             self._last_denied_at = time.monotonic()
         if already:
             return
@@ -113,6 +125,32 @@ class _NotesAccessGuard:
         except Exception:  # registry is best-effort — never mask the real error
             logger.debug("[notes] could not mark notes_sync degraded", exc_info=True)
 
+    def note_missing(self, path: Path) -> None:
+        """Record that the notes directory itself does not exist.
+
+        Distinct from a permission denial: the fix is "create the folder",
+        not "grant access". Logs + transitions the registry ONCE, same as
+        note_denied.
+        """
+        reason = f"Notes folder does not exist: {path}"
+        with self._lock:
+            already = self._degraded
+            self._degraded = True
+            self._reason = reason
+            self._kind = "missing_dir"
+            self._last_denied_at = time.monotonic()
+        if already:
+            return
+        logger.warning(
+            "[notes] %s. Skipping notes sync until the folder exists.", reason
+        )
+        try:
+            from app.launcher import get_registry
+
+            get_registry().degraded(_NOTES_SERVICE, reason=reason)
+        except Exception:
+            logger.debug("[notes] could not mark notes_sync degraded", exc_info=True)
+
     def note_ok(self) -> None:
         """A notes op succeeded — clear degraded state back to READY (once)."""
         with self._lock:
@@ -120,6 +158,7 @@ class _NotesAccessGuard:
                 return
             self._degraded = False
             self._reason = None
+            self._kind = None
         logger.info("[notes] access to notes directory restored — notes_sync ready")
         try:
             from app.launcher import get_registry
@@ -137,6 +176,21 @@ class _NotesAccessGuard:
     def reason(self) -> str | None:
         with self._lock:
             return self._reason
+
+    @property
+    def kind(self) -> str | None:
+        """Why access is degraded: "permission" | "missing_dir" | None."""
+        with self._lock:
+            return self._kind
+
+    def snapshot(self) -> dict[str, Any]:
+        """Consistent {degraded, reason, kind} view for API surfaces."""
+        with self._lock:
+            return {
+                "degraded": self._degraded,
+                "reason": self._reason,
+                "kind": self._kind,
+            }
 
     def should_skip_sync(self) -> bool:
         """True while degraded AND inside the recheck backoff window.
@@ -158,6 +212,53 @@ class _NotesAccessGuard:
 
 # Module-level singleton — the single source of truth for notes access health.
 notes_access_guard = _NotesAccessGuard()
+
+
+def probe_notes_access(base_dir: Path, *, create_missing: bool = False) -> dict[str, Any]:
+    """Actively re-probe access to the notes directory and update the guard.
+
+    This is the "Check again" mechanism behind POST /notes/access/recheck: the
+    UI shows a first-class prompt while degraded (macOS Full Disk Access,
+    folder permissions, or a missing folder) and calls this to detect that the
+    user fixed it — without restarting the engine.
+
+    - Missing dir + ``create_missing`` → try to create it ("Create folder").
+    - Missing dir otherwise → guard flips to kind="missing_dir".
+    - Exists → attempt a real listdir; PermissionError → kind="permission".
+    - Any success → guard clears back to READY (note_ok logs once).
+
+    Returns the guard snapshot after the probe.
+    """
+    try:
+        exists = base_dir.exists()
+    except OSError as e:
+        if _is_permission_error(e):
+            notes_access_guard.note_denied(e, f"probing {base_dir}")
+            return notes_access_guard.snapshot()
+        raise
+    if not exists:
+        if create_missing:
+            try:
+                base_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                if _is_permission_error(e):
+                    notes_access_guard.note_denied(e, f"creating {base_dir}")
+                    return notes_access_guard.snapshot()
+                raise
+            notes_access_guard.note_ok()
+            return notes_access_guard.snapshot()
+        notes_access_guard.note_missing(base_dir)
+        return notes_access_guard.snapshot()
+    try:
+        with os.scandir(base_dir) as it:
+            next(it, None)
+    except OSError as e:
+        if _is_permission_error(e):
+            notes_access_guard.note_denied(e, f"listing {base_dir}")
+            return notes_access_guard.snapshot()
+        raise
+    notes_access_guard.note_ok()
+    return notes_access_guard.snapshot()
 
 # These module-level names are used as fallbacks during import-time initialisation
 # before the path manager is fully loaded. After that, DocumentFileManager.base_dir

@@ -83,6 +83,15 @@ class FakeFileManager:
         self.deleted.append(file_path)
         return self.notes.pop(file_path, None) is not None
 
+    def unique_file_path(self, folder_name: str, label: str) -> str:
+        base = f"{folder_name}/{label}.md"
+        if base not in self.notes:
+            return base
+        n = 2
+        while f"{folder_name}/{label}_{n}.md" in self.notes:
+            n += 1
+        return f"{folder_name}/{label}_{n}.md"
+
     def note_hash(self, file_path: str) -> str | None:
         content = self.notes.get(file_path)
         return content_hash(content) if content is not None else None
@@ -150,6 +159,31 @@ class FakeSupabase:
         self.calls.append(("upsert_note", kw))
         row = {**kw, "id": kw["note_id"], "sync_version": 1}
         self.notes[kw["note_id"]] = row
+        return row
+
+    async def update_note_if_unchanged(
+        self,
+        note_id: str,
+        updates: dict[str, Any],
+        expected_content_hash: str,
+        device_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if self.fail_pushes:
+            raise RuntimeError("simulated network failure")
+        row = self.notes.get(note_id)
+        if (
+            row is None
+            or row.get("is_deleted")
+            or row.get("content_hash") != expected_content_hash
+        ):
+            self.calls.append(("update_note_if_unchanged:precondition_failed", {"note_id": note_id}))
+            return None
+        self.calls.append(("update_note_if_unchanged", {"note_id": note_id, **updates}))
+        row = {**row, **updates, "id": note_id}
+        if "content" in updates:
+            from app.services.documents.file_manager import content_hash as _ch
+            row["content_hash"] = _ch(updates["content"])
+        self.notes[note_id] = row
         return row
 
     async def update_note(
@@ -268,8 +302,6 @@ def test_push_new_note_upserts_and_marks_synced(engine: SyncEngine) -> None:
     assert engine._repo.status_calls == [("n1", "synced", content_hash("body"))]
     # note_hashes recorded ONLY after the successful push.
     assert engine.fm.state["note_hashes"]["General/Hello.md"] == content_hash("body")
-    # sync_version from the cloud row advances local state.
-    assert engine.fm.state["last_sync_version"] == 1
 
 
 def test_push_existing_note_is_a_single_upsert(engine: SyncEngine) -> None:
@@ -334,7 +366,6 @@ def test_pull_overwrites_when_local_unchanged_since_last_sync(engine: SyncEngine
     row = engine._repo.rows[note_id]
     assert row["sync_status"] == "synced"
     assert row["content_hash"] == content_hash("remote newer content")
-    assert engine.fm.state["last_sync_version"] == 5
 
 
 def test_pull_conflicts_when_local_edited_since_last_sync(engine: SyncEngine) -> None:
@@ -567,7 +598,7 @@ def test_pull_changes_skips_notes_we_just_pushed(engine: SyncEngine) -> None:
     _configure(engine)
     fp = "General/mine.md"
 
-    async def fake_get_notes_since(user_id: str, since: int) -> list[dict[str, Any]]:
+    async def fake_get_notes_since(user_id: str, since: str | None) -> list[dict[str, Any]]:
         return [
             {"id": "n1", "file_path": fp, "content_hash": content_hash("pushed body")}
         ]
@@ -576,4 +607,95 @@ def test_pull_changes_skips_notes_we_just_pushed(engine: SyncEngine) -> None:
     engine._last_push_hashes[fp] = content_hash("pushed body")
 
     result = _run(engine.pull_changes())
-    assert result == {"pulled": 0, "conflicts": 0}
+    assert result["pulled"] == 0 and result["conflicts"] == 0
+    assert result["skipped"] == 1
+
+
+def test_pull_changes_never_echo_skips_tombstones(engine: SyncEngine) -> None:
+    """A soft-delete changes deleted_at but NOT content_hash — the own-echo
+    hash shortcut must not suppress the deletion (pinned 2026-07-13)."""
+    _configure(engine)
+    fp = "General/mine.md"
+    engine.fm.notes[fp] = "pushed body"
+    engine.fm.state["note_hashes"][fp] = content_hash("pushed body")
+    engine._last_push_hashes[fp] = content_hash("pushed body")
+    engine.sb.notes["n1"] = {"id": "n1", "file_path": fp, "is_deleted": True}
+
+    async def fake_get_notes_since(user_id: str, since: str | None) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "n1",
+                "file_path": fp,
+                "content_hash": content_hash("pushed body"),
+                "is_deleted": True,
+                "updated_at": "2026-07-13T00:00:00+00:00",
+            }
+        ]
+
+    engine.sb.get_notes_since = fake_get_notes_since  # type: ignore[attr-defined]
+    result = _run(engine.pull_changes())
+    assert result["deleted"] == 1
+    assert fp not in engine.fm.notes
+    assert engine.fm.state["last_pull_at"] == "2026-07-13T00:00:00+00:00"
+
+
+def test_pull_allocates_path_for_pathless_cloud_note_without_clobbering(
+    engine: SyncEngine,
+) -> None:
+    """Cloud notes from other clients have file_path NULL. The pull must NOT
+    derive <folder>/<label>.md directly — that overwrites whichever local note
+    already owns the filename (pinned 2026-07-13)."""
+    _configure(engine)
+    # Existing local note occupies General/Todo.md and is tracked in SQLite.
+    _run(engine._repo.upsert({"id": "local-1", "file_path": "General/Todo.md"}))
+    engine.fm.notes["General/Todo.md"] = "existing local note"
+    # Remote pathless note with the same label.
+    engine.sb.notes["cloud-1"] = {
+        "id": "cloud-1",
+        "label": "Todo",
+        "folder_name": "General",
+        "content": "web-authored note",
+        "content_hash": content_hash("web-authored note"),
+        "file_path": None,
+    }
+
+    result = _run(engine.pull_note("cloud-1"))
+    assert result is not None
+    assert engine.fm.notes["General/Todo.md"] == "existing local note"
+    row = engine._repo.rows["cloud-1"]
+    assert row["file_path"] != "General/Todo.md"
+    assert engine.fm.notes[row["file_path"]] == "web-authored note"
+
+
+def test_push_conflicts_instead_of_overwriting_foreign_remote_edit(
+    engine: SyncEngine,
+) -> None:
+    """Optimistic-concurrency push: when the remote row moved (another device
+    wrote it since our last sync), the push must preserve BOTH sides — never
+    silent last-writer-wins (pinned 2026-07-13)."""
+    _configure(engine)
+    fp = "General/Hello.md"
+    engine.fm.state["note_hashes"][fp] = content_hash("commonly synced")
+    engine.sb.notes["n1"] = {
+        "id": "n1",
+        "label": "Hello",
+        "content": "edited on ANOTHER device",
+        "content_hash": content_hash("edited on ANOTHER device"),
+        "last_device_id": "other-device",
+        "file_path": fp,
+    }
+
+    result = _run(engine.push_note("n1", "Hello", "edited HERE", file_path=fp))
+    assert result.get("_conflict") is True
+    # Cloud row untouched; both sides captured.
+    assert engine.sb.notes["n1"]["content"] == "edited on ANOTHER device"
+    assert engine.fm.conflicts_saved == [
+        {
+            "file_path": fp,
+            "local": "edited HERE",
+            "remote": "edited on ANOTHER device",
+            "id": "n1",
+        }
+    ]
+    # note_hashes must NOT advance — nothing synced.
+    assert engine.fm.state["note_hashes"][fp] == content_hash("commonly synced")

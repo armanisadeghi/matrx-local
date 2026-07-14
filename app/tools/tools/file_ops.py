@@ -140,6 +140,17 @@ async def tool_edit(
     )
 
 
+def _remove_existing(path: str) -> None:
+    """Clear a destination ahead of an overwrite-mode Move/Copy.
+
+    Raises OSError on failure — callers surface it as the operation's error.
+    """
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
+
+
 # ── File management: Move / Copy / Delete / Rename / Mkdir ───────────────────
 #
 # These are the elementary verbs an agent needs to actually MANAGE files.
@@ -165,11 +176,16 @@ async def tool_move(
         dst = os.path.join(dst, os.path.basename(src))
     if os.path.abspath(dst) == os.path.abspath(src):
         return ToolResult(type=ToolResultType.ERROR, output="Source and destination are the same path.")
-    if os.path.exists(dst) and not overwrite:
-        return ToolResult(
-            type=ToolResultType.ERROR,
-            output=f"Destination already exists: {dst}. Pass overwrite=true to replace it.",
-        )
+    if os.path.exists(dst):
+        if not overwrite:
+            return ToolResult(
+                type=ToolResultType.ERROR,
+                output=f"Destination already exists: {dst}. Pass overwrite=true to replace it.",
+            )
+        # overwrite means REPLACE, not merge/nest: without this, moving a
+        # directory onto an existing directory would nest it inside
+        # (shutil.move semantics), silently doing the wrong thing.
+        _remove_existing(dst)
 
     try:
         os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
@@ -195,16 +211,21 @@ async def tool_copy(
         dst = os.path.join(dst, os.path.basename(src))
     if os.path.abspath(dst) == os.path.abspath(src):
         return ToolResult(type=ToolResultType.ERROR, output="Source and destination are the same path.")
-    if os.path.exists(dst) and not overwrite:
-        return ToolResult(
-            type=ToolResultType.ERROR,
-            output=f"Destination already exists: {dst}. Pass overwrite=true to replace it.",
-        )
+    if os.path.exists(dst):
+        if not overwrite:
+            return ToolResult(
+                type=ToolResultType.ERROR,
+                output=f"Destination already exists: {dst}. Pass overwrite=true to replace it.",
+            )
+        # overwrite means REPLACE, not merge: copytree(dirs_exist_ok=True)
+        # would merge into the existing tree and leave stale files behind,
+        # and dir-over-file would raise. Clear the destination first.
+        _remove_existing(dst)
 
     try:
         os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
         if os.path.isdir(src):
-            shutil.copytree(src, dst, dirs_exist_ok=overwrite)
+            shutil.copytree(src, dst)
         else:
             shutil.copy2(src, dst)
     except OSError as e:
@@ -284,7 +305,11 @@ async def tool_rename(
         return ToolResult(type=ToolResultType.ERROR, output=f"Invalid new name: {new_name!r}")
 
     dst = os.path.join(os.path.dirname(resolved), new_name)
-    if os.path.exists(dst):
+    # Allow pure case-changes on case-insensitive filesystems (macOS/Windows):
+    # there os.path.exists(dst) is True because dst IS the source inode, yet
+    # renaming File.txt → file.txt is the legitimate way to fix casing.
+    same_inode = os.path.exists(dst) and os.path.samefile(resolved, dst)
+    if os.path.exists(dst) and not same_inode:
         return ToolResult(type=ToolResultType.ERROR, output=f"A file or directory named {new_name!r} already exists here.")
 
     try:

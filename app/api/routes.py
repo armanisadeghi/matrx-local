@@ -86,13 +86,17 @@ async def root():
 async def health():
     """Health check that tells the truth about managed services.
 
-    Always HTTP 200 while the engine process is alive (probes equate non-200
-    with a dead engine, and a degraded engine is NOT dead), but the payload
-    reflects the launcher registry instead of a hardcoded "ok" — v1.3.105
-    shipped an engine that answered {"status": "ok"} while ai_engine was
-    failed and 0 tools were registered (MXL-D-029/MXL-D-030). Reading the
-    in-memory snapshot costs microseconds, so this stays probe-cheap
-    (MXL-D-018).
+    CONTRACT: ``status`` is ALWAYS the literal "ok" while the engine process
+    is alive — matrx-extend's discovery pins it with `z.literal('ok')`
+    (matrx-extend src/lib/desktop/types.ts) and discards the port on any
+    other value, so overloading ``status`` with degraded states makes a
+    LIVE engine invisible to the extension. Liveness and health are
+    different questions: ``status`` answers "is the engine here", while
+    ``health`` / ``failed`` / ``degraded`` answer "is everything working" —
+    v1.3.105 shipped an engine that answered a bare {"status": "ok"} while
+    ai_engine was failed and 0 tools were registered (MXL-D-029/MXL-D-030),
+    which is why the detail fields exist. Reading the in-memory snapshot
+    costs microseconds, so this stays probe-cheap (MXL-D-018).
     """
     from app.launcher import get_registry
 
@@ -100,14 +104,15 @@ async def health():
     failed = sorted(n for n, s in services.items() if s.get("state") == "failed")
     degraded = sorted(n for n, s in services.items() if s.get("state") == "degraded")
 
-    status = "ok"
+    health_state = "ok"
     if degraded:
-        status = "degraded"
+        health_state = "degraded"
     if failed:
-        status = "failed_services"
+        health_state = "failed_services"
 
     payload: dict = {
-        "status": status,
+        "status": "ok",  # liveness literal — see contract note above
+        "health": health_state,
         "service": "matrx-local",
         "version": _APP_VERSION,
     }

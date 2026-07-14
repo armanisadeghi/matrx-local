@@ -286,6 +286,11 @@ class SupabaseDocClient:
             "metadata": metadata or {},
             "content_hash": _content_hash(content),
             "last_device_id": device_id,
+            # Explicit resurrect-on-push: if the row was soft-deleted remotely
+            # while this device kept editing the local file, pushing the edit
+            # revives the note (edit-vs-delete resolves to keep-the-edit —
+            # never destructive).
+            "deleted_at": None,
         }
         rows = await self._request(
             "POST",
@@ -317,12 +322,51 @@ class SupabaseDocClient:
         )
         return rows[0] if rows else {}
 
-    async def soft_delete_note(self, note_id: str) -> None:
+    async def update_note_if_unchanged(
+        self,
+        note_id: str,
+        updates: dict[str, Any],
+        expected_content_hash: str,
+        device_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Optimistic-concurrency update: PATCH only if the remote row still
+        carries ``expected_content_hash`` and is live.
+
+        Returns the updated row, or ``None`` when the precondition failed
+        (remote content moved since our last sync, or the row was
+        soft-deleted) — the caller must then run the pull/conflict path
+        instead of overwriting. This is what prevents silent cross-device
+        last-writer-wins on user content (SYNC_CONTRACT).
+        """
+        if "content" in updates:
+            updates["content_hash"] = _content_hash(updates["content"])
+        if device_id:
+            updates["last_device_id"] = device_id
+        rows = await self._request(
+            "PATCH",
+            "notes",
+            params={
+                "id": f"eq.{note_id}",
+                "content_hash": f"eq.{expected_content_hash}",
+                "deleted_at": "is.null",
+            },
+            json_body=updates,
+            schema=_WORKBENCH,
+        )
+        return rows[0] if rows else None
+
+    async def soft_delete_note(self, note_id: str, device_id: str | None = None) -> None:
+        body: dict[str, Any] = {"deleted_at": _utcnow_iso()}
+        # Stamp the deleting device so realtime consumers can classify the
+        # event; without this a delete inherits the LAST CONTENT WRITER's id
+        # and gets misread as that device's own echo.
+        if device_id:
+            body["last_device_id"] = device_id
         await self._request(
             "PATCH",
             "notes",
             params={"id": f"eq.{note_id}"},
-            json_body={"deleted_at": _utcnow_iso()},
+            json_body=body,
             schema=_WORKBENCH,
         )
 
@@ -347,26 +391,31 @@ class SupabaseDocClient:
     # ── Bulk fetch for sync ──────────────────────────────────────────────────
 
     async def get_notes_since(
-        self, user_id: str, since_version: int
+        self, user_id: str, since_iso: str | None
     ) -> list[dict[str, Any]]:
-        """Get all notes updated since a given sync_version.
+        """Get all notes touched since a given ``updated_at`` timestamp.
 
-        Includes soft-deleted rows on purpose: the cloud-side
-        ``trigger_notes_sync_version`` (BEFORE UPDATE) bumps ``sync_version``
-        on every update including the ``deleted_at`` PATCH, so remote
-        deletions ride the same incremental checkpoint as edits and propagate
-        via pull_changes → _pull_note's tombstone branch.
+        The incremental cursor is ``updated_at`` (stamped by the cloud-side
+        ``platform._touch_row`` BEFORE UPDATE trigger on EVERY write,
+        including the ``deleted_at`` soft-delete PATCH). It must NOT be
+        ``sync_version``: that column is a PER-ROW edit counter
+        (``increment_sync_version`` bumps only on content/label change), so a
+        global max-of-sync_version watermark goes blind to any note edited
+        fewer times than the busiest note, and to ALL soft-deletes — the
+        exact bug that made remote edits and deletions never reach this
+        engine incrementally.
+
+        Includes soft-deleted rows on purpose so deletions propagate via
+        pull_changes → _pull_note's tombstone branch. ``since_iso`` None
+        means "everything".
         """
-        rows = await self._request(
-            "GET",
-            "notes",
-            params={
-                "created_by": f"eq.{user_id}",
-                "sync_version": f"gt.{since_version}",
-                "order": "sync_version.asc",
-            },
-            schema=_WORKBENCH,
-        )
+        params: dict[str, str] = {
+            "created_by": f"eq.{user_id}",
+            "order": "updated_at.asc",
+        }
+        if since_iso:
+            params["updated_at"] = f"gt.{since_iso}"
+        rows = await self._request("GET", "notes", params=params, schema=_WORKBENCH)
         return [_normalize_note_row(r) for r in rows]
 
     async def get_all_notes_with_hashes(self, user_id: str) -> list[dict[str, Any]]:

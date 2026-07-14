@@ -22,6 +22,7 @@ import shutil
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -309,6 +310,31 @@ class DocumentFileManager:
         """Convert an absolute path back to a relative file_path string."""
         return str(absolute.relative_to(self.base_dir))
 
+    def unique_file_path(self, folder_name: str, label: str) -> str:
+        """Return a relative file_path that does not yet exist on disk.
+
+        If ``folder/label.md`` is taken, appends _2, _3 … _99, then falls back
+        to a compact UTC timestamp suffix. This is the ONLY sanctioned way to
+        pick a path for a note that doesn't already own one — deriving
+        ``<folder>/<label>.md`` directly silently overwrites whichever note
+        currently occupies that path.
+        """
+        base_path = self.note_path(folder_name, label)
+        if not base_path.exists():
+            return self.relative_path(base_path)
+
+        safe_label = _safe_filename(label)
+        folder_dir = self.folder_path(folder_name)
+        folder_dir.mkdir(parents=True, exist_ok=True)
+
+        for n in range(2, 100):
+            candidate = folder_dir / f"{safe_label}_{n}.md"
+            if not candidate.exists():
+                return self.relative_path(candidate)
+
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        return self.relative_path(folder_dir / f"{safe_label}_{ts}.md")
+
     # ── Folder operations ────────────────────────────────────────────────────
 
     def create_folder(self, folder_name: str) -> Path:
@@ -486,9 +512,14 @@ class DocumentFileManager:
     ) -> str:
         """Save conflicting versions for manual resolution.
 
-        Returns the path to the conflict directory.
+        First capture wins: if a conflict for this note is already filed,
+        the snapshots are NOT overwritten — repeated detection passes (sync
+        ticks) would otherwise keep re-capturing drifting content over the
+        original divergence point. Returns the conflict directory path.
         """
         conflict_dir = self._conflicts_dir / note_id
+        if (conflict_dir / "local.md").exists():
+            return str(conflict_dir)
         conflict_dir.mkdir(parents=True, exist_ok=True)
         (conflict_dir / "local.md").write_text(local_content, encoding="utf-8")
         (conflict_dir / "remote.md").write_text(remote_content, encoding="utf-8")

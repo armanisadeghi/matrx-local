@@ -24,22 +24,26 @@ import websockets
 
 
 def test_health(http_public: httpx.Client) -> None:
-    """GET /health returns 200 and the honest registry-backed contract.
+    """GET /health: liveness literal + honest health detail.
 
-    status is ok|degraded|failed_services (alive != fully healthy — the
-    engine reports failed/degraded managed services instead of a hardcoded
-    "ok"); non-ok statuses must name the offending services so a remote
-    client can tell WHAT is broken, not just that something is.
+    `status` is ALWAYS the literal "ok" while the process is alive — the
+    matrx-extend discovery schema pins z.literal('ok') and drops the port on
+    anything else, so this field is a liveness contract, not a health
+    report. The health report lives in `health` (ok|degraded|failed_services)
+    plus `failed`/`degraded` service-name lists, so a remote client can tell
+    WHAT is broken instead of a dead engine masquerading as healthy
+    (MXL-D-029/030).
     """
     r = http_public.get("/health")
     assert r.status_code == 200, r.text
     data = r.json()
     assert data.get("service") == "matrx-local"
-    status = data.get("status")
-    assert status in ("ok", "degraded", "failed_services"), data
-    if status == "failed_services":
+    assert data.get("status") == "ok"  # liveness literal — never overload
+    health = data.get("health")
+    assert health in ("ok", "degraded", "failed_services"), data
+    if health == "failed_services":
         assert data.get("failed"), data
-    if status == "degraded":
+    if health == "degraded":
         assert data.get("degraded"), data
 
 

@@ -29,6 +29,7 @@ interface ChatInputProps {
   onAgentChange?: (agentId: string | null) => void;
   agentsLoading?: boolean;
   showModelSelector?: boolean;
+  showModeSelector?: boolean;
 }
 
 const modeLabels: Record<ChatMode, string> = {
@@ -53,6 +54,7 @@ export function ChatInput({
   onAgentChange,
   agentsLoading = false,
   showModelSelector = true,
+  showModeSelector = true,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
   const [showModelDropdown, setShowModelDropdown] = useState(false);
@@ -119,23 +121,24 @@ export function ChatInput({
 
   return (
     <div className="mx-auto w-full max-w-3xl px-2 pt-1 md:px-4">
-      {/* Mode Tabs — centered above composer */}
-      <div className="mb-1.5 flex items-center justify-center gap-1">
-        {(Object.keys(modeLabels) as ChatMode[]).map((m) => (
-          <button
-            key={m}
-            onClick={() => onModeChange(m)}
-            className={cn(
-              "rounded-full px-3 py-1 text-xs font-medium transition-all duration-200",
-              mode === m
-                ? "bg-primary text-primary-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted",
-            )}
-          >
-            {modeLabels[m]}
-          </button>
-        ))}
-      </div>
+      {showModeSelector && (
+        <div className="mb-1.5 flex items-center justify-center gap-1">
+          {(Object.keys(modeLabels) as ChatMode[]).map((m) => (
+            <button
+              key={m}
+              onClick={() => onModeChange(m)}
+              className={cn(
+                "rounded-full px-3 py-1 text-xs font-medium transition-all duration-200",
+                mode === m
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted",
+              )}
+            >
+              {modeLabels[m]}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Composer Container */}
       <div className="glass relative rounded-xl transition-shadow focus-within:shadow-md">

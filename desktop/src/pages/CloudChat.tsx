@@ -4,7 +4,6 @@ import {
   Cloud,
   Loader2,
   MessageSquarePlus,
-  RefreshCw,
 } from "lucide-react";
 import { AgentPicker } from "@/components/chat/AgentPicker";
 import { ChatInput } from "@/components/chat/ChatInput";
@@ -67,11 +66,9 @@ export function CloudChat() {
     deleteConversation,
     groupedConversations,
     historyError,
-    historyLoading,
     isStreaming,
     mode,
     model,
-    refreshConversations,
     renameConversation,
     selectConversation,
     sendMessage,
@@ -86,7 +83,6 @@ export function CloudChat() {
     executionError,
     executionLoadingAgentId,
     isLoading: agentsLoading,
-    refresh,
   } = cloudAgents;
 
   const activeConversation = cloudChat.activeConversation;
@@ -104,6 +100,21 @@ export function CloudChat() {
     setActiveAgent(defaultAgent);
     setDefaultAgentApplied(true);
   }, [activeAgent, activeConversationId, agents, defaultAgentApplied]);
+
+  useEffect(() => {
+    if (!activeConversationId) return;
+    if (!activeConversation?.agentId) {
+      setActiveAgent(null);
+      return;
+    }
+    const conversationAgent = agents.find((agent) => agent.id === activeConversation.agentId);
+    if (conversationAgent) {
+      setActiveAgent(conversationAgent);
+      setDefaultAgentApplied(true);
+    } else {
+      setActiveAgent(null);
+    }
+  }, [activeConversation?.agentId, activeConversationId, agents]);
 
   useEffect(() => {
     if (!selectedAgentId || hasMessages) {
@@ -146,11 +157,11 @@ export function CloudChat() {
       setDefaultAgentApplied(true);
       setActiveVariables([]);
       setVariableValues({});
-      if (activeConversationId && !hasMessages) {
+      if (activeConversationId) {
         selectConversation(null);
       }
     },
-    [activeConversationId, agents, hasMessages, selectConversation],
+    [activeConversationId, agents, selectConversation],
   );
 
   const handleNewChat = useCallback(() => {
@@ -198,7 +209,7 @@ export function CloudChat() {
   const pickerLabel = activeAgent?.name ?? "Select an agent";
   const showVariables = activeVariables.length > 0 && !hasMessages;
   const cloudError =
-    agentsError ?? executionError ?? cloudChat.modelError ?? cloudChat.requestError ?? historyError;
+    agentsError ?? executionError ?? cloudChat.requestError ?? historyError;
   const sidebarAgentPicker = (
     <Button
       type="button"
@@ -229,30 +240,6 @@ export function CloudChat() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
-        <header className="no-select flex h-12 items-center justify-between border-b px-4">
-          <h1 className="min-w-0 truncate text-sm font-medium">
-            {activeConversation?.title ?? "New chat"}
-          </h1>
-          <div className="flex items-center gap-1">
-            {(agentsLoading || historyLoading) && (
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            )}
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => {
-                void refresh();
-                void refreshConversations();
-              }}
-              title="Refresh"
-            >
-              <RefreshCw className="h-4 w-4" />
-            </Button>
-          </div>
-        </header>
-
         {cloudError && (
           <div className="border-b border-amber-500/30 bg-amber-500/5 px-4 py-2 text-xs text-amber-500">
             {cloudError}
@@ -306,6 +293,7 @@ export function CloudChat() {
             engineReady
             selectedAgentId={selectedAgentId}
             showModelSelector={false}
+            showModeSelector={false}
           />
         </div>
       </div>

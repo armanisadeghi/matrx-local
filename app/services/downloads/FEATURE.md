@@ -58,6 +58,36 @@ cache last). This applies to ALL of:
 Never read `.env` directly for user tokens; never cache a token across
 requests — rotation must take effect on the next call.
 
+## Startup resume RECONCILES against disk — it never blind-re-downloads
+
+`_resume_incomplete` runs on every boot over rows still in `queued`/`active`
+(the app closed or crashed mid-download, or an item never dispatched). It does
+**not** blindly re-queue them — that historic behavior re-downloaded models the
+user ALREADY HAD from scratch, then failed on gated-repo 401s / missing keys for
+weights sitting on disk the whole time ("the system isn't checking if I have
+them"). Every stale row is triaged:
+
+- **already on disk** (`artifact_present`) → settle as `completed`, broadcast a
+  completed event, **never re-fetch**.
+- **malformed** (no `dest_dir` — can never download) → mark `failed` with a
+  clear reason so it stops resurrecting every boot (this is the `total=106`
+  junk-row class from the shipped-v1.3.113 logs).
+- **genuinely incomplete** → re-queue (restart from scratch; no range resume).
+
+`artifact_present(metadata, filename)` is the **single completion contract**,
+shared by `enqueue`'s idempotency check and resume so the two can never
+disagree:
+
+| Download kind | "present" means |
+|---|---|
+| HF snapshot (`hf_repo_id`) | `.download-complete` marker in `dest_dir` |
+| Civitai / marker-gated single file (`write_complete_marker`) | marker **and** the weight file present |
+| Plain single-file (GGUF, transfer, …) | the destination file present |
+
+The marker is written LAST by each writer, so its presence is a true
+"fully done" signal — a half-finished download (no marker) correctly reads as
+absent and re-downloads.
+
 ## Stale-row re-triage
 
 Failed rows written before this taxonomy carry only `error_msg`.

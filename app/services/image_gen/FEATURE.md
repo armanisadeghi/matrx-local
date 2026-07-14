@@ -100,6 +100,65 @@ A batch is N jobs sharing a `batch_id` — the unit a user actually thinks in
 | `POST /queue/reorder` | Reorders **queued** jobs only. The running job never moves. Unknown / no-longer-queued ids are ignored — the user dragging a row at the instant it starts running is a no-op, never a resurrection. |
 | `POST /jobs/{id}/retry` | Resets the attempt budget to 0: the user asking again is a new decision, not a continuation of the automatic backoff. 409 if the input image is gone. |
 
+## LoRA styles & custom models — resolve from an id or ANY url, never an exact one
+
+`loras.py` (store + curated catalog), `custom_models.py` (`parse_ref` /
+`resolve_hf` / `resolve_civitai`), routes in `image_gen_routes.py`
+(`/loras`, `/loras/download`, `/custom-models*`).
+
+### The user never hand-crafts a URL
+
+`parse_ref` is the single classifier for every LoRA/checkpoint reference. A user
+supplies **the id, or any link that contains it** — it resolves the rest:
+
+- HF repo id `org/name`; any `huggingface.co/hf.co` URL — model page, `tree`,
+  `blob`, or a deep `…/resolve|blob|raw/<rev>/<file>.safetensors` link (the
+  exact weight is captured into `weight_name` so the user is never re-asked to
+  pick a file they just pasted — `download_lora` uses `req.weight_name or the
+  URL hint`).
+- Civitai: a bare numeric model id, `civitai:<model>[@<version>]`, or any
+  `civitai.com` / `.red` / `.green` model / model-version / `api/download`
+  URL. The `?modelVersionId=` pin is preserved — multi-base pages (ZIT + Flux +
+  SDXL on one page) resolve to the newest version without it, often a different
+  family.
+
+Anything unresolvable → `InspectError(400)` with the reason. `parse_ref` is pure
+(no network) and unit-testable directly.
+
+### One bad entry never blanks the panel (fault isolation)
+
+`GET /image-gen/loras` builds every installed/catalog row **independently** —
+one malformed entry is skipped with a loud `logger.error`, the rest still
+render. Before this, a single hand-added catalog entry missing a required key
+(e.g. `license`) raised `KeyError`, 500'd the endpoint, and the client nulled
+BOTH lists — so a user who added several LoRAs saw *zero* of them. Never
+reintroduce hard dict-indexing in that response builder.
+
+`loras.validate_catalog()` runs at import and logs any malformed / duplicate
+`CURATED_LORA_CATALOG` entry at **startup**, so an authoring mistake is loud
+immediately, not silent until "Get more" is opened. Every catalog entry needs
+`repo_id, name, description, weight_name, base_family, license` (must match
+`LoraCatalogInfo`'s non-default fields).
+
+### Install & completion contract
+
+LoRA downloads route through the universal DownloadManager (category
+`image_gen_lora`) — **never an inline silent download**. The metadata sidecar
+(`lora.json`) is written first so the LoRA shows as *pending* immediately; the
+`.download-complete` marker (written last) flips it to *installed*. A LoRA is
+"installed" only when `lora.json` + marker + weight file all exist
+(`get_installed_lora`). Startup resume reconciles a half-finished LoRA download
+against this same contract (see `downloads/FEATURE.md`).
+
+### Family compatibility is HONEST — a mismatch fails loud, never silently hides
+
+`guess_base_family` maps a LoRA to `sdxl|sd15|flux|z-image|unknown` from the
+declared `base_model` then repo-id/filename heuristics. `check_lora_model_compat`
+raises (naming the mismatch) when a KNOWN family differs from the model's
+`lora_family`; `unknown` is attempted and diffusers' own error surfaces. LoRAs
+are **never filtered out of the UI by family** — they always list; only an
+enabled cross-family selection is rejected at generate time.
+
 ## The client side
 
 The `{{variable}}` engine itself lives in the desktop app and is **media-agnostic**

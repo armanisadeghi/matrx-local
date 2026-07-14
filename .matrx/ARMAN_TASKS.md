@@ -21,23 +21,16 @@ _Last updated: 2026-07-13 (hygiene pass: GLiNER NER review closed — Arman appr
 
 ## Active (ranked — quickest wins first within priority)
 
-- [ ] **Finish the matrx-files 0.1.4 deploy — ONE command (W3)** (~2 min) —
-      0.1.4 IS on PyPI (tag pushed ✅) and you ran the manual docker command,
-      BUT the on-box Dockerfile had drifted to a hard `==0.1.3` pin, so it
-      silently rebuilt 0.1.3 into an image *tagged* 0.1.4 — the live service
-      still lacks `/files/sync/*`. There is now a drift-proof script that
-      makes this impossible (syncs the canonical Dockerfile, verifies the
-      version INSIDE the image before swapping, health-checks, rollback =
-      same command with the old version):
-      `~/code/aidream/packages/matrx-files/deploy.sh 0.1.4`
-      Run it yourself, or tell an agent "run the matrx-files deploy script
-      for 0.1.4 against the production box" (the permission layer needs the
-      prod target named explicitly).
-- [ ] **Approve settings-catalog official-doc update for `file_sync_mode`**
-      (~30 s) — the new setting (off|pointers|full, default pointers, W3) is
-      live in both settings layers but `docs/official/settings-catalog.md` is
-      Arman-only. Reply "yes, add file_sync_mode to the settings catalog" and
-      any agent syncs it (source of truth: `app/services/file_sync/FEATURE.md`).
+- [ ] **matrx-files deploy STILL not live — re-run and paste the output (W3)**
+      (~2 min) — verified 2026-07-14 after your run: health is green but
+      `GET /files/sync/changes` and `/files/sync/folders` return **404** on
+      files.matrxserver.com, so the container still serves pre-0.1.4 code.
+      The drift-proof script prints a version check before swapping — re-run
+      and watch for a red failure line, then paste the tail to an agent:
+      `~/code/aidream/packages/matrx-files/deploy.sh 0.1.5`
+      (0.1.5 is the latest on PyPI; verification after = the two URLs above
+      must return 401, not 404. Agents cannot run this — the permission
+      layer hard-gates prod deploys to your terminal.)
 - [ ] **Approve official-docs update for dev/live isolation** (~2 min) — The
       MXL-D-043 fix added env vars (`MATRX_PORT_BASE`, `MATRX_LIVE_ENGINE`,
       `MATRX_INSTANCE_SALT`) and changed the `proxy_port` default to be

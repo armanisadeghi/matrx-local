@@ -44,6 +44,7 @@ All rows below use storage: **localStorage** key `matrx-settings` unless noted.
 | Proxy enabled | `proxyEnabled` | `proxy_enabled` | boolean | `true` | Yes |
 | Proxy port | `proxyPort` | `proxy_port` | number | `22180` | Yes |
 | Tunnel enabled | `tunnelEnabled` | `tunnel_enabled` | boolean | `false` | Yes |
+| File sync mode | `fileSyncMode` | `file_sync_mode` | `off` \| `pointers` \| `full` | `"pointers"` | Yes |
 | Notification sound | `notificationSound` | `notification_sound` | boolean | `true` | Yes |
 | Notification sound style | `notificationSoundStyle` | `notification_sound_style` | `chime` \| `alert` \| `success` \| `error` | `"chime"` | Yes |
 

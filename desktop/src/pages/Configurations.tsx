@@ -34,6 +34,7 @@ import {
   CloudOff,
   Cloud,
   Volume2,
+  FolderSync,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -58,6 +59,7 @@ import {
   type ConfigSection,
 } from "@/hooks/use-configurations";
 import { useConfigCatalogs } from "@/hooks/use-config-catalogs";
+import { FileSyncPanel } from "@/components/files/FileSyncPanel";
 import type { AppSettings, SyncResult } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 
@@ -1557,6 +1559,22 @@ export function Configurations() {
                   dirty={sectionDirty.proxy}
                   {...sectionActionProps}
                 />
+              </CardContent>
+            </Card>
+
+            {/* ── File Sync ──────────────────────────────────── */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <FolderSync className="h-4 w-4" />
+                  File Sync
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                {/* Live surface — the mode selector applies immediately
+                    (persisted via saveSetting + POST /file-sync/mode), so no
+                    SectionActions save/cancel bar here. */}
+                <FileSyncPanel />
               </CardContent>
             </Card>
 

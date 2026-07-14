@@ -1953,6 +1953,53 @@ class EngineAPI {
     return this.request(path, { ...init, method: "DELETE" });
   }
 
+  // ---- File sync (desktop replica of the matrx-files cloud tree) ----
+
+  /** Get file-sync engine status (mode, counts, cursor, last cycle). */
+  async fileSyncStatus(): Promise<FileSyncStatus> {
+    return this.request("/file-sync/status");
+  }
+
+  /** Run one sync cycle now and return its summary. */
+  async fileSyncNow(): Promise<FileSyncCycleSummary> {
+    return this.request("/file-sync/sync", { method: "POST" });
+  }
+
+  /** Fetch real bytes for a pointer file (rel path or cloud file id). */
+  async fileSyncHydrate(path: string): Promise<{ path: string }> {
+    return this.request("/file-sync/hydrate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+  }
+
+  /** List open file-sync conflicts. */
+  async fileSyncConflicts(): Promise<{ conflicts: FileSyncConflict[] }> {
+    return this.request("/file-sync/conflicts");
+  }
+
+  /** Resolve a file-sync conflict by keeping one side. */
+  async fileSyncResolveConflict(
+    fileId: string,
+    resolution: "keep_local" | "keep_remote",
+  ): Promise<unknown> {
+    return this.request(`/file-sync/conflicts/${fileId}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resolution }),
+    });
+  }
+
+  /** Change the file-sync mode (off | pointers | full). */
+  async fileSyncSetMode(mode: FileSyncMode): Promise<{ mode: FileSyncMode }> {
+    return this.request("/file-sync/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+  }
+
   /**
    * Hugging Face token stored like other API keys (SQLite). Exposed only for
    * the Tauri GGUF downloader; returns null if unset or engine unavailable.
@@ -3253,6 +3300,50 @@ export interface ConflictDetail {
 export interface ConflictList {
   conflicts: ConflictDetail[];
   count: number;
+}
+
+// ---- File sync types (desktop replica of the matrx-files cloud tree) ----
+
+export type FileSyncMode = "off" | "pointers" | "full";
+
+export interface FileSyncCounts {
+  pointer?: number;
+  synced?: number;
+  pending_push?: number;
+  conflict?: number;
+  pending_ops: number;
+  tracked: number;
+}
+
+export interface FileSyncStatus {
+  mode: FileSyncMode;
+  root: string;
+  configured: boolean;
+  auto_sync_active: boolean;
+  watcher_active: boolean;
+  interval_seconds: number;
+  counts: FileSyncCounts;
+  cursor: string | null;
+  last_sync_status: string | null;
+  last_sync_error: string | null;
+  last_cycle: number | null;
+}
+
+export interface FileSyncCycleSummary {
+  mode: FileSyncMode;
+  folders: number;
+  pulled: number;
+  pushed: number;
+  hydration_enqueued: number;
+  at: number;
+}
+
+export interface FileSyncConflict {
+  file_id: string;
+  rel_path: string;
+  local_state: string;
+  error: string | null;
+  updated_at: string | null;
 }
 
 export interface DocMappings {

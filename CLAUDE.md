@@ -16,6 +16,7 @@
 | Token broker — scoped short-lived credentials (client primitive this repo must build + `token-broker-client` repo skill) | `/Users/armanisadeghi/code/common-docs/token-broker/FEATURE.md` — read before touching this feature in ANY repo |
 | Download pipeline (audit / defects) | [docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md](docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md) |
 | Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |
+| File sync — the cloud-files replica (`@files/`, pointer/full modes, hydration) | [app/services/file_sync/FEATURE.md](app/services/file_sync/FEATURE.md) |
 | matrx-extend ↔ engine | [docs/MATRX_EXTEND_CONNECTION.md](docs/MATRX_EXTEND_CONNECTION.md) |
 | **Verify a startup/UI change actually runs** | **[docs/SMOKE_HARNESS.md](docs/SMOKE_HARNESS.md)** — `./scripts/smoke.sh` builds, launches, and hands you the logs |
 | **Any image/video UI** (thumbnails, lightbox, info, delete/vault/remix) | **[desktop/src/components/media/FEATURE.md](desktop/src/components/media/FEATURE.md)** — one `MediaDescriptor`, one thumb, one action set. Never hand-roll an `<img>` for media. |

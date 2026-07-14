@@ -30,6 +30,7 @@ export type ConfigSection =
   | "wakeWord"
   | "scraping"
   | "proxy"
+  | "fileSync"
   | "notifications";
 
 /**
@@ -106,6 +107,10 @@ const SECTION_KEYS: Record<ConfigSection, (keyof AppSettings)[]> = {
   ],
   scraping: ["headlessScraping", "scrapeDelay"],
   proxy: ["proxyEnabled", "proxyPort", "tunnelEnabled"],
+  // File Sync's mode selector applies immediately (via useFileSync.setMode →
+  // saveSetting) rather than through draft/save — the key lives here so the
+  // dirty machinery and cloud merge know it belongs to this section.
+  fileSync: ["fileSyncMode"],
   notifications: ["notificationSound", "notificationSoundStyle"],
 };
 

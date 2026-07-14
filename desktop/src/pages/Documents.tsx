@@ -23,6 +23,7 @@ import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import { FolderTree } from "@/components/documents/FolderTree";
 import { NoteList } from "@/components/documents/NoteList";
 import { NoteEditor } from "@/components/documents/NoteEditor";
+import { NotesAccessPrompt } from "@/components/documents/NotesAccessPrompt";
 import { SyncStatusBar } from "@/components/documents/SyncStatus";
 import { VersionHistory } from "@/components/documents/VersionHistory";
 import { DirectoryMappings } from "@/components/documents/DirectoryMappings";
@@ -59,6 +60,18 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
   useEffect(() => {
     if (docs.error) setErrorDismissed(false);
   }, [docs.error]);
+
+  // Access can degrade MID-session (e.g. a save hits the OS wall and 503s,
+  // or a background sync flags it). Whenever another surface reports the
+  // degraded flag — or any error appears — refresh the access state so the
+  // first-class prompt takes over instead of a raw error banner. Gated on
+  // the specific booleans, not broad objects (CLAUDE.md React rules).
+  const { loadNotesAccess } = docs;
+  const syncSaysDegraded = docs.syncStatus?.notes_access_degraded === true;
+  const hasError = docs.error !== null;
+  useEffect(() => {
+    if (syncSaysDegraded || hasError) void loadNotesAccess();
+  }, [syncSaysDegraded, hasError, loadNotesAccess]);
 
   useRealtimeSync({
     userId,
@@ -148,6 +161,16 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
           </p>
         </div>
       </div>
+    );
+  }
+
+  // Notes-directory access is degraded (macOS Full Disk Access not granted,
+  // folder permissions, or a missing folder): show the first-class prompt
+  // instead of empty lists and console errors. It re-probes via
+  // docs.recheckAccess and unmounts itself the moment access is granted.
+  if (docs.notesAccess?.degraded) {
+    return (
+      <NotesAccessPrompt access={docs.notesAccess} onRecheck={docs.recheckAccess} />
     );
   }
 

@@ -2259,6 +2259,27 @@ class EngineAPI {
     return this.docRequest("GET", "/sync/status", undefined, userId);
   }
 
+  /**
+   * Current notes-directory access state (macOS Full Disk Access, folder
+   * permissions, missing folder). Cheap — reads the engine's guard, no
+   * filesystem probe. Works signed-out; the notes dir is local.
+   */
+  async getNotesAccess(): Promise<NotesAccessStatus> {
+    return this.docRequest("GET", "/access");
+  }
+
+  /**
+   * Actively re-probe notes-directory access ("Check again"). Clears the
+   * engine's degraded state the moment access is restored. Pass
+   * `createDir: true` for the "Create folder" action when the notes folder
+   * is simply missing.
+   */
+  async recheckNotesAccess(opts?: { createDir?: boolean }): Promise<NotesAccessStatus> {
+    return this.docRequest("POST", "/access/recheck", {
+      create_dir: opts?.createDir ?? false,
+    });
+  }
+
   /** Trigger a sync. Mode: "push" | "pull" | "bidirectional" */
   async triggerSync(
     userId: string,
@@ -3276,6 +3297,27 @@ export interface SyncStatus {
   base_dir: string;
   pending_push_count?: number;
   excluded_count?: number;
+  /** True while the OS is denying access to the notes directory. */
+  notes_access_degraded?: boolean;
+  notes_access_reason?: string | null;
+  notes_access_kind?: NotesAccessKind | null;
+}
+
+/** Why notes-directory access is degraded. */
+export type NotesAccessKind = "permission" | "missing_dir";
+
+/**
+ * Notes-directory access health — the state behind the Documents page's
+ * Full-Disk-Access prompt. Served by GET /notes/access; POST
+ * /notes/access/recheck actively re-probes (and can create a missing dir).
+ */
+export interface NotesAccessStatus {
+  degraded: boolean;
+  reason: string | null;
+  kind: NotesAccessKind | null;
+  base_dir: string;
+  /** Engine's sys.platform: "darwin" | "win32" | "linux" | ... */
+  platform: string;
 }
 
 export interface SyncResult {
@@ -5343,6 +5385,39 @@ export async function fetchMediaLibraryFile(
     emitClientLog(
       resp.status === 423 ? "info" : "error",
       `[media-library] GET /file/${itemId} → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
+      "engine",
+    );
+    throw new MediaFileError(resp.status, detail || `HTTP ${resp.status}`);
+  }
+  const blob = await resp.blob();
+  return URL.createObjectURL(blob);
+}
+
+/**
+ * Small JPEG gallery thumb. The engine self-heals: a missing on-disk thumb
+ * is generated from the full media, saved as ``<id>.thumb.jpg``, and returned.
+ * Also resolves vaulted ids (423 when locked) — same contract as /file/{id}.
+ * Caller owns the object URL and must revoke it.
+ */
+export async function fetchMediaLibraryThumb(
+  baseUrl: string,
+  itemId: string,
+): Promise<string> {
+  const auth = await engine.getEngineAuthHeaders();
+  const resp = await fetch(
+    mediaLibraryUrl(baseUrl, `/thumb/${encodeURIComponent(itemId)}`),
+    {
+      headers: new Headers({ ...auth }),
+      // Thumb generation on a cold miss can take a moment for large PNGs /
+      // video posters — longer than a JSON list call, shorter than a hang.
+      signal: AbortSignal.timeout(MEDIA_GEN_TIMEOUT_MS),
+    },
+  );
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => `HTTP ${resp.status}`);
+    emitClientLog(
+      resp.status === 423 ? "info" : "error",
+      `[media-library] GET /thumb/${itemId} → HTTP ${resp.status}: ${detail.slice(0, 240)}`,
       "engine",
     );
     throw new MediaFileError(resp.status, detail || `HTTP ${resp.status}`);

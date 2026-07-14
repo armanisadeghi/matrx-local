@@ -325,6 +325,48 @@ def _hf_repo_from_url(url: str) -> Optional[str]:
     return None
 
 
+def artifact_present(metadata: Optional[dict[str, Any]], filename: str) -> bool:
+    """True when the COMPLETED on-disk artifact for a download already exists.
+
+    This is the single source of truth for "do I already have this?", shared by
+    ``enqueue`` (idempotency) and ``_resume_incomplete`` (crash recovery) so the
+    two can never disagree — a model the user already downloaded must never be
+    re-fetched on startup just because a stale ``queued``/``active`` row survived
+    in the DB.
+
+    Completion contract, mirroring what each writer does on success:
+      * HF snapshots (many files) → the ``.download-complete`` marker in the
+        model dir (``_download_hf_snapshot`` writes it last).
+      * Direct-URL downloads that opt into a marker (Civitai LoRAs,
+        ``write_complete_marker``) → marker AND the weight file present.
+      * Plain single-file downloads (GGUF, transfer tool, …) → the destination
+        file present.
+
+    Anything without a ``dest_dir`` (never a real, enqueue-able download) is
+    reported absent so the caller decides what to do with the malformed row.
+    """
+    md = metadata or {}
+    dest_dir = md.get("dest_dir")
+    if not dest_dir:
+        return False
+    try:
+        base = Path(dest_dir)
+    except Exception:  # noqa: BLE001 — a garbage path is simply "not present"
+        return False
+
+    from app.services.media_gen.paths import DOWNLOAD_COMPLETE_MARKER  # noqa: PLC0415
+
+    if md.get("hf_repo_id"):
+        return (base / DOWNLOAD_COMPLETE_MARKER).exists()
+
+    dest_name = md.get("dest_filename") or filename
+    if md.get("write_complete_marker"):
+        # Marker-gated single-file download: complete only when the writer got
+        # all the way to writing the marker AND the file is on disk.
+        return (base / DOWNLOAD_COMPLETE_MARKER).exists() and (base / dest_name).exists()
+    return (base / dest_name).exists()
+
+
 # SSE subscriber queue type
 _Subscriber = asyncio.Queue[str]
 
@@ -420,20 +462,16 @@ class DownloadManager:
                     return entry
                 if entry.status == "completed":
                     # Completed is only terminal while the file still exists —
-                    # a deleted file must be re-downloadable.
-                    if (entry.metadata or {}).get("hf_repo_id") or (metadata or {}).get("hf_repo_id"):
-                        # HF snapshots land as many files; the marker is the
-                        # single source of truth for "still on disk".
-                        from app.services.media_gen.paths import DOWNLOAD_COMPLETE_MARKER
-                        existing_dest = Path(
-                            (entry.metadata or {}).get("dest_dir", dest_dir)
-                        ) / DOWNLOAD_COMPLETE_MARKER
-                    else:
-                        _md = entry.metadata or {}
-                        existing_dest = Path(_md.get("dest_dir", dest_dir)) / (
-                            _md.get("dest_filename") or entry.filename
-                        )
-                    if existing_dest.exists():
+                    # a deleted file must be re-downloadable. ``artifact_present``
+                    # is the shared completion contract (marker / file), so this
+                    # can never disagree with the startup resume check.
+                    check_md = {
+                        **(entry.metadata or {}),
+                        # Fall back to the incoming dest_dir when the stored
+                        # entry never had one (shouldn't happen, but be safe).
+                        "dest_dir": (entry.metadata or {}).get("dest_dir", dest_dir),
+                    }
+                    if artifact_present(check_md, entry.filename):
                         logger.debug("[downloads] Already completed: %s", filename)
                         return entry
                     logger.info(
@@ -1435,35 +1473,81 @@ class DownloadManager:
             )
 
     async def _resume_incomplete(self) -> None:
-        """On startup, reset 'active' rows to 'queued' and re-add them to the priority queue."""
+        """On startup, reconcile every ``queued``/``active`` row against disk.
+
+        A row survives as ``queued``/``active`` whenever the app closed or
+        crashed mid-download (or before a queued item ever dispatched). Blindly
+        re-queuing them — the historic behavior — re-downloaded models the user
+        ALREADY HAS from scratch and then failed on gated-repo 401s / missing
+        keys for weights that were sitting on disk the whole time (the exact
+        "it's not checking if I have them" bug). Every row is now triaged:
+
+          * artifact already on disk  → mark ``completed``, do NOT re-download.
+          * malformed (no ``dest_dir``) → mark ``failed`` with a clear reason;
+            it can never download and must not resurrect every boot.
+          * genuinely incomplete       → re-queue (restart from scratch).
+        """
         try:
             db = get_db()
             rows = await db.fetchall(
                 "SELECT * FROM downloads WHERE status IN ('queued', 'active') ORDER BY priority DESC, created_at ASC"
             )
+            resumed = present = broken = 0
             for row in rows:
                 dl_id = row["id"]
                 urls = json.loads(row["urls"] or "[]")
                 metadata_raw = row["metadata"]
                 metadata = json.loads(metadata_raw) if metadata_raw else None
-                entry = DownloadEntry(
-                    id=dl_id,
-                    category=row["category"],
-                    filename=row["filename"],
-                    display_name=row["display_name"],
-                    urls=urls,
-                    total_bytes=row["total_bytes"],
-                    bytes_done=0,  # Restart from beginning (no range-request resume yet)
-                    status="queued",
-                    error_msg=None,
-                    priority=row["priority"],
-                    part_current=1,
-                    part_total=row["part_total"],
-                    created_at=row["created_at"],
-                    updated_at=_now(),
-                    metadata=metadata,
-                )
-                # Reset to queued in DB
+                filename = row["filename"]
+
+                # ── Already downloaded → never re-fetch, just settle as done ──
+                if artifact_present(metadata, filename):
+                    now = _now()
+                    await db.execute(
+                        "UPDATE downloads SET status='completed', bytes_done=total_bytes, "
+                        "part_current=part_total, updated_at=?, completed_at=? WHERE id=?",
+                        (now, now, dl_id),
+                    )
+                    entry = self._entry_from_row(row, status="completed")
+                    entry.bytes_done = entry.total_bytes
+                    entry.completed_at = now
+                    self._entries[dl_id] = entry
+                    await self._broadcast(ProgressEvent(
+                        id=dl_id,
+                        category=entry.category,
+                        filename=entry.filename,
+                        display_name=entry.display_name,
+                        status="completed",
+                        bytes_done=entry.total_bytes,
+                        total_bytes=entry.total_bytes,
+                        percent=100.0,
+                        part_current=entry.part_total,
+                        part_total=entry.part_total,
+                        updated_at=now,
+                    ))
+                    present += 1
+                    logger.info(
+                        "[downloads] Already present on disk — settling as completed, "
+                        "NOT re-downloading: %s", filename,
+                    )
+                    continue
+
+                # ── Malformed row that can never download → fail it, loudly ──
+                if not (metadata or {}).get("dest_dir"):
+                    now = _now()
+                    await db.execute(
+                        "UPDATE downloads SET status='failed', updated_at=?, error_msg=? WHERE id=?",
+                        (now, "download record has no destination — cannot resume", dl_id),
+                    )
+                    broken += 1
+                    logger.warning(
+                        "[downloads] Dropping unresumable row (no dest_dir): %s (id=%s)",
+                        filename, dl_id,
+                    )
+                    continue
+
+                # ── Genuinely incomplete → re-queue (restart from scratch) ──
+                entry = self._entry_from_row(row, status="queued")
                 await db.execute(
                     "UPDATE downloads SET status='queued', bytes_done=0, part_current=1, updated_at=? WHERE id=?",
                     (_now(), dl_id),
@@ -1471,11 +1555,46 @@ class DownloadManager:
                 self._entries[dl_id] = entry
                 self._cancel_flags[dl_id] = asyncio.Event()
                 self._insert_pending(dl_id, row["priority"], row["created_at"])
-                logger.info("[downloads] Resuming incomplete download: %s (priority=%d)", entry.filename, row["priority"])
+                resumed += 1
+                logger.info(
+                    "[downloads] Resuming incomplete download: %s (priority=%d)",
+                    entry.filename, row["priority"],
+                )
 
             await db.commit()
+            if present or resumed or broken:
+                logger.info(
+                    "[downloads] Startup reconcile: %d already-present, %d resumed, %d unresumable",
+                    present, resumed, broken,
+                )
         except Exception as exc:
             logger.warning("[downloads] Failed to resume incomplete downloads: %s", exc, exc_info=True)
+
+    def _entry_from_row(self, row: Any, *, status: str) -> DownloadEntry:
+        """Build a DownloadEntry from a persisted ``downloads`` row.
+
+        Shared by resume/history hydration so column→field mapping lives in one
+        place. Byte counters restart from zero (no range-request resume yet);
+        callers that settle a row as completed set them afterward.
+        """
+        metadata_raw = row["metadata"]
+        return DownloadEntry(
+            id=row["id"],
+            category=row["category"],
+            filename=row["filename"],
+            display_name=row["display_name"],
+            urls=json.loads(row["urls"] or "[]"),
+            total_bytes=row["total_bytes"],
+            bytes_done=0,
+            status=status,
+            error_msg=None,
+            priority=row["priority"],
+            part_current=1,
+            part_total=row["part_total"],
+            created_at=row["created_at"],
+            updated_at=_now(),
+            metadata=json.loads(metadata_raw) if metadata_raw else None,
+        )
 
     async def _load_history(self) -> None:
         """Load completed/failed/cancelled history rows for the UI (last 50).

@@ -378,17 +378,23 @@ class SyncEngine:
         async with self._sync_lock:
             return await self._pull_note(note_id)
 
-    async def _pull_note(self, note_id: str) -> dict[str, Any] | None:
+    async def _pull_note(
+        self, note_id: str, note: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """``note`` may carry the already-fetched full row (pull_changes gets
+        complete rows from get_notes_since) — skipping the refetch removes a
+        second network failure point per row."""
         if not self._user_id:
             return None
 
-        try:
-            note = await self.sb.get_note(note_id)
-        except Exception:
-            logger.warning(
-                "Failed to pull note %s from Supabase", note_id, exc_info=True
-            )
-            return None
+        if note is None:
+            try:
+                note = await self.sb.get_note(note_id)
+            except Exception:
+                logger.warning(
+                    "Failed to pull note %s from Supabase", note_id, exc_info=True
+                )
+                return None
 
         if not note:
             return None
@@ -442,11 +448,12 @@ class SyncEngine:
 
         # Local tombstone guard: this device deleted the note; don't let a pull
         # of the (not-yet-tombstoned) remote row resurrect it unless the remote
-        # copy was genuinely written AFTER the local deletion.
+        # CONTENT changed since our last sync (someone genuinely edited it
+        # after our delete). Hash comparison is clock-free — comparing the
+        # local wall-clock tombstone stamp against the Postgres updated_at let
+        # clock skew classify a newer remote edit as stale.
         if local_row and local_row.get("is_deleted") and not note.get("is_deleted"):
-            remote_ts = note.get("updated_at") or ""
-            local_ts = local_row.get("updated_at") or ""
-            if remote_ts <= local_ts:
+            if note.get("content_hash") == local_row.get("remote_content_hash"):
                 return {**note, "_skipped_local_tombstone": True}
 
         if not file_path:
@@ -520,13 +527,37 @@ class SyncEngine:
 
         state = self.fm.load_sync_state()
         state["note_hashes"][file_path] = c_hash
+
+        # The note moved paths (cross-device rename, or a write-back race lost
+        # to another device's allocation): remove the file at the OLD path —
+        # leaving it orphaned made the next full_sync push it as a brand-new
+        # cloud note (silent duplicate factory).
+        old_fp = local_row.get("file_path") if local_row else None
+        if old_fp and old_fp != file_path:
+            try:
+                self.fm.delete_note(old_fp)
+            except Exception:
+                logger.debug("Could not remove old-path file %s after move", old_fp)
+            state.get("note_hashes", {}).pop(old_fp, None)
+            self._last_push_hashes.pop(old_fp, None)
+
         self.fm.save_sync_state(state)
 
         if note.get("_allocated_path"):
-            # Write the allocated path back so every device (and the cloud row
-            # itself) converges on one canonical location for this note.
+            # Write the allocated path back so every device converges on one
+            # canonical location. Conditional (file_path still NULL) so two
+            # devices cannot ping-pong allocations, and device-stamped so the
+            # resulting realtime UPDATE reads as our own echo.
             try:
-                await self.sb.update_note(note_id, {"file_path": file_path})
+                won = await self.sb.set_file_path_if_null(
+                    note_id, file_path, self.device_id
+                )
+                if not won:
+                    logger.debug(
+                        "file_path write-back for %s lost to another device — "
+                        "next pull adopts theirs",
+                        note_id,
+                    )
             except Exception:
                 logger.debug("Could not write allocated file_path back to cloud for %s", note_id)
 
@@ -774,7 +805,14 @@ class SyncEngine:
                     # Local file is gone. If our SQLite row carries a delete
                     # tombstone, the user deleted it HERE — propagate the
                     # deletion instead of resurrecting the note from the cloud.
+                    # UNLESS the remote content changed since our last sync:
+                    # someone edited the note after our delete, and deleting
+                    # their edit would be destructive — resurrect it locally.
                     if local_note and local_note.get("is_deleted"):
+                        if remote.get("content_hash") != local_note.get("remote_content_hash"):
+                            await self._pull_note(note_id)
+                            stats["pulled"] += 1
+                            continue
                         try:
                             await self.sb.soft_delete_note(note_id, self.device_id)
                             stats["deleted_local"] += 1

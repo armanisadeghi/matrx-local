@@ -223,13 +223,11 @@ export function useDocuments(
     ) => {
       if (!engineReady) return;
 
-      if (data.content !== undefined) {
-        update({
-          activeNote: stateRef.current.activeNote
-            ? { ...stateRef.current.activeNote, content: data.content }
-            : null,
-        });
-      }
+      // Deliberately NOT echoed into activeNote.content: the editor owns the
+      // draft. Echoing every keystroke back through the note prop advanced
+      // NoteEditor's last-synced marker to the draft on each render, which
+      // made its "user is mid-edit, keep the draft" guard unreachable — a
+      // stale refetch could then overwrite visible keystrokes.
 
       // Merge any pending debounced partial for the same note into this
       // update. Without this, typing content then renaming within the 1s

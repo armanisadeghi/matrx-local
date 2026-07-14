@@ -355,6 +355,29 @@ class SupabaseDocClient:
         )
         return rows[0] if rows else None
 
+    async def set_file_path_if_null(
+        self, note_id: str, file_path: str, device_id: str | None = None
+    ) -> bool:
+        """Write an allocated file_path back to a pathless cloud row.
+
+        Conditional on ``file_path IS NULL`` so two devices importing the same
+        pathless note cannot ping-pong allocations (first writer wins), and
+        device-stamped so the resulting realtime UPDATE is recognized as this
+        device's own write instead of triggering a pull storm. Returns True if
+        this device won the write.
+        """
+        body: dict[str, Any] = {"file_path": file_path}
+        if device_id:
+            body["last_device_id"] = device_id
+        rows = await self._request(
+            "PATCH",
+            "notes",
+            params={"id": f"eq.{note_id}", "file_path": "is.null"},
+            json_body=body,
+            schema=_WORKBENCH,
+        )
+        return bool(rows)
+
     async def soft_delete_note(self, note_id: str, device_id: str | None = None) -> None:
         body: dict[str, Any] = {"deleted_at": _utcnow_iso()}
         # Stamp the deleting device so realtime consumers can classify the

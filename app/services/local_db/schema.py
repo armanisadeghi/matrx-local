@@ -553,6 +553,49 @@ DROP TABLE conversations
 # All migrations in order
 # ------------------------------------------------------------------
 
+# ------------------------------------------------------------------
+# Migration 11: File sync — local state sidecar for the files.* mirror
+#
+# The cloud rows live in the ATTACHed structural mirror (files.files /
+# files.folders — schema_mirror/snapshot.json is the spec). This table is
+# the LOCAL half the mirror deliberately does not carry: per-file on-disk
+# state for the ~/Documents/Matrx/Files replica.
+#
+# file_id is the cloud files.files id, or 'local:<uuid>' for a file created
+# on this machine that has not been uploaded yet (re-keyed to the cloud id
+# when the upload lands).
+#
+# local_state lifecycle:
+#   pointer      → placeholder on disk, bytes on demand (virtual mapping)
+#   synced       → bytes on disk match last_synced_hash
+#   pending_push → local bytes changed / created / deleted; pending_op says how
+#   conflict     → both sides changed; both copies preserved (.sync/conflicts)
+#
+# last_synced_hash follows the notes doctrine: the cloud checksum at the
+# last SUCCESSFUL sync, written only after a push landed or a pull wrote
+# the file (docs/SYNC_CONTRACT.md).
+# ------------------------------------------------------------------
+
+_V11_FILE_SYNC_STATE = """
+CREATE TABLE IF NOT EXISTS file_sync_state (
+    file_id          TEXT PRIMARY KEY,
+    rel_path         TEXT NOT NULL,
+    local_state      TEXT NOT NULL DEFAULT 'pointer',
+    pending_op       TEXT,
+    local_hash       TEXT,
+    local_size       INTEGER,
+    local_mtime      REAL,
+    last_synced_hash TEXT,
+    error            TEXT,
+    updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_file_sync_state_path ON file_sync_state(rel_path);
+CREATE INDEX IF NOT EXISTS idx_file_sync_state_state ON file_sync_state(local_state);
+CREATE INDEX IF NOT EXISTS idx_file_sync_state_pending ON file_sync_state(pending_op)
+    WHERE pending_op IS NOT NULL
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -564,4 +607,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (8, _V8_SCRAPE_PAGES),
     (9, _V9_DOWNLOADS),
     (10, _V10_CHAT_MIRROR_CUTOVER),
+    (11, _V11_FILE_SYNC_STATE),
 ]

@@ -36,6 +36,14 @@ async def tool_read(
     if os.path.isdir(resolved):
         return ToolResult(type=ToolResultType.ERROR, output=f"Path is a directory: {resolved}")
 
+    # Pointer files under the Files root hydrate transparently (file sync
+    # virtual mapping) — an empty placeholder must never read as content.
+    from app.services.file_sync.hydration import ensure_hydrated
+
+    hydrate_error = await ensure_hydrated(resolved)
+    if hydrate_error:
+        return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
+
     mime, _ = mimetypes.guess_type(resolved)
     if mime and mime.startswith("image/"):
         return _read_image(session, resolved, mime)
@@ -171,6 +179,13 @@ async def tool_move(
 
     if not os.path.exists(src):
         return ToolResult(type=ToolResultType.ERROR, output=f"Source not found: {src}")
+
+    # A pointer source must carry its real bytes with the move — hydrate first.
+    from app.services.file_sync.hydration import ensure_hydrated
+
+    hydrate_error = await ensure_hydrated(src)
+    if hydrate_error:
+        return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
     # Moving a file INTO an existing directory keeps its basename.
     if os.path.isdir(dst) and not os.path.isdir(src):
         dst = os.path.join(dst, os.path.basename(src))
@@ -207,6 +222,13 @@ async def tool_copy(
 
     if not os.path.exists(src):
         return ToolResult(type=ToolResultType.ERROR, output=f"Source not found: {src}")
+
+    # Copying a pointer must copy the real bytes, not the placeholder.
+    from app.services.file_sync.hydration import ensure_hydrated
+
+    hydrate_error = await ensure_hydrated(src)
+    if hydrate_error:
+        return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
     if os.path.isdir(dst) and not os.path.isdir(src):
         dst = os.path.join(dst, os.path.basename(src))
     if os.path.abspath(dst) == os.path.abspath(src):

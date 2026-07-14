@@ -5,7 +5,7 @@ Regenerate with: python scripts/generate_mirror_schema.py
 Source snapshot: schema_mirror/snapshot.json (cloud DB is the spec).
 """
 
-SNAPSHOT_HASH = "4006599661d4c31c1630718c16ccb0f4611bd1c824528c945054298672355ab2"
+SNAPSHOT_HASH = "8aa632dc8b8a5fac5c8b366cfd127c78bd951e823d776645dc5d70fcc2d14fc7"
 SNAPSHOT_GENERATED_AT = "2026-07-13"
 
 # schema -> table -> {columns, pk, cursor_col, has_deleted_at, create_sql, index_sql}
@@ -1309,6 +1309,118 @@ MIRROR_TABLES = {
             },
             "pk": [
                 "user_id"
+            ]
+        }
+    },
+    "files": {
+        "files": {
+            "columns": {
+                "canonical_processed_document_id": "TEXT",
+                "checksum": "TEXT",
+                "created_at": "TEXT",
+                "created_by": "TEXT",
+                "current_version": "INTEGER",
+                "deleted_at": "TEXT",
+                "derivation_kind": "TEXT",
+                "derivation_metadata": "TEXT",
+                "duplicate_of_file_id": "TEXT",
+                "duration_ms": "INTEGER",
+                "file_name": "TEXT",
+                "file_path": "TEXT",
+                "height": "INTEGER",
+                "id": "TEXT",
+                "metadata": "TEXT",
+                "mime_type": "TEXT",
+                "organization_id": "TEXT",
+                "parent_file_id": "TEXT",
+                "parent_folder_id": "TEXT",
+                "size_bytes": "INTEGER",
+                "storage_uri": "TEXT",
+                "updated_at": "TEXT",
+                "updated_by": "TEXT",
+                "version": "INTEGER",
+                "visibility": "TEXT",
+                "width": "INTEGER"
+            },
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"files\".\"files\" (\n    \"id\" TEXT NOT NULL,\n    \"created_by\" TEXT,\n    \"file_path\" TEXT,\n    \"file_name\" TEXT,\n    \"mime_type\" TEXT,\n    \"size_bytes\" INTEGER,\n    \"checksum\" TEXT,\n    \"visibility\" TEXT,\n    \"current_version\" INTEGER,\n    \"parent_folder_id\" TEXT,\n    \"metadata\" TEXT,\n    \"created_at\" TEXT,\n    \"updated_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"organization_id\" TEXT,\n    \"parent_file_id\" TEXT,\n    \"derivation_kind\" TEXT,\n    \"derivation_metadata\" TEXT,\n    \"storage_uri\" TEXT,\n    \"duplicate_of_file_id\" TEXT,\n    \"canonical_processed_document_id\" TEXT,\n    \"width\" INTEGER,\n    \"height\" INTEGER,\n    \"duration_ms\" INTEGER,\n    \"updated_by\" TEXT,\n    \"version\" INTEGER, PRIMARY KEY (\"id\")\n)",
+            "cursor_col": "updated_at",
+            "has_deleted_at": True,
+            "index_sql": [
+                "CREATE INDEX IF NOT EXISTS \"files\".\"idx_files_created_by\" ON \"files\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"files\".\"idx_files_updated_at\" ON \"files\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"files\".\"idx_files_created_at\" ON \"files\" (\"created_at\")"
+            ],
+            "pg_types": {
+                "canonical_processed_document_id": "uuid",
+                "checksum": "text",
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "current_version": "int4",
+                "deleted_at": "timestamptz",
+                "derivation_kind": "text",
+                "derivation_metadata": "jsonb",
+                "duplicate_of_file_id": "uuid",
+                "duration_ms": "int4",
+                "file_name": "text",
+                "file_path": "text",
+                "height": "int4",
+                "id": "uuid",
+                "metadata": "jsonb",
+                "mime_type": "text",
+                "organization_id": "uuid",
+                "parent_file_id": "uuid",
+                "parent_folder_id": "uuid",
+                "size_bytes": "int8",
+                "storage_uri": "text",
+                "updated_at": "timestamptz",
+                "updated_by": "uuid",
+                "version": "int4",
+                "visibility": "visibility",
+                "width": "int4"
+            },
+            "pk": [
+                "id"
+            ]
+        },
+        "folders": {
+            "columns": {
+                "created_at": "TEXT",
+                "created_by": "TEXT",
+                "deleted_at": "TEXT",
+                "folder_name": "TEXT",
+                "folder_path": "TEXT",
+                "id": "TEXT",
+                "is_system": "INTEGER",
+                "metadata": "TEXT",
+                "organization_id": "TEXT",
+                "parent_id": "TEXT",
+                "updated_at": "TEXT",
+                "visibility": "TEXT"
+            },
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"files\".\"folders\" (\n    \"id\" TEXT NOT NULL,\n    \"created_by\" TEXT,\n    \"folder_path\" TEXT,\n    \"folder_name\" TEXT,\n    \"parent_id\" TEXT,\n    \"visibility\" TEXT,\n    \"metadata\" TEXT,\n    \"created_at\" TEXT,\n    \"updated_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"organization_id\" TEXT,\n    \"is_system\" INTEGER, PRIMARY KEY (\"id\")\n)",
+            "cursor_col": "updated_at",
+            "has_deleted_at": True,
+            "index_sql": [
+                "CREATE INDEX IF NOT EXISTS \"files\".\"idx_folders_created_by\" ON \"folders\" (\"created_by\")",
+                "CREATE INDEX IF NOT EXISTS \"files\".\"idx_folders_updated_at\" ON \"folders\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"files\".\"idx_folders_created_at\" ON \"folders\" (\"created_at\")"
+            ],
+            "pg_types": {
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "deleted_at": "timestamptz",
+                "folder_name": "text",
+                "folder_path": "text",
+                "id": "uuid",
+                "is_system": "bool",
+                "metadata": "jsonb",
+                "organization_id": "uuid",
+                "parent_id": "uuid",
+                "updated_at": "timestamptz",
+                "visibility": "visibility"
+            },
+            "pk": [
+                "id"
             ]
         }
     }

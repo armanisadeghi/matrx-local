@@ -134,6 +134,13 @@ AIDREAM_SERVER_URL_LOCAL = os.getenv(
 # Active URL — everything in the codebase that needs the AIDream server reads this.
 AIDREAM_SERVER_URL = AIDREAM_SERVER_URL_LIVE
 
+# Matrx Files — the standalone file microservice (EC2/Cloudflare, launched
+# 2026-07-13). ALL desktop file-sync traffic (change feed, uploads, patches,
+# tombstones, URL minting) goes here — never through aidream, never a
+# hand-constructed S3/CDN URL. The env override exists for local development
+# against a locally-run matrx-files instance.
+MATRX_FILES_URL = os.getenv("MATRX_FILES_URL", "https://files.matrxserver.com")
+
 # Supabase (for document sync — uses PostgREST API with user JWTs)
 # These are publishable values — safe to embed in the binary (RLS enforces security).
 # The env var overrides are for local dev; shipped users get the baked-in defaults.

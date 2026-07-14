@@ -39,6 +39,7 @@ from app.api.image_gen_routes import router as image_gen_router
 from app.api.video_gen_routes import router as video_gen_router
 from app.api.media_library_routes import router as media_library_router
 from app.api.media_vault_routes import router as media_vault_router
+from app.api.file_sync_routes import router as file_sync_router
 from app.api.tts_routes import router as tts_router
 from app.api.ner_routes import router as ner_router
 from app.api.openai_compat_routes import router as openai_compat_router
@@ -589,6 +590,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("chat_sync", exc)
 
+    # Phase 2e: Engine-owned file sync (files.* mirror + ~/Documents/Matrx/Files
+    # replica of the matrx-files cloud tree). Same credential model: the
+    # persisted auth_tokens row feeds each tick. Mode (off|pointers|full)
+    # comes from settings; 'off' keeps the loop alive but idle.
+    # See app/services/file_sync/engine.py.
+    _registry.starting("file_sync")
+    try:
+        from app.services.file_sync import get_file_sync_engine
+
+        await get_file_sync_engine().start_background_sync()
+        logger.info("[app/main.py] Phase 2e: File sync started ✓")
+        _registry.ready("file_sync")
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 2e: File sync FAILED to start — the local file "
+            "replica will not update until triggered manually",
+            exc_info=True,
+        )
+        _registry.failed("file_sync", exc)
+
     # Phase 3: Start scraper engine
     print("[phase:scraper] Starting scraper engine...", flush=True)
     logger.info("[app/main.py] Phase 3: Starting scraper engine...")
@@ -1130,6 +1151,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
             _registry.stopped("chat_sync")
 
+    from app.services.file_sync import get_file_sync_engine as _get_file_sync
+
+    _file_sync = _get_file_sync()
+    if _file_sync.auto_sync_active or _file_sync.watcher_active:
+        _registry.stopping("file_sync")
+        try:
+            await asyncio.wait_for(_file_sync.stop_background_sync(), timeout=3.0)
+            _registry.stopped("file_sync")
+            logger.info("[app/main.py] File sync stopped ✓")
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.warning(
+                "[app/main.py] File sync did not stop cleanly: %s", exc
+            )
+            _registry.stopped("file_sync")
+
     if _doc_sync.watcher_active:
         try:
             await asyncio.wait_for(_doc_sync.stop_watcher(), timeout=3.0)
@@ -1373,6 +1409,7 @@ app.include_router(image_gen_router)
 app.include_router(video_gen_router)
 app.include_router(media_library_router)
 app.include_router(media_vault_router)
+app.include_router(file_sync_router)
 app.include_router(tts_router)
 app.include_router(ner_router)
 app.include_router(openai_compat_router)

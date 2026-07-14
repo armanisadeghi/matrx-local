@@ -41,8 +41,12 @@ OUTPUT_PATH = REPO_ROOT / "app" / "services" / "local_db" / "mirror_schema.py"
 
 # Phase 1 scope: the chat system. workbench.* and ai.* are present in the
 # snapshot and become one-line additions here once their cutover lands.
+# files.* is deliberately scoped to the two sync tables (files, folders) —
+# the rest of that schema (idempotency, webhooks, OCR, …) is server-side
+# machinery a device replica never mirrors.
 MIRRORED_SCHEMAS: dict[str, dict] = {
     "chat": {"include_views": False},
+    "files": {"include_views": False, "tables": ("files", "folders")},
 }
 
 # Postgres udt_name -> SQLite column type. Everything unlisted maps to TEXT
@@ -119,8 +123,11 @@ def generate(snapshot: dict) -> str:
         if tables is None:
             raise SystemExit(f"schema '{schema}' missing from snapshot — refresh snapshot.json")
         mirror[schema] = {}
+        table_scope = opts.get("tables")
         for name, spec in sorted(tables.items()):
             if spec["kind"] != "table" and not opts["include_views"]:
+                continue
+            if table_scope is not None and name not in table_scope:
                 continue
             mirror[schema][name] = build_table_entry(schema, name, spec)
 

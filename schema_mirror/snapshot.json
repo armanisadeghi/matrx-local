@@ -4824,6 +4824,290 @@
     ]
    }
   },
+  "files": {
+   "files": {
+    "columns": [
+     {
+      "data_type": "uuid",
+      "default": "uuid_generate_v4()",
+      "name": "id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "created_by",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "file_path",
+      "nullable": false,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "file_name",
+      "nullable": false,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "mime_type",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "bigint",
+      "default": null,
+      "name": "size_bytes",
+      "nullable": true,
+      "udt": "int8"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "checksum",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": "'private'::platform.visibility",
+      "name": "visibility",
+      "nullable": false,
+      "udt": "visibility"
+     },
+     {
+      "data_type": "integer",
+      "default": "1",
+      "name": "current_version",
+      "nullable": false,
+      "udt": "int4"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "parent_folder_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": "now()",
+      "name": "created_at",
+      "nullable": false,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": "now()",
+      "name": "updated_at",
+      "nullable": false,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "deleted_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "organization_id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "parent_file_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "derivation_kind",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "derivation_metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "storage_uri",
+      "nullable": false,
+      "udt": "text"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "duplicate_of_file_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "canonical_processed_document_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "integer",
+      "default": null,
+      "name": "width",
+      "nullable": true,
+      "udt": "int4"
+     },
+     {
+      "data_type": "integer",
+      "default": null,
+      "name": "height",
+      "nullable": true,
+      "udt": "int4"
+     },
+     {
+      "data_type": "integer",
+      "default": null,
+      "name": "duration_ms",
+      "nullable": true,
+      "udt": "int4"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "updated_by",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "integer",
+      "default": "1",
+      "name": "version",
+      "nullable": false,
+      "udt": "int4"
+     }
+    ],
+    "kind": "table",
+    "pk": [
+     "id"
+    ]
+   },
+   "folders": {
+    "columns": [
+     {
+      "data_type": "uuid",
+      "default": "uuid_generate_v4()",
+      "name": "id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "created_by",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "folder_path",
+      "nullable": false,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "folder_name",
+      "nullable": false,
+      "udt": "text"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "parent_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": "'private'::platform.visibility",
+      "name": "visibility",
+      "nullable": false,
+      "udt": "visibility"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": "now()",
+      "name": "created_at",
+      "nullable": false,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": "now()",
+      "name": "updated_at",
+      "nullable": false,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "deleted_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "organization_id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "boolean",
+      "default": "false",
+      "name": "is_system",
+      "nullable": false,
+      "udt": "bool"
+     }
+    ],
+    "kind": "table",
+    "pk": [
+     "id"
+    ]
+   }
+  },
   "workbench": {
    "note_folders": {
     "columns": [

@@ -122,6 +122,31 @@ async def admin_shutdown(background: BackgroundTasks) -> dict[str, Any]:
     }
 
 
+@router.post("/refresh-config")
+async def admin_refresh_config() -> dict[str, Any]:
+    """Force an immediate remote app-config refresh and return the provenance.
+
+    Complements the 6h background loop (app/services/app_config). Never
+    errors on a failed fetch — the service falls back per the precedence
+    chain and this returns the tier actually in effect plus the failure
+    reason, so callers always learn the truth.
+    """
+    from app.services.app_config import get_app_config_service
+
+    service = get_app_config_service()
+    resolved = await service.refresh_now()
+    return {
+        "ok": resolved.tier == "remote",
+        "tier": resolved.tier,
+        "fetched_at": resolved.fetched_at.isoformat() if resolved.fetched_at else None,
+        "update_required": resolved.update_required,
+        "min_supported_app_version": resolved.row.min_supported_app_version,
+        "app_version": resolved.app_version,
+        "env_overrides": sorted(resolved.env_overrides.keys()),
+        "error": service.last_error,
+    }
+
+
 @router.post("/diagnose")
 async def admin_diagnose(reason: str | None = None) -> dict[str, Any]:
     """Force-write a diagnostic snapshot and return its path.

@@ -44,7 +44,7 @@ import time
 from typing import Any, Dict, Optional
 
 from app.common.system_logger import get_logger
-from app.config import AIDREAM_SERVER_URL
+from app.services.app_config import get_aidream_server_url
 from app.services.delegation.client import (
     DelegationApiClient,
     DelegationApiError,
@@ -93,7 +93,10 @@ class DelegationEngine:
         client: DelegationApiClient | None = None,
         poll_interval: float | None = None,
     ) -> None:
-        self._client = client or DelegationApiClient(AIDREAM_SERVER_URL)
+        # URL captured at engine construction from the app-config accessor
+        # (env override > remote > cache > compiled default). A mid-session
+        # config change applies on the next engine start.
+        self._client = client or DelegationApiClient(get_aidream_server_url())
         self._interval = poll_interval if poll_interval is not None else DEFAULT_POLL_INTERVAL
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
@@ -129,7 +132,7 @@ class DelegationEngine:
         logger.info(
             "[delegation] background sweep started (interval=%.0fs, server=%s)",
             self._interval,
-            AIDREAM_SERVER_URL,
+            get_aidream_server_url(),
         )
 
     async def stop_background(self) -> None:

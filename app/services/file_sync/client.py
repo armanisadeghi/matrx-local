@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 
 from app.common.system_logger import get_logger
-from app.config import MATRX_FILES_URL
+from app.services.app_config import get_matrx_files_url
 
 logger = get_logger()
 
@@ -46,8 +46,17 @@ class MatrxFilesClient:
     """Thin async wrapper over the matrx-files REST surface."""
 
     def __init__(self, base_url: str | None = None) -> None:
-        self._base = (base_url or MATRX_FILES_URL).rstrip("/")
+        # Explicit base_url (tests) wins; otherwise the URL is read per-use
+        # from the remote app-config accessor so a config refresh applies on
+        # the next request without recreating the client.
+        self._base_override = base_url.rstrip("/") if base_url else None
         self._jwt: str | None = None
+
+    @property
+    def _base(self) -> str:
+        if self._base_override:
+            return self._base_override
+        return get_matrx_files_url().rstrip("/")
 
     def set_jwt(self, token: str | None) -> None:
         self._jwt = token

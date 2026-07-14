@@ -25,7 +25,8 @@ from typing import Any
 
 import httpx
 
-from app.config import SCRAPER_API_KEY, SCRAPER_SERVER_URL
+from app.config import SCRAPER_API_KEY
+from app.services.app_config import get_scraper_server_url
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +43,20 @@ class RemoteScraperClient:
 
     def __init__(
         self,
-        server_url: str = SCRAPER_SERVER_URL,
+        server_url: str | None = None,
         api_key: str = SCRAPER_API_KEY,
     ) -> None:
-        self._server_url = server_url.rstrip("/")
+        # Explicit server_url (tests) wins; otherwise read per-use from the
+        # remote app-config accessor so a config refresh applies on the next
+        # request without recreating the singleton.
+        self._server_url_override = server_url.rstrip("/") if server_url else None
         self._api_key = api_key
+
+    @property
+    def _server_url(self) -> str:
+        if self._server_url_override:
+            return self._server_url_override
+        return get_scraper_server_url().rstrip("/")
 
     @property
     def is_configured(self) -> bool:

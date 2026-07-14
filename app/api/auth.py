@@ -89,6 +89,7 @@ _LOCAL_BOOTSTRAP_PATHS = frozenset(
         "/admin/status",
         "/admin/shutdown",
         "/admin/diagnose",
+        "/admin/refresh-config",
     }
 )
 

@@ -13,7 +13,7 @@
 | App settings keys (`AppSettings`) | [docs/official/settings-catalog.md](docs/official/settings-catalog.md) |
 | Settings audit / known gaps | [docs/official/settings-audit.md](docs/official/settings-audit.md) |
 | CI, PyInstaller, Tauri build gotchas | [docs/official/build-lessons.md](docs/official/build-lessons.md) |
-| App config — remote runtime config for shipped clients (spec; env vars are dev-only) | Cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/app-config/FEATURE.md` — read it before touching this feature in ANY repo |
+| App config — remote runtime config for shipped clients (env vars are dev-only; consumer BUILT here 2026-07-14) | [app/services/app_config/FEATURE.md](app/services/app_config/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/app-config/FEATURE.md` — read it before touching this feature in ANY repo |
 | Token broker — scoped short-lived credentials (client primitive this repo must build + `token-broker-client` repo skill) | `/Users/armanisadeghi/code/common-docs/token-broker/FEATURE.md` — read before touching this feature in ANY repo |
 | Download pipeline (audit / defects) | [docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md](docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md) |
 | Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |

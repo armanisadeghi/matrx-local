@@ -9,7 +9,8 @@ matrx-frontend/features/agents/docs/CLIENT_TOOL_SUSPEND_RESUME.md):
   POST /ai/conversations/{id}/resume                — continue the suspended loop (stream)
 
 All calls carry the user's Supabase JWT as ``Authorization: Bearer``. The
-base URL is always ``config.AIDREAM_SERVER_URL`` — never hardcoded. These
+base URL is always the app-config accessor value
+(``app.services.app_config.get_aidream_server_url``) — never hardcoded. These
 paths are served at the server root (NO ``/api`` prefix — matrx-extend's
 ``tool-results.ts`` pins the same shape).
 

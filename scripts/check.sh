@@ -174,6 +174,12 @@ print(f'All tool files parse cleanly')
 
     run_step "parity: background tasks integrity" \
       uv run --frozen pytest tests/parity/test_background_tasks.py -q --no-header
+
+    # Release validation for remote app config (NETWORK: fetches the live
+    # Supabase row via both paths + validates compiled defaults — see
+    # app/services/app_config/FEATURE.md).
+    run_step "parity: app config live row" \
+      uv run --frozen pytest tests/parity/test_app_config_live.py -q --no-header
   fi
 fi
 

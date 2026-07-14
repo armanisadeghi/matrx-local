@@ -197,11 +197,18 @@ class ServiceRegistry:
         logger.info("[launcher] %s → starting%s", name, _meta_tail(fields))
 
     def ready(self, name: str, **fields: Any) -> None:
-        """Mark the service as ready (healthy). Records ready_at and any fields."""
+        """Mark the service as ready (healthy). Records ready_at and any fields.
+
+        Clears any earlier error/degraded reason — READY means healthy, and a
+        stale "degraded because X" string under state=ready misleads
+        /admin/status readers (seen with app_config's boot-degraded → ready
+        transition).
+        """
         with self._lock:
             r = self._services.setdefault(name, ServiceRecord(name=name))
             r.state = ServiceState.READY
             r.ready_at = time.time()
+            r.error = None
             self._apply_fields(r, fields)
             took = (r.ready_at - r.started_at) if r.started_at else None
         extras = []

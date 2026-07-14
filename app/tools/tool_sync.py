@@ -64,7 +64,6 @@ from app.tools.catalog import CatalogEntry, get_by_cloud_name, get_catalog
 # ---------------------------------------------------------------------------
 
 EXECUTOR_NAME = "matrx-local"
-DEFAULT_AIDREAM_URL = "https://server.app.matrxserver.com"
 TOOLS_ROUTE = "/ai-tools/app/matrx-local/all"
 ALL_TOOLS_ROUTE = "/ai-tools"
 DEFAULT_CHANGESET_PATH = Path(".matrx/tool_registry_changeset.sql")
@@ -103,7 +102,15 @@ FALLBACK_CLOUD_BASELINE: tuple[str, ...] = (
 
 
 def _base_url() -> str:
-    return os.environ.get("AIDREAM_SERVER_URL", DEFAULT_AIDREAM_URL).rstrip("/")
+    # AIDREAM_SERVER_URL env var stays as this CLI's historical dev override;
+    # otherwise the effective URL comes from the remote app-config accessor
+    # (env AIDREAM_SERVER_URL_LIVE override > remote > cache > compiled default).
+    explicit = os.environ.get("AIDREAM_SERVER_URL")
+    if explicit:
+        return explicit.rstrip("/")
+    from app.services.app_config import get_aidream_server_url
+
+    return get_aidream_server_url().rstrip("/")
 
 
 # ---------------------------------------------------------------------------

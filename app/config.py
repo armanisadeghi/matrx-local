@@ -118,10 +118,12 @@ CLOUD_PARTICIPATION_ENABLED = os.getenv(
 # Remote scraper server — all DB access goes through this API, never directly.
 # Authenticated users' Supabase JWTs are accepted by the server — no API key needed for users.
 # SCRAPER_API_KEY is for server-to-server calls only (your own .env, never shipped to users).
+# SCRAPER_SERVER_URL_DEFAULT is the shipping default — overridden at runtime by
+# remote app config (app/services/app_config); the env var remains a
+# developer-only tier-1 override.
 SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY", "")
-SCRAPER_SERVER_URL = os.getenv(
-    "SCRAPER_SERVER_URL", "https://scraper.app.matrxserver.com"
-)
+SCRAPER_SERVER_URL_DEFAULT = "https://scraper.app.matrxserver.com"
+SCRAPER_SERVER_URL = os.getenv("SCRAPER_SERVER_URL", SCRAPER_SERVER_URL_DEFAULT)
 
 # ---------------------------------------------------------------------------
 # AIDream Server — REST API for shared data (models, prompts, tools, cx data)
@@ -129,12 +131,14 @@ SCRAPER_SERVER_URL = os.getenv(
 # The active URL is read from AIDREAM_SERVER_URL_LIVE.  All four variants are
 # loaded so the UI can present a server-picker in debug/dev mode.
 #
-# NEVER fall back to a hardcoded URL here — if the env var is absent, sync is
-# simply disabled (logged as a warning).  This prevents stale hardcoded URLs
-# from shipping in production builds.
+# AIDREAM_SERVER_URL_DEFAULT is the SHIPPING DEFAULT — overridden at runtime
+# by remote app config (app/services/app_config). The env vars remain
+# developer-only tier-1 overrides. Runtime consumers read the accessor
+# (get_aidream_server_url), never this constant directly.
 # ---------------------------------------------------------------------------
+AIDREAM_SERVER_URL_DEFAULT = "https://server.app.matrxserver.com"
 AIDREAM_SERVER_URL_LIVE = os.getenv(
-    "AIDREAM_SERVER_URL_LIVE", "https://server.app.matrxserver.com"
+    "AIDREAM_SERVER_URL_LIVE", AIDREAM_SERVER_URL_DEFAULT
 )
 AIDREAM_SERVER_URL_PRODUCTION = os.getenv(
     "AIDREAM_SERVER_URL_PRODUCTION", "https://server.app.matrxserver.com"
@@ -146,15 +150,19 @@ AIDREAM_SERVER_URL_LOCAL = os.getenv(
     "AIDREAM_SERVER_URL_LOCAL", "http://localhost:8000"
 )
 
-# Active URL — everything in the codebase that needs the AIDream server reads this.
+# Active URL — bootstrap constant (config fetch + dev override detection).
+# Runtime consumers use app/services/app_config get_aidream_server_url().
 AIDREAM_SERVER_URL = AIDREAM_SERVER_URL_LIVE
 
 # Matrx Files — the standalone file microservice (EC2/Cloudflare, launched
 # 2026-07-13). ALL desktop file-sync traffic (change feed, uploads, patches,
 # tombstones, URL minting) goes here — never through aidream, never a
-# hand-constructed S3/CDN URL. The env override exists for local development
+# hand-constructed S3/CDN URL. MATRX_FILES_URL_DEFAULT is the shipping
+# default — overridden at runtime by remote app config
+# (app/services/app_config). The env override exists for local development
 # against a locally-run matrx-files instance.
-MATRX_FILES_URL = os.getenv("MATRX_FILES_URL", "https://files.matrxserver.com")
+MATRX_FILES_URL_DEFAULT = "https://files.matrxserver.com"
+MATRX_FILES_URL = os.getenv("MATRX_FILES_URL", MATRX_FILES_URL_DEFAULT)
 
 # Supabase (for document sync — uses PostgREST API with user JWTs)
 # These are publishable values — safe to embed in the binary (RLS enforces security).

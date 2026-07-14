@@ -120,6 +120,17 @@ async def health():
         payload["failed"] = failed
     if degraded:
         payload["degraded"] = degraded
+
+    # Remote app-config provenance: {tier, fetched_at, update_required} so the
+    # desktop UI / diagnostics can show "config: remote (2m ago)" vs
+    # "compiled defaults". Never allowed to break the liveness probe.
+    try:
+        from app.services.app_config import get_app_config_service
+
+        payload["app_config"] = get_app_config_service().status_payload()
+    except Exception:
+        logger.warning("[routes] /health app_config status read failed", exc_info=True)
+
     return payload
 
 

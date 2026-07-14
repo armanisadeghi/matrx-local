@@ -290,6 +290,44 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # falls back to presence-only on loopback for HS256 tokens. See
     # app/api/extension_auth.py for the full posture.
 
+    # Phase 00: Remote app config (server URLs, flags, min version).
+    # MUST run before every sync engine / client that consumes a server URL.
+    # NEVER blocks startup: the resolved config comes from disk cache or
+    # compiled defaults synchronously; the network fetch runs as a background
+    # task with a 6h refresh loop. See app/services/app_config/FEATURE.md.
+    print("[phase:app-config] Resolving runtime config...", flush=True)
+    logger.info("[app/main.py] Phase 00: Resolving remote app config...")
+    _registry.starting("app_config")
+    try:
+        from app.services.app_config import get_app_config_service
+
+        _app_config_service = get_app_config_service()  # sync: cache/defaults
+        _boot_resolved = _app_config_service.resolved
+        _registry.degraded(
+            "app_config",
+            reason=f"running on {_boot_resolved.tier} config until remote fetch completes",
+            tier=_boot_resolved.tier,
+            fetched_at=_boot_resolved.fetched_at.isoformat()
+            if _boot_resolved.fetched_at
+            else None,
+        )
+        await _app_config_service.start_background()  # non-blocking fetch + loop
+        logger.info(
+            "[app/main.py] Phase 00: App config applied (tier=%s) ✓ — background refresh running",
+            _boot_resolved.tier,
+        )
+        print(
+            f"[phase:app-config] Config applied ({_boot_resolved.tier})", flush=True
+        )
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 00: App config service FAILED — consumers will "
+            "read compiled defaults",
+            exc_info=True,
+        )
+        print("[phase:app-config] App config FAILED (compiled defaults)", flush=True)
+        _registry.failed("app_config", exc)
+
     # Phase 0a: Open local SQLite database (offline-first data store).
     # This MUST be the first phase — all data reads come from SQLite.
     # The database lives at ~/.matrx/matrx.db (outside the app folder) so it
@@ -1108,6 +1146,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
 
     # ── Phase S1: Cancel background asyncio tasks (fast, non-blocking) ────
+    # App-config refresh loop (mirrors Phase 00). Best-effort + timeouted.
+    try:
+        from app.services.app_config import get_app_config_service as _get_app_cfg
+
+        _app_cfg = _get_app_cfg()
+        if _app_cfg.active:
+            _registry.stopping("app_config")
+            await asyncio.wait_for(_app_cfg.stop_background(), timeout=2.0)
+            _registry.stopped("app_config")
+            logger.info("[app/main.py] App config refresh loop stopped ✓")
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning("[app/main.py] App config loop did not stop cleanly: %s", exc)
+        _registry.stopped("app_config")
+
     _registry.stopping("sync_engine")
     try:
         sync_eng = get_sync_engine()

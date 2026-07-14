@@ -4,8 +4,9 @@ Used by the SyncEngine to pull shared data (models, prompts, tools) from the
 AIDream server into local SQLite.  Never used for direct reads — all reads go
 through SQLite repositories.
 
-URL is always read from config.AIDREAM_SERVER_URL (which reads AIDREAM_SERVER_URL_LIVE
-from .env).  Never hardcoded.
+URL is always read from the remote app-config accessor
+(app.services.app_config.get_aidream_server_url — env dev-override > remote
+config > disk cache > compiled default).  Never hardcoded.
 
 Offline behaviour: raises AIDreamOfflineError when the server is unreachable.
 The SyncEngine catches this and skips the sync cycle gracefully, logging a warning.
@@ -18,7 +19,7 @@ from typing import Any, Optional
 
 import httpx
 
-from app.config import AIDREAM_SERVER_URL
+from app.services.app_config import get_aidream_server_url
 
 logger = logging.getLogger(__name__)
 
@@ -138,23 +139,34 @@ _instance: Optional[AIDreamClient] = None
 def get_aidream_client() -> Optional[AIDreamClient]:
     """Return the module-level AIDreamClient singleton.
 
-    Returns None if AIDREAM_SERVER_URL_LIVE is not configured, so callers can
-    gracefully skip sync rather than crashing.
+    The base URL comes from the remote app-config accessor (env override >
+    remote > cache > compiled default). If the effective URL changes after a
+    config refresh, the singleton is rebuilt on the next call so redirects
+    apply without an app restart. Returns None if no URL is resolvable, so
+    callers can gracefully skip sync rather than crashing.
     """
     global _instance
-    if _instance is not None:
-        return _instance
 
-    if not AIDREAM_SERVER_URL:
+    base_url = get_aidream_server_url()
+    if not base_url:
         logger.warning(
-            "[aidream_client] AIDREAM_SERVER_URL_LIVE is not set in .env. "
+            "[aidream_client] No aidream server URL resolved (app config + env). "
             "Remote sync (models, prompts, tools) is DISABLED. "
             "Data will be served from local SQLite only."
         )
         return None
 
-    _instance = AIDreamClient(AIDREAM_SERVER_URL)
-    logger.info(
-        "[aidream_client] AIDreamClient created. base_url=%s", AIDREAM_SERVER_URL
-    )
+    if _instance is not None and _instance._base_url == base_url.rstrip("/"):
+        return _instance
+
+    if _instance is not None:
+        logger.warning(
+            "[aidream_client] aidream server URL changed (%s → %s) via app "
+            "config refresh — rebuilding client",
+            _instance._base_url,
+            base_url,
+        )
+
+    _instance = AIDreamClient(base_url)
+    logger.info("[aidream_client] AIDreamClient created. base_url=%s", base_url)
     return _instance

@@ -16,11 +16,26 @@ how to combine them, see **exactly** how many runs that is, and queue them all.
   await enqueueImageBatch(built.jobs.map(...), label);                // one request
 ```
 
+### Pools — shared option lists via `{{name#slot}}`
+
+`{{color#1}}` / `{{color#2}}` / `{{color#3}}` declare **one pool** (`color`) with
+many slots. Options are typed once; each pool is **one axis** of length n
+(option count). Strategies / seed policy / RNG never special-case pools.
+
+| Assign | Within one run |
+|---|---|
+| `rotate` (default) | slot i at step s → `options[(s + i) % n]` — reuse when slots > options |
+| `same` | every slot gets `options[s]` |
+
+Bare `{{color}}` remains a normal variable. A name cannot be both a variable and
+a pool — `validateSpec` hard-errors on the collision. `syncPoolsWithTokens`
+mirrors variable sync: never re-sort, never discard typed options.
+
 ## The core is media-agnostic — keep it that way
 
-`types` / `parse` / `expand` / `rng` know about **variables, options, strategies
-and combinations**. They contain no reference to images, models, or diffusion,
-and they must not gain one.
+`types` / `parse` / `expand` / `rng` know about **variables, pools, options,
+strategies and combinations**. They contain no reference to images, models, or
+diffusion, and they must not gain one.
 
 A generator plugs in as a **`MatrixTarget`** (`targets.ts`), which supplies the
 other half:
@@ -72,6 +87,12 @@ token was momentarily deleted if it holds any hand-typed option. The working spe
 is persisted (debounced) to localStorage per target, so a half-built matrix
 survives a tab switch, a reload, and an app restart.
 
+**7. Library + templates live on disk.** Reusable pools/variables and named
+templates are written by the engine to `~/.matrx/prompt-matrix/`
+(`library.json`, `templates.json`) — not buried in browser storage. The Library
+panel sits in the matrix UI itself (with the absolute path shown). See
+`app/services/prompt_matrix/FEATURE.md`.
+
 ## Strategies
 
 | Kind | Runs | For |
@@ -103,17 +124,23 @@ the run-count + Queue button **below** them.
 - `BatchConfirmDialog` — the count, a time estimate from **this machine's own**
   median generation time, and the actual first/last prompts. Nothing is queued
   without it.
+- `BatchPreviewDialog` — **Preview** builds the batch with the real `buildJobs`
+  path, freezes that snapshot, and lets you review every prompt, copy runs, and
+  checkbox which ones to queue. Queue-from-preview never re-expands — selection
+  only filters the frozen list, so order/seeds/text match what Queue would send.
 - `BatchQueuePanel` — pause / drag-reorder / cancel-batch / retry, live.
-- **Templates menu** — save/load named matrices in localStorage; **export** the
-  current or saved matrix as JSON (copy or download); **import** from pasted
-  JSON or a `.json` file (wrapped export or bare `MatrixSpec`). Chat/agent
-  workflow: export → edit → paste back.
+- **Library panel** — always visible above the variable cards. Save a pool or
+  variable with **Save to library**; **Insert** drops it into the current
+  matrix. Path to `library.json` is shown and copyable.
+- **Templates menu** — save/load named matrices (on-disk `templates.json`);
+  **export** / **import** JSON for chat/agent workflows.
 
 `ImageGenerateForm` carries the Single ⇄ Batch toggle, so every variant gets it.
 
 ## Tests
 
-`prompt-matrix.test.ts` (43 tests, `pnpm test:unit`) pins the counting, the
-nesting order, every strategy, seed policy, validation, and the image target's
-axes. The count and the emission order are the two things a bug in this library
-turns into wasted GPU-hours — they are tested hardest.
+`prompt-matrix.test.ts` (`pnpm test:unit`) pins the counting, the nesting order,
+every strategy, seed policy, pool rotate/same (including slots > options),
+validation, and the image target's axes. The count and the emission order are
+the two things a bug in this library turns into wasted GPU-hours — they are
+tested hardest.

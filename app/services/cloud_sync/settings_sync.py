@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,9 +70,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Scraping
     "headless_scraping": True,
     "scrape_delay": 1.0,
-    # Proxy
+    # Proxy — port-base offset +40: live 22140 → 22180, dev 22240 → 22280
+    # (MXL-D-043 dev/live isolation; same formula as proxy/server.py
+    # DEFAULT_PROXY_PORT and desktop settings.ts DEFAULTS.proxyPort).
     "proxy_enabled": True,
-    "proxy_port": 22180,
+    "proxy_port": int(os.environ.get("MATRX_PORT_BASE", "22140")) + 40,
     # Remote access
     "tunnel_enabled": False,
     # Instance

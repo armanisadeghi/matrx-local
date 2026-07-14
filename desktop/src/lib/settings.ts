@@ -143,9 +143,11 @@ const DEFAULTS: AppSettings = {
   // Scraping
   headlessScraping: true,
   scrapeDelay: "1.0",
-  // Proxy
+  // Proxy — port-base offset +40: live 22140 → 22180, dev 22240 → 22280
+  // (MXL-D-043 dev/live isolation; same formula as the Python defaults in
+  // app/services/proxy/server.py and cloud_sync/settings_sync.py).
   proxyEnabled: true,
-  proxyPort: 22180,
+  proxyPort: import.meta.env.DEV ? 22280 : 22180,
   // Remote access
   tunnelEnabled: false,
   // Instance

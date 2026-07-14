@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import { countPlan, expandMatrix, validateSpec } from "./expand";
-import { findTokens, renderTemplate, tidyPrompt, variableKey } from "./parse";
+import {
+  extractPoolRefs,
+  extractVariableNames,
+  findTokens,
+  renderTemplate,
+  tidyPrompt,
+  variableKey,
+} from "./parse";
 import { Rng, sampleIndices } from "./rng";
-import { buildJobs, syncVariablesWithTokens } from "./targets";
+import {
+  buildJobs,
+  syncPoolsWithTokens,
+  syncVariablesWithTokens,
+} from "./targets";
 import { createImageTarget } from "./imageTarget";
 import {
   matrixExportFilename,
@@ -14,6 +25,7 @@ import type { ImageGenModelInfo } from "@/lib/api";
 import type { ImageGenerateInput } from "@/hooks/use-media-gen";
 import type {
   MatrixOption,
+  MatrixPool,
   MatrixSpec,
   MatrixStrategy,
   MatrixVariable,
@@ -46,6 +58,22 @@ function variable(
   };
 }
 
+function pool(
+  name: string,
+  values: string[],
+  over: Partial<MatrixPool> = {},
+): MatrixPool {
+  return {
+    id: nextId(),
+    name,
+    options: opts(...values),
+    assign: "rotate",
+    baselineOptionId: null,
+    enabled: true,
+    ...over,
+  };
+}
+
 const SEED: SeedPolicy = {
   mode: "fixed",
   baseSeed: 1234,
@@ -58,10 +86,12 @@ function spec(
   variables: MatrixVariable[],
   strategy: MatrixStrategy = { kind: "cartesian" },
   seed: Partial<SeedPolicy> = {},
+  pools: MatrixPool[] = [],
 ): MatrixSpec {
   return {
     fields: [{ id: "prompt", label: "Prompt", text: prompt }],
     variables,
+    pools,
     strategy,
     seed: { ...SEED, ...seed },
   };
@@ -102,6 +132,32 @@ describe("parse", () => {
     const p = "a cat, film noir, at night";
     expect(tidyPrompt(p)).toBe(p);
   });
+
+  it("parses pool slots and keeps them out of plain variable names", () => {
+    const text =
+      "man in {{color#1}} shirt, woman in {{color#2}} skirt, {{pose}}";
+    const toks = findTokens(text);
+    expect(toks.map((t) => t.name)).toEqual(["color#1", "color#2", "pose"]);
+    expect(toks[0]?.poolName).toBe("color");
+    expect(toks[0]?.slot).toBe("1");
+    expect(extractVariableNames([text])).toEqual(["pose"]);
+    const refs = extractPoolRefs([text]);
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.name).toBe("color");
+    expect(refs[0]?.slots).toEqual(["1", "2"]);
+  });
+
+  it("substitutes pool slot keys", () => {
+    const { text, unresolved } = renderTemplate(
+      "{{color#1}} and {{color#2}}",
+      new Map([
+        ["color#1", "red"],
+        ["color#2", "blue"],
+      ]),
+    );
+    expect(text).toBe("red and blue");
+    expect(unresolved).toEqual([]);
+  });
 });
 
 // ── counting + strategies ───────────────────────────────────────────────────
@@ -119,9 +175,9 @@ describe("strategies", () => {
   it("variable order is loop nesting — the first is frozen longest", () => {
     const plan = expandMatrix(spec("{{subject}} {{style}}", [s, t]));
     // subject (outer) holds for 5 runs while style (inner) sweeps.
-    expect(plan.combinations.slice(0, 5).map((c) => c.values["subject"])).toEqual(
-      ["cat", "cat", "cat", "cat", "cat"],
-    );
+    expect(
+      plan.combinations.slice(0, 5).map((c) => c.values["subject"]),
+    ).toEqual(["cat", "cat", "cat", "cat", "cat"]);
     expect(plan.combinations.slice(0, 5).map((c) => c.values["style"])).toEqual(
       ["noir", "anime", "oil", "3d", "pixel"],
     );
@@ -133,9 +189,9 @@ describe("strategies", () => {
     expect(plan.combinations.slice(0, 3).map((c) => c.values["style"])).toEqual(
       ["noir", "noir", "noir"],
     );
-    expect(plan.combinations.slice(0, 3).map((c) => c.values["subject"])).toEqual(
-      ["cat", "dog", "fox"],
-    );
+    expect(
+      plan.combinations.slice(0, 3).map((c) => c.values["subject"]),
+    ).toEqual(["cat", "dog", "fox"]);
   });
 
   it("baseline changes one variable at a time: 1 + Σ(n−1), not Πn", () => {
@@ -243,7 +299,10 @@ describe("strategies", () => {
 
   it("computes huge totals without materializing them", () => {
     const many = Array.from({ length: 6 }, (_, i) =>
-      variable(`v${i}`, Array.from({ length: 10 }, (_, j) => `o${j}`)),
+      variable(
+        `v${i}`,
+        Array.from({ length: 10 }, (_, j) => `o${j}`),
+      ),
     );
     const sp = spec(many.map((v) => `{{${v.name}}}`).join(" "), many);
     expect(countPlan(sp)).toBe(1_000_000);
@@ -270,7 +329,12 @@ describe("seed policy", () => {
     const plan = expandMatrix(sp);
     // Combination-major: all 3 seeds of "cat" land before "dog" starts.
     expect(plan.combinations.map((c) => c.values["subject"])).toEqual([
-      "cat", "cat", "cat", "dog", "dog", "dog",
+      "cat",
+      "cat",
+      "cat",
+      "dog",
+      "dog",
+      "dog",
     ]);
     expect(plan.combinations.map((c) => c.seed)).toEqual([
       1234, 1235, 1236, 1234, 1235, 1236,
@@ -285,7 +349,12 @@ describe("seed policy", () => {
   });
 
   it("random seeds are drawn from the plan RNG, so a plan replays identically", () => {
-    const sp = spec("{{subject}}", [s], { kind: "cartesian" }, { mode: "random" });
+    const sp = spec(
+      "{{subject}}",
+      [s],
+      { kind: "cartesian" },
+      { mode: "random" },
+    );
     const a = expandMatrix(sp).combinations.map((c) => c.seed);
     const b = expandMatrix(sp).combinations.map((c) => c.seed);
     expect(a).toEqual(b);
@@ -303,7 +372,9 @@ describe("validation", () => {
   it("blocks a token that has no variable — never generates a literal {{token}}", () => {
     const { errors } = validateSpec(spec("a {{subject}}", []));
     expect(errors.join(" ")).toContain("{{subject}}");
-    expect(expandMatrix(spec("a {{subject}}", [])).combinations).toHaveLength(0);
+    expect(expandMatrix(spec("a {{subject}}", [])).combinations).toHaveLength(
+      0,
+    );
   });
 
   it("blocks an unclosed brace", () => {
@@ -325,6 +396,135 @@ describe("validation", () => {
     expect(warnings.join(" ")).toContain("never appears in the prompt");
     expect(warnings.join(" ")).toContain("duplicate options");
   });
+
+  it("blocks colliding bare {{color}} with pool {{color#1}}", () => {
+    const colorPool = pool("color", ["red", "blue"]);
+    const { errors } = validateSpec(
+      spec("{{color}} and {{color#1}}", [], { kind: "cartesian" }, {}, [
+        colorPool,
+      ]),
+    );
+    expect(errors.join(" ")).toContain("both as");
+  });
+});
+
+// ── pools ───────────────────────────────────────────────────────────────────
+
+describe("pools", () => {
+  const colors = pool("color", ["red", "blue", "green"]);
+  const pose = variable("pose", ["standing", "driving"]);
+
+  it("rotate assigns different slots from one list — axis length is n, not n^k", () => {
+    const sp = spec(
+      "man in {{color#1}} shirt, woman in {{color#2}} skirt, {{color#3}} car",
+      [],
+      { kind: "cartesian" },
+      {},
+      [colors],
+    );
+    expect(countPlan(sp)).toBe(3);
+    const plan = expandMatrix(sp);
+    expect(plan.combinations).toHaveLength(3);
+    expect(plan.combinations[0]?.values).toEqual({
+      "color#1": "red",
+      "color#2": "blue",
+      "color#3": "green",
+    });
+    expect(plan.combinations[1]?.values).toEqual({
+      "color#1": "blue",
+      "color#2": "green",
+      "color#3": "red",
+    });
+    expect(plan.combinations[0]?.rendered["prompt"]).toBe(
+      "man in red shirt, woman in blue skirt, green car",
+    );
+  });
+
+  it("rotate reuses options when slots outnumber values", () => {
+    const small = pool("color", ["red", "blue", "green"]);
+    const sp = spec(
+      "{{color#1}} {{color#2}} {{color#3}} {{color#4}} {{color#5}} {{color#6}} {{color#7}} {{color#8}}",
+      [],
+      { kind: "cartesian" },
+      {},
+      [small],
+    );
+    expect(countPlan(sp)).toBe(3);
+    const plan = expandMatrix(sp);
+    expect(plan.warnings.join(" ")).toContain("will repeat");
+    expect(plan.combinations[0]?.values).toEqual({
+      "color#1": "red",
+      "color#2": "blue",
+      "color#3": "green",
+      "color#4": "red",
+      "color#5": "blue",
+      "color#6": "green",
+      "color#7": "red",
+      "color#8": "blue",
+    });
+  });
+
+  it("same assign puts the identical value in every slot", () => {
+    const samePool = pool("color", ["red", "blue"], { assign: "same" });
+    const sp = spec(
+      "{{color#1}} / {{color#2}}",
+      [],
+      { kind: "cartesian" },
+      {},
+      [samePool],
+    );
+    const plan = expandMatrix(sp);
+    expect(plan.combinations.map((c) => c.values)).toEqual([
+      { "color#1": "red", "color#2": "red" },
+      { "color#1": "blue", "color#2": "blue" },
+    ]);
+  });
+
+  it("multiplies with normal variables via existing cartesian", () => {
+    const sp = spec(
+      "{{color#1}} shirt, {{pose}}",
+      [pose],
+      { kind: "cartesian" },
+      {},
+      [colors],
+    );
+    // pose (3? no — 2) × color pool (3) = 6. Variable axes first, then pools.
+    expect(countPlan(sp)).toBe(6);
+    const plan = expandMatrix(sp);
+    // pose is outer (first variable axis); color rotates innermost.
+    expect(plan.combinations.slice(0, 3).map((c) => c.values["pose"])).toEqual([
+      "standing",
+      "standing",
+      "standing",
+    ]);
+    expect(
+      plan.combinations.slice(0, 3).map((c) => c.values["color#1"]),
+    ).toEqual(["red", "blue", "green"]);
+  });
+
+  it("sample over a pool product stays reproducible", () => {
+    const sp = spec(
+      "{{color#1}} {{pose}}",
+      [pose],
+      { kind: "sample", count: 3, seed: 11 },
+      {},
+      [colors],
+    );
+    const a = expandMatrix(sp).combinations.map((c) => c.label);
+    const b = expandMatrix(sp).combinations.map((c) => c.label);
+    expect(a).toEqual(b);
+    expect(a).toHaveLength(3);
+  });
+
+  it("does not disturb a matrix with only normal variables", () => {
+    const s = variable("subject", ["cat", "dog"]);
+    const sp = spec("a {{subject}}", [s]);
+    expect(sp.pools).toEqual([]);
+    expect(countPlan(sp)).toBe(2);
+    expect(
+      expandMatrix(sp).combinations.map((c) => c.rendered["prompt"]),
+    ).toEqual(["a cat", "a dog"]);
+  });
 });
 
 // ── token sync ──────────────────────────────────────────────────────────────
@@ -341,7 +541,11 @@ describe("syncVariablesWithTokens", () => {
     const typed = variable("style", ["noir", "anime", "oil"]);
     const out = syncVariablesWithTokens([typed], [], nextId);
     expect(out).toHaveLength(1);
-    expect(out[0]?.options.map((o) => o.value)).toEqual(["noir", "anime", "oil"]);
+    expect(out[0]?.options.map((o) => o.value)).toEqual([
+      "noir",
+      "anime",
+      "oil",
+    ]);
   });
 
   it("drops an empty auto-created variable whose token is gone", () => {
@@ -361,6 +565,32 @@ describe("syncVariablesWithTokens", () => {
     const b = variable("a", ["1"]);
     const out = syncVariablesWithTokens([a, b], ["b", "a", "c"], nextId);
     expect(out.map((v) => v.name)).toEqual(["b", "a", "c"]);
+  });
+});
+
+describe("syncPoolsWithTokens", () => {
+  it("creates a pool for a new slot token", () => {
+    const refs = extractPoolRefs(["{{color#1}} and {{color#2}}"]);
+    const out = syncPoolsWithTokens([], refs, nextId);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.name).toBe("color");
+    expect(out[0]?.assign).toBe("rotate");
+  });
+
+  it("keeps typed pool options when slots are momentarily deleted", () => {
+    const typed = pool("color", ["red", "blue", "green"]);
+    const out = syncPoolsWithTokens([typed], [], nextId);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.options.map((o) => o.value)).toEqual([
+      "red",
+      "blue",
+      "green",
+    ]);
+  });
+
+  it("drops an empty auto-created pool whose slots are gone", () => {
+    const auto = pool("ghost", [""]);
+    expect(syncPoolsWithTokens([auto], [], nextId)).toHaveLength(0);
   });
 });
 
@@ -391,7 +621,9 @@ describe("image target", () => {
       binding: { kind: "param", axisId: "steps" },
     });
     const plan = expandMatrix(spec("a cat", [steps]));
-    const { jobs, errors } = buildJobs(target, base, plan.combinations, [steps]);
+    const { jobs, errors } = buildJobs(target, base, plan.combinations, [
+      steps,
+    ]);
     expect(errors).toEqual([]);
     expect(jobs.map((j) => j.job.steps)).toEqual([8, 20]);
   });
@@ -516,9 +748,8 @@ describe("matrix JSON io", () => {
   it("rejects invalid JSON and bad versions", () => {
     expect(parseMatrixImport("not json").ok).toBe(false);
     expect(
-      parseMatrixImport(
-        JSON.stringify({ v: 99, targetId: "image", spec: {} }),
-      ).ok,
+      parseMatrixImport(JSON.stringify({ v: 99, targetId: "image", spec: {} }))
+        .ok,
     ).toBe(false);
   });
 

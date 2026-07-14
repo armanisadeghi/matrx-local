@@ -17,6 +17,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   Anchor,
+  BookMarked,
   ChevronDown,
   ChevronRight,
   GripVertical,
@@ -35,7 +36,11 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { MatrixVariable, ParamAxis, StrategyKind } from "@/lib/prompt-matrix";
+import type {
+  MatrixVariable,
+  ParamAxis,
+  StrategyKind,
+} from "@/lib/prompt-matrix";
 import type { PromptMatrixActions } from "@/hooks/use-prompt-matrix";
 import { cn } from "@/lib/utils";
 
@@ -150,7 +155,10 @@ export function VariableCard<TJob>({
         {strategy === "cartesian" && totalVariables > 1 && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">
+              <Badge
+                variant="outline"
+                className="h-5 shrink-0 px-1.5 text-[10px]"
+              >
                 {depth === 1
                   ? "outer"
                   : depth === totalVariables
@@ -222,7 +230,9 @@ export function VariableCard<TJob>({
       {!collapsed && (
         <div className="space-y-1 border-t px-2 py-2">
           {axis?.hint !== undefined && (
-            <p className="pb-1 text-[11px] text-muted-foreground">{axis.hint}</p>
+            <p className="pb-1 text-[11px] text-muted-foreground">
+              {axis.hint}
+            </p>
           )}
 
           {variable.options.map((option, i) => {
@@ -324,23 +334,34 @@ export function VariableCard<TJob>({
               Add option
             </Button>
 
-            {axis?.suggestions !== undefined &&
-              axis.suggestions.length > 0 && (
-                <>
-                  <span className="text-[11px] text-muted-foreground">·</span>
-                  {axis.suggestions.slice(0, 6).map((s) => (
-                    <Button
-                      key={s === "" ? "__none__" : s}
-                      variant="outline"
-                      size="sm"
-                      className="h-6 px-1.5 text-[11px] font-normal"
-                      onClick={() => actions.addOptions(variable.id, [s])}
-                    >
-                      {s === "" ? "none" : s}
-                    </Button>
-                  ))}
-                </>
-              )}
+            {variable.binding.kind === "text" && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 gap-1 px-1.5 text-xs"
+                onClick={() => void actions.saveVariableToLibrary(variable.id)}
+              >
+                <BookMarked className="h-3 w-3" />
+                Save to library
+              </Button>
+            )}
+
+            {axis?.suggestions !== undefined && axis.suggestions.length > 0 && (
+              <>
+                <span className="text-[11px] text-muted-foreground">·</span>
+                {axis.suggestions.slice(0, 6).map((s) => (
+                  <Button
+                    key={s === "" ? "__none__" : s}
+                    variant="outline"
+                    size="sm"
+                    className="h-6 px-1.5 text-[11px] font-normal"
+                    onClick={() => actions.addOptions(variable.id, [s])}
+                  >
+                    {s === "" ? "none" : s}
+                  </Button>
+                ))}
+              </>
+            )}
           </div>
         </div>
       )}

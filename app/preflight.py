@@ -91,7 +91,10 @@ logger = logging.getLogger(__name__)
 # Constants — defaults can be overridden by env vars (matches run.py behavior).
 # ──────────────────────────────────────────────────────────────────────────────
 
-DEFAULT_ENGINE_PORT = 22140
+# MATRX_PORT_BASE moves the whole default+scan window. run.py's dev/live
+# isolation guard sets 22240 for source-run (dev) engines so they can never
+# land inside the packaged app's 22140-22159 discovery-scan range.
+DEFAULT_ENGINE_PORT = int(os.environ.get("MATRX_PORT_BASE", "22140"))
 ENGINE_PORT_SCAN = 20
 
 _MATRX_HOME = Path(os.environ.get("MATRX_HOME_DIR", str(Path.home() / ".matrx")))
@@ -1116,7 +1119,35 @@ def write_discovery_file(
     tunnel_url: str | None = None,
 ) -> None:
     """Atomically write ~/.matrx/local.json with both legacy fields (for
-    matrx-extend / docs / integration guide) AND the new `services` map."""
+    matrx-extend / docs / integration guide) AND the new `services` map.
+
+    Clobber guard (MXL-D-043): if the file is currently owned by a DIFFERENT
+    engine that is alive and answering /health at its recorded URL, we refuse
+    to overwrite it. Every discovery consumer (the desktop app's Rust,
+    matrx-extend, cloud round trips) routes via this file — a second instance
+    silently claiming it redirects all of them to itself. The second instance
+    still runs fine on its own port; it just doesn't get discovered. Loud by
+    design so the operator knows which engine owns discovery.
+    """
+    existing = read_discovery_file() or {}
+    owner_pid = existing.get("pid")
+    owner_url = existing.get("url")
+    if (
+        isinstance(owner_pid, int)
+        and owner_pid != pid
+        and isinstance(owner_url, str)
+        and psutil.pid_exists(owner_pid)
+        and _probe_matrx_health(owner_url)
+    ):
+        _warn(
+            "engine",
+            f"discovery file {DISCOVERY_FILE} is owned by a LIVE engine "
+            f"(pid {owner_pid}, {owner_url}) — NOT overwriting. This instance "
+            f"(pid {pid}, port {engine_port}) keeps running but is not the "
+            "discovery owner.",
+        )
+        return
+
     DISCOVERY_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     payload: dict = {
@@ -1163,12 +1194,25 @@ def update_discovery_service(
 
     Use for late-binding services (e.g. tunnel comes up after the engine).
     Pass info=None to remove the entry.
+
+    Ownership guard (MXL-D-043): only the engine whose pid is recorded in the
+    file may mutate it — a non-owner instance updating its tunnel here would
+    corrupt the discovery owner's entries.
     """
     if not DISCOVERY_FILE.exists():
         return
     try:
         data = json.loads(DISCOVERY_FILE.read_text())
     except (OSError, json.JSONDecodeError):
+        return
+
+    owner_pid = data.get("pid")
+    if isinstance(owner_pid, int) and owner_pid != os.getpid():
+        _warn(
+            "engine",
+            f"discovery file owned by pid {owner_pid} — skipping "
+            f"'{service_key}' service update from non-owner pid {os.getpid()}.",
+        )
         return
 
     services_map = data.setdefault("services", {})

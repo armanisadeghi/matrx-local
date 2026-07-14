@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { engine, type SystemInfo, type BrowserStatus } from "@/lib/api";
 import { isTauri, startSidecar, stopSidecar, waitForEngine, discoverEnginePort } from "@/lib/sidecar";
+import { ENGINE_DEFAULT_URL, ENGINE_PORT_BASE, ENGINE_PORT_RANGE_LABEL } from "@/lib/engine-ports";
 import { initPlatformCtx } from "@/lib/platformCtx";
 import { startBackgroundTasks, stopBackgroundTasks } from "@/lib/background-tasks";
 import supabase from "@/lib/supabase";
@@ -143,12 +144,12 @@ export function useEngine(authenticated = true) {
 
         let ready = false;
         try {
-          ready = await waitForEngine("http://127.0.0.1:22140", 60, 1000);
+          ready = await waitForEngine(ENGINE_DEFAULT_URL, 60, 1000);
         } finally {
           clearInterval(heartbeatInterval);
         }
 
-        let confirmedUrl: string | null = ready ? "http://127.0.0.1:22140" : null;
+        let confirmedUrl: string | null = ready ? ENGINE_DEFAULT_URL : null;
         if (!ready) {
           emitClientLog("warn", "Default port not responding — scanning port range...", "engine");
           confirmedUrl = await discoverEnginePort();
@@ -174,7 +175,7 @@ export function useEngine(authenticated = true) {
           }
           emitClientLog("success", `Engine found at alternate port: ${confirmedUrl}`, "engine");
         } else {
-          emitClientLog("success", "Engine is responding on port 22140", "engine");
+          emitClientLog("success", `Engine is responding on port ${ENGINE_PORT_BASE}`, "engine");
         }
 
         // Pass the confirmed URL directly so engine.discover() doesn't do another
@@ -190,10 +191,10 @@ export function useEngine(authenticated = true) {
         ? await engine.discover(tauriConfirmedUrl)
         : await engine.discover();
       if (!url) {
-        emitClientLog("error", "Engine not found on any port 22140-22159", "engine");
+        emitClientLog("error", `Engine not found on any port ${ENGINE_PORT_RANGE_LABEL}`, "engine");
         update({
           status: "error",
-          error: "Engine not found on any port (22140-22159). Make sure the Python server is running.",
+          error: `Engine not found on any port (${ENGINE_PORT_RANGE_LABEL}). Make sure the Python server is running.`,
         });
         return;
       }

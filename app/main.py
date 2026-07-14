@@ -36,6 +36,7 @@ from app.api.hardware_routes import (
     run_initial_detection as run_hardware_detection,
 )
 from app.api.image_gen_routes import router as image_gen_router
+from app.api.prompt_matrix_routes import router as prompt_matrix_router
 from app.api.video_gen_routes import router as video_gen_router
 from app.api.media_library_routes import router as media_library_router
 from app.api.media_vault_routes import router as media_vault_router
@@ -58,7 +59,7 @@ from app.common.system_logger import get_logger
 import app.common.access_log as access_log
 from app.common.platform_ctx import refresh_capabilities
 from app.services.scraper.engine import get_scraper_engine
-from app.services.proxy.server import get_proxy_server
+from app.services.proxy.server import DEFAULT_PROXY_PORT, get_proxy_server
 from app.services.tunnel.manager import get_tunnel_manager
 from app.services.cloud_sync.settings_sync import get_settings_sync
 from app.services.ai.engine import (
@@ -669,9 +670,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if proxy_enabled:
         print("[phase:proxy] Starting local HTTP proxy...", flush=True)
         _registry.starting("proxy")
+        proxy_port = settings_sync.get("proxy_port", DEFAULT_PROXY_PORT)
         try:
             proxy = get_proxy_server()
-            proxy_port = settings_sync.get("proxy_port", 22180)
             # Guard against port collision with the main server
             if proxy_port == main_server_port:
                 fallback_port = main_server_port + 40
@@ -697,14 +698,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "[app/main.py] Phase 4: HTTP proxy FAILED to start — port %d is already in use. "
                 "Another process is holding this port. Kill it with: lsof -ti:%d | xargs kill -9  "
                 "Error: %s",
-                settings_sync.get("proxy_port", 22180),
-                settings_sync.get("proxy_port", 22180),
+                proxy_port,
+                proxy_port,
                 exc,
             )
             print("[phase:proxy] HTTP proxy FAILED (port in use)", flush=True)
-            _registry.failed(
-                "proxy", f"port {settings_sync.get('proxy_port', 22180)} in use: {exc}"
-            )
+            _registry.failed("proxy", f"port {proxy_port} in use: {exc}")
         except Exception as exc:
             logger.error(
                 "[app/main.py] Phase 4: HTTP proxy FAILED to start", exc_info=True
@@ -1161,9 +1160,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             _registry.stopped("file_sync")
             logger.info("[app/main.py] File sync stopped ✓")
         except (asyncio.TimeoutError, Exception) as exc:
-            logger.warning(
-                "[app/main.py] File sync did not stop cleanly: %s", exc
-            )
+            logger.warning("[app/main.py] File sync did not stop cleanly: %s", exc)
             _registry.stopped("file_sync")
 
     if _doc_sync.watcher_active:
@@ -1406,6 +1403,7 @@ app.include_router(wake_word_router)
 app.include_router(model_repo_router)
 app.include_router(hardware_router)
 app.include_router(image_gen_router)
+app.include_router(prompt_matrix_router)
 app.include_router(video_gen_router)
 app.include_router(media_library_router)
 app.include_router(media_vault_router)

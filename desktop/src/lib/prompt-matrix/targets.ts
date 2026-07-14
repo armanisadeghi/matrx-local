@@ -17,7 +17,13 @@
  * all. None of them require a change to the engine.
  */
 
-import type { MatrixCombination, MatrixVariable, TemplateField } from "./types";
+import type {
+  MatrixCombination,
+  MatrixPool,
+  MatrixVariable,
+  TemplateField,
+} from "./types";
+import type { PoolRef } from "./parse";
 import { variableKey } from "./parse";
 
 export type ParseResult =
@@ -186,6 +192,44 @@ export function syncVariablesWithTokens(
       options: [{ id: makeId(), value: "", enabled: true }],
       baselineOptionId: null,
       linkGroup: null,
+      enabled: true,
+    });
+  }
+
+  return kept;
+}
+
+/**
+ * Sync the pool list against `{{name#slot}}` tokens in the template.
+ *
+ * Same contract as syncVariablesWithTokens: pure, cheap, never re-sorts, never
+ * discards a pool the user has typed options into.
+ */
+export function syncPoolsWithTokens(
+  pools: readonly MatrixPool[],
+  poolRefs: readonly PoolRef[],
+  makeId: () => string,
+): MatrixPool[] {
+  const refs = new Map(poolRefs.map((r) => [r.key, r]));
+  const kept: MatrixPool[] = [];
+  const seen = new Set<string>();
+
+  for (const p of pools) {
+    const key = variableKey(p.name);
+    seen.add(key);
+    const stillPresent = refs.has(key);
+    const hasContent = p.options.some((o) => o.value.trim().length > 0);
+    if (stillPresent || hasContent) kept.push(p);
+  }
+
+  for (const [key, ref] of refs) {
+    if (seen.has(key)) continue;
+    kept.push({
+      id: makeId(),
+      name: ref.name,
+      options: [{ id: makeId(), value: "", enabled: true }],
+      assign: "rotate",
+      baselineOptionId: null,
       enabled: true,
     });
   }

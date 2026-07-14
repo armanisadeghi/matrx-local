@@ -18,6 +18,7 @@
 | Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |
 | File sync — the cloud-files replica (`@files/`, pointer/full modes, hydration) | [app/services/file_sync/FEATURE.md](app/services/file_sync/FEATURE.md) |
 | matrx-extend ↔ engine | [docs/MATRX_EXTEND_CONNECTION.md](docs/MATRX_EXTEND_CONNECTION.md) |
+| **How to test ANY change (pick the right rung)** | **[docs/TESTING_LADDER.md](docs/TESTING_LADDER.md)** — dev/live isolation model + which test mode proves what |
 | **Verify a startup/UI change actually runs** | **[docs/SMOKE_HARNESS.md](docs/SMOKE_HARNESS.md)** — `./scripts/smoke.sh` builds, launches, and hands you the logs |
 | **Any image/video UI** (thumbnails, lightbox, info, delete/vault/remix) | **[desktop/src/components/media/FEATURE.md](desktop/src/components/media/FEATURE.md)** — one `MediaDescriptor`, one thumb, one action set. Never hand-roll an `<img>` for media. |
 | Code-local rules | `app/tools/FEATURE.md`, `app/api/FEATURE.md`, `app/services/*/FEATURE.md` |
@@ -43,7 +44,10 @@ Matrx Local is a **Tauri v2 desktop app** (Rust + React) with a **Python/FastAPI
 
 ```bash
 # Python engine (Terminal 1)
-uv sync --all-extras && uv run python run.py   # plain `uv sync` STRIPS installed extras (torch/whisper/…)
+uv sync --all-extras && ./scripts/dev.sh   # plain `uv sync` STRIPS installed extras (torch/whisper/…)
+#   dev.sh = `uv run python run.py` + conveniences. Source-run engines self-isolate
+#   as DEV engines (home ~/.matrx-dev, ports 22240-22259 — see Hard Rule 9).
+#   `./scripts/dev.sh --fresh` = throwaway private home (agents needing their own matrx.db)
 
 # React frontend (Terminal 2)
 cd desktop && pnpm install && pnpm dev   # http://localhost:1420
@@ -116,6 +120,20 @@ cd desktop && pnpm tauri:dev
 7. **llama-server must be signed on macOS** — Re-sign with `codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY"` before `tauri-action`. Ad-hoc signatures from llama.cpp releases are rejected by Gatekeeper on end-user machines.
 
 8. **Tauri JSON Configs must be strict** — Do not use `"$comment"`, `"_comment"`, or any other non-schema properties in `tauri.conf.json` (or platform overlays like `tauri.macos.conf.json`). The Tauri CLI v2 strictly validates the merged config against its schema, and unexpected properties will fail the CI build.
+
+9. **Dev and live are separate worlds — never cross them.** The installed
+   (packaged) app owns the LIVE world: `~/.matrx`, ports 22140–22159. Every
+   source-run engine, `pnpm dev`, and `pnpm tauri:dev` lives in the DEV
+   world: `~/.matrx-dev`, ports 22240–22259, orphan sweeps off, salted cloud
+   instance id. This is enforced in code (`run.py` isolation guard, Rust
+   `debug_assertions` gates, `desktop/src/lib/engine-ports.ts`) — do not
+   weaken it, hardcode a port from the wrong range, or "fix" a dev engine by
+   pointing it at `~/.matrx`. Running an engine in the live position is
+   `MATRX_LIVE_ENGINE=1` / `./scripts/dev.sh --live` and requires the
+   installed app to be quit. Pre-fix, dev runs silently hijacked
+   `~/.matrx/local.json` and every client routed to uncommitted code
+   (MXL-D-043) — that class of bug must stay dead. Full model:
+   [docs/TESTING_LADDER.md](docs/TESTING_LADDER.md).
 
 ## External Connections
 

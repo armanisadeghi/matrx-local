@@ -15,7 +15,12 @@
  * from a malformed spec.
  */
 
-import type { MatrixSpec, MatrixVariable, TemplateField } from "./types";
+import type {
+  MatrixPool,
+  MatrixSpec,
+  MatrixVariable,
+  TemplateField,
+} from "./types";
 import { randomSeed } from "./rng";
 
 const WORKING_KEY = "matrx-prompt-matrix-working";
@@ -39,6 +44,7 @@ export function emptySpec(fields: TemplateField[]): MatrixSpec {
   return {
     fields: fields.map((f) => ({ ...f, text: "" })),
     variables: [],
+    pools: [],
     strategy: { kind: "cartesian" },
     seed: {
       mode: "fixed",
@@ -49,14 +55,21 @@ export function emptySpec(fields: TemplateField[]): MatrixSpec {
   };
 }
 
+/** Older saved specs predate pools — fill the field so the rest of the engine can assume it. */
+export function coerceSpec(spec: MatrixSpec): MatrixSpec {
+  return { ...spec, pools: Array.isArray(spec.pools) ? spec.pools : [] };
+}
+
 /**
  * Structural validation. Anything that fails is discarded — we would rather
  * hand back an empty matrix than let a malformed one reach the planner.
+ * `pools` may be missing (pre-pool saves); those are coerced on load.
  */
 export function isMatrixSpec(value: unknown): value is MatrixSpec {
   if (typeof value !== "object" || value === null) return false;
   const s = value as Partial<MatrixSpec>;
   if (!Array.isArray(s.fields) || !Array.isArray(s.variables)) return false;
+  if (s.pools !== undefined && !Array.isArray(s.pools)) return false;
   if (typeof s.strategy !== "object" || s.strategy === null) return false;
   if (typeof s.seed !== "object" || s.seed === null) return false;
   const okFields = s.fields.every(
@@ -69,7 +82,16 @@ export function isMatrixSpec(value: unknown): value is MatrixSpec {
       Array.isArray(v?.options) &&
       typeof v?.binding === "object",
   );
-  return okFields && okVars;
+  const okPools =
+    s.pools === undefined ||
+    s.pools.every(
+      (p: Partial<MatrixPool>) =>
+        typeof p?.id === "string" &&
+        typeof p?.name === "string" &&
+        Array.isArray(p?.options) &&
+        (p.assign === "rotate" || p.assign === "same"),
+    );
+  return okFields && okVars && okPools;
 }
 
 function read<T>(key: string, guard: (v: unknown) => v is T): T | null {
@@ -99,26 +121,28 @@ export function loadWorkingSpec(
   targetId: string,
   fields: TemplateField[],
 ): MatrixSpec {
-  const all = read(WORKING_KEY, (v): v is Record<string, unknown> =>
-    typeof v === "object" && v !== null,
+  const all = read(
+    WORKING_KEY,
+    (v): v is Record<string, unknown> => typeof v === "object" && v !== null,
   );
   const mine = all?.[targetId];
   if (mine !== undefined && isMatrixSpec(mine)) {
     // Reconcile the stored fields against the target's CURRENT fields, so a
     // target that gained or lost a field doesn't resurrect a stale one.
     const byId = new Map(mine.fields.map((f) => [f.id, f.text]));
-    return {
+    return coerceSpec({
       ...mine,
       fields: fields.map((f) => ({ ...f, text: byId.get(f.id) ?? "" })),
-    };
+    });
   }
   return emptySpec(fields);
 }
 
 export function saveWorkingSpec(targetId: string, spec: MatrixSpec): void {
   const all =
-    read(WORKING_KEY, (v): v is Record<string, unknown> =>
-      typeof v === "object" && v !== null,
+    read(
+      WORKING_KEY,
+      (v): v is Record<string, unknown> => typeof v === "object" && v !== null,
     ) ?? {};
   write(WORKING_KEY, { ...all, [targetId]: spec });
 }
@@ -155,8 +179,7 @@ export function saveTemplate(
   const trimmed = name.trim();
   const existing = all.find(
     (t) =>
-      t.targetId === targetId &&
-      t.name.toLowerCase() === trimmed.toLowerCase(),
+      t.targetId === targetId && t.name.toLowerCase() === trimmed.toLowerCase(),
   );
   const saved: SavedTemplate = existing
     ? { ...existing, spec, updatedAt: now }
@@ -178,4 +201,25 @@ export function deleteTemplate(id: string): void {
     TEMPLATES_KEY,
     all.filter((t) => t.id !== id),
   );
+}
+
+/** Validate templates coming back from the on-disk engine store. */
+export function sanitizeSavedTemplates(raw: unknown[]): SavedTemplate[] {
+  return raw
+    .filter(
+      (t: Partial<SavedTemplate>): t is SavedTemplate =>
+        typeof t?.id === "string" &&
+        typeof t?.name === "string" &&
+        typeof t?.targetId === "string" &&
+        isMatrixSpec(t?.spec) &&
+        typeof t?.createdAt === "number" &&
+        typeof t?.updatedAt === "number",
+    )
+    .map((t) => ({ ...t, spec: coerceSpec(t.spec) }))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/** Replace the localStorage template cache (used after a disk load/save). */
+export function replaceTemplatesCache(templates: SavedTemplate[]): void {
+  write(TEMPLATES_KEY, templates);
 }

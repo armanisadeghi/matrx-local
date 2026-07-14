@@ -121,7 +121,9 @@ const PORT_CATEGORIES: PortCategory[] = [
     color: "text-blue-400 border-blue-400/40 bg-blue-400/10",
     match: (p) => {
       const pyPorts = [
-        8000, 8001, 8002, 8888, 8889, 5000, 5001, 22140, 22141, 22142,
+        8000, 8001, 8002, 8888, 8889, 5000, 5001,
+        // Matrx engine port bases: live (packaged) and dev (source-run)
+        22140, 22141, 22142, 22240, 22241, 22242,
       ];
       return (
         pyPorts.includes(p.port) ||

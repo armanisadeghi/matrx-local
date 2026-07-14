@@ -10,13 +10,14 @@ entire application.  Letting Python also create a tray icon would produce two
 
 Port selection:
   1. MATRX_PORT env var (explicit override — fails hard if taken)
-  2. Default port 22140 (chosen to avoid conflicts with common dev ports)
+  2. Default port MATRX_PORT_BASE (22140 packaged / 22240 dev — see the
+     dev/live isolation guard below)
   3. If default port is held by a dead/stale previous instance of ourselves,
      we kill the stale process and reclaim the port rather than drifting.
   4. Auto-scan: tries up to 20 consecutive ports until one is free (last resort)
 
-The chosen port is written to ~/.matrx/local.json so the web/mobile frontend
-can discover it without configuration.
+The chosen port is written to <MATRX_HOME_DIR>/local.json so the web/mobile
+frontend can discover it without configuration.
 """
 
 from __future__ import annotations
@@ -60,6 +61,82 @@ if _sys.platform == "win32":
             )
     except Exception:
         pass
+
+# ── Dev/live isolation guard — MUST run before any app.* import ──────────────
+# app/config.py and app/preflight.py read MATRX_HOME_DIR at import time, so
+# the env must be final before they load.
+#
+# The packaged sidecar (PyInstaller sets sys.frozen) is the ONLY engine that
+# may occupy the live position by default: ~/.matrx, port range 22140-22159.
+# Every source-run engine (`uv run python run.py` — Arman or any agent) is a
+# DEV engine and is fully isolated unless explicitly told otherwise:
+#
+#   home       ~/.matrx-dev        (own discovery file, matrx.db, settings)
+#   ports      22240-22259         (OUTSIDE the live scan range — the packaged
+#                                   app's Rust probes 22140-22159 and would
+#                                   otherwise adopt a dev engine it finds)
+#   orphans    scan skipped        (a dev engine must never kill the live
+#                                   app's process tree — or another agent's)
+#   instance   salted "dev" id     (cloud registration must not collide with
+#                                   the live app's hardware-derived instance)
+#
+# Escape hatches (each var honored individually if already set):
+#   MATRX_LIVE_ENGINE=1   run a source engine in the live position on purpose
+#   MATRX_HOME_DIR=...    custom home (tests, per-agent isolation)
+#   MATRX_PORT=... / MATRX_PORT_BASE=...   explicit port placement
+#
+# This is the MXL-D-043 fix: before it, any source-run engine clobbered
+# ~/.matrx/local.json (even when bound to a fallback port) and every client —
+# the installed app, matrx-extend, cloud round trips — silently routed to
+# uncommitted code.
+IS_DEV_ENGINE = (
+    not getattr(_sys, "frozen", False)
+    and _os.environ.get("MATRX_LIVE_ENGINE") != "1"
+)
+if IS_DEV_ENGINE:
+    from pathlib import Path as _Path
+
+    if "MATRX_HOME_DIR" not in _os.environ:
+        _dev_home = _Path.home() / ".matrx-dev"
+        _os.environ["MATRX_HOME_DIR"] = str(_dev_home)
+        # Share the live home's huge, immutable-ish asset caches (~166GB of
+        # models on Arman's machine) via symlink so a dev engine never
+        # re-downloads them. Mutable state (matrx.db, settings.json,
+        # local.json, instance.json, data/, mirror/, media/) is NEVER shared —
+        # that separation is the whole point. Symlink failure (e.g. Windows
+        # without developer mode) is fine: the engine just downloads into the
+        # dev home. Custom MATRX_HOME_DIR values (tests, --fresh) skip this
+        # so they stay fully hermetic.
+        _live_home = _Path.home() / ".matrx"
+        try:
+            _dev_home.mkdir(parents=True, exist_ok=True)
+            for _cache in (
+                "image-models",
+                "video-models",
+                "playwright-browsers",
+                "image-gen-packages",
+                "tts",
+                "models",
+                "oww_models",
+            ):
+                _src = _live_home / _cache
+                _dst = _dev_home / _cache
+                if _src.is_dir() and not _dst.exists():
+                    _dst.symlink_to(_src, target_is_directory=True)
+        except OSError:
+            pass
+    if "MATRX_PORT" not in _os.environ:
+        _os.environ.setdefault("MATRX_PORT_BASE", "22240")
+    _os.environ.setdefault("MATRX_SKIP_ORPHAN_SCAN", "1")
+    _os.environ.setdefault("MATRX_INSTANCE_SALT", "dev")
+    print(
+        "[phase:isolation] DEV ENGINE (source run, not the packaged sidecar) — "
+        f"isolated from the installed app: home={_os.environ['MATRX_HOME_DIR']}, "
+        f"ports={_os.environ.get('MATRX_PORT') or _os.environ.get('MATRX_PORT_BASE', '22140') + '+'}, "
+        "orphan scan off, instance id salted. "
+        "Set MATRX_LIVE_ENGINE=1 to run in the live position on purpose.",
+        flush=True,
+    )
 
 import json
 import logging
@@ -200,7 +277,7 @@ STATIC_DIR = BUNDLE_DIR / "static"
 # (notably app/api/tunnel_routes.py imports DISCOVERY_FILE from this module)
 # keep working. The actual port-finding and stale-process-killing logic now
 # lives in app/preflight.py — single source of truth for managed services.
-DEFAULT_PORT = 22140
+DEFAULT_PORT = int(os.environ.get("MATRX_PORT_BASE", "22140"))
 MAX_PORT_SCAN = 20
 DISCOVERY_DIR = MATRX_HOME_DIR
 DISCOVERY_FILE = DISCOVERY_DIR / "local.json"
@@ -581,6 +658,19 @@ def setup_tray(port: int) -> None:
         logger.info(
             "Running as Tauri sidecar — skipping pystray tray icon "
             "(Tauri manages the system tray for this app)"
+        )
+        _wait_forever()
+        return
+
+    if IS_DEV_ENGINE:
+        # Dev engines run trayless: (a) 15 agent engines = 15 tray icons of
+        # noise, and (b) with the pystray AppKit run loop owning the main
+        # thread, SIGTERM is silently ignored (MXL-D-042) — dev engines must
+        # die cleanly when their terminal/agent kills them. _wait_forever()
+        # keeps the main thread in a signal-handling wait instead.
+        logger.info(
+            "Dev engine — skipping pystray tray icon (signal-friendly "
+            "headless mode; set MATRX_LIVE_ENGINE=1 for the tray)"
         )
         _wait_forever()
         return

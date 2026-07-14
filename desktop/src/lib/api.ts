@@ -4433,7 +4433,11 @@ export async function listImageGenBatches(
 export async function cancelImageGenBatch(
   baseUrl: string,
   batchId: string,
-): Promise<{ batch_id: string; cancelled: number; cancelling_job_id: string | null }> {
+): Promise<{
+  batch_id: string;
+  cancelled: number;
+  cancelling_job_id: string | null;
+}> {
   return imageGenFetch(
     imageGenUrl(baseUrl, `/batches/${encodeURIComponent(batchId)}`),
     { method: "DELETE" },
@@ -4472,10 +4476,10 @@ export async function reorderImageGenQueue(
   baseUrl: string,
   jobIds: string[],
 ): Promise<ImageGenJob[]> {
-  return imageGenFetch<ImageGenJob[]>(
-    imageGenUrl(baseUrl, "/queue/reorder"),
-    { method: "POST", body: JSON.stringify({ job_ids: jobIds }) },
-  );
+  return imageGenFetch<ImageGenJob[]>(imageGenUrl(baseUrl, "/queue/reorder"), {
+    method: "POST",
+    body: JSON.stringify({ job_ids: jobIds }),
+  });
 }
 
 /** Requeue a failed or cancelled job with a fresh attempt budget. */
@@ -4541,6 +4545,56 @@ export async function cancelImageGenJob(
   await imageGenFetch<unknown>(
     imageGenUrl(baseUrl, `/jobs/${encodeURIComponent(jobId)}`),
     { method: "DELETE" },
+  );
+}
+
+// ── Prompt-matrix on-disk library + templates ────────────────────────────────
+
+export interface PromptMatrixPaths {
+  root: string;
+  library: string;
+  templates: string;
+}
+
+export async function getPromptMatrixPaths(
+  baseUrl: string,
+): Promise<PromptMatrixPaths> {
+  return imageGenFetch<PromptMatrixPaths>(`${baseUrl}/prompt-matrix/paths`);
+}
+
+export async function getPromptMatrixLibrary(
+  baseUrl: string,
+): Promise<{ v: number; entries: unknown[] }> {
+  return imageGenFetch<{ v: number; entries: unknown[] }>(
+    `${baseUrl}/prompt-matrix/library`,
+  );
+}
+
+export async function putPromptMatrixLibrary(
+  baseUrl: string,
+  entries: unknown[],
+): Promise<{ v: number; entries: unknown[] }> {
+  return imageGenFetch<{ v: number; entries: unknown[] }>(
+    `${baseUrl}/prompt-matrix/library`,
+    { method: "PUT", body: JSON.stringify({ entries }) },
+  );
+}
+
+export async function getPromptMatrixTemplates(
+  baseUrl: string,
+): Promise<{ v: number; templates: unknown[] }> {
+  return imageGenFetch<{ v: number; templates: unknown[] }>(
+    `${baseUrl}/prompt-matrix/templates`,
+  );
+}
+
+export async function putPromptMatrixTemplates(
+  baseUrl: string,
+  templates: unknown[],
+): Promise<{ v: number; templates: unknown[] }> {
+  return imageGenFetch<{ v: number; templates: unknown[] }>(
+    `${baseUrl}/prompt-matrix/templates`,
+    { method: "PUT", body: JSON.stringify({ templates }) },
   );
 }
 
@@ -5192,7 +5246,12 @@ async function mediaLibraryFetch<T>(
     // Translate the abort like imageGenFetch does — a raw DOMException
     // renders as WebKit's "The operation timed out." with no context.
     if (isAbortTimeout(e)) {
-      throw mediaGenTimeoutError("media-library", method, url, MEDIA_GEN_TIMEOUT_MS);
+      throw mediaGenTimeoutError(
+        "media-library",
+        method,
+        url,
+        MEDIA_GEN_TIMEOUT_MS,
+      );
     }
     throw e;
   }

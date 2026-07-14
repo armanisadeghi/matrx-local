@@ -6,7 +6,7 @@
  * MatrixTarget (see ./targets). `createImageTarget` is the first one; video
  * and text-prompt targets slot in beside it without touching the engine.
  *
- *   const spec  = { fields, variables, strategy, seed };
+ *   const spec  = { fields, variables, pools, strategy, seed };
  *   const plan  = expandMatrix(spec);          // ordered runs + exact total
  *   const built = buildJobs(target, base, plan.combinations, spec.variables);
  */
@@ -18,9 +18,11 @@ export {
   type MatrixCombination,
   type MatrixOption,
   type MatrixPlan,
+  type MatrixPool,
   type MatrixSpec,
   type MatrixStrategy,
   type MatrixVariable,
+  type PoolAssign,
   type SeedMode,
   type SeedPolicy,
   type StrategyKind,
@@ -29,23 +31,33 @@ export {
 } from "./types";
 
 export {
+  extractPoolRefs,
   extractVariableNames,
   findTokens,
   hasTokens,
   hasUnclosedToken,
   normalizeName,
+  poolSlotName,
   renderTemplate,
+  sortSlots,
   tidyPrompt,
   variableKey,
+  type PoolRef,
   type TokenMatch,
 } from "./parse";
 
 export { MAX_SEED, randomSeed, Rng, sampleIndices } from "./rng";
 
-export { countPlan, expandMatrix, validateSpec, type PlanValidation } from "./expand";
+export {
+  countPlan,
+  expandMatrix,
+  validateSpec,
+  type PlanValidation,
+} from "./expand";
 
 export {
   buildJobs,
+  syncPoolsWithTokens,
   syncVariablesWithTokens,
   type BuiltJob,
   type BuildJobsResult,
@@ -69,3 +81,14 @@ export {
   type MatrixExportFile,
   type MatrixImportResult,
 } from "./io";
+
+export {
+  isLibraryEntry,
+  libraryEntryFromPool,
+  libraryEntryFromVariable,
+  poolFromLibraryEntry,
+  sanitizeLibraryEntries,
+  variableFromLibraryEntry,
+  type LibraryEntry,
+  type LibraryEntryKind,
+} from "./library";

@@ -13,6 +13,10 @@
  *    the innermost (changes fastest). That is the whole answer to "do you
  *    freeze one variable and sweep the others?" — you drag it to the top.
  *    Results therefore arrive grouped the way a human wants to compare them.
+ *
+ * Pools (`{{color#1}}` …) are additive: each pool is ONE axis of length n
+ * (option count). Strategies / seed policy / RNG never special-case them —
+ * only `buildAxes` knows how to turn a pool + slots into steps.
  */
 
 import {
@@ -20,35 +24,58 @@ import {
   type MatrixCombination,
   type MatrixOption,
   type MatrixPlan,
+  type MatrixPool,
   type MatrixSpec,
   type MatrixVariable,
 } from "./types";
-import { renderTemplate, tidyPrompt, variableKey } from "./parse";
+import {
+  extractPoolRefs,
+  findTokens,
+  hasUnclosedToken,
+  poolSlotName,
+  renderTemplate,
+  sortSlots,
+  tidyPrompt,
+  variableKey,
+} from "./parse";
 import { MAX_SEED, Rng, sampleIndices } from "./rng";
 
 /**
  * An axis is ONE independent dimension of the product. Usually one variable;
- * several when they are link-grouped (zipped), in which case they advance
- * together and contribute a single dimension rather than multiplying.
+ * several when they are link-grouped (zipped); or one pool writing many slot
+ * substitution keys at each step.
  */
 interface Axis {
   variables: MatrixVariable[];
-  /** steps[i] = the option each member variable takes at position i. */
+  pool: MatrixPool | null;
+  /** Sorted slot ids when this is a pool axis; empty otherwise. */
+  slots: string[];
+  /** steps[i] = the option each member (variable or slot) takes at position i. */
   steps: MatrixOption[][];
   /** Index of the baseline step (used by the `baseline` strategy). */
   baselineStep: number;
 }
 
-const enabledOptions = (v: MatrixVariable): MatrixOption[] =>
+const enabledOptions = (v: MatrixVariable | MatrixPool): MatrixOption[] =>
   v.options.filter((o) => o.enabled);
 
 const activeVariables = (spec: MatrixSpec): MatrixVariable[] =>
   spec.variables.filter((v) => v.enabled && enabledOptions(v).length > 0);
 
+const activePools = (spec: MatrixSpec): MatrixPool[] =>
+  (spec.pools ?? []).filter((p) => p.enabled && enabledOptions(p).length > 0);
+
+/** Slots currently referenced in the template, keyed by pool identity. */
+function slotsByPoolKey(spec: MatrixSpec): Map<string, string[]> {
+  const refs = extractPoolRefs(spec.fields.map((f) => f.text));
+  return new Map(refs.map((r) => [r.key, sortSlots(r.slots)]));
+}
+
 /**
  * Build the axes, preserving user order. Linked variables collapse into one
  * axis at the position of the FIRST member, so dragging any member of a link
- * group moves the group.
+ * group moves the group. Active pools append after variables (each pool is
+ * one axis — strategies never need to know).
  */
 function buildAxes(spec: MatrixSpec): { axes: Axis[]; warnings: string[] } {
   const warnings: string[] = [];
@@ -65,6 +92,8 @@ function buildAxes(spec: MatrixSpec): { axes: Axis[]; warnings: string[] } {
       );
       axes.push({
         variables: [v],
+        pool: null,
+        slots: [],
         steps: opts.map((o) => [o]),
         baselineStep,
       });
@@ -74,6 +103,8 @@ function buildAxes(spec: MatrixSpec): { axes: Axis[]; warnings: string[] } {
     if (existing === undefined) {
       const axis: Axis = {
         variables: [v],
+        pool: null,
+        slots: [],
         steps: opts.map((o) => [o]),
         baselineStep: 0,
       };
@@ -98,6 +129,44 @@ function buildAxes(spec: MatrixSpec): { axes: Axis[]; warnings: string[] } {
     existing.steps = existing.steps
       .slice(0, len)
       .map((step, i) => [...step, opts[i] as MatrixOption]);
+  }
+
+  // Pools: one axis each. Length = option count. Slot assignment is baked
+  // into steps so cartesian / baseline / zip / sample stay untouched.
+  const slotMap = slotsByPoolKey(spec);
+  for (const pool of activePools(spec)) {
+    const slots = slotMap.get(variableKey(pool.name));
+    if (slots === undefined || slots.length === 0) continue; // unused — warned in validate
+
+    const opts = enabledOptions(pool);
+    const n = opts.length;
+    const steps: MatrixOption[][] = Array.from({ length: n }, (_, s) => {
+      if (pool.assign === "same") {
+        const opt = opts[s] as MatrixOption;
+        return slots.map(() => opt);
+      }
+      // rotate — reuse via modulo when slots outnumber options
+      return slots.map((_, i) => opts[(s + i) % n] as MatrixOption);
+    });
+
+    if (pool.assign === "rotate" && slots.length > n) {
+      warnings.push(
+        `Pool "${pool.name}" has ${slots.length} slots and ${n} option` +
+          `${n === 1 ? "" : "s"} — values will repeat within each prompt.`,
+      );
+    }
+
+    const baselineStep = Math.max(
+      0,
+      opts.findIndex((o) => o.id === pool.baselineOptionId),
+    );
+    axes.push({
+      variables: [],
+      pool,
+      slots,
+      steps,
+      baselineStep,
+    });
   }
 
   return { axes, warnings };
@@ -175,7 +244,9 @@ function stepIndicesForPlan(axes: Axis[], spec: MatrixSpec): number[][] {
         MAX_MATERIALIZED,
       );
       const rng = new Rng(spec.strategy.seed);
-      return sampleIndices(full, want, rng).map((i) => decodeCartesian(i, axes));
+      return sampleIndices(full, want, rng).map((i) =>
+        decodeCartesian(i, axes),
+      );
     }
   }
 }
@@ -199,18 +270,15 @@ function seedFor(
   }
 }
 
-/** `subject=cat · style=noir` — the label shown on the queued job. */
+/** `subject=cat · color#1=red · color#2=blue` — the label shown on the queued job. */
 function labelFor(
-  variables: readonly MatrixVariable[],
-  options: readonly MatrixOption[],
+  entries: readonly { name: string; option: MatrixOption }[],
 ): string {
-  return variables
-    .map((v, i) => {
-      const opt = options[i];
-      if (opt === undefined) return v.name;
-      const shown = opt.label ?? opt.value;
+  return entries
+    .map(({ name, option }) => {
+      const shown = option.label ?? option.value;
       const text = shown.trim().length > 0 ? shown.trim() : "∅";
-      return `${v.name}=${text.length > 28 ? `${text.slice(0, 27)}…` : text}`;
+      return `${name}=${text.length > 28 ? `${text.slice(0, 27)}…` : text}`;
     })
     .join(" · ");
 }
@@ -230,24 +298,57 @@ export function validateSpec(spec: MatrixSpec): PlanValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  const declared = new Set(spec.variables.map((v) => variableKey(v.name)));
-  const usedInText = new Set<string>();
+  const pools = spec.pools ?? [];
+  const declaredVars = new Set(spec.variables.map((v) => variableKey(v.name)));
+  const declaredPools = new Set(pools.map((p) => variableKey(p.name)));
+  const usedPlain = new Set<string>();
+  const usedPoolKeys = new Set<string>();
 
   for (const field of spec.fields) {
-    for (const tok of field.text.matchAll(/\{\{\s*([A-Za-z0-9_\- ]+?)\s*\}\}/g)) {
-      usedInText.add(variableKey(tok[1] ?? ""));
+    for (const tok of findTokens(field.text)) {
+      if (tok.slot !== null && tok.poolName !== null) {
+        usedPoolKeys.add(variableKey(tok.poolName));
+      } else {
+        usedPlain.add(tok.key);
+      }
     }
-    if (/\{\{(?![^{}]*\}\})/.test(field.text)) {
+    if (hasUnclosedToken(field.text)) {
       errors.push(
         `${field.label} has an unclosed "{{" — every variable must be written {{like_this}}.`,
       );
     }
   }
 
-  for (const key of usedInText) {
-    if (!declared.has(key)) {
+  // Bare {{color}} and pool {{color#1}} share a name space — colliding them
+  // would make it ambiguous which options list applies.
+  for (const key of usedPlain) {
+    if (declaredPools.has(key) || usedPoolKeys.has(key)) {
+      errors.push(
+        `"${key}" is used both as {{${key}}} and as a pool ({{${key}#…}}). ` +
+          `Pick one: a normal variable, or pool slots.`,
+      );
+    }
+  }
+  for (const v of spec.variables) {
+    if (declaredPools.has(variableKey(v.name))) {
+      errors.push(
+        `"${v.name}" is both a variable and a pool — rename one of them.`,
+      );
+    }
+  }
+
+  for (const key of usedPlain) {
+    if (!declaredVars.has(key)) {
       errors.push(
         `{{${key}}} appears in the prompt but has no options defined. Add at least one option or remove the token.`,
+      );
+    }
+  }
+
+  for (const key of usedPoolKeys) {
+    if (!declaredPools.has(key)) {
+      errors.push(
+        `Pool {{${key}#…}} appears in the prompt but has no options defined. Add at least one option or remove the slots.`,
       );
     }
   }
@@ -261,7 +362,7 @@ export function validateSpec(spec: MatrixSpec): PlanValidation {
       );
       continue;
     }
-    if (v.binding.kind === "text" && !usedInText.has(variableKey(v.name))) {
+    if (v.binding.kind === "text" && !usedPlain.has(variableKey(v.name))) {
       warnings.push(
         `"${v.name}" has options but never appears in the prompt — it will not affect any generation.`,
       );
@@ -271,6 +372,29 @@ export function validateSpec(spec: MatrixSpec): PlanValidation {
     if (dupes.length > 0) {
       warnings.push(
         `"${v.name}" has duplicate options (${[...new Set(dupes)].join(", ")}) — they will generate identical runs.`,
+      );
+    }
+  }
+
+  for (const pool of pools) {
+    if (!pool.enabled) continue;
+    const opts = enabledOptions(pool);
+    if (opts.length === 0) {
+      errors.push(
+        `Pool "${pool.name}" has no enabled options — add one, disable the pool, or remove it.`,
+      );
+      continue;
+    }
+    if (!usedPoolKeys.has(variableKey(pool.name))) {
+      warnings.push(
+        `Pool "${pool.name}" has options but no {{${pool.name}#…}} slots in the prompt — it will not affect any generation.`,
+      );
+    }
+    const values = opts.map((o) => o.value.trim());
+    const dupes = values.filter((val, i) => values.indexOf(val) !== i);
+    if (dupes.length > 0) {
+      warnings.push(
+        `Pool "${pool.name}" has duplicate options (${[...new Set(dupes)].join(", ")}) — they will generate identical runs.`,
       );
     }
   }
@@ -316,8 +440,7 @@ export function expandMatrix(spec: MatrixSpec): MatrixPlan {
   const combinations: MatrixCombination[] = [];
 
   outer: for (const [rowIdx, picks] of rows.entries()) {
-    const vars: MatrixVariable[] = [];
-    const opts: MatrixOption[] = [];
+    const labelEntries: { name: string; option: MatrixOption }[] = [];
     const values: Record<string, string> = {};
     const optionIds: Record<string, string> = {};
     const substitutions = new Map<string, string>();
@@ -325,18 +448,32 @@ export function expandMatrix(spec: MatrixSpec): MatrixPlan {
     axes.forEach((axis, axisIdx) => {
       const step = axis.steps[picks[axisIdx] ?? 0];
       if (step === undefined) return;
+
+      if (axis.pool !== null) {
+        const pool = axis.pool;
+        axis.slots.forEach((slot, memberIdx) => {
+          const opt = step[memberIdx];
+          if (opt === undefined) return;
+          const name = poolSlotName(pool.name, slot);
+          labelEntries.push({ name, option: opt });
+          values[name] = opt.value;
+          optionIds[name] = opt.id;
+          substitutions.set(variableKey(name), opt.value);
+        });
+        return;
+      }
+
       axis.variables.forEach((v, memberIdx) => {
         const opt = step[memberIdx];
         if (opt === undefined) return;
-        vars.push(v);
-        opts.push(opt);
+        labelEntries.push({ name: v.name, option: opt });
         values[v.name] = opt.value;
         optionIds[v.name] = opt.id;
         substitutions.set(variableKey(v.name), opt.value);
       });
     });
 
-    const label = labelFor(vars, opts);
+    const label = labelFor(labelEntries);
 
     const rendered: Record<string, string> = {};
     for (const field of spec.fields) {

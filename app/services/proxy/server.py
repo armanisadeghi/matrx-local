@@ -15,13 +15,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import socket
 import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PROXY_PORT = 22180
+# Port-base offset +40 keeps the proxy inside its world's port block:
+# live 22140 → 22180, dev 22240 → 22280 (MXL-D-043 dev/live isolation).
+# Same formula as DEFAULT_SETTINGS["proxy_port"] in cloud_sync/settings_sync.py
+# and DEFAULTS.proxyPort in desktop/src/lib/settings.ts.
+DEFAULT_PROXY_PORT = int(os.environ.get("MATRX_PORT_BASE", "22140")) + 40
 MAX_PORT_SCAN = 10
 BUFFER_SIZE = 65536
 CONNECT_TIMEOUT = 15

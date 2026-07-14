@@ -5,6 +5,8 @@
  * In development, the engine is expected to be running separately.
  */
 
+import { ENGINE_PORT_BASE, enginePortList } from "@/lib/engine-ports";
+
 let invoke: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null = null;
 
 async function loadTauriInvoke() {
@@ -128,7 +130,7 @@ export async function getOwnedEngineUrl(): Promise<string | null> {
       port: number;
     } | null;
     if (!status?.running) return null;
-    const port = status.port ?? 22140;
+    const port = status.port ?? ENGINE_PORT_BASE;
     const healthy = (await inv("check_engine_health", { port })) as boolean;
     if (healthy) return `http://127.0.0.1:${port}`;
   } catch {
@@ -191,7 +193,7 @@ export async function waitForEngine(
 
   // Extract port from baseUrl for the Rust path
   const portMatch = baseUrl.match(/:(\d+)/);
-  const port = portMatch?.[1] ? parseInt(portMatch[1], 10) : 22140;
+  const port = portMatch?.[1] ? parseInt(portMatch[1], 10) : ENGINE_PORT_BASE;
 
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -238,7 +240,7 @@ export async function discoverEnginePort(): Promise<string | null> {
   }
 
   // JS fetch scan — works on macOS/Linux; fallback for Windows if Rust IPC fails
-  const ports = Array.from({ length: 20 }, (_, i) => 22140 + i);
+  const ports = enginePortList();
   for (const port of ports) {
     try {
       const resp = await fetch(`http://127.0.0.1:${port}/tools/list`, {

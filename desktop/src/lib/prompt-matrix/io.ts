@@ -7,7 +7,7 @@
  */
 
 import type { MatrixSpec } from "./types";
-import { isMatrixSpec } from "./storage";
+import { coerceSpec, isMatrixSpec } from "./storage";
 
 export const MATRIX_EXPORT_VERSION = 1 as const;
 
@@ -66,7 +66,10 @@ export function parseMatrixImport(text: string): MatrixImportResult {
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    return { ok: false, error: "Invalid JSON — check for a missing comma or brace." };
+    return {
+      ok: false,
+      error: "Invalid JSON — check for a missing comma or brace.",
+    };
   }
 
   if (typeof parsed !== "object" || parsed === null) {
@@ -76,7 +79,12 @@ export function parseMatrixImport(text: string): MatrixImportResult {
   const obj = parsed as Partial<MatrixExportFile>;
 
   if (isMatrixSpec(parsed)) {
-    return { ok: true, spec: parsed, name: null, targetId: "image" };
+    return {
+      ok: true,
+      spec: coerceSpec(parsed),
+      name: null,
+      targetId: "image",
+    };
   }
 
   if (obj.v !== MATRIX_EXPORT_VERSION) {
@@ -104,7 +112,7 @@ export function parseMatrixImport(text: string): MatrixImportResult {
 
   return {
     ok: true,
-    spec: obj.spec,
+    spec: coerceSpec(obj.spec),
     name: importedName,
     targetId: obj.targetId,
   };

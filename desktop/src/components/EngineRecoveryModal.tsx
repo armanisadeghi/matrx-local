@@ -50,6 +50,11 @@ import {
   discoverEnginePort,
 } from "@/lib/sidecar";
 import { getPlatformSnapshot } from "@/lib/platformCtx";
+import {
+  ENGINE_DEFAULT_URL,
+  ENGINE_PORT_RANGE_LABEL,
+  enginePortList,
+} from "@/lib/engine-ports";
 import type { EngineStatus } from "@/hooks/use-engine";
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -174,7 +179,7 @@ export function EngineMonitor({
     const initialSteps: DiagnosticStep[] = [
       { label: "Environment check", status: "pending" },
       { label: "Sidecar process status", status: "pending" },
-      { label: "Port scan (22140–22159)", status: "pending" },
+      { label: `Port scan (${ENGINE_PORT_RANGE_LABEL})`, status: "pending" },
       { label: "Engine health endpoint", status: "pending" },
     ];
     setSteps(initialSteps);
@@ -272,14 +277,15 @@ export function EngineMonitor({
 
   const scanPorts = async () => {
     setPortScanning(true);
-    const results: PortScanResult[] = Array.from({ length: 20 }, (_, i) => ({
-      port: 22140 + i,
+    const scanPortsList = enginePortList();
+    const results: PortScanResult[] = scanPortsList.map((port) => ({
+      port,
       status: "scanning" as const,
     }));
     setPorts(results);
 
-    for (let i = 0; i < 20; i++) {
-      const port = 22140 + i;
+    for (let i = 0; i < scanPortsList.length; i++) {
+      const port = scanPortsList[i];
       try {
         let open = false;
         let detail = "";
@@ -343,7 +349,7 @@ export function EngineMonitor({
     handleAction("Start Engine", async () => {
       await startSidecar();
       addLog("Sidecar spawned. Waiting for engine...");
-      const ready = await waitForEngine("http://127.0.0.1:22140", 60, 1000);
+      const ready = await waitForEngine(ENGINE_DEFAULT_URL, 60, 1000);
       if (ready) {
         addLog("Engine ready. Connecting...");
         await onRefresh();
@@ -449,7 +455,7 @@ export function EngineMonitor({
         lines.push(`  ${pt.port}: ${pt.detail || "open"}`);
       lines.push("");
     } else if (hasFailed) {
-      lines.push("=== Port Scan === No engine found on 22140–22159", "");
+      lines.push(`=== Port Scan === No engine found on ${ENGINE_PORT_RANGE_LABEL}`, "");
     }
 
     if (hasFailed && errorLines.length > 0) {
@@ -672,7 +678,7 @@ export function EngineMonitor({
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium flex items-center gap-1.5">
                 <Network className="h-4 w-4 text-primary" />
-                Port Scan (22140–22159)
+                Port Scan ({ENGINE_PORT_RANGE_LABEL})
               </h3>
               <Button
                 variant="ghost"
@@ -723,7 +729,7 @@ export function EngineMonitor({
                 ))}
                 {ports.length === 0 && (
                   <p className="text-sm text-muted-foreground text-center py-8">
-                    Click "Scan" to check ports 22140–22159
+                    Click "Scan" to check ports {ENGINE_PORT_RANGE_LABEL}
                   </p>
                 )}
               </div>

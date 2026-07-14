@@ -8,7 +8,7 @@
  *
  *   PromptMatrixPanel     template with {{variables}} → options → strategy
  *   …the form's base settings (steps, size, LoRA, advanced)…
- *   PromptMatrixQueueBar  exact run count → pre-flight dialog → queue
+ *   PromptMatrixQueueBar  exact run count → Preview (frozen buildJobs) or Queue
  *
  * The count is live on every keystroke and EXACT (computed arithmetically, never
  * by materializing), so nobody is ever surprised by what they queued.
@@ -33,7 +33,19 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { AlertCircle, Copy, Download, FileUp, Layers, Link2, RotateCcw, Save, Sparkles, Trash2 } from "lucide-react";
+import {
+  AlertCircle,
+  Copy,
+  Download,
+  Eye,
+  FileUp,
+  Layers,
+  Link2,
+  RotateCcw,
+  Save,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -58,8 +70,11 @@ import {
   buildJobs,
   countPlan,
   downloadMatrixExport,
+  extractPoolRefs,
   MAX_BATCH_SIZE,
+  poolSlotName,
   serializeMatrixExport,
+  sortSlots,
   variableKey,
   type MatrixSpec,
   type MatrixVariable,
@@ -72,6 +87,9 @@ import type { ImageGenBatchJobSpec } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { ImageGenController } from "../imageController";
 import { BatchConfirmDialog } from "./BatchConfirmDialog";
+import { BatchPreviewDialog, type PreviewRun } from "./BatchPreviewDialog";
+import { LibraryPanel } from "./LibraryPanel";
+import { PoolCard } from "./PoolCard";
 import { StrategyControls } from "./StrategyControls";
 import { TemplateEditor } from "./TemplateEditor";
 import { VariableCard } from "./VariableCard";
@@ -109,10 +127,21 @@ export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
   const { spec } = state;
   const optionErrors = useOptionErrors();
 
-  const knownVariables = useMemo(
-    () => new Set(spec.variables.map((v) => variableKey(v.name))),
-    [spec.variables],
-  );
+  const poolSlotsByKey = useMemo(() => {
+    const refs = extractPoolRefs(spec.fields.map((f) => f.text));
+    return new Map(refs.map((r) => [r.key, sortSlots(r.slots)]));
+  }, [spec.fields]);
+
+  const knownVariables = useMemo(() => {
+    const known = new Set(spec.variables.map((v) => variableKey(v.name)));
+    for (const pool of spec.pools ?? []) {
+      const slots = poolSlotsByKey.get(variableKey(pool.name)) ?? [];
+      for (const slot of slots) {
+        known.add(variableKey(poolSlotName(pool.name, slot)));
+      }
+    }
+    return known;
+  }, [spec.variables, spec.pools, poolSlotsByKey]);
 
   const cartesianTotal = useMemo(
     () => countPlan({ ...spec, strategy: { kind: "cartesian" } }),
@@ -172,7 +201,15 @@ export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
                 <code className="rounded bg-primary/15 px-1 text-primary">
                   {"{{double braces}}"}
                 </code>
-                . Each one becomes a variable below.
+                . Use{" "}
+                <code className="rounded bg-violet-500/15 px-1 text-violet-700 dark:text-violet-300">
+                  {"{{color#1}}"}
+                </code>{" "}
+                /{" "}
+                <code className="rounded bg-violet-500/15 px-1 text-violet-700 dark:text-violet-300">
+                  {"{{color#2}}"}
+                </code>{" "}
+                to share one option list across slots.
               </p>
             }
           />
@@ -190,7 +227,18 @@ export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
           )}
       </div>
 
-      {/* 2. the variables */}
+      {/* 2. on-disk library — always visible, not buried in a menu */}
+      <LibraryPanel
+        entries={state.library}
+        diskPath={state.libraryPath}
+        error={state.libraryError}
+        ready={state.libraryReady}
+        onInsert={actions.insertLibraryEntry}
+        onRemove={(id) => void actions.removeLibraryEntry(id)}
+        onRefresh={() => void actions.refreshLibrary()}
+      />
+
+      {/* 3. the variables */}
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <Label className="text-xs">Variables</Label>
@@ -207,14 +255,18 @@ export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
           </div>
         </div>
 
-        {spec.variables.length === 0 ? (
+        {spec.variables.length === 0 && (spec.pools ?? []).length === 0 ? (
           <div className="rounded-lg border border-dashed p-4 text-center">
             <p className="text-xs text-muted-foreground">
               No variables yet. Add{" "}
               <code className="rounded bg-primary/15 px-1 text-primary">
                 {"{{like_this}}"}
               </code>{" "}
-              to the prompt, or sweep a setting like Steps or Model.
+              or a shared pool like{" "}
+              <code className="rounded bg-violet-500/15 px-1 text-violet-700 dark:text-violet-300">
+                {"{{color#1}}"}
+              </code>
+              , or sweep a setting like Steps or Model.
             </p>
           </div>
         ) : (
@@ -250,6 +302,21 @@ export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
           </DndContext>
         )}
 
+        {(spec.pools ?? []).length > 0 && (
+          <div className="space-y-1.5 pt-1">
+            <Label className="text-xs text-muted-foreground">Pools</Label>
+            {(spec.pools ?? []).map((pool) => (
+              <PoolCard
+                key={pool.id}
+                pool={pool}
+                slots={poolSlotsByKey.get(variableKey(pool.name)) ?? []}
+                actions={actions}
+                strategy={spec.strategy.kind}
+              />
+            ))}
+          </div>
+        )}
+
         {spec.variables.length > 1 && (
           <LinkGroupControl variables={spec.variables} actions={actions} />
         )}
@@ -257,7 +324,7 @@ export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
 
       <Separator />
 
-      {/* 3. how to combine */}
+      {/* 4. how to combine */}
       <StrategyControls
         spec={spec}
         actions={actions}
@@ -279,11 +346,70 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
   const optionErrors = useOptionErrors();
 
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewRuns, setPreviewRuns] = useState<PreviewRun[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [templateName, setTemplateName] = useState("");
 
   const baseInput = ctl.buildInput();
+
+  /** Same buildJobs path Queue uses — freeze the result for preview/enqueue. */
+  const buildSnapshot = useCallback(():
+    | { ok: true; runs: PreviewRun[] }
+    | { ok: false; error: string } => {
+    if (baseInput === null) {
+      return {
+        ok: false,
+        error: "Pick a model and fill in the generation settings first.",
+      };
+    }
+    const built = buildJobs<ImageGenerateInput>(
+      target,
+      baseInput,
+      plan.combinations,
+      spec.variables,
+    );
+    if (built.errors.length > 0) {
+      return { ok: false, error: built.errors.join(" ") };
+    }
+    const runs: PreviewRun[] = built.jobs.map((b) => ({
+      index: b.index,
+      label: b.label,
+      prompt: b.job.prompt ?? "",
+      negativePrompt: b.job.negative_prompt ?? "",
+      seed: b.seed,
+      values: b.values,
+      job: {
+        ...b.job,
+        variables: b.values,
+        combo_label: b.label,
+      },
+    }));
+    return { ok: true, runs };
+  }, [baseInput, target, plan.combinations, spec.variables]);
+
+  const enqueueRuns = useCallback(
+    async (runs: readonly PreviewRun[]) => {
+      if (runs.length === 0) return;
+      setSubmitting(true);
+      setSubmitError(null);
+      const jobs: ImageGenBatchJobSpec[] = runs.map((r) => r.job);
+      const label =
+        templateName.trim().length > 0
+          ? templateName.trim()
+          : summarizeMatrix(spec);
+      const result = await enqueueImageBatch(jobs, label);
+      setSubmitting(false);
+      if (result.ok) {
+        setConfirmOpen(false);
+        setPreviewOpen(false);
+        return;
+      }
+      setSubmitError(result.error);
+    },
+    [templateName, spec, enqueueImageBatch],
+  );
 
   // Median seconds/image from this machine's own completed jobs. An estimate
   // grounded in real history beats a hardcoded guess.
@@ -323,50 +449,34 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
   const canQueue = blockers.length === 0 && !submitting;
 
   const handleConfirm = useCallback(async () => {
-    if (baseInput === null) return;
-    setSubmitting(true);
+    // Rebuild at confirm time (same path as preview). Preview queue uses the
+    // frozen snapshot instead — see handlePreviewQueue.
+    const snap = buildSnapshot();
+    if (!snap.ok) {
+      setSubmitError(snap.error);
+      return;
+    }
+    await enqueueRuns(snap.runs);
+  }, [buildSnapshot, enqueueRuns]);
+
+  const handleOpenPreview = useCallback(() => {
     setSubmitError(null);
-
-    const built = buildJobs<ImageGenerateInput>(
-      target,
-      baseInput,
-      plan.combinations,
-      spec.variables,
-    );
-    if (built.errors.length > 0) {
-      // The engine would reject these anyway. Failing here leaves the queue
-      // untouched and names exactly which values are wrong.
-      setSubmitError(built.errors.join(" "));
-      setSubmitting(false);
+    const snap = buildSnapshot();
+    if (!snap.ok) {
+      setSubmitError(snap.error);
       return;
     }
+    setPreviewRuns(snap.runs);
+    setPreviewOpen(true);
+  }, [buildSnapshot]);
 
-    const jobs: ImageGenBatchJobSpec[] = built.jobs.map((b) => ({
-      ...b.job,
-      variables: b.values,
-      combo_label: b.label,
-    }));
-
-    const label =
-      templateName.trim().length > 0
-        ? templateName.trim()
-        : summarizeMatrix(spec.variables);
-
-    const result = await enqueueImageBatch(jobs, label);
-    setSubmitting(false);
-    if (result.ok) {
-      setConfirmOpen(false);
-      return;
-    }
-    setSubmitError(result.error);
-  }, [
-    baseInput,
-    target,
-    plan.combinations,
-    spec.variables,
-    templateName,
-    enqueueImageBatch,
-  ]);
+  const handlePreviewQueue = useCallback(
+    (selected: PreviewRun[]) => {
+      // Selected rows are a filter over the frozen snapshot — never re-expand.
+      void enqueueRuns(selected);
+    },
+    [enqueueRuns],
+  );
 
   return (
     <div className="space-y-2">
@@ -413,7 +523,9 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
               Clear
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Clear the template and every variable.</TooltipContent>
+          <TooltipContent>
+            Clear the template and every variable.
+          </TooltipContent>
         </Tooltip>
 
         <div className="ml-auto flex items-center gap-3">
@@ -430,6 +542,24 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
               {total === 1 ? "run" : "runs"}
             </p>
           </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                className="gap-1.5"
+                disabled={!canQueue}
+                onClick={handleOpenPreview}
+              >
+                <Eye className="h-4 w-4" />
+                Preview
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-xs">
+              Build every run with the real matrix engine, review the exact
+              prompts, then copy or queue the ones you want — nothing starts
+              until you confirm.
+            </TooltipContent>
+          </Tooltip>
           <Button
             className="gap-1.5"
             disabled={!canQueue}
@@ -459,13 +589,27 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
         submitting={submitting}
         onConfirm={() => void handleConfirm()}
       />
+
+      <BatchPreviewDialog
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        runs={previewRuns}
+        truncatedTotal={
+          plan.truncated && plan.total > previewRuns.length ? plan.total : null
+        }
+        submitting={submitting}
+        onQueue={handlePreviewQueue}
+      />
     </div>
   );
 }
 
-/** `subject × style × steps` — the default batch name. */
-function summarizeMatrix(variables: readonly MatrixVariable[]): string {
-  const names = variables.filter((v) => v.enabled).map((v) => v.name);
+/** `subject × color × steps` — the default batch name. */
+function summarizeMatrix(spec: MatrixSpec): string {
+  const names = [
+    ...spec.variables.filter((v) => v.enabled).map((v) => v.name),
+    ...(spec.pools ?? []).filter((p) => p.enabled).map((p) => p.name),
+  ];
   return names.length > 0 ? names.join(" × ") : "Batch";
 }
 
@@ -563,9 +707,9 @@ function LinkGroupControl({
         <div>
           <p className="text-xs font-medium">Link variables</p>
           <p className="text-[11px] leading-snug text-muted-foreground">
-            Linked variables advance together (1st with 1st, 2nd with 2nd) rather
-            than multiplying. Pair a style with its LoRA and 3 × 3 becomes 3 runs,
-            not 9.
+            Linked variables advance together (1st with 1st, 2nd with 2nd)
+            rather than multiplying. Pair a style with its LoRA and 3 × 3
+            becomes 3 runs, not 9.
           </p>
         </div>
         <div className="space-y-1">
@@ -647,9 +791,7 @@ function TemplateMenu({
     setImportText("");
     setImportError(null);
     setImportOk(
-      result.name !== null
-        ? `Imported "${result.name}".`
-        : "Imported matrix.",
+      result.name !== null ? `Imported "${result.name}".` : "Imported matrix.",
     );
     setOpen(false);
   }, [importText, onImport, onNameChange]);
@@ -805,7 +947,7 @@ function TemplateMenu({
               setImportError(null);
               setImportOk(null);
             }}
-            placeholder='Paste a matrix export, or a bare {"fields":…,"variables":…} spec'
+            placeholder='Paste a matrix export, or a bare {"fields":…,"variables":…,"pools":…} spec'
             className="min-h-[72px] resize-y text-xs font-mono"
           />
           <div className="flex flex-wrap gap-1.5">

@@ -66,6 +66,15 @@ def _stable_machine_id() -> str:
     except Exception:
         pass
 
+    # MATRX_INSTANCE_SALT keeps a dev engine's cloud registration distinct
+    # from the installed app's. Without it, both derive the SAME hardware id
+    # on one machine and a dev engine overwrites the live app's instance row
+    # (tunnel_url, settings) in Supabase. run.py's dev/live isolation guard
+    # sets "dev"; the packaged sidecar never sets it.
+    salt = os.environ.get("MATRX_INSTANCE_SALT")
+    if salt:
+        parts.append(f"salt:{salt}")
+
     raw = "|".join(parts)
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 

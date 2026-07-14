@@ -2,10 +2,11 @@
  * usePromptMatrix — React state for a prompt matrix, bound to the pure engine
  * in lib/prompt-matrix.
  *
- * The hook owns ONLY the spec (template text, variables, strategy, seeds) and
- * derives everything else. It knows nothing about images: it takes a
- * MatrixTarget, so the same hook drives a video or text-prompt matrix the day
- * those targets exist.
+ * The hook owns the working spec (template text, variables, pools, strategy,
+ * seeds) plus the on-disk library/templates loaded from the engine
+ * (`~/.matrx/prompt-matrix/*.json`). It knows nothing about images: it takes
+ * a MatrixTarget, so the same hook drives a video or text-prompt matrix the
+ * day those targets exist.
  *
  * React rules (repo CLAUDE.md → React Patterns): every handler is
  * useCallback'd, `actions` is useMemo'd, and the persistence effect is gated on
@@ -15,29 +16,48 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  engine,
+  getPromptMatrixLibrary,
+  getPromptMatrixPaths,
+  getPromptMatrixTemplates,
+  putPromptMatrixLibrary,
+  putPromptMatrixTemplates,
+} from "@/lib/api";
+import {
   countPlan,
   expandMatrix,
+  extractPoolRefs,
   extractVariableNames,
+  libraryEntryFromPool,
+  libraryEntryFromVariable,
   parseMatrixImport,
+  poolFromLibraryEntry,
   randomSeed,
+  sanitizeLibraryEntries,
+  syncPoolsWithTokens,
   syncVariablesWithTokens,
+  variableFromLibraryEntry,
+  type LibraryEntry,
   type MatrixImportResult,
   type MatrixOption,
   type MatrixPlan,
+  type MatrixPool,
   type MatrixSpec,
   type MatrixStrategy,
   type MatrixTarget,
   type MatrixVariable,
+  type PoolAssign,
   type SeedPolicy,
   type StrategyKind,
 } from "@/lib/prompt-matrix";
 import {
-  deleteTemplate,
+  coerceSpec,
   emptySpec,
   loadTemplates,
   loadWorkingSpec,
   makeId,
-  saveTemplate,
+  replaceTemplatesCache,
+  sanitizeSavedTemplates,
   saveWorkingSpec,
   type SavedTemplate,
 } from "@/lib/prompt-matrix/storage";
@@ -52,6 +72,14 @@ export interface PromptMatrixState {
   blocked: boolean;
   /** Named templates saved for this target, newest first. */
   templates: SavedTemplate[];
+  /** Reusable pools/variables from on-disk library.json. */
+  library: LibraryEntry[];
+  /** Absolute path to library.json when the engine reported it. */
+  libraryPath: string | null;
+  /** True once the first disk load attempt finished (ok or error). */
+  libraryReady: boolean;
+  /** Loud disk/engine error — never swallowed. */
+  libraryError: string | null;
 }
 
 export interface PromptMatrixActions {
@@ -78,6 +106,19 @@ export interface PromptMatrixActions {
   ) => void;
   removeOption: (variableId: string, optionId: string) => void;
 
+  removePool: (poolId: string) => void;
+  togglePool: (poolId: string, enabled: boolean) => void;
+  setPoolAssign: (poolId: string, assign: PoolAssign) => void;
+  setPoolBaselineOption: (poolId: string, optionId: string | null) => void;
+  addPoolOption: (poolId: string, value?: string) => void;
+  addPoolOptions: (poolId: string, values: string[]) => void;
+  updatePoolOption: (
+    poolId: string,
+    optionId: string,
+    patch: Partial<MatrixOption>,
+  ) => void;
+  removePoolOption: (poolId: string, optionId: string) => void;
+
   setStrategy: (kind: StrategyKind) => void;
   setSampleCount: (count: number) => void;
   setSeedPolicy: (patch: Partial<SeedPolicy>) => void;
@@ -89,6 +130,15 @@ export interface PromptMatrixActions {
   removeTemplate: (id: string) => void;
   /** Load a MatrixSpec from exported / agent-edited JSON. */
   importFromJson: (text: string) => MatrixImportResult;
+
+  /** Persist a pool's option list to the on-disk library. */
+  savePoolToLibrary: (poolId: string, name?: string) => Promise<void>;
+  /** Persist a variable's option list to the on-disk library. */
+  saveVariableToLibrary: (variableId: string, name?: string) => Promise<void>;
+  /** Insert a library entry into the current matrix. */
+  insertLibraryEntry: (entryId: string) => void;
+  removeLibraryEntry: (entryId: string) => Promise<void>;
+  refreshLibrary: () => Promise<void>;
 }
 
 export function usePromptMatrix<TJob>(
@@ -103,6 +153,11 @@ export function usePromptMatrix<TJob>(
   const [templates, setTemplates] = useState<SavedTemplate[]>(() =>
     loadTemplates(targetId),
   );
+  const [library, setLibrary] = useState<LibraryEntry[]>([]);
+  const [libraryPath, setLibraryPath] = useState<string | null>(null);
+  const [libraryReady, setLibraryReady] = useState(false);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const diskSynced = useRef(false);
 
   // Persist the working spec (debounced — this fires on every keystroke).
   const saveTimer = useRef<number | null>(null);
@@ -116,24 +171,132 @@ export function usePromptMatrix<TJob>(
     };
   }, [spec, targetId]);
 
+  const persistLibrary = useCallback(async (entries: LibraryEntry[]) => {
+    const base = engine.engineUrl;
+    if (base === null) {
+      throw new Error("Engine not connected — cannot write library.json.");
+    }
+    await putPromptMatrixLibrary(base, entries);
+    setLibrary(entries);
+    setLibraryError(null);
+  }, []);
+
+  const persistTemplates = useCallback(
+    async (all: SavedTemplate[]) => {
+      const base = engine.engineUrl;
+      if (base === null) {
+        throw new Error("Engine not connected — cannot write templates.json.");
+      }
+      await putPromptMatrixTemplates(base, all);
+      replaceTemplatesCache(all);
+      setTemplates(all.filter((t) => t.targetId === targetId));
+      setLibraryError(null);
+    },
+    [targetId],
+  );
+
+  const refreshLibrary = useCallback(async () => {
+    const base = engine.engineUrl;
+    if (base === null) {
+      setLibraryError(
+        "Engine not connected — library is on disk via the engine. Start the engine to load/save it.",
+      );
+      setLibraryReady(true);
+      return;
+    }
+    try {
+      const [paths, libDoc, tmplDoc] = await Promise.all([
+        getPromptMatrixPaths(base),
+        getPromptMatrixLibrary(base),
+        getPromptMatrixTemplates(base),
+      ]);
+      setLibraryPath(paths.library);
+
+      let diskTemplates = sanitizeSavedTemplates(tmplDoc.templates);
+      // One-time migrate: localStorage → disk when the file is empty.
+      if (diskTemplates.length === 0) {
+        const local = loadTemplates(targetId);
+        // loadTemplates filters by target — pull the full cache via a re-read
+        // of every target by merging what we have for this target only if disk
+        // is empty. Broader migrate: if ANY local templates exist and disk is
+        // empty, write them.
+        const localAll = (() => {
+          try {
+            const raw = localStorage.getItem("matrx-prompt-matrix-templates");
+            if (raw === null) return [] as SavedTemplate[];
+            const parsed: unknown = JSON.parse(raw);
+            return sanitizeSavedTemplates(Array.isArray(parsed) ? parsed : []);
+          } catch {
+            return [] as SavedTemplate[];
+          }
+        })();
+        if (localAll.length > 0) {
+          await putPromptMatrixTemplates(base, localAll);
+          diskTemplates = localAll;
+        } else if (local.length > 0) {
+          await putPromptMatrixTemplates(base, local);
+          diskTemplates = local;
+        }
+      }
+      replaceTemplatesCache(diskTemplates);
+      setTemplates(diskTemplates.filter((t) => t.targetId === targetId));
+      setLibrary(sanitizeLibraryEntries(libDoc.entries));
+      setLibraryError(null);
+      diskSynced.current = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setLibraryError(`Could not load on-disk library: ${msg}`);
+    } finally {
+      setLibraryReady(true);
+    }
+  }, [targetId]);
+
+  // Load from disk once the engine URL is available (and retry when it appears).
+  useEffect(() => {
+    if (diskSynced.current) return;
+    void refreshLibrary();
+    const id = window.setInterval(() => {
+      if (diskSynced.current) {
+        window.clearInterval(id);
+        return;
+      }
+      if (engine.engineUrl !== null) void refreshLibrary();
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [refreshLibrary]);
+
   /**
-   * Keep the variable list in step with the {{tokens}} in the template.
+   * Keep variables + pools in step with the {{tokens}} in the template.
    * Runs inside the setter (not an effect) so typing never causes a
    * render → effect → setState → render loop.
    */
   const withTokenSync = useCallback((next: MatrixSpec): MatrixSpec => {
-    const names = extractVariableNames(next.fields.map((f) => f.text));
+    const texts = next.fields.map((f) => f.text);
+    const names = extractVariableNames(texts);
+    const poolRefs = extractPoolRefs(texts);
     const variables = syncVariablesWithTokens(next.variables, names, makeId);
-    return variables === next.variables ? next : { ...next, variables };
+    const pools = syncPoolsWithTokens(next.pools ?? [], poolRefs, makeId);
+    if (variables === next.variables && pools === (next.pools ?? [])) {
+      return next.pools === undefined ? { ...next, pools: [] } : next;
+    }
+    return { ...next, variables, pools };
   }, []);
 
   const patchVariable = useCallback(
     (variableId: string, fn: (v: MatrixVariable) => MatrixVariable) => {
       setSpec((prev) => ({
         ...prev,
-        variables: prev.variables.map((v) =>
-          v.id === variableId ? fn(v) : v,
-        ),
+        variables: prev.variables.map((v) => (v.id === variableId ? fn(v) : v)),
+      }));
+    },
+    [],
+  );
+
+  const patchPool = useCallback(
+    (poolId: string, fn: (p: MatrixPool) => MatrixPool) => {
+      setSpec((prev) => ({
+        ...prev,
+        pools: (prev.pools ?? []).map((p) => (p.id === poolId ? fn(p) : p)),
       }));
     },
     [],
@@ -146,6 +309,7 @@ export function usePromptMatrix<TJob>(
       setSpec((prev) =>
         withTokenSync({
           ...prev,
+          pools: prev.pools ?? [],
           fields: prev.fields.map((f) =>
             f.id === fieldId ? { ...f, text } : f,
           ),
@@ -161,6 +325,7 @@ export function usePromptMatrix<TJob>(
       setSpec((prev) =>
         withTokenSync({
           ...prev,
+          pools: prev.pools ?? [],
           fields: prev.fields.map((f) =>
             f.id === fieldId
               ? { ...f, text: f.text.length > 0 ? `${f.text} ${token}` : token }
@@ -194,13 +359,18 @@ export function usePromptMatrix<TJob>(
         linkGroup: null,
         enabled: true,
       };
-      return { ...prev, variables: [...prev.variables, variable] };
+      return {
+        ...prev,
+        pools: prev.pools ?? [],
+        variables: [...prev.variables, variable],
+      };
     });
   }, []);
 
   const removeVariable = useCallback((variableId: string) => {
     setSpec((prev) => ({
       ...prev,
+      pools: prev.pools ?? [],
       variables: prev.variables.filter((v) => v.id !== variableId),
     }));
   }, []);
@@ -230,7 +400,7 @@ export function usePromptMatrix<TJob>(
       for (const v of prev.variables) {
         if (!orderedIds.includes(v.id)) next.push(v);
       }
-      return { ...prev, variables: next };
+      return { ...prev, pools: prev.pools ?? [], variables: next };
     });
   }, []);
 
@@ -248,7 +418,7 @@ export function usePromptMatrix<TJob>(
     [patchVariable],
   );
 
-  // ── options ───────────────────────────────────────────────────────────────
+  // ── variable options ──────────────────────────────────────────────────────
 
   const addOption = useCallback(
     (variableId: string, value = "") => {
@@ -305,6 +475,89 @@ export function usePromptMatrix<TJob>(
     [patchVariable],
   );
 
+  // ── pools ─────────────────────────────────────────────────────────────────
+
+  const removePool = useCallback((poolId: string) => {
+    setSpec((prev) => ({
+      ...prev,
+      pools: (prev.pools ?? []).filter((p) => p.id !== poolId),
+    }));
+  }, []);
+
+  const togglePool = useCallback(
+    (poolId: string, enabled: boolean) => {
+      patchPool(poolId, (p) => ({ ...p, enabled }));
+    },
+    [patchPool],
+  );
+
+  const setPoolAssign = useCallback(
+    (poolId: string, assign: PoolAssign) => {
+      patchPool(poolId, (p) => ({ ...p, assign }));
+    },
+    [patchPool],
+  );
+
+  const setPoolBaselineOption = useCallback(
+    (poolId: string, optionId: string | null) => {
+      patchPool(poolId, (p) => ({ ...p, baselineOptionId: optionId }));
+    },
+    [patchPool],
+  );
+
+  const addPoolOption = useCallback(
+    (poolId: string, value = "") => {
+      patchPool(poolId, (p) => ({
+        ...p,
+        options: [...p.options, { id: makeId(), value, enabled: true }],
+      }));
+    },
+    [patchPool],
+  );
+
+  const addPoolOptions = useCallback(
+    (poolId: string, values: string[]) => {
+      const fresh = values.map((value) => ({
+        id: makeId(),
+        value,
+        enabled: true,
+      }));
+      if (fresh.length === 0) return;
+      patchPool(poolId, (p) => {
+        const existing =
+          p.options.length === 1 && p.options[0]?.value.trim() === ""
+            ? []
+            : p.options;
+        return { ...p, options: [...existing, ...fresh] };
+      });
+    },
+    [patchPool],
+  );
+
+  const updatePoolOption = useCallback(
+    (poolId: string, optionId: string, patch: Partial<MatrixOption>) => {
+      patchPool(poolId, (p) => ({
+        ...p,
+        options: p.options.map((o) =>
+          o.id === optionId ? { ...o, ...patch } : o,
+        ),
+      }));
+    },
+    [patchPool],
+  );
+
+  const removePoolOption = useCallback(
+    (poolId: string, optionId: string) => {
+      patchPool(poolId, (p) => ({
+        ...p,
+        options: p.options.filter((o) => o.id !== optionId),
+        baselineOptionId:
+          p.baselineOptionId === optionId ? null : p.baselineOptionId,
+      }));
+    },
+    [patchPool],
+  );
+
   // ── strategy + seeds ──────────────────────────────────────────────────────
 
   const setStrategy = useCallback((kind: StrategyKind) => {
@@ -319,7 +572,7 @@ export function usePromptMatrix<TJob>(
               seed: randomSeed(),
             }
           : { kind };
-      return { ...prev, strategy };
+      return { ...prev, pools: prev.pools ?? [], strategy };
     });
   }, []);
 
@@ -328,19 +581,28 @@ export function usePromptMatrix<TJob>(
       prev.strategy.kind === "sample"
         ? {
             ...prev,
-            strategy: { ...prev.strategy, count: Math.max(1, Math.trunc(count)) },
+            pools: prev.pools ?? [],
+            strategy: {
+              ...prev.strategy,
+              count: Math.max(1, Math.trunc(count)),
+            },
           }
         : prev,
     );
   }, []);
 
   const setSeedPolicy = useCallback((patch: Partial<SeedPolicy>) => {
-    setSpec((prev) => ({ ...prev, seed: { ...prev.seed, ...patch } }));
+    setSpec((prev) => ({
+      ...prev,
+      pools: prev.pools ?? [],
+      seed: { ...prev.seed, ...patch },
+    }));
   }, []);
 
   const rerollSeeds = useCallback(() => {
     setSpec((prev) => ({
       ...prev,
+      pools: prev.pools ?? [],
       seed: { ...prev.seed, baseSeed: randomSeed(), rngSeed: randomSeed() },
       strategy:
         prev.strategy.kind === "sample"
@@ -361,10 +623,15 @@ export function usePromptMatrix<TJob>(
       if (found === undefined) return;
       // Re-key the loaded spec's fields onto the target's current fields.
       const byId = new Map(found.spec.fields.map((f) => [f.id, f.text]));
-      setSpec({
-        ...found.spec,
-        fields: targetFields.map((f) => ({ ...f, text: byId.get(f.id) ?? "" })),
-      });
+      setSpec(
+        coerceSpec({
+          ...found.spec,
+          fields: targetFields.map((f) => ({
+            ...f,
+            text: byId.get(f.id) ?? "",
+          })),
+        }),
+      );
     },
     [templates, targetFields],
   );
@@ -372,18 +639,185 @@ export function usePromptMatrix<TJob>(
   const saveAsTemplate = useCallback(
     (name: string) => {
       if (name.trim().length === 0) return;
-      saveTemplate(targetId, name, spec);
-      setTemplates(loadTemplates(targetId));
+      const trimmed = name.trim();
+      const now = Date.now();
+      void (async () => {
+        const base = engine.engineUrl;
+        if (base === null) {
+          setLibraryError(
+            "Engine not connected — cannot save template to disk.",
+          );
+          return;
+        }
+        try {
+          const doc = await getPromptMatrixTemplates(base);
+          const all = sanitizeSavedTemplates(doc.templates);
+          const existing = all.find(
+            (t) =>
+              t.targetId === targetId &&
+              t.name.toLowerCase() === trimmed.toLowerCase(),
+          );
+          const saved: SavedTemplate = existing
+            ? { ...existing, spec: coerceSpec(spec), updatedAt: now }
+            : {
+                id: makeId(),
+                name: trimmed,
+                targetId,
+                spec: coerceSpec(spec),
+                createdAt: now,
+                updatedAt: now,
+              };
+          const next = [...all.filter((t) => t.id !== saved.id), saved].sort(
+            (a, b) => b.updatedAt - a.updatedAt,
+          );
+          await persistTemplates(next);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          setLibraryError(`Could not save template: ${msg}`);
+        }
+      })();
     },
-    [spec, targetId],
+    [spec, targetId, persistTemplates],
   );
 
   const removeTemplate = useCallback(
     (id: string) => {
-      deleteTemplate(id);
-      setTemplates(loadTemplates(targetId));
+      void (async () => {
+        const base = engine.engineUrl;
+        if (base === null) {
+          setLibraryError(
+            "Engine not connected — cannot delete template on disk.",
+          );
+          return;
+        }
+        try {
+          const doc = await getPromptMatrixTemplates(base);
+          const all = sanitizeSavedTemplates(doc.templates).filter(
+            (t) => t.id !== id,
+          );
+          await persistTemplates(all);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          setLibraryError(`Could not delete template: ${msg}`);
+        }
+      })();
     },
-    [targetId],
+    [persistTemplates],
+  );
+
+  const savePoolToLibrary = useCallback(
+    async (poolId: string, name?: string) => {
+      const pool = (spec.pools ?? []).find((p) => p.id === poolId);
+      if (pool === undefined) return;
+      const entry = libraryEntryFromPool(pool, name);
+      const next = [
+        entry,
+        ...library.filter(
+          (e) =>
+            !(
+              e.kind === "pool" &&
+              e.name.toLowerCase() === entry.name.toLowerCase()
+            ),
+        ),
+      ];
+      try {
+        await persistLibrary(next);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setLibraryError(`Could not save pool to library: ${msg}`);
+      }
+    },
+    [spec.pools, library, persistLibrary],
+  );
+
+  const saveVariableToLibrary = useCallback(
+    async (variableId: string, name?: string) => {
+      const variable = spec.variables.find((v) => v.id === variableId);
+      if (variable === undefined) return;
+      const entry = libraryEntryFromVariable(variable, name);
+      const next = [
+        entry,
+        ...library.filter(
+          (e) =>
+            !(
+              e.kind === "variable" &&
+              e.name.toLowerCase() === entry.name.toLowerCase()
+            ),
+        ),
+      ];
+      try {
+        await persistLibrary(next);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setLibraryError(`Could not save variable to library: ${msg}`);
+      }
+    },
+    [spec.variables, library, persistLibrary],
+  );
+
+  const insertLibraryEntry = useCallback(
+    (entryId: string) => {
+      const entry = library.find((e) => e.id === entryId);
+      if (entry === undefined) return;
+      if (entry.kind === "pool") {
+        const pool = poolFromLibraryEntry(entry);
+        setSpec((prev) => {
+          const pools = prev.pools ?? [];
+          // Replace same-named pool options if present; else append.
+          const idx = pools.findIndex(
+            (p) => p.name.toLowerCase() === pool.name.toLowerCase(),
+          );
+          if (idx >= 0) {
+            const next = [...pools];
+            const existing = next[idx];
+            if (existing === undefined) return prev;
+            next[idx] = {
+              ...existing,
+              options: pool.options,
+              assign: pool.assign,
+              enabled: true,
+            };
+            return { ...prev, pools: next };
+          }
+          return { ...prev, pools: [...pools, pool] };
+        });
+        return;
+      }
+      const variable = variableFromLibraryEntry(entry);
+      setSpec((prev) => {
+        const idx = prev.variables.findIndex(
+          (v) =>
+            v.binding.kind === "text" &&
+            v.name.toLowerCase() === variable.name.toLowerCase(),
+        );
+        if (idx >= 0) {
+          const next = [...prev.variables];
+          const existing = next[idx];
+          if (existing === undefined) return prev;
+          next[idx] = { ...existing, options: variable.options, enabled: true };
+          return { ...prev, pools: prev.pools ?? [], variables: next };
+        }
+        return {
+          ...prev,
+          pools: prev.pools ?? [],
+          variables: [...prev.variables, variable],
+        };
+      });
+    },
+    [library],
+  );
+
+  const removeLibraryEntry = useCallback(
+    async (entryId: string) => {
+      const next = library.filter((e) => e.id !== entryId);
+      try {
+        await persistLibrary(next);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setLibraryError(`Could not remove library entry: ${msg}`);
+      }
+    },
+    [library, persistLibrary],
   );
 
   const importFromJson = useCallback(
@@ -399,13 +833,15 @@ export function usePromptMatrix<TJob>(
       }
 
       const byId = new Map(parsed.spec.fields.map((f) => [f.id, f.text]));
-      setSpec({
-        ...parsed.spec,
-        fields: targetFields.map((f) => ({
-          ...f,
-          text: byId.get(f.id) ?? "",
-        })),
-      });
+      setSpec(
+        coerceSpec({
+          ...parsed.spec,
+          fields: targetFields.map((f) => ({
+            ...f,
+            text: byId.get(f.id) ?? "",
+          })),
+        }),
+      );
       return parsed;
     },
     [targetFields, targetId],
@@ -413,18 +849,32 @@ export function usePromptMatrix<TJob>(
 
   // ── derived ───────────────────────────────────────────────────────────────
 
-  const plan = useMemo(() => expandMatrix(spec), [spec]);
+  const normalizedSpec = useMemo(() => coerceSpec(spec), [spec]);
+  const plan = useMemo(() => expandMatrix(normalizedSpec), [normalizedSpec]);
   const total = plan.total;
 
   const state = useMemo<PromptMatrixState>(
     () => ({
-      spec,
+      spec: normalizedSpec,
       plan,
       total,
       blocked: plan.errors.length > 0,
       templates,
+      library,
+      libraryPath,
+      libraryReady,
+      libraryError,
     }),
-    [spec, plan, total, templates],
+    [
+      normalizedSpec,
+      plan,
+      total,
+      templates,
+      library,
+      libraryPath,
+      libraryReady,
+      libraryError,
+    ],
   );
 
   const actions = useMemo<PromptMatrixActions>(
@@ -442,6 +892,14 @@ export function usePromptMatrix<TJob>(
       addOptions,
       updateOption,
       removeOption,
+      removePool,
+      togglePool,
+      setPoolAssign,
+      setPoolBaselineOption,
+      addPoolOption,
+      addPoolOptions,
+      updatePoolOption,
+      removePoolOption,
       setStrategy,
       setSampleCount,
       setSeedPolicy,
@@ -451,6 +909,11 @@ export function usePromptMatrix<TJob>(
       saveAsTemplate,
       removeTemplate,
       importFromJson,
+      savePoolToLibrary,
+      saveVariableToLibrary,
+      insertLibraryEntry,
+      removeLibraryEntry,
+      refreshLibrary,
     }),
     [
       setFieldText,
@@ -466,6 +929,14 @@ export function usePromptMatrix<TJob>(
       addOptions,
       updateOption,
       removeOption,
+      removePool,
+      togglePool,
+      setPoolAssign,
+      setPoolBaselineOption,
+      addPoolOption,
+      addPoolOptions,
+      updatePoolOption,
+      removePoolOption,
       setStrategy,
       setSampleCount,
       setSeedPolicy,
@@ -475,6 +946,11 @@ export function usePromptMatrix<TJob>(
       saveAsTemplate,
       removeTemplate,
       importFromJson,
+      savePoolToLibrary,
+      saveVariableToLibrary,
+      insertLibraryEntry,
+      removeLibraryEntry,
+      refreshLibrary,
     ],
   );
 

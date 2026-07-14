@@ -60,7 +60,10 @@ logger = logging.getLogger(__name__)
 _HOME = Path(
     os.environ.get("USERPROFILE") or os.environ.get("HOME") or "."
 ).expanduser()
-DIAGNOSTICS_DIR = _HOME / ".matrx" / "diagnostics"
+# Honors MATRX_HOME_DIR so a dev engine's diagnostics land in its own home
+# (~/.matrx-dev), never the installed app's (MXL-D-043 isolation).
+_MATRX_HOME = Path(os.environ.get("MATRX_HOME_DIR", str(_HOME / ".matrx")))
+DIAGNOSTICS_DIR = _MATRX_HOME / "diagnostics"
 
 # How many diagnostic snapshots to keep on disk before pruning oldest.
 _MAX_DIAGNOSTICS = 50
@@ -547,7 +550,7 @@ def _capture_threads() -> list[dict[str, Any]]:
 def _capture_disk_usage() -> dict[str, Any]:
     """Capture free-disk numbers for ~/.matrx and the system temp dir."""
     out: dict[str, Any] = {}
-    candidates: list[Path] = [_HOME / ".matrx"]
+    candidates: list[Path] = [_MATRX_HOME]
     if sys.platform == "win32":
         for env in ("TEMP", "TMP"):
             v = os.environ.get(env)

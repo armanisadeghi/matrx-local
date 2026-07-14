@@ -99,6 +99,11 @@ import {
 import type { StoragePath, StoragePathStats } from "@/lib/api";
 import { parseEnvBlock, type ParsedEnvEntry } from "@/lib/api-key-patterns";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  ENGINE_DEFAULT_URL,
+  ENGINE_PORT_BASE,
+  ENGINE_PORT_RANGE_LABEL,
+} from "@/lib/engine-ports";
 
 type AuthActions = ReturnType<typeof useAuth>;
 
@@ -578,9 +583,9 @@ export function Settings({
         await new Promise((r) => setTimeout(r, 500));
         await startSidecar();
         // Wait for engine to actually be ready before refreshing. The engine
-        // auto-scans ports 22140-22159, so prefer the last-known URL and fall
+        // auto-scans its port range, so prefer the last-known URL and fall
         // back to a port scan if the engine came back on a different port.
-        const baseUrl = engineUrl ?? "http://127.0.0.1:22140";
+        const baseUrl = engineUrl ?? ENGINE_DEFAULT_URL;
         const ready = await waitForEngine(baseUrl, 60, 1000);
         if (!ready) {
           const alt = await discoverEnginePort();
@@ -1198,11 +1203,11 @@ export function Settings({
                     <div>
                       <Label>Engine Port</Label>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Port range 22140-22159 is scanned automatically
+                        Port range {ENGINE_PORT_RANGE_LABEL} is scanned automatically
                       </p>
                     </div>
                     <Input
-                      value="22140"
+                      value={String(ENGINE_PORT_BASE)}
                       disabled
                       className="w-24 text-right font-mono text-sm"
                     />

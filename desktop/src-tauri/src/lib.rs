@@ -32,6 +32,33 @@ use downloads::commands::*;
 mod floating_overlay;
 use floating_overlay::*;
 
+// ── Dev/live isolation (MXL-D-043) ──────────────────────────────────────────
+// Debug builds (`pnpm tauri:dev`) live in the DEV world: they discover the
+// engine via ~/.matrx-dev/local.json and scan the dev port range 22240-22259,
+// matching run.py's dev/live isolation guard for source-run engines. Release
+// builds use the live world (~/.matrx, 22140-22159). A debug build must never
+// read the installed app's discovery file or adopt/kill its engine.
+const MATRX_HOME_DIRNAME: &str = if cfg!(debug_assertions) {
+    ".matrx-dev"
+} else {
+    ".matrx"
+};
+const ENGINE_PORT_BASE: u16 = if cfg!(debug_assertions) { 22240 } else { 22140 };
+const ENGINE_PORT_SCAN: u16 = 20;
+
+/// Path to this build's discovery file: <home>/<.matrx|.matrx-dev>/local.json.
+fn matrx_discovery_file() -> Option<std::path::PathBuf> {
+    #[cfg(unix)]
+    let home = std::env::var("HOME").ok();
+    #[cfg(windows)]
+    let home = std::env::var("USERPROFILE").ok();
+    home.map(|h| {
+        std::path::PathBuf::from(h)
+            .join(MATRX_HOME_DIRNAME)
+            .join("local.json")
+    })
+}
+
 // ── proxy_fetch types ────────────────────────────────────────────────────────
 #[derive(Serialize)]
 struct FetchResponse {
@@ -74,6 +101,18 @@ struct FetchResponse {
 /// the new engine has already written its own PID — we would otherwise
 /// delete the new engine's discovery record on startup.
 fn kill_orphaned_sidecars() {
+    // Debug builds never sweep (MXL-D-043): the kill patterns below match
+    // ONLY packaged engine binary names, and in the dev world a packaged
+    // engine is always the INSTALLED app's — never a child of debug Rust.
+    // Pre-fix, a `pnpm tauri:dev` session invoking start_sidecar would
+    // SIGTERM the live app's engine mid-session (the MXL-D-039 signature).
+    if cfg!(debug_assertions) {
+        lifecycle_log::log(
+            "[orphan-sweep] debug build — sweep skipped (packaged engines \
+             belong to the installed app, not to dev Rust)",
+        );
+        return;
+    }
     #[cfg(unix)]
     {
         // Single regex covers the macOS Helper-app process name ("Matrx Engine"),
@@ -159,12 +198,7 @@ fn kill_orphaned_sidecars() {
     }
 
     // Remove the discovery file only if its recorded PID is no longer alive.
-    let discovery_path = {
-        #[cfg(unix)]
-        { std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".matrx").join("local.json")) }
-        #[cfg(windows)]
-        { std::env::var("USERPROFILE").ok().map(|h| std::path::PathBuf::from(h).join(".matrx").join("local.json")) }
-    };
+    let discovery_path = matrx_discovery_file();
 
     if let Some(path) = discovery_path {
         if path.exists() {
@@ -971,12 +1005,7 @@ fn request_admin_shutdown() -> bool {
 /// key in the JSON without a real parser. Returns None on any failure;
 /// callers should treat that as "engine isn't reachable, fall back to SIGTERM".
 fn read_engine_port_from_discovery() -> Option<u16> {
-    let path = {
-        #[cfg(unix)]
-        { std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".matrx").join("local.json")) }
-        #[cfg(windows)]
-        { std::env::var("USERPROFILE").ok().map(|h| std::path::PathBuf::from(h).join(".matrx").join("local.json")) }
-    }?;
+    let path = matrx_discovery_file()?;
     let text = std::fs::read_to_string(path).ok()?;
     text.split('"')
         .skip_while(|tok| *tok != "port")
@@ -1066,11 +1095,11 @@ async fn sidecar_status(state: tauri::State<'_, SidecarState>) -> Result<Sidecar
     };
     Ok(SidecarStatus {
         running,
-        // Real port from the engine's discovery file (~/.matrx/local.json);
-        // 22140 is only the fallback when the file isn't readable yet. The
-        // engine auto-scans 22140–22159, so hardcoding lied whenever 22140
-        // was already taken.
-        port: read_engine_port_from_discovery().unwrap_or(22140),
+        // Real port from this build's discovery file; the port base is only
+        // the fallback when the file isn't readable yet. The engine
+        // auto-scans base..base+20, so hardcoding lied whenever the base
+        // port was already taken.
+        port: read_engine_port_from_discovery().unwrap_or(ENGINE_PORT_BASE),
     })
 }
 
@@ -1093,7 +1122,8 @@ async fn check_engine_health(port: u16) -> Result<bool, String> {
     }
 }
 
-/// Scan the engine port range (22140–22159) and return the first port that responds.
+/// Scan this build's engine port range (release 22140–22159, debug
+/// 22240–22259) and return the first port that responds.
 ///
 /// Same rationale as check_engine_health — runs from Rust to bypass Windows
 /// WebView2 loopback isolation that prevents JS fetch() from reaching 127.0.0.1.
@@ -1104,7 +1134,7 @@ async fn discover_engine_port() -> Result<Option<u16>, String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    for port in 22140u16..22160u16 {
+    for port in ENGINE_PORT_BASE..(ENGINE_PORT_BASE + ENGINE_PORT_SCAN) {
         let url = format!("http://127.0.0.1:{}/tools/list", port);
         if let Ok(resp) = client.get(&url).send().await {
             if resp.status().is_success() {

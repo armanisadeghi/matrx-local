@@ -76,6 +76,15 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   literal external dashboard action like Supabase SMTP). If the app should
   be able to self-serve this, file the missing prompt/UX as an
   `.matrx/AGENT_TASKS.md` bug instead.
+- **Reinforced 2026-07-14 (Arman, emphatic):** this covers **OS permissions
+  too** (Full Disk Access, **Screen Recording**), not just API keys. The
+  distinction is lead-developer-action vs user-action: a user grant is NEVER
+  an Arman task. And the required app behavior is stronger than a passive
+  banner — an **urgent in-app notification + one-click deep-link to the exact
+  grant page**. "Grant Screen Recording" was living in ARMAN_TASKS as exactly
+  this anti-pattern; removed 2026-07-14 and folded into the "Proactive in-app
+  permission + API-key prompts" task (which now names Screen Recording and the
+  notification requirement).
 - **Status:** open
 - **Analysis stamp:** Unverified — from docs/logs only (process finding, not
   code-verified beyond the two examples in this pass).
@@ -306,6 +315,23 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   lock between batches of ~25 notes (state is persisted per `_pull_note`, so
   interleaved saves are safe), or run the import as its own follow-up phase
   after `full_sync` returns. One-time pain either way; fix is about first-run UX.
+
+### MXL-D-053 — Stale heavy build artifacts in desktop/src-tauri may ship dead weight
+- **Area:** build / installer size
+- **Symptom:** two large stale artifacts sit in the tree and could be swept
+  into the bundle: (1) `desktop/src-tauri/binaries/llama-b8377-bin-macos-x64.tar.gz`
+  (~93 MB) — a leftover archive at llama version **b8377** while the shipped
+  dylibs are **b9076**; (2) `desktop/src-tauri/sidecar/aimatrx-engine-aarch64-apple-darwin`
+  (~215 MB) — an old-named flat sidecar binary next to the current
+  `Matrx Engine.app`. Active externalBin is `sidecar/matrx-engine` / the `.app`
+  (`tauri.conf.json:44`), so the flat binary looks orphaned.
+- **Evidence:** file sizes on disk 2026-07-14 (CDN-assets audit,
+  `docs/CDN_ASSETS_PLAN.md` § 3).
+- **Status:** open. Unverified — needs a real `./scripts/smoke.sh packaged`
+  build to confirm whether either is swept into the installer (a `resources`
+  glob catching the tarball, or the flat binary being picked up) before
+  deleting. If unused, `git rm` both.
+- **Owner hint:** whoever does the CDN installer-slimming work — fold into that.
 
 ## Cross-repo
 

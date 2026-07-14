@@ -150,10 +150,15 @@ reusable pattern gap, not a one-off: any feature gated on an ungranted
 permission should surface the same kind of contextual nudge.
 
 **Suggested approach**
-1. Design one reusable "permission needed" UI primitive (banner/card, not a
-   blocking modal) that takes a permission key + short feature-specific
-   copy, and offers a "Grant Access" button wired to `use-permissions.ts`'s
-   existing request path.
+1. Design one reusable "grant needed" system: (a) an app-level **urgent
+   notification** channel (toast/notification-center entry, badge — visible
+   without navigating to the gated feature) that announces "Action needed:
+   <feature> requires <grant>"; and (b) a reusable in-context primitive
+   (banner/card, not a blocking modal) that takes a grant key + short
+   feature-specific copy. Both expose a single **"Grant / Take me there"**
+   action that deep-links in ONE click to the exact surface — OS pane via the
+   permissions request path (`use-permissions.ts`), Settings → API Keys for a
+   provider key, or the HF/gate URL — no hunting.
 2. Wire the Notes/Documents surface to catch the 503 (or proactively check
    `full_disk_access` status on mount) and render it via that primitive.
 3. Audit other permission-gated features (`desktop/src/lib/api.ts:908-937` —

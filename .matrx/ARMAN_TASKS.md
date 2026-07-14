@@ -30,12 +30,24 @@ _Last updated: 2026-07-14 (step-7 pass: both official-docs asks APPROVED + appli
 
 ## Active (ranked — quickest wins first within priority)
 
-- [ ] **Train “Hey Matrix” OWW model** — [`docs/wake-word-training.md`](../docs/wake-word-training.md)
-- [ ] **Windows EV code-signing cert** — Before broad public launch (SmartScreen).
-- [ ] **`MAIN_SERVER` URL** — For a future “real” proxy proof test (callback from server). Pick canonical production base URL.
-- [ ] **CDN: GGUF mirrors** — `assets.aimatrx.com/llm-models/` (per prior plan).
-- [ ] **CDN: llama-server binaries** — `assets.aimatrx.com/llama-server/`.
-- [ ] **CDN: Whisper `.bin` models** — `assets.aimatrx.com/whisper-models/`.
+- [ ] **Train “Hey Matrix” OWW model** — no custom model exists yet (app ships stock `hey_jarvis`/`alexa`). **Corrected 2026-07-14:** the old "4 commands + 2 GB" doc was fiction — real openWakeWord training is the full YAML-config pipeline (piper-sample-generator + multi-GB feature/background/RIR datasets). Runbook + honest options in [`docs/wake-word-training.md`](../docs/wake-word-training.md). **Recommended: openWakeWord's official Colab notebook** (`dscripka/openWakeWord` → `notebooks/automatic_model_training.ipynb`, `target_phrase="hey matrix"`) — free GPU, ~1 hr. Local training env is already set up on Arman's Mac (`~/wakeword-train`, imports clean). Decision for Arman: Colab now, full local harness, or defer and ship stock `hey_jarvis` interim. Deliver the resulting `.onnx` via CDN (not the installer) per [`docs/CDN_ASSETS_PLAN.md`](../docs/CDN_ASSETS_PLAN.md).
+- [ ] **Windows EV code-signing cert — IN PROGRESS, check back 2026-07-16** — Before broad public launch (kills SmartScreen warnings). Arman purchased it 2026-03-02; it's mid-provisioning at Sectigo. **Next agent on/after 2026-07-16: check for updates and walk Arman through completion — offer to launch the browser to the Agreement Link.**
+      - **Vendor:** Sectigo EV Code Signing (Token & US Shipping), 1 yr, bought via **SignMyCode**. Payment $469.99 on 2026-03-02, txn `SMC1014824S932733`.
+      - **Action required (from Sectigo email 2026-03-03):** execute the Subscriber Agreement + confirm the Code Signing Request. **Verification code:** `tKGHm82ntIr0q089JvUVKNNVP47NlEqN`.
+      - **Agreement Link:** the actual URL is in the Sectigo 2026-03-03 "operational" email (Arman must surface it — not captured here). Once Arman pastes it, the agent can `open <url>` (macOS) / shell-open plugin to launch it, then have him enter the verification code above.
+      - **Hard-copy fallback:** download the Agreement, sign, email to `docs@sectigo.com`.
+      - **Cloud-KMS option:** SignMyCode notes EV certs can be configured via Google Cloud KMS for signing Windows executables — worth evaluating vs the physical token for CI signing.
+- [ ] **CDN: matrx-local assets (models + binaries)** — full plan written
+      2026-07-14: [`docs/CDN_ASSETS_PLAN.md`](../docs/CDN_ASSETS_PLAN.md). Covers the
+      complete bucket-upload list (LLM GGUF / image / video / whisper / NER /
+      wake-word / TTS / LoRA — defaults flagged), the `matrx-local/` bucket
+      layout, installer-slimming targets (~150–200 MB: cloudflared, llama-server
+      +dylibs, ffmpeg), two stale-artifact purges to verify, and the exact code
+      seams (`ASSETS_CDN_BASE` in config + Rust const, with a Rust token-leak
+      guard to fix first). **Arman action:** create the `matrx-local/` prefix in
+      our assets bucket and upload the bold defaults first; an agent wires the
+      config seam + repoints catalogs. Assets are PUBLIC (never signed URLs);
+      CDN base is remote-app-config, not an env var (CLAUDE.md config posture).
 
 **GitHub Actions secrets** (if anything missing on new fork): `AIDREAM_SERVER_URL_LIVE`, `VITE_SUPABASE_*`.
 
@@ -80,6 +92,7 @@ _Skim and check off or delete. Agents: do not open `.arman/` — leave that to A
 
 ## Done
 
+- [x] REMOVED "`MAIN_SERVER` URL" — category error under the new config posture (§2 of CLAUDE.md): the aidream server URL is a non-secret runtime value that belongs in remote app config with a compiled-in public default, NOT an env var an end user's machine would need Arman to "set". Another agent owns the app-config migration; not an Arman ask (2026-07-14)
 - [x] REMOVED "Grant Screen Recording" — not a lead-developer task, it's an END-USER OS-permission grant that was hiding a missing feature (the app should proactively notify + deep-link the user to the grant page, not ask Arman). Folded into the "Proactive in-app permission + API-key prompts" AGENT task (Screen Recording added explicitly) and MXL-D-048 broadened to OS permissions + the urgent-notification pattern (Arman, 2026-07-14)
 - [x] Approved official-docs update for the API-key-validation surface — `settings-catalog.md` § Engine settings gained the `api_key_validation` blob key (verdicts only, user-supplied keys) + `elevenlabs`/`fastino` in `VALID_PROVIDERS`; also added the desktop security-posture doctrine to CLAUDE.md (Arman approved + requested, 2026-07-14)
 - [x] Approved official-docs update for dev/live isolation (MXL-D-043) — `configuration.md` gained a Dev/live isolation section + 4 env-var rows (`MATRX_PORT_BASE`/`MATRX_LIVE_ENGINE`/`MATRX_INSTANCE_SALT`/`MATRX_HOME_DIR`), `settings-catalog.md` proxy-port + engine-port rows updated (Arman approved, agent applied, 2026-07-14)

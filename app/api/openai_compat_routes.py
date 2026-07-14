@@ -7,11 +7,14 @@ Supabase JWT for this instance owner. Do not add these routes to _PUBLIC_PATHS.
 
 from __future__ import annotations
 
+import asyncio
+import importlib.util
 import json
 import os
 import tempfile
 import time
 from collections.abc import AsyncIterator
+from functools import lru_cache
 from typing import Any
 
 import httpx
@@ -27,6 +30,7 @@ router = APIRouter(prefix="/v1", tags=["openai-compatible"])
 
 _STREAM_TIMEOUT = httpx.Timeout(connect=5.0, read=None, write=30.0, pool=5.0)
 _NON_STREAM_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=30.0, pool=5.0)
+_DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 _HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -103,6 +107,22 @@ def _normalize_chat_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], di
     return forwarded, target
 
 
+@lru_cache(maxsize=4)
+def _load_embedding_model(model_name: str):
+    from fastembed import TextEmbedding
+
+    return TextEmbedding(model_name=model_name)
+
+
+async def _embed_texts(texts: tuple[str, ...], model_name: str) -> list[list[float]]:
+    def _run() -> list[list[float]]:
+        model = _load_embedding_model(model_name)
+        vectors = model.embed(list(texts))
+        return [vector.astype(float).tolist() for vector in vectors]
+
+    return await asyncio.to_thread(_run)
+
+
 async def _stream_upstream(
     client: httpx.AsyncClient,
     upstream: httpx.Response,
@@ -128,6 +148,17 @@ async def list_models() -> dict[str, Any]:
                 "created": 0,
                 "owned_by": "local",
                 "root": target["model_name"],
+                "parent": None,
+            }
+        )
+    if importlib.util.find_spec("fastembed") is not None:
+        data.append(
+            {
+                "id": f"local/{_DEFAULT_EMBEDDING_MODEL}",
+                "object": "model",
+                "created": 0,
+                "owned_by": "local",
+                "root": _DEFAULT_EMBEDDING_MODEL,
                 "parent": None,
             }
         )
@@ -455,3 +486,95 @@ async def audio_transcriptions(
             }
         )
     return JSONResponse(content=body)
+
+
+@router.post("/embeddings")
+async def embeddings(request: Request) -> JSONResponse:
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        return _openai_error(
+            "Request body must be valid JSON.",
+            status_code=400,
+            code="invalid_json",
+        )
+
+    if not isinstance(payload, dict):
+        return _openai_error(
+            "Request body must be a JSON object.",
+            status_code=400,
+            code="invalid_request",
+        )
+
+    raw_input = payload.get("input")
+    if isinstance(raw_input, str):
+        texts = (raw_input,)
+    elif isinstance(raw_input, list) and all(isinstance(item, str) for item in raw_input):
+        texts = tuple(raw_input)
+    else:
+        return _openai_error(
+            "Parameter 'input' must be a string or an array of strings.",
+            status_code=400,
+            code="invalid_type",
+            param="input",
+        )
+
+    if not texts or any(not text for text in texts):
+        return _openai_error(
+            "Parameter 'input' must not be empty.",
+            status_code=400,
+            code="invalid_value",
+            param="input",
+        )
+
+    encoding_format = str(payload.get("encoding_format") or "float").lower()
+    if encoding_format != "float":
+        return _openai_error(
+            "Only encoding_format='float' is currently supported.",
+            status_code=400,
+            code="unsupported_encoding_format",
+            param="encoding_format",
+        )
+
+    model_name = str(payload.get("model") or _DEFAULT_EMBEDDING_MODEL)
+    if model_name.startswith("local/"):
+        model_name = model_name.removeprefix("local/")
+
+    try:
+        vectors = await _embed_texts(texts, model_name)
+    except ImportError:
+        return _openai_error(
+            "Local embeddings are not installed. Install the optional 'embeddings' extra to enable /v1/embeddings.",
+            status_code=503,
+            code="missing_dependency",
+            param="model",
+        )
+    except ValueError as exc:
+        return _openai_error(
+            str(exc),
+            status_code=404,
+            code="model_not_found",
+            param="model",
+        )
+    except Exception as exc:
+        logger.warning("[openai_compat] local embeddings failed: %s", exc)
+        return _openai_error(
+            "Local embedding generation failed.",
+            status_code=500,
+            code="embedding_failed",
+        )
+
+    return JSONResponse(
+        content={
+            "object": "list",
+            "data": [
+                {"object": "embedding", "index": idx, "embedding": vector}
+                for idx, vector in enumerate(vectors)
+            ],
+            "model": model_name,
+            "usage": {
+                "prompt_tokens": sum(len(text.split()) for text in texts),
+                "total_tokens": sum(len(text.split()) for text in texts),
+            },
+        }
+    )

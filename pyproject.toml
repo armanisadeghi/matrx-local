@@ -148,6 +148,10 @@ image-gen = [
     # version: 7.34.1", 2026-07-12). See installer.py IMAGE_GEN_PACKAGES.
     "huggingface_hub>=0.22.0",
 ]
+embeddings = [
+    # Local OpenAI-compatible /v1/embeddings via ONNX Runtime.
+    "fastembed>=0.7.0",
+]
 all = [
     "openai-whisper",
     # Note: image-gen is NOT included in 'all' intentionally — it's a multi-GB

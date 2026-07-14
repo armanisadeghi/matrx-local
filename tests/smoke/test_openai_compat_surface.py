@@ -388,3 +388,81 @@ def test_audio_transcription_missing_dependency_error(
         assert r.json()["error"]["code"] == "missing_dependency"
 
     asyncio.run(_run())
+
+
+def test_embeddings_returns_openai_shape(
+    v1_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.api import openai_compat_routes
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_embed(texts: tuple[str, ...], model_name: str):
+        captured["texts"] = texts
+        captured["model_name"] = model_name
+        return [[0.1, 0.2], [0.3, 0.4]]
+
+    monkeypatch.setattr(openai_compat_routes, "_embed_texts", _fake_embed)
+
+    async def _run() -> None:
+        async with _client(v1_app) as client:
+            r = await client.post(
+                "/v1/embeddings",
+                json={
+                    "model": "local/BAAI/bge-small-en-v1.5",
+                    "input": ["hello world", "again"],
+                },
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["object"] == "list"
+        assert body["model"] == "BAAI/bge-small-en-v1.5"
+        assert body["data"][0] == {
+            "object": "embedding",
+            "index": 0,
+            "embedding": [0.1, 0.2],
+        }
+        assert body["usage"]["total_tokens"] == 3
+
+    asyncio.run(_run())
+    assert captured == {
+        "texts": ("hello world", "again"),
+        "model_name": "BAAI/bge-small-en-v1.5",
+    }
+
+
+def test_embeddings_missing_dependency_returns_openai_error(
+    v1_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.api import openai_compat_routes
+
+    async def _missing(texts: tuple[str, ...], model_name: str):
+        raise ImportError("fastembed")
+
+    monkeypatch.setattr(openai_compat_routes, "_embed_texts", _missing)
+
+    async def _run() -> None:
+        async with _client(v1_app) as client:
+            r = await client.post(
+                "/v1/embeddings",
+                json={"input": "hello"},
+            )
+        assert r.status_code == 503
+        assert r.json()["error"]["code"] == "missing_dependency"
+
+    asyncio.run(_run())
+
+
+def test_embeddings_rejects_base64_encoding(v1_app: FastAPI):
+    async def _run() -> None:
+        async with _client(v1_app) as client:
+            r = await client.post(
+                "/v1/embeddings",
+                json={"input": "hello", "encoding_format": "base64"},
+            )
+        assert r.status_code == 400
+        assert r.json()["error"]["code"] == "unsupported_encoding_format"
+
+    asyncio.run(_run())

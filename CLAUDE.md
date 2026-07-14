@@ -13,6 +13,7 @@
 | App settings keys (`AppSettings`) | [docs/official/settings-catalog.md](docs/official/settings-catalog.md) |
 | Settings audit / known gaps | [docs/official/settings-audit.md](docs/official/settings-audit.md) |
 | CI, PyInstaller, Tauri build gotchas | [docs/official/build-lessons.md](docs/official/build-lessons.md) |
+| App config — remote runtime config for shipped clients (spec; env vars are dev-only) | Cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/app-config/FEATURE.md` — read it before touching this feature in ANY repo |
 | Token broker — scoped short-lived credentials (client primitive this repo must build + `token-broker-client` repo skill) | `/Users/armanisadeghi/code/common-docs/token-broker/FEATURE.md` — read before touching this feature in ANY repo |
 | Download pipeline (audit / defects) | [docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md](docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md) |
 | Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |
@@ -32,23 +33,43 @@ Matrx Local is a **Tauri v2 desktop app** (Rust + React) with a **Python/FastAPI
 
 **Not a Next.js/Vercel project.** Stack: Tauri v2 (Rust), React 19, TS 7.0 (native compiler), Vite 6, Tailwind 3.4 + shadcn/ui (`darkMode: "class"`), Python 3.13+/FastAPI/Uvicorn, Supabase Auth, pnpm (desktop), uv (Python).
 
-## Security posture — everything here ships to the user
+## Security & configuration posture — everything here ships to the user
 
-This is a downloaded desktop app, so **there is no trusted server**: the Python
-engine, the Rust host, and the React UI all run on the user's machine and are
-fully inspectable. Treat every layer — including "server-side" Python — as
-client code.
+This is a downloaded desktop app: the Python engine, Rust host, and React UI
+all run on the user's machine and are fully inspectable. **There is no trusted
+server here and no trusted environment** — treat every layer, including
+"server-side" Python, as client code. That dictates where every value lives.
+There are exactly four kinds of configuration; before adding any config, key,
+or URL, identify which one it is:
 
-- **Never bundle a secret or private API key.** No service-role key, no signing
-  secret, no dev-owned provider key — anything shipped is effectively public.
-- **The core must run on public creds only** — the Supabase **publishable** key
-  (RLS-scoped). A single user OAuth grants each user exactly what they're
-  entitled to; RLS + `SECURITY DEFINER` RPCs enforce it.
-- **Anything needing elevated/approved access goes through aidream's grant
-  system** (server-issued, scoped, short-lived — e.g. the token broker), never a
-  credential baked into the app.
-- Any feature that seems to need a private key is either misconfigured or is a
-  key **the user** supplies for themselves — prompt them in-app; never ship it.
+1. **Env vars / `.env` files = DEVELOPER-ONLY.** Env vars are deploy-time
+   injection by whoever controls the environment — on a desktop app that's the
+   user, not us. "Setting" one before packaging is hardcoding with extra steps.
+   `.env` never ships and no shipped behavior may depend on one. Never ask
+   Arman to "set an env value" for shipped behavior — that request is a
+   category error.
+2. **Non-secret runtime values** (server URLs, feature flags, min versions) =
+   **remote app config**: one anon-readable Supabase row per app, fetched at
+   startup, cached to disk, with compiled-in public defaults as last-resort
+   fallback. System-of-record + build spec:
+   `/Users/armanisadeghi/code/common-docs/app-config/FEATURE.md` — read it
+   before touching this feature in ANY repo.
+3. **The user's own secrets** (their Anthropic key, HF token, Civit key…) =
+   the existing in-app key store (`ApiKeysRepo`, `/settings/api-keys/*`). The
+   user supplies them in-app; a missing key is a STATE with a prompt UI, never
+   an error, never an env var.
+4. **Our secrets never exist on the client — no exceptions.** No service-role
+   key, signing secret, or dev-owned provider key; anything shipped is public.
+   A capability needing privileged access is either (a) built into aidream and
+   consumed as an authenticated API call, or (b) reached via aidream's **token
+   broker** (scoped, short-lived credentials — built for matrx-local:
+   `/Users/armanisadeghi/code/common-docs/token-broker/FEATURE.md`).
+
+The core runs on public creds only: the Supabase **publishable** key
+(RLS-scoped) + the user's own OAuth session; RLS + `SECURITY DEFINER` RPCs
+enforce entitlements. If a feature seems to need a private key, it's either
+misdesigned (route it through 4a/4b) or it's the user's key (route it
+through 3).
 
 ## Key Entry Points
 
@@ -161,12 +182,10 @@ Three separate concerns — do not confuse them:
 2. **Remote Scraper Server** — `scraper.app.matrxserver.com`. REST API with Bearer token (API key or Supabase JWT). Its PostgreSQL is internal-only — no direct DB access.
 3. **Local Scraper Cache** — Optional local PostgreSQL via `DATABASE_URL` for persistent scrape cache. Defaults to in-memory TTLCache. This is NOT the remote server's DB.
 
-## Env Files
+## Env Files (developer-only — see § Security & configuration posture)
 
-- **Root `.env`** — Python engine config (API_KEY, SCRAPER_API_KEY, etc.). Not committed.
-- **`desktop/.env`** — Supabase client (VITE_* vars only). Not committed.
-- Comment out values instead of deleting, with a note for Arman.
-- Full env var reference in [configuration.md](docs/official/configuration.md).
+- **Root `.env`** (Python engine) and **`desktop/.env`** (VITE_* Supabase client vars). Not committed, never shipped.
+- Comment out values instead of deleting, with a note for Arman. Full reference: [configuration.md](docs/official/configuration.md).
 
 ## Database Migrations
 

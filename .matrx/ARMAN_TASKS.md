@@ -21,22 +21,18 @@ _Last updated: 2026-07-13 (hygiene pass: GLiNER NER review closed — Arman appr
 
 ## Active (ranked — quickest wins first within priority)
 
-- [ ] **Deploy matrx-files 0.1.4 — unblocks the entire file-sync feature (W3)**
-      (~3 min) — The desktop file-sync engine is built, tested (35+14 tests),
-      and E2E-drilled against a locally-run service, but the LIVE
-      `files.matrxserver.com` still lacks the new `/files/sync/*` endpoints.
-      Arman approved 2026-07-14 in chat, but the agent permission layer
-      blocks the publish trigger in every form (git tag push AND gh api) —
-      it needs YOUR terminal (or a permission rule). Everything is staged:
-      the commits are on the remote branch `matrx-files-0.1.4`, so step ① is
-      instant. From your terminal:
-      ① `cd ~/code/aidream && git push origin refs/tags/matrx-files/v0.1.4`
-      (tag exists locally at `fd4053cc7`; triggers the PyPI OIDC publish).
-      ② Once on PyPI (~2 min; check the Actions run), bump the container:
-      `ssh matrx-sandbox`, then per `packages/matrx-files/DEPLOY.md` rebuild
-      `matrx-files` at `==0.1.4` (docker rm + run, NOT restart), verify triad
-      + `GET /files/sync/changes?limit=1` with a user JWT. An agent CAN do
-      step ② if you approve its ssh/docker command interactively.
+- [ ] **Finish the matrx-files 0.1.4 deploy — ONE command (W3)** (~2 min) —
+      0.1.4 IS on PyPI (tag pushed ✅) and you ran the manual docker command,
+      BUT the on-box Dockerfile had drifted to a hard `==0.1.3` pin, so it
+      silently rebuilt 0.1.3 into an image *tagged* 0.1.4 — the live service
+      still lacks `/files/sync/*`. There is now a drift-proof script that
+      makes this impossible (syncs the canonical Dockerfile, verifies the
+      version INSIDE the image before swapping, health-checks, rollback =
+      same command with the old version):
+      `~/code/aidream/packages/matrx-files/deploy.sh 0.1.4`
+      Run it yourself, or tell an agent "run the matrx-files deploy script
+      for 0.1.4 against the production box" (the permission layer needs the
+      prod target named explicitly).
 - [ ] **Approve settings-catalog official-doc update for `file_sync_mode`**
       (~30 s) — the new setting (off|pointers|full, default pointers, W3) is
       live in both settings layers but `docs/official/settings-catalog.md` is

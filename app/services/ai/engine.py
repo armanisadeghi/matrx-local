@@ -81,6 +81,7 @@ _ai_initialized = False
 _tools_loaded = False
 _registered_tool_count = 0
 _client_mode_active = False
+_queue_guard_installed = False
 
 
 # ------------------------------------------------------------------
@@ -113,6 +114,70 @@ def clear_jwt_cache() -> None:
 def _get_jwt() -> str | None:
     """Synchronous getter passed to matrx_ai.configure(get_jwt=...)."""
     return _jwt_cache
+
+
+def install_client_host_queue_guard() -> None:
+    """Skip ORM-backed write coordinators when matrx-ai runs as a client host.
+
+    matrx-local intentionally configures matrx-ai without Postgres ORM bases.
+    Conversation persistence is delegated to SQLiteConversationStore, but
+    matrx-ai 0.4.0 still calls ``queue_helpers.get_coordinator()`` from a few
+    reservation paths. Without this guard that helper lazily imports cx_ ORM
+    managers and raises DBNotConfiguredError mid-stream.
+
+    The guard is narrow: if the host has registered ORM bases, the original
+    coordinator path is left intact.
+    """
+    global _queue_guard_installed
+    if _queue_guard_installed:
+        return
+
+    try:
+        from matrx_ai._ext import has_ext
+        from matrx_ai.db._registry import get_base
+        from matrx_ai.db import persistence as db_persistence
+        from matrx_ai.persistence import queue_helpers
+        from matrx_ai.tools import dynamic_drain
+    except Exception:
+        logger.warning("[engine] could not install matrx-ai queue guard", exc_info=True)
+        return
+
+    original = queue_helpers.get_coordinator
+
+    def _orm_bases_available() -> bool:
+        try:
+            get_base("AgentMemoryBase")
+            return True
+        except Exception:
+            return False
+
+    def _client_host_without_orm() -> bool:
+        return has_ext("conversation_store") and not _orm_bases_available()
+
+    def _guarded_get_coordinator():
+        if _client_host_without_orm():
+            return None
+        return original()
+
+    async def _guarded_drain_pending_injections(config, ctx):
+        if _client_host_without_orm():
+            return ctx
+        return await original_drain(config, ctx)
+
+    async def _guarded_apply_authoritative_user_request_rollup(user_request_id: str) -> None:
+        if _client_host_without_orm():
+            return None
+        return await original_rollup(user_request_id)
+
+    original_drain = dynamic_drain.drain_pending_injections
+    original_rollup = db_persistence.apply_authoritative_user_request_rollup
+    queue_helpers.get_coordinator = _guarded_get_coordinator
+    dynamic_drain.drain_pending_injections = _guarded_drain_pending_injections
+    db_persistence.apply_authoritative_user_request_rollup = (
+        _guarded_apply_authoritative_user_request_rollup
+    )
+    _queue_guard_installed = True
+    logger.info("[engine] matrx-ai client-host queue guard installed ✓")
 
 
 async def warm_jwt_cache() -> None:
@@ -218,6 +283,7 @@ def initialize_matrx_ai() -> None:
         server_url=server_url or None,
         source_app="matrx_local",
     )
+    install_client_host_queue_guard()
     _client_mode_active = True
     _ai_initialized = True
     logger.info(

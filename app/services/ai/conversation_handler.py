@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from decimal import Decimal
 from typing import Any
 
 from app.common.system_logger import get_logger
@@ -82,6 +83,8 @@ def _to_sql_value(value: Any, sqlite_type: str) -> Any:
         return None
     if isinstance(value, bool):
         return int(value)
+    if isinstance(value, Decimal):
+        return int(value) if sqlite_type == "INTEGER" else float(value)
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False, default=str)
     if sqlite_type == "TEXT" and not isinstance(value, str):

@@ -13,7 +13,7 @@ Two layers of coverage:
      * Conversation + messages persisted through the SQLite store.
      * A LOCAL TOOL (local_system_info) round-trips through the mock
        provider's tool_calls path (tool_event on the stream + a
-       tool_call_logs row on disk).
+       chat.tool_call row on disk).
      * aidream error semantics: 404 conversation_not_found,
        409 conversation_already_exists, resume 404/409, envelope shape.
 
@@ -136,11 +136,12 @@ def ai_app(seam_sandbox, local_db, monkeypatch: pytest.MonkeyPatch):
         api_key_resolver=get_key_resolver(),
         source_app="matrx_local",
     )
+    from app.services.ai.engine import install_client_host_queue_guard
 
-    # No coordinator guard needed: matrx-ai >= 0.4.0 short-circuits the
-    # WriteCoordinator + inbox drain itself when a conversation_store is
-    # configured (the engine's monkeypatch guard was deleted with the 0.4.0
-    # floor bump).
+    install_client_host_queue_guard()
+
+    # The real engine installs this guard during initialize_matrx_ai(); this
+    # direct configure_ext() fixture mirrors that client-host posture.
 
     # Local tool registry: definitions + executors (the engine's Phase A½+B).
     from matrx_ai.tools.registry import ToolRegistry
@@ -273,20 +274,20 @@ def test_chat_stream_with_local_tool_round_trip(ai_app, local_db):
 
         # Persistence through the SQLite store
         conv_row = await local_db.fetchone(
-            "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+            "SELECT * FROM chat.conversation WHERE id = ?", (conversation_id,)
         )
         assert conv_row is not None, "conversation row missing"
         msg_rows = await local_db.fetchall(
-            "SELECT * FROM messages WHERE conversation_id = ?", (conversation_id,)
+            "SELECT * FROM chat.message WHERE conversation_id = ?", (conversation_id,)
         )
         contents = [dict(r).get("content", "") for r in msg_rows]
         assert any("use the tool please" in c for c in contents)
         assert any("tool round trip complete" in c for c in contents)
         tool_rows = await local_db.fetchall(
-            "SELECT * FROM tool_call_logs WHERE conversation_id = ?",
+            "SELECT * FROM chat.tool_call WHERE conversation_id = ?",
             (conversation_id,),
         )
-        assert tool_rows, "tool_call_logs row missing for the local tool call"
+        assert tool_rows, "chat.tool_call row missing for the local tool call"
 
     asyncio.run(_run())
 
@@ -333,7 +334,7 @@ def test_conversation_continue_and_agent_start(ai_app, local_db):
             assert "completion" in types2 and types2[-1] == "end"
 
         msg_rows = await local_db.fetchall(
-            "SELECT * FROM messages WHERE conversation_id = ?", (conversation_id,)
+            "SELECT * FROM chat.message WHERE conversation_id = ?", (conversation_id,)
         )
         contents = [dict(r).get("content", "") for r in msg_rows]
         assert any("hello from turn one" in c for c in contents)
@@ -397,7 +398,8 @@ def test_error_semantics_match_aidream(ai_app):
             from app.services.local_db.database import get_db
 
             row = await get_db().fetchone(
-                "SELECT id FROM user_requests WHERE conversation_id = ?", (cid,)
+                "SELECT id FROM chat.user_request WHERE json_extract(metadata, '$.conversation_id') = ?",
+                (cid,),
             )
             assert row is not None
             r = await client.post(

@@ -24,11 +24,23 @@ import websockets
 
 
 def test_health(http_public: httpx.Client) -> None:
-    """GET /health returns 200."""
+    """GET /health returns 200 and the honest registry-backed contract.
+
+    status is ok|degraded|failed_services (alive != fully healthy — the
+    engine reports failed/degraded managed services instead of a hardcoded
+    "ok"); non-ok statuses must name the offending services so a remote
+    client can tell WHAT is broken, not just that something is.
+    """
     r = http_public.get("/health")
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data.get("status") == "ok"
+    assert data.get("service") == "matrx-local"
+    status = data.get("status")
+    assert status in ("ok", "degraded", "failed_services"), data
+    if status == "failed_services":
+        assert data.get("failed"), data
+    if status == "degraded":
+        assert data.get("degraded"), data
 
 
 def test_version(http_public: httpx.Client) -> None:

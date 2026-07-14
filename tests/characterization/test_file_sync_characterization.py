@@ -973,3 +973,447 @@ def test_ensure_hydrated_returns_error_string_when_hydrate_raises(
         assert "network is a lie" in message
 
     run_scenario(tmp_path, monkeypatch, scenario)
+
+
+# ---------------------------------------------------------------------------
+# Regressions — adversarial-review fixes (commit 56340714e)
+# ---------------------------------------------------------------------------
+
+
+def test_capture_conflict_clears_pending_op_so_the_queued_upload_never_drains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A watcher-queued upload on a row that then conflicts with a remote
+    change MUST be disarmed — draining it would be silent last-writer-wins."""
+    import watchfiles
+
+    local_edit = b"my local edit queued for upload"
+    remote_edit = b"their remote edit arriving via the feed"
+    client = FakeFilesClient(
+        pages=[page([feed_entry("f1", "a.txt", remote_edit)], next_cursor="cur-cc")]
+    )
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        await _seed_synced(engine, "f1", "a.txt", b"common ancestor")
+        (engine.root / "a.txt").write_bytes(local_edit)
+        await engine._handle_watch_event(
+            watchfiles.Change.modified, str(engine.root / "a.txt")
+        )
+        state = await _state(db, "f1")
+        assert state is not None and state["pending_op"] == "upload"  # armed
+
+        engine._download_to = DownloadStub({"f1": remote_edit})
+        await engine._pull_changes()
+
+        state = await _state(db, "f1")
+        assert state is not None
+        assert state["local_state"] == "conflict"
+        assert state["pending_op"] is None  # the fix: conflict disarms the push
+
+        # And the next drain pushes NOTHING for it.
+        result = await engine._drain_pending()
+        assert result == {"sent": 0, "failed": 0}
+        assert fake.calls["upload"] == []
+
+    run_scenario(tmp_path, monkeypatch, scenario, client=client)
+
+
+def test_drain_pending_skips_conflicted_rows_clears_the_op_and_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defense in depth: even a directly-seeded conflict+pending_op row is
+    never pushed — the op is cleared with a loud error line."""
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        (engine.root / "c.txt").write_bytes(b"conflicted bytes")
+        await engine._index.upsert_state(
+            "f-conf", rel_path="c.txt", local_state="conflict",
+            pending_op="upload", local_hash=_sha(b"conflicted bytes"),
+        )
+        errors: list[str] = []
+        monkeypatch.setattr(
+            engine_module.logger, "error",
+            lambda msg, *args, **kwargs: errors.append(msg % args if args else msg),
+        )
+
+        result = await engine._drain_pending()
+        assert result == {"sent": 0, "failed": 0}
+        assert fake.total_calls() == 0  # nothing pushed to the cloud
+
+        state = await _state(db, "f-conf")
+        assert state is not None
+        assert state["local_state"] == "conflict"  # conflict stays open
+        assert state["pending_op"] is None  # op cleared
+        assert any("pending_op" in e and "c.txt" in e for e in errors)  # logged loud
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_first_sight_of_a_cloud_file_adopts_matching_local_content_as_synced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-existing local content whose hash matches the feed checksum is
+    adopted as synced — never misrecorded as an empty pointer."""
+    content = b"identical on both sides"
+    client = FakeFilesClient(
+        pages=[page([feed_entry("f1", "docs/a.txt", content)], next_cursor="cur-fs1")]
+    )
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        abs_path = engine.root / "docs" / "a.txt"
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+        abs_path.write_bytes(content)
+        stub = DownloadStub()
+        engine._download_to = stub
+
+        await engine._pull_changes()
+
+        assert abs_path.read_bytes() == content  # never truncated to a placeholder
+        assert stub.calls == []  # no bytes moved at all
+        state = await _state(db, "f1")
+        assert state is not None
+        assert state["local_state"] == "synced"
+        assert state["local_hash"] == _sha(content)
+        assert state["last_synced_hash"] == _sha(content)
+        assert state["pending_op"] is None
+
+    run_scenario(tmp_path, monkeypatch, scenario, client=client)
+
+
+def test_first_sight_with_divergent_local_content_captures_a_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local = b"what the user already had here"
+    remote = b"what the cloud says lives here"
+    client = FakeFilesClient(
+        pages=[page([feed_entry("f1", "a.txt", remote)], next_cursor="cur-fs2")]
+    )
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        (engine.root / "a.txt").write_bytes(local)
+        stub = DownloadStub({"f1": remote})
+        engine._download_to = stub
+
+        summary = await engine._pull_changes()
+        assert summary["conflicts"] == 1
+
+        # Local file untouched; remote copy captured beside it.
+        assert (engine.root / "a.txt").read_bytes() == local
+        remote_copy = engine.root / ".sync" / "conflicts" / "f1" / "remote_a.txt"
+        assert remote_copy.read_bytes() == remote
+        state = await _state(db, "f1")
+        assert state is not None
+        assert state["local_state"] == "conflict"
+        assert state["pending_op"] is None
+        assert state["error"] == "remote_and_local_both_changed"
+
+    run_scenario(tmp_path, monkeypatch, scenario, client=client)
+
+
+def test_first_sight_adopts_a_local_born_row_under_the_cloud_id_when_hashes_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A local:<uuid> row already holding the path (offline create) merges
+    into the cloud id when the content matches — one row, synced."""
+    content = b"uploaded from another device, same bytes here"
+    client = FakeFilesClient(
+        pages=[page([feed_entry("f1", "a.txt", content)], next_cursor="cur-fs3")]
+    )
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        (engine.root / "a.txt").write_bytes(content)
+        local_id = f"{LOCAL_ID_PREFIX}dead-beef-first-sight"
+        await engine._index.upsert_state(
+            local_id, rel_path="a.txt", local_state="pending_push",
+            pending_op="upload", local_hash=_sha(content), local_size=len(content),
+        )
+
+        await engine._pull_changes()
+
+        assert await _state(db, local_id) is None  # provisional row gone
+        states = await _all_states(db)
+        assert len(states) == 1
+        state = states[0]
+        assert state["file_id"] == "f1"
+        assert state["local_state"] == "synced"
+        assert state["last_synced_hash"] == _sha(content)
+        assert state["pending_op"] is None
+        assert (engine.root / "a.txt").read_bytes() == content
+
+    run_scenario(tmp_path, monkeypatch, scenario, client=client)
+
+
+def test_hydrate_on_a_pointer_that_gained_content_conflicts_instead_of_overwriting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A placeholder the user typed into is a local edit — hydration must
+    capture a conflict and raise, never clobber the bytes."""
+    user_bytes = b"the user typed straight into the placeholder"
+    remote = b"real cloud content"
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        await engine._index.upsert_remote_file(feed_entry("f1", "docs/a.txt", remote))
+        await engine._index.upsert_state(
+            "f1", rel_path="docs/a.txt", local_state="pointer",
+            local_hash=EMPTY_SHA256, local_size=0,
+        )
+        abs_path = engine.root / "docs" / "a.txt"
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+        abs_path.write_bytes(user_bytes)  # placeholder gained content
+        stub = DownloadStub({"f1": remote})
+        engine._download_to = stub
+
+        with pytest.raises(RuntimeError, match="local changes"):
+            await engine.hydrate("f1")
+
+        assert abs_path.read_bytes() == user_bytes  # local bytes untouched
+        remote_copy = engine.root / ".sync" / "conflicts" / "f1" / "remote_a.txt"
+        assert remote_copy.read_bytes() == remote  # remote captured aside
+        state = await _state(db, "f1")
+        assert state is not None
+        assert state["local_state"] == "conflict"
+        assert state["pending_op"] is None
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_push_upload_mid_flight_edit_keeps_the_newer_edit_queued(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the watcher re-stamps local_hash while the upload is in flight, the
+    finalize must take the not-finalized branch: last_synced_hash records
+    what DID land, but the row is never flipped to synced with a stale hash —
+    the pending op survives so the next drain pushes the delta."""
+    uploaded = b"snapshot that went over the wire"
+    newer = b"edit that landed mid-upload"
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        (engine.root / "up.txt").write_bytes(uploaded)
+        local_id = f"{LOCAL_ID_PREFIX}0000-midflight"
+        await engine._index.upsert_state(
+            local_id, rel_path="up.txt", local_state="pending_push",
+            pending_op="upload", local_hash=_sha(uploaded), local_size=len(uploaded),
+        )
+
+        real_upload = fake.upload
+
+        async def racing_upload(**kwargs: Any) -> dict[str, Any]:
+            resp = await real_upload(**kwargs)
+            # Simulate the watcher stamping a fresh edit before _push_upload
+            # finalizes (the row is still under its local: id here).
+            await engine._index.upsert_state(local_id, local_hash=_sha(newer))
+            return resp
+
+        fake.upload = racing_upload  # type: ignore[method-assign]
+
+        result = await engine._drain_pending()
+        assert result == {"sent": 1, "failed": 0}
+
+        # Re-keyed to the cloud id, but NOT finalized as synced.
+        assert await _state(db, local_id) is None
+        state = await _state(db, "cloud-1")
+        assert state is not None
+        assert state["local_state"] == "pending_push"  # not marked synced
+        assert state["pending_op"] == "upload"  # newer edit stays queued
+        assert state["local_hash"] == _sha(newer)  # the fresh edit's hash intact
+        assert state["last_synced_hash"] == _sha(uploaded)  # what DID land
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_remote_edit_wins_over_a_pending_local_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delete queued locally, then the cloud content changed: the edit wins —
+    the delete is dropped and the row falls back to a pointer."""
+    new_remote = b"fresh cloud content after the local delete was queued"
+    client = FakeFilesClient(
+        pages=[page([feed_entry("f1", "a.txt", new_remote)], next_cursor="cur-ed")]
+    )
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        await _seed_synced(engine, "f1", "a.txt", b"old synced content")
+        (engine.root / "a.txt").unlink()
+        await engine._index.upsert_state(
+            "f1", local_state="pending_push", pending_op="delete"
+        )
+
+        await engine._pull_changes()
+
+        state = await _state(db, "f1")
+        assert state is not None
+        assert state["pending_op"] is None  # delete dropped
+        assert state["local_state"] == "pointer"  # hydrates on access/backfill
+        assert state["local_hash"] == EMPTY_SHA256
+        placeholder = engine.root / "a.txt"
+        assert placeholder.exists() and placeholder.stat().st_size == 0
+
+        # And the drain must not soft-delete the resurrected file.
+        await engine._drain_pending()
+        assert fake.calls["soft_delete"] == []
+
+    run_scenario(tmp_path, monkeypatch, scenario, client=client)
+
+
+def test_watch_delete_of_a_conflicted_file_leaves_the_conflict_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import watchfiles
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        await engine._index.upsert_state(
+            "f1", rel_path="a.txt", local_state="conflict",
+            local_hash=_sha(b"conflicted"), error="remote_and_local_both_changed",
+        )
+        # File already gone from disk; the watcher reports the delete.
+        await engine._handle_watch_event(
+            watchfiles.Change.deleted, str(engine.root / "a.txt")
+        )
+
+        state = await _state(db, "f1")
+        assert state is not None  # row survives
+        assert state["local_state"] == "conflict"  # conflict stays open
+        assert state["pending_op"] is None  # no delete queued
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_watch_modify_of_a_conflicted_file_tracks_bytes_but_never_rearms_a_push(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import watchfiles
+
+    newer = b"user keeps editing the conflicted file"
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        (engine.root / "a.txt").write_bytes(b"conflicted state bytes")
+        await engine._index.upsert_state(
+            "f1", rel_path="a.txt", local_state="conflict",
+            local_hash=_sha(b"conflicted state bytes"),
+            error="remote_and_local_both_changed",
+        )
+        (engine.root / "a.txt").write_bytes(newer)
+
+        await engine._handle_watch_event(
+            watchfiles.Change.modified, str(engine.root / "a.txt")
+        )
+
+        state = await _state(db, "f1")
+        assert state is not None
+        assert state["local_state"] == "conflict"  # only resolve_conflict moves it
+        assert state["pending_op"] is None  # never re-armed
+        assert state["local_hash"] == _sha(newer)  # but the new bytes are tracked
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_watch_batch_orders_deletes_before_adds_so_any_input_order_is_one_move(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The watch loop sorts each batch deletes-first; an add+delete rename
+    pair arriving add-first still collapses to a single 'move' row."""
+    import watchfiles
+
+    content = b"identical bytes travel, whatever the batch order"
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        await _seed_synced(engine, "f1", "old/name.txt", content)
+        (engine.root / "old" / "name.txt").unlink()
+        new_path = engine.root / "new" / "renamed.txt"
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        new_path.write_bytes(content)
+
+        # Same-batch pair with the ADD FIRST in input order — the loop's
+        # ordering rule (deletes sort before everything else) must fix it.
+        batch = [
+            (watchfiles.Change.added, str(new_path)),
+            (watchfiles.Change.deleted, str(engine.root / "old" / "name.txt")),
+        ]
+        ordered = sorted(
+            batch, key=lambda c: 0 if c[0] == watchfiles.Change.deleted else 1
+        )
+        assert ordered[0][0] == watchfiles.Change.deleted  # the loop's contract
+        for change_type, change_path in ordered:
+            await engine._handle_watch_event(change_type, change_path)
+
+        states = await _all_states(db)
+        assert len(states) == 1, "rename must collapse to ONE state row"
+        state = states[0]
+        assert state["file_id"] == "f1"
+        assert state["rel_path"] == "new/renamed.txt"
+        assert state["pending_op"] == "move"
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_resolve_conflict_keep_remote_stays_conflict_until_the_download_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """keep_remote never pre-flips the row: a failed forced hydration leaves
+    the conflict open; only a successful one marks it synced."""
+    local = b"local conflicted copy"
+    remote = b"remote copy the user chose to keep"
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        await engine._index.upsert_remote_file(feed_entry("f1", "a.txt", remote))
+        (engine.root / "a.txt").write_bytes(local)
+        await engine._index.upsert_state(
+            "f1", rel_path="a.txt", local_state="conflict",
+            local_hash=_sha(local), local_size=len(local),
+            error="remote_and_local_both_changed",
+        )
+
+        # First attempt: the download fails — the row must STAY 'conflict'.
+        async def failing_download(
+            file_id: str, dest: Path, *, expected_checksum: str | None = None
+        ) -> None:
+            raise RuntimeError("cloud unreachable")
+
+        engine._download_to = failing_download  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="cloud unreachable"):
+            await engine.resolve_conflict("f1", "keep_remote")
+        state = await _state(db, "f1")
+        assert state is not None
+        assert state["local_state"] == "conflict"  # never pre-flipped
+        assert (engine.root / "a.txt").read_bytes() == local  # bytes untouched
+
+        # Second attempt: the download succeeds — only NOW is it synced.
+        engine._download_to = DownloadStub({"f1": remote})
+        result = await engine.resolve_conflict("f1", "keep_remote")
+        assert result["hydrated"] is True
+        state = await _state(db, "f1")
+        assert state is not None
+        assert state["local_state"] == "synced"
+        assert state["last_synced_hash"] == _sha(remote)
+        assert (engine.root / "a.txt").read_bytes() == remote
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_clean_rel_path_rejects_drive_letters_ads_separators_and_admin_dir_casefold() -> None:
+    """Windows drive/ADS separators and any-case .sync/ can never be local
+    relative paths."""
+    assert engine_module._clean_rel_path("C:/evil") is None
+    assert engine_module._clean_rel_path("a:b/c") is None
+    assert engine_module._clean_rel_path(".SYNC/x") is None  # casefolded admin dir
+    # Sanity: a plain nested path survives untouched.
+    assert engine_module._clean_rel_path("docs/a.txt") == "docs/a.txt"
+
+
+def test_watch_event_on_a_part_file_is_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The DownloadManager streams to '<name>.part' then renames — a partial
+    download must never classify as a new local file."""
+    import watchfiles
+
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        part = engine.root / "foo.bin.part"
+        part.write_bytes(b"half-downloaded bytes")
+
+        await engine._handle_watch_event(watchfiles.Change.added, str(part))
+
+        assert await _all_states(db) == []  # nothing tracked, nothing queued
+        assert fake.total_calls() == 0
+
+    run_scenario(tmp_path, monkeypatch, scenario)

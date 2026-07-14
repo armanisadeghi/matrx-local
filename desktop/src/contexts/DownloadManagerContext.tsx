@@ -206,9 +206,19 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
         (payload as DownloadEntry).updated_at ?? new Date().toISOString(),
     };
 
-    // Emit a log line for failures and cancellations
+    // Emit a log line for failures and cancellations. A failure carrying a
+    // `resolution` is a user-actionable STATE (accept a license, add a key) —
+    // it logs as info with the [action-needed] marker, never as a red error.
     const status = (payload as DownloadEntry).status;
-    if (status === "failed") {
+    const resolution = (payload as DownloadEntry).resolution;
+    if (status === "failed" && resolution != null) {
+      emitClientLog(
+        "info",
+        `[downloads] [action-needed] id=${payload.id} file=${(payload as DownloadEntry).filename ?? "?"} ` +
+          `code=${resolution.code} — ${resolution.title}`,
+        DOWNLOAD_LOG_SOURCE,
+      );
+    } else if (status === "failed") {
       emitClientLog(
         "error",
         `[downloads] FAILED: id=${payload.id} file=${(payload as DownloadEntry).filename ?? "?"} ` +

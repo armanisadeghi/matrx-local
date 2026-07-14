@@ -31,7 +31,7 @@ import {
   HardDrive,
 } from "lucide-react";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
-import { DownloadActionDialog } from "@/components/downloads/DownloadActionDialog";
+import { useResolutionAction } from "@/components/downloads/useResolutionAction";
 import { useClientLogSubscriber } from "@/hooks/use-unified-log";
 import type { DownloadEntry } from "@/lib/downloads/types";
 
@@ -267,23 +267,80 @@ function WaitingRow({
   );
 }
 
+// ── "Needs your action" prompt card ───────────────────────────────────────
+//
+// A failed download that carries a `resolution` is NOT an error — it is a
+// question the app must ask the user (accept a model license, add an API key,
+// install the AI packages). Those entries surface HERE, as a first-class
+// prompt card at the top of the panel with the explanation and the one button
+// that fixes it — never as a red row buried in history.
+
+function ActionNeededCard({
+  entry,
+  onRetry,
+}: {
+  entry: DownloadEntry;
+  onRetry: (entry: DownloadEntry) => void;
+}) {
+  const dispatchAction = useResolutionAction();
+  const resolution = entry.resolution;
+  if (!resolution) return null;
+
+  return (
+    <div className="mx-4 my-3 rounded-lg border border-amber-300/70 bg-amber-50 p-4 dark:border-amber-700/50 dark:bg-amber-950/30">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/60">
+          <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-500" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-foreground">
+            {resolution.title}
+          </p>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+            {resolution.message}
+          </p>
+          <p
+            className="mt-1.5 truncate text-xs text-muted-foreground/70"
+            title={entry.display_name || entry.filename}
+          >
+            {entry.display_name || entry.filename}
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => void dispatchAction(resolution)}
+              className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
+            >
+              {resolution.action_label}
+            </button>
+            <button
+              onClick={() => onRetry(entry)}
+              className="flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+              title="Re-check access and start the download again"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Check again & retry
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Completed/Failed/Cancelled row ────────────────────────────────────────
 
 function HistoryRow({
   entry,
   onRetry,
-  onResolve,
 }: {
   entry: DownloadEntry;
   onRetry?: (entry: DownloadEntry) => void;
-  onResolve?: (entry: DownloadEntry) => void;
 }) {
   const isCompleted = entry.status === "completed";
   const isFailed = entry.status === "failed";
-  // A failure the user can fix (no API key, unaccepted license, packages not
-  // installed) is NOT an error to display — it's a question to ask. It gets an
-  // amber "Action needed" button instead of a red string nobody can read.
-  const needsAction = isFailed && entry.resolution != null;
+  // Failures the user can fix never land here — the modal routes entries with
+  // a `resolution` to the "Needs your action" prompt cards up top. A failed
+  // row in history is a genuine error and keeps its raw message.
 
   return (
     <div className="group flex h-12 items-center gap-3 border-b border-border/60 px-4 transition-colors hover:bg-muted/50">
@@ -291,13 +348,7 @@ function HistoryRow({
       <div className="w-5 shrink-0">
         {isCompleted && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
         {isFailed && (
-          <AlertCircle
-            className={
-              needsAction
-                ? "h-4 w-4 text-amber-600 dark:text-amber-500"
-                : "h-4 w-4 text-red-600 dark:text-red-400"
-            }
-          />
+          <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
         )}
         {entry.status === "cancelled" && (
           <XCircle className="h-4 w-4 text-muted-foreground" />
@@ -315,24 +366,14 @@ function HistoryRow({
         </span>
       </div>
 
-      {/* Failure state: an ask (with a fix) or a real error (with its text) */}
+      {/* Error text (genuine failures only) */}
       <div className="w-48 shrink-0 text-xs">
-        {needsAction ? (
-          <button
-            onClick={() => onResolve?.(entry)}
-            className="truncate rounded px-2 py-1 font-medium text-amber-700 underline-offset-2 hover:underline dark:text-amber-500"
-            title={entry.resolution?.title}
-          >
-            Action needed — {entry.resolution?.action_label}
-          </button>
-        ) : (
-          <span
-            className="block truncate text-red-600 dark:text-red-400"
-            title={isFailed ? (entry.error_msg ?? "Unknown error") : undefined}
-          >
-            {isFailed ? (entry.error_msg ?? "Unknown error") : ""}
-          </span>
-        )}
+        <span
+          className="block truncate text-red-600 dark:text-red-400"
+          title={isFailed ? (entry.error_msg ?? "Unknown error") : undefined}
+        >
+          {isFailed ? (entry.error_msg ?? "Unknown error") : ""}
+        </span>
       </div>
 
       {/* Size */}
@@ -483,10 +524,15 @@ export function DownloadManagerModal() {
 
   const active = downloads.filter((d) => d.status === "active");
   const queued = downloads.filter((d) => d.status === "queued");
+  // Failures the user can fix are prompts, not history — they get their own
+  // section at the top of the panel instead of a red row at the bottom.
+  const actionNeeded = downloads.filter(
+    (d) => d.status === "failed" && d.resolution != null,
+  );
   const history = downloads.filter(
     (d) =>
       d.status === "completed" ||
-      d.status === "failed" ||
+      (d.status === "failed" && d.resolution == null) ||
       d.status === "cancelled",
   );
 
@@ -494,9 +540,6 @@ export function DownloadManagerModal() {
     const toCancel = [...active, ...queued];
     await Promise.allSettled(toCancel.map((d) => cancel(d.id)));
   }, [active, queued, cancel]);
-
-  /** The failed download whose "here's what to do" dialog is open, if any. */
-  const [resolveEntry, setResolveEntry] = useState<DownloadEntry | null>(null);
 
   const handleRetry = useCallback(
     (entry: DownloadEntry) => {
@@ -581,6 +624,23 @@ export function DownloadManagerModal() {
 
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto">
+          {/* ── Needs your action ──────────────────────────────────────── */}
+          {actionNeeded.length > 0 && (
+            <>
+              <SectionHeader
+                label="Needs your action"
+                count={actionNeeded.length}
+              />
+              {actionNeeded.map((entry) => (
+                <ActionNeededCard
+                  key={entry.id}
+                  entry={entry}
+                  onRetry={handleRetry}
+                />
+              ))}
+            </>
+          )}
+
           {/* ── In Progress ────────────────────────────────────────────── */}
           <SectionHeader label="In Progress" count={active.length} />
           {active.length > 0 && (
@@ -640,20 +700,9 @@ export function DownloadManagerModal() {
           )}
           {history.length === 0 && <EmptyRow message="No history" />}
           {history.map((entry) => (
-            <HistoryRow
-              key={entry.id}
-              entry={entry}
-              onRetry={handleRetry}
-              onResolve={setResolveEntry}
-            />
+            <HistoryRow key={entry.id} entry={entry} onRetry={handleRetry} />
           ))}
         </div>
-
-        <DownloadActionDialog
-          entry={resolveEntry}
-          onClose={() => setResolveEntry(null)}
-          onRetry={handleRetry}
-        />
 
         {/* ── Log panel (collapsible) ─────────────────────────────────── */}
         <div className="shrink-0 border-t border-border">

@@ -292,6 +292,23 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   Prepped ask filed 2026-07-12 at the TOP of `.matrx/ARMAN_TASKS.md`.
 - **Owner hint:** platform / Supabase admin (Arman)
 
+### MXL-D-044 — Flaky full-suite ordering: test_runner_drains_a_whole_batch_unattended
+
+- **Found:** 2026-07-13 during Wave-0 verification run
+- **Symptom:** `tests/smoke/test_media_gen_batch.py::test_runner_drains_a_whole_batch_unattended`
+  fails in a FULL `pytest tests/smoke/` run (a deliberately-injected
+  "synthetic crash inside generate" from a sibling test leaks into its
+  batch drain), but passes in isolation and passes 17/17 when the file
+  runs alone. Order-dependent state bleed through the shared engine
+  fixture — same hazard class as the media-gen pytest-fixture
+  engine-killer noted in the 2026-07 media-gen overhaul.
+- **Evidence:** full-suite run 2026-07-13: `1 failed, 94 passed`; solo
+  rerun: `1 passed`; whole-file rerun: `17 passed`.
+- **Status:** open — needs the batch-runner fixture to isolate/reset the
+  job queue (or the synthetic-crash test to clean up its poisoned job)
+  so suite order can't couple them.
+- **Owner hint:** media-gen tests
+
 ---
 
 ## Untriaged legacy backlog (from deleted root `AGENT_TASKS.md`, 2026-07-12)

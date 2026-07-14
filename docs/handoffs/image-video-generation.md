@@ -18,21 +18,15 @@ UI), the core/ unification of all layouts, the Playwright E2E harness, and
 the sd-server spike doc (commit `20fe69da1`). Full detail lives in git log
 and `.matrx/AGENT_TASKS.md` — do not re-derive it here.
 
-## ⛔ THE GATE — read before doing anything
+## ✅ THE GATE IS OPEN (2026-07-13)
 
-`main` is ~36 commits ahead of `origin/main` and includes an in-flight
-**matrx-ai 0.3.0 migration** (Phases 3–5, from a parallel session).
-`pyproject.toml` requires `matrx-ai>=0.3.0` which is **not on PyPI yet**
-(see the ⚠️ comment at pyproject.toml:59). Consequences:
-
-- **Do not push** until matrx-ai 0.3.0 is published (publishing happens in
-  the aidream repo — see memory `reference_aidream_packages_location`).
-  Pushing earlier breaks CI and any release build.
-- `uv run` re-resolution fails → use **`uv run --no-sync pytest tests/smoke`**
-  until the publish lands. The existing venv is fully working.
-- Once published: `uv sync --all-extras` (plain `uv sync` STRIPS extras —
-  real incident, see AGENT_TASKS) → full verify → `git push` → cut
-  **v1.3.99** via `./scripts/release.sh --patch --monitor`.
+The matrx-* publish wave landed: matrx-ai 0.3.12, matrx-utils 2.0.0,
+matrx-orm 3.1.9 (+ connect/graph/runtime) are on PyPI. `pyproject.toml`
+floors were bumped and `uv sync --all-extras` resolves cleanly (commit
+`2acaafa97`). `uv run` works normally again — the `--no-sync` workaround is
+retired. Remaining release step when ready: full verify → `git push` → cut
+the next release via `./scripts/release.sh --patch --monitor` (plain
+`uv sync` still STRIPS extras — real incident, use `--all-extras`).
 
 ## Priority work queue
 

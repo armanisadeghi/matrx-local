@@ -262,20 +262,14 @@ are condensed under Completed. Still open:
   matrx-connect's detach-on-disconnect keeps the local turn running to
   completion (burning local compute). Wire emitter.cancel via a small
   request registry when needed.
-- [ ] **Upstream (matrx-ai 0.3.0): client-host writes reach the
-  WriteCoordinator + Turn-Boundary Inbox reads cxm** — the client-host
-  contract says the coordinator is "always None in a client host", but
-  `persistence/queue_helpers.get_coordinator()` only short-circuits when no
-  RequestLane exists — and matrx-connect's `create_streaming_response`
-  ALWAYS opens a lane, so `_ensure_cx_registered()` → cxm →
-  `DBNotConfiguredError` mid-request. Same class:
-  `tools/dynamic_drain.drain_pending_injections` reads cx_pending_injection
-  with no store-first dispatch (crashed every tool-loop turn boundary).
-  Worked around host-side in
-  `engine.install_client_host_coordinator_guard()` (wraps get_coordinator +
-  the two drain fns to no-op when a conversation_store is configured).
-  Upstream fix: store-first checks at both choke points; then delete the
-  guard.
+- [x] **DONE 2026-07-13 — Upstream (matrx-ai 0.4.0): client-host writes reach
+  the WriteCoordinator + Turn-Boundary Inbox reads cxm** — fixed at the
+  source: `get_coordinator()` and `drain_pending_injections` now short-circuit
+  when a conversation_store is configured; the tool registry gained a
+  `tool_source` seam + a derived server-backed fetch. The host-side
+  `engine.install_client_host_coordinator_guard()` monkeypatch was DELETED
+  with the `matrx-ai>=0.4.0` floor bump. Pinned upstream by
+  `tests/client_host/test_no_db_streaming_with_tool.py` (zero-ORM invariant).
 - [ ] **Upstream (aidream/packages/matrx-ai): providers ↔ orchestrator circular
   import still present in 0.3.0** — a COLD `import matrx_ai.providers...`
   dies (`providers/__init__` → `unified_client` → `orchestrator/__init__` →

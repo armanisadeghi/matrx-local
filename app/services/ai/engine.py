@@ -11,16 +11,19 @@ Initialization sequence
        - ``api_key_resolver``      → SQLite-backed key resolver (key_manager)
        - ``conversation_store``    → SQLiteConversationStore (conversation_handler)
        - ``model_catalog``         → SqliteModelCatalog (model_catalog)
-       - ``get_jwt`` + ``server_url`` + ``source_app`` → user identity for
-         server-backed features (tool registry fetch, authenticated reads)
+       - ``get_jwt`` + ``server_url`` + ``source_app`` → user identity +
+         the server-backed tool registry fetch (matrx-ai >= 0.4.0 derives a
+         ServerToolSource that GETs /ai-tools/app/matrx_local/all)
      Seam validation is all-errors-at-once (ClientHostConfigError) and any
      wiring failure CRASHES startup — a client host without its seams would
      die with DBNotConfiguredError mid-request otherwise.
   2. ``load_tools_and_register()`` — async phase:
-       a. Loads the matrx-ai tool registry (server DB fetch fails loudly in a
-          client host; that's expected and mitigated by b).
-       b. Backfills local tool definitions from app/tools/catalog.py and
-          registers all local OS tool executors via ``LocalToolBridge``.
+       a. Loads the matrx-ai tool registry from the SERVER (matrx-ai's
+          derived ServerToolSource; requires AIDREAM_SERVER_URL_LIVE).
+       b. FALLBACK: backfills any definitions the server didn't provide from
+          app/tools/catalog.py, then registers all local OS tool executors
+          via ``LocalToolBridge``. matrx-ai's host-executor precedence
+          guarantees server rows never shadow the local executors.
 
 matrx-local ALWAYS runs as a matrx-ai CLIENT HOST
 -------------------------------------------------
@@ -193,10 +196,10 @@ def initialize_matrx_ai() -> None:
 
     if not server_url:
         logger.error(
-            "[engine] AIDREAM_SERVER_URL_LIVE is not set — server-backed matrx-ai "
-            "features (tool registry fetch, authenticated reads) are DISABLED. "
-            "Add it to .env. Local seams (keys, conversations, model catalog) "
-            "are still active."
+            "[engine] AIDREAM_SERVER_URL_LIVE is not set — the server-backed "
+            "tool registry fetch is DISABLED and tool definitions fall back to "
+            "the bundled catalog. Add it to .env. Local seams (keys, "
+            "conversations, model catalog) are still active."
         )
 
     from app.services.ai.conversation_handler import get_conversation_store
@@ -215,7 +218,6 @@ def initialize_matrx_ai() -> None:
         server_url=server_url or None,
         source_app="matrx_local",
     )
-    install_client_host_coordinator_guard()
     _client_mode_active = True
     _ai_initialized = True
     logger.info(
@@ -223,77 +225,6 @@ def initialize_matrx_ai() -> None:
         "(keys → SQLite resolver, conversations → SQLite store, "
         "models → SQLite catalog%s)",
         ", identity → JWT cache" if server_url else "; NO server identity",
-    )
-
-
-def install_client_host_coordinator_guard() -> None:
-    """Force matrx-ai's WriteCoordinator OFF in a client host.
-
-    KNOWN UPSTREAM DEFECT (matrx-ai 0.3.0): the client-host contract says
-    "no client-host write ever reaches persistence/queue_helpers.py — the
-    coordinator is always None in a client host", but
-    ``queue_helpers.get_coordinator()`` only returns None when there is NO
-    RequestLane. matrx-connect's ``create_streaming_response`` (the /ai
-    surface) ALWAYS opens a lane, so the coordinator lazily constructs and
-    ``_ensure_cx_registered()`` imports the ORM cx managers →
-    ``DBNotConfiguredError`` mid-request. Until upstream short-circuits on a
-    configured conversation_store, this guard wraps ``get_coordinator`` to
-    return None whenever the store seam is set — which routes every write
-    through the store dispatch exactly as documented. Idempotent. Tracked
-    in .matrx/AGENT_TASKS.md; delete when matrx-ai fixes it.
-    """
-    from matrx_ai.persistence import queue_helpers
-
-    if getattr(queue_helpers, "_matrx_local_client_host_guard", False):
-        return
-    _orig_get_coordinator = queue_helpers.get_coordinator
-
-    def _guarded_get_coordinator():  # type: ignore[no-untyped-def]
-        from matrx_ai.client_host import get_conversation_store
-
-        if get_conversation_store() is not None:
-            return None
-        return _orig_get_coordinator()
-
-    queue_helpers.get_coordinator = _guarded_get_coordinator  # type: ignore[assignment]
-
-    # Same defect class, second site: the Turn-Boundary Inbox drain
-    # (matrx_ai.tools.dynamic_drain.drain_pending_injections) reads
-    # cx_pending_injection through cxm with no store-first dispatch, so every
-    # tool-loop iteration in a client host raised DBNotConfiguredError at the
-    # turn boundary. There is no local inbox (no producer can queue into a
-    # desktop conversation), so the drain is a documented no-op here.
-    from matrx_ai.tools import dynamic_drain
-
-    _orig_drain_injections = dynamic_drain.drain_pending_injections
-
-    async def _guarded_drain_pending_injections(config, ctx):  # type: ignore[no-untyped-def]
-        from matrx_ai.client_host import get_conversation_store
-
-        if get_conversation_store() is not None:
-            return ctx
-        return await _orig_drain_injections(config, ctx)
-
-    dynamic_drain.drain_pending_injections = _guarded_drain_pending_injections  # type: ignore[assignment]
-
-    _orig_drain_pending = dynamic_drain.drain_pending
-
-    async def _guarded_drain_pending(config, ctx):  # type: ignore[no-untyped-def]
-        from matrx_ai.client_host import get_conversation_store
-
-        if get_conversation_store() is not None:
-            # Tool mutations are in-memory and still valid locally; only the
-            # cx_pending_injection read is skipped.
-            return await dynamic_drain.drain_tool_mutations(config, ctx)
-        return await _orig_drain_pending(config, ctx)
-
-    dynamic_drain.drain_pending = _guarded_drain_pending  # type: ignore[assignment]
-
-    queue_helpers._matrx_local_client_host_guard = True  # type: ignore[attr-defined]
-    logger.info(
-        "[engine] client-host coordinator guard installed "
-        "(WriteCoordinator forced off, inbox drain no-op — store dispatch "
-        "owns all writes)"
     )
 
 
@@ -341,13 +272,13 @@ async def load_tools_and_register() -> int:
     # the load-bearing step; if it throws, the next call should try again.
     local_tools_ok = False
 
-    # --- Phase A: load DB tools into matrx-ai registry ---
-    # In a client host there is no ORM ToolDefBase, so matrx-ai's registry
-    # fetch vcprints a red error + traceback to stdout and returns 0 rows.
-    # That is an expected, mitigated condition — Phase A½ backfills the
-    # definitions from the local catalog — so capture the stdout noise and
-    # keep it at DEBUG instead of tripping issue reports with ERR lines on
-    # every boot.
+    # --- Phase A: load tool definitions into the matrx-ai registry ---
+    # matrx-ai >= 0.4.0 derives a ServerToolSource from the configured
+    # server_url + source_app seams and fetches this app's definitions from
+    # /ai-tools/app/matrx_local/all — no ORM involved. When the server is
+    # unreachable (offline boot) the fetch returns 0 rows and Phase A½
+    # backfills from the bundled catalog. Capture the stdout noise and keep
+    # it at DEBUG so an offline boot doesn't trip issue reports.
     import contextlib
     import io
 
@@ -369,16 +300,19 @@ async def load_tools_and_register() -> int:
                 )
                 logger.debug("[engine] matrx-ai tool init output: %s", compact)
         if count:
-            logger.info("[engine] matrx-ai: loaded %d tools from DB into registry ✓", count)
+            logger.info(
+                "[engine] matrx-ai: loaded %d tools from the server registry ✓", count
+            )
         else:
             logger.warning(
-                "[engine] matrx-ai: server tool registry returned 0 tools — "
-                "falling back to the local tool catalog"
+                "[engine] matrx-ai: server tool registry returned 0 tools "
+                "(offline or server unreachable) — falling back to the local "
+                "tool catalog"
             )
     except Exception:
         logger.warning(
-            "[engine] matrx-ai: FAILED to load tool registry from DB — "
-            "AI agents won't have access to cloud-registered tools",
+            "[engine] matrx-ai: FAILED to load the server tool registry — "
+            "falling back to the local tool catalog",
             exc_info=True,
         )
 

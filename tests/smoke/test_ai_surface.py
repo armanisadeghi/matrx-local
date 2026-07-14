@@ -137,11 +137,10 @@ def ai_app(seam_sandbox, local_db, monkeypatch: pytest.MonkeyPatch):
         source_app="matrx_local",
     )
 
-    # Same guard the engine installs at startup (WriteCoordinator forced off
-    # in a client host — see engine.install_client_host_coordinator_guard).
-    from app.services.ai.engine import install_client_host_coordinator_guard
-
-    install_client_host_coordinator_guard()
+    # No coordinator guard needed: matrx-ai >= 0.4.0 short-circuits the
+    # WriteCoordinator + inbox drain itself when a conversation_store is
+    # configured (the engine's monkeypatch guard was deleted with the 0.4.0
+    # floor bump).
 
     # Local tool registry: definitions + executors (the engine's Phase A½+B).
     from matrx_ai.tools.registry import ToolRegistry

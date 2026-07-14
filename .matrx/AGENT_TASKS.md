@@ -103,16 +103,35 @@ Unblocked — Arman approved the plan 2026-07-13; build in progress. Key
 constraint from research: Python sidecar subsystem, NOT LLM catalog /
 llama-server.
 
-### Proactive in-app permission + API-key prompts (Full Disk Access, HF token, and generalize to others)
-- **Status:** open — code analysis pending (backend confirmed, frontend gap confirmed 2026-07-13)
+### Proactive in-app permission + API-key prompts (Full Disk Access, Screen Recording, HF token, and generalize to ALL user-supplied grants)
+- **Status:** open — code analysis pending (backend confirmed, frontend gap confirmed 2026-07-13; scope sharpened 2026-07-14 per Arman)
 - **Created:** 2026-07-13
 - **Priority:** P1 — user-facing trust/UX issue, not just a missing grant
 
+**Doctrine (Arman, 2026-07-14 — emphatic):** a user-supplied grant (OS
+permission, the user's own API key, a license acceptance) is NEVER a
+lead-developer/ARMAN_TASKS item. If the app needs it, the APP is responsible
+for getting it: **detect the missing grant → fire an urgent, visible in-app
+notification → deep-link the user in ONE click to the exact page/OS pane where
+they grant it.** Silent degrade, a raw error, or "ask Arman to go approve it"
+are all the bug. Any agent that files a user grant as an Arman task is hiding
+this missing feature behind the user.
+
 **Goal**
-When a feature needs a macOS permission the user hasn't granted, the app must
-proactively show a clear, well-designed in-app explanation of *why* it's
-needed and a one-click path to grant it — right when the user reaches that
-feature. Never rely on a generic error or a task list to communicate this.
+When a feature needs a grant the user hasn't given (macOS permission like Full
+Disk Access or **Screen Recording**, a provider API key, a gated-model license),
+the app must proactively (a) surface an **urgent notification** the user can't
+miss — not only a banner they discover by navigating to the feature — and
+(b) offer a **one-click deep-link** straight to the grant surface (the
+Configurations/permission page, System Settings pane, or Settings → API Keys),
+with a clear *why*. Never rely on a generic error, silent degrade, or a
+person-to-person task list.
+
+**Screen Recording (concrete case, reclassified from ARMAN_TASKS 2026-07-14):**
+the grant path itself already works (`CGRequestScreenCaptureAccess`, engine-side,
+MXL-D-032, 2026-07-11) — what's missing is the proactive notify + deep-link when
+a screen-capture/recording feature is reached without the permission. Wire it
+through the same primitive as FDA.
 
 **Why**
 Arman has NOT granted Full Disk Access on purpose — not an oversight. Notes

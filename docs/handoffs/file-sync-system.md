@@ -18,81 +18,60 @@ drive space like I do, I will absolutely want to create a full sync. And the
 point is that we want the user to use our file system for their full cloud
 sync system, instead of using Google Drive or something else."
 
-Two modes, user-choosable (global default + per-folder override is the
-natural shape):
-1. **Full sync** — bytes mirrored locally, bidirectional, offline-capable.
-2. **Virtual mapping** — full metadata tree locally (paths, names, sizes,
-   types), bytes fetched on demand; the agent sees one uniform filesystem.
+2026-07-13 addendum: the fully managed file service (EC2/Cloudflare,
+`files.matrxserver.com`) is operational — the desktop hits the matrx-files
+API directly from the start (no aidream detour).
 
-## Where things stand (verified 2026-07-13)
+## Resources
 
-- Nothing is built. The only artifact is a `"file_sync"` download-category
-  enum value with zero code paths (`app/services/downloads/manager.py:46`,
-  `app/services/local_db/schema.py:427`).
-- Cloud side: the platform file service is **matrx-files**
-  (`files.matrxserver.com` cutover, aidream handoff `matrx-files-cutover.md`;
-  package `matrx-files` 0.1.3 on PyPI). Cloud tables: `files.files`,
-  `files.file_versions`, `files.file_rag_jobs`. Private files route through
-  the server (signed URLs); public files get durable CDN URLs (workspace-root
-  CLAUDE.md § Files).
-- Local building blocks that MUST be reused, not duplicated: the unified
-  DownloadManager (queue, bandwidth, resume, actionable failures —
-  `app/services/downloads/`), the notes sync engine's proven patterns
-  (content-hash conflict handling, tombstones, `.sync/state.json` device
-  identity, engine-owned background loop — `app/services/documents/sync_engine.py`),
-  and the file watcher (watchfiles).
+- Feature contract + invariants: `app/services/file_sync/FEATURE.md` (read first)
+- Doctrine row: `docs/SYNC_CONTRACT.md` § User files (matrx-files replica)
+- Server wire contract: `/Users/armanisadeghi/code/aidream/packages/matrx-files/matrx_files/api/router_files.py` (`/files/sync/changes` + `/files/sync/folders`) + `common-docs/matrx-files-service/FEATURE.md`
+- Tests: `tests/characterization/test_file_sync_characterization.py` (21) + aidream `packages/matrx-files/tests/test_sync_feed.py` (14)
+- UI: Configurations → File Sync card (`desktop/src/components/files/FileSyncPanel.tsx`, `desktop/src/hooks/use-file-sync.ts`)
 
-## Priority work queue
+## Remaining work
 
-### 1. Contract first: the file index
-Local mirror of the user's `files.files` tree (per the canonical-DB-mirror
-handoff — this is one of its schemas) + a local root, e.g.
-`~/Matrx/Files/…` mirroring the cloud folder tree. Every entry carries:
-cloud id, path, size, content hash, visibility, and local state
-(`synced | pointer | pending_push | conflict`). The index IS the virtual
-mapping — mode 2 is "index only, bytes on demand".
+1. **Deploy matrx-files 0.1.4** — blocked on Arman (see Decisions needed).
+   Until it's live, `files.matrxserver.com` lacks `/files/sync/*` and the
+   desktop engine's pulls 404/401-fail loudly each tick (by design). After
+   deploy: run the DEPLOY.md triad + `GET /files/sync/changes?limit=1` with a
+   user JWT.
+2. **End-to-end drill against the live service** (FEATURE.md § Verification +
+   the airplane-mode drill in SYNC_CONTRACT): enable full sync → files appear
+   under the Files root → offline edit → reconnect → cloud converges; pointer
+   Read hydrates transparently.
+3. **First-run prompt** — plain-language mode choice on first sign-in (gentle
+   prompt doctrine); today the default is `pointers` silently. Natural home:
+   the existing first-run/setup flow in the desktop app.
+4. **Per-folder mode overrides** (vision: "global default + per-folder
+   override") — settings shape + engine filter; not started.
+5. **Presigned uploads** — buffered multipart has a 512 MB ceiling
+   (`_UPLOAD_MAX_BYTES`); the service needs `/files/upload/presigned` parity
+   (exists in aidream host only), then the desktop client switches.
+6. **Realtime channel** — polling interval is 300s; Supabase Realtime on
+   `files.files` (column-safe publication exists per the sandbox bridge work)
+   would make pulls near-instant. Optional enhancement.
+7. **Sandbox bridge convergence (after 1–3)** — the sandbox's `/cloud-files`
+   service-token feed and this JWT feed should converge on the package's
+   `/files/sync/*`; do not build a separate sandbox sync.
 
-### 2. Pull path (cloud → local)
-Incremental (checkpoint on the cloud's version/updated_at), bytes via the
-DownloadManager (it already does resume/bandwidth/failure attribution).
-Private files need signed URLs from the server (or a brokered credential —
-see the token-broker FEATURE doc in common-docs); never hand-construct URLs.
-On-demand hydration for pointer mode: an agent Read/Copy of a pointer file
-triggers a fetch-then-serve (tool layer integration in
-`app/tools/tools/file_ops.py` + `app/tools/session.py` named path
-`@matrx-files/`).
+## Done
 
-### 3. Push path (local → cloud)
-Watcher on the local root (reuse the watchfiles pattern); local
-create/modify/delete → upload/patch/tombstone through matrx-files APIs with
-the user JWT. Conflicts: never destructive — both versions preserved,
-`.sync/conflicts/` pattern from notes.
+- Server: device-replica sync feed in the matrx-files package (0.1.4, aidream `40893249f`) — keyset cursor + tombstones + folders; verified against the live DB via a locally-run standalone instance.
+- Desktop: full engine + index + client + hydration seam + REST + lifecycle — see `app/services/file_sync/` (matrx-local `fb786ea39`).
+- Modes/settings/UI: `file_sync_mode` (off|pointers|full, default pointers) both settings layers + Configurations File Sync card (`f367137a8`).
+- Tools: `tool_read`/`tool_copy`/`tool_move` hydrate pointers transparently.
+- Mirror: `files.files`/`files.folders` joined the structural mirror (snapshot refreshed live 2026-07-13).
+- Tests: 21 desktop characterization + 14 package wire tests, all green.
 
-### 4. Modes, settings, UI
-Setting: `file_sync_mode` (`off | pointers | full`) + per-folder overrides;
-sync status page mirroring the notes Sync UI (pending / conflicts / last
-sync); first-run prompt that explains the choice in plain language (gentle
-prompt doctrine — no red errors, no jargon).
+## Decisions needed
 
-### 5. Sandbox bridge (after 1–3)
-The cloud sandbox (matrx-sandbox) already integrates with aidream's
-cloud-files bridge. Once local file sync exists, the same index makes
-sandbox↔desktop file flow "just another remote" — do not build a separate
-sandbox sync.
-
-## Contracts
-
-- matrx-files is the ONLY file backend — no S3/scraper side-channels.
-- Private bytes go through server-issued URLs; public bytes are durable CDN
-  URLs (never expiring links in stored data).
-- DownloadManager is the ONLY byte-transfer path on desktop (no second
-  downloader — the repo already had that incident, see
-  DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md).
-
-## Verification
-
-Drill: enable full sync → cloud files appear under `~/Matrx/Files` →
-airplane mode: agent reads/edits a synced file offline → reconnect →
-cloud converges. Pointer mode: agent `Read` of a non-hydrated file fetches
-and returns bytes transparently; `ListDirectory` shows the full tree either
-way. Both modes exercised in tests with a seeded cloud fixture.
+**Deploy matrx-files 0.1.4.** Situation: the 0.1.4 code (sync feed) is
+committed in aidream (`40893249f`, tag `matrx-files/v0.1.4` created locally)
+and verified against the live DB, but publishing requires pushing the tag
+(triggers the PyPI OIDC workflow) and bumping the container on EC2
+`i-084f757c1e47d4efb` — both gated actions an agent could not take alone.
+Decide: push the tag `matrx-files/v0.1.4` (or say "proceed" to an agent with
+permission), then rebuild/restart the `matrx-files` container per
+`packages/matrx-files/DEPLOY.md`.

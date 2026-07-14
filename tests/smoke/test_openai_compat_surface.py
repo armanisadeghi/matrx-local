@@ -290,6 +290,21 @@ def test_audio_speech_rejects_unsupported_format(v1_app: FastAPI):
     asyncio.run(_run())
 
 
+def test_audio_speech_rejects_oversized_input(v1_app: FastAPI):
+    from app.api.openai_compat_routes import _MAX_SPEECH_INPUT_CHARS
+
+    async def _run() -> None:
+        async with _client(v1_app) as client:
+            r = await client.post(
+                "/v1/audio/speech",
+                json={"input": "x" * (_MAX_SPEECH_INPUT_CHARS + 1)},
+            )
+        assert r.status_code == 413
+        assert r.json()["error"]["code"] == "input_too_large"
+
+    asyncio.run(_run())
+
+
 def test_audio_transcription_returns_json(
     v1_app: FastAPI,
     monkeypatch: pytest.MonkeyPatch,
@@ -390,6 +405,28 @@ def test_audio_transcription_missing_dependency_error(
     asyncio.run(_run())
 
 
+def test_audio_transcription_rejects_oversized_upload(v1_app: FastAPI):
+    from app.api.openai_compat_routes import _MAX_TRANSCRIPTION_BYTES
+
+    async def _run() -> None:
+        async with _client(v1_app) as client:
+            r = await client.post(
+                "/v1/audio/transcriptions",
+                data={"model": "base"},
+                files={
+                    "file": (
+                        "huge.wav",
+                        b"x" * (_MAX_TRANSCRIPTION_BYTES + 1),
+                        "audio/wav",
+                    )
+                },
+            )
+        assert r.status_code == 413
+        assert r.json()["error"]["code"] == "file_too_large"
+
+    asyncio.run(_run())
+
+
 def test_embeddings_returns_openai_shape(
     v1_app: FastAPI,
     monkeypatch: pytest.MonkeyPatch,
@@ -466,3 +503,21 @@ def test_embeddings_rejects_base64_encoding(v1_app: FastAPI):
         assert r.json()["error"]["code"] == "unsupported_encoding_format"
 
     asyncio.run(_run())
+
+
+def test_v1_request_body_log_redaction() -> None:
+    from app.main import _request_body_for_log
+
+    body = {
+        "model": "local/qwen",
+        "messages": [{"role": "user", "content": "private prompt"}],
+        "input": "private embedding text",
+    }
+    redacted = _request_body_for_log("/v1/chat/completions", body)
+
+    assert redacted == {
+        "_redacted": "openai-compatible request body",
+        "keys": ["input", "messages", "model"],
+    }
+    assert "private prompt" not in str(redacted)
+    assert "private embedding text" not in str(redacted)

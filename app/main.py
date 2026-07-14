@@ -232,6 +232,25 @@ def _sanitize_body_for_log(obj):
     return obj
 
 
+def _request_body_for_log(path: str, body):
+    """Return a log-safe request body.
+
+    The OpenAI-compatible surface carries user prompts, speech text, embedding
+    input, and multipart audio. Those payloads are private by default and can
+    be large, so log shape only.
+    """
+    if path == "/v1" or path.startswith("/v1/"):
+        if body is None:
+            return None
+        if isinstance(body, dict):
+            return {
+                "_redacted": "openai-compatible request body",
+                "keys": sorted(body.keys()),
+            }
+        return {"_redacted": "openai-compatible request body"}
+    return _sanitize_body_for_log(body)
+
+
 def _format_request_details(request: Request, body=None) -> str:
     """Format request headers and other metadata for detailed error logging."""
     headers = dict(request.headers)
@@ -1452,7 +1471,7 @@ async def _log_requests_dispatch(request: Request, call_next):
         if request.method in ("POST", "PUT", "PATCH"):
             body = await request.json()
             if body is not None:
-                body = _sanitize_body_for_log(body)
+                body = _request_body_for_log(path, body)
     except Exception:
         pass
 

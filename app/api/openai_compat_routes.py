@@ -31,6 +31,8 @@ router = APIRouter(prefix="/v1", tags=["openai-compatible"])
 _STREAM_TIMEOUT = httpx.Timeout(connect=5.0, read=None, write=30.0, pool=5.0)
 _NON_STREAM_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=30.0, pool=5.0)
 _DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+_MAX_SPEECH_INPUT_CHARS = 50_000
+_MAX_TRANSCRIPTION_BYTES = 25 * 1024 * 1024
 _HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -342,6 +344,14 @@ async def audio_speech(request: Request) -> Response:
             code="missing_required_parameter",
             param="input",
         )
+    text = text.strip()
+    if len(text) > _MAX_SPEECH_INPUT_CHARS:
+        return _openai_error(
+            f"Parameter 'input' exceeds {_MAX_SPEECH_INPUT_CHARS} characters.",
+            status_code=413,
+            code="input_too_large",
+            param="input",
+        )
 
     response_format = str(payload.get("response_format") or "wav").lower()
     if response_format != "wav":
@@ -385,7 +395,7 @@ async def audio_speech(request: Request) -> Response:
         )
 
     result = await svc.synthesize(
-        text=text.strip(),
+        text=text,
         voice_id=voice,
         speed=speed,
         lang=payload.get("lang") if isinstance(payload.get("lang"), str) else None,
@@ -439,7 +449,16 @@ async def audio_transcriptions(
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp_path = tmp.name
+            total = 0
             while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > _MAX_TRANSCRIPTION_BYTES:
+                    return _openai_error(
+                        f"Audio upload exceeds {_MAX_TRANSCRIPTION_BYTES} bytes.",
+                        status_code=413,
+                        code="file_too_large",
+                        param="file",
+                    )
                 tmp.write(chunk)
 
         result = await _transcribe_audio_file(

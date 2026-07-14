@@ -5,7 +5,7 @@ Regenerate with: python scripts/generate_mirror_schema.py
 Source snapshot: schema_mirror/snapshot.json (cloud DB is the spec).
 """
 
-SNAPSHOT_HASH = "8aa632dc8b8a5fac5c8b366cfd127c78bd951e823d776645dc5d70fcc2d14fc7"
+SNAPSHOT_HASH = "6dd550d4f57a829cd8c396b6d25fc8d95fb93b31b0eed9e73e2fe3889af0f86c"
 SNAPSHOT_GENERATED_AT = "2026-07-13"
 
 # schema -> table -> {columns, pk, cursor_col, has_deleted_at, create_sql, index_sql}
@@ -179,6 +179,7 @@ MIRROR_TABLES = {
         "agent_run_stage": {
             "columns": {
                 "cost": "REAL",
+                "created_at": "TEXT",
                 "error": "TEXT",
                 "finished_at": "TEXT",
                 "id": "TEXT",
@@ -186,14 +187,19 @@ MIRROR_TABLES = {
                 "run_id": "TEXT",
                 "stage_key": "TEXT",
                 "started_at": "TEXT",
-                "status": "TEXT"
+                "status": "TEXT",
+                "updated_at": "TEXT"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"agent_run_stage\" (\n    \"id\" TEXT NOT NULL,\n    \"run_id\" TEXT,\n    \"stage_key\" TEXT,\n    \"status\" TEXT,\n    \"output\" TEXT,\n    \"error\" TEXT,\n    \"cost\" REAL,\n    \"started_at\" TEXT,\n    \"finished_at\" TEXT, PRIMARY KEY (\"id\")\n)",
-            "cursor_col": None,
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"agent_run_stage\" (\n    \"id\" TEXT NOT NULL,\n    \"run_id\" TEXT,\n    \"stage_key\" TEXT,\n    \"status\" TEXT,\n    \"output\" TEXT,\n    \"error\" TEXT,\n    \"cost\" REAL,\n    \"started_at\" TEXT,\n    \"finished_at\" TEXT,\n    \"created_at\" TEXT,\n    \"updated_at\" TEXT, PRIMARY KEY (\"id\")\n)",
+            "cursor_col": "updated_at",
             "has_deleted_at": False,
-            "index_sql": [],
+            "index_sql": [
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_run_stage_updated_at\" ON \"agent_run_stage\" (\"updated_at\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_run_stage_created_at\" ON \"agent_run_stage\" (\"created_at\")"
+            ],
             "pg_types": {
                 "cost": "numeric",
+                "created_at": "timestamptz",
                 "error": "jsonb",
                 "finished_at": "timestamptz",
                 "id": "uuid",
@@ -201,7 +207,8 @@ MIRROR_TABLES = {
                 "run_id": "uuid",
                 "stage_key": "text",
                 "started_at": "timestamptz",
-                "status": "text"
+                "status": "text",
+                "updated_at": "timestamptz"
             },
             "pk": [
                 "id"
@@ -334,14 +341,16 @@ MIRROR_TABLES = {
                 "reverted_at": "TEXT",
                 "search_text": "TEXT",
                 "status": "TEXT",
+                "updated_at": "TEXT",
                 "user_id": "TEXT"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"code_edit\" (\n    \"id\" TEXT NOT NULL,\n    \"message_file_id\" TEXT,\n    \"message_id\" TEXT,\n    \"conversation_id\" TEXT,\n    \"user_id\" TEXT,\n    \"block_index\" INTEGER,\n    \"search_text\" TEXT,\n    \"replace_text\" TEXT,\n    \"status\" TEXT,\n    \"applied_at\" TEXT,\n    \"rejected_at\" TEXT,\n    \"reverted_at\" TEXT,\n    \"reject_reason\" TEXT,\n    \"created_at\" TEXT, PRIMARY KEY (\"id\")\n)",
-            "cursor_col": "created_at",
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"code_edit\" (\n    \"id\" TEXT NOT NULL,\n    \"message_file_id\" TEXT,\n    \"message_id\" TEXT,\n    \"conversation_id\" TEXT,\n    \"user_id\" TEXT,\n    \"block_index\" INTEGER,\n    \"search_text\" TEXT,\n    \"replace_text\" TEXT,\n    \"status\" TEXT,\n    \"applied_at\" TEXT,\n    \"rejected_at\" TEXT,\n    \"reverted_at\" TEXT,\n    \"reject_reason\" TEXT,\n    \"created_at\" TEXT,\n    \"updated_at\" TEXT, PRIMARY KEY (\"id\")\n)",
+            "cursor_col": "updated_at",
             "has_deleted_at": False,
             "index_sql": [
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_edit_conversation_id\" ON \"code_edit\" (\"conversation_id\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_edit_user_id\" ON \"code_edit\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_edit_updated_at\" ON \"code_edit\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_edit_created_at\" ON \"code_edit\" (\"created_at\")"
             ],
             "pg_types": {
@@ -358,6 +367,7 @@ MIRROR_TABLES = {
                 "reverted_at": "timestamptz",
                 "search_text": "text",
                 "status": "code_edit_status",
+                "updated_at": "timestamptz",
                 "user_id": "uuid"
             },
             "pk": [
@@ -586,15 +596,17 @@ MIRROR_TABLES = {
                 "kind": "TEXT",
                 "metadata": "TEXT",
                 "mime_type": "TEXT",
+                "updated_at": "TEXT",
                 "url": "TEXT",
                 "user_id": "TEXT"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"media\" (\n    \"id\" TEXT NOT NULL,\n    \"conversation_id\" TEXT,\n    \"user_id\" TEXT,\n    \"kind\" TEXT,\n    \"url\" TEXT,\n    \"file_uri\" TEXT,\n    \"mime_type\" TEXT,\n    \"file_size_bytes\" INTEGER,\n    \"created_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"metadata\" TEXT, PRIMARY KEY (\"id\")\n)",
-            "cursor_col": "created_at",
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"media\" (\n    \"id\" TEXT NOT NULL,\n    \"conversation_id\" TEXT,\n    \"user_id\" TEXT,\n    \"kind\" TEXT,\n    \"url\" TEXT,\n    \"file_uri\" TEXT,\n    \"mime_type\" TEXT,\n    \"file_size_bytes\" INTEGER,\n    \"created_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"metadata\" TEXT,\n    \"updated_at\" TEXT, PRIMARY KEY (\"id\")\n)",
+            "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_media_conversation_id\" ON \"media\" (\"conversation_id\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_media_user_id\" ON \"media\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_media_updated_at\" ON \"media\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_media_created_at\" ON \"media\" (\"created_at\")"
             ],
             "pg_types": {
@@ -607,6 +619,7 @@ MIRROR_TABLES = {
                 "kind": "text",
                 "metadata": "jsonb",
                 "mime_type": "text",
+                "updated_at": "timestamptz",
                 "url": "text",
                 "user_id": "uuid"
             },
@@ -783,15 +796,17 @@ MIRROR_TABLES = {
                 "success": "INTEGER",
                 "trigger_reason": "TEXT",
                 "triggered_at": "TEXT",
+                "updated_at": "TEXT",
                 "user_id": "TEXT",
                 "user_request_id": "TEXT"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"observational_memory_event\" (\n    \"id\" TEXT NOT NULL,\n    \"memory_record_id\" TEXT,\n    \"conversation_id\" TEXT,\n    \"user_id\" TEXT,\n    \"user_request_id\" TEXT,\n    \"event_type\" TEXT,\n    \"model\" TEXT,\n    \"input_tokens\" INTEGER,\n    \"output_tokens\" INTEGER,\n    \"cost\" REAL,\n    \"duration_ms\" INTEGER,\n    \"triggered_at\" TEXT,\n    \"completed_at\" TEXT,\n    \"success\" INTEGER,\n    \"error\" TEXT,\n    \"trigger_reason\" TEXT,\n    \"metadata\" TEXT,\n    \"created_at\" TEXT, PRIMARY KEY (\"id\")\n)",
-            "cursor_col": "created_at",
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"observational_memory_event\" (\n    \"id\" TEXT NOT NULL,\n    \"memory_record_id\" TEXT,\n    \"conversation_id\" TEXT,\n    \"user_id\" TEXT,\n    \"user_request_id\" TEXT,\n    \"event_type\" TEXT,\n    \"model\" TEXT,\n    \"input_tokens\" INTEGER,\n    \"output_tokens\" INTEGER,\n    \"cost\" REAL,\n    \"duration_ms\" INTEGER,\n    \"triggered_at\" TEXT,\n    \"completed_at\" TEXT,\n    \"success\" INTEGER,\n    \"error\" TEXT,\n    \"trigger_reason\" TEXT,\n    \"metadata\" TEXT,\n    \"created_at\" TEXT,\n    \"updated_at\" TEXT, PRIMARY KEY (\"id\")\n)",
+            "cursor_col": "updated_at",
             "has_deleted_at": False,
             "index_sql": [
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_event_conversation_id\" ON \"observational_memory_event\" (\"conversation_id\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_event_user_id\" ON \"observational_memory_event\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_event_updated_at\" ON \"observational_memory_event\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_event_created_at\" ON \"observational_memory_event\" (\"created_at\")"
             ],
             "pg_types": {
@@ -811,6 +826,7 @@ MIRROR_TABLES = {
                 "success": "bool",
                 "trigger_reason": "text",
                 "triggered_at": "timestamptz",
+                "updated_at": "timestamptz",
                 "user_id": "uuid",
                 "user_request_id": "uuid"
             },
@@ -834,14 +850,16 @@ MIRROR_TABLES = {
                 "metadata": "TEXT",
                 "source": "TEXT",
                 "status": "TEXT",
+                "updated_at": "TEXT",
                 "user_id": "TEXT"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"pending_injection\" (\n    \"id\" TEXT NOT NULL,\n    \"conversation_id\" TEXT,\n    \"user_id\" TEXT,\n    \"kind\" TEXT,\n    \"content\" TEXT,\n    \"status\" TEXT,\n    \"source\" TEXT,\n    \"is_visible_to_user\" INTEGER,\n    \"is_visible_to_model\" INTEGER,\n    \"enqueued_seq\" INTEGER,\n    \"created_at\" TEXT,\n    \"consumed_at\" TEXT,\n    \"consumed_by_request_id\" TEXT,\n    \"consumed_message_id\" TEXT,\n    \"metadata\" TEXT, PRIMARY KEY (\"id\")\n)",
-            "cursor_col": "created_at",
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"pending_injection\" (\n    \"id\" TEXT NOT NULL,\n    \"conversation_id\" TEXT,\n    \"user_id\" TEXT,\n    \"kind\" TEXT,\n    \"content\" TEXT,\n    \"status\" TEXT,\n    \"source\" TEXT,\n    \"is_visible_to_user\" INTEGER,\n    \"is_visible_to_model\" INTEGER,\n    \"enqueued_seq\" INTEGER,\n    \"created_at\" TEXT,\n    \"consumed_at\" TEXT,\n    \"consumed_by_request_id\" TEXT,\n    \"consumed_message_id\" TEXT,\n    \"metadata\" TEXT,\n    \"updated_at\" TEXT, PRIMARY KEY (\"id\")\n)",
+            "cursor_col": "updated_at",
             "has_deleted_at": False,
             "index_sql": [
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_pending_injection_conversation_id\" ON \"pending_injection\" (\"conversation_id\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_pending_injection_user_id\" ON \"pending_injection\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_pending_injection_updated_at\" ON \"pending_injection\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_pending_injection_created_at\" ON \"pending_injection\" (\"created_at\")"
             ],
             "pg_types": {
@@ -859,6 +877,7 @@ MIRROR_TABLES = {
                 "metadata": "jsonb",
                 "source": "text",
                 "status": "text",
+                "updated_at": "timestamptz",
                 "user_id": "uuid"
             },
             "pk": [
@@ -891,13 +910,15 @@ MIRROR_TABLES = {
                 "total_duration_ms": "INTEGER",
                 "total_tokens": "INTEGER",
                 "trim_summary": "TEXT",
+                "updated_at": "TEXT",
                 "user_request_id": "TEXT"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"request\" (\n    \"id\" TEXT NOT NULL,\n    \"user_request_id\" TEXT,\n    \"conversation_id\" TEXT,\n    \"provider\" TEXT,\n    \"iteration\" INTEGER,\n    \"input_tokens\" INTEGER,\n    \"output_tokens\" INTEGER,\n    \"cached_tokens\" INTEGER,\n    \"total_tokens\" INTEGER,\n    \"cost\" REAL,\n    \"api_duration_ms\" INTEGER,\n    \"tool_duration_ms\" INTEGER,\n    \"total_duration_ms\" INTEGER,\n    \"tool_calls_count\" INTEGER,\n    \"tool_calls_details\" TEXT,\n    \"finish_reason\" TEXT,\n    \"response_id\" TEXT,\n    \"created_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"metadata\" TEXT,\n    \"ai_model_id\" TEXT,\n    \"raw_usage\" TEXT,\n    \"trim_summary\" TEXT,\n    \"status\" TEXT,\n    \"error\" TEXT, PRIMARY KEY (\"id\")\n)",
-            "cursor_col": "created_at",
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"request\" (\n    \"id\" TEXT NOT NULL,\n    \"user_request_id\" TEXT,\n    \"conversation_id\" TEXT,\n    \"provider\" TEXT,\n    \"iteration\" INTEGER,\n    \"input_tokens\" INTEGER,\n    \"output_tokens\" INTEGER,\n    \"cached_tokens\" INTEGER,\n    \"total_tokens\" INTEGER,\n    \"cost\" REAL,\n    \"api_duration_ms\" INTEGER,\n    \"tool_duration_ms\" INTEGER,\n    \"total_duration_ms\" INTEGER,\n    \"tool_calls_count\" INTEGER,\n    \"tool_calls_details\" TEXT,\n    \"finish_reason\" TEXT,\n    \"response_id\" TEXT,\n    \"created_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"metadata\" TEXT,\n    \"ai_model_id\" TEXT,\n    \"raw_usage\" TEXT,\n    \"trim_summary\" TEXT,\n    \"status\" TEXT,\n    \"error\" TEXT,\n    \"updated_at\" TEXT, PRIMARY KEY (\"id\")\n)",
+            "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_conversation_id\" ON \"request\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_updated_at\" ON \"request\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_created_at\" ON \"request\" (\"created_at\")"
             ],
             "pg_types": {
@@ -925,6 +946,7 @@ MIRROR_TABLES = {
                 "total_duration_ms": "int4",
                 "total_tokens": "int4",
                 "trim_summary": "jsonb",
+                "updated_at": "timestamptz",
                 "user_request_id": "uuid"
             },
             "pk": [
@@ -945,13 +967,15 @@ MIRROR_TABLES = {
                 "response_payload": "TEXT",
                 "trigger_message_id": "TEXT",
                 "unified_payload": "TEXT",
+                "updated_at": "TEXT",
                 "user_request_id": "TEXT"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"request_snapshot\" (\n    \"id\" TEXT NOT NULL,\n    \"conversation_id\" TEXT,\n    \"user_request_id\" TEXT,\n    \"cx_request_id\" TEXT,\n    \"iteration\" INTEGER,\n    \"trigger_message_id\" TEXT,\n    \"response_message_id\" TEXT,\n    \"provider\" TEXT,\n    \"model\" TEXT,\n    \"request_payload\" TEXT,\n    \"response_payload\" TEXT,\n    \"created_at\" TEXT,\n    \"unified_payload\" TEXT, PRIMARY KEY (\"id\")\n)",
-            "cursor_col": "created_at",
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"request_snapshot\" (\n    \"id\" TEXT NOT NULL,\n    \"conversation_id\" TEXT,\n    \"user_request_id\" TEXT,\n    \"cx_request_id\" TEXT,\n    \"iteration\" INTEGER,\n    \"trigger_message_id\" TEXT,\n    \"response_message_id\" TEXT,\n    \"provider\" TEXT,\n    \"model\" TEXT,\n    \"request_payload\" TEXT,\n    \"response_payload\" TEXT,\n    \"created_at\" TEXT,\n    \"unified_payload\" TEXT,\n    \"updated_at\" TEXT, PRIMARY KEY (\"id\")\n)",
+            "cursor_col": "updated_at",
             "has_deleted_at": False,
             "index_sql": [
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_snapshot_conversation_id\" ON \"request_snapshot\" (\"conversation_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_snapshot_updated_at\" ON \"request_snapshot\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_snapshot_created_at\" ON \"request_snapshot\" (\"created_at\")"
             ],
             "pg_types": {
@@ -967,6 +991,7 @@ MIRROR_TABLES = {
                 "response_payload": "jsonb",
                 "trigger_message_id": "uuid",
                 "unified_payload": "jsonb",
+                "updated_at": "timestamptz",
                 "user_request_id": "uuid"
             },
             "pk": [
@@ -1107,14 +1132,16 @@ MIRROR_TABLES = {
                 "result_preview": "TEXT",
                 "tool_name": "TEXT",
                 "ts": "TEXT",
+                "updated_at": "TEXT",
                 "user_id": "TEXT"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"tool_trace\" (\n    \"id\" TEXT NOT NULL,\n    \"process_pid\" INTEGER,\n    \"process_started_at\" TEXT,\n    \"ts\" TEXT,\n    \"event\" TEXT,\n    \"tool_name\" TEXT,\n    \"kind\" TEXT,\n    \"duration_ms\" INTEGER,\n    \"args\" TEXT,\n    \"result_preview\" TEXT,\n    \"err_type\" TEXT,\n    \"err_msg\" TEXT,\n    \"conversation_id\" TEXT,\n    \"call_id\" TEXT,\n    \"user_id\" TEXT,\n    \"metadata\" TEXT,\n    \"created_at\" TEXT,\n    \"fault_domain\" TEXT, PRIMARY KEY (\"id\")\n)",
-            "cursor_col": "created_at",
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"tool_trace\" (\n    \"id\" TEXT NOT NULL,\n    \"process_pid\" INTEGER,\n    \"process_started_at\" TEXT,\n    \"ts\" TEXT,\n    \"event\" TEXT,\n    \"tool_name\" TEXT,\n    \"kind\" TEXT,\n    \"duration_ms\" INTEGER,\n    \"args\" TEXT,\n    \"result_preview\" TEXT,\n    \"err_type\" TEXT,\n    \"err_msg\" TEXT,\n    \"conversation_id\" TEXT,\n    \"call_id\" TEXT,\n    \"user_id\" TEXT,\n    \"metadata\" TEXT,\n    \"created_at\" TEXT,\n    \"fault_domain\" TEXT,\n    \"updated_at\" TEXT, PRIMARY KEY (\"id\")\n)",
+            "cursor_col": "updated_at",
             "has_deleted_at": False,
             "index_sql": [
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_trace_conversation_id\" ON \"tool_trace\" (\"conversation_id\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_trace_user_id\" ON \"tool_trace\" (\"user_id\")",
+                "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_trace_updated_at\" ON \"tool_trace\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_trace_created_at\" ON \"tool_trace\" (\"created_at\")"
             ],
             "pg_types": {
@@ -1135,6 +1162,7 @@ MIRROR_TABLES = {
                 "result_preview": "text",
                 "tool_name": "text",
                 "ts": "timestamptz",
+                "updated_at": "timestamptz",
                 "user_id": "uuid"
             },
             "pk": [

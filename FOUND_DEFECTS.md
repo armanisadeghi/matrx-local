@@ -250,6 +250,24 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   Plus a CLAUDE.md hard rule + wrapper script so agents can't run the engine
   un-isolated.
 
+### MXL-D-045 — Notes bulk sync holds the engine-wide lock for the whole reconcile; the first pathless import (~800 web notes) can stall saves/deletes for minutes
+
+- **Symptom:** while `full_sync` runs, every debounced save (`push_note`), delete
+  route, and realtime pull queues behind `sync_engine._sync_lock`. Normally the
+  reconcile is seconds, but the FIRST full_sync after the 2026-07-13 overhaul
+  imports the ~814 pathless web-authored `workbench.notes` rows (one `_pull_note`
+  + one conditional file_path write-back each) and can hold the lock for minutes.
+  Typing during that window shows "Saving..." until the import finishes; the
+  saves are queued, not lost.
+- **Evidence:** `app/services/documents/sync_engine.py::full_sync` (single lock
+  scope around the whole reconcile incl. the pathless-import pass added
+  2026-07-13); every mutating entry point takes the same lock by design
+  (SYNC_CONTRACT — the lock IS the consistency mechanism for `.sync/state.json`).
+- **Proposed fix:** chunk the pathless-import pass — release and reacquire the
+  lock between batches of ~25 notes (state is persisted per `_pull_note`, so
+  interleaved saves are safe), or run the import as its own follow-up phase
+  after `full_sync` returns. One-time pain either way; fix is about first-run UX.
+
 ## Cross-repo
 
 ### MXL-D-027 — Voice E2E unconfirmed on physical hardware

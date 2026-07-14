@@ -1,6 +1,6 @@
 # Arman Tasks — Matrx Local
 
-_Last updated: 2026-07-13 (hygiene pass: GLiNER NER review closed — Arman approved, work assigned to agent; item moved to Done)_
+_Last updated: 2026-07-14 (matrx-files 0.1.5 DEPLOYED + verified live (sync endpoints 401); file_sync_mode catalog approved+synced; stale tool-registry reconcile ask deleted — solved by matrx-ai 0.4.x W1 work, server fetch verified live)_
 
 > **Ask-Arman list for agents — NOT Arman's personal inbox.** These are things
 > only Arman can do (secrets, accounts, dashboards, decisions). When one blocks
@@ -21,16 +21,6 @@ _Last updated: 2026-07-13 (hygiene pass: GLiNER NER review closed — Arman appr
 
 ## Active (ranked — quickest wins first within priority)
 
-- [ ] **matrx-files deploy STILL not live — re-run and paste the output (W3)**
-      (~2 min) — verified 2026-07-14 after your run: health is green but
-      `GET /files/sync/changes` and `/files/sync/folders` return **404** on
-      files.matrxserver.com, so the container still serves pre-0.1.4 code.
-      The drift-proof script prints a version check before swapping — re-run
-      and watch for a red failure line, then paste the tail to an agent:
-      `~/code/aidream/packages/matrx-files/deploy.sh 0.1.5`
-      (0.1.5 is the latest on PyPI; verification after = the two URLs above
-      must return 401, not 404. Agents cannot run this — the permission
-      layer hard-gates prod deploys to your terminal.)
 - [ ] **Approve official-docs update for dev/live isolation** (~2 min) — The
       MXL-D-043 fix added env vars (`MATRX_PORT_BASE`, `MATRX_LIVE_ENGINE`,
       `MATRX_INSTANCE_SALT`) and changed the `proxy_port` default to be
@@ -44,16 +34,6 @@ _Last updated: 2026-07-13 (hygiene pass: GLiNER NER review closed — Arman appr
       the engine (the process that runs `screencapture`), which is what finally
       lists it in System Settings → Privacy & Security → Screen Recording.
       macOS may need an app restart before it reads back as granted.
-- [ ] **Reconcile AIDream server ↔ matrx-ai tool registry (aidream repo)** — The
-      deployed server 404s `GET /api/ai-tools/app/matrx_local` (the endpoint
-      matrx-ai 0.1.26 from PyPI calls); the DB has migrated to the surface-based
-      system (`tool_def` + `tool_surface_defaults`) and has no `matrx_local`
-      surface. The desktop backfills its local tool definitions so chat tools
-      work without the server, but *cloud-registered* tools won't reach the
-      desktop until either: (a) matrx-ai 0.2.x+ (new protocol) is published to
-      PyPI and matrx-local bumps it, or (b) the server re-adds a compat route
-      for `/api/ai-tools/app/{source_app}`. Option (a) is the real fix — same
-      playbook as matrx-scheduler 0.3.0.
 - [ ] **Train “Hey Matrix” OWW model** — [`docs/wake-word-training.md`](../docs/wake-word-training.md)
 - [ ] **Windows EV code-signing cert** — Before broad public launch (SmartScreen).
 - [ ] **`MAIN_SERVER` URL** — For a future “real” proxy proof test (callback from server). Pick canonical production base URL.
@@ -114,6 +94,9 @@ _Skim and check off or delete. Agents: do not open `.arman/` — leave that to A
 ---
 
 ## Done
+
+- [x] matrx-files 0.1.5 deployed to files.matrxserver.com via deploy.sh (Arman, 2026-07-14) — verified: image version check passed, health green, /files/sync/* now 401 (live) — W3 cloud side ON
+- [x] file_sync_mode added to official settings catalog (Arman approved 2026-07-14)
 
 - [x] "Add your Hugging Face token" was stale and wrong to ask — verified directly against `~/.matrx/matrx.db` (2026-07-13, no secret values printed) that Arman's HF token IS already stored, encrypted, under `api_keys.huggingface`. My earlier check only looked at `.env`/environment/huggingface-cli cache, never the app's own key store — that was my mistake, not a missing key. Filed two real bugs instead: MXL-D-047 (possible resolver/startup-race causing a 401 despite a stored key — needs live repro) and MXL-D-048 (process bug: "add your X key" items don't belong in ARMAN_TASKS at all when the app can self-serve prompt) — both in `FOUND_DEFECTS.md`; MXL-D-048's fix folded into the "Proactive in-app permission + API-key prompts" task in `.matrx/AGENT_TASKS.md`
 - [x] "Accept FLUX.1-schnell license" clarified — HF gate acceptance is per-account/per-token, not app-wide; Arman clicking accept fixes nothing for other users. Confirmed the app already handles this gracefully per-user (no blow-up): `app/services/downloads/failures.py:66` `hf_gate_not_accepted` + `manager.py:1063-1068` convert the raw 401 into a friendly "Accept the license on Hugging Face" prompt with a direct link, shown to whichever user hits the gate. Nothing to fix, nothing for Arman to do system-wide — removed as purely optional/personal — 2026-07-13

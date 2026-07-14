@@ -40,6 +40,7 @@ from app.api.video_gen_routes import router as video_gen_router
 from app.api.media_library_routes import router as media_library_router
 from app.api.media_vault_routes import router as media_vault_router
 from app.api.tts_routes import router as tts_router
+from app.api.ner_routes import router as ner_router
 from app.api.openai_compat_routes import router as openai_compat_router
 from app.api.hf_token_routes import router as hf_token_router
 from app.api.scrape_routes import router as scrape_router
@@ -1373,6 +1374,7 @@ app.include_router(video_gen_router)
 app.include_router(media_library_router)
 app.include_router(media_vault_router)
 app.include_router(tts_router)
+app.include_router(ner_router)
 app.include_router(openai_compat_router)
 app.include_router(hf_token_router)
 app.include_router(scrape_router)

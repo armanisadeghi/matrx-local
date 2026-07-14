@@ -148,6 +148,14 @@ image-gen = [
     # version: 7.34.1", 2026-07-12). See installer.py IMAGE_GEN_PACKAGES.
     "huggingface_hub>=0.22.0",
 ]
+ner = [
+    # GLiNER2 local inference. The [local] extra brings torch/transformers for
+    # on-device execution; base gliner2 alone is API/schema utilities only.
+    "gliner2[local]>=1.3.2",
+    # Classic GLiNER models remain useful for edge/large/XXL tiers.
+    "gliner>=0.2.23",
+    "huggingface_hub>=0.22.0",
+]
 embeddings = [
     # Local OpenAI-compatible /v1/embeddings via ONNX Runtime.
     "fastembed>=0.7.0",

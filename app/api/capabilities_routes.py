@@ -107,6 +107,15 @@ CAPABILITY_SPECS: dict[str, dict] = {
         "size_warning": "~400–800 MB download (includes PyTorch)",
         "docs_url": "https://github.com/openai/whisper",
     },
+    "ner": {
+        "name": "Entity Extraction (GLiNER)",
+        "description": "Extract zero-shot named entities and common PII locally using GLiNER / GLiNER2. Powers local_extract_entities and local_extract_pii. Requires PyTorch — large download.",
+        "probe_module": "gliner2",
+        "packages": ["gliner2[local]", "gliner", "huggingface_hub"],
+        "install_extra": "ner",
+        "size_warning": "~1–2 GB download before model weights (includes PyTorch)",
+        "docs_url": "https://github.com/fastino-ai/GLiNER2",
+    },
     "ocr": {
         "name": "OCR (Image Text Extraction)",
         "description": "Extract text from images using Tesseract. Powers the ImageOCR tool. Tesseract data files are bundled in the sidecar — no separate system install needed.",

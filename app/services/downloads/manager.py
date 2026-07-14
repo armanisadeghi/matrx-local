@@ -43,7 +43,7 @@ from app.services.local_db.database import get_db
 logger = get_logger()
 
 DownloadStatus = Literal["queued", "active", "completed", "failed", "cancelled"]
-DownloadCategory = Literal["llm", "whisper", "image_gen", "video_gen", "tts", "file_sync"]
+DownloadCategory = Literal["llm", "whisper", "image_gen", "video_gen", "tts", "ner", "file_sync"]
 
 # Maximum number of simultaneous downloads.
 MAX_CONCURRENT = 3

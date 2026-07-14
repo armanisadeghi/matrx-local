@@ -36,6 +36,18 @@ CAPABILITY_INSTALL: dict[str, dict] = {
         "verify_imports": ["torch", "whisper"],
         "display_name": "Speech Transcription (Whisper)",
     },
+    "ner": {
+        "dir_name": "ner-packages",
+        "packages": [
+            "torch>=2.6",
+            "gliner2[local]>=1.3.2",
+            "gliner>=0.2.23",
+            "huggingface_hub>=0.22.0",
+        ],
+        "needs_torch_index": True,
+        "verify_imports": ["torch", "gliner2", "gliner", "huggingface_hub"],
+        "display_name": "Entity Extraction (GLiNER)",
+    },
 }
 
 _active: dict[str, InstallProgress] = {}

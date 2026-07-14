@@ -384,3 +384,53 @@ CURATED_LORA_CATALOG: list[dict[str, Any]] = [
         "unverified": False,
     },
 ]
+
+# Required keys on every catalog entry (must match LoraCatalogInfo's non-default
+# fields in app/api/image_gen_routes.py). A hand-added entry that omits one used
+# to raise KeyError inside the /image-gen/loras response builder and 500 the
+# whole endpoint — blanking installed styles too. The endpoint now skips bad
+# entries, and this import-time check makes an authoring mistake loud at startup
+# instead of silent until a user opens "Get more".
+_REQUIRED_CATALOG_KEYS = (
+    "repo_id",
+    "name",
+    "description",
+    "weight_name",
+    "base_family",
+    "license",
+)
+
+
+def validate_catalog() -> list[str]:
+    """Return a list of problems in CURATED_LORA_CATALOG (empty when clean).
+
+    Never raises — a malformed curated entry must degrade to "that one style is
+    missing", never crash image-gen or the engine.
+    """
+    problems: list[str] = []
+    seen_repo_ids: set[str] = set()
+    for i, e in enumerate(CURATED_LORA_CATALOG):
+        label = e.get("repo_id") or e.get("name") or f"index {i}"
+        if not isinstance(e, dict):
+            problems.append(f"entry {i} is not a dict")
+            continue
+        missing = [k for k in _REQUIRED_CATALOG_KEYS if not e.get(k)]
+        if missing:
+            problems.append(f"'{label}' missing required key(s): {', '.join(missing)}")
+        rid = e.get("repo_id")
+        if rid:
+            if rid in seen_repo_ids:
+                problems.append(f"duplicate repo_id '{rid}'")
+            seen_repo_ids.add(rid)
+    return problems
+
+
+_catalog_problems = validate_catalog()
+if _catalog_problems:
+    logger.error(
+        "[image_gen] CURATED_LORA_CATALOG has %d malformed entr%s — they will be "
+        "SKIPPED in GET /image-gen/loras (the panel stays up): %s",
+        len(_catalog_problems),
+        "y" if len(_catalog_problems) == 1 else "ies",
+        "; ".join(_catalog_problems),
+    )

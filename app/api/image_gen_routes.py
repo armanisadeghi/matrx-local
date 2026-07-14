@@ -99,8 +99,11 @@ from app.services.image_gen.installer import (
     needs_upgrade,
 )
 from app.common.route_errors import safe_route
+from app.common.system_logger import get_logger
 
 from app.api.error_envelope import EnvelopeRoute
+
+logger = get_logger()
 
 router = APIRouter(prefix="/image-gen", tags=["image-gen"], route_class=EnvelopeRoute)
 
@@ -1288,37 +1291,60 @@ async def list_image_loras() -> LorasResponse:
 
     items = list_loras()
     installed_repo_ids = {m["repo_id"] for m in items if m["installed"]}
-    return LorasResponse(
-        installed=[
-            LoraInstalledInfo(
-                id=m["id"],
-                repo_id=m["repo_id"],
-                weight_name=m["weight_name"],
-                base_family=str(m.get("base_family") or "unknown"),
-                size_bytes=int(m.get("size_bytes") or 0),
-                added_at=m.get("added_at"),
-                installed=bool(m["installed"]),
-                source=str(m.get("source") or "hf"),
+    installed_ids = {m["id"] for m in items if m["installed"]}
+
+    # FAULT ISOLATION: one malformed row must NEVER blank the whole panel.
+    # A single bad catalog/installed entry used to raise KeyError/ValidationError
+    # here and 500 the endpoint, which nulled BOTH lists in the client — so a
+    # user who added a bunch of LoRAs saw *zero* of them (including the ones that
+    # were fine). Every entry is built independently; a bad one is skipped with a
+    # loud log and the rest still render.
+    installed: list[LoraInstalledInfo] = []
+    for m in items:
+        try:
+            installed.append(
+                LoraInstalledInfo(
+                    id=m["id"],
+                    repo_id=m["repo_id"],
+                    weight_name=m["weight_name"],
+                    base_family=str(m.get("base_family") or "unknown"),
+                    size_bytes=int(m.get("size_bytes") or 0),
+                    added_at=m.get("added_at"),
+                    installed=bool(m["installed"]),
+                    source=str(m.get("source") or "hf"),
+                )
             )
-            for m in items
-        ],
-        catalog=[
-            LoraCatalogInfo(
-                repo_id=e["repo_id"],
-                name=e["name"],
-                description=e["description"],
-                weight_name=e["weight_name"],
-                base_family=e["base_family"],
-                license=e["license"],
-                source=str(e.get("source") or "hf"),
-                unverified=bool(e.get("unverified", False)),
-                installed=e["repo_id"] in installed_repo_ids
-                or lora_id_for_repo(e["repo_id"])
-                in {m["id"] for m in items if m["installed"]},
+        except Exception as exc:  # noqa: BLE001 — skip-and-scream, never 500 the list
+            logger.error(
+                "[image_gen] Skipping malformed installed LoRA %r: %s",
+                m.get("id") or m.get("repo_id"), exc,
             )
-            for e in CURATED_LORA_CATALOG
-        ],
-    )
+
+    catalog: list[LoraCatalogInfo] = []
+    for e in CURATED_LORA_CATALOG:
+        try:
+            repo_id = e["repo_id"]
+            catalog.append(
+                LoraCatalogInfo(
+                    repo_id=repo_id,
+                    name=e["name"],
+                    description=e["description"],
+                    weight_name=e["weight_name"],
+                    base_family=e["base_family"],
+                    license=e["license"],
+                    source=str(e.get("source") or "hf"),
+                    unverified=bool(e.get("unverified", False)),
+                    installed=repo_id in installed_repo_ids
+                    or lora_id_for_repo(repo_id) in installed_ids,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — a bad curated entry is a bug, not an outage
+            logger.error(
+                "[image_gen] Skipping malformed catalog LoRA %r: %s",
+                e.get("repo_id") or e.get("name"), exc,
+            )
+
+    return LorasResponse(installed=installed, catalog=catalog)
 
 
 @router.post("/loras/download", response_model=LoraDownloadResponse)

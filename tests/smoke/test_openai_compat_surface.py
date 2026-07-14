@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -198,3 +199,92 @@ def test_non_stream_proxy_uses_finite_read_timeout() -> None:
 
     assert _STREAM_TIMEOUT.read is None
     assert _NON_STREAM_TIMEOUT.read == 300.0
+
+
+@dataclass
+class _FakeTtsResult:
+    success: bool
+    audio_bytes: bytes | None = None
+    voice_id: str = "af_heart"
+    duration_seconds: float = 1.25
+    sample_rate: int = 24000
+    error: str | None = None
+    error_code: str | None = None
+
+
+class _FakeTtsService:
+    def __init__(self, *, downloaded: bool = True, result: _FakeTtsResult | None = None):
+        self.model_downloaded = downloaded
+        self.result = result or _FakeTtsResult(success=True, audio_bytes=b"RIFFfake-wav")
+        self.calls: list[dict[str, Any]] = []
+        self.background_download_checked = False
+
+    def maybe_start_background_download(self) -> None:
+        self.background_download_checked = True
+
+    async def synthesize(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.result
+
+
+def test_audio_speech_returns_wav(v1_app: FastAPI, monkeypatch: pytest.MonkeyPatch):
+    from app.api import openai_compat_routes
+
+    svc = _FakeTtsService()
+    monkeypatch.setattr(openai_compat_routes, "_get_tts_service", lambda: svc)
+
+    async def _run() -> None:
+        async with _client(v1_app) as client:
+            r = await client.post(
+                "/v1/audio/speech",
+                json={
+                    "model": "tts-1",
+                    "input": "hello",
+                    "voice": "af_heart",
+                    "response_format": "wav",
+                    "speed": 1.1,
+                },
+            )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("audio/wav")
+        assert r.content == b"RIFFfake-wav"
+
+    asyncio.run(_run())
+    assert svc.calls == [
+        {"text": "hello", "voice_id": "af_heart", "speed": 1.1, "lang": None}
+    ]
+
+
+def test_audio_speech_requires_downloaded_model(
+    v1_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.api import openai_compat_routes
+
+    svc = _FakeTtsService(downloaded=False)
+    monkeypatch.setattr(openai_compat_routes, "_get_tts_service", lambda: svc)
+
+    async def _run() -> None:
+        async with _client(v1_app) as client:
+            r = await client.post(
+                "/v1/audio/speech",
+                json={"input": "hello", "voice": "af_heart"},
+            )
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "model_not_downloaded"
+
+    asyncio.run(_run())
+    assert svc.background_download_checked is True
+
+
+def test_audio_speech_rejects_unsupported_format(v1_app: FastAPI):
+    async def _run() -> None:
+        async with _client(v1_app) as client:
+            r = await client.post(
+                "/v1/audio/speech",
+                json={"input": "hello", "voice": "af_heart", "response_format": "mp3"},
+            )
+        assert r.status_code == 400
+        assert r.json()["error"]["code"] == "unsupported_response_format"
+
+    asyncio.run(_run())

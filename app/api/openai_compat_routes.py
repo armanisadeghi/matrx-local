@@ -258,3 +258,110 @@ async def chat_completions(request: Request) -> Response:
         media_type=upstream.headers.get("content-type", "application/json"),
         headers=_response_headers(upstream.headers),
     )
+
+
+def _get_tts_service():
+    from app.services.tts.service import get_tts_service
+
+    return get_tts_service()
+
+
+@router.post("/audio/speech")
+async def audio_speech(request: Request) -> Response:
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        return _openai_error(
+            "Request body must be valid JSON.",
+            status_code=400,
+            code="invalid_json",
+        )
+
+    if not isinstance(payload, dict):
+        return _openai_error(
+            "Request body must be a JSON object.",
+            status_code=400,
+            code="invalid_request",
+        )
+
+    text = payload.get("input")
+    if not isinstance(text, str) or not text.strip():
+        return _openai_error(
+            "Missing required parameter: 'input'.",
+            status_code=400,
+            code="missing_required_parameter",
+            param="input",
+        )
+
+    response_format = str(payload.get("response_format") or "wav").lower()
+    if response_format != "wav":
+        return _openai_error(
+            "Only response_format='wav' is currently supported by the local TTS engine.",
+            status_code=400,
+            code="unsupported_response_format",
+            param="response_format",
+        )
+
+    voice = str(payload.get("voice") or "af_heart")
+    speed_raw = payload.get("speed", 1.0)
+    try:
+        speed = float(speed_raw)
+    except (TypeError, ValueError):
+        return _openai_error(
+            "Parameter 'speed' must be a number.",
+            status_code=400,
+            code="invalid_type",
+            param="speed",
+        )
+    if speed < 0.5 or speed > 2.0:
+        return _openai_error(
+            "Parameter 'speed' must be between 0.5 and 2.0.",
+            status_code=400,
+            code="invalid_value",
+            param="speed",
+        )
+
+    svc = _get_tts_service()
+    if not svc.model_downloaded:
+        try:
+            svc.maybe_start_background_download()
+        except Exception:
+            logger.debug("[openai_compat] TTS background download check failed", exc_info=True)
+        return _openai_error(
+            "The local TTS model is not downloaded on this machine.",
+            status_code=409,
+            code="model_not_downloaded",
+            param="model",
+        )
+
+    result = await svc.synthesize(
+        text=text.strip(),
+        voice_id=voice,
+        speed=speed,
+        lang=payload.get("lang") if isinstance(payload.get("lang"), str) else None,
+    )
+    if not result.success or result.audio_bytes is None:
+        code = result.error_code or "tts_synthesis_failed"
+        status = {
+            "voice_not_found": 404,
+            "invalid_id": 400,
+            "empty_text": 400,
+            "model_not_downloaded": 409,
+            "model_missing": 503,
+        }.get(code, 500)
+        return _openai_error(
+            result.error or "Local TTS synthesis failed.",
+            status_code=status,
+            code=code,
+            param="voice" if code == "voice_not_found" else None,
+        )
+
+    return Response(
+        content=result.audio_bytes,
+        media_type="audio/wav",
+        headers={
+            "X-TTS-Voice": result.voice_id,
+            "X-TTS-Duration": str(result.duration_seconds),
+            "X-TTS-Sample-Rate": str(result.sample_rate),
+        },
+    )

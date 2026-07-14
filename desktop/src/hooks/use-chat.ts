@@ -67,6 +67,7 @@ export type ConversationRouteMode = "chat" | "agent" | "conversation";
 export interface Conversation {
   id: string;
   title: string;
+  description?: string;
   mode: ChatMode;
   model: string;
   messages: ChatMessage[];

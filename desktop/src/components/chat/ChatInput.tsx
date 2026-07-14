@@ -28,6 +28,7 @@ interface ChatInputProps {
   selectedAgentId?: string | null;
   onAgentChange?: (agentId: string | null) => void;
   agentsLoading?: boolean;
+  showModelSelector?: boolean;
 }
 
 const modeLabels: Record<ChatMode, string> = {
@@ -51,6 +52,7 @@ export function ChatInput({
   selectedAgentId = null,
   onAgentChange,
   agentsLoading = false,
+  showModelSelector = true,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
   const [showModelDropdown, setShowModelDropdown] = useState(false);
@@ -204,45 +206,93 @@ export function ChatInput({
             )}
 
             {/* Model selector */}
-            <div className="relative" ref={dropdownRef}>
-              <button
-                onClick={() => setShowModelDropdown(!showModelDropdown)}
-                className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-              >
-                {isLocalModel && (
-                  <Cpu className="h-3 w-3 text-blue-500 shrink-0" />
-                )}
-                <span className="max-w-[140px] truncate">
-                  {selectedModel?.label ?? "Select model"}
-                </span>
-                <ChevronDown className="h-3 w-3" />
-              </button>
-
-              {showModelDropdown && (
-                <div className="glass absolute bottom-full left-0 mb-1.5 min-w-[260px] max-h-80 overflow-y-auto rounded-lg p-1.5">
-                  {/* Empty state — engine not connected or models not yet synced */}
-                  {availableModels.length === 0 && (
-                    <div className="px-3 py-4 text-center text-[11px] text-muted-foreground">
-                      No models available.
-                      <br />
-                      Connect to engine to load models.
-                    </div>
+            {showModelSelector && (
+              <div className="relative" ref={dropdownRef}>
+                <button
+                  onClick={() => setShowModelDropdown(!showModelDropdown)}
+                  className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {isLocalModel && (
+                    <Cpu className="h-3 w-3 text-blue-500 shrink-0" />
                   )}
-                  {/* Confidential Chat (on-device) models — shown first if any exist */}
-                  {availableModels.some((m) => m.provider === "local") && (
-                    <div>
-                      <div className="flex items-center gap-1.5 px-3 pt-2 pb-1">
-                        <Cpu className="h-3 w-3 text-blue-500" />
-                        <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-500/80">
-                          Confidential Chat
-                        </span>
-                        <span className="ml-1 rounded-full bg-green-500/20 px-1.5 py-0.5 text-[9px] font-medium text-green-600">
-                          On-device
-                        </span>
+                  <span className="max-w-[140px] truncate">
+                    {selectedModel?.label ?? "Select model"}
+                  </span>
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+
+                {showModelDropdown && (
+                  <div className="glass absolute bottom-full left-0 mb-1.5 min-w-[260px] max-h-80 overflow-y-auto rounded-lg p-1.5">
+                    {/* Empty state — engine not connected or models not yet synced */}
+                    {availableModels.length === 0 && (
+                      <div className="px-3 py-4 text-center text-[11px] text-muted-foreground">
+                        No models available.
+                        <br />
+                        Connect to engine to load models.
                       </div>
-                      {availableModels
-                        .filter((m) => m.provider === "local")
-                        .map((m) => (
+                    )}
+                    {/* Confidential Chat (on-device) models — shown first if any exist */}
+                    {availableModels.some((m) => m.provider === "local") && (
+                      <div>
+                        <div className="flex items-center gap-1.5 px-3 pt-2 pb-1">
+                          <Cpu className="h-3 w-3 text-blue-500" />
+                          <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-500/80">
+                            Confidential Chat
+                          </span>
+                          <span className="ml-1 rounded-full bg-green-500/20 px-1.5 py-0.5 text-[9px] font-medium text-green-600">
+                            On-device
+                          </span>
+                        </div>
+                        {availableModels
+                          .filter((m) => m.provider === "local")
+                          .map((m) => (
+                            <button
+                              key={m.id}
+                              onClick={() => {
+                                onModelChange(m.id);
+                                setShowModelDropdown(false);
+                              }}
+                              className={cn(
+                                "flex w-full items-center rounded-md px-3 py-2 text-left text-xs transition-colors",
+                                model === m.id
+                                  ? "bg-accent text-accent-foreground"
+                                  : "text-foreground hover:bg-accent/50",
+                              )}
+                            >
+                              <Cpu className="h-3 w-3 text-blue-500 mr-2 shrink-0" />
+                              <span className="font-medium">{m.label}</span>
+                              <span className="ml-auto text-[10px] text-blue-500">
+                                local
+                              </span>
+                            </button>
+                          ))}
+                        {availableModels.some(
+                          (m) => m.provider !== "local",
+                        ) && (
+                          <div className="my-1.5 border-t border-border/50" />
+                        )}
+                      </div>
+                    )}
+
+                    {/* Cloud Models grouped by provider */}
+                    {Object.entries(
+                      availableModels
+                        .filter((m) => m.provider !== "local")
+                        .reduce<Record<string, typeof availableModels>>(
+                          (acc, m) => {
+                            const p = m.provider ?? "other";
+                            if (!acc[p]) acc[p] = [];
+                            acc[p].push(m);
+                            return acc;
+                          },
+                          {},
+                        ),
+                    ).map(([provider, models]) => (
+                      <div key={provider}>
+                        <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                          {provider}
+                        </div>
+                        {models.map((m) => (
                           <button
                             key={m.id}
                             onClick={() => {
@@ -256,64 +306,20 @@ export function ChatInput({
                                 : "text-foreground hover:bg-accent/50",
                             )}
                           >
-                            <Cpu className="h-3 w-3 text-blue-500 mr-2 shrink-0" />
                             <span className="font-medium">{m.label}</span>
-                            <span className="ml-auto text-[10px] text-blue-500">
-                              local
-                            </span>
+                            {m.default && (
+                              <span className="ml-auto text-[10px] text-muted-foreground">
+                                default
+                              </span>
+                            )}
                           </button>
                         ))}
-                      {availableModels.some((m) => m.provider !== "local") && (
-                        <div className="my-1.5 border-t border-border/50" />
-                      )}
-                    </div>
-                  )}
-
-                  {/* Cloud Models grouped by provider */}
-                  {Object.entries(
-                    availableModels
-                      .filter((m) => m.provider !== "local")
-                      .reduce<Record<string, typeof availableModels>>(
-                        (acc, m) => {
-                          const p = m.provider ?? "other";
-                          if (!acc[p]) acc[p] = [];
-                          acc[p].push(m);
-                          return acc;
-                        },
-                        {},
-                      ),
-                  ).map(([provider, models]) => (
-                    <div key={provider}>
-                      <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                        {provider}
                       </div>
-                      {models.map((m) => (
-                        <button
-                          key={m.id}
-                          onClick={() => {
-                            onModelChange(m.id);
-                            setShowModelDropdown(false);
-                          }}
-                          className={cn(
-                            "flex w-full items-center rounded-md px-3 py-2 text-left text-xs transition-colors",
-                            model === m.id
-                              ? "bg-accent text-accent-foreground"
-                              : "text-foreground hover:bg-accent/50",
-                          )}
-                        >
-                          <span className="font-medium">{m.label}</span>
-                          {m.default && (
-                            <span className="ml-auto text-[10px] text-muted-foreground">
-                              default
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Right: Send / Stop */}

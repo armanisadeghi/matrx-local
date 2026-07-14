@@ -20,6 +20,44 @@ import {
 
 const STORAGE_KEY = "matrx-cloud-chat-conversations";
 const MAX_CONVERSATIONS = 100;
+const CLOUD_SOURCE_APP = "matrx-desktop";
+const CLOUD_SOURCE_FEATURE = "chat-route";
+const CHAT_HISTORY_FEATURES = ["chat-route", "chat-interface", "quick-chat"];
+const HISTORY_COLUMNS =
+  "id, title, description, status, message_count, initial_agent_id, last_model_id, source_app, source_feature, created_at, updated_at";
+
+interface CloudConversationRow {
+  id: string;
+  title?: string | null;
+  description?: string | null;
+  initial_agent_id?: string | null;
+  last_model_id?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+interface CloudMessageRow {
+  id: string;
+  role?: string | null;
+  content?: unknown;
+  user_content?: unknown;
+  model_context?: unknown;
+  error?: unknown;
+  created_at?: string | null;
+  updated_at?: string | null;
+  position?: number | null;
+}
+
+interface ExtractedContent {
+  answer: string;
+  reasoning: string;
+  diagnostics: string[];
+}
+
+interface BlockAccumulatorEntry {
+  index: number;
+  text: string;
+}
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -101,12 +139,18 @@ function buildRequest(
       body: {
         user_input: userContent,
         stream: true,
+        source_app: CLOUD_SOURCE_APP,
+        source_feature: CLOUD_SOURCE_FEATURE,
       },
     };
   }
 
   if (options?.agentId) {
-    const body: Record<string, unknown> = { stream: true };
+    const body: Record<string, unknown> = {
+      stream: true,
+      source_app: CLOUD_SOURCE_APP,
+      source_feature: CLOUD_SOURCE_FEATURE,
+    };
     if (userContent) body.user_input = userContent;
     if (options.variables && Object.keys(options.variables).length > 0) {
       body.variables = options.variables;
@@ -124,6 +168,8 @@ function buildRequest(
       messages: toApiMessages(allMessages),
       stream: true,
       max_iterations: 20,
+      source_app: CLOUD_SOURCE_APP,
+      source_feature: CLOUD_SOURCE_FEATURE,
     },
   };
 }
@@ -262,6 +308,267 @@ function describeDataEvent(data: TypedDataPayload | UntypedDataPayload): string 
   }
 }
 
+function normalizeRole(role: string | null | undefined): ChatMessage["role"] {
+  return role === "assistant" || role === "system" ? role : "user";
+}
+
+function mergeText(parts: string[]): string {
+  return parts
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function splitInlineReasoning(raw: string): { answer: string; reasoning: string } {
+  let answer = "";
+  let reasoning = "";
+  let cursor = 0;
+  const openingTag = /<(thinking|reasoning|think)\b[^>]*>/i;
+
+  while (cursor < raw.length) {
+    const rest = raw.slice(cursor);
+    const match = openingTag.exec(rest);
+    if (!match || match.index < 0) {
+      answer += rest;
+      break;
+    }
+
+    const tag = match[1]?.toLowerCase();
+    if (!tag) {
+      answer += rest;
+      break;
+    }
+    const start = cursor + match.index;
+    const contentStart = start + match[0].length;
+    answer += raw.slice(cursor, start);
+
+    const closingTag = new RegExp(`</${tag}>`, "i");
+    const closeMatch = closingTag.exec(raw.slice(contentStart));
+    if (!closeMatch || closeMatch.index < 0) {
+      reasoning += raw.slice(contentStart);
+      break;
+    }
+
+    reasoning += raw.slice(contentStart, contentStart + closeMatch.index);
+    cursor = contentStart + closeMatch.index + closeMatch[0].length;
+  }
+
+  return { answer, reasoning };
+}
+
+function extractTextFromRecord(record: Record<string, unknown> | null): string | null {
+  if (!record) return null;
+  return (
+    readString(record.text) ??
+    readString(record.content) ??
+    readString(record.markdown) ??
+    readString(record.value) ??
+    readString(record.output) ??
+    readString(record.transcript)
+  );
+}
+
+function renderBlockText(blockType: string, content: string | null, data: Record<string, unknown> | null): string | null {
+  const direct = content ?? extractTextFromRecord(data);
+  if (direct) {
+    if (blockType === "code") {
+      const language = readString(data?.language) ?? "";
+      return `\`\`\`${language}\n${direct}\n\`\`\``;
+    }
+    if (blockType === "mermaid") {
+      return `\`\`\`mermaid\n${direct}\n\`\`\``;
+    }
+    return direct;
+  }
+
+  const url =
+    readString(data?.url) ??
+    readString(data?.cdn_url) ??
+    readString(data?.signed_url) ??
+    readString(data?.download_url);
+  if (!url) return null;
+  if (blockType === "image") return `![Generated image](${url})`;
+  return `[${humanizeToken(blockType)}](${url})`;
+}
+
+function isReasoningBlockType(blockType: string): boolean {
+  return (
+    blockType === "thinking" ||
+    blockType === "reasoning" ||
+    blockType === "consolidated_reasoning" ||
+    blockType === "private"
+  );
+}
+
+function contentPartToExtracted(part: unknown): ExtractedContent {
+  if (typeof part === "string") {
+    const split = splitInlineReasoning(part);
+    return { answer: split.answer, reasoning: split.reasoning, diagnostics: [] };
+  }
+
+  const record = readRecord(part);
+  if (!record) return { answer: "", reasoning: "", diagnostics: [] };
+
+  const type = readString(record.type) ?? "text";
+  if (type === "thinking" || type === "reasoning" || type === "consolidated_reasoning") {
+    return {
+      answer: "",
+      reasoning: readString(record.text) ?? readString(record.content) ?? "",
+      diagnostics: [],
+    };
+  }
+
+  if (type === "text") {
+    const split = splitInlineReasoning(readString(record.text) ?? readString(record.content) ?? "");
+    return { answer: split.answer, reasoning: split.reasoning, diagnostics: [] };
+  }
+
+  if (type === "media") {
+    const kind = readString(record.kind) ?? "media";
+    const url = readString(record.url);
+    if (!url) return { answer: "", reasoning: "", diagnostics: [] };
+    return {
+      answer: kind === "image" ? `![Image](${url})` : `[${humanizeToken(kind)}](${url})`,
+      reasoning: "",
+      diagnostics: [],
+    };
+  }
+
+  if (type === "code_exec") {
+    const language = readString(record.language) ?? "";
+    const code = readString(record.code);
+    return {
+      answer: code ? `\`\`\`${language}\n${code}\n\`\`\`` : "",
+      reasoning: "",
+      diagnostics: [],
+    };
+  }
+
+  if (type === "code_result") {
+    return {
+      answer: readString(record.output) ?? "",
+      reasoning: "",
+      diagnostics: readString(record.outcome) ? [`Code result: ${record.outcome}`] : [],
+    };
+  }
+
+  if (type === "tool_call" || type === "tool_result" || type === "web_search") {
+    const name = readString(record.name) ?? readString(record.call_id) ?? type;
+    return {
+      answer: "",
+      reasoning: "",
+      diagnostics: [`${humanizeToken(type)}: ${name}`],
+    };
+  }
+
+  const fallback = extractTextFromRecord(record);
+  if (!fallback) return { answer: "", reasoning: "", diagnostics: [] };
+  const split = splitInlineReasoning(fallback);
+  return { answer: split.answer, reasoning: split.reasoning, diagnostics: [] };
+}
+
+function extractMessageContent(content: unknown): ExtractedContent {
+  if (typeof content === "string") {
+    const split = splitInlineReasoning(content);
+    return { answer: split.answer.trim(), reasoning: split.reasoning.trim(), diagnostics: [] };
+  }
+
+  if (Array.isArray(content)) {
+    const extracted = content.map(contentPartToExtracted);
+    return {
+      answer: mergeText(extracted.map((item) => item.answer)),
+      reasoning: mergeText(extracted.map((item) => item.reasoning)),
+      diagnostics: extracted.flatMap((item) => item.diagnostics),
+    };
+  }
+
+  const record = readRecord(content);
+  if (!record) return { answer: "", reasoning: "", diagnostics: [] };
+
+  const text = extractTextFromRecord(record);
+  if (!text) return { answer: "", reasoning: "", diagnostics: [] };
+  const split = splitInlineReasoning(text);
+  return { answer: split.answer.trim(), reasoning: split.reasoning.trim(), diagnostics: [] };
+}
+
+function conversationRowToConversation(row: CloudConversationRow): Conversation {
+  const createdAt = row.created_at ?? new Date().toISOString();
+  const updatedAt = row.updated_at ?? createdAt;
+  return {
+    id: row.id,
+    title: row.title?.trim() || "New Conversation",
+    mode: "chat",
+    model: row.last_model_id ?? "",
+    messages: [],
+    created_at: createdAt,
+    updated_at: updatedAt,
+    serverConversationId: row.id,
+    routeMode: "conversation",
+    ...(row.description?.trim() ? { description: row.description.trim() } : {}),
+    ...(row.initial_agent_id ? { agentId: row.initial_agent_id } : {}),
+  };
+}
+
+function messageRowToChatMessage(row: CloudMessageRow): ChatMessage {
+  const extracted = extractMessageContent(row.content ?? row.user_content);
+  const errRecord = readRecord(row.error);
+  const error =
+    readString(errRecord?.user_message) ??
+    readString(errRecord?.message) ??
+    readString(errRecord?.code) ??
+    null;
+  return {
+    id: row.id,
+    role: normalizeRole(row.role),
+    content: extracted.answer,
+    timestamp: row.created_at ?? row.updated_at ?? new Date().toISOString(),
+    ...(extracted.reasoning ? { reasoning: extracted.reasoning } : {}),
+    ...(extracted.diagnostics.length > 0 ? { streamDiagnostics: extracted.diagnostics } : {}),
+    ...(error ? { error } : {}),
+  };
+}
+
+function sortConversations(items: Conversation[]): Conversation[] {
+  return [...items].sort(
+    (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+  );
+}
+
+function mergeRemoteConversations(
+  current: Conversation[],
+  remoteRows: CloudConversationRow[],
+): Conversation[] {
+  const remote = remoteRows.map(conversationRowToConversation);
+  const consumedLocalIds = new Set<string>();
+  const merged = remote.map((remoteConversation) => {
+    const existing = current.find(
+      (item) =>
+        item.id === remoteConversation.id ||
+        item.serverConversationId === remoteConversation.serverConversationId,
+    );
+    if (!existing) return remoteConversation;
+    consumedLocalIds.add(existing.id);
+    return {
+      ...remoteConversation,
+      id: existing.id,
+      messages: existing.messages.length > 0 ? existing.messages : remoteConversation.messages,
+      created_at: existing.created_at || remoteConversation.created_at,
+      updated_at:
+        new Date(existing.updated_at).getTime() > new Date(remoteConversation.updated_at).getTime()
+          ? existing.updated_at
+          : remoteConversation.updated_at,
+    };
+  });
+
+  const localOnly = current.filter(
+    (item) =>
+      !consumedLocalIds.has(item.id) &&
+      (!item.serverConversationId || item.messages.length > 0),
+  );
+
+  return sortConversations([...merged, ...localOnly]).slice(0, MAX_CONVERSATIONS);
+}
+
 export function useCloudChat() {
   const [conversations, setConversations] = useState<Conversation[]>(() =>
     loadConversations().sort(
@@ -275,6 +582,8 @@ export function useCloudChat() {
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [modelError, setModelError] = useState<string | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const conversationsRef = useRef(conversations);
 
@@ -310,7 +619,6 @@ export function useCloudChat() {
             return modelOption;
         });
         setAvailableModels(mapped);
-        setModel((prev) => prev || mapped[0]?.id || "");
         setModelError(null);
       })
       .catch((error: unknown) => {
@@ -324,6 +632,79 @@ export function useCloudChat() {
 
   const activeConversation =
     conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
+
+  const refreshConversations = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      let query = supabase
+        .schema("chat")
+        .from("conversation")
+        .select(HISTORY_COLUMNS)
+        .is("deleted_at", null)
+        .eq("is_ephemeral", false)
+        .order("updated_at", { ascending: false })
+        .range(0, MAX_CONVERSATIONS - 1);
+
+      query = query.or(`source_feature.in.(${CHAT_HISTORY_FEATURES.join(",")})`);
+
+      const { data, error } = await query;
+      if (error) throw error;
+      setConversations((prev) =>
+        mergeRemoteConversations(prev, (data ?? []) as CloudConversationRow[]),
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Failed to load cloud conversations";
+      setHistoryError(message);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshConversations();
+  }, [refreshConversations]);
+
+  const hydrateConversationMessages = useCallback(async (id: string) => {
+    const target = conversationsRef.current.find((item) => item.id === id);
+    if (!target || target.messages.length > 0) return;
+
+    const serverConversationId = target.serverConversationId ?? target.id;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const { data, error } = await supabase
+        .schema("chat")
+        .from("message")
+        .select("*")
+        .eq("conversation_id", serverConversationId)
+        .is("deleted_at", null)
+        .eq("is_visible_to_user", true)
+        .order("position", { ascending: true })
+        .order("created_at", { ascending: true })
+        .limit(200);
+
+      if (error) throw error;
+      const messages = ((data ?? []) as CloudMessageRow[]).map(messageRowToChatMessage);
+      setConversations((prev) =>
+        prev.map((conversation) =>
+          conversation.id === id
+            ? {
+                ...conversation,
+                messages,
+              }
+            : conversation,
+        ),
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Failed to load conversation messages";
+      setHistoryError(message);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
 
   const createConversation = useCallback(
     (initialMode?: ChatMode): Conversation => {
@@ -350,8 +731,9 @@ export function useCloudChat() {
     if (conversation) {
       setMode(conversation.mode);
       setModel(conversation.model);
+      void hydrateConversationMessages(id);
     }
-  }, []);
+  }, [hydrateConversationMessages]);
 
   const deleteConversation = useCallback(
     (id: string) => {
@@ -498,18 +880,26 @@ export function useCloudChat() {
       const updateConversationMeta = (patch: Partial<Conversation>) => {
         setConversations((prev) =>
           prev.map((conversation) =>
-            conversation.id === conversationId ? { ...conversation, ...patch } : conversation,
+            conversation.id === conversationId ||
+            (patch.serverConversationId &&
+              conversation.serverConversationId === patch.serverConversationId)
+              ? { ...conversation, ...patch }
+              : conversation,
           ),
         );
       };
 
       setIsStreaming(true);
       let accumulated = "";
+      let rawAnswer = "";
       let reasoning = "";
+      let inlineReasoning = "";
       let eventCount = 0;
       let sawTerminalEvent = false;
       let lastStatus = "Connecting to AIDream...";
       let diagnostics: string[] = [];
+      const answerRenderBlocks = new Map<string, BlockAccumulatorEntry>();
+      const reasoningRenderBlocks = new Map<string, BlockAccumulatorEntry>();
 
       const setStatus = (status: string) => {
         lastStatus = status;
@@ -519,6 +909,45 @@ export function useCloudChat() {
       const addDiagnostic = (message: string) => {
         diagnostics = [...diagnostics, message].slice(-12);
         updateAssistant({ streamDiagnostics: diagnostics });
+      };
+
+      const combinedReasoning = () =>
+        mergeText([
+          reasoning,
+          inlineReasoning,
+          ...[...reasoningRenderBlocks.values()]
+            .sort((a, b) => a.index - b.index)
+            .map((entry) => entry.text),
+        ]);
+
+      const updateReasoning = (status?: string) => {
+        updateAssistant({
+          reasoning: combinedReasoning(),
+          ...(status ? { streamStatus: status } : {}),
+        });
+      };
+
+      const applyAnswerText = (nextRawAnswer: string) => {
+        rawAnswer = nextRawAnswer;
+        const split = splitInlineReasoning(rawAnswer);
+        accumulated = split.answer;
+        inlineReasoning = split.reasoning;
+        updateAssistant({
+          content: accumulated,
+          reasoning: combinedReasoning(),
+          isStreaming: true,
+          streamStatus: "Generating response...",
+        });
+      };
+
+      const applyRenderAnswerBlocks = () => {
+        if (rawAnswer) return;
+        accumulated = mergeText(
+          [...answerRenderBlocks.values()]
+            .sort((a, b) => a.index - b.index)
+            .map((entry) => entry.text),
+        );
+        updateAssistant({ content: accumulated });
       };
 
       try {
@@ -578,21 +1007,13 @@ export function useCloudChat() {
 
           switch (event.event) {
             case EventType.CHUNK: {
-              accumulated += event.data.text;
-              updateAssistant({
-                content: accumulated,
-                isStreaming: true,
-                streamStatus: "Generating response...",
-              });
+              applyAnswerText(rawAnswer + event.data.text);
               break;
             }
 
             case EventType.REASONING_CHUNK: {
               reasoning += event.data.text;
-              updateAssistant({
-                reasoning,
-                streamStatus: "Reasoning...",
-              });
+              updateReasoning("Reasoning...");
               break;
             }
 
@@ -648,7 +1069,20 @@ export function useCloudChat() {
                 }
               } else if (type === "conversation_labeled") {
                 const title = readString(record?.title);
-                if (title) updateConversationMeta({ title });
+                const description = readString(record?.description);
+                const labeledConversationId = readString(record?.conversation_id);
+                if (title || description || labeledConversationId) {
+                  updateConversationMeta({
+                    ...(title ? { title } : {}),
+                    ...(description ? { description } : {}),
+                    ...(labeledConversationId
+                      ? {
+                          serverConversationId: labeledConversationId,
+                          routeMode: "conversation" as ConversationRouteMode,
+                        }
+                      : {}),
+                  });
+                }
               } else if (
                 type === "image_output" ||
                 type === "audio_output" ||
@@ -689,8 +1123,7 @@ export function useCloudChat() {
               sawTerminalEvent = true;
               const output = completionText(event.data.result);
               if (output && !accumulated) {
-                accumulated = output;
-                updateAssistant({ content: accumulated });
+                applyAnswerText(output);
               }
 
               if (event.data.status === "failed" || event.data.status === "cancelled") {
@@ -749,14 +1182,27 @@ export function useCloudChat() {
             case EventType.RENDER_BLOCK: {
               const blockType = event.data.type;
               const content = readString(event.data.content);
-              if (
-                content &&
-                (blockType === "text" || blockType === "markdown") &&
-                event.data.status === "complete" &&
-                !accumulated
-              ) {
-                accumulated = content;
-                updateAssistant({ content: accumulated });
+              const blockText = renderBlockText(blockType, content, event.data.data ?? null);
+              const blockId = event.data.blockId || `${event.data.blockIndex}-${blockType}`;
+
+              if (blockText) {
+                if (isReasoningBlockType(blockType)) {
+                  reasoningRenderBlocks.set(blockId, {
+                    index: event.data.blockIndex,
+                    text: blockText,
+                  });
+                  updateReasoning(
+                    blockType === "thinking" || blockType === "reasoning"
+                      ? "Reasoning..."
+                      : undefined,
+                  );
+                } else if (event.data.status === "complete" || !answerRenderBlocks.has(blockId)) {
+                  answerRenderBlocks.set(blockId, {
+                    index: event.data.blockIndex,
+                    text: blockText,
+                  });
+                  applyRenderAnswerBlocks();
+                }
               }
 
               if (event.data.status === "error") {
@@ -891,9 +1337,10 @@ export function useCloudChat() {
         }
       } finally {
         setIsStreaming(false);
+        void refreshConversations();
       }
     },
-    [activeConversationId, createConversation, isStreaming, mode, model],
+    [activeConversationId, createConversation, isStreaming, mode, model, refreshConversations],
   );
 
   const stopStreaming = useCallback(() => {
@@ -926,6 +1373,8 @@ export function useCloudChat() {
     availableModels,
     modelError,
     requestError,
+    historyError,
+    historyLoading,
     groupedConversations,
     createConversation,
     selectConversation,
@@ -934,6 +1383,7 @@ export function useCloudChat() {
     sendMessage,
     stopStreaming,
     clearConversations,
+    refreshConversations,
     setMode,
     setModel,
   };

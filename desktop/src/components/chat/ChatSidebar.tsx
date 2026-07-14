@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import {
   Plus,
   Search,
@@ -27,6 +27,7 @@ interface ChatSidebarProps {
   onNew: () => void;
   onDelete: (id: string) => void;
   onRename: (id: string, title: string) => void;
+  headerContent?: ReactNode;
 }
 
 export function ChatSidebar({
@@ -38,6 +39,7 @@ export function ChatSidebar({
   onNew,
   onDelete,
   onRename,
+  headerContent,
 }: ChatSidebarProps) {
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -108,16 +110,19 @@ export function ChatSidebar({
   return (
     <div className="flex h-full w-64 flex-col border-r bg-sidebar">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-3">
+      <div className="flex items-center gap-2 px-3 py-3">
         <button
+          type="button"
           className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
           onClick={onToggle}
         >
           <PanelLeftClose className="h-4 w-4" />
         </button>
+        <div className="min-w-0 flex-1">{headerContent}</div>
         <Tooltip delayDuration={0}>
           <TooltipTrigger asChild>
             <button
+              type="button"
               className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
               onClick={onNew}
             >

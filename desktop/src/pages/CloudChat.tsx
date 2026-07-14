@@ -5,27 +5,19 @@ import {
   Loader2,
   MessageSquarePlus,
   RefreshCw,
-  Sparkles,
 } from "lucide-react";
 import { AgentPicker } from "@/components/chat/AgentPicker";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessages } from "@/components/chat/ChatMessages";
 import { ChatSidebar } from "@/components/chat/ChatSidebar";
 import { GuidedVariableInputs } from "@/components/chat/GuidedVariableInputs";
-import { PageHeader } from "@/components/layout/PageHeader";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useCloudAgents } from "@/hooks/use-cloud-agents";
 import { useCloudChat } from "@/hooks/use-cloud-chat";
 import { cn } from "@/lib/utils";
 import type { AgentInfo, PromptVariable } from "@/types/agents";
 
-const CLOUD_SUGGESTIONS = [
-  "Help me outline a product spec for a desktop Cloud Chat migration.",
-  "Summarize the differences between local and cloud AI workflows.",
-  "Draft a test checklist for agent variables and streaming chat.",
-  "Create a concise implementation plan for a complex React feature.",
-];
+const DEFAULT_GENERAL_CHAT_AGENT_ID = "6b6b4e45-4699-4860-8dea-d8a60e07d69a";
 
 function defaultVariableValues(variables: PromptVariable[]): Record<string, string> {
   const defaults: Record<string, string> = {};
@@ -35,39 +27,26 @@ function defaultVariableValues(variables: PromptVariable[]): Record<string, stri
   return defaults;
 }
 
-function CloudWelcome({
-  activeAgent,
-  onSuggestionClick,
-}: {
-  activeAgent: AgentInfo | null;
-  onSuggestionClick: (prompt: string) => void;
-}) {
+function findDefaultAgent(agents: AgentInfo[]): AgentInfo | null {
   return (
-    <div className="flex h-full flex-col items-center justify-center px-4">
-      <div className="mb-8 flex flex-col items-center text-center">
-        <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/90 text-primary-foreground">
-          <Cloud className="h-8 w-8" />
-        </div>
-        <h2 className="mb-1.5 text-2xl font-semibold">Cloud Chat</h2>
-        <p className="max-w-xl text-sm text-muted-foreground">
-          {activeAgent
-            ? `Ready to run ${activeAgent.name} with cloud conversation state.`
-            : "Choose an agent in the header or start with a model-backed cloud chat."}
-        </p>
-      </div>
+    agents.find((agent) => agent.id === DEFAULT_GENERAL_CHAT_AGENT_ID) ??
+    agents.find(
+      (agent) =>
+        agent.source === "builtin" &&
+        agent.name.trim().toLowerCase() === "general chat",
+    ) ??
+    agents.find((agent) => agent.name.trim().toLowerCase() === "general chat") ??
+    agents.find((agent) => agent.source === "builtin") ??
+    agents[0] ??
+    null
+  );
+}
 
-      <div className="grid w-full max-w-2xl grid-cols-1 gap-2.5 sm:grid-cols-2">
-        {CLOUD_SUGGESTIONS.map((prompt) => (
-          <button
-            key={prompt}
-            type="button"
-            onClick={() => onSuggestionClick(prompt)}
-            className="glass-subtle group flex min-h-20 items-start gap-3 rounded-lg px-4 py-3.5 text-left transition-all duration-200 hover:shadow-md active:scale-[0.98]"
-          >
-            <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
-            <span className="text-sm leading-snug">{prompt}</span>
-          </button>
-        ))}
+function CloudEmptyState({ activeAgent }: { activeAgent: AgentInfo | null }) {
+  return (
+    <div className="flex h-full items-center justify-center px-4">
+      <div className="text-center text-xs text-muted-foreground">
+        {activeAgent ? activeAgent.name : "Select an agent"}
       </div>
     </div>
   );
@@ -76,6 +55,7 @@ function CloudWelcome({
 export function CloudChat() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [defaultAgentApplied, setDefaultAgentApplied] = useState(false);
   const [activeAgent, setActiveAgent] = useState<AgentInfo | null>(null);
   const [activeVariables, setActiveVariables] = useState<PromptVariable[]>([]);
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
@@ -83,13 +63,15 @@ export function CloudChat() {
   const cloudAgents = useCloudAgents();
   const {
     activeConversationId,
-    availableModels,
     createConversation,
     deleteConversation,
     groupedConversations,
+    historyError,
+    historyLoading,
     isStreaming,
     mode,
     model,
+    refreshConversations,
     renameConversation,
     selectConversation,
     sendMessage,
@@ -114,6 +96,14 @@ export function CloudChat() {
   const currentActiveAgent = selectedAgentId
     ? (agents.find((agent) => agent.id === selectedAgentId) ?? activeAgent)
     : null;
+
+  useEffect(() => {
+    if (defaultAgentApplied || activeAgent || activeConversationId || agents.length === 0) return;
+    const defaultAgent = findDefaultAgent(agents);
+    if (!defaultAgent) return;
+    setActiveAgent(defaultAgent);
+    setDefaultAgentApplied(true);
+  }, [activeAgent, activeConversationId, agents, defaultAgentApplied]);
 
   useEffect(() => {
     if (!selectedAgentId || hasMessages) {
@@ -143,21 +133,6 @@ export function CloudChat() {
     };
   }, [currentActiveAgent, activeVariables]);
 
-  const effectiveModels = useMemo(() => {
-    if (!model || availableModels.some((item) => item.id === model)) {
-      return availableModels;
-    }
-
-    return [
-      {
-        id: model,
-        label: `${currentActiveAgent?.name ?? "Agent"} model (${model})`,
-        provider: "agent",
-      },
-      ...availableModels,
-    ];
-  }, [availableModels, currentActiveAgent?.name, model]);
-
   const handleSelectAgent = useCallback(
     (agentId: string | null) => {
       if (!agentId) {
@@ -168,19 +143,40 @@ export function CloudChat() {
       }
       const found = agents.find((agent) => agent.id === agentId) ?? null;
       setActiveAgent(found);
+      setDefaultAgentApplied(true);
       setActiveVariables([]);
       setVariableValues({});
-      if (found?.settings.model_id) setModel(found.settings.model_id);
       if (activeConversationId && !hasMessages) {
         selectConversation(null);
       }
     },
-    [activeConversationId, agents, hasMessages, selectConversation, setModel],
+    [activeConversationId, agents, hasMessages, selectConversation],
   );
 
   const handleNewChat = useCallback(() => {
+    if (!activeAgent) {
+      const defaultAgent = findDefaultAgent(agents);
+      if (defaultAgent) setActiveAgent(defaultAgent);
+    }
     createConversation();
-  }, [createConversation]);
+  }, [activeAgent, agents, createConversation]);
+
+  const handleSelectConversation = useCallback(
+    (conversationId: string) => {
+      selectConversation(conversationId);
+      const conversation = cloudChat.conversations.find((item) => item.id === conversationId);
+      const conversationAgent = conversation?.agentId
+        ? agents.find((agent) => agent.id === conversation.agentId)
+        : null;
+      if (conversationAgent) {
+        setActiveAgent(conversationAgent);
+        setDefaultAgentApplied(true);
+      }
+      setActiveVariables([]);
+      setVariableValues({});
+    },
+    [agents, cloudChat.conversations, selectConversation],
+  );
 
   const handleSend = useCallback(
     async (content: string) => {
@@ -199,16 +195,23 @@ export function CloudChat() {
     setVariableValues((prev) => ({ ...prev, [name]: value }));
   }, []);
 
-  const handleSuggestionClick = useCallback(
-    (prompt: string) => {
-      void handleSend(prompt);
-    },
-    [handleSend],
-  );
-
   const pickerLabel = activeAgent?.name ?? "Select an agent";
-  const agentCount = agents.length;
   const showVariables = activeVariables.length > 0 && !hasMessages;
+  const cloudError =
+    agentsError ?? executionError ?? cloudChat.modelError ?? cloudChat.requestError ?? historyError;
+  const sidebarAgentPicker = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-8 w-full justify-start px-2 text-xs"
+      onClick={() => setAgentPickerOpen(true)}
+    >
+      <Cloud className="h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate text-left">{pickerLabel}</span>
+      <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+    </Button>
+  );
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -218,50 +221,47 @@ export function CloudChat() {
         activeConversationId={activeConversationId}
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((prev) => !prev)}
-        onSelect={selectConversation}
+        onSelect={handleSelectConversation}
         onNew={handleNewChat}
         onDelete={deleteConversation}
         onRename={renameConversation}
+        headerContent={sidebarAgentPicker}
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
-        <PageHeader
-          title={activeConversation?.title ?? "Cloud Chat"}
-          description="Cloud-backed agent chat, isolated from the local Chat route"
-        >
-          <div className="flex min-w-0 items-center gap-2">
+        <header className="no-select flex h-12 items-center justify-between border-b px-4">
+          <h1 className="min-w-0 truncate text-sm font-medium">
+            {activeConversation?.title ?? "New chat"}
+          </h1>
+          <div className="flex items-center gap-1">
+            {(agentsLoading || historyLoading) && (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            )}
             <Button
-              variant="outline"
-              size="sm"
-              className="max-w-[280px] justify-start"
-              onClick={() => setAgentPickerOpen(true)}
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => {
+                void refresh();
+                void refreshConversations();
+              }}
+              title="Refresh"
             >
-              <Cloud className="h-4 w-4" />
-              <span className="truncate">{pickerLabel}</span>
-              <ChevronDown className="ml-auto h-3.5 w-3.5 opacity-60" />
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => void refresh()}>
               <RefreshCw className="h-4 w-4" />
-              Refresh
             </Button>
-            <Badge variant={agentsError ? "warning" : "secondary"}>
-              {agentsLoading ? "Loading agents" : `${agentCount} agents`}
-            </Badge>
           </div>
-        </PageHeader>
+        </header>
 
-        {(agentsError || executionError || cloudChat.modelError || cloudChat.requestError) && (
+        {cloudError && (
           <div className="border-b border-amber-500/30 bg-amber-500/5 px-4 py-2 text-xs text-amber-500">
-            {agentsError ?? executionError ?? cloudChat.modelError ?? cloudChat.requestError}
+            {cloudError}
           </div>
         )}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {messages.length === 0 ? (
-            <CloudWelcome
-              activeAgent={activeAgentWithVariables}
-              onSuggestionClick={handleSuggestionClick}
-            />
+            <CloudEmptyState activeAgent={activeAgentWithVariables} />
           ) : (
             <ChatMessages messages={messages} isStreaming={isStreaming} />
           )}
@@ -300,11 +300,12 @@ export function CloudChat() {
             isStreaming={isStreaming}
             mode={mode}
             model={model}
-            availableModels={effectiveModels}
+            availableModels={[]}
             onModelChange={setModel}
             onModeChange={setMode}
             engineReady
             selectedAgentId={selectedAgentId}
+            showModelSelector={false}
           />
         </div>
       </div>

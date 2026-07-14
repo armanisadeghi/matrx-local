@@ -161,6 +161,17 @@ class LocalToolBridge(ExternalToolAdapter):
         reg.__class__.register_app_handler = _silent_register_app  # type: ignore[method-assign]
         try:
             reg.register_app_handler(self.source_kind, self._app_dispatcher)
+            # Server-fetched tool rows carry source_kind='native' (the cloud
+            # rows for this app's tools), not 'matrx_local'. Registering the
+            # same dispatcher under 'native' keeps the app-level fallback
+            # alive for a cloud row whose name is NOT in this build's catalog
+            # (cloud registry ahead of the installed app) — it then gets the
+            # bridge's friendly not_implemented instead of the executor's
+            # no_viable_executor red banner. Safe on desktop: every native
+            # no-path def here IS one of this app's tools (the server fetch
+            # is filtered to /ai-tools/app/matrx_local/all), and per-name
+            # handlers always win over the app-level fallback.
+            reg.register_app_handler("native", self._app_dispatcher)
         finally:
             reg.__class__.register_app_handler = _orig_register_app  # type: ignore[method-assign]
 

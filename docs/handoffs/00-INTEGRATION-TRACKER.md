@@ -28,7 +28,7 @@ no external users yet. Everything aims at: make the system actually work.
 | W4 | OpenAI-compatible local endpoint | `docs/handoffs/local-openai-endpoint.md` | ✅ Chat + speech + transcription + embeddings `/v1/*` shipped with auth hardening | Live verification from a second device via tunnel with a stock OpenAI SDK |
 | W5 | GLiNER local NER | `docs/GLINER_NER_INTEGRATION_PLAN.md` (TASK-001) | ✅ Service + local tools shipped (`0f4d1c729`, `927b75a17`) | Tool-count pins + cloud registry changeset for the new NER tools (verify `tool_sync status` clean) |
 | W6 | matrx-extend health schema | (matrx-extend repo) | ✅ DONE, verified by coordinator (`status` literal kept; optional `health` field added) | — |
-| W7 | **Actions / delegation / tool bundles alignment** | `docs/handoffs/actions-delegation-bundles.md` (being written — research in flight) | 🔬 Research running | Arman-reviewed writeup → then implementation |
+| W7 | **Actions / delegation / tool bundles alignment** | `docs/handoffs/actions-delegation-bundles.md` | 📋 Handoff WRITTEN (research done: delegation engine already recognizes matrx-local; blocker is the missing `ui.ui_surface` row + no capability/loader + flat 115-tool registry) | Dispatch to an agent (or Arman review first) — step 1 (seed surface row) unblocks everything |
 
 ## Standing gates & environment facts
 

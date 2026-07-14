@@ -1,101 +1,65 @@
 ---
-status: active
-updated: 2026-07-13
+status: code-shipped-needs-live-verification
+updated: 2026-07-14
 repos: [matrx-local]
 owner-context: OpenAI-compatible /v1 endpoint over local models — "the user's machine becomes a little worker", reachable locally and remotely
+next-gate: Live second-device OpenAI SDK drill through the Cloudflare tunnel using a real Supabase JWT and a running local model.
 ---
 
-# OpenAI-compatible local endpoint — handoff
+# OpenAI-compatible local endpoint — work order
 
-## Arman's vision (verbatim intent)
+## Goal
 
-"It's supposed to offer an API endpoint that we can hit for an OpenAI
-compatible endpoint for running all of the local models so users can easily
-run models and have it hit their home or office PC, either locally or
-remotely." … "From inside of the web app or the mobile app or wherever they
-may be in the universe, if they choose, they can hit their computer's
-endpoint and run a local model, as opposed to paying to use one of the big
-APIs. The point is that the user's local machine becomes a little worker."
+Expose the user's desktop engine as an authenticated OpenAI-compatible `/v1`
+endpoint so web, mobile, and scripts can use the user's machine as a local
+model worker over loopback or the existing owner-locked Cloudflare tunnel.
 
-Auth ruling (Arman, 2026-07-13): "Our auth is almost entirely through
-Supabase … if the user is local or remote, it would have to be logged into
-our app with their normal Supabase auth. So then it would be the same."
+Auth ruling (Arman, 2026-07-13): normal Supabase auth is the auth model for
+local and remote use. OpenAI SDKs should pass the Supabase JWT as the
+`api_key`, which arrives as `Authorization: Bearer <jwt>`.
 
-## Where things stand (verified 2026-07-13)
+## Done
 
-- **No `/v1` surface exists.** llama-server's own OpenAI API binds
-  `127.0.0.1:{port}` only (`desktop/src-tauri/src/llm/server.rs:356-374`,
-  no `--api-key`), never proxied, never tunneled. The engine's only chat
-  surface is the bespoke SSE `/ai/chat` (`app/api/ai_routes.py`).
-- Local model registration engine-side: `/chat/local-llm/connect` →
-  `app/services/ai/local_llm_registry.py:125` `set_local_llm` builds a
-  `GenericOpenAIChat` at `http://127.0.0.1:{port}/v1` and registers runtime
-  model `local/<name>` with matrx-ai. The auto-start registration race was
-  fixed 2026-07-13 (`desktop/src/hooks/use-llm.ts` reconciliation).
-- Remote reachability exists TODAY via the Cloudflare tunnel: engine URL is
-  registered in cloud `app_instances` (tunnel_url + heartbeat), AuthMiddleware
-  (`app/api/auth.py:237-310`) already enforces verified Supabase JWT +
-  instance-owner on tunnel traffic. A new engine route is remotely reachable
-  and owner-locked for free.
-- TTS (`/tts/*`) is complete; transcription has no HTTP endpoint (Rust
-  pipeline + a Python file tool, unverified E2E — MXL-D-027/062);
-  embeddings/classification don't exist (GLiNER plan TASK-001 awaits Arman).
+- `/v1/chat/completions` proxies streaming and non-streaming OpenAI chat bodies to the Rust-owned llama-server, preserving unknown request params and mapping `local/<name>` or bare model names to the active registered model: `app/api/openai_compat_routes.py`, `app/services/ai/local_llm_registry.py`.
+- `/v1/models` lists the active local chat model and the local embedding model when `fastembed` is importable: `app/api/openai_compat_routes.py`.
+- `/v1/audio/speech` maps OpenAI-style speech requests to the existing Kokoro `TtsService`, currently WAV-only with a 50,000-character input cap: `app/api/openai_compat_routes.py`, `app/services/tts/service.py`.
+- `/v1/audio/transcriptions` maps OpenAI-style multipart transcription uploads to the existing Python-side Whisper file transcription tool, with a 25 MB upload cap and temp-file cleanup: `app/api/openai_compat_routes.py`, `app/tools/tools/audio.py`.
+- `/v1/embeddings` adds optional local embeddings via `fastembed` using `BAAI/bge-small-en-v1.5` by default, offloaded from the event loop: `app/api/openai_compat_routes.py`, `pyproject.toml`.
+- `/v1/*` remains protected by the standard `AuthMiddleware`; auth failures on `/v1/*` now return OpenAI-shaped error objects while preserving existing non-`/v1` auth responses: `app/api/auth.py`.
+- Proxy hardening avoids stale `Content-Encoding`/decoded-body mismatches and uses a finite non-streaming read timeout while keeping streaming reads open-ended: `app/api/openai_compat_routes.py`.
+- `/v1` request bodies are redacted in engine request logs so prompts, speech text, embeddings input, and audio request bodies do not land in DEBUG/error logs: `app/main.py`.
+- Local AI client-host runtime defects found during adjacent smoke coverage were fixed: DB-less matrx-ai queue/drain/rollup paths are guarded, and Decimal tool-call costs persist cleanly to SQLite: `app/services/ai/engine.py`, `app/services/ai/conversation_handler.py`.
+- Focused smoke coverage pins the OpenAI-compatible surface, auth envelope, proxy behavior, audio limits, transcription temp path seam, embeddings shape, and log redaction: `tests/smoke/test_openai_compat_surface.py`.
 
-## Priority work queue
+## Remaining work
 
-### 1. `/v1/chat/completions` (+ `/v1/models`)
-New router `app/api/openai_compat_routes.py`: OpenAI wire format in/out,
-streaming (SSE `data:` chunks + `[DONE]`) and non-streaming. Model routing:
-`local/<name>` (or the bare llama-server model name) → reverse-proxy to the
-registered llama-server `/v1` (the registry above knows the port). Reject
-unknown models with an OpenAI-shaped error object. Honor context/params
-pass-through — no silent parameter drops (the `LocalChatRequest` silent-drop
-bug class, AGENT_TASKS ai-surface follow-ups).
-- Auth: standard AuthMiddleware (Supabase JWT; loopback presence-trust,
-  tunnel verified+owner). Additionally accept the JWT as an OpenAI-style
-  `Authorization: Bearer <jwt>` — which is what OpenAI SDKs send as api_key,
-  so `OpenAI(base_url="https://<tunnel>/v1", api_key="<supabase_jwt>")` just
-  works.
-- Do NOT add these to `_PUBLIC_PATHS`.
+1. **Live verification gate:** From a second device or phone hotspot, call `OpenAI(base_url="https://<tunnel-url>/v1", api_key="<supabase_jwt>")` and verify `client.chat.completions.create(model="local/<name>", stream=True)` streams tokens from a running local llama-server. Also verify a different user's valid JWT gets 403.
+2. **Loopback SDK drill:** Run the same stock OpenAI SDK calls over `http://127.0.0.1:<engine-port>/v1` with a Supabase JWT: chat streaming, chat non-streaming, models, speech, transcription, and embeddings.
+3. **Real-service audio/RAG drill:** Exercise `/v1/audio/speech` against a downloaded Kokoro model, `/v1/audio/transcriptions` against an actual audio file with Whisper installed, and `/v1/embeddings` with `uv sync --extra embeddings` and a real fastembed model download. Current coverage mocks those local services.
+4. **Settings UX:** Add Settings -> Local API UI showing loopback URL, tunnel URL when active, curl snippets, OpenAI Python/JS snippets, current auth requirement, active model, and copy buttons. Do not put `/v1/*` in `_PUBLIC_PATHS`.
+5. **matrx-frontend/mobile consumption:** In the frontend repo, surface remote machine endpoints from `app_instances` and let model pickers label "Your computer (local/<name>)"; this repo's contract is `/v1/models` plus `app_instances.tunnel_url`.
+6. **Packaging and installer policy:** Decide whether embeddings stays developer-only optional extra or gets an in-app capability installer and PyInstaller hidden-import/data treatment. Delete this item when packaged builds can either install/use fastembed or show a deliberate "not installed" capability prompt.
+7. **Audio format parity:** `/v1/audio/speech` currently supports `response_format="wav"` only. Add mp3/opus/flac/aac/pcm support or document WAV-only compatibility in the Local API UI.
+8. **Transcription consolidation:** The endpoint uses the existing Python `tool_transcribe_audio` path; Rust live mic/wake-word remains separate. If the product wants one canonical transcription stack, consolidate model install/status/error reporting across Rust streaming and Python file transcription.
+9. **Multi-model/cold-model behavior:** llama-server still runs one model at a time. Keep `/v1/models` truthful; later, Python may request Rust to start a model on demand, but Rust must remain lifecycle owner.
+10. **Delete workaround later:** Remove `install_client_host_queue_guard()` from `app/services/ai/engine.py` only after matrx-ai upstream guarantees `queue_helpers.get_coordinator()`, `dynamic_drain.drain_pending_injections()`, and `apply_authoritative_user_request_rollup()` are no-ops or ConversationStore-backed in client-host mode without ORM bases, and after `tests/smoke/test_ai_surface.py` passes without the guard.
 
-### 2. `/v1/audio` surfaces (same pattern, big win, mostly plumbing)
-- `/v1/audio/speech` → existing TtsService (kokoro) — OpenAI TTS wire shape.
-- `/v1/audio/transcriptions` → whisper. This forces the transcription
-  consolidation: one Python-side file-transcription path with an HTTP
-  endpoint (the Rust streaming pipeline stays for live mic/wake-word).
-### 3. `/v1/embeddings` (opens local RAG)
-fastembed (ONNX, BAAI/bge-small-en-v1.5 default — the long-standing
-local-RAG plan in memory). New optional extra if weights are heavy; follow
-Hard Rule 5 (declare deps) + 6 (spec hidden imports).
+## Remaining work — verification
 
-### 4. Discovery + UX
-Surface the endpoint in the UI (Settings → Local API): the local URL, the
-tunnel URL when active, and copy-paste snippets (curl + OpenAI SDK). The
-web app's model picker can then list "Your computer (local/<name>)" via
-`app_instances` — that consumption belongs to matrx-frontend; the contract
-here is: `/v1/models` lists what this machine serves, `app_instances` says
-where this machine is.
+- Not yet exercised: a booted engine serving real `/v1` OpenAI SDK calls.
+- Not yet exercised: Cloudflare tunnel from another network/device.
+- Not yet exercised: wrong-owner Supabase JWT rejection on tunnel traffic.
+- Not yet exercised: real llama-server streaming through `/v1/chat/completions`.
+- Not yet exercised: real Kokoro speech synthesis through `/v1/audio/speech`.
+- Not yet exercised: real Whisper transcription through `/v1/audio/transcriptions`.
+- Not yet exercised: real fastembed inference through `/v1/embeddings`.
+- Not yet exercised: packaged PyInstaller sidecar behavior for optional embeddings/transcription dependencies.
 
-### 5. Multi-model (after 1)
-llama-server runs one model at a time today. `/v1/models` reflects reality
-(one entry + downloaded-but-cold models flagged); a later iteration can
-auto-start on demand via the Rust `start_llm_server` command — respect the
-lifecycle-ownership contract (Rust owns llama-server; Python asks, never
-spawns).
+## Progress log
 
-## Contracts
-
-- Wire format: OpenAI Chat Completions + Models + Audio + Embeddings
-  (2024-era stable shapes; SDK compatibility is THE acceptance bar).
-- Lifecycle: llama-server remains Rust-owned (CLAUDE.md Hard Rule 0) —
-  the proxy talks to it over HTTP only.
-- Auth: Supabase JWT everywhere; tunnel = verified + owner-only
-  (`app/api/extension_auth.py`).
-
-## Verification
-
-From another machine (or phone hotspot): `OpenAI(base_url="https://<tunnel-url>/v1",
-api_key=<jwt>)` → `client.chat.completions.create(model="local/<name>",
-stream=True)` streams tokens from the home PC. Same call on loopback. A wrong
-user's JWT gets 403. Pin with smoke tests (httpx against the test engine,
-llama-server mocked at the registry seam).
+- 2026-07-14: Implemented and committed `/v1/chat/completions`, `/v1/models`, `/v1/audio/speech`, `/v1/audio/transcriptions`, and `/v1/embeddings` in matrx-local.
+- 2026-07-14: Ran adversarial review agents over the chat/proxy/auth path, client-host runtime guard, and full `/v1` surface; fixed findings for content encoding, auth envelope shape, non-stream timeout, ORM guard breadth, Decimal persistence, log redaction, and audio input caps.
+- 2026-07-14: Exercised with `UV_PYTHON=3.13 uv run --frozen pytest tests/smoke/test_openai_compat_surface.py -q` — 18 passed. This is mocked/in-process coverage for llama-server, TTS, transcription, embeddings, auth envelope shape, resource caps, and log redaction.
+- 2026-07-14: Exercised with `UV_PYTHON=3.13 uv run --frozen ruff check app/api/openai_compat_routes.py tests/smoke/test_openai_compat_surface.py` — passed.
+- 2026-07-14: Exercised with `UV_PYTHON=3.13 uv run --frozen python -m py_compile app/main.py app/api/openai_compat_routes.py tests/smoke/test_openai_compat_surface.py` — passed.
+- 2026-07-14: Adjacent `tests/smoke/test_ai_surface.py` was green earlier after the ORM guard fixes, but later broader runs were interrupted by unrelated active mirror/file-sync work in the same checkout. Treat current `/v1` verification as focused smoke/unit coverage, not an end-to-end engine drill.

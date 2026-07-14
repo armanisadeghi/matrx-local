@@ -1,6 +1,6 @@
 # Arman Tasks — Matrx Local
 
-_Last updated: 2026-07-12 (hygiene pass: SMTP P0 + Full Disk Access added; FLUX.1-dev gate deleted — verified out of catalog)_
+_Last updated: 2026-07-13 (hygiene pass: GLiNER NER review closed — Arman approved, work assigned to agent; item moved to Done)_
 
 > **Ask-Arman list for agents — NOT Arman's personal inbox.** These are things
 > only Arman can do (secrets, accounts, dashboards, decisions). When one blocks
@@ -21,50 +21,36 @@ _Last updated: 2026-07-12 (hygiene pass: SMTP P0 + Full Disk Access added; FLUX.
 
 ## Active (ranked — quickest wins first within priority)
 
-- [ ] **P0: Fix Supabase SMTP — public email signup is broken platform-wide**
-      (~5 min) — `auth.signUp` fails with "Error sending confirmation email"
-      and the user row rolls back, so ANY self-serve email signup (and likely
-      password-reset / magic-link emails) is dead on every Matrx surface
-      (MXL-D-028, verified 2026-07-10 with two addresses). Do: Supabase
-      dashboard → project `txzxabzwovsujtloxrus` → Authentication → Emails →
-      SMTP Settings — check whether custom SMTP is enabled and its credentials
-      are still valid (rotate/re-enter the provider key, e.g. Resend/SendGrid),
-      then test with a throwaway signup. If no custom SMTP is set, the built-in
-      sender is rate-limited/failing — configure a real provider.
-- [ ] **Grant Full Disk Access to Matrx** (~1 min) — System Settings →
-      Privacy & Security → Full Disk Access → enable Matrx (or the engine
-      binary). The engine currently can't list `~/Documents/Matrx/Notes`
-      (CURRENT_ERRORS E002); notes sync sits in a degraded state (with the
-      hint surfaced in-app) until granted.
-- [ ] **Add your Hugging Face token** (~1 min) — Settings → API Keys → Hugging
-      Face. There is currently NO HF token anywhere on this machine: the app's
-      key store holds only anthropic/cerebras/google/xai, and there is no
-      `HF_TOKEN` in `.env`, in the environment, or in the huggingface-cli
-      cache. That is why FLUX.1-schnell 401'd — the download went out
-      unauthenticated. (The app now asks you for it properly instead of
-      showing a 401.)
+- [ ] **Deploy matrx-files 0.1.4 — unblocks the entire file-sync feature (W3)**
+      (~3 min) — The desktop file-sync engine is built, tested (35+14 tests),
+      and E2E-drilled against a locally-run service, but the LIVE
+      `files.matrxserver.com` still lacks the new `/files/sync/*` endpoints.
+      Two steps, both gated actions an agent couldn't take alone:
+      ① `cd ~/code/aidream && git push origin refs/tags/matrx-files/v0.1.4`
+      (tag exists locally at `fd4053cc7`; the push triggers the PyPI OIDC
+      publish workflow — a public PyPI release). ② Once on PyPI, bump the
+      container: `ssh matrx-sandbox`, then per `packages/matrx-files/DEPLOY.md`
+      rebuild `matrx-files` at `==0.1.4` (docker rm + run, NOT restart), run
+      the verify triad + `GET /files/sync/changes?limit=1` with a user JWT.
+      Or reply "proceed, deploy 0.1.4" and an agent with permissions does both.
+- [ ] **Approve settings-catalog official-doc update for `file_sync_mode`**
+      (~30 s) — the new setting (off|pointers|full, default pointers, W3) is
+      live in both settings layers but `docs/official/settings-catalog.md` is
+      Arman-only. Reply "yes, add file_sync_mode to the settings catalog" and
+      any agent syncs it (source of truth: `app/services/file_sync/FEATURE.md`).
+- [ ] **Approve official-docs update for dev/live isolation** (~2 min) — The
+      MXL-D-043 fix added env vars (`MATRX_PORT_BASE`, `MATRX_LIVE_ENGINE`,
+      `MATRX_INSTANCE_SALT`) and changed the `proxy_port` default to be
+      port-base-derived (22180 live / 22280 dev). `docs/official/configuration.md`
+      and `docs/official/settings-catalog.md` are now stale, and agents may not
+      edit `docs/official/**` without your approval. Ask: reply "yes, update
+      official docs for MXL-D-043" and any agent can sync them from
+      `docs/TESTING_LADDER.md` (the non-official source of truth).
 - [ ] **Grant Screen Recording** (~1 min) — Setup Wizard → Review & Grant →
       Grant Access. This now actually calls `CGRequestScreenCaptureAccess` in
       the engine (the process that runs `screencapture`), which is what finally
       lists it in System Settings → Privacy & Security → Screen Recording.
       macOS may need an app restart before it reads back as granted.
-- [ ] **Accept the FLUX.1-schnell license** (~1 min, only if you want that
-      model) — https://huggingface.co/black-forest-labs/FLUX.1-schnell →
-      "Agree and access repository". It is `gated: auto` (the only gated repo
-      in the catalog); Apache-2.0 licensed but still gated. The app links you
-      straight there when a download hits the gate.
-- [ ] **URGENT: Review local GLiNER NER plan before agents build** —
-      Cloud NER API volume is a major cost driver; local NER is required.
-      Read [`docs/GLINER_NER_INTEGRATION_PLAN.md`](../docs/GLINER_NER_INTEGRATION_PLAN.md)
-      and answer the decision checklist (default model, PII/relations in P1 vs P3,
-      desktop UI for P1, whether to offer XXL in-app). Tracked as TASK-001 in
-      `.matrx/AGENT_TASKS.md` — agents must not start coding until you approve.
-- [ ] **Publish matrx-ai 0.3.6** — fix is committed in `aidream/packages/matrx-ai`
-      (`configure()` no longer loads `db/_registry.py` by file path, which was
-      impossible in a PyInstaller bundle and killed the AI stack in every
-      packaged build — MXL-D-029). Then agents raise the floor in matrx-local
-      `pyproject.toml` (`matrx-ai>=0.3.6`) and drop the pre-import workaround
-      in `app/services/ai/engine.py`. matrx-local works with 0.3.3 meanwhile.
 - [ ] **Reconcile AIDream server ↔ matrx-ai tool registry (aidream repo)** — The
       deployed server 404s `GET /api/ai-tools/app/matrx_local` (the endpoint
       matrx-ai 0.1.26 from PyPI calls); the DB has migrated to the surface-based
@@ -136,6 +122,12 @@ _Skim and check off or delete. Agents: do not open `.arman/` — leave that to A
 
 ## Done
 
+- [x] "Add your Hugging Face token" was stale and wrong to ask — verified directly against `~/.matrx/matrx.db` (2026-07-13, no secret values printed) that Arman's HF token IS already stored, encrypted, under `api_keys.huggingface`. My earlier check only looked at `.env`/environment/huggingface-cli cache, never the app's own key store — that was my mistake, not a missing key. Filed two real bugs instead: MXL-D-047 (possible resolver/startup-race causing a 401 despite a stored key — needs live repro) and MXL-D-048 (process bug: "add your X key" items don't belong in ARMAN_TASKS at all when the app can self-serve prompt) — both in `FOUND_DEFECTS.md`; MXL-D-048's fix folded into the "Proactive in-app permission + API-key prompts" task in `.matrx/AGENT_TASKS.md`
+- [x] "Accept FLUX.1-schnell license" clarified — HF gate acceptance is per-account/per-token, not app-wide; Arman clicking accept fixes nothing for other users. Confirmed the app already handles this gracefully per-user (no blow-up): `app/services/downloads/failures.py:66` `hf_gate_not_accepted` + `manager.py:1063-1068` convert the raw 401 into a friendly "Accept the license on Hugging Face" prompt with a direct link, shown to whichever user hits the gate. Nothing to fix, nothing for Arman to do system-wide — removed as purely optional/personal — 2026-07-13
+- [x] "Grant Full Disk Access" ask reclassified — not an Arman action, it's a missing in-app feature (proactive contextual permission prompts). Filed as real work in `.matrx/AGENT_TASKS.md` ("Proactive in-app permission prompts") — 2026-07-13
+- [x] Supabase SMTP "broken" ask rejected — not in production yet, SMTP intentionally off (MXL-D-028 stays open in FOUND_DEFECTS as a pre-launch item, not an Arman ask) — 2026-07-13
+- [x] matrx-ai published past 0.3.6 — `pyproject.toml` floor now `>=0.4.0`, `aidream/packages/matrx-ai` at `0.4.0` (verified 2026-07-13). Note: `app/services/ai/engine.py` still has the pre-import workaround for `db/_registry.py` — that's leftover agent code cleanup, not an Arman ask; flag for `.matrx/AGENT_TASKS.md` if not already tracked.
+- [x] GLiNER NER plan reviewed/approved — assigned to agent, build underway (TASK-001, `.matrx/AGENT_TASKS.md`) — 2026-07-13
 - [x] Media Vault escrow PRIVATE key secured (password manager + offline backup; key at `~/.matrx-escrow/matrx-media-escrow-private.pem`, recovery via `scripts/vault-recover.py`) — 2026-07-12
 - [x] Apple Developer / notarization path live.
 - [x] Supabase OAuth redirect `aimatrx://auth/callback`.

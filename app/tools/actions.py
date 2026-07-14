@@ -67,7 +67,7 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "File", "local_file",
             "Filesystem operations on the user's machine.",
-            "local_file_ops", ("file", "filesystem", "local", "actions"),
+            "desktop-files", ("file", "filesystem", "local", "actions"),
             {
                 "read": "Read", "write": "Write", "edit": "Edit",
                 "move": "Move", "copy": "Copy", "delete": "Delete",
@@ -78,13 +78,13 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Shell", "local_shell",
             "Run shell commands on the user's machine (foreground or background).",
-            "local_execution", ("shell", "command", "local", "actions"),
+            "desktop-shell", ("shell", "command", "local", "actions"),
             {"run": "Bash", "output": "BashOutput", "stop": "TaskStop"},
         ),
         ActionGroup(
             "Window", "local_window",
             "Desktop window management.",
-            "local_window", ("window", "desktop", "local", "actions"),
+            "desktop-system", ("window", "desktop", "local", "actions"),
             {
                 "list": "ListWindows", "focus": "FocusWindow",
                 "move": "MoveWindow", "minimize": "MinimizeWindow",
@@ -94,7 +94,7 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Process", "local_process",
             "Process and application management.",
-            "local_process", ("process", "app", "local", "actions"),
+            "desktop-system", ("process", "app", "local", "actions"),
             {
                 "list": "ListProcesses", "ports": "ListPorts",
                 "launch_app": "LaunchApp", "kill": "KillProcess",
@@ -105,7 +105,7 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Input", "local_input",
             "Keyboard and mouse automation.",
-            "local_input", ("input", "keyboard", "mouse", "local", "actions"),
+            "desktop-input", ("input", "keyboard", "mouse", "local", "actions"),
             {
                 "type_text": "TypeText", "hotkey": "Hotkey",
                 "mouse_click": "MouseClick", "mouse_move": "MouseMove",
@@ -114,7 +114,7 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Audio", "local_audio",
             "Audio devices, recording, playback, and transcription.",
-            "local_audio", ("audio", "transcribe", "local", "actions"),
+            "desktop-media", ("audio", "transcribe", "local", "actions"),
             {
                 "devices": "ListAudioDevices", "record": "RecordAudio",
                 "play": "PlayAudio", "transcribe": "TranscribeAudio",
@@ -125,19 +125,19 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Clipboard", "local_clipboard",
             "System clipboard access.",
-            "local_clipboard", ("clipboard", "local", "actions"),
+            "desktop-system", ("clipboard", "local", "actions"),
             {"read": "ClipboardRead", "write": "ClipboardWrite"},
         ),
         ActionGroup(
             "Screen", "local_screen",
             "Screen capture and display enumeration.",
-            "local_screen", ("screen", "screenshot", "local", "actions"),
+            "desktop-system", ("screen", "screenshot", "local", "actions"),
             {"screenshot": "Screenshot", "list": "ListScreens"},
         ),
         ActionGroup(
             "System", "local_system",
             "System information, opening URLs/paths, and desktop notifications.",
-            "local_system", ("system", "local", "actions"),
+            "desktop-system", ("system", "local", "actions"),
             {
                 "info": "SystemInfo", "open_url": "OpenUrl",
                 "open_path": "OpenPath", "notify": "Notify",
@@ -146,7 +146,7 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Browser", "local_browser",
             "Local Playwright browser automation on the user's machine.",
-            "local_browser", ("browser", "playwright", "local", "actions"),
+            "desktop-web", ("browser", "playwright", "local", "actions"),
             {
                 "navigate": "BrowserNavigate", "click": "BrowserClick",
                 "type_text": "BrowserType", "extract": "BrowserExtract",
@@ -158,7 +158,7 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Web", "local_web",
             "Web access from the user's machine: fetch, scrape, search, research, and file transfer.",
-            "local_web", ("web", "http", "scrape", "search", "local", "actions"),
+            "desktop-web", ("web", "http", "scrape", "search", "local", "actions"),
             {
                 "fetch": "FetchUrl", "fetch_with_browser": "FetchWithBrowser",
                 "scrape": "Scrape", "search": "Search", "research": "Research",
@@ -168,7 +168,7 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Net", "local_net",
             "Local network inspection and discovery.",
-            "local_net", ("network", "discovery", "local", "actions"),
+            "desktop-web", ("network", "discovery", "local", "actions"),
             {
                 "info": "NetworkInfo", "scan": "NetworkScan",
                 "port_scan": "PortScan", "mdns_discover": "MDNSDiscover",
@@ -180,7 +180,7 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Monitor", "local_monitor",
             "System monitoring and filesystem watching.",
-            "local_monitor", ("monitor", "resources", "watch", "local", "actions"),
+            "desktop-system", ("monitor", "resources", "watch", "local", "actions"),
             {
                 "resources": "SystemResources", "battery": "BatteryStatus",
                 "disk_usage": "DiskUsage", "top_processes": "TopProcesses",
@@ -191,7 +191,7 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Schedule", "local_schedule",
             "Scheduled tasks on the user's machine.",
-            "local_schedule", ("schedule", "tasks", "local", "actions"),
+            "desktop-system", ("schedule", "tasks", "local", "actions"),
             {
                 "create": "ScheduleTask", "list": "ListScheduled",
                 "cancel": "CancelScheduled", "prevent_sleep": "PreventSleep",
@@ -200,7 +200,7 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Documents", "local_documents",
             "The user's managed document library.",
-            "local_documents", ("documents", "library", "local", "actions"),
+            "desktop-files", ("documents", "library", "local", "actions"),
             {
                 "list": "ListDocuments", "folders": "ListDocumentFolders",
                 "read": "ReadDocument", "write": "WriteDocument",
@@ -210,7 +210,7 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Media", "local_media",
             "Local media processing: OCR, image resize, PDF extraction, archives.",
-            "local_media", ("media", "image", "pdf", "archive", "local", "actions"),
+            "desktop-media", ("media", "image", "pdf", "archive", "local", "actions"),
             {
                 "ocr": "ImageOCR", "resize": "ImageResize",
                 "pdf_extract": "PdfExtract", "archive_create": "ArchiveCreate",
@@ -220,13 +220,13 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "Ner", "local_ner",
             "Local named-entity and PII extraction (data never leaves the machine).",
-            "local_ner", ("ner", "pii", "privacy", "local", "actions"),
+            "desktop-ner", ("ner", "pii", "privacy", "local", "actions"),
             {"entities": "ExtractEntities", "pii": "ExtractPII"},
         ),
         ActionGroup(
             "MacApps", "local_mac_apps",
             "macOS app integrations: AppleScript, Mail, Messages, Contacts, Calendar, Reminders, Photos, Location.",
-            "local_mac_apps", ("macos", "apps", "local", "actions"),
+            "desktop-mac", ("macos", "apps", "local", "actions"),
             {
                 "applescript": "AppleScript",
                 "list_emails": "ListEmails", "send_email": "SendEmail",
@@ -244,7 +244,7 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ActionGroup(
             "WindowsPs", "local_windows_ps",
             "PowerShell and Windows administration: scripts, env vars, registry, services, event log, features.",
-            "local_windows_ps", ("windows", "powershell", "local", "actions"),
+            "desktop-windows", ("windows", "powershell", "local", "actions"),
             {
                 "run": "PowerShellScript",
                 "get_env": "PSGetEnv", "set_env": "PSSetEnv",

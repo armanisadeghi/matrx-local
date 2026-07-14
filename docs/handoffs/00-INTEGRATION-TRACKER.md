@@ -44,7 +44,7 @@ no external users yet. Everything aims at: make the system actually work.
 
 ## Collisions
 
-- Current working tree contains unrelated active W2/W3-style edits (`app/services/file_sync/`, local DB mirror/schema files, cloud/settings files, desktop files). W5 handoff work touched only `docs/handoffs/gliner-local-ner.md` and this tracker row; do not sweep unrelated dirty files into W5 commits. (Moved here — this bullet was accidentally inserted mid-table and broke the workstream table rendering.)
+- W5 handoff work touched only `docs/handoffs/gliner-local-ner.md` and this tracker row. Current working tree contains unrelated active W2/W3-style edits (`app/services/file_sync/`, local DB mirror/schema files, cloud/settings files, desktop files); do not sweep those dirty files into W5 commits.
 - W1 wind-down touched only `aidream/docs/handoffs/matrx-ai-client-host-completion.md` + this tracker row. W1's remaining engine-side deletion (`install_client_host_queue_guard()` in `app/services/ai/engine.py`) lives inside W2's DIRTY worktree — do NOT delete it from outside; it is W2's to remove when their session lands (it is redundant-but-harmless with matrx-ai 0.4.0).
 - W4 touched `app/main.py` only for `/v1` request-body log redaction. The current checkout also has unrelated NER router edits in `app/main.py`; keep those hunks with W5/NER and do not conflate them with W4 handoff commits.
 

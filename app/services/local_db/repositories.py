@@ -241,8 +241,39 @@ class AgentsRepo:
 
 
 # ==================================================================
-# ConversationsRepo — conversations table
+# ConversationsRepo — canonical chat.conversation mirror table
+#
+# The bespoke `conversations` table is GONE (migration V10). This repo now
+# fronts the structural mirror of the cloud's chat.conversation and keeps
+# the old dict shape for its callers (data_routes, chat UI):
+#   mode / route_mode / model  <-> config JSON
+#   agent_id                   <-> initial_agent_id
+#   server_conversation_id     ==  id (the local id IS the canonical id now)
+# Local-origin writes enqueue an outbox row so the chat sync engine pushes
+# them to the cloud. Deletes are soft (deleted_at tombstone), like the cloud.
 # ==================================================================
+
+def _conv_to_compat(row) -> dict[str, Any]:
+    d = _row_to_dict(row)
+    if not d:
+        return d
+    config = _json_loads(d.get("config")) or {}
+    if not isinstance(config, dict):
+        config = {}
+    return {
+        "id": d.get("id"),
+        "title": d.get("title") or "New conversation",
+        "mode": config.get("mode", "chat"),
+        "model": config.get("model", ""),
+        "server_conversation_id": d.get("id"),
+        "route_mode": config.get("route_mode", "chat"),
+        "agent_id": d.get("initial_agent_id"),
+        "created_at": d.get("created_at"),
+        "updated_at": d.get("updated_at"),
+        "is_favorite": bool(d.get("is_favorite")),
+        "status": d.get("status") or "active",
+    }
+
 
 class ConversationsRepo:
     def __init__(self, db: LocalDatabase | None = None):
@@ -250,66 +281,156 @@ class ConversationsRepo:
 
     async def list_all(self, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
         rows = await self._db.fetchall(
-            "SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            "SELECT * FROM chat.conversation WHERE deleted_at IS NULL "
+            "ORDER BY updated_at DESC LIMIT ? OFFSET ?",
             (limit, offset),
         )
-        return [_row_to_dict(r) for r in rows]
+        return [_conv_to_compat(r) for r in rows]
 
     async def get(self, conv_id: str) -> dict[str, Any] | None:
-        row = await self._db.fetchone("SELECT * FROM conversations WHERE id = ?", (conv_id,))
-        return _row_to_dict(row) if row else None
+        row = await self._db.fetchone(
+            "SELECT * FROM chat.conversation WHERE id = ? AND deleted_at IS NULL",
+            (conv_id,),
+        )
+        return _conv_to_compat(row) if row else None
 
     async def create(self, conv: dict[str, Any]) -> None:
+        from app.services.local_db.outbox import enqueue_change
+
         now = _now()
+        config = {
+            "mode": conv.get("mode", "chat"),
+            "route_mode": conv.get("route_mode", "chat"),
+            "model": conv.get("model", ""),
+        }
+        owner = conv.get("user_id") or await TokenRepo(self._db).get_owner_user_id()
         await self._db.execute(
-            """INSERT INTO conversations (id, title, mode, model, server_conversation_id,
-               route_mode, agent_id, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO chat.conversation
+               (id, title, config, status, initial_agent_id, source_app,
+                created_by, created_at, updated_at, message_count, is_favorite,
+                is_ephemeral, conversation_type, visibility, version,
+                metadata, variables, overrides, cache_state,
+                source_feature, exclude_from_kg)
+               VALUES (?, ?, ?, 'active', ?, 'matrx_local', ?, ?, ?, 0, 0,
+                       0, 'standard', 'private', 1, '{}', '{}', '{}', '{}', '', 0)""",
             (
                 conv["id"],
                 conv.get("title", "New conversation"),
-                conv.get("mode", "chat"),
-                conv.get("model", ""),
-                conv.get("server_conversation_id"),
-                conv.get("route_mode", "chat"),
+                _json_dumps(config),
                 conv.get("agent_id"),
-                conv.get("created_at", now),
-                conv.get("updated_at", now),
+                owner,
+                conv.get("created_at") or now,
+                conv.get("updated_at") or now,
             ),
         )
+        await enqueue_change("chat", "conversation", conv["id"], self._db, commit=False)
         await self._db.commit()
 
     async def update(self, conv_id: str, updates: dict[str, Any]) -> None:
-        sets = []
-        params = []
-        for key in ("title", "mode", "model", "server_conversation_id", "route_mode", "agent_id"):
-            if key in updates:
-                sets.append(f"{key} = ?")
-                params.append(updates[key])
+        from app.services.local_db.outbox import enqueue_change
+
+        sets: list[str] = []
+        params: list[Any] = []
+        if "title" in updates:
+            sets.append("title = ?")
+            params.append(updates["title"])
+        if "agent_id" in updates:
+            sets.append("initial_agent_id = ?")
+            params.append(updates["agent_id"])
+        config_updates = {
+            k: updates[k] for k in ("mode", "route_mode", "model") if k in updates
+        }
+        if config_updates:
+            # Merge into the existing config JSON without clobbering other keys.
+            sets.append("config = json_patch(COALESCE(config, '{}'), ?)")
+            params.append(_json_dumps(config_updates))
         if not sets:
             return
         sets.append("updated_at = ?")
         params.append(_now())
         params.append(conv_id)
         await self._db.execute(
-            f"UPDATE conversations SET {', '.join(sets)} WHERE id = ?",
+            f"UPDATE chat.conversation SET {', '.join(sets)} WHERE id = ?",
             tuple(params),
         )
+        await enqueue_change("chat", "conversation", conv_id, self._db, commit=False)
         await self._db.commit()
 
     async def delete(self, conv_id: str) -> None:
-        # Messages cascade-delete via FK
-        await self._db.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
+        """Soft-delete (tombstone) — mirrors cloud semantics; never lose rows."""
+        from app.services.local_db.outbox import enqueue_change
+
+        now = _now()
+        await self._db.execute(
+            "UPDATE chat.conversation SET deleted_at = ?, updated_at = ? "
+            "WHERE id = ? AND deleted_at IS NULL",
+            (now, now, conv_id),
+        )
+        await enqueue_change("chat", "conversation", conv_id, self._db, commit=False)
         await self._db.commit()
 
     async def count(self) -> int:
-        row = await self._db.fetchone("SELECT COUNT(*) as cnt FROM conversations")
+        row = await self._db.fetchone(
+            "SELECT COUNT(*) as cnt FROM chat.conversation WHERE deleted_at IS NULL"
+        )
         return row["cnt"] if row else 0
 
 
 # ==================================================================
-# MessagesRepo — messages table
+# MessagesRepo — canonical chat.message mirror table
+#
+# Compat mapping for callers that predate the mirror:
+#   content (plain text)  <-> content JSON parts [{type:"text",text:...}]
+#   model / tool_calls / tool_results  <-> metadata JSON
+#   error (text)          <-> error JSON {"message": ...}
 # ==================================================================
+
+def _content_to_parts(text: str) -> str:
+    return _json_dumps([{"type": "text", "text": text}] if text else [])
+
+
+def _parts_to_text(raw: Any) -> str:
+    parts = _json_loads(raw) if isinstance(raw, str) else raw
+    if isinstance(parts, str):
+        return parts
+    if not isinstance(parts, list):
+        return ""
+    out: list[str] = []
+    for part in parts:
+        if isinstance(part, dict):
+            text = part.get("text")
+            if isinstance(text, str):
+                out.append(text)
+            elif part:
+                out.append(_json_dumps(part))
+        elif isinstance(part, str):
+            out.append(part)
+    return "\n".join(p for p in out if p)
+
+
+def _msg_to_compat(row) -> dict[str, Any]:
+    d = _row_to_dict(row)
+    if not d:
+        return d
+    meta = _json_loads(d.get("metadata")) or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    error = _json_loads(d.get("error"))
+    if isinstance(error, dict):
+        error = error.get("message") or _json_dumps(error)
+    return {
+        "id": d.get("id"),
+        "conversation_id": d.get("conversation_id"),
+        "role": d.get("role") or "user",
+        "content": _parts_to_text(d.get("content")),
+        "model": meta.get("model"),
+        "tool_calls": meta.get("tool_calls"),
+        "tool_results": meta.get("tool_results"),
+        "error": error,
+        "created_at": d.get("created_at"),
+        "position": d.get("position"),
+    }
+
 
 class MessagesRepo:
     def __init__(self, db: LocalDatabase | None = None):
@@ -317,28 +438,51 @@ class MessagesRepo:
 
     async def list_by_conversation(self, conv_id: str) -> list[dict[str, Any]]:
         rows = await self._db.fetchall(
-            "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at",
+            "SELECT * FROM chat.message WHERE conversation_id = ? AND deleted_at IS NULL "
+            "ORDER BY position, created_at",
             (conv_id,),
         )
-        return [self._deserialize(r) for r in rows]
+        return [_msg_to_compat(r) for r in rows]
 
     async def create(self, msg: dict[str, Any]) -> None:
+        from app.services.local_db.outbox import enqueue_change
+
+        now = _now()
+        meta: dict[str, Any] = {}
+        for key in ("model", "tool_calls", "tool_results"):
+            if msg.get(key):
+                meta[key] = msg[key]
+        position = msg.get("position")
+        if position is None:
+            row = await self._db.fetchone(
+                "SELECT COALESCE(MAX(position) + 1, 0) AS pos FROM chat.message "
+                "WHERE conversation_id = ?",
+                (msg["conversation_id"],),
+            )
+            position = row["pos"] if row else 0
+        role = msg.get("role", "user")
+        error = msg.get("error")
         await self._db.execute(
-            """INSERT INTO messages (id, conversation_id, role, content, model,
-               tool_calls, tool_results, error, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO chat.message
+               (id, conversation_id, role, position, status, content, metadata,
+                error, source, is_visible_to_user, is_visible_to_model,
+                content_chars, tool_results_chars, created_at, updated_at, version)
+               VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, 1, 1, ?, 0, ?, ?, 1)""",
             (
                 msg["id"],
                 msg["conversation_id"],
-                msg.get("role", "user"),
-                msg.get("content", ""),
-                msg.get("model"),
-                _json_dumps(msg["tool_calls"]) if msg.get("tool_calls") else None,
-                _json_dumps(msg["tool_results"]) if msg.get("tool_results") else None,
-                msg.get("error"),
-                msg.get("created_at", _now()),
+                role,
+                position,
+                _content_to_parts(msg.get("content", "")),
+                _json_dumps(meta),
+                _json_dumps({"message": error}) if error else None,
+                "user" if role == "user" else "model",
+                len(msg.get("content", "") or ""),
+                msg.get("created_at") or now,
+                msg.get("created_at") or now,
             ),
         )
+        await enqueue_change("chat", "message", msg["id"], self._db, commit=False)
         await self._db.commit()
 
     async def create_many(self, messages: list[dict[str, Any]]) -> None:
@@ -346,37 +490,56 @@ class MessagesRepo:
             await self.create(m)
 
     async def update(self, msg_id: str, updates: dict[str, Any]) -> None:
-        sets = []
-        params = []
-        for key in ("content", "model", "error"):
-            if key in updates:
-                sets.append(f"{key} = ?")
-                params.append(updates[key])
-        for key in ("tool_calls", "tool_results"):
-            if key in updates:
-                sets.append(f"{key} = ?")
-                params.append(_json_dumps(updates[key]) if updates[key] else None)
+        from app.services.local_db.outbox import enqueue_change
+
+        sets: list[str] = []
+        params: list[Any] = []
+        if "content" in updates:
+            sets.append("content = ?")
+            params.append(_content_to_parts(updates["content"] or ""))
+            sets.append("content_chars = ?")
+            params.append(len(updates["content"] or ""))
+        if "error" in updates:
+            sets.append("error = ?")
+            params.append(
+                _json_dumps({"message": updates["error"]}) if updates["error"] else None
+            )
+        meta_updates = {
+            k: updates[k] for k in ("model", "tool_calls", "tool_results") if k in updates
+        }
+        if meta_updates:
+            sets.append("metadata = json_patch(COALESCE(metadata, '{}'), ?)")
+            params.append(_json_dumps(meta_updates))
         if not sets:
             return
+        sets.append("updated_at = ?")
+        params.append(_now())
         params.append(msg_id)
         await self._db.execute(
-            f"UPDATE messages SET {', '.join(sets)} WHERE id = ?",
+            f"UPDATE chat.message SET {', '.join(sets)} WHERE id = ?",
             tuple(params),
         )
+        await enqueue_change("chat", "message", msg_id, self._db, commit=False)
         await self._db.commit()
 
     async def delete_by_conversation(self, conv_id: str) -> int:
-        cursor = await self._db.execute(
-            "DELETE FROM messages WHERE conversation_id = ?", (conv_id,)
+        """Tombstone every live message in a conversation (cloud semantics)."""
+        from app.services.local_db.outbox import enqueue_change
+
+        now = _now()
+        rows = await self._db.fetchall(
+            "SELECT id FROM chat.message WHERE conversation_id = ? AND deleted_at IS NULL",
+            (conv_id,),
         )
+        cursor = await self._db.execute(
+            "UPDATE chat.message SET deleted_at = ?, updated_at = ? "
+            "WHERE conversation_id = ? AND deleted_at IS NULL",
+            (now, now, conv_id),
+        )
+        for r in rows:
+            await enqueue_change("chat", "message", r["id"], self._db, commit=False)
         await self._db.commit()
         return cursor.rowcount
-
-    def _deserialize(self, row) -> dict[str, Any]:
-        d = _row_to_dict(row)
-        d["tool_calls"] = _json_loads(d.get("tool_calls"))
-        d["tool_results"] = _json_loads(d.get("tool_results"))
-        return d
 
 
 # ==================================================================

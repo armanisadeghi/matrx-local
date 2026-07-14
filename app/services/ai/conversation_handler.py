@@ -4,7 +4,14 @@ Implements the ``matrx_ai.client_host.ConversationStore`` Protocol (matrx-ai
 >= 0.3.0). The store is injected via ``matrx_ai.configure(conversation_store=
 ...)`` at startup (app/services/ai/engine.py); after that, EVERY conversation
 write the classic execution path makes (gate, persist, tool logging) and the
-history read delegate here instead of the cx_ ORM tables.
+history read delegate here.
+
+Storage is the CANONICAL LOCAL MIRROR of the cloud chat schema
+(``chat.conversation`` / ``chat.message`` / ``chat.user_request`` /
+``chat.tool_call`` — see app/services/local_db/mirror.py). Local ids ARE the
+canonical cloud ids; every write enqueues an outbox row so the chat sync
+engine pushes the turn to the cloud (docs/SYNC_CONTRACT.md — contract gap #1
+is closed by this pipeline).
 
 Contract notes (matrx_ai/client_host/store.py is the source of truth):
   - The STORE owns idempotency: ``ensure_conversation_exists`` and
@@ -17,25 +24,34 @@ Contract notes (matrx_ai/client_host/store.py is the source of truth):
   - ``get_conversation_config`` must RAISE when the conversation does not
     exist (the resolver treats that as "no local state").
 
-All storage delegates to the local SQLite database (~/.matrx/matrx.db) via
-the existing repository layer, keeping SQLite as the single working store
-consistent with docs/SYNC_CONTRACT.md (conversations/messages are currently
-LOCAL-ONLY — no reconnect push pipeline yet; contract gap #1).
+Canonical-mapping notes:
+  - ``chat.user_request`` has no conversation_id column in the cloud schema
+    (the link lives in ``chat.request`` rows, which a client host does not
+    produce). We keep the linkage in ``user_request.metadata.conversation_id``
+    so local reads can group requests per conversation; the cloud accepts the
+    metadata untouched.
+  - matrx-ai's tool-log ``data`` dict is already shaped like a
+    ``chat.tool_call`` row (it was written for the cx ORM this table came
+    from), so tool logging maps keys straight onto canonical columns and
+    keeps any unknown keys under ``metadata`` — nothing is dropped.
 """
 
 from __future__ import annotations
 
 import json
-import sqlite3
 import uuid
 from typing import Any
 
 from app.common.system_logger import get_logger
+from app.services.local_db.database import get_db
+from app.services.local_db.mirror_schema import MIRROR_TABLES
+from app.services.local_db.outbox import enqueue_change
 from app.services.local_db.repositories import (
     ConversationsRepo,
     MessagesRepo,
+    _content_to_parts,
+    _now,
 )
-from app.services.local_db.database import get_db
 
 logger = get_logger()
 
@@ -54,14 +70,27 @@ def get_conversation_store() -> "SQLiteConversationStore":
 get_conversation_handler = get_conversation_store
 
 
-class SQLiteConversationStore:
-    """matrx_ai.client_host.ConversationStore backed by local SQLite.
+# Columns of chat.tool_call, straight from the generated mirror schema —
+# used to split matrx-ai's tool-log data dict into canonical columns vs
+# metadata extras.
+_TOOL_CALL_COLUMNS: dict[str, str] = MIRROR_TABLES["chat"]["tool_call"]["columns"]
 
-    All seven protocol methods are async and delegate to the existing
-    ConversationsRepo / MessagesRepo plus two dedicated tables:
-    - user_requests: one row per AI interaction
-    - tool_call_logs: one row per tool invocation
-    """
+
+def _to_sql_value(value: Any, sqlite_type: str) -> Any:
+    """Serialize a python value for a mirror column."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, default=str)
+    if sqlite_type == "TEXT" and not isinstance(value, str):
+        return str(value)
+    return value
+
+
+class SQLiteConversationStore:
+    """matrx_ai.client_host.ConversationStore backed by the canonical mirror."""
 
     def __init__(self) -> None:
         self._convs = ConversationsRepo()
@@ -80,27 +109,43 @@ class SQLiteConversationStore:
         overrides: dict[str, Any] | None = None,
     ) -> None:
         try:
-            existing = await self._convs.get(conversation_id)
-            if existing:
-                return
-            await self._convs.create(
-                {
-                    "id": conversation_id,
-                    "title": "New conversation",
-                    "mode": "chat",
-                    "model": "",
-                    "server_conversation_id": None,
-                    "route_mode": overrides.get("route_mode", "chat") if overrides else "chat",
-                    "agent_id": overrides.get("agent_id") if overrides else None,
-                }
+            db = get_db()
+            overrides = overrides or {}
+            config = {
+                "mode": "chat",
+                "route_mode": overrides.get("route_mode", "chat"),
+                "model": overrides.get("model", ""),
+            }
+            cursor = await db.execute(
+                """INSERT OR IGNORE INTO chat.conversation
+                   (id, title, config, status, parent_conversation_id, variables,
+                    overrides, initial_agent_id, source_app, created_by,
+                    created_at, updated_at, message_count, is_favorite,
+                    is_ephemeral, conversation_type, visibility, version,
+                    metadata, cache_state, source_feature, exclude_from_kg)
+                   VALUES (?, 'New conversation', ?, 'active', ?, ?, ?, ?,
+                           'matrx_local', ?, ?, ?, 0, 0, 0, 'standard',
+                           'private', 1, '{}', '{}', '', 0)""",
+                (
+                    conversation_id,
+                    json.dumps(config, ensure_ascii=False),
+                    parent_conversation_id,
+                    json.dumps(variables or {}, ensure_ascii=False, default=str),
+                    json.dumps(overrides, ensure_ascii=False, default=str),
+                    overrides.get("agent_id"),
+                    user_id,
+                    _now(),
+                    _now(),
+                ),
             )
-            logger.debug(
-                "[conv_store] Created conversation %s for user %s", conversation_id, user_id
-            )
-        except sqlite3.IntegrityError:
-            # Lost a create race with a concurrent ensure — the row exists now,
-            # which is exactly what "ensure" means.
-            logger.debug("[conv_store] Conversation %s created concurrently", conversation_id)
+            if cursor.rowcount:
+                await enqueue_change("chat", "conversation", conversation_id, db, commit=False)
+                logger.debug(
+                    "[conv_store] Created conversation %s for user %s",
+                    conversation_id,
+                    user_id,
+                )
+            await db.commit()
         except Exception:
             # matrx-ai swallows store failures with its own log line; scream
             # here so the local failure is visible in the engine log.
@@ -125,19 +170,30 @@ class SQLiteConversationStore:
         must be a no-op, which INSERT OR IGNORE guarantees.
         """
         try:
-            # user_requests.conversation_id has a NOT NULL + FK constraint;
-            # self-heal the parent row when the gate hands us a conversation
-            # we have not seen (ensure_* ordering is not guaranteed for
-            # cross-conversation requests).
             if conversation_id:
                 await self.ensure_conversation_exists(conversation_id, user_id)
             db = get_db()
-            await db.execute(
-                """INSERT OR IGNORE INTO user_requests
-                   (id, conversation_id, user_id, status, created_at, updated_at)
-                   VALUES (?, ?, ?, 'pending', datetime('now'), datetime('now'))""",
-                (request_id, conversation_id, user_id),
+            now = _now()
+            cursor = await db.execute(
+                """INSERT OR IGNORE INTO chat.user_request
+                   (id, user_id, status, source_app, metadata, created_by,
+                    created_at, updated_at, last_activity_at,
+                    total_input_tokens, total_output_tokens, total_cached_tokens,
+                    total_tokens, iterations, total_tool_calls, version)
+                   VALUES (?, ?, 'pending', 'matrx_local', ?, ?, ?, ?, ?,
+                           0, 0, 0, 0, 1, 0, 1)""",
+                (
+                    request_id,
+                    user_id,
+                    json.dumps({"conversation_id": conversation_id}),
+                    user_id,
+                    now,
+                    now,
+                    now,
+                ),
             )
+            if cursor.rowcount:
+                await enqueue_change("chat", "user_request", request_id, db, commit=False)
             await db.commit()
             logger.debug("[conv_store] Ensured pending request %s", request_id)
         except Exception:
@@ -159,7 +215,7 @@ class SQLiteConversationStore:
         completed: Any,
         conversation_id: str | None = None,
     ) -> dict[str, Any]:
-        """Persist all data from a completed AI execution to SQLite.
+        """Persist all data from a completed AI execution.
 
         The `completed` object is matrx-ai's CompletedRequest dataclass (or a
         plain dict in tests). IMPORTANT: on the dataclass, ``messages`` and
@@ -211,38 +267,70 @@ class SQLiteConversationStore:
         message_ids: list[str] = []
         request_ids: list[str] = [user_request_id]
 
+        db = get_db()
+
         # `completed.messages` is the FULL conversation history on every turn.
         # Derive a deterministic id from (conversation, position) so re-persisting
         # the history each turn is idempotent — only genuinely new positions insert.
+        now = _now()
         for position, msg in enumerate(raw_messages):
-            msg_dict = _normalize_message(msg)
-            if msg_dict is None:
+            norm = _normalize_message(msg)
+            if norm is None:
                 continue
-            msg_dict.setdefault(
-                "id", str(uuid.uuid5(_MSG_NAMESPACE, f"{conv_id}:{position}"))
+            msg_id = norm.get("id") or str(
+                uuid.uuid5(_MSG_NAMESPACE, f"{conv_id}:{position}")
             )
-            msg_dict["conversation_id"] = conv_id
+            role = norm["role"]
+            text = norm["content"]
             try:
-                await self._msgs.create(msg_dict)
-                message_ids.append(msg_dict["id"])
-            except sqlite3.IntegrityError:
-                # Already persisted on a previous turn — expected for history rows.
-                pass
+                cursor = await db.execute(
+                    """INSERT OR IGNORE INTO chat.message
+                       (id, conversation_id, role, position, status, content,
+                        metadata, source, is_visible_to_user, is_visible_to_model,
+                        content_chars, tool_results_chars, created_at, updated_at,
+                        version)
+                       VALUES (?, ?, ?, ?, 'active', ?, '{}', ?, 1, 1, ?, 0, ?, ?, 1)""",
+                    (
+                        msg_id,
+                        conv_id,
+                        role,
+                        position,
+                        _content_to_parts(text),
+                        "user" if role == "user" else "model",
+                        len(text),
+                        now,
+                        now,
+                    ),
+                )
+                if cursor.rowcount:
+                    message_ids.append(msg_id)
+                    await enqueue_change("chat", "message", msg_id, db, commit=False)
             except Exception:
                 logger.error(
                     "[conv_store] Failed to persist message %s (conversation=%s)",
-                    msg_dict.get("id"),
+                    msg_id,
                     conv_id,
                     exc_info=True,
                 )
 
-        # Update the user_request row to status=completed
-        db = get_db()
+        # Complete the user_request and touch the conversation rollups.
         await db.execute(
-            """UPDATE user_requests SET status='completed', updated_at=datetime('now')
+            """UPDATE chat.user_request
+               SET status='completed', completed_at=?, updated_at=?, last_activity_at=?
                WHERE id = ?""",
-            (user_request_id,),
+            (now, now, now, user_request_id),
         )
+        await enqueue_change("chat", "user_request", user_request_id, db, commit=False)
+
+        await db.execute(
+            """UPDATE chat.conversation
+               SET message_count = (SELECT COUNT(*) FROM chat.message
+                                    WHERE conversation_id = ? AND deleted_at IS NULL),
+                   last_request_id = ?, last_request_status = 'completed', updated_at = ?
+               WHERE id = ?""",
+            (conv_id, user_request_id, now, conv_id),
+        )
+        await enqueue_change("chat", "conversation", conv_id, db, commit=False)
         await db.commit()
 
         logger.debug(
@@ -267,21 +355,7 @@ class SQLiteConversationStore:
         data: dict[str, Any],
     ) -> None:
         try:
-            db = get_db()
-            status = data.get("status") or "running"
-            await db.execute(
-                """INSERT OR REPLACE INTO tool_call_logs
-                   (id, conversation_id, user_request_id, status, data, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
-                (
-                    row_id,
-                    data.get("conversation_id"),
-                    data.get("user_request_id"),
-                    status,
-                    json.dumps(data, default=str),
-                ),
-            )
-            await db.commit()
+            await self._write_tool_call(row_id, data, replace=True)
         except Exception:
             logger.error(
                 "[conv_store] log_tool_call_start FAILED for row %s (tool=%r)",
@@ -297,15 +371,7 @@ class SQLiteConversationStore:
         data: dict[str, Any],
     ) -> None:
         try:
-            db = get_db()
-            status = data.get("status", "completed")
-            await db.execute(
-                """UPDATE tool_call_logs
-                   SET status = ?, data = ?, updated_at = datetime('now')
-                   WHERE id = ?""",
-                (status, json.dumps(data, default=str), row_id),
-            )
-            await db.commit()
+            await self._write_tool_call(row_id, data, replace=True)
         except Exception:
             logger.error(
                 "[conv_store] log_tool_call_update FAILED for row %s",
@@ -313,6 +379,60 @@ class SQLiteConversationStore:
                 exc_info=True,
             )
             raise
+
+    async def _write_tool_call(self, row_id: str, data: dict[str, Any], replace: bool) -> None:
+        """Upsert a chat.tool_call row from matrx-ai's tool-log data dict.
+
+        Known keys map straight onto canonical columns; anything else is
+        preserved under metadata (nothing silently dropped). Update calls
+        merge over the existing row via INSERT OR REPLACE after re-reading —
+        matrx-ai sends the full data dict on updates too, so replace is safe.
+        """
+        db = get_db()
+        row: dict[str, Any] = {"id": row_id}
+        extras: dict[str, Any] = {}
+        for key, value in data.items():
+            if key == "id":
+                continue
+            if key in _TOOL_CALL_COLUMNS:
+                row[key] = value
+            else:
+                extras[key] = value
+
+        meta = row.get("metadata") or {}
+        if not isinstance(meta, dict):
+            meta = {"_raw": meta}
+        if extras:
+            meta = {**meta, **extras}
+        row["metadata"] = meta
+        row.setdefault("status", "running")
+        row.setdefault("created_at", _now())
+        row["updated_at"] = _now()
+
+        columns = list(row.keys())
+        placeholders = ", ".join("?" for _ in columns)
+        col_sql = ", ".join(f'"{c}"' for c in columns)
+        values = tuple(
+            _to_sql_value(row[c], _TOOL_CALL_COLUMNS.get(c, "TEXT")) for c in columns
+        )
+        # ON CONFLICT upsert keeps columns from the start row that the update
+        # dict doesn't carry (INSERT OR REPLACE would null them out), and
+        # metadata merges so start-time extras survive partial updates.
+        update_sql = ", ".join(
+            '"metadata" = json_patch(COALESCE("metadata", \'{}\'), '
+            'COALESCE(excluded."metadata", \'{}\'))'
+            if c == "metadata"
+            else f'"{c}" = excluded."{c}"'
+            for c in columns
+            if c != "id"
+        )
+        await db.execute(
+            f'INSERT INTO chat.tool_call ({col_sql}) VALUES ({placeholders}) '
+            f"ON CONFLICT(id) DO UPDATE SET {update_sql}",
+            values,
+        )
+        await enqueue_change("chat", "tool_call", row_id, db, commit=False)
+        await db.commit()
 
     # ------------------------------------------------------------------
     # ConversationStore protocol — reads
@@ -360,34 +480,46 @@ class SQLiteConversationStore:
 
         db = get_db()
         request_rows = await db.fetchall(
-            "SELECT * FROM user_requests WHERE conversation_id = ? ORDER BY created_at",
+            "SELECT * FROM chat.user_request "
+            "WHERE json_extract(metadata, '$.conversation_id') = ? AND deleted_at IS NULL "
+            "ORDER BY created_at",
             (conversation_id,),
         )
         user_requests = [dict(r) for r in request_rows]
 
         tool_rows = await db.fetchall(
-            "SELECT * FROM tool_call_logs WHERE conversation_id = ? ORDER BY created_at",
+            "SELECT * FROM chat.tool_call "
+            "WHERE conversation_id = ? AND deleted_at IS NULL ORDER BY created_at",
             (conversation_id,),
         )
         tool_calls: list[dict[str, Any]] = []
         for r in tool_rows:
             row = dict(r)
-            try:
-                row["data"] = json.loads(row.get("data") or "{}")
-            except Exception:
-                logger.warning(
-                    "[conv_store] Corrupt tool_call_logs.data for row %s — returning raw string",
-                    row.get("id"),
-                )
+            for json_col in ("arguments", "metadata", "execution_events", "output_preview"):
+                raw = row.get(json_col)
+                if isinstance(raw, str) and raw:
+                    try:
+                        row[json_col] = json.loads(raw)
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "[conv_store] Corrupt chat.tool_call.%s for row %s — "
+                            "returning raw string",
+                            json_col,
+                            row.get("id"),
+                        )
             tool_calls.append(row)
+
+        media_rows = await db.fetchall(
+            "SELECT * FROM chat.media "
+            "WHERE conversation_id = ? AND deleted_at IS NULL ORDER BY created_at",
+            (conversation_id,),
+        )
 
         return {
             "conversation": conv,
             "messages": messages,
             "tool_calls": tool_calls,
-            # No local media pipeline for conversations yet (media lives in the
-            # media vault, keyed by generation — not linked to conversations).
-            "media": [],
+            "media": [dict(r) for r in media_rows],
             "user_requests": user_requests,
             "requests": user_requests,
         }
@@ -430,11 +562,12 @@ _MSG_NAMESPACE = uuid.UUID("7df1aa44-43e5-4dca-9c4f-3f2f6f8a1b9e")
 
 
 def _normalize_message(msg: Any) -> dict[str, Any] | None:
-    """Convert a UnifiedMessage / dict into a row for the local messages table.
+    """Convert a UnifiedMessage / dict into {id?, role, content-text}.
 
-    UnifiedMessage.content is a list of UnifiedContent parts; the messages
-    table stores plain text. Text parts are concatenated; any non-text parts
-    are JSON-dumped so nothing is silently dropped.
+    UnifiedMessage.content is a list of UnifiedContent parts; we flatten to
+    plain text for storage as a single canonical text part. Text parts are
+    concatenated; any non-text parts are JSON-dumped so nothing is silently
+    dropped.
     """
     if isinstance(msg, dict):
         role = msg.get("role") or "user"

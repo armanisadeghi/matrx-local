@@ -453,6 +453,103 @@ CREATE INDEX IF NOT EXISTS idx_downloads_created  ON downloads(created_at DESC)
 """
 
 # ------------------------------------------------------------------
+# Migration 10: Chat cutover to the canonical cloud mirror
+#
+# The bespoke conversations/messages/user_requests/tool_call_logs tables are
+# replaced by the structural mirror of the cloud chat schema
+# (chat.conversation / chat.message / chat.user_request / chat.tool_call —
+# ATTACHed mirror files, see app/services/local_db/mirror.py; the mirror is
+# attached BEFORE migrations run so this SQL can reference chat.*).
+#
+# Existing local data is copied into the canonical shape and every copied
+# row is seeded into the sync_queue outbox so historical local-only chats
+# get pushed to the cloud on the first sync. Then the bespoke tables are
+# ANNIHILATED — no dual systems.
+#
+# Canonical-mapping notes (same rules as ConversationsRepo/MessagesRepo):
+#   conversations.mode/route_mode/model -> conversation.config JSON
+#   conversations.agent_id              -> conversation.initial_agent_id
+#   messages.content (text)             -> message.content [{type,text}]
+#   messages.model/tool_calls/results   -> message.metadata JSON
+#   user_requests.conversation_id       -> user_request.metadata JSON
+#     (the cloud user_request table has no conversation_id column)
+#   tool_call_logs.data (full dict)     -> canonical columns extracted,
+#                                          whole blob kept in metadata
+# ------------------------------------------------------------------
+
+_V10_CHAT_MIRROR_CUTOVER = """
+INSERT OR IGNORE INTO chat.conversation
+    (id, title, config, status, initial_agent_id, source_app, created_at,
+     updated_at, message_count, is_favorite, is_ephemeral, conversation_type,
+     visibility, version, metadata, variables, overrides, cache_state,
+     source_feature, exclude_from_kg)
+SELECT id, title,
+       json_object('mode', mode, 'route_mode', route_mode, 'model', COALESCE(model, '')),
+       'active', agent_id, 'matrx_local', created_at, updated_at,
+       0, 0, 0, 'standard', 'private', 1, '{}', '{}', '{}', '{}', '', 0
+FROM conversations;
+INSERT OR IGNORE INTO chat.message
+    (id, conversation_id, role, position, status, content, metadata, error,
+     source, is_visible_to_user, is_visible_to_model, content_chars,
+     tool_results_chars, created_at, updated_at, version)
+SELECT m.id, m.conversation_id, m.role,
+       (ROW_NUMBER() OVER (PARTITION BY m.conversation_id ORDER BY m.created_at, m.id)) - 1,
+       'active',
+       CASE WHEN m.content IS NULL OR m.content = '' THEN '[]'
+            ELSE json_array(json_object('type', 'text', 'text', m.content)) END,
+       json_patch(
+           json_patch(
+               json_object('model', m.model),
+               CASE WHEN m.tool_calls IS NOT NULL AND json_valid(m.tool_calls)
+                    THEN json_object('tool_calls', json(m.tool_calls)) ELSE '{}' END),
+           CASE WHEN m.tool_results IS NOT NULL AND json_valid(m.tool_results)
+                THEN json_object('tool_results', json(m.tool_results)) ELSE '{}' END),
+       CASE WHEN m.error IS NOT NULL THEN json_object('message', m.error) END,
+       CASE WHEN m.role = 'user' THEN 'user' ELSE 'model' END,
+       1, 1, length(COALESCE(m.content, '')), 0, m.created_at, m.created_at, 1
+FROM messages m;
+UPDATE chat.conversation
+SET message_count = (SELECT COUNT(*) FROM chat.message m
+                     WHERE m.conversation_id = chat.conversation.id);
+INSERT OR IGNORE INTO chat.user_request
+    (id, user_id, status, source_app, metadata, created_at, updated_at,
+     last_activity_at, total_input_tokens, total_output_tokens,
+     total_cached_tokens, total_tokens, iterations, total_tool_calls, version)
+SELECT id, user_id, status, 'matrx_local',
+       json_object('conversation_id', conversation_id),
+       created_at, updated_at, updated_at, 0, 0, 0, 0, 1, 0, 1
+FROM user_requests;
+INSERT OR IGNORE INTO chat.tool_call
+    (id, conversation_id, user_request_id, status, tool_name, tool_type,
+     call_id, arguments, message_id, iteration, started_at, completed_at,
+     metadata, created_at, updated_at, version)
+SELECT id, conversation_id, user_request_id, status,
+       CASE WHEN json_valid(data) THEN json_extract(data, '$.tool_name') END,
+       CASE WHEN json_valid(data) THEN json_extract(data, '$.tool_type') END,
+       CASE WHEN json_valid(data) THEN json_extract(data, '$.call_id') END,
+       CASE WHEN json_valid(data) THEN json_extract(data, '$.arguments') END,
+       CASE WHEN json_valid(data) THEN json_extract(data, '$.message_id') END,
+       CASE WHEN json_valid(data) THEN json_extract(data, '$.iteration') END,
+       CASE WHEN json_valid(data) THEN json_extract(data, '$.started_at') END,
+       CASE WHEN json_valid(data) THEN json_extract(data, '$.completed_at') END,
+       CASE WHEN json_valid(data) THEN json(data) ELSE json_object('raw', data) END,
+       created_at, updated_at, 1
+FROM tool_call_logs;
+INSERT INTO sync_queue (entity_type, entity_id, action, payload)
+SELECT 'chat.conversation', id, 'upsert', '{}' FROM conversations;
+INSERT INTO sync_queue (entity_type, entity_id, action, payload)
+SELECT 'chat.message', id, 'upsert', '{}' FROM messages;
+INSERT INTO sync_queue (entity_type, entity_id, action, payload)
+SELECT 'chat.user_request', id, 'upsert', '{}' FROM user_requests;
+INSERT INTO sync_queue (entity_type, entity_id, action, payload)
+SELECT 'chat.tool_call', id, 'upsert', '{}' FROM tool_call_logs;
+DROP TABLE tool_call_logs;
+DROP TABLE user_requests;
+DROP TABLE messages;
+DROP TABLE conversations
+"""
+
+# ------------------------------------------------------------------
 # All migrations in order
 # ------------------------------------------------------------------
 
@@ -466,4 +563,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (7, _V7_LOCAL_NOTE_VERSIONS),
     (8, _V8_SCRAPE_PAGES),
     (9, _V9_DOWNLOADS),
+    (10, _V10_CHAT_MIRROR_CUTOVER),
 ]

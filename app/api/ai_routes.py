@@ -353,7 +353,7 @@ async def resume_conversation(
 
     db = get_db()
     row = await db.fetchone(
-        "SELECT id, status FROM user_requests WHERE id = ?",
+        "SELECT id, status FROM chat.user_request WHERE id = ?",
         (request.user_request_id,),
     )
     if row is None:

@@ -67,12 +67,12 @@ class LocalDatabase:
         # Sync less aggressively — we have WAL for crash safety
         await self._db.execute("PRAGMA synchronous=NORMAL")
 
-        await self._run_migrations()
-
         # Attach the structural mirror of the canonical cloud schemas
         # (chat.conversation etc. — see app/services/local_db/mirror.py).
+        # MUST run before migrations: V10+ migration SQL references chat.*.
         await attach_and_ensure_mirror(self._db, self.path)
 
+        await self._run_migrations()
         logger.info("[local_db] Connected to %s", self.path)
 
     async def close(self) -> None:

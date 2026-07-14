@@ -114,6 +114,7 @@ from app.tools.tools.media import (
     tool_image_resize,
     tool_pdf_extract,
 )
+from app.tools.tools.ner import tool_extract_entities, tool_extract_pii
 from app.tools.tools.wifi_bluetooth import (
     tool_bluetooth_devices,
     tool_connected_devices,
@@ -274,6 +275,9 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "PdfExtract": tool_pdf_extract,
     "ArchiveCreate": tool_archive_create,
     "ArchiveExtract": tool_archive_extract,
+    # ── Local NER ───────────────────────────────────────────────────────
+    "ExtractEntities": tool_extract_entities,
+    "ExtractPII": tool_extract_pii,
     # ── WiFi & Bluetooth ─────────────────────────────────────────────
     "WifiNetworks": tool_wifi_networks,
     "BluetoothDevices": tool_bluetooth_devices,

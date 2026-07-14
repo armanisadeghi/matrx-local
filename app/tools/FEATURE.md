@@ -1,6 +1,6 @@
 # FEATURE — Local Tools (dispatcher + catalog + tool_sync)
 
-113 local tools, one registry, three files that matter. Before touching any of
+115 local tools, one registry, three files that matter. Before touching any of
 this, know the two truths:
 
 - **Code-side truth:** `catalog.py::get_catalog()` — built automatically from
@@ -44,6 +44,9 @@ this, know the two truths:
    `catalog.py::_META` — richer schema (descriptions, enums, bounds).
 4. `uv run python -m app.tools.tool_sync status` → `emit-changeset`; operator
    applies the SQL via Supabase MCP.
+   After applying, rerun `status`. Do not leave an applyable SQL file behind
+   once cloud and code are in sync; replace it with a no-op applied record or
+   regenerate only when drift exists.
 5. Run `uv run pytest tests/parity/test_tool_count.py` — it enforces
    dispatcher = catalog = source exact-set parity and schema validity; the
    characterization snapshot must be regenerated when the set changes.

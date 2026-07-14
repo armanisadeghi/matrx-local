@@ -137,6 +137,7 @@ a = Analysis(
         'app.tools.tools.network_discovery', 'app.tools.tools.system_monitor',
         'app.tools.tools.file_watch', 'app.tools.tools.app_integration',
         'app.tools.tools.scheduler', 'app.tools.tools.media',
+        'app.tools.tools.ner',
         'app.tools.tools.wifi_bluetooth',
         # stdlib modules not auto-discovered by PyInstaller but required by
         # user-installed image-gen packages (transformers uses filecmp directly)

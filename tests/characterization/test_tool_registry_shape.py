@@ -3,9 +3,9 @@
 This test snapshots the complete tool surface (post Phase-4 registry
 unification, 2026-07-10):
 
-  - TOOL_HANDLERS names        (app/tools/dispatcher.py)   — 113 tools
-  - catalog cloud names        (app/tools/catalog.py)      — 113 names
-  - tool_* source functions    (app/tools/tools/*.py)      — 113 funcs
+  - TOOL_HANDLERS names        (app/tools/dispatcher.py)   — 115 tools
+  - catalog cloud names        (app/tools/catalog.py)      — 115 names
+  - tool_* source functions    (app/tools/tools/*.py)      — 115 funcs
   - orphan source functions    (source − dispatcher)       — 0 funcs
 
 plus the derived relationships between them. Any drift — a tool added,
@@ -166,10 +166,10 @@ def test_snapshot_counts() -> None:
     snap = _snapshot()
     counts = {k: len(v) for k, v in snap.items()}
     assert counts == {
-        "dispatcher_tool_names": 113,
-        "catalog_cloud_names": 113,
-        "source_tool_functions": 113,
-        "dispatcher_handler_function_names": 113,
+        "dispatcher_tool_names": 115,
+        "catalog_cloud_names": 115,
+        "source_tool_functions": 115,
+        "dispatcher_handler_function_names": 115,
         "orphan_source_functions": 0,
     }, (
         f"TOOL SURFACE COUNTS CHANGED: {counts}. If intentional, update this "

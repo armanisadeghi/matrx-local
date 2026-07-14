@@ -102,6 +102,7 @@ from app.tools.arg_models.media_args import (
     ImageResizeArgs,
     PdfExtractArgs,
 )
+from app.tools.arg_models.ner_args import ExtractEntitiesArgs, ExtractPiiArgs
 from app.tools.arg_models.network_args import (
     MdnsDiscoverArgs,
     NetworkInfoArgs,
@@ -561,6 +562,19 @@ _META: dict[str, ToolMeta] = {
         "Extract a zip, tar, or 7z archive.",
         "local_media", ("archive", "extract", "zip", "tar", "local"),
         ArchiveExtractArgs, timeout_seconds=120.0,
+    ),
+    # ── Local NER ────────────────────────────────────────────────────────
+    "ExtractEntities": ToolMeta(
+        "local_extract_entities",
+        "Extract zero-shot named entities from text using the local GLiNER / GLiNER2 NER subsystem.",
+        "local_ner", ("ner", "entities", "gliner", "local"),
+        ExtractEntitiesArgs, timeout_seconds=300.0,
+    ),
+    "ExtractPII": ToolMeta(
+        "local_extract_pii",
+        "Extract common PII entities from text using the local GLiNER / GLiNER2 NER subsystem.",
+        "local_ner", ("ner", "pii", "privacy", "gliner", "local"),
+        ExtractPiiArgs, timeout_seconds=300.0,
     ),
     # ── Documents ────────────────────────────────────────────────────────
     "ListDocuments": ToolMeta(

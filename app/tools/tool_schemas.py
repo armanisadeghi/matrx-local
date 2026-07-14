@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, get_args, get_origin
+import types
+from typing import Any, Union, get_args, get_origin
 
 from app.tools.dispatcher import TOOL_HANDLERS
 
@@ -48,6 +49,7 @@ TOOL_CATEGORIES: dict[str, list[str]] = {
     "OS Integration": ["AppleScript", "PowerShellScript", "GetInstalledApps"],
     "Scheduler": ["ScheduleTask", "ListScheduled", "CancelScheduled", "HeartbeatStatus", "PreventSleep"],
     "Media Processing": ["ImageOCR", "ImageResize", "PdfExtract", "ArchiveCreate", "ArchiveExtract"],
+    "Local NER": ["ExtractEntities", "ExtractPII"],
     "WiFi & Bluetooth": ["WifiNetworks", "BluetoothDevices", "ConnectedDevices"],
     "Documents": ["ListDocuments", "ListDocumentFolders", "ReadDocument", "WriteDocument", "SearchDocuments"],
     "PowerShell": [
@@ -93,17 +95,16 @@ def _python_type_to_json_schema(annotation: Any) -> dict[str, Any]:
     if origin is dict:
         return {"type": "object"}
 
-    # Handle Union types (e.g. str | None)
-    try:
-        import types
-        if isinstance(annotation, types.UnionType):
-            args = get_args(annotation)
-            non_none = [a for a in args if a is not type(None)]
-            if len(non_none) == 1:
-                return _python_type_to_json_schema(non_none[0])
-            return {"type": "string"}
-    except AttributeError:
-        pass
+    # Handle Union types (e.g. str | None, list[str] | dict[str, str]).
+    if isinstance(annotation, types.UnionType) or origin is Union:
+        args = get_args(annotation)
+        non_none = [a for a in args if a is not type(None)]
+        if len(non_none) == 1:
+            return _python_type_to_json_schema(non_none[0])
+        schemas = [_python_type_to_json_schema(arg) for arg in non_none]
+        if len(schemas) == 1:
+            return schemas[0]
+        return {"anyOf": schemas}
 
     # Simple types
     if annotation in _TYPE_MAP:

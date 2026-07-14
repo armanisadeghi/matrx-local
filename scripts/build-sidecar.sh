@@ -362,6 +362,7 @@ args = [
     "--hidden-import", "app.tools.tools.app_integration",
     "--hidden-import", "app.tools.tools.scheduler",
     "--hidden-import", "app.tools.tools.media",
+    "--hidden-import", "app.tools.tools.ner",
     "--hidden-import", "app.tools.tools.wifi_bluetooth",
     "--hidden-import", "pydantic_settings",
     # Lazily/dynamically imported — PyInstaller's static analysis misses these

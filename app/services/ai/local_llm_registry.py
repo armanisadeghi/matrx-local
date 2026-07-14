@@ -49,6 +49,13 @@ def _local_model_name(model_name: str) -> str:
     return f"local/{model_name}"
 
 
+def _bare_model_name(model_name: str) -> str:
+    """Return the model name without the public ``local/`` prefix."""
+    if model_name.startswith("local/"):
+        return model_name.removeprefix("local/")
+    return model_name
+
+
 # ---------------------------------------------------------------------------
 # Runtime model registration (matrx_ai.catalog)
 # ---------------------------------------------------------------------------
@@ -211,4 +218,27 @@ def get_local_llm_status() -> dict[str, Any]:
         # response shape compatibility with the desktop frontend.
         "matrx_ai_support": True,
         "instructions": None,
+    }
+
+
+def resolve_local_llm_model(requested_model: str | None = None) -> dict[str, Any] | None:
+    """Resolve an OpenAI-compatible model id to the active llama-server target.
+
+    The public API exposes ``local/<name>`` while llama-server generally expects
+    its bare model name. Accept both spellings for SDK ergonomics, but return
+    the bare name to use in the proxied request body.
+    """
+    if _local_llm_port is None or _local_llm_model is None:
+        return None
+
+    bare = _bare_model_name(_local_llm_model)
+    canonical = _local_model_name(bare)
+    if requested_model is not None and requested_model not in {bare, canonical}:
+        return None
+
+    return {
+        "port": _local_llm_port,
+        "base_url": f"http://127.0.0.1:{_local_llm_port}/v1",
+        "model_name": bare,
+        "canonical_model_name": canonical,
     }

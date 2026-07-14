@@ -776,7 +776,7 @@ class SyncEngine:
                     # deletion instead of resurrecting the note from the cloud.
                     if local_note and local_note.get("is_deleted"):
                         try:
-                            await self.sb.soft_delete_note(note_id)
+                            await self.sb.soft_delete_note(note_id, self.device_id)
                             stats["deleted_local"] += 1
                         except Exception:
                             logger.debug(
@@ -1193,7 +1193,7 @@ class SyncEngine:
 
             if self.is_configured and self._user_id:
                 try:
-                    await self.sb.soft_delete_note(row["id"])
+                    await self.sb.soft_delete_note(row["id"], self.device_id)
                 except Exception:
                     logger.debug(
                         "Could not propagate delete for %s (will retry on full_sync)",

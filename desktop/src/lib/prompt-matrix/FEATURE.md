@@ -104,6 +104,10 @@ the run-count + Queue button **below** them.
   median generation time, and the actual first/last prompts. Nothing is queued
   without it.
 - `BatchQueuePanel` — pause / drag-reorder / cancel-batch / retry, live.
+- **Templates menu** — save/load named matrices in localStorage; **export** the
+  current or saved matrix as JSON (copy or download); **import** from pasted
+  JSON or a `.json` file (wrapped export or bare `MatrixSpec`). Chat/agent
+  workflow: export → edit → paste back.
 
 `ImageGenerateForm` carries the Single ⇄ Batch toggle, so every variant gets it.
 

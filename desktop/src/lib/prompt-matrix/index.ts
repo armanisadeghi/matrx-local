@@ -59,3 +59,13 @@ export {
   IMAGE_TEMPLATE_FIELDS,
   type ImageTargetContext,
 } from "./imageTarget";
+
+export {
+  MATRIX_EXPORT_VERSION,
+  downloadMatrixExport,
+  matrixExportFilename,
+  parseMatrixImport,
+  serializeMatrixExport,
+  type MatrixExportFile,
+  type MatrixImportResult,
+} from "./io";

@@ -18,7 +18,10 @@ import {
   countPlan,
   expandMatrix,
   extractVariableNames,
+  parseMatrixImport,
+  randomSeed,
   syncVariablesWithTokens,
+  type MatrixImportResult,
   type MatrixOption,
   type MatrixPlan,
   type MatrixSpec,
@@ -28,7 +31,6 @@ import {
   type SeedPolicy,
   type StrategyKind,
 } from "@/lib/prompt-matrix";
-import { randomSeed } from "@/lib/prompt-matrix";
 import {
   deleteTemplate,
   emptySpec,
@@ -85,6 +87,8 @@ export interface PromptMatrixActions {
   loadTemplate: (id: string) => void;
   saveAsTemplate: (name: string) => void;
   removeTemplate: (id: string) => void;
+  /** Load a MatrixSpec from exported / agent-edited JSON. */
+  importFromJson: (text: string) => MatrixImportResult;
 }
 
 export function usePromptMatrix<TJob>(
@@ -382,6 +386,31 @@ export function usePromptMatrix<TJob>(
     [targetId],
   );
 
+  const importFromJson = useCallback(
+    (text: string): MatrixImportResult => {
+      const parsed = parseMatrixImport(text);
+      if (!parsed.ok) return parsed;
+
+      if (parsed.targetId !== targetId) {
+        return {
+          ok: false,
+          error: `This export is for "${parsed.targetId}" — this panel is "${targetId}".`,
+        };
+      }
+
+      const byId = new Map(parsed.spec.fields.map((f) => [f.id, f.text]));
+      setSpec({
+        ...parsed.spec,
+        fields: targetFields.map((f) => ({
+          ...f,
+          text: byId.get(f.id) ?? "",
+        })),
+      });
+      return parsed;
+    },
+    [targetFields, targetId],
+  );
+
   // ── derived ───────────────────────────────────────────────────────────────
 
   const plan = useMemo(() => expandMatrix(spec), [spec]);
@@ -421,6 +450,7 @@ export function usePromptMatrix<TJob>(
       loadTemplate: loadTemplateById,
       saveAsTemplate,
       removeTemplate,
+      importFromJson,
     }),
     [
       setFieldText,
@@ -444,6 +474,7 @@ export function usePromptMatrix<TJob>(
       loadTemplateById,
       saveAsTemplate,
       removeTemplate,
+      importFromJson,
     ],
   );
 

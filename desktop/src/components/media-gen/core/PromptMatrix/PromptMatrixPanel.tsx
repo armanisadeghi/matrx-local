@@ -14,7 +14,7 @@
  * by materializing), so nobody is ever surprised by what they queued.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -33,7 +33,7 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { AlertCircle, Layers, Link2, RotateCcw, Save, Sparkles, Trash2 } from "lucide-react";
+import { AlertCircle, Copy, Download, FileUp, Layers, Link2, RotateCcw, Save, Sparkles, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
   TooltipContent,
@@ -56,11 +57,16 @@ import type { PromptMatrixActions } from "@/hooks/use-prompt-matrix";
 import {
   buildJobs,
   countPlan,
+  downloadMatrixExport,
   MAX_BATCH_SIZE,
+  serializeMatrixExport,
   variableKey,
+  type MatrixSpec,
   type MatrixVariable,
   type ParamAxis,
 } from "@/lib/prompt-matrix";
+import type { SavedTemplate } from "@/lib/prompt-matrix/storage";
+import type { MatrixImportResult } from "@/lib/prompt-matrix";
 import type { ImageGenerateInput } from "@/hooks/use-media-gen";
 import type { ImageGenBatchJobSpec } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -384,12 +390,15 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
 
       <div className="flex flex-wrap items-center gap-2">
         <TemplateMenu
+          spec={spec}
+          targetId={target.id}
           templates={state.templates}
           name={templateName}
           onNameChange={setTemplateName}
           onSave={actions.saveAsTemplate}
           onLoad={actions.loadTemplate}
           onDelete={actions.removeTemplate}
+          onImport={actions.importFromJson}
         />
 
         <Tooltip>
@@ -585,26 +594,91 @@ function LinkGroupControl({
   );
 }
 
-/** Save / load / delete named templates. */
+/** Save / load / delete named templates; export / import JSON. */
 function TemplateMenu({
+  spec,
+  targetId,
   templates,
   name,
   onNameChange,
   onSave,
   onLoad,
   onDelete,
+  onImport,
 }: {
-  templates: { id: string; name: string }[];
+  spec: MatrixSpec;
+  targetId: string;
+  templates: SavedTemplate[];
   name: string;
   onNameChange: (name: string) => void;
   onSave: (name: string) => void;
   onLoad: (id: string) => void;
   onDelete: (id: string) => void;
+  onImport: (text: string) => MatrixImportResult;
 }) {
   const [open, setOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importOk, setImportOk] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const copyExport = useCallback(
+    async (exportSpec: MatrixSpec, exportName?: string) => {
+      const text = serializeMatrixExport(targetId, exportSpec, exportName);
+      await navigator.clipboard.writeText(text);
+      setImportOk(
+        exportName !== undefined && exportName.trim().length > 0
+          ? `Copied "${exportName.trim()}" to clipboard.`
+          : "Copied current matrix to clipboard.",
+      );
+      setImportError(null);
+    },
+    [targetId],
+  );
+
+  const handleImport = useCallback(() => {
+    const result = onImport(importText);
+    if (!result.ok) {
+      setImportError(result.error);
+      setImportOk(null);
+      return;
+    }
+    if (result.name !== null) onNameChange(result.name);
+    setImportText("");
+    setImportError(null);
+    setImportOk(
+      result.name !== null
+        ? `Imported "${result.name}".`
+        : "Imported matrix.",
+    );
+    setOpen(false);
+  }, [importText, onImport, onNameChange]);
+
+  const handleFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = "";
+      if (file === undefined) return;
+      void file.text().then((text) => {
+        setImportText(text);
+        setImportError(null);
+        setImportOk(null);
+      });
+    },
+    [],
+  );
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) {
+          setImportError(null);
+          setImportOk(null);
+        }
+      }}
+    >
       <PopoverTrigger asChild>
         <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
           <Save className="h-3.5 w-3.5" />
@@ -616,7 +690,7 @@ function TemplateMenu({
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 space-y-3 p-3">
+      <PopoverContent align="start" className="w-80 space-y-3 p-3">
         <div className="space-y-1.5">
           <Label className="text-xs">Save this matrix</Label>
           <div className="flex gap-1.5">
@@ -643,6 +717,30 @@ function TemplateMenu({
           </p>
         </div>
 
+        <div className="space-y-1.5">
+          <Label className="text-xs">Export JSON</Label>
+          <div className="flex flex-wrap gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 text-xs"
+              onClick={() => void copyExport(spec, name)}
+            >
+              <Copy className="h-3 w-3" />
+              Copy current
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 text-xs"
+              onClick={() => downloadMatrixExport(targetId, spec, name)}
+            >
+              <Download className="h-3 w-3" />
+              Download
+            </Button>
+          </div>
+        </div>
+
         {templates.length > 0 && (
           <>
             <Separator />
@@ -664,6 +762,26 @@ function TemplateMenu({
                   <Button
                     variant="ghost"
                     size="icon"
+                    className="h-6 w-6 shrink-0 text-muted-foreground"
+                    onClick={() => void copyExport(t.spec, t.name)}
+                    aria-label={`Copy ${t.name} as JSON`}
+                  >
+                    <Copy className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0 text-muted-foreground"
+                    onClick={() =>
+                      downloadMatrixExport(targetId, t.spec, t.name)
+                    }
+                    aria-label={`Download ${t.name} as JSON`}
+                  >
+                    <Download className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
                     onClick={() => onDelete(t.id)}
                     aria-label={`Delete ${t.name}`}
@@ -675,6 +793,54 @@ function TemplateMenu({
             </div>
           </>
         )}
+
+        <Separator />
+
+        <div className="space-y-1.5">
+          <Label className="text-xs">Import JSON</Label>
+          <Textarea
+            value={importText}
+            onChange={(e) => {
+              setImportText(e.target.value);
+              setImportError(null);
+              setImportOk(null);
+            }}
+            placeholder='Paste a matrix export, or a bare {"fields":…,"variables":…} spec'
+            className="min-h-[72px] resize-y text-xs font-mono"
+          />
+          <div className="flex flex-wrap gap-1.5">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 text-xs"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <FileUp className="h-3 w-3" />
+              Choose file
+            </Button>
+            <Button
+              size="sm"
+              className="h-7 text-xs"
+              disabled={importText.trim().length === 0}
+              onClick={handleImport}
+            >
+              Import
+            </Button>
+          </div>
+          {importError !== null && (
+            <p className="text-[10px] text-destructive">{importError}</p>
+          )}
+          {importOk !== null && (
+            <p className="text-[10px] text-muted-foreground">{importOk}</p>
+          )}
+        </div>
       </PopoverContent>
     </Popover>
   );

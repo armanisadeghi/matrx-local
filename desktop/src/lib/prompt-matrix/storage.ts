@@ -53,7 +53,7 @@ export function emptySpec(fields: TemplateField[]): MatrixSpec {
  * Structural validation. Anything that fails is discarded — we would rather
  * hand back an empty matrix than let a malformed one reach the planner.
  */
-function isSpec(value: unknown): value is MatrixSpec {
+export function isMatrixSpec(value: unknown): value is MatrixSpec {
   if (typeof value !== "object" || value === null) return false;
   const s = value as Partial<MatrixSpec>;
   if (!Array.isArray(s.fields) || !Array.isArray(s.variables)) return false;
@@ -103,7 +103,7 @@ export function loadWorkingSpec(
     typeof v === "object" && v !== null,
   );
   const mine = all?.[targetId];
-  if (mine !== undefined && isSpec(mine)) {
+  if (mine !== undefined && isMatrixSpec(mine)) {
     // Reconcile the stored fields against the target's CURRENT fields, so a
     // target that gained or lost a field doesn't resurrect a stale one.
     const byId = new Map(mine.fields.map((f) => [f.id, f.text]));
@@ -132,7 +132,7 @@ function isTemplateArray(value: unknown): value is SavedTemplate[] {
       (t: Partial<SavedTemplate>) =>
         typeof t?.id === "string" &&
         typeof t?.name === "string" &&
-        isSpec(t?.spec),
+        isMatrixSpec(t?.spec),
     )
   );
 }

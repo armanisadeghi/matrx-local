@@ -5,6 +5,11 @@ import { findTokens, renderTemplate, tidyPrompt, variableKey } from "./parse";
 import { Rng, sampleIndices } from "./rng";
 import { buildJobs, syncVariablesWithTokens } from "./targets";
 import { createImageTarget } from "./imageTarget";
+import {
+  matrixExportFilename,
+  parseMatrixImport,
+  serializeMatrixExport,
+} from "./io";
 import type { ImageGenModelInfo } from "@/lib/api";
 import type { ImageGenerateInput } from "@/hooks/use-media-gen";
 import type {
@@ -480,5 +485,45 @@ describe("rng", () => {
 
   it("survives a zero seed", () => {
     expect(new Rng(0).next()).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ── JSON export / import ────────────────────────────────────────────────────
+
+describe("matrix JSON io", () => {
+  const s = variable("subject", ["cat", "dog"]);
+
+  it("round-trips a wrapped export", () => {
+    const sp = spec("{{subject}}", [s]);
+    const text = serializeMatrixExport("image", sp, "Portrait sweep");
+    const parsed = parseMatrixImport(text);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.targetId).toBe("image");
+    expect(parsed.name).toBe("Portrait sweep");
+    expect(parsed.spec.variables).toHaveLength(1);
+  });
+
+  it("accepts a bare MatrixSpec without the envelope", () => {
+    const sp = spec("{{subject}}", [s]);
+    const parsed = parseMatrixImport(JSON.stringify(sp));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.name).toBeNull();
+    expect(parsed.targetId).toBe("image");
+  });
+
+  it("rejects invalid JSON and bad versions", () => {
+    expect(parseMatrixImport("not json").ok).toBe(false);
+    expect(
+      parseMatrixImport(
+        JSON.stringify({ v: 99, targetId: "image", spec: {} }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it("suggests a safe download filename", () => {
+    expect(matrixExportFilename("Portrait Sweep!")).toBe("portrait-sweep.json");
+    expect(matrixExportFilename("")).toBe("matrix-template.json");
   });
 });

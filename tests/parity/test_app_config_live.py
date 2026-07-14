@@ -14,10 +14,13 @@ blocking this repo's release. Any other aidream failure (connection refused,
 5xx, invalid payload) FAILS: a dead fallback is a real release blocker.
 
 NETWORK TEST — wired into scripts/check.sh Step 1 alongside the other parity
-steps; requires outbound HTTPS.
+steps (which sets MATRX_LIVE_CHECKS=1 for this invocation); requires outbound
+HTTPS. A plain offline ``pytest tests/`` skips this module entirely.
 """
 
 from __future__ import annotations
+
+import os
 
 import httpx
 import pytest
@@ -33,6 +36,17 @@ from app.config import (
     SUPABASE_PUBLISHABLE_KEY,
     SUPABASE_URL,
 )
+
+pytestmark = [
+    pytest.mark.network,
+    pytest.mark.skipif(
+        os.getenv("MATRX_LIVE_CHECKS") != "1",
+        reason=(
+            "live-network release validation — set MATRX_LIVE_CHECKS=1 to run "
+            "(scripts/check.sh does; plain offline pytest must not hard-fail)"
+        ),
+    ),
+]
 
 _TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 

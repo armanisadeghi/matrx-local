@@ -177,9 +177,11 @@ print(f'All tool files parse cleanly')
 
     # Release validation for remote app config (NETWORK: fetches the live
     # Supabase row via both paths + validates compiled defaults — see
-    # app/services/app_config/FEATURE.md).
+    # app/services/app_config/FEATURE.md). The test module is gated behind
+    # MATRX_LIVE_CHECKS=1 so a plain offline `pytest tests/` never hard-fails;
+    # the release gate here opts in explicitly.
     run_step "parity: app config live row" \
-      uv run --frozen pytest tests/parity/test_app_config_live.py -q --no-header
+      env MATRX_LIVE_CHECKS=1 uv run --frozen pytest tests/parity/test_app_config_live.py -q --no-header
   fi
 fi
 

@@ -24,7 +24,10 @@ from app.services.app_config.models import (
     semver_tuple,
     version_below,
 )
-from app.services.app_config.service import AppConfigService
+from app.services.app_config.service import (
+    AppConfigService,
+    _resolve_refresh_interval,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -202,6 +205,31 @@ def test_invalid_remote_payload_falls_to_next_tier(tmp_path: Path) -> None:
     assert svc.get_aidream_server_url() == "https://cached.example.com"
 
 
+def test_non_object_json_cache_falls_to_defaults(tmp_path: Path) -> None:
+    """Valid JSON that is not an object ([]/"x"/null) must NOT crash __init__.
+
+    Regression: `data.get("row")` on a list raised AttributeError, which was
+    outside the except tuple — the singleton never got assigned and every
+    accessor call re-raised until the user deleted the cache file.
+    """
+    for content in ("[]", '"x"', "null"):
+        cache_path = tmp_path / "app_config.json"
+        cache_path.write_text(content, encoding="utf-8")
+
+        async def fetcher() -> AppConfigRow:
+            raise ConnectionError("offline")
+
+        svc = AppConfigService(
+            cache_path=cache_path,
+            app_version="1.3.112",
+            fetcher=fetcher,
+            env_overrides={},
+            use_registry=False,
+        )
+        assert svc.resolved.tier == "defaults", f"cache content {content!r}"
+        assert svc.get_aidream_server_url() == "https://server.app.matrxserver.com"
+
+
 def test_corrupt_cache_falls_to_defaults(tmp_path: Path) -> None:
     cache_path = tmp_path / "app_config.json"
     cache_path.write_text("{not json", encoding="utf-8")
@@ -256,6 +284,77 @@ def test_update_not_required_when_current(tmp_path: Path) -> None:
     svc = _make_service(tmp_path, fetch_result=REMOTE_ROW)  # min 1.0.0 vs 1.3.112
     resolved = _run(svc.refresh_now())
     assert resolved.update_required is False
+
+
+def test_version_probe_fallback_disables_gate(tmp_path: Path) -> None:
+    """app_version '0.0.0' = broken version probe → cannot gate, gate open.
+
+    Otherwise a healthy install with a broken probe would show a permanent
+    false "Update required" banner (0.0.0 is below every real minimum).
+    """
+    row = dict(REMOTE_ROW)
+    row["min_supported_app_version"] = "1.0.0"
+
+    async def fetcher() -> AppConfigRow:
+        return parse_row(row)
+
+    svc = AppConfigService(
+        cache_path=tmp_path / "app_config.json",
+        app_version="0.0.0",
+        fetcher=fetcher,
+        env_overrides={},
+        use_registry=False,
+    )
+    assert svc.resolved.update_required is False
+    resolved = _run(svc.refresh_now())
+    assert resolved.update_required is False
+    assert svc.status_payload()["update_required"] is False
+
+
+# ---------------------------------------------------------------------------
+# Refresh interval knob
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_interval_garbage_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MATRX_APP_CONFIG_REFRESH_INTERVAL", "banana")
+    assert _resolve_refresh_interval() == 21600
+
+
+def test_refresh_interval_zero_clamped_to_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A 0 would hot-loop against Supabase — clamped to the 60s floor.
+    monkeypatch.setenv("MATRX_APP_CONFIG_REFRESH_INTERVAL", "0")
+    assert _resolve_refresh_interval() == 60
+
+
+def test_refresh_interval_valid_value_passes_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MATRX_APP_CONFIG_REFRESH_INTERVAL", "300")
+    assert _resolve_refresh_interval() == 300
+    monkeypatch.delenv("MATRX_APP_CONFIG_REFRESH_INTERVAL")
+    assert _resolve_refresh_interval() == 21600
+
+
+# ---------------------------------------------------------------------------
+# Status payload provenance
+# ---------------------------------------------------------------------------
+
+
+def test_status_payload_reports_env_overrides(tmp_path: Path) -> None:
+    svc = _make_service(
+        tmp_path,
+        fetch_result=REMOTE_ROW,
+        env_overrides={"aidream_server_url": "http://localhost:8000"},
+    )
+    assert svc.status_payload()["env_overrides"] == ["aidream_server_url"]
+
+    svc_clean = _make_service(tmp_path, fetch_result=REMOTE_ROW)
+    assert svc_clean.status_payload()["env_overrides"] == []
 
 
 # ---------------------------------------------------------------------------

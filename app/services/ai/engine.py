@@ -52,7 +52,6 @@ working store, never a competing server.
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
@@ -265,9 +264,12 @@ def initialize_matrx_ai() -> None:
     DBNotConfiguredError in the middle of a user's request instead of a
     clear crash at startup.
 
-    Missing env vars (AIDREAM_SERVER_URL_LIVE) degrade only the
-    server-backed features (tool registry fetch, authenticated reads) and
-    are logged as ERRORs; the local seams are always wired.
+    The aidream server URL comes from the remote App Config system
+    (``app.services.app_config.get_aidream_server_url`` — env override >
+    remote > cache > compiled default), captured once here so remote changes
+    apply on restart. An empty URL (contract breach) degrades only the
+    server-backed features (tool registry fetch, authenticated reads) and is
+    logged as an ERROR; the local seams are always wired.
 
     Call from the FastAPI lifespan handler BEFORE the async phase.
     """
@@ -300,7 +302,14 @@ def initialize_matrx_ai() -> None:
 
     import matrx_ai
 
-    server_url = os.getenv("AIDREAM_SERVER_URL_LIVE", "").strip()
+    # Effective aidream URL from the remote App Config system (env override >
+    # remote > cache > compiled default — the accessor owns tier-1 env
+    # semantics). Captured ONCE here, so a remote change applies on restart —
+    # same posture as delegation/engine.py. Imported inside the function to
+    # avoid an import cycle (app_config → app.launcher / app.api.routes).
+    from app.services.app_config import get_aidream_server_url
+
+    server_url = get_aidream_server_url().strip()
 
     from importlib.metadata import version as _pkg_version
 
@@ -314,14 +323,16 @@ def initialize_matrx_ai() -> None:
     logger.info("[engine] matrx-ai STARTUP — client-host mode")
     logger.info("[engine]   matrx-ai   = %s", _safe_version("matrx-ai"))
     logger.info("[engine]   matrx-utils= %s", _safe_version("matrx-utils"))
-    logger.info("[engine]   AIDREAM_SERVER_URL_LIVE  = %s", server_url or "(NOT SET ✗)")
+    logger.info("[engine]   aidream server URL (app_config) = %s", server_url or "(NOT SET ✗)")
     logger.info("=" * 60)
 
     if not server_url:
+        # Defensive: the app_config accessor always resolves at least the
+        # compiled default, so this only fires if that contract breaks.
         logger.error(
-            "[engine] AIDREAM_SERVER_URL_LIVE is not set — the server-backed "
-            "tool registry fetch is DISABLED and tool definitions fall back to "
-            "the bundled catalog. Add it to .env. Local seams (keys, "
+            "[engine] aidream server URL resolved EMPTY from app_config — the "
+            "server-backed tool registry fetch is DISABLED and tool "
+            "definitions fall back to the bundled catalog. Local seams (keys, "
             "conversations, model catalog) are still active."
         )
 

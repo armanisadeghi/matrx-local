@@ -40,11 +40,16 @@ touching this feature in ANY repo.
   `start_background()` (initial fetch + 6h loop). Teardown stops the loop in
   Phase S1.
 - **Status:** `GET /health` carries `app_config: {tier, fetched_at,
-  update_required, notice}`; `GET /admin/status` reflects the registry record.
+  update_required, notice, env_overrides}` — `env_overrides` lists the key
+  names an active dev override is masking (tier stays remote/cache/defaults;
+  the `"env"` Tier literal is reserved since overrides are per-key);
+  `GET /admin/status` reflects the registry record.
 - **Manual refresh:** `POST /admin/refresh-config` (local-bootstrap auth, like
   the other `/admin/*` routes) → `refresh_now()` → provenance payload.
 - **Consumers:** `aidream/client.py` (singleton rebuilt on URL change),
   `delegation/engine.py` (captured at engine construction),
+  `ai/engine.py` (`initialize_matrx_ai()` captures the aidream URL once —
+  remote changes apply on restart, same posture as delegation),
   `file_sync/client.py` + `scraper/remote_client.py` (read per-request via
   property), `tools/tool_sync.py` (per-use). New code reads the accessors —
   never `config.AIDREAM_SERVER_URL` / `MATRX_FILES_URL` / `SCRAPER_SERVER_URL`
@@ -78,6 +83,21 @@ touching this feature in ANY repo.
   failed cache write warns.
 - **No secrets.** The row, the payload schema, and every code path here are
   public by definition.
+- **Version gate fails open.** An app version that resolves to the `"0.0.0"`
+  probe fallback (or any unparseable version) means "cannot gate":
+  `update_required=False` + loud warning — a broken probe must never brand a
+  healthy install with a permanent false "Update required" banner.
+- **Refresh knob is defensive.** `MATRX_APP_CONFIG_REFRESH_INTERVAL` parse
+  failures fall back to 6h with a loud warning, and values below 60s are
+  clamped (a 0 would hot-loop against Supabase).
+
+## Known limits
+
+- **Desktop webview aidream URL is build-pinned.**
+  `desktop/src/lib/aidream-client.ts` bakes `VITE_AIDREAM_SERVER_URL_LIVE` in
+  at build time, so the webview's direct aidream calls sit OUTSIDE remote
+  config (known exclusion — revisit if it becomes a problem; the Python
+  sidecar's calls are all covered).
 
 ## Tests
 
@@ -88,10 +108,19 @@ touching this feature in ANY repo.
 - `tests/parity/test_app_config_live.py` — release validation: live row via
   both fetch paths parses against `AppConfigV1` (aidream path skips on 404
   until that endpoint deploys); compiled defaults parse against the same
-  schema. Wired into `scripts/check.sh` Step 1.
+  schema. Marked `network` and gated behind `MATRX_LIVE_CHECKS=1` so plain
+  offline `pytest tests/` skips it; `scripts/check.sh` Step 1 sets the env
+  var so the release gate still runs it.
 
 ## Change Log
 
+- **2026-07-14 — Adversarial-review hardening.** Non-object JSON cache no
+  longer crashes boot (falls to defaults); `ai/engine.py` migrated onto
+  `get_aidream_server_url()` (restart-applies); `/health` reports
+  `env_overrides`; live parity test gated behind `MATRX_LIVE_CHECKS=1`;
+  version gate fails open on the `"0.0.0"` probe fallback; refresh-interval
+  knob parse-hardened + clamped to a 60s floor; documented the desktop
+  webview build-pinned URL exclusion.
 - **2026-07-14 — Desktop UI surface.** `/health` `app_config` now includes
   `notice`; added `use-app-config-status` polling hook + `AppConfigBanner`
   (update-required strip + once-per-content operator notice) in the Tauri UI.

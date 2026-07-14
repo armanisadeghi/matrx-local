@@ -69,4 +69,5 @@ def test_total_network_failure_boots_on_compiled_defaults(tmp_path: Path) -> Non
         "fetched_at": None,
         "update_required": False,
         "notice": None,
+        "env_overrides": [],
     }

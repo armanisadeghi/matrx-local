@@ -55,9 +55,40 @@ SERVICE_NAME = "app_config"
 CACHE_FILENAME = "app_config.json"
 
 # 6h default; env var is a developer-only knob (dev worlds / tests).
-DEFAULT_REFRESH_INTERVAL_S = int(
-    os.getenv("MATRX_APP_CONFIG_REFRESH_INTERVAL", "21600")
-)
+_REFRESH_INTERVAL_DEFAULT_S = 21600
+_REFRESH_INTERVAL_MIN_S = 60
+
+
+def _resolve_refresh_interval() -> int:
+    """Parse the developer refresh-interval knob defensively.
+
+    A garbage value must not crash module import, and a tiny/zero value must
+    not hot-loop against Supabase — clamp to a 60s floor, loudly.
+    """
+    raw = os.getenv("MATRX_APP_CONFIG_REFRESH_INTERVAL", str(_REFRESH_INTERVAL_DEFAULT_S))
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "[app_config] MATRX_APP_CONFIG_REFRESH_INTERVAL=%r is not an "
+            "integer — falling back to default %ss",
+            raw,
+            _REFRESH_INTERVAL_DEFAULT_S,
+        )
+        return _REFRESH_INTERVAL_DEFAULT_S
+    if value < _REFRESH_INTERVAL_MIN_S:
+        logger.warning(
+            "[app_config] MATRX_APP_CONFIG_REFRESH_INTERVAL=%s is below the "
+            "%ss floor (a 0 would hot-loop against Supabase) — clamping to %ss",
+            value,
+            _REFRESH_INTERVAL_MIN_S,
+            _REFRESH_INTERVAL_MIN_S,
+        )
+        return _REFRESH_INTERVAL_MIN_S
+    return value
+
+
+DEFAULT_REFRESH_INTERVAL_S = _resolve_refresh_interval()
 
 # The compiled-in last-resort payload — MUST mirror the shipping defaults in
 # app/config.py (pinned by tests/parity/test_app_config_live.py).
@@ -86,6 +117,12 @@ _ENV_OVERRIDE_SOURCES: dict[str, tuple[str, str]] = {
 
 
 def _detect_env_overrides() -> dict[str, str]:
+    # WHY value-vs-default and not presence-based: packaged builds inject
+    # AIDREAM_SERVER_URL_LIVE=<compiled default> into the environment via
+    # hooks/runtime_hook.py → bundled_config.apply(), so "is the env var set?"
+    # would flag a permanent override in every production install and kill
+    # remote config for that key forever. Only a value that actually DIFFERS
+    # from the compiled default is a real developer override.
     overrides: dict[str, str] = {}
     for key, (effective, default) in _ENV_OVERRIDE_SOURCES.items():
         if effective and effective.rstrip("/") != default.rstrip("/"):
@@ -176,10 +213,14 @@ class AppConfigService:
         r = self._resolved
         notice = r.row.config.notice
         return {
+            # NOTE: tier stays remote/cache/defaults — the "env" Tier literal
+            # is reserved. Env overrides are per-key, so they are reported
+            # separately below rather than as a whole-config tier.
             "tier": r.tier,
             "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
             "update_required": r.update_required,
             "notice": notice.model_dump(mode="json") if notice else None,
+            "env_overrides": sorted(r.env_overrides.keys()),
         }
 
     # ------------------------------------------------------------------
@@ -208,7 +249,20 @@ class AppConfigService:
         self, row: AppConfigRow, *, tier: Tier, fetched_at: datetime | None
     ) -> ResolvedAppConfig:
         app_version = self._app_version or _resolve_app_version()
-        update_required = version_below(app_version, row.min_supported_app_version)
+        if app_version == "0.0.0":
+            # "0.0.0" is the version-probe FALLBACK, not a real version — a
+            # broken probe must not brand a healthy install with a permanent
+            # false "Update required" banner. Cannot gate → gate open, loudly.
+            logger.warning(
+                "[app_config] app version resolved to the '0.0.0' fallback — "
+                "the version probe is broken; version gate DISABLED "
+                "(cannot compare an unknown version against "
+                "min_supported_app_version=%s)",
+                row.min_supported_app_version,
+            )
+            update_required = False
+        else:
+            update_required = version_below(app_version, row.min_supported_app_version)
         if update_required:
             # A STATE, not an error — but a loud one: the operator raised the
             # floor above this installed version.
@@ -237,6 +291,19 @@ class AppConfigService:
             if not self._cache_path.exists():
                 return None
             data = json.loads(self._cache_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                # Valid JSON but not an object ([], "x", null, …) — without
+                # this guard the .get() below raises AttributeError inside
+                # __init__, the singleton is never assigned, and EVERY
+                # accessor call re-raises until the user deletes the file.
+                logger.warning(
+                    "[app_config] disk cache at %s is valid JSON but not an "
+                    "object (got %s) — ignoring it and falling back to "
+                    "compiled defaults",
+                    self._cache_path,
+                    type(data).__name__,
+                )
+                return None
             row = parse_row(data.get("row"))
             fetched_at: datetime | None = None
             raw_fetched = data.get("fetched_at")

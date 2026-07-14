@@ -30,6 +30,9 @@ from pydantic import (
 )
 
 # Provenance tier of the currently-applied config, in precedence order.
+# "env" is RESERVED and never emitted today: env overrides are per-key, not a
+# whole-config tier, so the service keeps tier at remote/cache/defaults and
+# reports active overrides separately (status_payload()["env_overrides"]).
 Tier = Literal["env", "remote", "cache", "defaults"]
 
 

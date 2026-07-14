@@ -42,6 +42,27 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_memory_updated_at\" ON \"agent_memory\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_memory_created_at\" ON \"agent_memory\" (\"created_at\")"
             ],
+            "pg_types": {
+                "access_count": "int4",
+                "content": "text",
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "deleted_at": "timestamptz",
+                "expires_at": "timestamptz",
+                "id": "uuid",
+                "importance": "float8",
+                "key": "text",
+                "last_accessed_at": "timestamptz",
+                "memory_type": "text",
+                "metadata": "jsonb",
+                "organization_id": "uuid",
+                "scope": "text",
+                "scope_id": "text",
+                "updated_at": "timestamptz",
+                "updated_by": "uuid",
+                "user_id": "uuid",
+                "version": "int4"
+            },
             "pk": [
                 "id"
             ]
@@ -75,6 +96,24 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_plan_updated_at\" ON \"agent_plan\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_plan_created_at\" ON \"agent_plan\" (\"created_at\")"
             ],
+            "pg_types": {
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "domains": "_text",
+                "estimated_minutes": "int4",
+                "id": "uuid",
+                "organization_id": "uuid",
+                "project_id": "uuid",
+                "reasoning": "text",
+                "status": "cx_plan_status",
+                "steps": "jsonb",
+                "title": "text",
+                "updated_at": "timestamptz",
+                "updated_by": "uuid",
+                "user_id": "uuid",
+                "version": "int4"
+            },
             "pk": [
                 "id"
             ]
@@ -111,6 +150,28 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_run_updated_at\" ON \"agent_run\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_run_created_at\" ON \"agent_run\" (\"created_at\")"
             ],
+            "pg_types": {
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "deleted_at": "timestamptz",
+                "episode_id": "uuid",
+                "error": "jsonb",
+                "id": "uuid",
+                "input_fingerprint": "text",
+                "kind": "text",
+                "last_heartbeat_at": "timestamptz",
+                "metadata": "jsonb",
+                "organization_id": "uuid",
+                "request": "jsonb",
+                "result": "jsonb",
+                "status": "text",
+                "total_cost": "numeric",
+                "updated_at": "timestamptz",
+                "updated_by": "uuid",
+                "user_id": "uuid",
+                "version": "int4",
+                "visibility": "visibility"
+            },
             "pk": [
                 "id"
             ]
@@ -131,6 +192,17 @@ MIRROR_TABLES = {
             "cursor_col": None,
             "has_deleted_at": False,
             "index_sql": [],
+            "pg_types": {
+                "cost": "numeric",
+                "error": "jsonb",
+                "finished_at": "timestamptz",
+                "id": "uuid",
+                "output": "jsonb",
+                "run_id": "uuid",
+                "stage_key": "text",
+                "started_at": "timestamptz",
+                "status": "text"
+            },
             "pk": [
                 "id"
             ]
@@ -159,6 +231,19 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_task_updated_at\" ON \"agent_task\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_agent_task_created_at\" ON \"agent_task\" (\"created_at\")"
             ],
+            "pg_types": {
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "created_by": "cx_agent_task_creator",
+                "id": "uuid",
+                "note": "text",
+                "plan_id": "uuid",
+                "position": "int4",
+                "status": "cx_agent_task_status",
+                "title": "text",
+                "updated_at": "timestamptz",
+                "user_id": "uuid"
+            },
             "pk": [
                 "id"
             ]
@@ -202,6 +287,34 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_artifact_updated_at\" ON \"artifact\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_artifact_created_at\" ON \"artifact\" (\"created_at\")"
             ],
+            "pg_types": {
+                "artifact_index": "int2",
+                "artifact_type": "artifact_type",
+                "canvas_item_id": "uuid",
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "deleted_at": "timestamptz",
+                "description": "text",
+                "external_id": "text",
+                "external_system": "text",
+                "external_url": "text",
+                "id": "uuid",
+                "message_id": "uuid",
+                "metadata": "jsonb",
+                "organization_id": "uuid",
+                "project_id": "uuid",
+                "source_id": "uuid",
+                "source_system": "text",
+                "status": "artifact_status",
+                "task_id": "uuid",
+                "thumbnail_url": "text",
+                "title": "text",
+                "updated_at": "timestamptz",
+                "updated_by": "uuid",
+                "user_id": "uuid",
+                "version": "int4"
+            },
             "pk": [
                 "id"
             ]
@@ -231,6 +344,22 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_edit_user_id\" ON \"code_edit\" (\"user_id\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_edit_created_at\" ON \"code_edit\" (\"created_at\")"
             ],
+            "pg_types": {
+                "applied_at": "timestamptz",
+                "block_index": "int4",
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "id": "uuid",
+                "message_file_id": "uuid",
+                "message_id": "uuid",
+                "reject_reason": "text",
+                "rejected_at": "timestamptz",
+                "replace_text": "text",
+                "reverted_at": "timestamptz",
+                "search_text": "text",
+                "status": "code_edit_status",
+                "user_id": "uuid"
+            },
             "pk": [
                 "id"
             ]
@@ -266,6 +395,27 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_message_file_updated_at\" ON \"code_message_file\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_code_message_file_created_at\" ON \"code_message_file\" (\"created_at\")"
             ],
+            "pg_types": {
+                "after_content": "text",
+                "before_content": "text",
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "edits_applied_count": "int4",
+                "edits_pending_count": "int4",
+                "edits_rejected_count": "int4",
+                "file_adapter": "text",
+                "file_path": "text",
+                "git_branch": "text",
+                "git_commit_sha": "text",
+                "id": "uuid",
+                "library_file_id": "uuid",
+                "message_id": "uuid",
+                "organization_id": "uuid",
+                "reverted_at": "timestamptz",
+                "status": "code_message_file_status",
+                "updated_at": "timestamptz",
+                "user_id": "uuid"
+            },
             "pk": [
                 "id"
             ]
@@ -320,6 +470,47 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_conversation_updated_at\" ON \"conversation\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_conversation_created_at\" ON \"conversation\" (\"created_at\")"
             ],
+            "pg_types": {
+                "app_instance_id": "uuid",
+                "cache_state": "jsonb",
+                "config": "jsonb",
+                "conversation_type": "text",
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "deleted_at": "timestamptz",
+                "description": "text",
+                "exclude_from_kg": "bool",
+                "forked_at_position": "int2",
+                "forked_from_id": "uuid",
+                "id": "uuid",
+                "initial_agent_id": "uuid",
+                "initial_agent_version_id": "uuid",
+                "is_ephemeral": "bool",
+                "is_favorite": "bool",
+                "keywords": "_text",
+                "last_context_breakdown": "jsonb",
+                "last_model_id": "uuid",
+                "last_request_id": "uuid",
+                "last_request_status": "text",
+                "message_count": "int2",
+                "metadata": "jsonb",
+                "organization_id": "uuid",
+                "overrides": "jsonb",
+                "parent_conversation_id": "uuid",
+                "project_id": "uuid",
+                "sandbox_instance_id": "uuid",
+                "source_app": "text",
+                "source_feature": "text",
+                "status": "text",
+                "system_instruction": "text",
+                "task_id": "uuid",
+                "title": "text",
+                "updated_at": "timestamptz",
+                "updated_by": "uuid",
+                "variables": "jsonb",
+                "version": "int4",
+                "visibility": "visibility"
+            },
             "pk": [
                 "id"
             ]
@@ -357,6 +548,29 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_conversation_value_updated_at\" ON \"conversation_value\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_conversation_value_created_at\" ON \"conversation_value\" (\"created_at\")"
             ],
+            "pg_types": {
+                "chars": "int4",
+                "content": "text",
+                "content_json": "jsonb",
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "deleted_at": "timestamptz",
+                "description": "text",
+                "id": "uuid",
+                "json_schema": "jsonb",
+                "key": "text",
+                "kind": "text",
+                "metadata": "jsonb",
+                "organization_id": "uuid",
+                "source_agent_id": "uuid",
+                "source_call_id": "text",
+                "source_execution_id": "uuid",
+                "status": "text",
+                "updated_at": "timestamptz",
+                "updated_by": "uuid",
+                "version": "int4"
+            },
             "pk": [
                 "id"
             ]
@@ -383,6 +597,19 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_media_user_id\" ON \"media\" (\"user_id\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_media_created_at\" ON \"media\" (\"created_at\")"
             ],
+            "pg_types": {
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "deleted_at": "timestamptz",
+                "file_size_bytes": "int8",
+                "file_uri": "text",
+                "id": "uuid",
+                "kind": "text",
+                "metadata": "jsonb",
+                "mime_type": "text",
+                "url": "text",
+                "user_id": "uuid"
+            },
             "pk": [
                 "id"
             ]
@@ -425,6 +652,34 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_message_updated_at\" ON \"message\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_message_created_at\" ON \"message\" (\"created_at\")"
             ],
+            "pg_types": {
+                "agent_id": "uuid",
+                "content": "jsonb",
+                "content_chars": "int4",
+                "content_history": "jsonb",
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "deleted_at": "timestamptz",
+                "error": "jsonb",
+                "id": "uuid",
+                "is_visible_to_model": "bool",
+                "is_visible_to_user": "bool",
+                "metadata": "jsonb",
+                "model_context": "jsonb",
+                "organization_id": "uuid",
+                "position": "int2",
+                "role": "text",
+                "source": "text",
+                "status": "text",
+                "tool_results_chars": "int4",
+                "tools_on_call": "jsonb",
+                "updated_at": "timestamptz",
+                "updated_by": "uuid",
+                "user_content": "jsonb",
+                "version": "int4",
+                "voice": "jsonb"
+            },
             "pk": [
                 "id"
             ]
@@ -473,6 +728,39 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_updated_at\" ON \"observational_memory\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_created_at\" ON \"observational_memory\" (\"created_at\")"
             ],
+            "pg_types": {
+                "active_observations": "text",
+                "buffered_observations": "jsonb",
+                "buffered_reflection": "text",
+                "buffered_reflection_input_tokens": "int4",
+                "buffered_reflection_tokens": "int4",
+                "config": "jsonb",
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "current_task": "text",
+                "deleted_at": "timestamptz",
+                "generation_count": "int4",
+                "id": "uuid",
+                "is_buffering_observation": "bool",
+                "is_buffering_reflection": "bool",
+                "last_buffered_at_time": "timestamptz",
+                "last_buffered_at_tokens": "int4",
+                "last_observed_at": "timestamptz",
+                "metadata": "jsonb",
+                "observation_token_count": "int4",
+                "observed_message_ids": "jsonb",
+                "observed_timezone": "text",
+                "organization_id": "uuid",
+                "pending_message_tokens": "int4",
+                "reflected_observation_line_count": "int4",
+                "scope": "text",
+                "suggested_response": "text",
+                "updated_at": "timestamptz",
+                "updated_by": "uuid",
+                "user_id": "uuid",
+                "version": "int4"
+            },
             "pk": [
                 "id"
             ]
@@ -506,6 +794,26 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_event_user_id\" ON \"observational_memory_event\" (\"user_id\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_observational_memory_event_created_at\" ON \"observational_memory_event\" (\"created_at\")"
             ],
+            "pg_types": {
+                "completed_at": "timestamptz",
+                "conversation_id": "uuid",
+                "cost": "numeric",
+                "created_at": "timestamptz",
+                "duration_ms": "int4",
+                "error": "text",
+                "event_type": "text",
+                "id": "uuid",
+                "input_tokens": "int4",
+                "memory_record_id": "uuid",
+                "metadata": "jsonb",
+                "model": "text",
+                "output_tokens": "int4",
+                "success": "bool",
+                "trigger_reason": "text",
+                "triggered_at": "timestamptz",
+                "user_id": "uuid",
+                "user_request_id": "uuid"
+            },
             "pk": [
                 "id"
             ]
@@ -536,6 +844,23 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_pending_injection_user_id\" ON \"pending_injection\" (\"user_id\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_pending_injection_created_at\" ON \"pending_injection\" (\"created_at\")"
             ],
+            "pg_types": {
+                "consumed_at": "timestamptz",
+                "consumed_by_request_id": "uuid",
+                "consumed_message_id": "uuid",
+                "content": "jsonb",
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "enqueued_seq": "int8",
+                "id": "uuid",
+                "is_visible_to_model": "bool",
+                "is_visible_to_user": "bool",
+                "kind": "text",
+                "metadata": "jsonb",
+                "source": "text",
+                "status": "text",
+                "user_id": "uuid"
+            },
             "pk": [
                 "id"
             ]
@@ -575,6 +900,33 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_conversation_id\" ON \"request\" (\"conversation_id\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_created_at\" ON \"request\" (\"created_at\")"
             ],
+            "pg_types": {
+                "ai_model_id": "uuid",
+                "api_duration_ms": "int4",
+                "cached_tokens": "int4",
+                "conversation_id": "uuid",
+                "cost": "numeric",
+                "created_at": "timestamptz",
+                "deleted_at": "timestamptz",
+                "error": "jsonb",
+                "finish_reason": "text",
+                "id": "uuid",
+                "input_tokens": "int4",
+                "iteration": "int2",
+                "metadata": "jsonb",
+                "output_tokens": "int4",
+                "provider": "text",
+                "raw_usage": "jsonb",
+                "response_id": "text",
+                "status": "text",
+                "tool_calls_count": "int2",
+                "tool_calls_details": "jsonb",
+                "tool_duration_ms": "int4",
+                "total_duration_ms": "int4",
+                "total_tokens": "int4",
+                "trim_summary": "jsonb",
+                "user_request_id": "uuid"
+            },
             "pk": [
                 "id"
             ]
@@ -602,6 +954,21 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_snapshot_conversation_id\" ON \"request_snapshot\" (\"conversation_id\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_request_snapshot_created_at\" ON \"request_snapshot\" (\"created_at\")"
             ],
+            "pg_types": {
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "cx_request_id": "uuid",
+                "id": "uuid",
+                "iteration": "int2",
+                "model": "text",
+                "provider": "text",
+                "request_payload": "jsonb",
+                "response_message_id": "uuid",
+                "response_payload": "jsonb",
+                "trigger_message_id": "uuid",
+                "unified_payload": "jsonb",
+                "user_request_id": "uuid"
+            },
             "pk": [
                 "id"
             ]
@@ -667,6 +1034,56 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_call_updated_at\" ON \"tool_call\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_call_created_at\" ON \"tool_call\" (\"created_at\")"
             ],
+            "pg_types": {
+                "arguments": "jsonb",
+                "call_id": "text",
+                "completed_at": "timestamptz",
+                "conversation_id": "uuid",
+                "cost_usd": "numeric",
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "deleted_at": "timestamptz",
+                "duration_ms": "int4",
+                "error_message": "text",
+                "error_type": "text",
+                "execution_events": "jsonb",
+                "expires_at": "timestamptz",
+                "fault_domain": "text",
+                "file_path": "text",
+                "id": "uuid",
+                "input_tokens": "int4",
+                "is_client_delegated": "bool",
+                "is_error": "bool",
+                "iteration": "int4",
+                "message_id": "uuid",
+                "metadata": "jsonb",
+                "model_stub_at": "timestamptz",
+                "organization_id": "uuid",
+                "output": "text",
+                "output_chars": "int4",
+                "output_preview": "jsonb",
+                "output_tokens": "int4",
+                "output_type": "text",
+                "parent_call_id": "uuid",
+                "persist_key": "text",
+                "resolution_source": "text",
+                "resolved_at": "timestamptz",
+                "retry_count": "int4",
+                "runtime_execution_id": "uuid",
+                "started_at": "timestamptz",
+                "status": "text",
+                "success": "bool",
+                "tool_name": "text",
+                "tool_name_as_called": "text",
+                "tool_type": "text",
+                "total_tokens": "int4",
+                "updated_at": "timestamptz",
+                "updated_by": "uuid",
+                "user_id": "uuid",
+                "user_request_id": "uuid",
+                "value_ref_key": "text",
+                "version": "int4"
+            },
             "pk": [
                 "id"
             ]
@@ -700,6 +1117,26 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_trace_user_id\" ON \"tool_trace\" (\"user_id\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_tool_trace_created_at\" ON \"tool_trace\" (\"created_at\")"
             ],
+            "pg_types": {
+                "args": "jsonb",
+                "call_id": "text",
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "duration_ms": "int4",
+                "err_msg": "text",
+                "err_type": "text",
+                "event": "text",
+                "fault_domain": "text",
+                "id": "uuid",
+                "kind": "text",
+                "metadata": "jsonb",
+                "process_pid": "int4",
+                "process_started_at": "timestamptz",
+                "result_preview": "text",
+                "tool_name": "text",
+                "ts": "timestamptz",
+                "user_id": "uuid"
+            },
             "pk": [
                 "id"
             ]
@@ -745,6 +1182,37 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_request_updated_at\" ON \"user_request\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_request_created_at\" ON \"user_request\" (\"created_at\")"
             ],
+            "pg_types": {
+                "agent_id": "uuid",
+                "agent_version_id": "uuid",
+                "api_duration_ms": "int4",
+                "completed_at": "timestamptz",
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "deleted_at": "timestamptz",
+                "error": "text",
+                "finish_reason": "text",
+                "id": "uuid",
+                "iterations": "int2",
+                "last_activity_at": "timestamptz",
+                "metadata": "jsonb",
+                "organization_id": "uuid",
+                "source_app": "text",
+                "source_feature": "text",
+                "status": "text",
+                "tool_duration_ms": "int4",
+                "total_cached_tokens": "int4",
+                "total_cost": "numeric",
+                "total_duration_ms": "int4",
+                "total_input_tokens": "int4",
+                "total_output_tokens": "int4",
+                "total_tokens": "int4",
+                "total_tool_calls": "int2",
+                "updated_at": "timestamptz",
+                "updated_by": "uuid",
+                "user_id": "uuid",
+                "version": "int4"
+            },
             "pk": [
                 "id"
             ]
@@ -777,6 +1245,23 @@ MIRROR_TABLES = {
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_todo_updated_at\" ON \"user_todo\" (\"updated_at\")",
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_todo_created_at\" ON \"user_todo\" (\"created_at\")"
             ],
+            "pg_types": {
+                "context": "text",
+                "conversation_id": "uuid",
+                "created_at": "timestamptz",
+                "created_by": "uuid",
+                "ctx_task_id": "uuid",
+                "done": "bool",
+                "done_at": "timestamptz",
+                "due": "text",
+                "id": "uuid",
+                "organization_id": "uuid",
+                "title": "text",
+                "updated_at": "timestamptz",
+                "updated_by": "uuid",
+                "user_id": "uuid",
+                "version": "int4"
+            },
             "pk": [
                 "id"
             ]
@@ -805,6 +1290,23 @@ MIRROR_TABLES = {
             "index_sql": [
                 "CREATE INDEX IF NOT EXISTS \"chat\".\"idx_user_usage_summary_updated_at\" ON \"user_usage_summary\" (\"updated_at\")"
             ],
+            "pg_types": {
+                "auth_type": "text",
+                "blocked_reason": "text",
+                "cost_24h_mcents": "int8",
+                "cost_6h_mcents": "int8",
+                "daily_blocked": "bool",
+                "last_request_at": "timestamptz",
+                "requests_24h": "int4",
+                "requests_6h": "int4",
+                "tokens_24h": "int8",
+                "tokens_6h": "int8",
+                "updated_at": "timestamptz",
+                "user_id": "uuid",
+                "window_24h_starts_at": "timestamptz",
+                "window_6h_starts_at": "timestamptz",
+                "window_blocked": "bool"
+            },
             "pk": [
                 "user_id"
             ]

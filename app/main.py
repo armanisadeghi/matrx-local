@@ -550,6 +550,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("notes_sync", exc)
 
+    # Phase 2d: Engine-owned chat mirror sync (chat.* <-> cloud). Same
+    # credential model as notes: the persisted auth_tokens row feeds each
+    # tick, so local turns push and cloud conversations pull without any
+    # frontend involvement. See app/services/chat_sync/engine.py.
+    _registry.starting("chat_sync")
+    try:
+        from app.services.chat_sync import get_chat_sync_engine
+
+        await get_chat_sync_engine().start_background_sync()
+        logger.info("[app/main.py] Phase 2d: Chat mirror auto-sync started ✓")
+        _registry.ready("chat_sync")
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 2d: Chat mirror auto-sync FAILED to start — local "
+            "chats will not reach the cloud until triggered manually",
+            exc_info=True,
+        )
+        _registry.failed("chat_sync", exc)
+
     # Phase 3: Start scraper engine
     print("[phase:scraper] Starting scraper engine...", flush=True)
     logger.info("[app/main.py] Phase 3: Starting scraper engine...")
@@ -1075,6 +1094,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "[app/main.py] Notes auto-sync did not stop cleanly: %s", exc
             )
             _registry.stopped("notes_sync")
+
+    from app.services.chat_sync import get_chat_sync_engine as _get_chat_sync
+
+    _chat_sync = _get_chat_sync()
+    if _chat_sync.auto_sync_active:
+        _registry.stopping("chat_sync")
+        try:
+            await asyncio.wait_for(_chat_sync.stop_background_sync(), timeout=3.0)
+            _registry.stopped("chat_sync")
+            logger.info("[app/main.py] Chat mirror auto-sync stopped ✓")
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.warning(
+                "[app/main.py] Chat mirror auto-sync did not stop cleanly: %s", exc
+            )
+            _registry.stopped("chat_sync")
 
     if _doc_sync.watcher_active:
         try:

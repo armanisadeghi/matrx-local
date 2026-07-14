@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.common.background_tasks import fire_and_forget
@@ -380,6 +380,39 @@ async def trigger_chat_sync() -> dict[str, Any]:
     results = await engine.sync_all()
     logger.info("[chat_routes /sync/trigger] Sync complete: %s", results)
     return {"status": "ok", "results": results}
+
+
+# ---------------------------------------------------------------------------
+# Chat-system mirror sync (chat.* <-> cloud) — see app/services/chat_sync/
+# ---------------------------------------------------------------------------
+
+
+@router.get("/mirror/status")
+async def chat_mirror_status() -> dict[str, Any]:
+    """Status of the bidirectional chat.* mirror sync (outbox + checkpoints)."""
+    from app.services.chat_sync import get_chat_sync_engine
+
+    return await get_chat_sync_engine().get_status()
+
+
+@router.post("/mirror/sync")
+async def trigger_chat_mirror_sync() -> dict[str, Any]:
+    """Run one push+pull cycle of the chat.* mirror sync right now."""
+    from app.services.chat_sync import get_chat_sync_engine
+    from app.services.local_db.repositories import TokenRepo
+
+    engine = get_chat_sync_engine()
+    if not engine.is_configured:
+        token_repo = TokenRepo()
+        row = await token_repo.get()
+        if not row or not row.get("access_token") or not row.get("user_id"):
+            raise HTTPException(status_code=401, detail="No signed-in user — sign in first")
+        if token_repo.is_expired(row):
+            raise HTTPException(status_code=401, detail="Stored JWT expired — refresh via POST /auth/token")
+        engine.configure(row["user_id"], row["access_token"])
+    logger.info("[chat_routes /mirror/sync] Manual chat mirror sync triggered")
+    summary = await engine.sync_cycle()
+    return {"status": "ok", **summary}
 
 
 # ---------------------------------------------------------------------------

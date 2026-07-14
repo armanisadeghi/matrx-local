@@ -98,6 +98,9 @@ def build_table_entry(schema: str, name: str, spec: dict) -> dict:
     ]
     return {
         "columns": {c["name"]: sqlite_type(c["udt"]) for c in cols},
+        # Postgres udt per column — the sync codec needs to know which TEXT
+        # columns are jsonb/arrays/bools to round-trip PostgREST JSON.
+        "pg_types": {c["name"]: c["udt"] for c in cols},
         "pk": pk,
         "cursor_col": cursor_column(cols),
         "has_deleted_at": "deleted_at" in names,

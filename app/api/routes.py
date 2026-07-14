@@ -84,8 +84,38 @@ async def root():
 
 @router.get("/health")
 async def health():
-    """Simple health check — returns OK if the engine is running."""
-    return {"status": "ok", "service": "matrx-local", "version": _APP_VERSION}
+    """Health check that tells the truth about managed services.
+
+    Always HTTP 200 while the engine process is alive (probes equate non-200
+    with a dead engine, and a degraded engine is NOT dead), but the payload
+    reflects the launcher registry instead of a hardcoded "ok" — v1.3.105
+    shipped an engine that answered {"status": "ok"} while ai_engine was
+    failed and 0 tools were registered (MXL-D-029/MXL-D-030). Reading the
+    in-memory snapshot costs microseconds, so this stays probe-cheap
+    (MXL-D-018).
+    """
+    from app.launcher import get_registry
+
+    services = get_registry().snapshot().get("services", {})
+    failed = sorted(n for n, s in services.items() if s.get("state") == "failed")
+    degraded = sorted(n for n, s in services.items() if s.get("state") == "degraded")
+
+    status = "ok"
+    if degraded:
+        status = "degraded"
+    if failed:
+        status = "failed_services"
+
+    payload: dict = {
+        "status": status,
+        "service": "matrx-local",
+        "version": _APP_VERSION,
+    }
+    if failed:
+        payload["failed"] = failed
+    if degraded:
+        payload["degraded"] = degraded
+    return payload
 
 
 @router.get("/version")

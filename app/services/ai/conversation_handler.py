@@ -310,7 +310,13 @@ class SQLiteConversationStore:
                         role,
                         position,
                         _content_to_parts(text),
-                        "user" if role == "user" else "model",
+                        # Canonical source vocabulary (cloud CHECK constraint
+                        # cx_message_source_check): user | agent_template |
+                        # system. `source` = row ORIGIN, not authorship —
+                        # assistant turns are source='user' too (aidream
+                        # Message.source default). 'model' 400s on every
+                        # push (MXL-D-052).
+                        "user",
                         len(text),
                         now,
                         now,

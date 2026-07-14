@@ -509,7 +509,7 @@ SELECT m.id, m.conversation_id, m.role,
            CASE WHEN m.tool_results IS NOT NULL AND json_valid(m.tool_results)
                 THEN json_object('tool_results', json(m.tool_results)) ELSE '{}' END),
        CASE WHEN m.error IS NOT NULL THEN json_object('message', m.error) END,
-       CASE WHEN m.role = 'user' THEN 'user' ELSE 'model' END,
+       'user',
        1, 1, length(COALESCE(m.content, '')), 0, m.created_at, m.created_at, 1
 FROM messages m;
 UPDATE chat.conversation
@@ -599,6 +599,45 @@ DROP TABLE IF EXISTS conversations
 """
 
 # ------------------------------------------------------------------
+# Migration 13: repair chat.message.source vocabulary (MXL-D-052).
+#
+# V10 (and MessagesRepo.create until this fix) wrote source='model' for
+# every non-user role. The canonical vocabulary — aidream's Message model
+# (db/models/chat.py, default='user') and the live cloud CHECK constraint
+# cx_message_source_check — is 'user' | 'agent_template' | 'system':
+# `source` records the ORIGIN of the row (user session / agent template /
+# system injection), while `role` carries authorship. 'model' is illegal in
+# the cloud, so every AI/assistant message 400'd on push and eventually
+# dead-lettered — synced conversations held only the user's turns.
+#
+# Repair, in order (order matters — the enqueue predicate is source='model'):
+#   1. Drop the poisoned queue entries (pending AND dead-lettered) for the
+#      affected messages so step 2 can seed fresh pending pushes.
+#   2. Re-enqueue every affected pushable message: UUID-shaped id (cloud pk
+#      is uuid) and not a child of a legacy conversation that lives
+#      server-side under a different id (V10 seeding rule — pushing those
+#      under the local conversation id would fail or duplicate).
+#   3. Remap source to the canonical 'user'.
+# ------------------------------------------------------------------
+
+_V13_MESSAGE_SOURCE_REPAIR = """
+DELETE FROM sync_queue
+WHERE entity_type = 'chat.message'
+  AND entity_id IN (SELECT id FROM chat.message WHERE source = 'model');
+INSERT INTO sync_queue (entity_type, entity_id, action, payload)
+SELECT 'chat.message', m.id, 'upsert', '{}'
+FROM chat.message m
+WHERE m.source = 'model'
+  AND length(m.id) = 36 AND substr(m.id,9,1)='-' AND substr(m.id,14,1)='-'
+  AND substr(m.id,19,1)='-' AND substr(m.id,24,1)='-'
+  AND NOT EXISTS (SELECT 1 FROM chat.conversation c
+                  WHERE c.id = m.conversation_id
+                    AND json_extract(c.metadata,
+                        '$.legacy_server_conversation_id') IS NOT NULL);
+UPDATE chat.message SET source = 'user' WHERE source = 'model'
+"""
+
+# ------------------------------------------------------------------
 # All migrations in order
 # ------------------------------------------------------------------
 
@@ -658,4 +697,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (10, _V10_CHAT_MIRROR_CUTOVER),
     (11, _V11_FILE_SYNC_STATE),
     (12, _V12_CHAT_BESPOKE_DROP),
+    (13, _V13_MESSAGE_SOURCE_REPAIR),
 ]

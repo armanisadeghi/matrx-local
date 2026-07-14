@@ -323,6 +323,108 @@ def test_repo_compat_shapes_and_tombstone_delete(tmp_path: Path) -> None:
     _run(tmp_path, scenario)
 
 
+def test_message_source_is_canonical_for_all_roles(tmp_path: Path) -> None:
+    """MXL-D-052: `source` is the row's ORIGIN (cloud vocabulary:
+    user | agent_template | system — CHECK cx_message_source_check), not turn
+    authorship. Assistant/tool turns written locally must be source='user';
+    'model' is illegal in the cloud and made every AI message 400 on push."""
+
+    async def scenario(db: LocalDatabase) -> None:
+        from app.services.ai.conversation_handler import SQLiteConversationStore
+        from app.services.local_db.repositories import MessagesRepo
+
+        msgs = MessagesRepo()
+        for i, role in enumerate(("user", "assistant", "tool", "system")):
+            await msgs.create(
+                {"id": f"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa1{i}",
+                 "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+                 "role": role, "content": f"m{i}"}
+            )
+
+        store = SQLiteConversationStore()
+        await store.ensure_conversation_exists("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02", "u1")
+        await store.create_pending_user_request(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02", "u1"
+        )
+        await store.persist_completed_request(
+            {
+                "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02",
+                "request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21",
+                "messages": [
+                    {"role": "user", "content": "ping"},
+                    {"role": "assistant", "content": "pong"},
+                ],
+            }
+        )
+
+        rows = [dict(r) for r in await db.fetchall("SELECT id, role, source FROM chat.message")]
+        assert rows, "no messages written"
+        bad = [r for r in rows if r["source"] != "user"]
+        assert not bad, f"non-canonical source values written: {bad}"
+
+    _run(tmp_path, scenario)
+
+
+def test_v13_repairs_model_source_and_reenqueues(tmp_path: Path) -> None:
+    """MXL-D-052 repair: existing source='model' rows are remapped to 'user'
+    and re-enqueued (dead-lettered entries resurrected) so the outbox drains;
+    non-UUID ids and children of legacy server-side conversations stay out."""
+
+    async def scenario(db: LocalDatabase) -> None:
+        # Simulate a pre-fix database: poisoned rows + a dead-lettered queue
+        # entry, then rewind the ledger so V13 reruns on reconnect.
+        await db.execute(
+            "INSERT INTO chat.conversation (id, title, created_at, updated_at) "
+            "VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01','C','2026-01-01','2026-01-01')"
+        )
+        await db.execute(
+            "INSERT INTO chat.conversation (id, title, metadata, created_at, updated_at) "
+            "VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02','Legacy',"
+            "'{\"legacy_server_conversation_id\": \"srv-1\"}','2026-01-01','2026-01-01')"
+        )
+        for mid, conv in (
+            ("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"),
+            ("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02"),
+            ("1751234567-abc", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"),
+        ):
+            await db.execute(
+                "INSERT INTO chat.message (id, conversation_id, role, position, "
+                "status, content, source, created_at, updated_at) VALUES "
+                f"('{mid}','{conv}','assistant',0,'active','[]','model',"
+                "'2026-01-01','2026-01-01')"
+            )
+        # dead-lettered queue entry from the 400-retry ladder
+        await db.execute(
+            "INSERT INTO sync_queue (entity_type, entity_id, action, payload, attempts) "
+            "VALUES ('chat.message','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11','dead','{}',3)"
+        )
+        await db.execute("DELETE FROM _migrations WHERE version >= 13")
+        await db.commit()
+        await db.close()
+
+        db2 = LocalDatabase(db.path)
+        await db2.connect()  # reruns V13
+        try:
+            rows = [dict(r) for r in await db2.fetchall("SELECT id, source FROM chat.message")]
+            assert all(r["source"] == "user" for r in rows), rows
+            queue = [
+                dict(r)
+                for r in await db2.fetchall(
+                    "SELECT entity_id, action FROM sync_queue WHERE entity_type='chat.message'"
+                )
+            ]
+            by_id = {q["entity_id"]: q["action"] for q in queue}
+            # dead-lettered row resurrected as a fresh pending upsert
+            assert by_id.get("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11") == "upsert"
+            # legacy-conversation child and non-UUID id must NOT be enqueued
+            assert "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12" not in by_id
+            assert "1751234567-abc" not in by_id
+        finally:
+            await db2.close()
+
+    _run(tmp_path, scenario)
+
+
 # ---------------------------------------------------------------------------
 # Chat sync engine — push/pull semantics against a fake PostgREST client
 # ---------------------------------------------------------------------------

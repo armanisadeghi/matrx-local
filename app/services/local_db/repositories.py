@@ -506,7 +506,15 @@ class MessagesRepo:
                 _content_to_parts(msg.get("content", "")),
                 _json_dumps(meta),
                 _json_dumps({"message": error}) if error else None,
-                "user" if role == "user" else "model",
+                # Canonical vocabulary (aidream db/models/chat.py Message.source):
+                # 'user' | 'agent_template' | 'system' — enforced by the cloud
+                # CHECK constraint cx_message_source_check. `source` is the
+                # ORIGIN of the row (user session vs template vs system
+                # injection), NOT turn authorship — `role` carries that. Every
+                # message created in a user's local session is source='user',
+                # assistant/tool turns included (MXL-D-052: writing 'model'
+                # here made every AI message 400 on push, permanently).
+                "user",
                 len(msg.get("content", "") or ""),
                 msg.get("created_at") or now,
                 msg.get("created_at") or now,

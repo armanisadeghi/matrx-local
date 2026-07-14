@@ -62,7 +62,7 @@ def _response_headers(headers: httpx.Headers) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, value in headers.items():
         lk = key.lower()
-        if lk in _HOP_BY_HOP_HEADERS or lk == "content-length":
+        if lk in _HOP_BY_HOP_HEADERS or lk in {"content-length", "content-encoding"}:
             continue
         out[key] = value
     return out
@@ -70,8 +70,8 @@ def _response_headers(headers: httpx.Headers) -> dict[str, str]:
 
 def _client_headers(request: Request) -> dict[str, str]:
     """Forward useful client negotiation headers, never the Supabase JWT."""
-    headers: dict[str, str] = {}
-    for key in ("accept", "accept-encoding", "user-agent"):
+    headers: dict[str, str] = {"accept-encoding": "identity"}
+    for key in ("accept", "user-agent"):
         value = request.headers.get(key)
         if value:
             headers[key] = value

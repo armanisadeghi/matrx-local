@@ -84,6 +84,7 @@ def test_chat_completion_proxies_and_preserves_params(
     def _handler(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
         captured["authorization"] = request.headers.get("authorization")
+        captured["accept_encoding"] = request.headers.get("accept-encoding")
         captured["body"] = json.loads(request.content.decode("utf-8"))
         return httpx.Response(
             200,
@@ -115,6 +116,7 @@ def test_chat_completion_proxies_and_preserves_params(
     asyncio.run(_run())
     assert captured["url"] == "http://127.0.0.1:8765/v1/chat/completions"
     assert captured["authorization"] is None
+    assert captured["accept_encoding"] == "identity"
     assert captured["body"]["model"] == "qwen3-8b"
     assert captured["body"]["temperature"] == 0.12
     assert captured["body"]["top_p"] == 0.9

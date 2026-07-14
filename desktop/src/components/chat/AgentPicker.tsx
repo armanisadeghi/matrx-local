@@ -25,7 +25,13 @@ import {
 /** Matches admin prompts filter: include rows with no category / no tags. */
 const NONE_SENTINEL = "__none__";
 
-type SortOption = "name-asc" | "name-desc" | "source" | "category-asc";
+type SortOption =
+  | "updated-desc"
+  | "created-desc"
+  | "name-asc"
+  | "name-desc"
+  | "source"
+  | "category-asc";
 type SourceFilter = "all" | AgentSource;
 type FavFilter = "all" | "yes" | "no";
 
@@ -55,6 +61,8 @@ const SOURCE_ICONS: Record<AgentSource, React.ReactNode> = {
 };
 
 const SORT_OPTIONS: { value: SortOption; label: string }[] = [
+  { value: "updated-desc", label: "Recently updated" },
+  { value: "created-desc", label: "Recently created" },
   { value: "name-asc", label: "Name (A–Z)" },
   { value: "name-desc", label: "Name (Z–A)" },
   { value: "category-asc", label: "Category (A–Z)" },
@@ -113,6 +121,12 @@ function totalSearchScore(agent: AgentInfo, query: string): number {
   if (!trimmed) return 0;
   const tokens = trimmed.split(/\s+/).filter(Boolean);
   return tokens.reduce((sum, t) => sum + computeAgentSearchScore(agent, t), 0);
+}
+
+function readTime(value?: string | null): number {
+  if (!value) return 0;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : 0;
 }
 
 // ─── Highlight helper ────────────────────────────────────────────────────────
@@ -233,8 +247,8 @@ export function AgentPicker({
   onClose,
 }: AgentPickerProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
-  const [sortBy, setSortBy] = useState<SortOption>("name-asc");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("user");
+  const [sortBy, setSortBy] = useState<SortOption>("updated-desc");
   const [favoritesFirst, setFavoritesFirst] = useState(true);
   const [favFilter, setFavFilter] = useState<FavFilter>("all");
   /** Inclusion model (empty = no filter), with NONE_SENTINEL for uncategorized / untagged. */
@@ -280,16 +294,16 @@ export function AgentPicker({
   }, [agents]);
 
   const hasActiveFilters =
-    sourceFilter !== "all" ||
-    sortBy !== "name-asc" ||
+    sourceFilter !== "user" ||
+    sortBy !== "updated-desc" ||
     includedCategories.length > 0 ||
     includedTags.length > 0 ||
     favFilter !== "all" ||
     !favoritesFirst;
 
   const resetFilters = useCallback(() => {
-    setSourceFilter("all");
-    setSortBy("name-asc");
+    setSourceFilter("user");
+    setSortBy("updated-desc");
     setIncludedCategories([]);
     setIncludedTags([]);
     setFavFilter("all");
@@ -299,6 +313,14 @@ export function AgentPicker({
   const compareAgents = useCallback(
     (a: AgentInfo, b: AgentInfo): number => {
       switch (sortBy) {
+        case "updated-desc": {
+          const diff = readTime(b.updated_at) - readTime(a.updated_at);
+          return diff !== 0 ? diff : a.name.localeCompare(b.name);
+        }
+        case "created-desc": {
+          const diff = readTime(b.created_at) - readTime(a.created_at);
+          return diff !== 0 ? diff : a.name.localeCompare(b.name);
+        }
         case "name-desc":
           return b.name.localeCompare(a.name);
         case "category-asc": {
@@ -434,8 +456,8 @@ export function AgentPicker({
   );
 
   const activeFilterCount =
-    (sourceFilter !== "all" ? 1 : 0) +
-    (sortBy !== "name-asc" ? 1 : 0) +
+    (sourceFilter !== "user" ? 1 : 0) +
+    (sortBy !== "updated-desc" ? 1 : 0) +
     includedCategories.length +
     includedTags.length +
     (favFilter !== "all" ? 1 : 0) +
@@ -524,9 +546,7 @@ export function AgentPicker({
                   label={SOURCE_LABELS[src]}
                   icon={SOURCE_ICONS[src]}
                   active={sourceFilter === src}
-                  onClick={() =>
-                    setSourceFilter(sourceFilter === src ? "all" : src)
-                  }
+                  onClick={() => setSourceFilter(src)}
                 />
               ))}
               {activeFilterCount > 0 ? (

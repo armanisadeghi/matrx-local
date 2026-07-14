@@ -54,6 +54,10 @@ export interface AgentInfo {
   category?: string | null;
   tags?: string[] | null;
   is_favorite?: boolean;
+  is_owner?: boolean;
+  access_level?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface AgentsResponse {

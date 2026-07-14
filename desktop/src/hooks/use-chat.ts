@@ -51,6 +51,9 @@ export interface ChatMessage {
   model?: string;
   isStreaming?: boolean;
   error?: string;
+  streamStatus?: string;
+  streamDiagnostics?: string[];
+  reasoning?: string;
 }
 
 /**

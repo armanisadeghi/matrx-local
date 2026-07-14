@@ -99,7 +99,7 @@ export function CloudChat() {
   } = cloudChat;
   const {
     agents,
-    ensureExecutionMinimal,
+    ensureExecutionFull,
     error: agentsError,
     executionError,
     executionLoadingAgentId,
@@ -111,6 +111,9 @@ export function CloudChat() {
   const messages = activeConversation?.messages ?? [];
   const hasMessages = messages.length > 0;
   const selectedAgentId = activeAgent?.id ?? null;
+  const currentActiveAgent = selectedAgentId
+    ? (agents.find((agent) => agent.id === selectedAgentId) ?? activeAgent)
+    : null;
 
   useEffect(() => {
     if (!selectedAgentId || hasMessages) {
@@ -120,24 +123,40 @@ export function CloudChat() {
     }
 
     let cancelled = false;
-    void ensureExecutionMinimal(selectedAgentId).then((variables) => {
+    void ensureExecutionFull(selectedAgentId).then((payload) => {
       if (cancelled) return;
-      setActiveVariables(variables);
-      setVariableValues(defaultVariableValues(variables));
+      setActiveVariables(payload.variables);
+      setVariableValues(defaultVariableValues(payload.variables));
+      if (payload.modelId) setModel(payload.modelId);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [ensureExecutionMinimal, hasMessages, selectedAgentId]);
+  }, [ensureExecutionFull, hasMessages, selectedAgentId, setModel]);
 
   const activeAgentWithVariables = useMemo(() => {
-    if (!activeAgent) return null;
+    if (!currentActiveAgent) return null;
     return {
-      ...activeAgent,
+      ...currentActiveAgent,
       variable_defaults: activeVariables,
     };
-  }, [activeAgent, activeVariables]);
+  }, [currentActiveAgent, activeVariables]);
+
+  const effectiveModels = useMemo(() => {
+    if (!model || availableModels.some((item) => item.id === model)) {
+      return availableModels;
+    }
+
+    return [
+      {
+        id: model,
+        label: `${currentActiveAgent?.name ?? "Agent"} model (${model})`,
+        provider: "agent",
+      },
+      ...availableModels,
+    ];
+  }, [availableModels, currentActiveAgent?.name, model]);
 
   const handleSelectAgent = useCallback(
     (agentId: string | null) => {
@@ -149,11 +168,14 @@ export function CloudChat() {
       }
       const found = agents.find((agent) => agent.id === agentId) ?? null;
       setActiveAgent(found);
+      setActiveVariables([]);
+      setVariableValues({});
+      if (found?.settings.model_id) setModel(found.settings.model_id);
       if (activeConversationId && !hasMessages) {
         selectConversation(null);
       }
     },
-    [activeConversationId, agents, hasMessages, selectConversation],
+    [activeConversationId, agents, hasMessages, selectConversation, setModel],
   );
 
   const handleNewChat = useCallback(() => {
@@ -228,9 +250,9 @@ export function CloudChat() {
           </div>
         </PageHeader>
 
-        {(agentsError || executionError || cloudChat.modelError) && (
+        {(agentsError || executionError || cloudChat.modelError || cloudChat.requestError) && (
           <div className="border-b border-amber-500/30 bg-amber-500/5 px-4 py-2 text-xs text-amber-500">
-            {agentsError ?? executionError ?? cloudChat.modelError}
+            {agentsError ?? executionError ?? cloudChat.modelError ?? cloudChat.requestError}
           </div>
         )}
 
@@ -278,10 +300,11 @@ export function CloudChat() {
             isStreaming={isStreaming}
             mode={mode}
             model={model}
-            availableModels={availableModels}
+            availableModels={effectiveModels}
             onModelChange={setModel}
             onModeChange={setMode}
             engineReady
+            selectedAgentId={selectedAgentId}
           />
         </div>
       </div>

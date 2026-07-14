@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  fetchCloudAgentExecutionMinimal,
+  fetchCloudAgentExecutionFull,
   fetchCloudAgents,
 } from "@/lib/cloud-agents";
-import type { AgentInfo, PromptVariable } from "@/types/agents";
+import type { AgentInfo, AgentSettings, PromptVariable } from "@/types/agents";
+
+interface AgentExecutionPayload {
+  variables: PromptVariable[];
+  contextSlots: unknown[];
+  modelId: string | null;
+  settings: AgentSettings;
+  tools: string[];
+  customTools: unknown;
+  uiGates: unknown;
+}
 
 interface AgentExecutionState {
-  variablesByAgentId: Record<string, PromptVariable[]>;
+  byAgentId: Record<string, AgentExecutionPayload>;
   loadingAgentId: string | null;
   error: string | null;
 }
@@ -16,7 +26,7 @@ export function useCloudAgents() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [execution, setExecution] = useState<AgentExecutionState>({
-    variablesByAgentId: {},
+    byAgentId: {},
     loadingAgentId: null,
     error: null,
   });
@@ -45,9 +55,9 @@ export function useCloudAgents() {
     };
   }, [loadAgents]);
 
-  const ensureExecutionMinimal = useCallback(
-    async (agentId: string): Promise<PromptVariable[]> => {
-      const cached = execution.variablesByAgentId[agentId];
+  const ensureExecutionFull = useCallback(
+    async (agentId: string): Promise<AgentExecutionPayload> => {
+      const cached = execution.byAgentId[agentId];
       if (cached) return cached;
 
       setExecution((prev) => ({
@@ -57,11 +67,11 @@ export function useCloudAgents() {
       }));
 
       try {
-        const payload = await fetchCloudAgentExecutionMinimal(agentId);
+        const payload = await fetchCloudAgentExecutionFull(agentId);
         setExecution((prev) => ({
-          variablesByAgentId: {
-            ...prev.variablesByAgentId,
-            [agentId]: payload.variables,
+          byAgentId: {
+            ...prev.byAgentId,
+            [agentId]: payload,
           },
           loadingAgentId: null,
           error: null,
@@ -69,23 +79,47 @@ export function useCloudAgents() {
         setAgents((prev) =>
           prev.map((agent) =>
             agent.id === agentId
-              ? { ...agent, variable_defaults: payload.variables }
+              ? {
+                  ...agent,
+                  variable_defaults: payload.variables,
+                  settings: {
+                    ...agent.settings,
+                    ...payload.settings,
+                    ...(payload.modelId ? { model_id: payload.modelId } : {}),
+                  },
+                }
               : agent,
           ),
         );
-        return payload.variables;
+        return payload;
       } catch (err) {
         const message =
-          err instanceof Error ? err.message : "Failed to load agent variables";
+          err instanceof Error ? err.message : "Failed to load agent execution details";
         setExecution((prev) => ({
           ...prev,
           loadingAgentId: null,
           error: message,
         }));
-        return [];
+        return {
+          variables: [],
+          contextSlots: [],
+          modelId: null,
+          settings: {},
+          tools: [],
+          customTools: null,
+          uiGates: null,
+        };
       }
     },
-    [execution.variablesByAgentId],
+    [execution.byAgentId],
+  );
+
+  const ensureExecutionMinimal = useCallback(
+    async (agentId: string): Promise<PromptVariable[]> => {
+      const payload = await ensureExecutionFull(agentId);
+      return payload.variables;
+    },
+    [ensureExecutionFull],
   );
 
   const grouped = useMemo(
@@ -103,7 +137,9 @@ export function useCloudAgents() {
     isLoading,
     error,
     refresh: loadAgents,
+    ensureExecutionFull,
     ensureExecutionMinimal,
+    executionByAgentId: execution.byAgentId,
     executionLoadingAgentId: execution.loadingAgentId,
     executionError: execution.error,
   };

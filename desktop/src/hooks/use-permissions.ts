@@ -263,6 +263,23 @@ function buildInitialState(): Map<PermissionKey, PermissionState> {
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+function fallbackPermissionState(key: PermissionKey): PermissionState {
+  const label = key
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+
+  return {
+    key,
+    status: "unknown",
+    label,
+    description: "Permission reported by the engine",
+    tools: [],
+    canPrompt: false,
+    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy",
+  };
+}
+
 export function usePermissions(): UsePermissionsReturn {
   const [permissions, setPermissions] = useState<Map<PermissionKey, PermissionState>>(
     buildInitialState,
@@ -275,7 +292,11 @@ export function usePermissions(): UsePermissionsReturn {
     (key: PermissionKey, status: PermissionStatus, detail?: string) => {
       setPermissions((prev) => {
         const next = new Map(prev);
-        const current = next.get(key)!;
+        const current =
+          next.get(key) ??
+          (PERMISSION_META[key]
+            ? { key, status: "loading" as PermissionStatus, ...PERMISSION_META[key] }
+            : fallbackPermissionState(key));
         const { detail: _stale, ...rest } = current;
         next.set(key, { ...rest, status, ...(detail !== undefined ? { detail } : {}) });
         return next;

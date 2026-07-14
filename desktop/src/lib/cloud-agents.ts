@@ -21,12 +21,19 @@ interface AgentListRow {
   is_favorite: boolean | null;
   is_owner: boolean | null;
   access_level: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
-interface AgentExecutionMinimalRow {
+interface AgentExecutionFullRow {
   id: string;
   variable_definitions: unknown;
   context_slots: unknown;
+  model_id: string | null;
+  settings: unknown;
+  tools: string[] | null;
+  custom_tools: unknown;
+  ui_gates: unknown;
 }
 
 const SUPPORTED_COMPONENT_TYPES = new Set<VariableComponentType>([
@@ -57,6 +64,16 @@ function stringArray(value: unknown): string[] | undefined {
 function readRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value
+    : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function normalizeComponentType(value: unknown): VariableComponentType {
@@ -94,27 +111,42 @@ function normalizeCustomComponent(value: unknown): VariableCustomComponent | und
 
 export function normalizeVariableDefinition(value: unknown): PromptVariable | null {
   const raw = readRecord(value);
-  if (!raw || typeof raw.name !== "string" || raw.name.trim().length === 0) {
+  const name = readString(raw?.name) ?? readString(raw?.key);
+  if (!raw || !name) {
     return null;
   }
 
   const variable: PromptVariable = {
-    name: raw.name,
+    name,
   };
 
   if ("defaultValue" in raw) variable.defaultValue = asString(raw.defaultValue);
+  else if ("default_value" in raw) variable.defaultValue = asString(raw.default_value);
+  else if ("default" in raw) variable.defaultValue = asString(raw.default);
+
   if (typeof raw.helpText === "string") variable.helpText = raw.helpText;
+  else if (typeof raw.help_text === "string") variable.helpText = raw.help_text;
+  else if (typeof raw.description === "string") variable.helpText = raw.description;
+
   if (typeof raw.required === "boolean") variable.required = raw.required;
 
-  const customComponent = normalizeCustomComponent(raw.customComponent);
+  const customComponent = normalizeCustomComponent(
+    raw.customComponent ?? raw.custom_component ?? raw.component,
+  );
   if (customComponent) variable.customComponent = customComponent;
 
   return variable;
 }
 
 function normalizeVariableList(value: unknown): PromptVariable[] {
-  if (!Array.isArray(value)) return [];
-  return value
+  const values = Array.isArray(value)
+    ? value
+    : Object.entries(readRecord(value) ?? {}).map(([name, raw]) => {
+        const record = readRecord(raw);
+        return record && !("name" in record) ? { ...record, name } : raw;
+      });
+
+  return values
     .map(normalizeVariableDefinition)
     .filter((variable): variable is PromptVariable => variable !== null);
 }
@@ -123,6 +155,28 @@ function sourceFromRow(row: AgentListRow): AgentSource {
   if (row.agent_type === "builtin" || row.access_level === "system") return "builtin";
   if (row.is_owner) return "user";
   return "shared";
+}
+
+function settingsFromUnknown(value: unknown): AgentSettings {
+  const raw = readRecord(value);
+  if (!raw) return {};
+
+  const settings: AgentSettings = {};
+  const modelId = readString(raw.model_id ?? raw.modelId ?? raw.ai_model_id);
+  if (modelId) settings.model_id = modelId;
+
+  const temperature = readNumber(raw.temperature);
+  if (temperature !== undefined) settings.temperature = temperature;
+
+  const maxTokens = readNumber(raw.max_tokens ?? raw.maxTokens);
+  if (maxTokens !== undefined) settings.max_tokens = maxTokens;
+
+  if (typeof raw.stream === "boolean") settings.stream = raw.stream;
+
+  const tools = stringArray(raw.tools);
+  if (tools) settings.tools = tools;
+
+  return settings;
 }
 
 function settingsFromRow(row: AgentListRow): AgentSettings {
@@ -140,6 +194,10 @@ function agentFromRow(row: AgentListRow): AgentInfo {
     category: row.category,
     tags: row.tags ?? [],
     is_favorite: Boolean(row.is_favorite),
+    is_owner: Boolean(row.is_owner),
+    access_level: row.access_level,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   };
 }
 
@@ -149,27 +207,58 @@ export async function fetchCloudAgents(): Promise<AgentInfo[]> {
 
   return ((data ?? []) as AgentListRow[])
     .filter((row) => row.is_active !== false && row.is_archived !== true)
-    .map(agentFromRow)
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .map(agentFromRow);
 }
 
-export async function fetchCloudAgentExecutionMinimal(
+export async function fetchCloudAgentExecutionFull(
   agentId: string,
-): Promise<{ variables: PromptVariable[]; contextSlots: unknown[] }> {
-  const { data, error } = await supabase.rpc("agx_get_execution_minimal", {
+): Promise<{
+  variables: PromptVariable[];
+  contextSlots: unknown[];
+  modelId: string | null;
+  settings: AgentSettings;
+  tools: string[];
+  customTools: unknown;
+  uiGates: unknown;
+}> {
+  const { data, error } = await supabase.rpc("agx_get_execution_full", {
     p_agent_id: agentId,
   });
   if (error) throw new Error(error.message);
 
   const row = Array.isArray(data)
-    ? (data[0] as AgentExecutionMinimalRow | undefined)
-    : (data as AgentExecutionMinimalRow | null);
+    ? (data[0] as AgentExecutionFullRow | undefined)
+    : (data as AgentExecutionFullRow | null);
 
-  if (!row) return { variables: [], contextSlots: [] };
+  if (!row) {
+    return {
+      variables: [],
+      contextSlots: [],
+      modelId: null,
+      settings: {},
+      tools: [],
+      customTools: null,
+      uiGates: null,
+    };
+  }
 
   const contextSlots = Array.isArray(row.context_slots) ? row.context_slots : [];
+  const settings = settingsFromUnknown(row.settings);
+  const modelId = row.model_id ?? settings.model_id ?? null;
+
   return {
     variables: normalizeVariableList(row.variable_definitions),
     contextSlots,
+    modelId,
+    settings: {
+      ...settings,
+      ...(modelId ? { model_id: modelId } : {}),
+      ...(row.tools?.length ? { tools: row.tools } : {}),
+    },
+    tools: row.tools ?? [],
+    customTools: row.custom_tools,
+    uiGates: row.ui_gates,
   };
 }
+
+export const fetchCloudAgentExecutionMinimal = fetchCloudAgentExecutionFull;

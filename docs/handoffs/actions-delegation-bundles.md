@@ -69,56 +69,91 @@ local models, local codebase."
   (`matrx_ai/capabilities/models.py:73-117`) — surface, capabilities,
   state payloads, amendments, mcp, apply_policy; unknown capability → 422.
 
-## The gap (why none of this works for the desktop today)
+## The gap — CLOSED for steps 1-4 (2026-07-14)
 
-**No `ui.ui_surface` row has `executor_name='matrx-local'`.** Only
-`chrome-extension/assistant|pilot` exist. So the active-executor set never
-contains `matrx-local`, every desktop tool resolves to "server", and the
-viability gate drops all 115 on a real agent turn. The desktop is reachable
-only through the chrome-extension `desktop` bundle's single
-`desktop_run_command` bridge tool. Everything below hangs off fixing that.
+~~No `ui.ui_surface` row has `executor_name='matrx-local'`.~~ FIXED —
+`matrx-local/desktop` is live (aidream 0170). The cloud registry now carries
+19 action-enum mega-tools bound to `matrx-local` (115 flat rows retired),
+9 desktop bundles with member edges, and surface defaults. What's still
+missing for end-to-end delegation: a matrx-ai RELEASE carrying
+`desktop-native`/`load_desktop_tools` (sits as aidream local commit
+`f99caf82b`), the suspend/resume client half in the engine (step 5), and
+the acceptance drill (step 6).
 
-## Priority work queue
+## Progress log (2026-07-14, W7 agent — steps 1-4 DONE + EXERCISED)
 
-### 1. Seed the desktop surface (small, unblocks everything)
-`ui.ui_surface` row `matrx-local/desktop` (parent `matrx-default/default`,
-`executor_name='matrx-local'`) + `tool_surface_defaults` for it. Follow the
-seeding pattern the connect-matrx-extend skill documents. Applied live via
-Supabase MCP + verified, same session (house migration rule).
+### ✅ 1. Desktop surface seeded (EXERCISED live)
+aidream migration `0170_seed_matrx_local_surface.sql` (aidream local commit
+`a9ac784dc`), applied via Supabase MCP + ledgered in
+`public._schema_migrations`. Live-verified: `ui.ui_client` `matrx-local`,
+`ui.ui_surface` `matrx-local/desktop` (executor `matrx-local`, parent
+`matrx-default/default`), `tool.surface_defaults` row (filled by step 4).
 
-### 2. Collapse siblings into action-enum mega-tools (the `note` pattern)
-Target shape (~115 → ~25-30 definitions):
-- `file` — action ∈ read/write/edit/glob/grep/move/copy/delete/rename/mkdir/list
-  (the 11 file_ops tools, incl. the 2026-07-13 additions)
-- `window`, `process`, `input`, `audio`, `clipboard`, `screen`,
-  `browser` (local Playwright), `net`, `monitor`, `schedule`,
-  `documents`, `media`, platform clusters (`mac_apps`, `windows_ps`)
-Each: one discriminated-union arg model (`$variants`), one dispatcher-side
-fan-out to the existing `tool_*` handlers (do NOT rewrite handlers — wrap
-them; the `note` tool at notes.py:341-348 is the template). Cloud rows
-updated via `tool_sync emit-changeset` (retire the old per-tool rows in the
-same changeset — no dual registrations; cloud is canon).
-The dispatcher keeps accepting the legacy PascalCase names from existing
-surfaces (extension RPC) during the transition — but the ADVERTISED registry
-is mega-tools only.
+### ✅ 2. 115 → 19 action-enum mega-tools (EXERCISED live, pushed)
+matrx-local commits `b8c936098` + `e87a21114` (pushed to origin main):
+- `app/tools/actions.py` — `ACTION_GROUPS` (19 groups covering all 115
+  legacy tools exactly; build fails loudly on orphans), generic fan-out
+  handler factory (wraps legacy handlers via `dispatch()`; arg aliases
+  `tab_action`/`window_action`/`service_action` for the three tools that
+  already had an `action` param), schema composers emitting BOTH the
+  standard `input_schema` and the flat cloud dialect with `$variants`
+  (verified byte-shape against the platform `note` row).
+- Catalog: `advertised` flag + `cloud_parameters`; legacy entries stay
+  dispatchable (extension RPC transition) but unadvertised.
+- tool_sync: advertised-only diff + `RETIRED` class emitting ACTIVE
+  deactivation SQL.
+- CLOUD APPLIED + VERIFIED: 19 NEW rows inserted, 115 legacy rows retired
+  (binding + definition `is_active=false`; pre-checked only matrx-local
+  binds them); `tool_sync status` drift-clean against the live route
+  (serves exactly 19). Mega fan-out exercised in-process (File list/grep,
+  bad-action error, legacy Read still dispatches). 257 parity/
+  characterization tests green; local bridge builds 19 ToolDefinitions and
+  matrx-ai's own `_build_json_schema` renders clean provider schemas
+  ($variants skipped, action enum + required present).
+- Categories aligned to the 9-bundle taxonomy (desktop-files/-shell/
+  -system/-input/-web/-media/-ner/-mac/-windows) in code AND the live rows.
 
-### 3. Desktop capability + discovery loader (the matrx-extend pattern)
-- New capability `desktop-native` (matrx-ai `capabilities/` module +
-  registration): payload carries platform, granted OS permissions, engine
-  version, tunnel state, loaded_categories — mirror `BrowserDomPayload`.
-- One `load_desktop_tools(category)` discovery tool (copy
-  `browser_discovery.py` per its own docstring instruction), categories =
-  the mega-tool groups above. `queue_tool_changes(add=…, remove=[self])`.
-- Result: an agent turn starts with ONE desktop tool advertised.
+### ✅ 3. desktop-native capability + load_desktop_tools (code EXERCISED in-proc; NOT released)
+aidream local commit `f99caf82b` (packages/matrx-ai — DO NOT push aidream
+main without coordination; see tracker):
+- `matrx_ai/capabilities/desktop_native.py` — `DesktopNativePayload`
+  (platform, engine_version, instance_id, tunnel_state,
+  permissions_granted, loaded_categories) + `DESKTOP_NATIVE` capability;
+  factory advertises ONLY `load_desktop_tools`.
+- `matrx_ai/tools/implementations/desktop_discovery.py` — category-routed
+  loader mirroring browser_discovery (registry-driven, platform-gates
+  local_mac_apps/local_windows_ps against payload.platform,
+  loaded_categories short-circuit, `queue_tool_changes(add=…, remove=self)`).
+- `_generated_declarations.py` `LoadDesktopToolsArgs` (9-category Literal)
+  + `_reg`; `built_in.py` registers the capability.
+- DB row `load_desktop_tools` (definition + matrx-ai-core binding, enum
+  matches declaration) applied live + verified.
+- Exercised: capability registration, factory, arg validation, payload
+  model, module import; matrx-ai capability+tools suites 278 passed.
+- **NOT exercised:** aidream startup drift gate (needs a configured boot —
+  W2's dirty worktree blocks a clean live boot), and NOTHING runs it in
+  prod until a **matrx-ai release > 0.4.0** ships this module and the
+  server + matrx-local upgrade. That release is the gate for steps 5-6.
 
-### 4. Bundles in the DB
-`tool.bundle` rows (`desktop-files`, `desktop-system`, `desktop-input`,
-`desktop-media`, `desktop-browser`, …) with `platform.associations` member
-edges; reference from `matrx-local/desktop` surface defaults
-(`always_include_bundles[]`). Optional `bundle:list_desktop_*` rows backed by
-the generic `bundle_lister` for MCP-style discovery parity.
+### ✅ 4. Bundles + surface defaults (EXERCISED live)
+aidream migration `0171_seed_desktop_bundles.sql` (local commit
+`fc46f94fb`), applied + ledgered. 9 `tool.bundle` rows with
+`bundle:list_desktop-*` listers (generic bundle_lister family) and
+`platform.associations` member edges covering all 19 megas — live-verified
+member counts files=2 shell=1 system=7 input=1 web=3 media=2 ner=1 mac=1
+windows=1. `matrx-local/desktop` surface defaults:
+`always_include_tools=[load_desktop_tools]`,
+`always_include_bundles=[desktop-files, desktop-shell]`.
 
-### 5. Suspend/resume client half in matrx-local
+### Known cosmetic nits (not worth blocking)
+- Two mega descriptions have truncated first-sentence fragments
+  ("hotkey: Send a keyboard shortcut (e.g"; local_windows_ps repeats
+  "(Windows only) (Windows only)"). Descriptions are DB-canonical — fix
+  with a one-line UPDATE whenever convenient.
+
+## Remaining work queue
+
+### 5. Suspend/resume client half in matrx-local (NOT STARTED)
 When a cloud agent delegates a desktop tool: matrx-local (via Broadcast rpc /
 tunnel) executes with the existing `tool` command primitive, then POSTs
 `/conversations/{id}/tool_results` and `/resume` on `continuation_needed` —
@@ -127,13 +162,33 @@ cross-component router path) so the desktop works headless (no UI required).
 Set `max_client_wait_seconds` per tool class (slow desktop ops: downloads,
 media gen, long shell commands).
 
-### 6. Verification (acceptance)
-From the web app with the desktop online: an agent turn advertises
-`load_desktop_tools`, loads `desktop-files`, calls `file(action="move", …)`,
-the call suspends → executes on this machine → resumes, and the file actually
-moved on disk. Then the same over Broadcast with the tunnel down. Pin the
-merge behavior with a characterization test on the aidream side (surface
-`matrx-local/desktop` yields delegated bindings, not drops).
+Open design question the next agent must answer first: HOW does the
+delegated-call notification reach a headless desktop? matrx-extend receives
+the suspension inside the stream it opened; a headless desktop is not in the
+stream. Candidates: (a) aidream emits a Broadcast rpc envelope to the
+desktop's channel when a matrx-local-bound call suspends (server-side work
+in aidream), (b) the desktop polls pending delegated calls. Inspect
+`_suspend_for_delegation` (`matrx_ai/orchestrator/executor.py:464-526`) and
+`app/api/cross_component_router.py` before writing anything. Then: execute
+via the existing `tool` command primitive (mega names ARE dispatcher names
+now: File/Shell/… — the Broadcast rpc path dispatches by PascalCase, cloud
+names by the local bridge), POST `/conversations/{id}/tool_results`, then
+`/resume` on `continuation_needed`. Set `max_client_wait_seconds` per tool
+class (downloads, media gen, long shell).
+
+### 6. Verification (acceptance) — GATED on a matrx-ai release
+**Gate:** publish matrx-ai (>0.4.0) carrying `desktop-native` +
+`load_desktop_tools` (aidream local commit `f99caf82b`), deploy the server,
+bump matrx-local's floor. Also observe the aidream startup tool-drift gate
+green on first boot (declaration ↔ DB row parity was constructed but not
+boot-verified).
+Then, from the web app with the desktop online: an agent turn advertises
+`load_desktop_tools`, loads `desktop-files`, calls
+`local_file(action="move", …)`, the call suspends → executes on this
+machine → resumes, and the file actually moved on disk. Then the same over
+Broadcast with the tunnel down. Pin the merge behavior with a
+characterization test on the aidream side (surface `matrx-local/desktop`
+yields delegated bindings, not drops).
 
 ## Contracts
 

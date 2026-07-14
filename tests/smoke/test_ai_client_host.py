@@ -264,12 +264,12 @@ def test_mock_conversation_round_trips_through_sqlite_store(seam_sandbox, local_
         # ── Rows actually landed in SQLite ────────────────────────────
         db = local_db
         conv_row = await db.fetchone(
-            "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+            "SELECT * FROM chat.conversation WHERE id = ?", (conversation_id,)
         )
         assert conv_row is not None, "ensure_conversation_exists never wrote the row"
 
         req_row = await db.fetchone(
-            "SELECT * FROM user_requests WHERE id = ?", (request_id,)
+            "SELECT * FROM chat.user_request WHERE id = ?", (request_id,)
         )
         assert req_row is not None, "create_pending_user_request never wrote the row"
         assert dict(req_row)["status"] == "completed", (
@@ -277,7 +277,7 @@ def test_mock_conversation_round_trips_through_sqlite_store(seam_sandbox, local_
         )
 
         msg_rows = await db.fetchall(
-            "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at",
+            "SELECT * FROM chat.message WHERE conversation_id = ? ORDER BY position",
             (conversation_id,),
         )
         contents = [dict(r).get("content", "") for r in msg_rows]
@@ -293,7 +293,7 @@ def test_mock_conversation_round_trips_through_sqlite_store(seam_sandbox, local_
         await store.ensure_conversation_exists(conversation_id, user_id)
         await store.create_pending_user_request(request_id, conversation_id, user_id)
         again = await db.fetchall(
-            "SELECT id FROM user_requests WHERE id = ?", (request_id,)
+            "SELECT id FROM chat.user_request WHERE id = ?", (request_id,)
         )
         assert len(again) == 1
 

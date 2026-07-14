@@ -50,7 +50,11 @@ async def attach_and_ensure_mirror(db: aiosqlite.Connection, main_db_path: Path)
         except OSError:
             logger.debug("[mirror] could not chmod mirror dir", exc_info=True)
 
-    for schema, tables in MIRROR_TABLES.items():
+    # Two passes: attach + WAL pragmas for EVERY schema first, tables second.
+    # journal_mode cannot change inside a transaction, and the DDL/INSERT
+    # statements of an earlier schema open an implicit one — interleaving the
+    # passes breaks the moment there is more than one mirrored schema.
+    for schema in MIRROR_TABLES:
         if not _IDENT_RE.match(schema):
             raise ValueError(f"unsafe mirror schema name: {schema!r}")
         file_path = mirror_dir / f"{schema}.db"
@@ -63,6 +67,7 @@ async def attach_and_ensure_mirror(db: aiosqlite.Connection, main_db_path: Path)
             except OSError:
                 logger.debug("[mirror] could not chmod %s", file_path, exc_info=True)
 
+    for schema, tables in MIRROR_TABLES.items():
         await _ensure_schema_tables(db, schema, tables)
 
         await db.execute(

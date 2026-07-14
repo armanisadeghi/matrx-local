@@ -1,6 +1,6 @@
 # FEATURE — Local Tools (dispatcher + catalog + tool_sync)
 
-108 local tools, one registry, three files that matter. Before touching any of
+113 local tools, one registry, three files that matter. Before touching any of
 this, know the two truths:
 
 - **Code-side truth:** `catalog.py::get_catalog()` — built automatically from

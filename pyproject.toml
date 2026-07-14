@@ -82,6 +82,9 @@ dependencies = [
     # OS keychain access for encrypting credentials at rest in matrx.db
     # (macOS Keychain / Windows Credential Manager / Linux Secret Service).
     "keyring>=25.0.0",
+    # Trash-first Delete tool (app/tools/tools/file_ops.py tool_delete) —
+    # a remote agent's delete must be recoverable from the OS trash.
+    "send2trash>=1.8.3",
     # AES-256-GCM + scrypt + RSA-OAEP for the Private Media Vault
     # (app/services/media_vault/) and keyring's Fernet backend. Declared
     # explicitly per Hard Rule 5 — "present transitively" is not a

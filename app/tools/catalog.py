@@ -73,11 +73,16 @@ from app.tools.arg_models.browser_args import (
 )
 from app.tools.arg_models.execution_args import BashArgs, BashOutputArgs, TaskStopArgs
 from app.tools.arg_models.file_ops_args import (
+    CopyArgs,
+    DeleteArgs,
     EditArgs,
     GlobArgs,
     GrepArgs,
     ListDirectoryArgs,
+    MkdirArgs,
+    MoveArgs,
     ReadArgs,
+    RenameArgs,
     WriteArgs,
 )
 from app.tools.arg_models.input_args import (
@@ -193,8 +198,42 @@ _META: dict[str, ToolMeta] = {
     "Edit": ToolMeta(
         "local_edit_file",
         "Apply a precise string replacement to a file. old_string must match "
-        "exactly (including whitespace) and be unique in the file.",
+        "exactly (including whitespace) and be unique in the file, unless "
+        "replace_all is true.",
         "local_file_ops", ("file", "edit", "local", "filesystem"), EditArgs,
+    ),
+    "Move": ToolMeta(
+        "local_move_path",
+        "Move a file or directory to a new location on the local filesystem. "
+        "Moving a file into an existing directory keeps its name. Refuses to "
+        "overwrite unless overwrite=true.",
+        "local_file_ops", ("file", "move", "local", "filesystem"), MoveArgs,
+    ),
+    "Copy": ToolMeta(
+        "local_copy_path",
+        "Copy a file or directory on the local filesystem (recursive for "
+        "directories, metadata preserved). Refuses to overwrite unless "
+        "overwrite=true.",
+        "local_file_ops", ("file", "copy", "local", "filesystem"), CopyArgs,
+    ),
+    "Delete": ToolMeta(
+        "local_delete_path",
+        "Delete a file or directory. Moves to the OS trash by default so the "
+        "action is recoverable; pass permanent=true for an unrecoverable "
+        "delete.",
+        "local_file_ops", ("file", "delete", "trash", "local", "filesystem"), DeleteArgs,
+    ),
+    "Rename": ToolMeta(
+        "local_rename_path",
+        "Rename a file or directory in place (same parent directory). "
+        "Use Move to relocate.",
+        "local_file_ops", ("file", "rename", "local", "filesystem"), RenameArgs,
+    ),
+    "Mkdir": ToolMeta(
+        "local_make_directory",
+        "Create a directory on the local filesystem, including missing parent "
+        "directories by default.",
+        "local_file_ops", ("file", "directory", "create", "local", "filesystem"), MkdirArgs,
     ),
     "Glob": ToolMeta(
         "local_glob",

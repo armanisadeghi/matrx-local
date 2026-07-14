@@ -89,6 +89,11 @@ a = Analysis(
         'pydantic', 'fastapi', 'websockets', 'httpx',
         'curl_cffi', 'bs4', 'lxml', 'selectolax', 'asyncpg', 'cachetools',
         'tldextract', 'markdownify', 'tabulate', 'fitz', 'pytesseract',
+        # send2trash picks its platform backend at import time; the
+        # unused-platform submodules are conditional imports PyInstaller
+        # can miss. Trash-first Delete tool depends on these.
+        'send2trash', 'send2trash.mac', 'send2trash.win',
+        'send2trash.plat_gio', 'send2trash.plat_other',
         'playwright', 'playwright.async_api', 'playwright.sync_api',
         'playwright._impl._driver',
         'yt_dlp', 'yt_dlp.extractor', 'yt_dlp.downloader',

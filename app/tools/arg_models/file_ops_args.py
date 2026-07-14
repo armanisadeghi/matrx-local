@@ -33,10 +33,68 @@ class EditArgs(BaseModel):
     old_string: str = Field(
         description=(
             "Exact string to find and replace. Must match exactly including "
-            "whitespace. Must be unique in the file."
+            "whitespace. Must be unique in the file unless replace_all is true."
         )
     )
     new_string: str = Field(description="Replacement string.")
+    replace_all: bool = Field(
+        default=False,
+        description="Replace every occurrence instead of requiring a unique match.",
+    )
+
+
+class MoveArgs(BaseModel):
+    source: str = Field(description="Path of the file or directory to move.")
+    destination: str = Field(
+        description=(
+            "Target path. Moving a file into an existing directory keeps the "
+            "file's name."
+        )
+    )
+    overwrite: bool = Field(
+        default=False,
+        description="Replace the destination if it already exists.",
+    )
+
+
+class CopyArgs(BaseModel):
+    source: str = Field(description="Path of the file or directory to copy.")
+    destination: str = Field(
+        description=(
+            "Target path. Copying a file into an existing directory keeps the "
+            "file's name."
+        )
+    )
+    overwrite: bool = Field(
+        default=False,
+        description="Replace the destination if it already exists.",
+    )
+
+
+class DeleteArgs(BaseModel):
+    path: str = Field(description="Path of the file or directory to delete.")
+    permanent: bool = Field(
+        default=False,
+        description=(
+            "If false (default), move to the OS trash (recoverable). If true, "
+            "delete permanently — NOT recoverable."
+        ),
+    )
+
+
+class RenameArgs(BaseModel):
+    path: str = Field(description="Path of the file or directory to rename.")
+    new_name: str = Field(
+        description="New bare name (no path separators). Use Move to relocate."
+    )
+
+
+class MkdirArgs(BaseModel):
+    path: str = Field(description="Path of the directory to create.")
+    parents: bool = Field(
+        default=True,
+        description="Create missing parent directories as needed.",
+    )
 
 
 class GlobArgs(BaseModel):

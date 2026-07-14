@@ -10,7 +10,18 @@ from typing import Any, Callable, Coroutine
 from app.tools.session import ToolSession
 from app.tools.tools.clipboard import tool_clipboard_read, tool_clipboard_write
 from app.tools.tools.execution import tool_bash, tool_bash_output, tool_task_stop
-from app.tools.tools.file_ops import tool_edit, tool_glob, tool_grep, tool_read, tool_write
+from app.tools.tools.file_ops import (
+    tool_copy,
+    tool_delete,
+    tool_edit,
+    tool_glob,
+    tool_grep,
+    tool_mkdir,
+    tool_move,
+    tool_read,
+    tool_rename,
+    tool_write,
+)
 from app.tools.tools.network import (
     tool_fetch_url,
     tool_fetch_with_browser,
@@ -171,6 +182,11 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "Edit": tool_edit,
     "Glob": tool_glob,
     "Grep": tool_grep,
+    "Move": tool_move,
+    "Copy": tool_copy,
+    "Delete": tool_delete,
+    "Rename": tool_rename,
+    "Mkdir": tool_mkdir,
     # ── Execution ────────────────────────────────────────────────────
     "Bash": tool_bash,
     "BashOutput": tool_bash_output,

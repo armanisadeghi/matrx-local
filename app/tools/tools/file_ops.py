@@ -1,4 +1,5 @@
-"""File operation tools — Read, Write, Edit, Glob, Grep."""
+"""File operation tools — Read, Write, Edit, Glob, Grep, Move, Copy, Delete,
+Rename, Mkdir."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ import logging
 import mimetypes
 import os
 import re
+import shutil
 from pathlib import Path
 
 from app.common.platform_ctx import CAPABILITIES
@@ -97,6 +99,7 @@ async def tool_edit(
     file_path: str,
     old_string: str,
     new_string: str,
+    replace_all: bool = False,
 ) -> ToolResult:
     resolved = session.resolve_path(file_path)
 
@@ -111,20 +114,208 @@ async def tool_edit(
     count = text.count(old_string)
     if count == 0:
         return ToolResult(type=ToolResultType.ERROR, output="old_string not found in file.")
-    if count > 1:
+    if count > 1 and not replace_all:
         return ToolResult(
             type=ToolResultType.ERROR,
-            output=f"old_string found {count} times — must be unique. Add more context.",
+            output=(
+                f"old_string found {count} times — must be unique. Add more "
+                "context, or pass replace_all=true to replace every occurrence."
+            ),
         )
 
-    new_text = text.replace(old_string, new_string, 1)
+    if replace_all:
+        new_text = text.replace(old_string, new_string)
+        replaced = count
+    else:
+        new_text = text.replace(old_string, new_string, 1)
+        replaced = 1
 
     try:
         Path(resolved).write_text(new_text, encoding="utf-8")
     except OSError as e:
         return ToolResult(type=ToolResultType.ERROR, output=f"Cannot write file: {e}")
 
-    return ToolResult(output=f"Edited {resolved}")
+    return ToolResult(
+        output=f"Edited {resolved} ({replaced} replacement{'s' if replaced != 1 else ''})"
+    )
+
+
+# ── File management: Move / Copy / Delete / Rename / Mkdir ───────────────────
+#
+# These are the elementary verbs an agent needs to actually MANAGE files.
+# The dispatcher shipped for months with read/write/search only — an agent
+# could not relocate, duplicate, remove, or rename anything, which is why
+# "basic file management" felt broken. Delete is trash-first by design:
+# a remote agent's mistake must be recoverable from the OS trash.
+
+
+async def tool_move(
+    session: ToolSession,
+    source: str,
+    destination: str,
+    overwrite: bool = False,
+) -> ToolResult:
+    src = session.resolve_path(source)
+    dst = session.resolve_path(destination)
+
+    if not os.path.exists(src):
+        return ToolResult(type=ToolResultType.ERROR, output=f"Source not found: {src}")
+    # Moving a file INTO an existing directory keeps its basename.
+    if os.path.isdir(dst) and not os.path.isdir(src):
+        dst = os.path.join(dst, os.path.basename(src))
+    if os.path.abspath(dst) == os.path.abspath(src):
+        return ToolResult(type=ToolResultType.ERROR, output="Source and destination are the same path.")
+    if os.path.exists(dst) and not overwrite:
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=f"Destination already exists: {dst}. Pass overwrite=true to replace it.",
+        )
+
+    try:
+        os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+        shutil.move(src, dst)
+    except OSError as e:
+        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot move: {e}")
+
+    return ToolResult(output=f"Moved {src} → {dst}", metadata={"source": src, "destination": dst})
+
+
+async def tool_copy(
+    session: ToolSession,
+    source: str,
+    destination: str,
+    overwrite: bool = False,
+) -> ToolResult:
+    src = session.resolve_path(source)
+    dst = session.resolve_path(destination)
+
+    if not os.path.exists(src):
+        return ToolResult(type=ToolResultType.ERROR, output=f"Source not found: {src}")
+    if os.path.isdir(dst) and not os.path.isdir(src):
+        dst = os.path.join(dst, os.path.basename(src))
+    if os.path.abspath(dst) == os.path.abspath(src):
+        return ToolResult(type=ToolResultType.ERROR, output="Source and destination are the same path.")
+    if os.path.exists(dst) and not overwrite:
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=f"Destination already exists: {dst}. Pass overwrite=true to replace it.",
+        )
+
+    try:
+        os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, dirs_exist_ok=overwrite)
+        else:
+            shutil.copy2(src, dst)
+    except OSError as e:
+        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot copy: {e}")
+
+    return ToolResult(output=f"Copied {src} → {dst}", metadata={"source": src, "destination": dst})
+
+
+async def tool_delete(
+    session: ToolSession,
+    path: str,
+    permanent: bool = False,
+) -> ToolResult:
+    resolved = session.resolve_path(path)
+
+    if not os.path.exists(resolved):
+        return ToolResult(type=ToolResultType.ERROR, output=f"Path not found: {resolved}")
+
+    is_dir = os.path.isdir(resolved)
+    kind = "directory" if is_dir else "file"
+
+    if not permanent:
+        try:
+            from send2trash import send2trash
+
+            send2trash(resolved)
+            return ToolResult(
+                output=f"Moved {kind} to trash: {resolved} (recoverable from the OS trash)",
+                metadata={"path": resolved, "trashed": True},
+            )
+        except ImportError:
+            return ToolResult(
+                type=ToolResultType.ERROR,
+                output=(
+                    "Trash support unavailable on this system. Pass "
+                    "permanent=true to delete permanently (NOT recoverable)."
+                ),
+            )
+        except OSError as e:
+            return ToolResult(
+                type=ToolResultType.ERROR,
+                output=(
+                    f"Could not move to trash: {e}. Pass permanent=true to "
+                    "delete permanently (NOT recoverable)."
+                ),
+            )
+
+    try:
+        if is_dir:
+            shutil.rmtree(resolved)
+        else:
+            os.remove(resolved)
+    except OSError as e:
+        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot delete: {e}")
+
+    return ToolResult(
+        output=f"Permanently deleted {kind}: {resolved}",
+        metadata={"path": resolved, "trashed": False},
+    )
+
+
+async def tool_rename(
+    session: ToolSession,
+    path: str,
+    new_name: str,
+) -> ToolResult:
+    resolved = session.resolve_path(path)
+
+    if not os.path.exists(resolved):
+        return ToolResult(type=ToolResultType.ERROR, output=f"Path not found: {resolved}")
+    if os.sep in new_name or (os.altsep and os.altsep in new_name):
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output="new_name must be a bare name, not a path. Use Move to relocate.",
+        )
+    if not new_name or new_name in (".", ".."):
+        return ToolResult(type=ToolResultType.ERROR, output=f"Invalid new name: {new_name!r}")
+
+    dst = os.path.join(os.path.dirname(resolved), new_name)
+    if os.path.exists(dst):
+        return ToolResult(type=ToolResultType.ERROR, output=f"A file or directory named {new_name!r} already exists here.")
+
+    try:
+        os.rename(resolved, dst)
+    except OSError as e:
+        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot rename: {e}")
+
+    return ToolResult(output=f"Renamed {resolved} → {dst}", metadata={"source": resolved, "destination": dst})
+
+
+async def tool_mkdir(
+    session: ToolSession,
+    path: str,
+    parents: bool = True,
+) -> ToolResult:
+    resolved = session.resolve_path(path)
+
+    if os.path.isdir(resolved):
+        return ToolResult(output=f"Directory already exists: {resolved}", metadata={"path": resolved, "created": False})
+    if os.path.exists(resolved):
+        return ToolResult(type=ToolResultType.ERROR, output=f"A file already exists at: {resolved}")
+
+    try:
+        if parents:
+            os.makedirs(resolved)
+        else:
+            os.mkdir(resolved)
+    except OSError as e:
+        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot create directory: {e}")
+
+    return ToolResult(output=f"Created directory: {resolved}", metadata={"path": resolved, "created": True})
 
 
 TOOL_TIMEOUT_S = 15.0

@@ -14,7 +14,8 @@ phrase in the sync directories.
 - `database.py` — connection/bootstrap for `~/.matrx/matrx.db`.
 - `schema.py` — versioned migrations `_V1.._V7+` (core catalog tables,
   auth_tokens/prompts/notes, conversation persistence, notes-sync metadata,
-  local version history). Additive, applied at startup.
+  local version history, and the opaque canonical executable-agent cache in
+  V14). Additive, applied at startup.
 - `repositories.py` — typed repo layer; ALL reads elsewhere in the app go
   through these (the replica IS the read path — never route local reads
   through the cloud "for consistency").
@@ -33,12 +34,23 @@ phrase in the sync directories.
 - `secret_store.py` — keychain-backed Fernet encryption for `api_keys` (in the
   SQLite `app_settings` blob) and `auth_tokens`. **These never sync, never
   leave the machine.** Do not merge them into the synced settings blob.
+- `agent_execution_definitions` — fetch-through cache of the complete,
+  authenticated AIDream execution definition consumed by matrx-ai's
+  `ExecutionAgentSource`. It is deliberately separate from `agents` /
+  `prompt_builtins`: those are picker projections and must never be interpreted
+  as models, prompts, tools, or other executable policy.
 
 ## Rules
 
 - **Cloud wins unconditionally for catalog data** — `delete_missing` prunes
   rows absent from the feed (it's a cache, not user work). Empty-feed guard
   keeps the cache instead of wiping it.
+- **Executable agents fail closed** — cached definitions are hash-checked and
+  must include a top-level model plus authored messages. Corrupt/incomplete
+  cache rows are deleted and fetched once from the authenticated canonical
+  endpoint; an invalid authoritative definition is never partially executed.
+  A complete hash-valid stale definition remains usable while offline, matching
+  the first-access replica doctrine.
 - **Offline skips are LOUD and recorded** in `sync_meta.status`
   (`skipped`/`offline`); stale cache is served, never wiped. Agents sync needs
   a user JWT (from `auth_tokens`); no token ⇒ loud skip, cache kept.

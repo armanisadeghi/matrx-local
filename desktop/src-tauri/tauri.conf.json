@@ -71,6 +71,9 @@
     }
   },
   "plugins": {
+    "shell": {
+      "open": "((mailto|tel):[^\\s]+|https?://[^\\s]+|x-apple\\.systempreferences:[^\\s]+)"
+    },
     "deep-link": {
       "desktop": {
         "schemes": ["aimatrx"]

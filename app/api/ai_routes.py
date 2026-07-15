@@ -403,7 +403,16 @@ async def chat(
 @router.get("/status")
 async def ai_surface_status() -> dict[str, Any]:
     """Cheap non-streaming probe: is the host-owned AI surface live?"""
-    from app.services.ai.engine import is_client_mode, is_initialized, tools_loaded
+    from app.services.ai.engine import (
+        is_client_mode,
+        is_initialized,
+        supports_agent_execution,
+        tools_loaded,
+    )
+
+    capabilities = ["chat_execution_v1", "conversation_execution_v1"]
+    if supports_agent_execution():
+        capabilities.append("agent_execution_v1")
 
     return {
         "surface": "local-ai",
@@ -411,6 +420,7 @@ async def ai_surface_status() -> dict[str, Any]:
         "client_mode": is_client_mode(),
         "tools_loaded": tools_loaded(),
         "heartbeat_interval": _HEARTBEAT_INTERVAL,
+        "capabilities": capabilities,
         "endpoints": [
             "POST /agents/{agent_id}",
             "POST /conversations/{conversation_id}",

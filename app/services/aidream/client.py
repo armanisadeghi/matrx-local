@@ -118,6 +118,27 @@ class AIDreamClient:
         data = await self.get("/agents", jwt=jwt)
         return data.get("agents", [])
 
+    async def fetch_agent_execution_definition(
+        self,
+        definition_id: str,
+        *,
+        is_version: bool,
+        jwt: str,
+    ) -> dict[str, Any]:
+        """Fetch one complete, ownership-scoped executable-agent definition."""
+
+        if is_version:
+            path = f"/agents/versions/{definition_id}/execution-definition"
+        else:
+            path = f"/agents/{definition_id}/execution-definition"
+        data = await self.get(path, jwt=jwt)
+        if not isinstance(data, dict):
+            raise AIDreamError(
+                502,
+                f"[aidream_client] {path} returned a non-object definition",
+            )
+        return data
+
     async def fetch_tools(self) -> list[dict[str, Any]]:
         """GET /api/ai-tools — public, no auth needed."""
         data = await self.get("/ai-tools")

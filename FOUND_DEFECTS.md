@@ -277,6 +277,13 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   fully isolated (`~/.matrx-dev`, ports 22240+, sweeps off — CLAUDE.md Hard
   Rule 9). If mid-session deaths STOP recurring after this date, this was the
   trigger; if one recurs, lifecycle.log still attributes it.
+- **Live observation 2026-07-14:** `./scripts/smoke.sh packaged` built and
+  launched v1.3.114 cleanly, but graceful app termination left both of the
+  newly spawned owned children alive: Rust-owned llama-server PID 12101 and
+  engine-owned quick-tunnel cloudflared PID 13025. The engine itself exited.
+  Harness evidence: `.smoke/runs/20260714-213904/summary.md`. This reproduces
+  the orphan side of the lifecycle defect in a fresh packaged build; neither
+  process was part of the pre-launch snapshot.
 
 ### MXL-D-042 — Standalone (non-sidecar) engine on macOS ignores SIGTERM while the pystray tray is active
 - **Area:** run.py / standalone mode

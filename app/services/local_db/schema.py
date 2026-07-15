@@ -638,6 +638,30 @@ UPDATE chat.message SET source = 'user' WHERE source = 'model'
 """
 
 # ------------------------------------------------------------------
+# Migration 14: Complete executable-agent definitions
+#
+# The `agents` table is intentionally a picker/listing projection. It must
+# never again be interpreted as an executable prompt. This separate cache
+# stores the opaque canonical definition returned by AIDream and consumed by
+# matrx-ai's ExecutionAgentSource seam.
+# ------------------------------------------------------------------
+
+_V14_AGENT_EXECUTION_DEFINITIONS = """
+CREATE TABLE IF NOT EXISTS agent_execution_definitions (
+    definition_id  TEXT NOT NULL,
+    is_version     INTEGER NOT NULL DEFAULT 0,
+    definition_json TEXT NOT NULL,
+    definition_hash TEXT NOT NULL,
+    revision       TEXT,
+    fetched_at     TEXT NOT NULL,
+    PRIMARY KEY (definition_id, is_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_execution_definitions_fetched
+ON agent_execution_definitions(fetched_at)
+"""
+
+# ------------------------------------------------------------------
 # All migrations in order
 # ------------------------------------------------------------------
 
@@ -698,4 +722,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (11, _V11_FILE_SYNC_STATE),
     (12, _V12_CHAT_BESPOKE_DROP),
     (13, _V13_MESSAGE_SOURCE_REPAIR),
+    (14, _V14_AGENT_EXECUTION_DEFINITIONS),
 ]

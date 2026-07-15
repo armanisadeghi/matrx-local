@@ -24,15 +24,11 @@ Everything here runs against the client-host seams wired at startup
 (SQLiteConversationStore, SqliteModelCatalog, SqliteKeyResolver, the local
 ToolRegistry with 108 OS tools) — see app/services/ai/engine.py.
 
-KNOWN CONTRACT GAP (documented, loud): the local agent cache (SQLite
-``agents`` table, synced from aidream ``GET /api/agents``) carries an
-agent's settings (model/temperature/max_tokens/tools) and variables but NOT
-its authored system prompt — aidream exposes no non-admin REST endpoint
-that returns agent messages. A NEW conversation started locally therefore
-runs with the agent's model + tools but without the authored prompt (a
-WARNING is logged and a stream `warning` event is emitted). Continue-mode
-conversations are unaffected: the persisted conversation state is the
-source of truth, exactly like aidream.
+Saved agents are loaded only through matrx-ai's ``ExecutionAgentSource`` seam.
+The local ``agents`` table remains picker metadata and is never interpreted as
+an executable definition. Complete definitions are fetched through the
+authenticated AIDream endpoint and cached opaquely in SQLite; matrx-ai owns the
+single definition -> AgentConfig -> UnifiedConfig conversion.
 """
 
 from __future__ import annotations
@@ -46,7 +42,7 @@ from typing import Any
 import matrx_ai.orchestrator  # noqa: F401  (import-order fix, see above)
 
 from fastapi import HTTPException, status
-from matrx_ai.config import LLMParams, MessageList, UnifiedConfig
+from matrx_ai.config import LLMParams, UnifiedConfig
 from matrx_ai.orchestrator.requests import CompletedRequest
 from matrx_connect.context.app_context import AppContext, set_app_context
 from matrx_connect.context.events import WarningPayload
@@ -161,6 +157,8 @@ def apply_request_tools(
     ctx: AppContext,
     tools: list[Any],
     tools_replace: list[Any] | None,
+    *,
+    excluded: list[str] | None = None,
 ) -> AppContext:
     """Apply the frontend's unified tool injection to ``config``.
 
@@ -176,9 +174,6 @@ def apply_request_tools(
     if tools_replace is not None:
         config.tools = []
         config.custom_tools = []
-    if not specs:
-        return ctx
-
     registry = _registry()
     unknown = [
         getattr(s, "name", None)
@@ -203,70 +198,14 @@ def apply_request_tools(
 
     # Local engine: every registered tool executes in-process (no client
     # delegation surface), so active_executors stays empty.
-    new_ctx = merge_request_tools(config, ctx, specs)
+    new_ctx = merge_request_tools(config, ctx, specs, excluded=excluded or [])
     set_app_context(new_ctx)
     return new_ctx
-
-
-def filter_agent_tools_to_local(agent_tools: list[Any], agent_id: str) -> list[str]:
-    """Keep only agent-declared tools the LOCAL registry can execute.
-
-    Agent settings carry cloud tool refs (UUIDs or names). Unknown refs are
-    DROPPED with a loud warning (they'd otherwise hit matrx-ai's
-    tool-id-at-provider-boundary guard and kill the turn) — a cloud-only
-    tool simply isn't available on the local runtime.
-    """
-    registry = _registry()
-    kept: list[str] = []
-    dropped: list[str] = []
-    for entry in agent_tools or []:
-        if not isinstance(entry, str):
-            dropped.append(repr(entry))
-            continue
-        tool = registry.get(entry)
-        if tool is not None:
-            kept.append(tool.name)
-        else:
-            dropped.append(entry)
-    if dropped:
-        logger.warning(
-            "[local_ai_task] agent %s declares %d tool(s) not available in the "
-            "local registry — dropped for this run: %s",
-            agent_id,
-            len(dropped),
-            ", ".join(dropped),
-        )
-    return kept
 
 
 # ---------------------------------------------------------------------------
 # Prep — agent start (turn 1) / conversation continue (turn 2+) / chat
 # ---------------------------------------------------------------------------
-
-
-async def _load_local_agent(agent_id: str) -> dict[str, Any]:
-    from app.services.local_db.repositories import AgentsRepo
-
-    row = await AgentsRepo().get(agent_id)
-    if row is None:
-        # Same shape as aidream's AgentConfigResolver 404.
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Agent not found: {agent_id}",
-        )
-    return row
-
-
-def _agent_settings(row: dict[str, Any]) -> dict[str, Any]:
-    import json
-
-    settings = row.get("settings") or {}
-    if isinstance(settings, str):
-        try:
-            settings = json.loads(settings)
-        except Exception:
-            settings = {}
-    return settings if isinstance(settings, dict) else {}
 
 
 async def prepare_agent_start(
@@ -283,6 +222,20 @@ async def prepare_agent_start(
     """
     _validate_uuid(agent_id, "agent_version_id" if request.is_version else "agent_id")
 
+    from app.services.ai.engine import supports_agent_execution
+
+    if not supports_agent_execution():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "agent_execution_unavailable",
+                "message": (
+                    "This Matrx Local build does not support canonical saved-agent "
+                    "definitions. Route the turn through AIDream."
+                ),
+            },
+        )
+
     if (
         request.conversation_id
         and request.is_new is not True
@@ -296,66 +249,26 @@ async def prepare_agent_start(
         request.conversation_id, request.is_new
     )
 
-    agent_row = await _load_local_agent(agent_id)
-    settings = _agent_settings(agent_row)
+    from matrx_ai.db.agx_manager import agx
 
-    overrides = request.config_overrides
-    override_model = getattr(overrides, "model", None) if overrides else None
-    model = override_model or settings.get("model_id")
-    if not model:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "code": "agent_model_missing",
-                "message": (
-                    f"Agent {agent_id!r} has no model in its local cached settings "
-                    "and the request carried no config_overrides.model. Set a model "
-                    "on the agent (web) and re-sync, or send config_overrides.model."
-                ),
-            },
-        )
-
-    config = UnifiedConfig(
-        model=str(model),
-        messages=MessageList(_messages=[]),
-        stream=request.stream,
-    )
-    if settings.get("temperature") is not None:
-        config.temperature = settings["temperature"]
-    if settings.get("max_tokens") is not None:
-        config.max_output_tokens = settings["max_tokens"]
-
-    # Contract gap (see module docstring): the authored system prompt is not
-    # in the local cache. Loud on both the log and the stream.
-    logger.warning(
-        "[local_ai_task] agent %s (%s): authored system prompt is NOT in the "
-        "local cache (aidream exposes no non-admin full-definition endpoint) — "
-        "running with model+tools only. Tracked in .matrx/AGENT_TASKS.md.",
+    agent_config = await agx.load_for_execution(
         agent_id,
-        agent_row.get("name", ""),
+        is_version=request.is_version,
     )
-    if ctx.emitter is not None:
-        await ctx.emitter.send_warning(
-            WarningPayload(
-                code="agent_prompt_unavailable_locally",
-                system_message=(
-                    f"Agent {agent_id} authored system prompt is not synced to the "
-                    "local engine; the turn runs with the agent's model/tools only."
-                ),
-                user_message=(
-                    "This agent's full instructions aren't available on your local "
-                    "runtime yet — responses may differ from the cloud version."
-                ),
-                level="medium",
-                recoverable=True,
-                metadata={"agent_id": agent_id},
-            )
-        )
+    overrides = request.config_overrides
+    config = agent_config.config
+    if request.variables:
+        config.replace_variables(request.variables)
+    if overrides:
+        config.apply_overrides(overrides)
 
-    # Agent-declared tools (local-executable subset) + request injection.
-    agent_tools = filter_agent_tools_to_local(settings.get("tools") or [], agent_id)
-    if agent_tools:
-        config.tools = list(agent_tools)
+    metadata = {
+        **ctx.metadata,
+        "agent_name": agent_config.name,
+        "initial_model": config.model,
+    }
+    if agent_config.matrx_actions:
+        metadata["matrx_actions"] = agent_config.matrx_actions
 
     ctx = ctx.with_overrides(
         conversation_id=conversation_id,
@@ -368,6 +281,7 @@ async def prepare_agent_start(
         ),
         store=bool(ctx.store and request.store and not skip_persistence),
         source_feature=ctx.source_feature or "agent",
+        metadata=metadata,
         **(
             {"agent_version_id": agent_id}
             if request.is_version
@@ -380,12 +294,13 @@ async def prepare_agent_start(
         config.store = False
     config.stream = request.stream
 
-    ctx = apply_request_tools(config, ctx, request.tools, request.tools_replace)
-
-    if request.variables:
-        config.replace_variables(request.variables)
-    if overrides:
-        config.apply_overrides(overrides)
+    ctx = apply_request_tools(
+        config,
+        ctx,
+        request.tools,
+        request.tools_replace,
+        excluded=agent_config.excluded_tools,
+    )
     if request.user_input is not None:
         config.append_or_extend_user_input(request.user_input)
 
@@ -404,8 +319,6 @@ async def prepare_conversation_continue(
     ConversationResolver) is the source of truth. 404s with aidream's
     ``conversation_not_found`` code when the row is missing.
     """
-    from matrx_ai.agents.resolver import ConversationResolver
-
     _validate_uuid(conversation_id)
 
     if not await conversation_exists(conversation_id):
@@ -438,50 +351,69 @@ async def prepare_conversation_continue(
             },
         )
 
-    config = await ConversationResolver.from_conversation_id(
-        conversation_id,
-        user_input=user_input,
-        config_overrides=request.config_overrides,
-    )
+    from app.services.local_db.repositories import ConversationsRepo
 
-    # Stuck-conversation recovery (mirrors aidream _prepare_continue_run):
-    # a conversation whose first turn never persisted a model is rescued
-    # from the local agent cache when the URL/hint agent_id is known.
+    conv_row = await ConversationsRepo().get(conversation_id)
+    version_id = (conv_row or {}).get("agent_version_id") or None
+    persisted_agent_id = (conv_row or {}).get("agent_id") or agent_id_hint
+    source_id = version_id or persisted_agent_id
+    excluded_tools: list[str] = []
+
+    if source_id:
+        # Rebuild from the exact canonical definition on every continuation,
+        # then append durable history. A failed first turn and a process restart
+        # therefore cannot erase the agent's prompt, model, or tools.
+        from matrx_ai.db.agx_manager import agx
+
+        from app.services.ai.conversation_handler import get_conversation_store
+
+        agent_config = await agx.load_for_execution(
+            source_id,
+            is_version=bool(version_id),
+        )
+        config = agent_config.config
+        excluded_tools = agent_config.excluded_tools
+        persisted = UnifiedConfig.from_dict(
+            await get_conversation_store().get_conversation_config(conversation_id)
+        )
+        if persisted.model:
+            config.model = persisted.model
+        config.messages.extend(persisted.messages)
+        if user_input is not None:
+            config.append_or_extend_user_input(user_input)
+        if request.config_overrides:
+            config.apply_overrides(request.config_overrides)
+    else:
+        from matrx_ai.agents.resolver import ConversationResolver
+
+        config = await ConversationResolver.from_conversation_id(
+            conversation_id,
+            user_input=user_input,
+            config_overrides=request.config_overrides,
+        )
+
     if not getattr(config, "model", None):
-        rescued = False
-        if not agent_id_hint:
-            # The conversation row may carry the agent it was created from.
-            from app.services.local_db.repositories import ConversationsRepo
-
-            conv_row = await ConversationsRepo().get(conversation_id)
-            agent_id_hint = (conv_row or {}).get("agent_id") or None
-        if agent_id_hint:
-            try:
-                row = await _load_local_agent(agent_id_hint)
-                fallback_model = _agent_settings(row).get("model_id")
-                if fallback_model:
-                    config.model = str(fallback_model)
-                    rescued = True
-            except HTTPException:
-                pass
-        if not rescued:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail={
-                    "code": "conversation_model_missing",
-                    "message": (
-                        f"Conversation {conversation_id!r} has no persisted model and "
-                        "no agent fallback resolved. Send config_overrides.model."
-                    ),
-                },
-            )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "conversation_model_missing",
+                "message": (
+                    f"Conversation {conversation_id!r} has no persisted model or "
+                    "pinned executable-agent definition."
+                ),
+            },
+        )
 
     config.stream = getattr(request, "stream", True)
     if not ctx.store:
         config.store = False
 
     ctx = apply_request_tools(
-        config, ctx, getattr(request, "tools", []), getattr(request, "tools_replace", None)
+        config,
+        ctx,
+        getattr(request, "tools", []),
+        getattr(request, "tools_replace", None),
+        excluded=excluded_tools,
     )
 
     return ctx, config, request.max_iterations, request.max_retries_per_iteration
@@ -502,7 +434,9 @@ async def prepare_chat(
 
     config_dict: dict[str, Any] = {
         "model": request.ai_model_id,
-        "messages": [m if isinstance(m, dict) else m.model_dump() for m in request.messages],
+        "messages": [
+            m if isinstance(m, dict) else m.model_dump() for m in request.messages
+        ],
         "stream": request.stream,
     }
     if request.system_instruction is not None:

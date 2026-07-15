@@ -56,15 +56,6 @@ _(none)_
 - **Source files:** `matrx-local/app/main.py` (mounts), `matrx-local/app/api/ai_routes.py`, `matrx-frontend/lib/api/ai-api-version.ts`
 - **Deliverable:** document v2 routing behavior when frontend targets `127.0.0.1:22140` (local engine) vs aidream cloud.
 
-#### AT-L009 — Local engine 422 on `POST /ai/agents/{id}` (agent `8d02d271-…`)
-- **Status:** filed, not started. `code analysis pending`.
-- **Created:** 2026-07-14
-- **Priority:** P1
-- **Log ID:** L009
-- **Scope:** matrx-local + matrx-frontend
-- **Source files:** `matrx-local/app/services/ai/local_ai_task.py` (422 paths), `matrx-local/app/api/ai_routes.py`, `matrx-frontend/features/agents/redux/execution-system/thunks/execute-instance.thunk.ts`
-- **Deliverable:** capture the 422 response body for this exact request; map to the emitting code path (`invalid_uuid` / `agent_model_missing` / `tool_not_found` / other).
-
 #### AT-L001 — `[use-llm] Failed to notify engine of local LLM start: {}`
 - **Status:** filed, not started. `code analysis pending`.
 - **Created:** 2026-07-14
@@ -351,6 +342,13 @@ Civitai keys (`app/services/downloads/failures.py`, `hf_token_missing` /
 (e.g. starting a chat/agent action that needs a provider key before the
 request fails) and to Full Disk Access.
 
+2026-07-14: Fixed the shared macOS System Settings launcher configuration.
+The Tauri capability allowed `x-apple.systempreferences:` URLs, but the shell
+plugin's separate default validator rejected them, making the Notes banner and
+Documents-page buttons appear dead. `tauri.conf.json` now explicitly allows
+the System Settings scheme with regression coverage; the broader prompt audit
+in this task remains open.
+
 - [ ] **img2img + LoRA follow-ups (added 2026-07-10, image-gen img2img/LoRA
   build)** — shipped: `init_image_b64`/`strength`/`loras` on
   /image-gen/generate + /image-gen/jobs, `supports_img2img`/`img2img_strength`/
@@ -534,17 +532,6 @@ are condensed under Completed. Still open:
 
 ### Active (added 2026-07-10, matrx-ai 0.3.0 migration — Phase 3)
 
-- [ ] **/ai-surface follow-up: agent authored system prompt is not available
-  locally** — the local agent cache (SQLite `agents`, from aidream `GET
-  /api/agents`) carries settings/variables but NOT the agent's authored
-  messages; aidream exposes NO non-admin REST endpoint returning them
-  (`/agent-service/agents/{id}` is admin-only and still omits messages). A
-  NEW conversation started on the local runtime therefore runs with the
-  agent's model+tools only (loud WARNING log + a stream `warning` event
-  `agent_prompt_unavailable_locally`); continue-mode turns are unaffected
-  (persisted conversation state is the source of truth). Fix belongs in
-  aidream: a user-scoped full-definition endpoint (or sync the messages
-  column into `GET /api/agents`); then extend sync_engine + `_load_local_agent`.
 - [ ] **/ai-surface follow-up: no local /ai/cancel/{request_id}** — aidream's
   cancel router isn't mirrored; the FE cancels via fetch-abort, and
   matrx-connect's detach-on-disconnect keeps the local turn running to
@@ -587,6 +574,7 @@ are condensed under Completed. Still open:
 ## Completed
 
 _(one line each, newest first; full detail in git history)_
+- [BUG] AT-L009 + the prompt-less local-agent follow-up fixed end-to-end: matrx-ai now owns `ExecutionAgentSource` + the one canonical full-definition mapper; AIDream exposes authenticated owner/public master+version definitions; Local hash-validates/caches the opaque definition and retries from conversation agent provenance, never picker metadata or empty prompts; frontend gates direct Local routing on `agent_execution_v1` and classifies structured 422s correctly — 2026-07-14
 - [FEAT] Upstream matrx-ai 0.4.0 client-host writes reach the WriteCoordinator + Turn-Boundary Inbox reads cxm; host-side coordinator-guard monkeypatch DELETED with the >=0.4.0 floor bump; pinned by `tests/client_host/test_no_db_streaming_with_tool.py` — 2026-07-13
 - [BUG] MXL-D-052 fixed (chat_sync, W2): local mirror wrote `source='model'` for AI/tool turns while the canonical vocabulary (aidream `Message.source` default + cloud `cx_message_source_check`) is user/agent_template/system — `source` is row ORIGIN, `role` carries authorship — so every assistant message 400'd on push and dead-lettered; fixed all three write sites (`MessagesRepo.create`, `conversation_handler.persist_completed_request`, V10 cutover CASE) to `'user'`, added V13 repair migration (remaps rows, resurrects dead-letters, re-enqueues with UUID/legacy-conversation guards); verified live: dev-world module-level drill pushed all 7 previously-rejected messages to the cloud (sent=7 failed=0, rows confirmed in live `chat.message` with source='user', roles intact); 2 pins in `tests/characterization/test_chat_mirror_characterization.py` — 2026-07-13
 - [BUG] Notes access-degraded UX fixed (Errors→Prompts, tracker W8 notes row): Documents page now shows a first-class `NotesAccessPrompt` (FDA explanation + System Settings deep-link via the permissions system, Check again + 10s auto-poll, Create-folder for missing dir) instead of silently empty lists; engine adds `GET /notes/access` + `POST /notes/access/recheck` (guard gains kind + platform-appropriate reason) and a live-found raw 500 in `GET /notes/sync/status` (unguarded `.exists()` in `list_conflicts`) is fixed; chmod-000 drill verified degrade→recover without restart; 12 pytest + 3 vitest pins — 2026-07-13

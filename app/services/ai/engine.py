@@ -339,10 +339,25 @@ def initialize_matrx_ai() -> None:
     from app.services.ai.conversation_handler import get_conversation_store
     from app.services.ai.key_manager import get_key_resolver
     from app.services.ai.model_catalog import get_model_catalog
+    execution_agent_source = None
+    try:
+        from matrx_ai.client_host.agent_source import ExecutionAgentSource  # noqa: F401
+
+        from app.services.ai.agent_source import get_execution_agent_source
+
+        execution_agent_source = get_execution_agent_source()
+    except ImportError:
+        # Safe containment for a rolling package upgrade: older matrx-ai
+        # builds can still run direct model chat, but saved-agent execution is
+        # not advertised and its route refuses explicitly.
+        logger.warning(
+            "[engine] matrx-ai has no ExecutionAgentSource seam — saved-agent "
+            "execution is disabled; frontend routing will stay on AIDream"
+        )
 
     # Seam wiring errors must CRASH here (ClientHostConfigError lists every
     # problem at once) — no try/except, no legacy fallback.
-    matrx_ai.configure(
+    configure_kwargs: dict[str, Any] = dict(
         api_key_resolver=get_key_resolver(),
         conversation_store=get_conversation_store(),
         model_catalog=get_model_catalog(),
@@ -352,6 +367,9 @@ def initialize_matrx_ai() -> None:
         server_url=server_url or None,
         source_app="matrx_local",
     )
+    if execution_agent_source is not None:
+        configure_kwargs["execution_agent_source"] = execution_agent_source
+    matrx_ai.configure(**configure_kwargs)
     install_client_host_queue_guard()
     _client_mode_active = True
     _ai_initialized = True
@@ -366,6 +384,17 @@ def initialize_matrx_ai() -> None:
 def is_client_mode() -> bool:
     """Return True if matrx-ai was successfully configured with the client-host seams."""
     return _client_mode_active
+
+
+def supports_agent_execution() -> bool:
+    """True only when the canonical source seam is installed and configured."""
+
+    try:
+        from matrx_ai.client_host.agent_source import get_execution_agent_source
+
+        return get_execution_agent_source() is not None
+    except ImportError:
+        return False
 
 
 def has_db() -> bool:

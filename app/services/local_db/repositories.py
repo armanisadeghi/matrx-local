@@ -244,6 +244,60 @@ class AgentsRepo:
 
 
 # ==================================================================
+# AgentExecutionDefinitionsRepo — opaque canonical execution cache
+# ==================================================================
+
+class AgentExecutionDefinitionsRepo:
+    def __init__(self, db: LocalDatabase | None = None):
+        self._db = db or get_db()
+
+    async def get(
+        self, definition_id: str, *, is_version: bool
+    ) -> dict[str, Any] | None:
+        row = await self._db.fetchone(
+            """SELECT * FROM agent_execution_definitions
+               WHERE definition_id = ? AND is_version = ?""",
+            (definition_id, int(is_version)),
+        )
+        if not row:
+            return None
+        data = _row_to_dict(row)
+        data["definition_json"] = _json_loads(data.get("definition_json"))
+        data["is_version"] = bool(data.get("is_version"))
+        return data
+
+    async def upsert(self, definition: dict[str, Any]) -> None:
+        await self._db.execute(
+            """INSERT INTO agent_execution_definitions
+               (definition_id, is_version, definition_json, definition_hash,
+                revision, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(definition_id, is_version) DO UPDATE SET
+                 definition_json=excluded.definition_json,
+                 definition_hash=excluded.definition_hash,
+                 revision=excluded.revision,
+                 fetched_at=excluded.fetched_at""",
+            (
+                definition["definition_id"],
+                int(bool(definition.get("is_version", False))),
+                _json_dumps(definition),
+                definition["definition_hash"],
+                definition.get("revision"),
+                _now(),
+            ),
+        )
+        await self._db.commit()
+
+    async def delete(self, definition_id: str, *, is_version: bool) -> None:
+        await self._db.execute(
+            """DELETE FROM agent_execution_definitions
+               WHERE definition_id = ? AND is_version = ?""",
+            (definition_id, int(is_version)),
+        )
+        await self._db.commit()
+
+
+# ==================================================================
 # ConversationsRepo — canonical chat.conversation mirror table
 #
 # The bespoke `conversations` table is GONE (migration V10). This repo now
@@ -271,6 +325,7 @@ def _conv_to_compat(row) -> dict[str, Any]:
         "server_conversation_id": d.get("id"),
         "route_mode": config.get("route_mode", "chat"),
         "agent_id": d.get("initial_agent_id"),
+        "agent_version_id": d.get("initial_agent_version_id"),
         "created_at": d.get("created_at"),
         "updated_at": d.get("updated_at"),
         "is_favorite": bool(d.get("is_favorite")),

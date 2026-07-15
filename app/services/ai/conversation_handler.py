@@ -114,19 +114,27 @@ class SQLiteConversationStore:
         try:
             db = get_db()
             overrides = overrides or {}
+            from matrx_connect.context.app_context import try_get_app_context
+
+            ctx = try_get_app_context()
             config = {
                 "mode": "chat",
                 "route_mode": overrides.get("route_mode", "chat"),
-                "model": overrides.get("model", ""),
+                "model": (
+                    (ctx.metadata or {}).get("initial_model", "")
+                    if ctx is not None
+                    else overrides.get("model", "")
+                ),
             }
             cursor = await db.execute(
                 """INSERT OR IGNORE INTO chat.conversation
                    (id, title, config, status, parent_conversation_id, variables,
-                    overrides, initial_agent_id, source_app, created_by,
+                    overrides, initial_agent_id, initial_agent_version_id,
+                    source_app, created_by,
                     created_at, updated_at, message_count, is_favorite,
                     is_ephemeral, conversation_type, visibility, version,
                     metadata, cache_state, source_feature, exclude_from_kg)
-                   VALUES (?, 'New conversation', ?, 'active', ?, ?, ?, ?,
+                   VALUES (?, 'New conversation', ?, 'active', ?, ?, ?, ?, ?,
                            'matrx_local', ?, ?, ?, 0, 0, 0, 'standard',
                            'private', 1, '{}', '{}', '', 0)""",
                 (
@@ -135,7 +143,8 @@ class SQLiteConversationStore:
                     parent_conversation_id,
                     json.dumps(variables or {}, ensure_ascii=False, default=str),
                     json.dumps(overrides, ensure_ascii=False, default=str),
-                    overrides.get("agent_id"),
+                    ctx.agent_id if ctx is not None else None,
+                    ctx.agent_version_id if ctx is not None else None,
                     user_id,
                     _now(),
                     _now(),
@@ -485,6 +494,7 @@ class SQLiteConversationStore:
             "model": conv.get("model", ""),
             "route_mode": conv.get("route_mode", "chat"),
             "agent_id": conv.get("agent_id"),
+            "agent_version_id": conv.get("agent_version_id"),
             "messages": await self._load_history(conversation_id),
         }
 

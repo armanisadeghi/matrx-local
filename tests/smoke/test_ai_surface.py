@@ -72,13 +72,38 @@ _MOCK_AGENT = {
     "is_favorite": False,
     "variable_defaults": [],
     "settings": {
-        "model_id": "mock-model",
+        # Listing metadata is deliberately non-executable. If Local ever
+        # regresses to interpreting this projection, the test fails loudly.
+        "model_id": "must-never-be-used",
         "temperature": 0.2,
         "max_tokens": 512,
         "stream": True,
         "tools": [],
     },
     "is_active": True,
+}
+
+_MOCK_EXECUTION_DEFINITION = {
+    "definition_id": _AGENT_ID,
+    "agent_id": _AGENT_ID,
+    "is_version": False,
+    "version_number": 1,
+    "revision": "test-revision",
+    "name": "Smoke Agent",
+    "model_id": "mock-model",
+    "messages": [
+        {"role": "system", "content": "Canonical smoke system prompt."}
+    ],
+    "settings": {"temperature": 0.2, "max_output_tokens": 512, "stream": True},
+    "tools": [],
+    "custom_tools": [],
+    "mcp_servers": [],
+    "variable_definitions": [],
+    "context_slots": [],
+    "tool_config": {},
+    "output_schema": None,
+    "matrx_actions": None,
+    "skill_config": {},
 }
 
 
@@ -131,10 +156,34 @@ def ai_app(seam_sandbox, local_db, monkeypatch: pytest.MonkeyPatch):
     from app.services.ai.key_manager import get_key_resolver
     from app.services.ai.model_catalog import SqliteModelCatalog
 
+    from matrx_ai.client_host.agent_source import ExecutionAgentDefinition
+
+    definition = ExecutionAgentDefinition.model_validate(
+        _MOCK_EXECUTION_DEFINITION
+    ).with_content_hash()
+
+    class StaticExecutionAgentSource:
+        async def load_for_execution(
+            self, agent_id: str, *, is_version: bool = False
+        ) -> dict[str, Any]:
+            if agent_id != _AGENT_ID:
+                from fastapi import HTTPException, status
+
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={
+                        "code": "agent_not_found",
+                        "message": f"Agent not found: {agent_id}",
+                    },
+                )
+            assert is_version is False
+            return definition.model_dump(mode="json")
+
     configure_ext(
         conversation_store=SQLiteConversationStore(),
         model_catalog=SqliteModelCatalog(),
         api_key_resolver=get_key_resolver(),
+        execution_agent_source=StaticExecutionAgentSource(),
         source_app="matrx_local",
     )
     from app.services.ai.engine import install_client_host_queue_guard
@@ -316,11 +365,12 @@ def test_conversation_continue_and_agent_start(ai_app, local_db):
                 events = await _read_stream(resp)
             types = _event_types(events)
             assert "completion" in types and types[-1] == "end"
-            # The authored-prompt contract gap surfaces LOUDLY as a warning.
+            # The canonical authored prompt is present; the old warning that
+            # admitted prompt-less execution must never return.
             warn_codes = [
                 e["data"].get("code") for e in events if e["event"] == "warning"
             ]
-            assert "agent_prompt_unavailable_locally" in warn_codes
+            assert "agent_prompt_unavailable_locally" not in warn_codes
 
             # Turn 2 — continue.
             async with client.stream(
@@ -340,6 +390,56 @@ def test_conversation_continue_and_agent_start(ai_app, local_db):
         contents = [dict(r).get("content", "") for r in msg_rows]
         assert any("hello from turn one" in c for c in contents)
         assert any("and turn two" in c for c in contents)
+
+    asyncio.run(_run())
+
+
+def test_retry_rehydrates_pinned_agent_after_failed_first_turn(ai_app, local_db):
+    """Exact regression: no client model/config payload, no warm AgentCache.
+
+    A failed first turn left only the conversation provenance + user message.
+    Retry must reload the canonical agent model/prompt and execute successfully.
+    """
+
+    conversation_id = str(uuid.uuid4())
+
+    async def _run() -> None:
+        from app.services.local_db.repositories import ConversationsRepo, MessagesRepo
+
+        await ConversationsRepo().create(
+            {
+                "id": conversation_id,
+                "agent_id": _AGENT_ID,
+                "model": "",
+                "title": "Failed first turn",
+            }
+        )
+        await MessagesRepo().create(
+            {
+                "id": str(uuid.uuid4()),
+                "conversation_id": conversation_id,
+                "role": "user",
+                "content": "retry this persisted user turn",
+            }
+        )
+
+        async with _client(ai_app) as client:
+            async with client.stream(
+                "POST",
+                f"/conversations/{conversation_id}",
+                json={"retry": True},
+            ) as resp:
+                assert resp.status_code == 200
+                assert resp.headers.get("x-conversation-id") == conversation_id
+                events = await _read_stream(resp)
+
+        types = _event_types(events)
+        assert "completion" in types
+        assert types[-1] == "end"
+        assert not any(
+            e["event"] == "error" and "model" in str(e["data"]).lower()
+            for e in events
+        )
 
     asyncio.run(_run())
 

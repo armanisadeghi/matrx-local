@@ -110,11 +110,23 @@ async def health():
     if failed:
         health_state = "failed_services"
 
+    from app.services.ai.engine import supports_agent_execution
+
+    execution_capabilities = [
+        "chat_execution_v1",
+        "conversation_execution_v1",
+    ]
+    if supports_agent_execution():
+        execution_capabilities.append("agent_execution_v1")
+
     payload: dict = {
         "status": "ok",  # liveness literal — see contract note above
         "health": health_state,
         "service": "matrx-local",
         "version": _APP_VERSION,
+        # Explicit protocol gates for callers that may route paid/executable
+        # work here. Reachability alone never implies saved-agent parity.
+        "capabilities": execution_capabilities,
     }
     if failed:
         payload["failed"] = failed

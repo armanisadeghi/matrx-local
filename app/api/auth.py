@@ -98,12 +98,14 @@ _LOCAL_BOOTSTRAP_PATHS = frozenset(
         "/admin/diagnose",
         "/admin/refresh-config",
         "/admin/refresh-catalogs",
+        "/admin/recovery",
     }
 )
 
 # Path PREFIXES that are local-bootstrap (same rule as above): permissive on
 # direct loopback, verified-auth required over the tunnel.
 _LOCAL_BOOTSTRAP_PREFIXES = (
+    "/admin/recovery/",
     "/devices/",     # device status polling — local UI
     "/fetch-proxy",  # in-app browser iframe navigation (also an SSRF vector)
     "/setup/",       # setup wizard — system probing, installs

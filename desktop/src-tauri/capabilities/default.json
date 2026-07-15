@@ -2,7 +2,10 @@
   "identifier": "default",
   "description": "Default permissions for AI Matrx Desktop",
   "windows": [
-    "main"
+    "main",
+    "peer-*",
+    "panel-*",
+    "transcript-overlay"
   ],
   "permissions": [
     "core:default",
@@ -23,6 +26,7 @@
     "autostart:default",
     "updater:default",
     "process:allow-restart",
+    "window-state:default",
     "deep-link:default",
     "deep-link:allow-get-current",
     "deep-link:allow-register",

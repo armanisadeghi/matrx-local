@@ -66,7 +66,18 @@ export function useTranscriptionSessions(): [SessionsState, SessionsActions] {
 
   useEffect(() => {
     setFlushCallback(() => setSessions(loadSessions()));
+    // Multi-window: another window's write lands here via the storage event
+    // (writes are safe — every mutation in lib/transcription/sessions.ts
+    // re-reads localStorage before merging — but this window's React state
+    // would otherwise go stale until its own next mutation).
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "matrx-transcription-sessions") {
+        setSessions(loadSessions());
+      }
+    };
+    window.addEventListener("storage", onStorage);
     return () => {
+      window.removeEventListener("storage", onStorage);
       flushNow();
       setFlushCallback(null);
     };

@@ -1,10 +1,29 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { windowRole } from "./lib/window-role";
+import { TranscriptOverlay } from "./components/TranscriptOverlay";
+import { PanelApp } from "./panels/PanelApp";
 import "./index.css";
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
+/**
+ * Window-role entry branch (see lib/window-role.ts):
+ *   • overlay → ONLY the TranscriptOverlay — no providers, no engine socket,
+ *               no background tasks. The overlay used to boot the entire app
+ *               (14 providers + its own WebSocket); never regress that.
+ *   • panel   → PanelApp: slim chrome + only the providers the page needs
+ *               (panels/manifest.tsx).
+ *   • main / peers / browser dev → full App.
+ */
+const root = ReactDOM.createRoot(document.getElementById("root")!);
+
+const tree =
+  windowRole.kind === "overlay" ? (
+    <TranscriptOverlay />
+  ) : windowRole.kind === "panel" ? (
+    <PanelApp page={windowRole.page} />
+  ) : (
     <App />
-  </React.StrictMode>
-);
+  );
+
+root.render(<React.StrictMode>{tree}</React.StrictMode>);

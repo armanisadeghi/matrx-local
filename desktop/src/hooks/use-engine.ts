@@ -6,6 +6,7 @@ import { initPlatformCtx } from "@/lib/platformCtx";
 import { startBackgroundTasks, stopBackgroundTasks } from "@/lib/background-tasks";
 import supabase from "@/lib/supabase";
 import { emitClientLog } from "@/hooks/use-client-log";
+import { useWindowLeader } from "@/hooks/use-window-leader";
 
 export type EngineStatus = "discovering" | "starting" | "connected" | "disconnected" | "error";
 
@@ -31,6 +32,13 @@ export function useEngine(authenticated = true) {
     error: null,
     wsConnected: false,
   });
+
+  // Leader gating (multi-window): only the leader window runs the singleton
+  // services — background-task orchestrator + periodic cloud heartbeat. The
+  // per-window engine connection, status, and health poll are NOT gated.
+  const isLeader = useWindowLeader();
+  const isLeaderRef = useRef(isLeader);
+  isLeaderRef.current = isLeader;
 
   const mountedRef = useRef(true);
   // Prevents concurrent duplicate runs — but does NOT prevent future retries
@@ -264,10 +272,15 @@ export function useEngine(authenticated = true) {
 
       // Fire background tasks: token sync, cloud configure, settings hydration,
       // prefetch, and heartbeat all run via the idle-scheduled orchestrator.
+      // Leader-only: with multiple windows, exactly one runs the orchestrator
+      // (a late promotion is handled by the isLeader effect below).
       lastCloudConfigureRef.current = Date.now();
-      startBackgroundTasks();
-
-      emitClientLog("success", "Engine initialization complete — background tasks queued", "engine");
+      if (isLeaderRef.current) {
+        startBackgroundTasks();
+        emitClientLog("success", "Engine initialization complete — background tasks queued", "engine");
+      } else {
+        emitClientLog("success", "Engine initialization complete (non-leader window — background tasks skipped)", "engine");
+      }
     } finally {
       // Always release the mutex so future retries are possible
       initializingRef.current = false;
@@ -306,6 +319,20 @@ export function useEngine(authenticated = true) {
     await initialize();
   }, [initialize]);
 
+  // Leader promotion: if this window becomes leader AFTER its initialize()
+  // already completed (the previous leader window closed), the orchestrator
+  // was skipped back then — start it now. orchestrator.start() is idempotent,
+  // and demotion never happens without window destruction, so cleanup here is
+  // belt-and-suspenders only.
+  useEffect(() => {
+    if (!isLeader) return;
+    if (statusRef.current === "connected") {
+      emitClientLog("info", "Promoted to leader window — starting background tasks", "engine");
+      startBackgroundTasks();
+    }
+    return () => stopBackgroundTasks();
+  }, [isLeader]);
+
   // Trigger initialize() whenever authentication state first becomes true.
   // Guard against re-running when already connected — Supabase fires SIGNED_IN
   // on every token refresh (including on window refocus), which would cause the
@@ -326,20 +353,26 @@ export function useEngine(authenticated = true) {
   // the StartupScreen. Instead, only patch up the WebSocket if it dropped.
   // This behaviour is identical on macOS, Windows, and Linux.
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_IN") {
         if (statusRef.current === "connected") {
           if (!wsConnectedRef.current && session?.access_token) {
-            try {
-              await engine.connectWebSocket();
-              update({ wsConnected: true });
-              emitClientLog("success", "WebSocket connected (deferred — auth arrived after engine)", "engine");
-            } catch (err) {
-              emitClientLog("warn", `Deferred WebSocket connection failed: ${err}`, "engine");
-            }
+            // Supabase holds its auth lock while this callback runs.
+            // connectWebSocket() obtains the token through getSession(), so
+            // awaiting it here deadlocks that lock and every later authenticated
+            // engine request (including image-model loads).  Leave the callback
+            // first, then reconnect once Supabase has released the lock.
+            setTimeout(() => {
+              void engine.connectWebSocket().then(() => {
+                update({ wsConnected: true });
+                emitClientLog("success", "WebSocket connected (deferred — auth arrived after engine)", "engine");
+              }).catch((err) => {
+                emitClientLog("warn", `Deferred WebSocket connection failed: ${err}`, "engine");
+              });
+            }, 0);
           }
         } else {
-          initialize();
+          setTimeout(() => void initialize(), 0);
         }
       }
     });
@@ -358,47 +391,52 @@ export function useEngine(authenticated = true) {
 
     // Re-configure cloud sync and sync JWT to Python whenever auth state changes.
     const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      (event, session) => {
         if (!engine.engineUrl) return;
-        if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
-          if (session?.access_token && session?.user?.id) {
-            // Push the JWT to Python so it persists across restarts.
-            engine.syncTokenToPython(
-              session.access_token,
-              session.user.id,
-              session.refresh_token ?? undefined,
-              session.expires_in ?? undefined,
-            ).catch((e) => console.warn("[engine] syncTokenToPython failed:", e));
+        // Never keep Supabase's auth lock while doing network work. Besides
+        // blocking future auth reads, some engine calls obtain the current
+        // token through getSession() and would self-deadlock inside this callback.
+        setTimeout(async () => {
+          if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
+            if (session?.access_token && session?.user?.id) {
+              // Push the JWT to Python so it persists across restarts.
+              engine.syncTokenToPython(
+                session.access_token,
+                session.user.id,
+                session.refresh_token ?? undefined,
+                session.expires_in ?? undefined,
+              ).catch((e) => console.warn("[engine] syncTokenToPython failed:", e));
 
-            // Skip if initialize() already sent configure within the last 10s
-            // to avoid a duplicate call on the INITIAL_SESSION event.
-            if (Date.now() - lastCloudConfigureRef.current < 10_000) return;
-            try {
-              lastCloudConfigureRef.current = Date.now();
-              await engine.configureCloudSync(session.access_token, session.user.id);
-              engine.cloudHeartbeat().catch((e) => console.warn("[engine] cloudHeartbeat failed:", e));
-            } catch (e) {
-              console.warn("[engine] configureCloudSync failed (non-critical):", e);
+              // Skip if initialize() already sent configure within the last 10s
+              // to avoid a duplicate call on the INITIAL_SESSION event.
+              if (Date.now() - lastCloudConfigureRef.current < 10_000) return;
+              try {
+                lastCloudConfigureRef.current = Date.now();
+                await engine.configureCloudSync(session.access_token, session.user.id);
+                engine.cloudHeartbeat().catch((e) => console.warn("[engine] cloudHeartbeat failed:", e));
+              } catch (e) {
+                console.warn("[engine] configureCloudSync failed (non-critical):", e);
+              }
             }
-          }
-        } else if (event === "TOKEN_REFRESHED") {
-          if (session?.access_token && session?.user?.id) {
-            // Push refreshed JWT to Python immediately.
-            engine.syncTokenToPython(
-              session.access_token,
-              session.user.id,
-              session.refresh_token ?? undefined,
-              session.expires_in ?? undefined,
-            ).catch((e) => console.warn("[engine] syncTokenToPython (refresh) failed:", e));
-            try {
-              await engine.reconfigureCloudSync(session.access_token, session.user.id);
-            } catch (e) {
-              console.warn("[engine] reconfigureCloudSync failed (non-critical):", e);
+          } else if (event === "TOKEN_REFRESHED") {
+            if (session?.access_token && session?.user?.id) {
+              // Push refreshed JWT to Python immediately.
+              engine.syncTokenToPython(
+                session.access_token,
+                session.user.id,
+                session.refresh_token ?? undefined,
+                session.expires_in ?? undefined,
+              ).catch((e) => console.warn("[engine] syncTokenToPython (refresh) failed:", e));
+              try {
+                await engine.reconfigureCloudSync(session.access_token, session.user.id);
+              } catch (e) {
+                console.warn("[engine] reconfigureCloudSync failed (non-critical):", e);
+              }
             }
+          } else if (event === "SIGNED_OUT") {
+            engine.clearPythonToken().catch((e) => console.warn("[engine] clearPythonToken failed:", e));
           }
-        } else if (event === "SIGNED_OUT") {
-          engine.clearPythonToken().catch((e) => console.warn("[engine] clearPythonToken failed:", e));
-        }
+        }, 0);
       }
     );
 
@@ -429,8 +467,11 @@ export function useEngine(authenticated = true) {
       }
     }, 10000);
 
-    // Periodic cloud heartbeat (every 5 minutes)
+    // Periodic cloud heartbeat (every 5 minutes) — leader window only; the
+    // engine owns the device identity, so N windows heartbeating is pure
+    // redundancy. Checked per-tick via ref so promotion needs no re-mount.
     const heartbeatInterval = setInterval(() => {
+      if (!isLeaderRef.current) return;
       engine.cloudHeartbeat().catch((e) => console.warn("[engine] periodic heartbeat failed:", e));
     }, 300000);
 

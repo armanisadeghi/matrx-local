@@ -32,6 +32,9 @@ use downloads::commands::*;
 mod floating_overlay;
 use floating_overlay::*;
 
+mod windows;
+mod menu;
+
 // ── Dev/live isolation (MXL-D-043) ──────────────────────────────────────────
 // Debug builds (`pnpm tauri:dev`) live in the DEV world: they discover the
 // engine via ~/.matrx-dev/local.json and scan the dev port range 22240-22259,
@@ -249,6 +252,9 @@ fn kill_orphaned_llama_server() {
 /// Holds the sidecar child process handle for lifecycle management.
 struct SidecarState {
     child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
+    /// Orphan recovery is only appropriate on the first spawn after app
+    /// startup. Routine restarts must remain scoped to the PID we own.
+    has_started: AtomicBool,
 }
 
 /// Ring buffer of recent sidecar stdout/stderr lines for frontend diagnostics.
@@ -381,10 +387,13 @@ async fn start_sidecar(
     }
     let _spawn_guard = SpawnGuard;
 
-    // Kill any orphaned sidecar processes from a previous session before
-    // spawning a new one.  Without this, port 22140 may still be held by
-    // a zombie from a crash/force-quit, and the new sidecar will fail.
-    kill_orphaned_sidecars();
+    // Recover engine orphans only on the first spawn of this app process.
+    // A routine stop/restart already has an owned PID and must not sweep
+    // unrelated engine processes by image name.
+    let first_spawn = !state.has_started.load(Ordering::SeqCst);
+    if first_spawn {
+        kill_orphaned_sidecars();
+    }
 
     // Build the engine command. On macOS production the engine lives inside
     // a Helper .app sub-bundle; everywhere else Tauri's externalBin places
@@ -425,8 +434,10 @@ async fn start_sidecar(
         .spawn()
         .map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
 
-    lifecycle_log::log(&format!("[start_sidecar] engine spawned, pid {}", child.pid()));
+    let spawned_pid = child.pid();
+    lifecycle_log::log(&format!("[start_sidecar] engine spawned, pid {}", spawned_pid));
     *state.child.lock().unwrap() = Some(child);
+    state.has_started.store(true, Ordering::SeqCst);
 
     // Forward sidecar output to Tauri logs AND to the frontend via events.
     // The SidecarLogs ring buffer stores the last 200 lines so the frontend
@@ -480,6 +491,20 @@ async fn start_sidecar(
                         lines.push(msg.clone());
                     }
                     let _ = app_handle.emit("sidecar-log", msg);
+                    // The receiver belongs to exactly one spawn. Clear the
+                    // handle only if it still names that PID; a delayed
+                    // Terminated event from generation N must never erase a
+                    // newly spawned generation N+1. This is also the Windows
+                    // stale-handle liveness mechanism.
+                    let sidecar_state = app_handle.state::<SidecarState>();
+                    let mut child = sidecar_state.child.lock().unwrap();
+                    if child.as_ref().map(|current| current.pid()) == Some(spawned_pid) {
+                        lifecycle_log::log(&format!(
+                            "[engine-exit] clearing terminated owned handle for pid {}",
+                            spawned_pid
+                        ));
+                        *child = None;
+                    }
                     break;
                 }
                 _ => {}
@@ -510,13 +535,36 @@ async fn stop_sidecar(state: tauri::State<'_, SidecarState>) -> Result<(), Strin
         if let Some(c) = child {
             sigterm_then_kill(c);
         }
-        // Also nuke any orphaned processes by name — covers the case where
-        // the process was SIGKILLed by the OS (e.g. macOS watchdog) before we
-        // could clear the handle, leaving port 22140 still bound.
-        kill_orphaned_sidecars();
     })
     .await;
     Ok(())
+}
+
+/// Restart only the Rust-owned engine using its exact managed PID. This does
+/// not run the broad orphan sweep used during initial crash recovery.
+#[tauri::command]
+async fn restart_sidecar(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SidecarState>,
+) -> Result<(), String> {
+    let child = state.child.lock().unwrap().take();
+    lifecycle_log::log(&format!(
+        "[restart_sidecar] recovery restart requested (owned pid: {})",
+        child
+            .as_ref()
+            .map(|process| process.pid().to_string())
+            .unwrap_or_else(|| "none".into())
+    ));
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(process) = child {
+            sigterm_then_kill(process);
+        }
+    })
+    .await
+    .map_err(|error| format!("Engine shutdown task failed: {error}"))?;
+
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    start_sidecar(app, state).await
 }
 
 /// Send SIGTERM to the sidecar's PID and wait for it to exit cleanly,
@@ -1040,14 +1088,64 @@ async fn restart_for_update(
     wake_word_state: tauri::State<'_, WakeWordAppState>,
     recording_state: tauri::State<'_, RecordingState>,
 ) -> Result<(), String> {
-    graceful_shutdown_sync(
-        "restart_for_update command (auto-updater installed an update; app will relaunch)",
+    restart_app_impl(
+        app,
+        "auto-updater installed an update; app will relaunch".into(),
         &sidecar_state,
         &transcription_state,
         &llm_process,
-        Some(&*llm_server_state),
-        Some(&wake_word_state),
-        Some(&recording_state),
+        &llm_server_state,
+        &wake_word_state,
+        &recording_state,
+    )
+    .await
+}
+
+/// Relaunch the complete application through the ownership-safe shutdown
+/// path. Unlike the process plugin's direct relaunch, this always gives Rust
+/// and the engine a chance to cascade shutdown to their own children.
+#[tauri::command]
+async fn restart_app(
+    app: tauri::AppHandle,
+    reason: Option<String>,
+    sidecar_state: tauri::State<'_, SidecarState>,
+    transcription_state: tauri::State<'_, TranscriptionState>,
+    llm_process: tauri::State<'_, llm::commands::LlmProcessHandle>,
+    llm_server_state: tauri::State<'_, llm::commands::LlmServerState>,
+    wake_word_state: tauri::State<'_, WakeWordAppState>,
+    recording_state: tauri::State<'_, RecordingState>,
+) -> Result<(), String> {
+    restart_app_impl(
+        app,
+        reason.unwrap_or_else(|| "user requested application restart".into()),
+        &sidecar_state,
+        &transcription_state,
+        &llm_process,
+        &llm_server_state,
+        &wake_word_state,
+        &recording_state,
+    )
+    .await
+}
+
+async fn restart_app_impl(
+    app: tauri::AppHandle,
+    reason: String,
+    sidecar_state: &SidecarState,
+    transcription_state: &TranscriptionState,
+    llm_process: &llm::commands::LlmProcessHandle,
+    llm_server_state: &llm::commands::LlmServerState,
+    wake_word_state: &WakeWordAppState,
+    recording_state: &RecordingState,
+) -> Result<(), String> {
+    graceful_shutdown_sync(
+        &format!("restart_app command ({})", reason),
+        sidecar_state,
+        transcription_state,
+        llm_process,
+        Some(llm_server_state),
+        Some(wake_word_state),
+        Some(recording_state),
     );
 
     // Give child processes a moment to exit cleanly before we restart.
@@ -1061,6 +1159,16 @@ async fn restart_for_update(
     // task and need the Tokio runtime to wind down cleanly.
     app.request_restart();
     Ok(())
+}
+
+/// Reload only the invoking window's webview. The engine and Rust-owned
+/// services remain running, making this the bounded recovery action for
+/// renderer-local state.
+#[tauri::command]
+fn reload_renderer(window: tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .eval("window.location.reload()")
+        .map_err(|error| format!("Failed to reload application interface: {error}"))
 }
 
 /// Get sidecar status.
@@ -1168,18 +1276,15 @@ async fn get_close_to_tray(state: tauri::State<'_, CloseToTray>) -> Result<bool,
     Ok(state.0.load(Ordering::Relaxed))
 }
 
-/// Resize the main window to a compact recorder size or restore to full size.
+/// Resize the invoking window to a compact recorder size or restore to full
+/// size (works from any full app window, not just `main`).
 ///
 /// Compact size: 420 × 240 px — just enough for a mic button + live transcript.
 /// The minimum-size constraints are temporarily lifted so the window can shrink
 /// below the normal 900 × 600 minimum. Restoring re-applies the original min size.
 #[tauri::command]
-async fn set_compact_mode(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+async fn set_compact_mode(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
     use tauri::{LogicalPosition, LogicalSize};
-
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "Main window not found".to_string())?;
 
     if enabled {
         // Remove min-size constraint first so the window can actually shrink.
@@ -1358,29 +1463,80 @@ fn get_pending_oauth_url(state: tauri::State<'_, PendingOAuthUrl>) -> Option<Str
     state.0.lock().unwrap().take()
 }
 
-/// Bring the main window to front.
+/// Bring the app to front: focuses the most recent full window, recreating
+/// `main` if none exist (multi-window generalization — see windows.rs).
 ///
 /// On macOS, `window.show()` alone is not enough when the app has been hidden
-/// via `window.hide()` — the app process may not be the frontmost application,
-/// so the window appears but receives no focus. We must call both `show()` and
-/// `set_focus()`, and additionally `unminimize()` in case the window was
-/// minimized into the Dock rather than hidden.
-///
-/// On macOS, we also switch the activation policy back to Regular so the Dock
-/// icon appears (it was set to Accessory when the window was hidden to tray).
+/// via `window.hide()` — the activation policy is restored to Regular and the
+/// window is unminimized + shown + focused inside the helper.
 fn show_main_window(app: &tauri::AppHandle) {
-    #[cfg(target_os = "macos")]
-    {
-        // Switch to Regular policy BEFORE show() so the Dock icon appears
-        // at the same moment the window becomes visible.  Must be called on
-        // the main thread — all callers of show_main_window run on the main
-        // thread (tray event, Reopen event, single-instance callback).
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    windows::focus_most_recent_full_or_recreate_main(app);
+}
+
+/// Stable id for the single app tray icon — used by refresh_tray_menu.
+const TRAY_ID: &str = "matrx-tray";
+
+/// Human-readable tray/menu name for a window label.
+fn window_display_name(app: &tauri::AppHandle, label: &str) -> String {
+    if label == windows::MAIN_LABEL {
+        return "Main Window".to_string();
     }
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+    if let Some(n) = label.strip_prefix(windows::PEER_PREFIX) {
+        return format!("Window {n}");
+    }
+    // Panels: use the real window title ("Media Gallery", …).
+    app.get_webview_window(label)
+        .and_then(|w| w.title().ok())
+        .unwrap_or_else(|| label.to_string())
+}
+
+/// Build the tray menu, including the current window list.
+fn build_tray_menu(
+    app: &tauri::AppHandle,
+) -> Result<tauri::menu::Menu<tauri::Wry>, tauri::Error> {
+    let show = MenuItemBuilder::with_id("show", "Show AI Matrx").build(app)?;
+    let new_window = MenuItemBuilder::with_id("new-window", "New Window").build(app)?;
+    let status = MenuItemBuilder::with_id("status", "Status: Running")
+        .enabled(false)
+        .build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "Quit AI Matrx").build(app)?;
+
+    let mut builder = MenuBuilder::new(app)
+        .item(&show)
+        .item(&new_window)
+        .separator();
+
+    // One entry per live window (overlay excluded) — click focuses it.
+    let mut entries: Vec<(String, String)> = app
+        .webview_windows()
+        .into_iter()
+        .filter(|(label, _)| label != windows::OVERLAY_LABEL)
+        .map(|(label, _)| (window_display_name(app, &label), label))
+        .collect();
+    entries.sort();
+    for (name, label) in entries {
+        let item = MenuItemBuilder::with_id(format!("win:{label}"), name).build(app)?;
+        builder = builder.item(&item);
+    }
+
+    builder
+        .separator()
+        .item(&status)
+        .separator()
+        .item(&quit)
+        .build()
+}
+
+/// Rebuild the tray menu's window list. Called by windows.rs whenever a
+/// window is created or destroyed.
+pub(crate) fn refresh_tray_menu(app: &tauri::AppHandle) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        match build_tray_menu(app) {
+            Ok(menu) => {
+                let _ = tray.set_menu(Some(menu));
+            }
+            Err(e) => eprintln!("[tray] failed to rebuild menu: {e}"),
+        }
     }
 }
 
@@ -1389,30 +1545,35 @@ fn show_main_window(app: &tauri::AppHandle) {
 /// Only ONE tray icon is created here — the auto-trayIcon in tauri.conf.json
 /// has been removed to prevent a second blank icon from appearing.
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let show = MenuItemBuilder::with_id("show", "Show AI Matrx").build(app)?;
-    let status = MenuItemBuilder::with_id("status", "Status: Starting...")
-        .enabled(false)
-        .build(app)?;
-    let quit = MenuItemBuilder::with_id("quit", "Quit AI Matrx").build(app)?;
-
-    let menu = MenuBuilder::new(app)
-        .item(&show)
-        .separator()
-        .item(&status)
-        .separator()
-        .item(&quit)
-        .build()?;
+    let menu = build_tray_menu(app.handle())?;
 
     // Use the application's default window icon for the tray.
     // `app.default_window_icon()` returns the icon configured by the Tauri build system
     // (from the icon list in tauri.conf.json), so the tray icon always matches the
     // dock / taskbar icon without any runtime file path resolution.
-    let tray_builder = TrayIconBuilder::new()
+    let tray_builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .tooltip("AI Matrx")
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "show" => {
                 show_main_window(app);
+            }
+            "new-window" => {
+                if let Err(e) = windows::open_peer_window_impl(app) {
+                    eprintln!("[tray] New Window failed: {e}");
+                }
+            }
+            id if id.starts_with("win:") => {
+                let label = &id[4..];
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+                }
+                if let Some(w) = app.get_webview_window(label) {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
             }
             "quit" => {
                 // Run graceful shutdown on a background thread so the main thread
@@ -1506,13 +1667,23 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // Per-label window geometry persistence. The transcript overlay is
+        // excluded — it positions itself programmatically every time
+        // (floating_overlay.rs) and must not fight a restored state.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&["transcript-overlay"])
+                .build(),
+        )
         .manage(SidecarState {
             child: Mutex::new(None),
+            has_started: AtomicBool::new(false),
         })
         .manage(SidecarLogs {
             lines: Arc::new(Mutex::new(Vec::new())),
         })
         .manage(CloseToTray(AtomicBool::new(true)))
+        .manage(windows::WindowRegistry::default())
         .manage(PendingOAuthUrl(Mutex::new(None)))
         .manage(TranscriptionState(Mutex::new(None)))
         .manage(RecordingState::new())
@@ -1535,7 +1706,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_sidecar,
             stop_sidecar,
+            restart_sidecar,
             restart_for_update,
+            restart_app,
+            reload_renderer,
             sidecar_status,
             get_sidecar_logs,
             check_engine_health,
@@ -1589,6 +1763,12 @@ pub fn run() {
             // Floating overlay commands
             show_transcript_overlay,
             hide_transcript_overlay,
+            // Multi-window commands
+            windows::open_peer_window,
+            windows::open_panel_window,
+            windows::list_app_windows,
+            windows::focus_app_window,
+            windows::get_window_role,
             // Universal download manager commands
             dm_enqueue,
             dm_cancel,
@@ -1596,6 +1776,16 @@ pub fn run() {
             dm_get,
         ])
         .setup(|app| {
+            // Register the config-created main window as the initial full
+            // window (and therefore leader) in the multi-window registry.
+            app.state::<windows::WindowRegistry>()
+                .register_full(windows::MAIN_LABEL);
+
+            // Native application menu (File > New Window, Edit, View, Window).
+            if let Err(e) = menu::setup_app_menu(app) {
+                eprintln!("Failed to set up application menu: {e}");
+            }
+
             // Kill orphaned LLM server immediately before the JS frontend has
             // a chance to issue commands to start it. This prevents the race condition
             // where `start_sidecar` used to blindly kill `llama-server` *while* it
@@ -1878,13 +2068,26 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Registry cleanup + leader promotion when any window is destroyed.
+            if let tauri::WindowEvent::Destroyed = event {
+                windows::handle_window_destroyed(&window.app_handle().clone(), window.label());
+                return;
+            }
+
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Only act on the main window.  The transcript overlay has its own
-                // lifecycle and should close freely without triggering app shutdown.
-                if window.label() != "main" {
+                // Panels and the transcript overlay have their own lifecycles and
+                // close freely without touching app shutdown.
+                if !windows::is_full_window(window.label()) {
                     return;
                 }
 
+                // A full window closing while OTHER full windows remain closes
+                // freely — leader promotion happens on Destroyed above.
+                if windows::other_full_windows_exist(&window.app_handle().clone(), window.label()) {
+                    return;
+                }
+
+                // This is the LAST full window — apply the app-level policy.
                 let close_to_tray = window
                     .app_handle()
                     .try_state::<CloseToTray>()
@@ -1896,14 +2099,18 @@ pub fn run() {
                     // in the background (accessible via the system tray icon).
                     // We do NOT kill the sidecar — it serves as the "server" half and must
                     // stay alive for background jobs and cloud connectivity.
+                    // Panels/overlay hide with it — a floating panel with no parent
+                    // app window is orphaned UX; they come back with the app.
+                    windows::hide_secondary_windows(&window.app_handle().clone());
                     let _ = window.hide();
                     api.prevent_close();
 
                     // On macOS: switch to Accessory policy so the Dock icon disappears
-                    // when the window is hidden.  This prevents the confusing state where
-                    // the Dock shows an icon for a window the user cannot find, which
-                    // causes them to relaunch the app and produce two Dock icons.
-                    // Must be called on the main thread — on_window_event runs on the main thread.
+                    // when the last full window is hidden.  This prevents the confusing
+                    // state where the Dock shows an icon for a window the user cannot
+                    // find, which causes them to relaunch the app and produce two Dock
+                    // icons. Must be called on the main thread — on_window_event runs
+                    // on the main thread.
                     #[cfg(target_os = "macos")]
                     {
                         let _ = window.app_handle().set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -1937,7 +2144,7 @@ pub fn run() {
                             let ww = app_handle.try_state::<WakeWordAppState>();
                             let rec = app_handle.try_state::<RecordingState>();
                             graceful_shutdown_sync(
-                                "main window closed with close-to-tray disabled (user quit via window X)",
+                                "last app window closed with close-to-tray disabled (user quit via window X)",
                                 &sidecar,
                                 &transcription,
                                 &llm_proc,
@@ -1946,9 +2153,16 @@ pub fn run() {
                                 rec.as_deref(),
                             );
                         }
-                        // Cleanup done — close the window programmatically.
-                        // This fires CloseRequested again, but SHUTDOWN_DONE=true
-                        // causes it to be a no-op, allowing the close to proceed.
+                        // Cleanup done — close every remaining window (panels/
+                        // overlay included), then the triggering window.
+                        // Re-closing fires CloseRequested again, but
+                        // SHUTDOWN_DONE=true causes it to be a no-op, allowing
+                        // the close to proceed.
+                        for (label, w) in app_handle.webview_windows() {
+                            if label != window_label {
+                                let _ = w.close();
+                            }
+                        }
                         if let Some(w) = app_handle.get_webview_window(&window_label) {
                             let _ = w.close();
                         }

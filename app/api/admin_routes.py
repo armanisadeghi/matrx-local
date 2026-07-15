@@ -54,14 +54,19 @@ import threading
 import time
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from pydantic import BaseModel, Field
 
 from app.launcher import dump_diagnostics, get_registry
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+class RecoveryRequest(BaseModel):
+    action: str = Field(pattern="^(probe|refresh|repair|stop|start|restart|snapshot)$")
+    timeout_seconds: float = Field(default=15.0, gt=0, le=120)
 
 
 # Tracks whether a shutdown has already been requested so repeated calls
@@ -79,6 +84,48 @@ async def admin_status() -> dict[str, Any]:
     Safe to poll every few seconds. For the heavy snapshot use POST /admin/diagnose.
     """
     return get_registry().snapshot()
+
+
+@router.get("/recovery")
+async def admin_recovery_status() -> dict[str, Any]:
+    """Return recoverable services, capabilities, and recent attempts."""
+    snapshot = get_registry().snapshot()
+    return {
+        "services": {
+            name: {
+                "state": record["state"],
+                "capabilities": record.get("capabilities", []),
+                "metadata": record.get("metadata", {}),
+                "error": record.get("error"),
+            }
+            for name, record in snapshot["services"].items()
+            if record.get("capabilities")
+        },
+        "operations": snapshot["recovery_operations"],
+    }
+
+
+@router.post("/recovery/{service_name}")
+async def admin_recover_service(
+    service_name: str, request: RecoveryRequest
+) -> dict[str, Any]:
+    """Run a bounded service operation through its canonical controller."""
+    try:
+        return await get_registry().recover(
+            service_name, request.action, timeout_s=request.timeout_seconds
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=f"{service_name} {request.action} timed out; no unsafe kill was attempted",
+        ) from exc
+    except Exception as exc:
+        logger.exception("[launcher] recovery failed: %s.%s", service_name, request.action)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/shutdown")

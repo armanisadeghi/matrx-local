@@ -12,7 +12,7 @@
  * and this switcher get deleted (no dead code left behind).
  */
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { LayoutTemplate, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +29,7 @@ import { VariantStudio } from "@/components/media-gen/variants/VariantStudio";
 import { VariantWorkspace } from "@/components/media-gen/variants/VariantWorkspace";
 import { VariantGallery } from "@/components/media-gen/variants/VariantGallery";
 import { VariantFocus } from "@/components/media-gen/variants/VariantFocus";
+import { usePageRefreshHandler } from "@/hooks/use-page-refresh";
 
 const VARIANTS = [
   { id: "classic", label: "Classic tabs", Component: VariantClassic },
@@ -53,8 +54,16 @@ function readVariant(): VariantId {
 }
 
 export function MediaGeneration() {
-  const [state] = useMediaGenApp();
+  const [state, actions] = useMediaGenApp();
   const [variantId, setVariantId] = useState<VariantId>(readVariant);
+  const refreshPage = useCallback(async () => {
+    await Promise.all([
+      actions.refreshImage(),
+      actions.refreshVideo(),
+      actions.refreshImageJobs(),
+    ]);
+  }, [actions.refreshImage, actions.refreshVideo, actions.refreshImageJobs]);
+  usePageRefreshHandler("/media-generation", refreshPage);
 
   const selectVariant = (id: string) => {
     const next = VARIANTS.some((v) => v.id === id)

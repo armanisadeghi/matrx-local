@@ -48,6 +48,7 @@ import {
   DevTerminalProvider,
 } from "@/components/DevTerminalPanel";
 import { CompactRecorderWindow } from "@/components/CompactRecorderWindow";
+import { MenuEventBridge } from "@/components/MenuEventBridge";
 import { PermissionsProvider } from "@/contexts/PermissionsContext";
 import { AudioDevicesProvider } from "@/contexts/AudioDevicesContext";
 import { LlmProvider } from "@/contexts/LlmContext";
@@ -564,6 +565,7 @@ function AppInner() {
         {/* These live INSIDE HashRouter (though outside Routes): several of
             them — DownloadManagerModal's action dialog especially — call
             useNavigate(). Hoisting them out crashes the app on boot. */}
+        <MenuEventBridge />
         <NotificationToastContainer
           toasts={toasts}
           onDismiss={notif.hideToast}

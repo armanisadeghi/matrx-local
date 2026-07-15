@@ -378,6 +378,7 @@ class ImageGenService:
         self._is_loading = False
         self._load_progress: float = 0.0
         self._load_error: str | None = None
+        self._load_started_at: float | None = None
         self._device: str | None = None
         # Active generations, keyed by an opaque token. Each entry:
         #   {"kind": "oneshot"|"job", "job_id": str|None,
@@ -417,6 +418,10 @@ class ImageGenService:
             "is_loading": self._is_loading,
             "load_progress": self._load_progress,
             "load_error": self._load_error,
+            "load_started_at": self._load_started_at,
+            "load_age_seconds": (
+                time.time() - self._load_started_at if self._is_loading and self._load_started_at else None
+            ),
             "is_generating": bool(gens),
             "cancel_requested": any(g["cancel_requested"] for g in gens),
             "packages_version": get_installed_diffusers_version(),
@@ -438,6 +443,7 @@ class ImageGenService:
                 "event": event,
                 "cancel_requested": False,
                 "supports_step_cancel": None,
+                "started_at": time.time(),
             }
             return token
 
@@ -766,6 +772,7 @@ class ImageGenService:
                 return {"success": True, "model_id": model.model_id, "already_loaded": True}
 
             self._is_loading = True
+            self._load_started_at = time.time()
             self._load_progress = 0.0
             self._load_error = None
             logger.info("[image_gen] Loading model: %s", model.model_id)
@@ -931,6 +938,7 @@ class ImageGenService:
                 # is_loading may NEVER stay true after a load attempt —
                 # a stuck true here is the "spins forever" bug.
                 self._is_loading = False
+                self._load_started_at = None
 
     def _unload_sync(self) -> None:
         with self._lock:

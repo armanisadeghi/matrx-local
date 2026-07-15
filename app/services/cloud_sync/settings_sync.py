@@ -48,13 +48,13 @@ import json
 import logging
 import os
 import time
+import shutil
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from app.config import MATRX_HOME_DIR
+from app.config import MATRX_HOME_DIR  # noqa: E402
 LOCAL_SETTINGS_FILE = MATRX_HOME_DIR / "settings.json"
 
 # Default settings — every possible setting with its default value.
@@ -143,6 +143,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "voice_restore_prompt_on_exit": True,
     # UI
     "sidebar_collapsed": False,
+}
+
+RESET_SCOPES: dict[str, tuple[str, ...]] = {
+    "application": ("launch_", "minimize_", "theme", "auto_check_", "update_check_", "sidebar_", "notification_"),
+    "network": ("headless_", "scrape_", "proxy_", "tunnel_", "file_sync_", "extension_"),
+    "ai": ("chat_", "llm_", "transcription_", "tts_", "wake_word_", "voice_"),
+    "identity": ("instance_name",),
 }
 
 
@@ -252,9 +259,42 @@ class SettingsSync:
         self._save_local()
 
     def reset_to_defaults(self) -> None:
-        """Reset all settings to defaults."""
-        self._settings = dict(DEFAULT_SETTINGS)
+        """Internal full reset. HTTP callers must use preview/apply_reset."""
+        self.apply_reset("all", confirmed=True)
+
+    def preview_reset(self, scope: str) -> dict[str, Any]:
+        if scope == "all":
+            keys = set(DEFAULT_SETTINGS) | set(self._settings)
+        elif scope in RESET_SCOPES:
+            prefixes = RESET_SCOPES[scope]
+            keys = {key for key in DEFAULT_SETTINGS if any(key == p or key.startswith(p) for p in prefixes)}
+        else:
+            raise ValueError(f"Unknown reset scope: {scope}")
+        changes = {
+            key: {"current": self.get(key), "default": DEFAULT_SETTINGS.get(key)}
+            for key in sorted(keys)
+            if self.get(key) != DEFAULT_SETTINGS.get(key)
+        }
+        return {"scope": scope, "keys": sorted(keys), "changes": changes, "change_count": len(changes)}
+
+    def apply_reset(self, scope: str, *, confirmed: bool) -> dict[str, Any]:
+        preview = self.preview_reset(scope)
+        if not confirmed:
+            raise ValueError("Reset requires explicit confirmation")
+        backup_path: str | None = None
+        if LOCAL_SETTINGS_FILE.exists():
+            backup = LOCAL_SETTINGS_FILE.with_name(
+                f"settings.backup-{time.strftime('%Y%m%d-%H%M%S')}.json"
+            )
+            shutil.copy2(LOCAL_SETTINGS_FILE, backup)
+            backup_path = str(backup)
+        for key in preview["keys"]:
+            if key in DEFAULT_SETTINGS:
+                self._settings[key] = DEFAULT_SETTINGS[key]
+            else:
+                self._settings.pop(key, None)
         self._save_local()
+        return {**preview, "applied": True, "backup_path": backup_path}
 
     # ── local file I/O ──────────────────────────────────────────────────
 

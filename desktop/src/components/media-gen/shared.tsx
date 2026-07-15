@@ -37,6 +37,7 @@ import type { GeneratedImageResult } from "@/hooks/use-media-gen";
 import type { ImageGenJob } from "@/lib/api";
 import { engine, fetchMediaLibraryFile } from "@/lib/api";
 import { emitClientLog } from "@/hooks/use-unified-log";
+import { recovery } from "@/lib/recovery";
 import { useMediaActions } from "@/components/media/MediaActionsProvider";
 import { MediaOverflowMenu } from "@/components/media/MediaOverflowMenu";
 import {
@@ -373,6 +374,13 @@ export function ModelLoadingNotice({
   loadError: string | null | undefined;
   what?: string;
 }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!loading) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(id);
+  }, [loading]);
+  const stale = loading && startedAt !== null && now - startedAt >= 60_000;
   if (loading) {
     return (
       <div className="rounded-lg border bg-muted/20 px-3 py-2">
@@ -381,6 +389,15 @@ export function ModelLoadingNotice({
           label={`Loading ${what} — still working`}
           className="justify-start"
         />
+        {stale && (
+          <div className="mt-2 flex items-center justify-between gap-3 border-t pt-2 text-xs">
+            <span className="text-amber-600 dark:text-amber-400">This load is taking unusually long. Refresh its status or reset this view; your queues are preserved.</span>
+            <div className="flex shrink-0 gap-1">
+              <Button size="sm" variant="outline" onClick={() => void recovery.refreshSurface("/media-generation")}>Refresh status</Button>
+              <Button size="sm" variant="outline" onClick={() => void recovery.resetSurface("/media-generation")}>Reset view</Button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

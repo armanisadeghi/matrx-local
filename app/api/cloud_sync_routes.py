@@ -6,9 +6,9 @@ and synchronization between local and cloud storage.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.services.cloud_sync.instance_manager import get_instance_manager
@@ -25,6 +25,13 @@ class ConfigureRequest(BaseModel):
 
 class SettingsUpdateRequest(BaseModel):
     settings: dict[str, Any]
+
+
+class SettingsResetRequest(BaseModel):
+    scope: str = "all"
+    preview: bool = True
+    confirm: str | None = None
+    push_to_cloud: bool = False
 
 
 class SyncResult(BaseModel):
@@ -147,11 +154,35 @@ async def update_cloud_settings(req: SettingsUpdateRequest) -> dict:
 
 
 @router.post("/settings/reset")
-async def reset_settings() -> dict:
-    """Reset all settings to defaults."""
+async def reset_settings(req: SettingsResetRequest | None = None) -> dict:
+    """Preview or apply a scoped reset with backup and explicit confirmation.
+
+    A legacy empty request is safely treated as preview-only. Applying uses
+    ``confirm=RESET <scope>`` so accidental/replayed calls cannot erase state.
+    """
     sync = get_settings_sync()
-    sync.reset_to_defaults()
-    return {"settings": sync.get_all()}
+    request = req or SettingsResetRequest()
+    try:
+        preview = sync.preview_reset(request.scope)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if request.preview:
+        return {
+            **preview,
+            "applied": False,
+            "settings": sync.get_all(),
+            "confirmation_required": f"RESET {request.scope}",
+        }
+    expected = f"RESET {request.scope}"
+    if request.confirm != expected:
+        raise HTTPException(status_code=409, detail=f"Confirmation must exactly match: {expected}")
+    result = sync.apply_reset(request.scope, confirmed=True)
+    push_result = (
+        await sync.push_to_cloud()
+        if request.push_to_cloud and sync.is_configured
+        else None
+    )
+    return {**result, "settings": sync.get_all(), "push_result": push_result}
 
 
 # ── Sync Operations ────────────────────────────────────────────────────

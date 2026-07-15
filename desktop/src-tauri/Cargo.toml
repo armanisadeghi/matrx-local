@@ -41,6 +41,7 @@ log = "0.4"
 rubato = "1"
 audioadapter-buffers = "2.0.0"
 tauri-plugin-single-instance = { version = "2.4.0", features = ["deep-link"] }
+tauri-plugin-window-state = "2"
 
 # Wake word detection reuses whisper-cpp-plus — no additional dependencies needed.
 

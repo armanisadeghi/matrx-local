@@ -81,6 +81,11 @@ export async function stopSidecar(): Promise<void> {
   await inv<void>("stop_sidecar");
 }
 
+/** Restart the owned engine through the canonical PID-scoped Rust path. */
+export async function restartSidecar(): Promise<void> {
+  await invokeTauri<void>("restart_sidecar");
+}
+
 /** Set whether closing the window hides to tray or quits. */
 export async function setCloseToTray(enabled: boolean): Promise<void> {
   const inv = await loadTauriInvoke();
@@ -107,30 +112,20 @@ export async function checkForUpdates(install = false): Promise<UpdateStatus> {
 /**
  * Restart the app after an update with a clean shutdown sequence.
  *
- * Calls the Rust `restart_for_update` command which kills the Python sidecar
+ * Calls the Rust `restart_app` command which shuts down the Python sidecar
  * and llama-server before relaunching via the proper Cocoa/WinRT termination
  * handshake. This prevents macOS from generating a crash report on update.
  *
- * Falls back to a direct `relaunch()` if the Rust command is unavailable
- * (e.g. in a browser dev environment).
+ * Throws if the ownership-safe Rust command is unavailable. A direct process
+ * relaunch can strand engine-owned children and is intentionally not used.
  */
-export async function restartApp(): Promise<void> {
-  if (!isTauri()) return;
-  const inv = await loadTauriInvoke();
-  if (inv) {
-    try {
-      await inv("restart_for_update");
-      return;
-    } catch {
-      // Rust command not available — fall through to direct relaunch
-    }
-  }
-  try {
-    const { relaunch } = await import("@tauri-apps/plugin-process");
-    await relaunch();
-  } catch {
-    // process plugin not available
-  }
+export async function restartApp(reason = "user requested application restart"): Promise<void> {
+  await invokeTauri<void>("restart_app", { reason });
+}
+
+/** Reload only the renderer while leaving the engine and native services running. */
+export async function reloadRenderer(): Promise<void> {
+  await invokeTauri<void>("reload_renderer");
 }
 
 /** Get sidecar process status from Rust (Tauri only). */

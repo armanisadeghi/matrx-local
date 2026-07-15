@@ -875,10 +875,12 @@ class ImageJobRunner:
     def __init__(self, store: ImageJobStore) -> None:
         self._store = store
         self._task: asyncio.Task | None = None
+        self._stopping = False
 
     def ensure_running(self) -> None:
         """Start (or restart) the drain task. Called after every enqueue and on
         resume, from the event loop — task creation is loop-serialized."""
+        self._stopping = False
         if self._task is not None and not self._task.done():
             return
         self._task = asyncio.get_running_loop().create_task(
@@ -886,8 +888,7 @@ class ImageJobRunner:
         )
         self._task.add_done_callback(self._on_drain_done)
 
-    @staticmethod
-    def _on_drain_done(task: asyncio.Task) -> None:
+    def _on_drain_done(self, task: asyncio.Task) -> None:
         """Loud recovery: the drain loop must never die silently. Per-job
         failures are handled inside the loop; anything escaping to here is an
         infrastructure bug. The next enqueue restarts the worker either way."""
@@ -901,10 +902,34 @@ class ImageJobRunner:
                 "will not run until the next enqueue restarts it: %s",
                 exc, exc_info=exc,
             )
+            if not self._stopping and self._store.queued_count() > 0:
+                # Supervise the worker: durable queued jobs must not wait for
+                # an unrelated future enqueue after an infrastructure crash.
+                asyncio.get_running_loop().call_later(1.0, self.ensure_running)
 
     @property
     def active(self) -> bool:
         return self._task is not None and not self._task.done()
+
+    async def stop(self) -> dict[str, Any]:
+        """Stop only the drain task; queue records remain durable on disk."""
+        self._stopping = True
+        task = self._task
+        if task is None or task.done():
+            return {"stopped": True, "active": False}
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return {"stopped": True, "active": False}
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "active": self.active,
+            "queued_jobs": self._store.queued_count(),
+            "stopping": self._stopping,
+        }
 
     async def _drain(self) -> None:
         from app.services.image_gen.service import get_image_gen_service  # noqa: PLC0415

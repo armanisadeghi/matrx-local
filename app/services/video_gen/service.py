@@ -178,6 +178,7 @@ class VideoGenService:
         self._is_loading = False
         self._load_progress: float = 0.0
         self._load_error: str | None = None
+        self._load_started_at: float | None = None
         self._device: str | None = None
         self._worker: threading.Thread | None = None
         # (job_id, cancel_event) for the job currently in the worker thread,
@@ -218,6 +219,10 @@ class VideoGenService:
             "is_loading": self._is_loading,
             "load_progress": self._load_progress,
             "load_error": self._load_error,
+            "load_started_at": self._load_started_at,
+            "load_age_seconds": (
+                time.time() - self._load_started_at if self._is_loading and self._load_started_at else None
+            ),
             "device": self._device or compute.device,
             "active_job_id": active_job_id,
             "cancel_requested": bool(active_job and active_job.cancel_requested),
@@ -370,6 +375,7 @@ class VideoGenService:
                 return {"success": True, "model_id": model.model_id, "already_loaded": True}
 
             self._is_loading = True
+            self._load_started_at = time.time()
             self._load_progress = 0.0
             self._load_error = None
             registry.starting("video-gen-model", model=model.model_id)
@@ -470,6 +476,7 @@ class VideoGenService:
             finally:
                 # is_loading may NEVER stay true after a load attempt.
                 self._is_loading = False
+                self._load_started_at = None
 
     def _unload_sync(self) -> None:
         with self._lock:

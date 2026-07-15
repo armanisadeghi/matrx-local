@@ -42,6 +42,9 @@ import type { EngineStatus } from "@/hooks/use-engine";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { saveSetting, broadcastSettingsChanged } from "@/lib/settings";
 import { triggerPageRefresh } from "@/lib/page-refresh";
+import { isTauri, invokeTauri } from "@/lib/sidecar";
+import { ROUTE_TO_PANEL } from "@/panels/manifest";
+import { windowRole } from "@/lib/window-role";
 
 interface AppSidebarProps {
   engineStatus: EngineStatus;
@@ -87,10 +90,23 @@ const statusLabels: Record<EngineStatus, string> = {
   error: "Engine error",
 };
 
+// Multi-window: the main window owns the canonical (settings-synced) collapse
+// state; peer windows keep a per-label local key so collapsing a peer's
+// sidebar never yanks the main window's.
+const IS_MAIN_WINDOW = windowRole.label === "main";
+const COLLAPSED_KEY = IS_MAIN_WINDOW
+  ? "sidebar-collapsed"
+  : `sidebar-collapsed:${windowRole.label}`;
+
 export function AppSidebar({ engineStatus, user, onSignOut }: AppSidebarProps) {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(() => {
-    // Read from unified settings (also falls back to old localStorage key)
+    // Read from unified settings (also falls back to old localStorage key).
+    // Peer windows check their own key first, then inherit the shared state.
+    if (!IS_MAIN_WINDOW) {
+      const own = localStorage.getItem(COLLAPSED_KEY);
+      if (own !== null) return own === "true";
+    }
     try {
       const raw = localStorage.getItem("matrx-settings");
       if (raw) {
@@ -109,12 +125,14 @@ export function AppSidebar({ engineStatus, user, onSignOut }: AppSidebarProps) {
   const toggleCollapsed = () => {
     const next = !collapsed;
     setCollapsed(next);
-    // Write through the canonical settings API so the engine + cloud stay in sync.
-    // Also write the legacy key for any code that hasn't migrated yet.
-    localStorage.setItem("sidebar-collapsed", String(next));
-    saveSetting("sidebarCollapsed", next).then(() =>
-      broadcastSettingsChanged(),
-    );
+    localStorage.setItem(COLLAPSED_KEY, String(next));
+    // Only the main window writes through the canonical settings API (engine +
+    // cloud sync) — a peer's layout preference is window-local.
+    if (IS_MAIN_WINDOW) {
+      saveSetting("sidebarCollapsed", next).then(() =>
+        broadcastSettingsChanged(),
+      );
+    }
   };
 
   const isActive = (to: string) =>
@@ -179,6 +197,16 @@ export function AppSidebar({ engineStatus, user, onSignOut }: AppSidebarProps) {
                 <div className="group relative flex items-center">
                   <Link
                     to={to}
+                    onContextMenu={(e) => {
+                      // Right-click a panel-capable page → pop it into its own
+                      // window (mirrors the toolbar OpenInWindowButton).
+                      const page = ROUTE_TO_PANEL[to];
+                      if (!page || !isTauri()) return;
+                      e.preventDefault();
+                      void invokeTauri<string>("open_panel_window", { page }).catch(
+                        (err) => console.error("[sidebar] open_panel_window failed:", err),
+                      );
+                    }}
                     className={cn(
                       "flex flex-1 items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors whitespace-nowrap overflow-hidden",
                       collapsed && "justify-center px-0",
@@ -193,10 +221,10 @@ export function AppSidebar({ engineStatus, user, onSignOut }: AppSidebarProps) {
                   {/* Per-tab refresh button — only shown on active tab when sidebar is expanded */}
                   {active && !collapsed && (
                     <button
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        triggerPageRefresh(to);
+                        await triggerPageRefresh(to);
                       }}
                       title={`Refresh ${label}`}
                       className="absolute right-2 flex h-5 w-5 items-center justify-center rounded opacity-0 group-hover:opacity-100 text-sidebar-foreground/50 hover:text-sidebar-foreground hover:bg-sidebar-accent/70 transition-all"

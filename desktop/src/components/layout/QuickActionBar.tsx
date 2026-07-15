@@ -29,6 +29,7 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
+import { OpenInWindowButton } from "@/components/OpenInWindowButton";
 import { QuickChatModal } from "@/components/quick-actions/QuickChatModal";
 import { QuickLocalChatModal } from "@/components/quick-actions/QuickLocalChatModal";
 import { QuickNoteModal } from "@/components/quick-actions/QuickNoteModal";
@@ -262,11 +263,14 @@ export function QuickActionBar(props: QuickActionBarProps) {
     }
   }, [wwListening, wwActions]);
 
-  const handleRefreshPageData = useCallback(() => {
+  const handleRefreshPageData = useCallback(async () => {
     if (refreshing) return;
     setRefreshing(true);
-    triggerPageRefresh("*");
-    setTimeout(() => setRefreshing(false), 700);
+    try {
+      await triggerPageRefresh(window.location.hash.replace(/^#/, "").split("?")[0] || "/");
+    } finally {
+      setRefreshing(false);
+    }
   }, [refreshing]);
 
   const handleRestart = useCallback(async () => {
@@ -489,6 +493,8 @@ export function QuickActionBar(props: QuickActionBarProps) {
             <ArrowUpCircle className="h-4 w-4 text-emerald-500" />
           </BarButton>
         )}
+
+        <OpenInWindowButton />
 
         <div ref={userMenuRef} className="relative">
           <BarButton

@@ -16,6 +16,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { isTauri, checkForUpdates, restartApp, type UpdateStatus } from "@/lib/sidecar";
 import { loadSettings } from "@/lib/settings";
+import { useWindowLeader } from "@/hooks/use-window-leader";
 
 declare const __APP_VERSION__: string;
 
@@ -280,9 +281,14 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
     }
   }, [status?.status]);
 
-  // Startup check + periodic polling
+  // Startup check + periodic polling — LEADER window only. Two windows
+  // silently pre-downloading the same update is a corruption risk; manual
+  // checks (user-clicked) remain available from any window. Gating on
+  // isLeader also handles promotion: the effect re-runs and starts polling
+  // when a surviving window inherits leadership.
+  const isLeader = useWindowLeader();
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() || !isLeader) return;
 
     let startupTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -305,7 +311,7 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
       if (intervalRef.current) clearInterval(intervalRef.current);
       intervalRef.current = null;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isLeader]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const state: AutoUpdateState = {
     status,

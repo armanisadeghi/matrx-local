@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { AppSidebar } from "./AppSidebar";
 import { StatusBar } from "./StatusBar";
@@ -12,6 +13,9 @@ import type { TranscriptionState, TranscriptionActions } from "@/hooks/use-trans
 import type { AutoUpdateState, AutoUpdateActions } from "@/hooks/use-auto-update";
 import type { AppNotification } from "@/hooks/use-notifications";
 import type { User } from "@supabase/supabase-js";
+import { recovery } from "@/lib/recovery";
+import { RecoveryCenter } from "@/components/recovery/RecoveryCenter";
+import { SurfaceErrorBoundary } from "@/components/recovery/SurfaceErrorBoundary";
 
 const NOOP = () => {};
 
@@ -92,6 +96,19 @@ export function AppLayout({
   const location = useLocation();
   const terminalHeight = useDevTerminalHeight();
   const appConfig = useAppConfigStatus(engineStatus);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [surfaceGenerations, setSurfaceGenerations] = useState<Record<string, number>>({});
+  const resetSurface = useCallback((path: string) => {
+    setSurfaceGenerations((current) => ({ ...current, [path]: (current[path] ?? 0) + 1 }));
+  }, []);
+
+  useEffect(() => {
+    recovery.setEngineRestart(onRestartEngine);
+    return () => recovery.setEngineRestart(null);
+  }, [onRestartEngine]);
+  useEffect(() => {
+    return recovery.registerSurface(location.pathname, "reset", () => resetSurface(location.pathname));
+  }, [location.pathname, resetSurface]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -135,23 +152,29 @@ export function AppLayout({
         />
         <AppActionBanner engineStatus={engineStatus} />
         <main className="flex flex-1 flex-col overflow-hidden relative">
-          {pages.map(({ path, element }) => (
+          {pages.map(({ path, element }) => {
+            const generation = surfaceGenerations[path] ?? 0;
+            return (
             <div
-              key={path}
+              key={`${path}-host`}
               className="flex h-full flex-col overflow-hidden"
               style={{ display: pageIsActive(path, location.pathname) ? "flex" : "none" }}
             >
-              {element}
+              <SurfaceErrorBoundary route={path} resetKey={generation} onReset={() => resetSurface(path)} onOpenRecovery={() => setRecoveryOpen(true)}>
+                <div key={`${path}-${generation}`} className="flex h-full flex-col overflow-hidden">{element}</div>
+              </SurfaceErrorBoundary>
             </div>
-          ))}
+          )})}
         </main>
         <StatusBar
           engineStatus={engineStatus}
           engineUrl={engineUrl}
           {...(engineVersion !== undefined ? { engineVersion } : {})}
           onRefresh={onRefresh}
+          onOpenRecovery={() => setRecoveryOpen(true)}
           {...(onOpenMonitor !== undefined ? { onOpenMonitor } : {})}
         />
+        <RecoveryCenter open={recoveryOpen} onOpenChange={setRecoveryOpen} route={location.pathname} />
       </div>
     </div>
   );

@@ -23,6 +23,7 @@
 | **How to test ANY change (pick the right rung)** | **[docs/TESTING_LADDER.md](docs/TESTING_LADDER.md)** — dev/live isolation model + which test mode proves what |
 | **Verify a startup/UI change actually runs** | **[docs/SMOKE_HARNESS.md](docs/SMOKE_HARNESS.md)** — `./scripts/smoke.sh` builds, launches, and hands you the logs |
 | **Any image/video UI** (thumbnails, lightbox, info, delete/vault/remix) | **[desktop/src/components/media/FEATURE.md](desktop/src/components/media/FEATURE.md)** — one `MediaDescriptor`, one thumb, one action set. Never hand-roll an `<img>` for media. |
+| **Multi-window** (peer windows, panel windows, leader election, close policy, native menus, tray window list) | **[desktop/src/panels/FEATURE.md](desktop/src/panels/FEATURE.md)** — window labels are the taxonomy; leader runs the singletons; adding a panel is a 4-step checklist. |
 | Code-local rules | `app/tools/FEATURE.md`, `app/api/FEATURE.md`, `app/services/*/FEATURE.md` |
 | Defect holding area | [FOUND_DEFECTS.md](FOUND_DEFECTS.md) |
 | Approved agent work | [.matrx/AGENT_TASKS.md](.matrx/AGENT_TASKS.md) |

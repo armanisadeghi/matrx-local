@@ -21,6 +21,13 @@ device capture) is described by it. Build one with a builder — never by hand:
 `capabilitiesOf(descriptor)` decides which actions apply. A menu never shows an
 action that cannot run (no dead clicks), and never hides one that can.
 
+**Multi-window:** the media library also ships as a standalone panel window
+(`panel-media-gallery` → `desktop/src/panels/pages/MediaGalleryPanel.tsx`),
+which is a thin composition over the canonical `MediaLibrarySection` behind the
+same Media* providers (manifest: `desktop/src/panels/manifest.tsx`). Panel or
+main window, the contract above is identical — never fork gallery UI per
+window kind.
+
 ## The components
 
 | Component | Use it for |

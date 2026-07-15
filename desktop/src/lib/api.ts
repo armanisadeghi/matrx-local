@@ -169,6 +169,7 @@ class EngineAPI {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private requestIdCounter = 0;
   private _getAccessToken: (() => Promise<string | null>) | null = null;
+  private static readonly TOKEN_PROVIDER_TIMEOUT_MS = 10_000;
   // Self-healing re-discovery guards: prevent concurrent scans and rate-limit
   // how often we re-run discovery when the engine URL goes null or stale.
   private rediscovering = false;
@@ -180,9 +181,33 @@ class EngineAPI {
     this._getAccessToken = fn;
   }
 
+  /**
+   * Bound token resolution independently of the HTTP request timeout.
+   *
+   * Media requests obtain auth before fetch() is created, so an auth-provider
+   * deadlock would otherwise bypass AbortSignal.timeout() and spin forever.
+   */
+  private async resolveAccessToken(): Promise<string | null> {
+    if (!this._getAccessToken) return null;
+    const timeoutMs = EngineAPI.TOKEN_PROVIDER_TIMEOUT_MS;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this._getAccessToken(),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error(`Authentication token lookup timed out after ${timeoutMs / 1000}s`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
+  }
+
   private async authHeaders(): Promise<Record<string, string>> {
-    if (!this._getAccessToken) return {};
-    const token = await this._getAccessToken();
+    const token = await this.resolveAccessToken();
     if (!token) return {};
     return { Authorization: `Bearer ${token}` };
   }
@@ -194,8 +219,7 @@ class EngineAPI {
 
   /** Expose the current access token for SSE/EventSource connections that need ?token=. */
   async getAccessToken(): Promise<string | null> {
-    if (!this._getAccessToken) return null;
-    return this._getAccessToken();
+    return this.resolveAccessToken();
   }
 
   /**
@@ -1053,7 +1077,7 @@ class EngineAPI {
 
     // WebSocket does not support arbitrary headers in the browser.
     // The server validates auth via a `?token=` query parameter instead.
-    const token = this._getAccessToken ? await this._getAccessToken() : null;
+    const token = await this.resolveAccessToken();
     const url = token
       ? `${this.wsUrl}?token=${encodeURIComponent(token)}`
       : this.wsUrl;
@@ -3895,6 +3919,41 @@ export interface ExtensionBootCheckSummary {
 
 // Singleton instance
 export const engine = new EngineAPI();
+
+export type RecoveryServiceAction = "probe" | "refresh" | "repair" | "stop" | "start" | "restart" | "snapshot";
+export interface EngineRecoveryService {
+  state: string;
+  capabilities: RecoveryServiceAction[];
+  metadata: Record<string, unknown>;
+  error: string | null;
+}
+export interface EngineRecoveryOperation {
+  id: string;
+  service: string;
+  action: string;
+  status: string;
+  started_at: number;
+  finished_at: number | null;
+  error: string | null;
+  result?: Record<string, unknown>;
+}
+export interface EngineRecoveryStatus {
+  services: Record<string, EngineRecoveryService>;
+  operations: EngineRecoveryOperation[];
+}
+export async function getEngineRecoveryStatus(): Promise<EngineRecoveryStatus> {
+  return engine.get("/admin/recovery") as Promise<EngineRecoveryStatus>;
+}
+export async function runEngineRecoveryAction(
+  service: string,
+  action: RecoveryServiceAction,
+  timeoutSeconds = 30,
+): Promise<EngineRecoveryOperation> {
+  return engine.post(`/admin/recovery/${encodeURIComponent(service)}`, {
+    action,
+    timeout_seconds: timeoutSeconds,
+  }) as Promise<EngineRecoveryOperation>;
+}
 
 // ── Image Generation Types ─────────────────────────────────────────────────
 

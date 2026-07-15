@@ -1,6 +1,5 @@
-import { useEffect, useCallback } from "react";
-import { PAGE_REFRESH_EVENT } from "@/lib/page-refresh";
-import type { PageRefreshEvent } from "@/lib/page-refresh";
+import { useEffect } from "react";
+import { recovery } from "@/lib/recovery";
 
 /**
  * Register a refresh handler for a given route.
@@ -13,20 +12,9 @@ import type { PageRefreshEvent } from "@/lib/page-refresh";
  */
 export function usePageRefreshHandler(
   route: string,
-  onRefresh: () => void,
+  onRefresh: () => void | Promise<void>,
 ): void {
-  const handler = useCallback(
-    (e: Event) => {
-      const detail = (e as PageRefreshEvent).detail;
-      if (detail.route === "*" || detail.route === route) {
-        onRefresh();
-      }
-    },
-    [route, onRefresh],
-  );
-
   useEffect(() => {
-    window.addEventListener(PAGE_REFRESH_EVENT, handler);
-    return () => window.removeEventListener(PAGE_REFRESH_EVENT, handler);
-  }, [handler]);
+    return recovery.registerSurface(route, "refresh", onRefresh);
+  }, [route, onRefresh]);
 }

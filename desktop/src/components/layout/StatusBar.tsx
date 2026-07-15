@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { RefreshCw } from "lucide-react";
+import { LifeBuoy, RefreshCw } from "lucide-react";
 import type { EngineStatus } from "@/hooks/use-engine";
 import { TerminalToggleButton } from "@/components/DevTerminalPanel";
 
@@ -11,6 +11,7 @@ interface StatusBarProps {
   engineVersion?: string;
   onRefresh?: () => void;
   onOpenMonitor?: () => void;
+  onOpenRecovery?: () => void;
 }
 
 const statusVariants: Record<
@@ -32,7 +33,7 @@ const statusText: Record<EngineStatus, string> = {
   error: "Error",
 };
 
-export function StatusBar({ engineStatus, engineUrl, engineVersion, onRefresh, onOpenMonitor }: StatusBarProps) {
+export function StatusBar({ engineStatus, engineUrl, engineVersion, onRefresh, onOpenMonitor, onOpenRecovery }: StatusBarProps) {
   const [spinning, setSpinning] = useState(false);
 
   const handleRefresh = async () => {
@@ -74,6 +75,7 @@ export function StatusBar({ engineStatus, engineUrl, engineVersion, onRefresh, o
 
       {/* Right side — terminal toggle, version, reconnect */}
       <div className="flex items-center gap-2">
+        <button onClick={onOpenRecovery} title="Open Recovery Center" className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"><LifeBuoy className="h-3 w-3" /><span>Recovery</span></button>
         <TerminalToggleButton />
         {engineVersion && (
           <span className="text-[10px] text-muted-foreground">

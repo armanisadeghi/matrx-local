@@ -1119,6 +1119,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
 
     elapsed = _startup_time.monotonic() - _t0
+    # Media services are lazy, but their health/recovery contracts must be
+    # visible before a user first opens either page.
+    from app.services.media_gen.recovery import register_media_recovery_controllers
+
+    register_media_recovery_controllers()
     logger.info(
         "[app/main.py] ── Startup complete in %.1fs — scraper=%s, proxy=%s ──────────────",
         elapsed,
@@ -1138,6 +1143,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # children behind our back; doing so races with these stops and produces
     # the "ended unexpectedly" crash reports we're trying to eliminate.
     # See app/launcher.py for the full ownership rules.
+
+    # Stop the image queue worker before other services. Queue records and init
+    # images remain persisted; an engine restart resumes them.
+    if _registry.current_state("image_gen") not in (None, "stopped"):
+        try:
+            await _registry.recover("image_gen", "stop", timeout_s=5.0)
+        except Exception as exc:
+            logger.warning("[app/main.py] Image generation stop did not complete: %s", exc)
+    if _registry.current_state("video_gen") not in (None, "stopped"):
+        try:
+            await _registry.recover("video_gen", "stop", timeout_s=5.0)
+        except Exception as exc:
+            logger.warning("[app/main.py] Video generation stop did not complete: %s", exc)
 
     # ── Phase S00: Stop matrx-scheduler host (mirrors Phase 8) ────────────
     # Stop the scanner BEFORE tearing down the broadcast / Supabase clients

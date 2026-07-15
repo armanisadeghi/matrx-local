@@ -340,6 +340,23 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   deleting. If unused, `git rm` both.
 - **Owner hint:** whoever does the CDN installer-slimming work — fold into that.
 
+### MXL-D-054 — Local signed sidecar build can hang forever while re-signing Tcl/Tk
+- **Area:** `scripts/build-sidecar.sh` / macOS local release signing
+- **Symptom:** the pre-build loop that re-signs every `.dylib`/`.so` under the
+  complete Python installation has no per-file timeout. On this machine it
+  blocked indefinitely in `codesign --force --sign … libtcl9tk9.0.dylib`, so
+  PyInstaller never started and the build emitted no further progress.
+- **Evidence:** reproduced 2026-07-15 with the valid Developer ID identity:
+  the build remained on the same `codesign` PID/file for >4m30s; an isolated
+  retry wrapped in `timeout 15` also timed out (`exit 124`) on the same 1.7 MB
+  linker-signed dylib. Signing the completed `Matrx Engine.app` with that
+  identity succeeds, so this is file-specific rather than a missing identity.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-07-15 — reproduced locally. The CI release
+  path may not carry Tcl/Tk and is not yet known to be affected.
+- **Owner hint:** packaging; sign only libraries PyInstaller actually collects,
+  or add a bounded per-file timeout with a loud failure/explicit safe skip.
+
 ## Cross-repo
 
 ### MXL-D-027 — Voice E2E unconfirmed on physical hardware

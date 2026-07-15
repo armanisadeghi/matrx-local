@@ -44,10 +44,13 @@ import sys
 import threading
 import time
 import traceback
+import asyncio
+import inspect
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import psutil
 
@@ -105,6 +108,7 @@ class ServiceRecord:
     url: Optional[str] = None
     error: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    capabilities: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         running_states = {
@@ -131,7 +135,35 @@ class ServiceRecord:
             "url": self.url,
             "error": self.error,
             "metadata": self.metadata,
+            "capabilities": list(self.capabilities),
         }
+
+
+RecoveryCallable = Callable[[], Any | Awaitable[Any]]
+
+
+@dataclass(frozen=True)
+class ServiceController:
+    """Public recovery facade for one engine-owned service.
+
+    Callbacks must be bounded/idempotent where possible. A missing callback is
+    an explicit unsupported capability, never an implied no-op.
+    """
+
+    probe: RecoveryCallable | None = None
+    refresh: RecoveryCallable | None = None
+    repair: RecoveryCallable | None = None
+    stop: RecoveryCallable | None = None
+    start: RecoveryCallable | None = None
+    snapshot: RecoveryCallable | None = None
+
+    @property
+    def capabilities(self) -> tuple[str, ...]:
+        return tuple(
+            name for name in ("probe", "refresh", "repair", "stop", "start", "restart", "snapshot")
+            if name == "restart" and self.stop is not None and self.start is not None
+            or name != "restart" and getattr(self, name) is not None
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -166,6 +198,9 @@ class ServiceRegistry:
         self._lock = threading.Lock()
         self._services: dict[str, ServiceRecord] = {}
         self._engine_started_at: float = time.time()
+        self._controllers: dict[str, ServiceController] = {}
+        self._operation_locks: dict[str, asyncio.Lock] = {}
+        self._operations: list[dict[str, Any]] = []
 
     # ── State transitions ────────────────────────────────────────────────────
 
@@ -182,6 +217,82 @@ class ServiceRegistry:
                 r = ServiceRecord(name=name)
                 self._services[name] = r
             return r
+
+    def register_controller(self, name: str, controller: ServiceController) -> None:
+        """Register/replace a service recovery facade without changing state."""
+        with self._lock:
+            self._controllers[name] = controller
+            r = self._services.setdefault(name, ServiceRecord(name=name))
+            r.capabilities = controller.capabilities
+
+    def controller_names(self) -> list[str]:
+        with self._lock:
+            return sorted(self._controllers)
+
+    async def recover(
+        self, name: str, action: str, *, timeout_s: float = 15.0
+    ) -> dict[str, Any]:
+        """Run one truthful, bounded recovery action and return its result."""
+        if timeout_s <= 0 or timeout_s > 120:
+            raise ValueError("timeout_s must be between 0 and 120 seconds")
+        with self._lock:
+            controller = self._controllers.get(name)
+        if controller is None:
+            raise KeyError(f"Unknown recoverable service: {name}")
+        if action == "restart":
+            if controller.stop is None or controller.start is None:
+                raise NotImplementedError(f"{name} does not support restart")
+            callbacks = (("stop", controller.stop), ("start", controller.start))
+        else:
+            callback = getattr(controller, action, None)
+            if action not in {"probe", "refresh", "repair", "stop", "start", "snapshot"} or callback is None:
+                raise NotImplementedError(f"{name} does not support {action}")
+            callbacks = ((action, callback),)
+
+        operation = {
+            "id": uuid.uuid4().hex,
+            "service": name,
+            "action": action,
+            "status": "running",
+            "started_at": time.time(),
+            "finished_at": None,
+            "error": None,
+        }
+        with self._lock:
+            self._operations.append(operation)
+            del self._operations[:-50]
+        lock = self._operation_locks.setdefault(name, asyncio.Lock())
+        try:
+            async with asyncio.timeout(timeout_s):
+                async with lock:
+                    results: dict[str, Any] = {}
+                    for phase, cb in callbacks:
+                        value = cb()
+                        if inspect.isawaitable(value):
+                            value = await value
+                        results[phase] = value
+                        if (
+                            action == "restart"
+                            and phase == "stop"
+                            and isinstance(value, dict)
+                            and value.get("stopped") is False
+                        ):
+                            raise RuntimeError(
+                                value.get("reason")
+                                or f"{name} did not stop; restart was not continued"
+                            )
+            operation["status"] = "succeeded"
+            return {**operation, "result": results}
+        except TimeoutError:
+            operation["status"] = "timed_out"
+            operation["error"] = f"{action} timed out after {timeout_s:g}s"
+            raise
+        except Exception as exc:
+            operation["status"] = "failed"
+            operation["error"] = str(exc)
+            raise
+        finally:
+            operation["finished_at"] = time.time()
 
     def starting(self, name: str, **fields: Any) -> None:
         """Mark the service as starting. Records started_at and any fields.
@@ -333,6 +444,7 @@ class ServiceRegistry:
                 "machine": platform.machine(),
             },
             "services": services,
+            "recovery_operations": list(self._operations),
         }
 
     # ── Internal ─────────────────────────────────────────────────────────────

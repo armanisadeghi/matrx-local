@@ -29,10 +29,6 @@ import { loadTestCreds, loginViaUI } from "./helpers";
 const EXPECTED_IN_BROWSER_MODE = [
   /__TAURI/i, // Tauri IPC bridge does not exist outside the desktop shell
   /tauri/i,
-  // ...and calling into that absent bridge throws this exact shape:
-  // "Cannot read properties of undefined (reading 'invoke')". Browser mode
-  // only — in the real desktop shell the bridge is always present.
-  /undefined \(reading 'invoke'\)/i,
   /Failed to load resource/i, // engine port-scan 22140-22159 against nothing
   /ERR_CONNECTION_REFUSED/i,
   /net::ERR_/i,
@@ -116,6 +112,15 @@ test.describe("boot", () => {
     await page.waitForTimeout(2_000);
     await expectNoCrashScreen(page);
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible();
+
+    // Confidential Chat depends on native Rust commands. Browser mode must
+    // present that boundary explicitly instead of calling the importable
+    // @tauri-apps/api shim and crashing on a missing runtime bridge.
+    await page.getByRole("link", { name: "Confidential Chat" }).click();
+    await expect(
+      page.getByText("Desktop app required", { exact: true }),
+    ).toBeVisible();
+    await expectNoCrashScreen(page);
 
     expect(
       fatalErrors(),

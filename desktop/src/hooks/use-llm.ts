@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { isTauri } from "@/lib/sidecar";
+import { invokeTauri as tauriInvoke, isTauri } from "@/lib/sidecar";
 import { engine } from "@/lib/api";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
@@ -10,14 +10,6 @@ import type {
   LlmDownloadCancelledEvent,
   DownloadedLlmModel,
 } from "@/lib/llm/types";
-
-async function tauriInvoke<T>(
-  cmd: string,
-  args?: Record<string, unknown>,
-): Promise<T> {
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<T>(cmd, args);
-}
 
 async function tauriListen<T>(
   event: string,

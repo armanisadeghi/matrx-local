@@ -11,8 +11,14 @@ import type {
 import { AudioDevicesContext } from "@/contexts/AudioDevicesContext";
 
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<T>(cmd, args);
+  if (!isTauri()) {
+    throw new Error("Voice transcription controls are only available in the desktop app.");
+  }
+  const core = await import("@tauri-apps/api/core");
+  if (typeof core.invoke !== "function") {
+    throw new Error("The desktop command bridge is unavailable.");
+  }
+  return core.invoke<T>(cmd, args);
 }
 
 async function tauriListen<T>(event: string, handler: (e: { payload: T }) => void): Promise<UnlistenFn> {
@@ -540,7 +546,9 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
 
   const forceReset = useCallback(() => {
     // Best-effort — don't await, don't throw
-    tauriInvoke("stop_transcription").catch((e) => console.warn("[transcription] forceReset stop_transcription failed:", e));
+    if (isTauri()) {
+      tauriInvoke("stop_transcription").catch((e) => console.warn("[transcription] forceReset stop_transcription failed:", e));
+    }
     // Tear down all Tauri event listeners to prevent ghost events
     unlistenersRef.current.forEach((fn) => fn());
     unlistenersRef.current = [];

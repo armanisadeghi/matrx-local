@@ -352,6 +352,7 @@ function ModelLoadingCard({
 
 function SetupTab() {
   const [state, actions] = useLlmContext();
+  const desktopAvailable = isTauri();
   const {
     hardwareResult,
     downloadProgress,
@@ -369,6 +370,7 @@ function SetupTab() {
   const { detectHardware, quickSetup, cancelDownload, clearError } = actions;
 
   useEffect(() => {
+    if (!desktopAvailable) return;
     if (!hardwareResult && !isDetecting) {
       detectHardware().catch((e) =>
         console.warn("[local-models] detectHardware failed:", e),
@@ -388,9 +390,17 @@ function SetupTab() {
       })
     : false;
 
-  const handleQuickSetup = async () => {
+  const handleQuickSetup = () => {
     clearError();
-    await quickSetup();
+    void quickSetup().catch(() => {
+      // useLlm owns and displays the actionable error state.
+    });
+  };
+
+  const handleDetectHardware = () => {
+    void detectHardware().catch(() => {
+      // useLlm owns and displays the actionable error state.
+    });
   };
 
   const progressPercent = downloadProgress?.percent ?? 0;
@@ -401,6 +411,24 @@ function SetupTab() {
   const bytesLabel = downloadProgress
     ? `${formatBytes(downloadProgress.bytes_downloaded)} / ${formatBytes(downloadProgress.total_bytes || (hardwareResult?.all_models.find((m) => m.filename === downloadProgress.filename)?.expected_size_bytes ?? 0))}`
     : "";
+
+  if (!desktopAvailable) {
+    return (
+      <Card className="max-w-2xl">
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-amber-500" />
+            Desktop app required
+          </CardTitle>
+          <CardDescription>
+            On-device model downloads and confidential chat use the native
+            Matrx Local runtime. Open this page in the Matrx Local desktop app
+            to download and start a model.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -416,7 +444,7 @@ function SetupTab() {
               size="sm"
               variant="outline"
               disabled={isDetecting}
-              onClick={detectHardware}
+              onClick={handleDetectHardware}
             >
               {isDetecting ? "Detecting…" : "Re-detect"}
             </Button>

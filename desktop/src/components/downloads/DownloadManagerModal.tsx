@@ -133,9 +133,9 @@ function TableHeader({
 }) {
   return (
     <div className="flex items-center gap-3 border-b border-border bg-muted/50 px-4 py-1.5">
-      {columns.map((col) => (
+      {columns.map((col, index) => (
         <span
-          key={col.label}
+          key={`${index}:${col.label}`}
           className={`text-[10px] font-semibold uppercase tracking-wider text-muted-foreground ${col.className ?? ""}`}
         >
           {col.label}

@@ -32,6 +32,104 @@ _(none)_
 
 ## Active
 
+### Log audit 2026-07-14 — scheduled from `docs/LOG_AUDIT_2026-07-14.md`
+
+> Source log export 2026-07-14 12:27:26. Facts + file links only in the audit doc —
+> tasks below are scoped investigations. **Needs Arman approval before starting**
+> (per AGENT_TASKS rules).
+
+#### AT-L003 — aidream `GET /ai/user/pending_calls` → 500 SchemaMismatchError
+- **Status:** filed, not started. `code analysis pending`.
+- **Created:** 2026-07-14
+- **Priority:** P1
+- **Log ID:** L003
+- **Scope:** aidream (primary) + matrx-local delegation client
+- **Source files:** `aidream/aidream/services/ai_execution/tool_results.py` (`_claim_pending_calls_for_instance`), `aidream/db/migrations/0172_targetable_desktop_tool_calls.sql`, `matrx-local/app/services/delegation/client.py`, `matrx-local/app/services/delegation/engine.py`
+- **Deliverable:** confirm live `chat.tool_call` schema vs migration 0172; document whether `instance_id` query triggers the failing SQL path.
+
+#### AT-L008 — Local engine 404 on `POST /v2/ai/agents/{id}`
+- **Status:** filed, not started. `code analysis pending`.
+- **Created:** 2026-07-14
+- **Priority:** P1
+- **Log ID:** L008
+- **Scope:** matrx-local + matrx-frontend
+- **Source files:** `matrx-local/app/main.py` (mounts), `matrx-local/app/api/ai_routes.py`, `matrx-frontend/lib/api/ai-api-version.ts`
+- **Deliverable:** document v2 routing behavior when frontend targets `127.0.0.1:22140` (local engine) vs aidream cloud.
+
+#### AT-L009 — Local engine 422 on `POST /ai/agents/{id}` (agent `8d02d271-…`)
+- **Status:** filed, not started. `code analysis pending`.
+- **Created:** 2026-07-14
+- **Priority:** P1
+- **Log ID:** L009
+- **Scope:** matrx-local + matrx-frontend
+- **Source files:** `matrx-local/app/services/ai/local_ai_task.py` (422 paths), `matrx-local/app/api/ai_routes.py`, `matrx-frontend/features/agents/redux/execution-system/thunks/execute-instance.thunk.ts`
+- **Deliverable:** capture the 422 response body for this exact request; map to the emitting code path (`invalid_uuid` / `agent_model_missing` / `tool_not_found` / other).
+
+#### AT-L001 — `[use-llm] Failed to notify engine of local LLM start: {}`
+- **Status:** filed, not started. `code analysis pending`.
+- **Created:** 2026-07-14
+- **Priority:** P2
+- **Log ID:** L001
+- **Scope:** matrx-local desktop
+- **Source files:** `matrx-local/desktop/src/hooks/use-llm.ts`, `matrx-local/desktop/src/lib/api.ts` (`connectLocalLlm`), `matrx-local/app/api/chat_routes.py`
+- **Deliverable:** determine whether `baseUrl` was unset at `llm-server-ready` time or the POST failed for another reason.
+
+#### AT-L004 — Download FAILED: Tongyi-MAI--Z-Image-Turbo (huggingface_hub not importable)
+- **Status:** filed, not started. `code analysis pending`.
+- **Created:** 2026-07-14
+- **Priority:** P2
+- **Log ID:** L004
+- **Scope:** matrx-local downloads + image-gen install
+- **Source files:** `matrx-local/app/services/downloads/manager.py` (`_download_hf_snapshot`), `matrx-local/app/services/downloads/failures.py`, `matrx-local/app/main.py` (Phase 0a ordering)
+- **Deliverable:** verify whether `huggingface_hub` is importable at failure time; correlate with persisted error row `f98e0567-12e3-4c0c-b217-0543eb293b41`.
+
+#### AT-L005 — Download FAILED: black-forest-labs--FLUX.1-schnell (HF 401 gated)
+- **Status:** filed, not started. `code analysis pending`.
+- **Created:** 2026-07-14
+- **Priority:** P2
+- **Log ID:** L005
+- **Scope:** matrx-local downloads
+- **Source files:** `matrx-local/app/services/downloads/manager.py`, `matrx-local/app/services/downloads/failures.py`, `matrx-local/app/services/media_gen/paths.py` (`read_hf_token`)
+- **Deliverable:** document HF token presence and gate-acceptance state for `black-forest-labs/FLUX.1-schnell` at failure time; error row `18add2b4-b22a-4d15-a752-033bb1ebae0b`.
+
+#### AT-L006 — Download FAILED: civitai--580857-2674760 (API key)
+- **Status:** filed, not started. `code analysis pending`.
+- **Created:** 2026-07-14
+- **Priority:** P2
+- **Log ID:** L006
+- **Scope:** matrx-local downloads + settings
+- **Source files:** `matrx-local/app/services/downloads/manager.py`, `matrx-local/app/services/downloads/failures.py`, `matrx-local/app/services/media_gen/paths.py` (`read_civitai_key`)
+- **Deliverable:** document Civitai key presence at failure time; error row `2f704646-7762-403b-9f28-78629fb645d2`.
+
+#### AT-L007 — Downloads CANCELLED (sdxl-turbo + Z-Image-Turbo)
+- **Status:** filed, not started. `code analysis pending`.
+- **Created:** 2026-07-14
+- **Priority:** P3
+- **Log ID:** L007
+- **Scope:** matrx-local downloads
+- **Source files:** `matrx-local/app/services/downloads/manager.py`, `matrx-local/desktop/src/contexts/DownloadManagerContext.tsx`
+- **Deliverable:** determine cancel initiator (user action vs cascade from other failures) for ids `8dff0ba9-…` and `e9efc7a8-…` at 12:01:59.
+
+#### AT-L002 — app_config boot degraded (cache tier)
+- **Status:** filed, not started. `code analysis pending`.
+- **Created:** 2026-07-14
+- **Priority:** P3
+- **Log ID:** L002
+- **Scope:** matrx-local app_config
+- **Source files:** `matrx-local/app/main.py` Phase 00, `matrx-local/app/services/app_config/service.py`, `matrx-local/app/services/app_config/FEATURE.md`
+- **Deliverable:** confirm whether registry transitioned to `ready` after background remote fetch; capture `last_error` if fetch failed.
+
+#### AT-L010 — Skill discovery fs/list 404 WARN spam (six convention paths)
+- **Status:** filed, not started. `code analysis pending`.
+- **Created:** 2026-07-14
+- **Priority:** P3
+- **Log ID:** L010
+- **Scope:** aidream skills ingest + matrx-local sandbox routes
+- **Source files:** `aidream/packages/matrx-ai/matrx_ai/skills/ingest.py` (`walk_via_proxy`), `aidream/aidream/services/sandboxes/sandbox_autobind.py`, `matrx-local/app/api/sandbox_routes.py`, `matrx-local/app/main.py` (`_log_requests_dispatch`)
+- **Deliverable:** document why probes use `root_path: "/"` and whether 404s are expected absent skill dirs on the user's machine.
+
+---
+
 ### TASK: Salvage-audit orphan branch — macOS DMG installer (`add-auto-update-system-Pl7Ak`)
 - **Status:** filed, not started. Approved by Arman 2026-07-14. `code analysis pending`.
 - **Created:** 2026-07-14

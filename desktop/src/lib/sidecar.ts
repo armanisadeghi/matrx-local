@@ -7,10 +7,29 @@
 
 import { ENGINE_PORT_BASE, enginePortList } from "@/lib/engine-ports";
 
-let invoke: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null = null;
+type TauriInvoke = <T>(
+  cmd: string,
+  args?: Record<string, unknown>,
+) => Promise<T>;
+
+let invoke: TauriInvoke | null = null;
+
+export class DesktopBridgeUnavailableError extends Error {
+  constructor() {
+    super(
+      "This action requires the Matrx Local desktop app. The desktop command bridge is unavailable in a browser.",
+    );
+    this.name = "DesktopBridgeUnavailableError";
+  }
+}
 
 async function loadTauriInvoke() {
   if (invoke) return invoke;
+  // Importing @tauri-apps/api succeeds in an ordinary browser too. Its
+  // exported invoke() is therefore present and correctly typed, but calling
+  // it dereferences window.__TAURI_INTERNALS__.invoke and crashes. Check the
+  // host capability before treating the module export as usable.
+  if (!isTauri()) return null;
   try {
     const mod = await import("@tauri-apps/api/core");
     invoke = mod.invoke;
@@ -22,7 +41,27 @@ async function loadTauriInvoke() {
 
 /** Whether we're running inside a Tauri window. */
 export function isTauri(): boolean {
-  return "__TAURI_INTERNALS__" in window;
+  if (typeof window === "undefined") return false;
+  const tauriWindow = window as Window & {
+    __TAURI_INTERNALS__?: { invoke?: unknown };
+  };
+  return typeof tauriWindow.__TAURI_INTERNALS__?.invoke === "function";
+}
+
+/**
+ * Invoke a required desktop command through the checked runtime boundary.
+ *
+ * Feature code should use this instead of importing @tauri-apps/api/core
+ * directly. The package's TypeScript declaration cannot express whether the
+ * current JavaScript host actually injected the Tauri bridge.
+ */
+export async function invokeTauri<T>(
+  cmd: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
+  const inv = await loadTauriInvoke();
+  if (!inv) throw new DesktopBridgeUnavailableError();
+  return inv<T>(cmd, args);
 }
 
 /** Start the Python engine sidecar (Tauri only). */
@@ -32,21 +71,21 @@ export async function startSidecar(): Promise<void> {
     console.log("[sidecar] Not in Tauri, skipping sidecar start");
     return;
   }
-  await inv("start_sidecar");
+  await inv<void>("start_sidecar");
 }
 
 /** Stop the Python engine sidecar (Tauri only). */
 export async function stopSidecar(): Promise<void> {
   const inv = await loadTauriInvoke();
   if (!inv) return;
-  await inv("stop_sidecar");
+  await inv<void>("stop_sidecar");
 }
 
 /** Set whether closing the window hides to tray or quits. */
 export async function setCloseToTray(enabled: boolean): Promise<void> {
   const inv = await loadTauriInvoke();
   if (!inv) return;
-  await inv("set_close_to_tray", { enabled });
+  await inv<void>("set_close_to_tray", { enabled });
 }
 
 export interface UpdateStatus {

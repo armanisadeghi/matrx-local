@@ -553,6 +553,7 @@ function SetupTab({
   state: TranscriptionState;
   actions: TranscriptionActions;
 }) {
+  const desktopAvailable = isTauri();
   const isSetupDone = state.setupStatus?.setup_complete ?? false;
   const isActive =
     state.isDetecting || state.isDownloading || state.isInitializing;
@@ -590,7 +591,12 @@ function SetupTab({
             {!isSetupDone && (
               <Button
                 onClick={actions.quickSetup}
-                disabled={isActive}
+                disabled={isActive || !desktopAvailable}
+                title={
+                  desktopAvailable
+                    ? undefined
+                    : "Voice setup is available in the desktop app"
+                }
                 className="mt-2"
                 size="lg"
               >
@@ -711,15 +717,21 @@ function HardwareInfoCard({
   state: TranscriptionState;
   actions: TranscriptionActions;
 }) {
+  const desktopAvailable = isTauri();
   const hw = state.hardwareResult;
   const didAutoDetect = useRef(false);
 
   useEffect(() => {
-    if (!hw && !state.isDetecting && !didAutoDetect.current) {
+    if (
+      desktopAvailable &&
+      !hw &&
+      !state.isDetecting &&
+      !didAutoDetect.current
+    ) {
       didAutoDetect.current = true;
-      actions.detectHardware();
+      void actions.detectHardware();
     }
-  }, [hw, state.isDetecting, actions]);
+  }, [desktopAvailable, hw, state.isDetecting, actions]);
 
   return (
     <div className="rounded-xl border bg-card p-6 space-y-4">
@@ -729,7 +741,12 @@ function HardwareInfoCard({
           variant="outline"
           size="sm"
           onClick={actions.detectHardware}
-          disabled={state.isDetecting}
+          disabled={state.isDetecting || !desktopAvailable}
+          title={
+            desktopAvailable
+              ? undefined
+              : "Hardware detection is available in the desktop app"
+          }
         >
           {state.isDetecting ? (
             <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -2354,6 +2371,7 @@ function ModelsTab({
   state: TranscriptionState;
   actions: TranscriptionActions;
 }) {
+  const desktopAvailable = isTauri();
   const hw = state.hardwareResult;
   const downloaded = state.setupStatus?.downloaded_models ?? [];
   const { isDownloading, downloadingFilename, downloadQueue } = state;
@@ -2362,11 +2380,16 @@ function ModelsTab({
   // prevents a self-sustaining invoke loop while hw is still null.
   const didAutoDetect = useRef(false);
   useEffect(() => {
-    if (!hw && !state.isDetecting && !didAutoDetect.current) {
+    if (
+      desktopAvailable &&
+      !hw &&
+      !state.isDetecting &&
+      !didAutoDetect.current
+    ) {
       didAutoDetect.current = true;
-      actions.detectHardware();
+      void actions.detectHardware();
     }
-  }, [hw, state.isDetecting, actions]);
+  }, [desktopAvailable, hw, state.isDetecting, actions]);
 
   // Live mirrors for the download-completion poll loop below — a closure
   // captured at click time would otherwise read stale pre-download values.
@@ -2566,7 +2589,12 @@ function ModelsTab({
           <div className="flex items-center justify-center py-8">
             <Button
               onClick={actions.detectHardware}
-              disabled={state.isDetecting}
+              disabled={state.isDetecting || !desktopAvailable}
+              title={
+                desktopAvailable
+                  ? undefined
+                  : "Hardware detection is available in the desktop app"
+              }
             >
               {state.isDetecting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

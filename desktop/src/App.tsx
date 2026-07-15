@@ -392,7 +392,7 @@ function AppInner() {
         path: "/chat",
         element: <Chat engineStatus={status} engineUrl={url} tools={tools} />,
       },
-      { path: "/cloud-chat", element: <CloudChat /> },
+      { path: "/cloud-chat", element: <CloudChat engineStatus={status} engineUrl={url} /> },
       {
         path: "/notes",
         element: (

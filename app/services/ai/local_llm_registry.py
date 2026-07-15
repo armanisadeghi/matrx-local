@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 # KNOWN UPSTREAM DEFECT (matrx-ai 0.3.0): a cold import of
 # matrx_ai.providers.* triggers the providers ↔ orchestrator circular import.
@@ -54,6 +56,20 @@ def _bare_model_name(model_name: str) -> str:
     if model_name.startswith("local/"):
         return model_name.removeprefix("local/")
     return model_name
+
+
+def _probe_llama_server(port: int) -> tuple[bool, str | None]:
+    """Return whether the registered llama-server is reachable right now."""
+    request = Request(f"http://127.0.0.1:{port}/v1/models", method="GET")
+    try:
+        with urlopen(request, timeout=1.0) as response:
+            if 200 <= response.status < 300:
+                return True, None
+            return False, f"llama-server returned HTTP {response.status}"
+    except URLError as exc:
+        return False, str(exc.reason)
+    except Exception as exc:
+        return False, str(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -209,15 +225,33 @@ def is_local_llm_available() -> bool:
 
 def get_local_llm_status() -> dict[str, Any]:
     """Return a status dict suitable for the /chat/local-llm/status API response."""
+    registered = _local_llm_port is not None and _local_llm_model is not None
+    reachable = False
+    error: str | None = None
+
+    if registered and _local_llm_port is not None:
+        reachable, error = _probe_llama_server(_local_llm_port)
+        if not reachable:
+            logger.warning(
+                "[local_llm_registry] Registered local LLM is unreachable "
+                "(port=%s, model=%s): %s",
+                _local_llm_port,
+                _local_llm_model,
+                error or "unknown error",
+            )
+            clear_local_llm()
+
     return {
-        "available": is_local_llm_available(),
+        "available": registered and reachable,
         "port": _local_llm_port,
         "model_name": _local_llm_model,
         "canonical_model_name": _local_model_name(_local_llm_model) if _local_llm_model else None,
+        "reachable": reachable,
+        "error": error,
         # matrx-ai >= 0.3.0 always ships GenericOpenAIChat; kept for API
         # response shape compatibility with the desktop frontend.
         "matrx_ai_support": True,
-        "instructions": None,
+        "instructions": None if registered and reachable else "Start a local model first.",
     }
 
 

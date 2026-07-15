@@ -26,6 +26,23 @@ const CHAT_HISTORY_FEATURES = ["chat-route", "chat-interface", "quick-chat"];
 const HISTORY_COLUMNS =
   "id, title, description, status, message_count, initial_agent_id, last_model_id, source_app, source_feature, created_at, updated_at";
 
+export type CloudChatExecutionTarget = "cloud" | "local";
+
+interface UseCloudChatOptions {
+  engineUrl?: string | null;
+}
+
+interface LocalLlmStatus {
+  available: boolean;
+  port: number | null;
+  model_name: string | null;
+  canonical_model_name: string | null;
+  reachable?: boolean;
+  error?: string | null;
+  matrx_ai_support: boolean;
+  instructions: string | null;
+}
+
 interface CloudConversationRow {
   id: string;
   title?: string | null;
@@ -133,19 +150,32 @@ function buildRequest(
   conversation: Conversation,
   userContent: string,
   currentModel: string,
+  target: CloudChatExecutionTarget,
+  localModel: string | null,
+  engineUrl: string | null | undefined,
   options: { agentId?: string; variables?: Record<string, string> } | undefined,
   allMessages: ChatMessage[],
 ): { url: string; body: Record<string, unknown> } {
-  const base = `${AIDREAM_SERVER_URL}/api/ai`;
+  const base =
+    target === "local"
+      ? `${engineUrl}/ai`
+      : `${AIDREAM_SERVER_URL}/api/ai`;
+  const conversationId =
+    target === "local"
+      ? conversation.localConversationId
+      : conversation.cloudConversationId ?? conversation.serverConversationId;
+  const configOverrides =
+    target === "local" && localModel ? { model: localModel } : undefined;
 
-  if (conversation.serverConversationId) {
+  if (conversationId) {
     return {
-      url: `${base}/conversations/${conversation.serverConversationId}`,
+      url: `${base}/conversations/${conversationId}`,
       body: {
         user_input: userContent,
         stream: true,
         source_app: CLOUD_SOURCE_APP,
         source_feature: CLOUD_SOURCE_FEATURE,
+        ...(configOverrides ? { config_overrides: configOverrides } : {}),
       },
     };
   }
@@ -155,6 +185,7 @@ function buildRequest(
       stream: true,
       source_app: CLOUD_SOURCE_APP,
       source_feature: CLOUD_SOURCE_FEATURE,
+      ...(configOverrides ? { config_overrides: configOverrides } : {}),
     };
     if (userContent) body.user_input = userContent;
     if (options.variables && Object.keys(options.variables).length > 0) {
@@ -169,12 +200,13 @@ function buildRequest(
   return {
     url: `${base}/chat`,
     body: {
-      ai_model_id: currentModel,
+      ai_model_id: localModel ?? currentModel,
       messages: toApiMessages(allMessages),
       stream: true,
       max_iterations: 20,
       source_app: CLOUD_SOURCE_APP,
       source_feature: CLOUD_SOURCE_FEATURE,
+      ...(configOverrides ? { config_overrides: configOverrides } : {}),
     },
   };
 }
@@ -195,10 +227,10 @@ function humanizeToken(value: string): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function phaseStatus(phase: string): string {
+function phaseStatus(phase: string, serviceLabel: string): string {
   switch (phase) {
     case "connected":
-      return "Connected to AIDream.";
+      return `Connected to ${serviceLabel}.`;
     case "processing":
       return "Processing request...";
     case "generating":
@@ -226,6 +258,24 @@ function phaseStatus(phase: string): string {
   }
 }
 
+function conversationIdPatch(
+  target: CloudChatExecutionTarget,
+  conversationId: string,
+): Partial<Conversation> {
+  return target === "local"
+    ? {
+        localConversationId: conversationId,
+        routeMode: "conversation",
+        executionTarget: "local",
+      }
+    : {
+        serverConversationId: conversationId,
+        cloudConversationId: conversationId,
+        routeMode: "conversation",
+        executionTarget: "cloud",
+      };
+}
+
 function completionText(result: unknown): string | null {
   const record = readRecord(result);
   if (!record) return null;
@@ -250,7 +300,7 @@ function errorMessage(data: {
     data.message ||
     data.code ||
     data.error_type ||
-    "AIDream returned an unknown stream error."
+    "The AI stream returned an unknown error."
   );
 }
 
@@ -533,7 +583,9 @@ function conversationRowToConversation(row: CloudConversationRow): Conversation 
     created_at: createdAt,
     updated_at: updatedAt,
     serverConversationId: row.id,
+    cloudConversationId: row.id,
     routeMode: "conversation",
+    executionTarget: "cloud",
     ...(row.description?.trim() ? { description: row.description.trim() } : {}),
     ...(row.initial_agent_id ? { agentId: row.initial_agent_id } : {}),
   };
@@ -594,9 +646,12 @@ function mergeRemoteConversations(
     );
     if (!existing) return remoteConversation;
     consumedLocalIds.add(existing.id);
-    return {
+    const remoteServerId = remoteConversation.serverConversationId ?? remoteConversation.id;
+    const mergedConversation: Conversation = {
       ...remoteConversation,
       id: existing.id,
+      cloudConversationId: remoteServerId,
+      serverConversationId: remoteServerId,
       title:
         isDefaultConversationTitle(remoteConversation.title) && !isDefaultConversationTitle(existing.title)
           ? existing.title
@@ -611,6 +666,7 @@ function mergeRemoteConversations(
         ? { description: remoteConversation.description ?? existing.description }
         : {}),
     };
+    return mergedConversation;
   });
 
   const localOnly = current.filter(
@@ -622,7 +678,23 @@ function mergeRemoteConversations(
   return sortConversations([...merged, ...localOnly]).slice(0, MAX_CONVERSATIONS);
 }
 
-export function useCloudChat() {
+async function fetchLocalLlmStatus(
+  engineUrl: string | null | undefined,
+  accessToken?: string,
+): Promise<LocalLlmStatus | null> {
+  if (!engineUrl) return null;
+  const init: RequestInit = accessToken
+    ? { headers: { Authorization: `Bearer ${accessToken}` } }
+    : {};
+  const response = await fetch(`${engineUrl}/chat/local-llm/status`, init);
+  if (!response.ok) {
+    throw new Error(`Failed to get local LLM status (${response.status})`);
+  }
+  return (await response.json()) as LocalLlmStatus;
+}
+
+export function useCloudChat(options: UseCloudChatOptions = {}) {
+  const { engineUrl = null } = options;
   const [conversations, setConversations] = useState<Conversation[]>(() =>
     loadConversations().sort(
       (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
@@ -637,6 +709,9 @@ export function useCloudChat() {
   const [requestError, setRequestError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [executionTarget, setExecutionTarget] = useState<CloudChatExecutionTarget>("cloud");
+  const [localLlmStatus, setLocalLlmStatus] = useState<LocalLlmStatus | null>(null);
+  const [localLlmError, setLocalLlmError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const conversationsRef = useRef(conversations);
 
@@ -683,6 +758,33 @@ export function useCloudChat() {
     };
   }, []);
 
+  const refreshLocalLlmStatus = useCallback(async () => {
+    if (!engineUrl) {
+      setLocalLlmStatus(null);
+      setLocalLlmError(null);
+      return null;
+    }
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const status = await fetchLocalLlmStatus(engineUrl, session?.access_token);
+      setLocalLlmStatus(status);
+      setLocalLlmError(null);
+      return status;
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Failed to get local LLM status";
+      setLocalLlmError(message);
+      return null;
+    }
+  }, [engineUrl]);
+
+  useEffect(() => {
+    if (executionTarget !== "local") return;
+    void refreshLocalLlmStatus();
+  }, [executionTarget, refreshLocalLlmStatus]);
+
   const activeConversation =
     conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
 
@@ -722,6 +824,7 @@ export function useCloudChat() {
   const hydrateConversationMessages = useCallback(async (id: string) => {
     const target = conversationsRef.current.find((item) => item.id === id);
     if (!target || target.messages.length > 0) return;
+    if (target.executionTarget === "local" || target.localConversationId) return;
 
     const serverConversationId = target.serverConversationId ?? target.id;
     setHistoryLoading(true);
@@ -769,12 +872,13 @@ export function useCloudChat() {
         messages: [],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        executionTarget,
       };
       setConversations((prev) => [conversation, ...prev]);
       setActiveConversationId(conversation.id);
       return conversation;
     },
-    [mode, model],
+    [executionTarget, mode, model],
   );
 
   const selectConversation = useCallback((id: string | null) => {
@@ -838,11 +942,86 @@ export function useCloudChat() {
       if (!hasAgent && !trimmed) return;
       if (isStreaming) return;
 
-      if (!AIDREAM_SERVER_URL) {
+      if (executionTarget === "cloud" && !AIDREAM_SERVER_URL) {
         setRequestError("VITE_AIDREAM_SERVER_URL_LIVE is not set.");
         return;
       }
+      if (executionTarget === "local" && !engineUrl) {
+        setRequestError("Local engine is not connected.");
+        return;
+      }
       setRequestError(null);
+      setLocalLlmError(null);
+
+      const recordPreflightFailure = (
+        message: string,
+        patch?: Partial<Conversation>,
+      ) => {
+        let conversationId = activeConversationId;
+
+        if (!conversationId) {
+          const created = createConversation();
+          conversationId = created.id;
+        }
+
+        if (!conversationId) return;
+
+        const now = new Date().toISOString();
+        const userMessage: ChatMessage | null = trimmed
+          ? {
+              id: generateId(),
+              role: "user",
+              content: trimmed,
+              timestamp: now,
+            }
+          : null;
+        const assistantMessage: ChatMessage = {
+          id: generateId(),
+          role: "assistant",
+          content: "",
+          timestamp: now,
+          model,
+          isStreaming: false,
+          streamStatus: "Request failed.",
+          error: message,
+        };
+
+        setConversations((prev) =>
+          prev.map((conversation) => {
+            if (conversation.id !== conversationId) return conversation;
+            const isFirst = conversation.messages.length === 0;
+            return {
+              ...conversation,
+              ...(patch ?? {}),
+              title: userMessage && isFirst ? generateTitle(trimmed) : conversation.title,
+              messages: [
+                ...conversation.messages,
+                ...(userMessage ? [userMessage] : []),
+                assistantMessage,
+              ],
+              updated_at: now,
+            };
+          }),
+        );
+      };
+
+      let localStatus: LocalLlmStatus | null = null;
+      if (executionTarget === "local") {
+        localStatus = await refreshLocalLlmStatus();
+        if (!localStatus?.available || !localStatus.canonical_model_name) {
+          const message =
+            localStatus?.error ||
+            localStatus?.instructions ||
+            "Local model is not registered with the engine. Start a local model first.";
+          setRequestError(message);
+          setLocalLlmError(message);
+          recordPreflightFailure(message, {
+            executionTarget: "local",
+            ...(hasAgent && options?.agentId ? { agentId: options.agentId } : {}),
+          });
+          return;
+        }
+      }
 
       abortRef.current?.abort();
       const abort = new AbortController();
@@ -869,6 +1048,7 @@ export function useCloudChat() {
           messages: existingMessages,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
+          executionTarget,
         };
       }
 
@@ -880,6 +1060,7 @@ export function useCloudChat() {
           ? {
               routeMode: "agent" as ConversationRouteMode,
               agentId: options.agentId,
+              executionTarget,
             }
           : {};
 
@@ -971,7 +1152,9 @@ export function useCloudChat() {
       let inlineReasoning = "";
       let eventCount = 0;
       let sawTerminalEvent = false;
-      let lastStatus = "Connecting to AIDream...";
+      let streamHadError = false;
+      const serviceLabel = executionTarget === "local" ? "Local AI" : "AIDream";
+      let lastStatus = `Connecting to ${serviceLabel}...`;
       let diagnostics: string[] = [];
       const answerRenderBlocks = new Map<string, BlockAccumulatorEntry>();
       const reasoningRenderBlocks = new Map<string, BlockAccumulatorEntry>();
@@ -1042,6 +1225,9 @@ export function useCloudChat() {
           requestConversation,
           trimmed,
           model,
+          executionTarget,
+          localStatus?.canonical_model_name ?? null,
+          engineUrl,
           options,
           allMessages,
         );
@@ -1059,7 +1245,8 @@ export function useCloudChat() {
         if (!response.ok || !response.body) {
           const rawErrorText = await response.text().catch(() => `HTTP ${response.status}`);
           const errorText = rawErrorText || `HTTP ${response.status} ${response.statusText}`;
-          const message = `AIDream request failed (${response.status}): ${errorText}`;
+          const label = executionTarget === "local" ? "Local AI" : "AIDream";
+          const message = `${label} request failed (${response.status}): ${errorText}`;
           setRequestError(message);
           updateAssistant({
             content: "",
@@ -1071,14 +1258,15 @@ export function useCloudChat() {
         }
 
         const headerConversationId = response.headers.get("X-Conversation-ID");
-        if (headerConversationId && !requestConversation.serverConversationId) {
-          updateConversationMeta({
-            serverConversationId: headerConversationId,
-            routeMode: "conversation",
-          });
+        const existingTargetConversationId =
+          executionTarget === "local"
+            ? requestConversation.localConversationId
+            : requestConversation.cloudConversationId ?? requestConversation.serverConversationId;
+        if (headerConversationId && !existingTargetConversationId) {
+          updateConversationMeta(conversationIdPatch(executionTarget, headerConversationId));
         }
 
-        setStatus("Connected to AIDream.");
+        setStatus(`Connected to ${serviceLabel}.`);
 
         for await (const event of parseAIDreamStream(response, abort.signal)) {
           eventCount += 1;
@@ -1107,7 +1295,7 @@ export function useCloudChat() {
             }
 
             case EventType.PHASE: {
-              setStatus(phaseStatus(event.data.phase));
+              setStatus(phaseStatus(event.data.phase, serviceLabel));
               break;
             }
 
@@ -1116,7 +1304,7 @@ export function useCloudChat() {
                 event.data.user_message ||
                 event.data.system_message ||
                 event.data.code ||
-                "AIDream returned a warning.";
+                `${serviceLabel} returned a warning.`;
               addDiagnostic(`Warning: ${message}`);
               setStatus(message);
               break;
@@ -1127,7 +1315,7 @@ export function useCloudChat() {
                 event.data.user_message ||
                 event.data.system_message ||
                 event.data.code ||
-                "AIDream sent an info event.";
+                `${serviceLabel} sent an info event.`;
               setStatus(message);
               break;
             }
@@ -1140,10 +1328,7 @@ export function useCloudChat() {
               if (type === "conversation_id") {
                 const conversationIdValue = readString(record?.conversation_id);
                 if (conversationIdValue) {
-                  updateConversationMeta({
-                    serverConversationId: conversationIdValue,
-                    routeMode: "conversation",
-                  });
+                  updateConversationMeta(conversationIdPatch(executionTarget, conversationIdValue));
                 }
               } else if (type === "conversation_labeled") {
                 const title = readString(record?.title);
@@ -1154,10 +1339,7 @@ export function useCloudChat() {
                     ...(title ? { title } : {}),
                     ...(description ? { description } : {}),
                     ...(labeledConversationId
-                      ? {
-                          serverConversationId: labeledConversationId,
-                          routeMode: "conversation" as ConversationRouteMode,
-                        }
+                      ? conversationIdPatch(executionTarget, labeledConversationId)
                       : {}),
                   });
                 }
@@ -1211,6 +1393,7 @@ export function useCloudChat() {
               }
 
               if (event.data.status === "failed" || event.data.status === "cancelled") {
+                streamHadError = true;
                 const message = `${humanizeToken(event.data.operation)} ${event.data.status}.`;
                 setRequestError(message);
                 updateAssistant({ error: message });
@@ -1222,13 +1405,14 @@ export function useCloudChat() {
             }
 
             case EventType.ERROR: {
+              streamHadError = true;
               sawTerminalEvent = true;
               const message = errorMessage(event.data);
               setRequestError(message);
               updateAssistant({
                 error: message,
                 isStreaming: false,
-                streamStatus: "AIDream returned an error.",
+                streamStatus: `${serviceLabel} returned an error.`,
               });
               addDiagnostic(`Error: ${message}`);
               break;
@@ -1253,13 +1437,15 @@ export function useCloudChat() {
             }
 
             case EventType.HEARTBEAT: {
-              if (!accumulated) setStatus(lastStatus || "Waiting for AIDream...");
+              if (!accumulated) setStatus(lastStatus || `Waiting for ${serviceLabel}...`);
               break;
             }
 
             case EventType.END: {
               sawTerminalEvent = true;
-              setStatus(event.data.reason ? `Stream ended: ${event.data.reason}.` : "Stream ended.");
+              if (!streamHadError) {
+                setStatus(event.data.reason ? `Stream ended: ${event.data.reason}.` : "Stream ended.");
+              }
               break;
             }
 
@@ -1380,7 +1566,7 @@ export function useCloudChat() {
         }
 
         if (!accumulated && !diagnostics.length && !sawTerminalEvent && eventCount === 0) {
-          const message = "AIDream returned an empty stream with no events.";
+          const message = `${serviceLabel} returned an empty stream with no events.`;
           setRequestError(message);
           updateAssistant({
             isStreaming: false,
@@ -1394,8 +1580,8 @@ export function useCloudChat() {
           updateAssistant({
             streamStatus:
               eventCount > 0
-                ? lastStatus || "AIDream completed without text output."
-                : "AIDream completed without stream events.",
+                ? lastStatus || `${serviceLabel} completed without text output.`
+                : `${serviceLabel} completed without stream events.`,
           });
         }
 
@@ -1406,7 +1592,7 @@ export function useCloudChat() {
         } else {
           const message =
             error instanceof SyntaxError
-              ? `Failed to parse AIDream stream: ${error.message}`
+              ? `Failed to parse ${serviceLabel} stream: ${error.message}`
               : error instanceof Error
                 ? error.message
                 : "Connection error";
@@ -1424,7 +1610,17 @@ export function useCloudChat() {
         void refreshConversations();
       }
     },
-    [activeConversationId, createConversation, isStreaming, mode, model, refreshConversations],
+    [
+      activeConversationId,
+      createConversation,
+      engineUrl,
+      executionTarget,
+      isStreaming,
+      mode,
+      model,
+      refreshConversations,
+      refreshLocalLlmStatus,
+    ],
   );
 
   const stopStreaming = useCallback(() => {
@@ -1459,6 +1655,9 @@ export function useCloudChat() {
     requestError,
     historyError,
     historyLoading,
+    executionTarget,
+    localLlmStatus,
+    localLlmError,
     groupedConversations,
     createConversation,
     selectConversation,
@@ -1468,7 +1667,9 @@ export function useCloudChat() {
     stopStreaming,
     clearConversations,
     refreshConversations,
+    refreshLocalLlmStatus,
     setMode,
     setModel,
+    setExecutionTarget,
   };
 }

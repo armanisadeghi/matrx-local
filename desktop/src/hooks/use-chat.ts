@@ -74,8 +74,11 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   serverConversationId?: string;
+  cloudConversationId?: string;
+  localConversationId?: string;
   routeMode?: ConversationRouteMode;
   agentId?: string;
+  executionTarget?: "cloud" | "local";
 }
 
 export interface ToolSchema {

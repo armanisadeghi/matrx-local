@@ -77,7 +77,12 @@ class VideoGenModel:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Catalog
+# Catalog — COMPILED FALLBACK DATA
+#
+# The live catalog is the remote `catalog_entries` table (kind
+# `video_gen_model`) served through app/services/catalogs — read it via the
+# get_*() accessors below, NEVER by importing this list directly. It stays
+# only as the explicit defaults tier (first boot / total network failure).
 # ─────────────────────────────────────────────────────────────────────────────
 
 VIDEO_GEN_MODELS: list[VideoGenModel] = [
@@ -174,3 +179,37 @@ VIDEO_GEN_MODELS: list[VideoGenModel] = [
 ]
 
 DEFAULT_VIDEO_MODEL_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Remote-catalog accessors — the canonical read path
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def get_video_gen_models() -> list[VideoGenModel]:
+    """Resolved video-gen model catalog (remote > cache > compiled fallback)."""
+    from app.services.catalogs import get_catalog  # noqa: PLC0415 — lazy: avoids import cycle
+    from app.services.catalogs.adapt import entries_to_dataclasses  # noqa: PLC0415
+
+    return entries_to_dataclasses(get_catalog("video_gen_model"), VideoGenModel)
+
+
+def get_video_gen_model(model_id: str) -> VideoGenModel | None:
+    """Single resolved catalog model by HF repo id."""
+    return next((m for m in get_video_gen_models() if m.model_id == model_id), None)
+
+
+def get_default_video_model_id() -> str:
+    """The catalog's flagged default model id (payload.is_default)."""
+    from app.common.system_logger import get_logger  # noqa: PLC0415
+    from app.services.catalogs import get_catalog  # noqa: PLC0415
+
+    for entry in get_catalog("video_gen_model"):
+        if entry.payload.get("is_default"):
+            return str(entry.payload.get("model_id") or entry.key)
+    get_logger().warning(
+        "[video_gen] no catalog entry flagged is_default — falling back to the "
+        "compiled DEFAULT_VIDEO_MODEL_ID (%s)",
+        DEFAULT_VIDEO_MODEL_ID,
+    )
+    return DEFAULT_VIDEO_MODEL_ID

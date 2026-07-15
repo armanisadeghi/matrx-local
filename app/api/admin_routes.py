@@ -147,6 +147,27 @@ async def admin_refresh_config() -> dict[str, Any]:
     }
 
 
+@router.post("/refresh-catalogs")
+async def admin_refresh_catalogs() -> dict[str, Any]:
+    """Force an immediate remote catalogs refresh and return the provenance.
+
+    Complements the 6h background loop (app/services/catalogs). Never errors
+    on a failed fetch — the service falls back per the precedence chain
+    (remote > cache > compiled) and this returns the tier actually in effect
+    plus the failure reason, so callers always learn the truth.
+    """
+    from app.services.catalogs import get_catalogs_service
+
+    service = get_catalogs_service()
+    resolved = await service.refresh_now()
+    return {
+        "ok": resolved.tier == "remote",
+        **service.status_payload(),
+        "app_version": resolved.app_version,
+        "error": service.last_error,
+    }
+
+
 @router.post("/diagnose")
 async def admin_diagnose(reason: str | None = None) -> dict[str, Any]:
     """Force-write a diagnostic snapshot and return its path.

@@ -214,7 +214,11 @@ def delete_lora(lora_id: str) -> bool:
     return True
 
 
-# ── curated catalog ───────────────────────────────────────────────────────────
+# ── curated catalog — COMPILED FALLBACK DATA ─────────────────────────────────
+# The live catalog is the remote `catalog_entries` table (kind `lora`) served
+# through app/services/catalogs — read it via get_curated_lora_catalog()
+# below, NEVER by importing this list directly. It stays only as the explicit
+# defaults tier (first boot / total network failure).
 # HF entries: verified against the Hub API (repo present, exact weight
 # filename in siblings, license/base_model from cardData).
 # Civitai entries: verified against GET /api/v1/models/<id> (type=LORA,
@@ -443,3 +447,15 @@ if _catalog_problems:
         "y" if len(_catalog_problems) == 1 else "ies",
         "; ".join(_catalog_problems),
     )
+
+
+def get_curated_lora_catalog() -> list[dict[str, Any]]:
+    """Resolved curated LoRA catalog (remote > cache > compiled fallback).
+
+    Entries are plain dicts (payload mirrors of the legacy
+    ``CURATED_LORA_CATALOG`` items) — the compiled list above stays only as
+    the defaults tier via app/services/catalogs/compiled.py.
+    """
+    from app.services.catalogs import get_catalog  # noqa: PLC0415 — lazy: avoids import cycle
+
+    return [dict(e.payload) for e in get_catalog("lora")]

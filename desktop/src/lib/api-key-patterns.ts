@@ -204,6 +204,81 @@ export const PROVIDER_PATTERNS: ProviderPattern[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Remote Catalogs overlay (kind `api_key_provider`)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The compiled constants above are FALLBACK DATA — the live pattern set is
+// the remote catalog served by the engine (`GET /catalogs/api_key_provider`:
+// one entry per provider + the `global-strip-lists` entry). All matching
+// below reads the resolved lets; refreshApiKeyPatterns() swaps them in.
+
+let resolvedPatterns: ProviderPattern[] = PROVIDER_PATTERNS;
+let resolvedStripPrefixes: string[] = GLOBAL_STRIP_PREFIXES;
+let resolvedStripSuffixes: string[] = GLOBAL_STRIP_SUFFIXES;
+let patternsRefreshInFlight: Promise<void> | null = null;
+
+interface ApiKeyProviderPayload {
+  names?: string[];
+  env_var_names?: string[];
+  label?: string;
+  strip_prefixes?: string[];
+  strip_suffixes?: string[];
+}
+
+/**
+ * Fetch the resolved provider patterns from the engine's catalog.
+ * Fire-and-forget safe: failures keep the current (compiled or last-good)
+ * set; the next call retries.
+ */
+export async function refreshApiKeyPatterns(): Promise<void> {
+  if (patternsRefreshInFlight) return patternsRefreshInFlight;
+  patternsRefreshInFlight = (async () => {
+    try {
+      const { fetchCatalog } = await import("@/lib/catalogs");
+      const entries = await fetchCatalog<ApiKeyProviderPayload>(
+        "api_key_provider",
+      );
+      const patterns: ProviderPattern[] = [];
+      let prefixes: string[] | null = null;
+      let suffixes: string[] | null = null;
+      for (const e of entries) {
+        if (e.key === "global-strip-lists") {
+          if (Array.isArray(e.payload.strip_prefixes)) {
+            prefixes = e.payload.strip_prefixes;
+          }
+          if (Array.isArray(e.payload.strip_suffixes)) {
+            suffixes = e.payload.strip_suffixes;
+          }
+          continue;
+        }
+        if (
+          Array.isArray(e.payload.names) &&
+          e.payload.names.length > 0 &&
+          typeof e.payload.label === "string"
+        ) {
+          const pattern: ProviderPattern = {
+            names: e.payload.names,
+            label: e.payload.label,
+          };
+          if (Array.isArray(e.payload.env_var_names)) {
+            pattern.envVarNames = e.payload.env_var_names;
+          }
+          patterns.push(pattern);
+        }
+      }
+      if (patterns.length > 0) resolvedPatterns = patterns;
+      if (prefixes && prefixes.length > 0) resolvedStripPrefixes = prefixes;
+      if (suffixes && suffixes.length > 0) resolvedStripSuffixes = suffixes;
+    } catch {
+      // Engine unreachable — compiled/last-good patterns stay; retried later.
+    } finally {
+      patternsRefreshInFlight = null;
+    }
+  })();
+  return patternsRefreshInFlight;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Matching logic
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -211,7 +286,7 @@ export const PROVIDER_PATTERNS: ProviderPattern[] = [
 function stripPrefixes(name: string): string {
   const upper = name.toUpperCase();
   // Sort descending by length so more specific prefixes win
-  const sorted = [...GLOBAL_STRIP_PREFIXES].sort((a, b) => b.length - a.length);
+  const sorted = [...resolvedStripPrefixes].sort((a, b) => b.length - a.length);
   for (const prefix of sorted) {
     if (upper.startsWith(prefix.toUpperCase())) {
       return name.slice(prefix.length);
@@ -223,7 +298,7 @@ function stripPrefixes(name: string): string {
 /** Strip global suffixes from a raw env-var name (longest match first). */
 function stripSuffixes(name: string): string {
   const upper = name.toUpperCase();
-  const sorted = [...GLOBAL_STRIP_SUFFIXES].sort((a, b) => b.length - a.length);
+  const sorted = [...resolvedStripSuffixes].sort((a, b) => b.length - a.length);
   for (const suffix of sorted) {
     if (upper.endsWith(suffix.toUpperCase())) {
       return name.slice(0, name.length - suffix.length);
@@ -239,7 +314,7 @@ function stripSuffixes(name: string): string {
 export function resolveProvider(rawName: string): string | null {
   const upper = rawName.trim().toUpperCase();
 
-  for (const provider of PROVIDER_PATTERNS) {
+  for (const provider of resolvedPatterns) {
     // 1. Check exact env-var name matches first
     if (provider.envVarNames) {
       for (const envName of provider.envVarNames) {
@@ -253,7 +328,7 @@ export function resolveProvider(rawName: string): string | null {
   // 2. Strip prefix + suffix, then match against provider names
   const stripped = stripSuffixes(stripPrefixes(rawName)).toUpperCase();
 
-  for (const provider of PROVIDER_PATTERNS) {
+  for (const provider of resolvedPatterns) {
     for (const alias of provider.names) {
       if (stripped === alias.toUpperCase()) {
         return provider.names[0] ?? null;
@@ -329,7 +404,7 @@ export function parseEnvBlock(text: string): ParsedEnvEntry[] {
 
     const provider = resolveProvider(key);
     const providerDef = provider
-      ? PROVIDER_PATTERNS.find((p) => p.names[0] === provider)
+      ? resolvedPatterns.find((p) => p.names[0] === provider)
       : null;
 
     results.push({

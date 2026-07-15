@@ -114,12 +114,19 @@ Critical rules:
 - Match the pace of conversation: short question → short answer
 - If you don't know something, say so in one sentence
 `;
-// Built-in prompts that ship with the app — always available, not editable.
-// Users can "fork" them into their own library.
-export const BUILTIN_PROMPTS: Omit<
+export type BuiltinPrompt = Omit<
   SystemPrompt,
   "createdAt" | "updatedAt" | "isPinned"
->[] = [
+>;
+
+// Built-in prompts that ship with the app — always available, not editable.
+// Users can "fork" them into their own library.
+//
+// COMPILED FALLBACK DATA: the live builtin set is the remote catalog (kind
+// `system_prompt`, engine GET /catalogs/system_prompt) — read it via
+// builtinPrompts() below, never this array directly. It stays only for
+// first paint / engine-unreachable.
+export const BUILTIN_PROMPTS: BuiltinPrompt[] = [
   {
     id: "builtin-assistant",
     name: "Helpful Assistant",
@@ -164,6 +171,60 @@ export const BUILTIN_PROMPTS: Omit<
   },
 ];
 
+// ── Remote builtins (Remote Catalogs overlay) ────────────────────────────────
+
+let remoteBuiltins: BuiltinPrompt[] | null = null;
+let refreshInFlight: Promise<void> | null = null;
+
+/** The resolved builtin set: remote catalog when loaded, compiled otherwise. */
+export function builtinPrompts(): BuiltinPrompt[] {
+  return remoteBuiltins ?? BUILTIN_PROMPTS;
+}
+
+/**
+ * Fetch the builtin prompts from the engine's resolved catalog
+ * (kind `system_prompt`). Fire-and-forget safe: failures keep the compiled
+ * set, success dispatches "matrx-prompts-changed" so open UIs re-read.
+ */
+export async function refreshBuiltinPrompts(): Promise<void> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      const { fetchCatalog } = await import("@/lib/catalogs");
+      const entries = await fetchCatalog<{
+        id: string;
+        name: string;
+        content: string;
+        category: string;
+      }>("system_prompt");
+      const prompts: BuiltinPrompt[] = entries
+        .filter(
+          (e) =>
+            typeof e.payload?.id === "string" &&
+            typeof e.payload?.name === "string" &&
+            typeof e.payload?.content === "string",
+        )
+        .map((e) => ({
+          id: e.payload.id,
+          name: e.payload.name,
+          content: e.payload.content,
+          category: e.payload.category || "General",
+        }));
+      if (prompts.length === 0) return; // empty catalog — keep compiled set
+      const changed = JSON.stringify(prompts) !== JSON.stringify(builtinPrompts());
+      remoteBuiltins = prompts;
+      if (changed) {
+        window.dispatchEvent(new CustomEvent("matrx-prompts-changed"));
+      }
+    } catch {
+      // Engine unreachable — compiled builtins stay; next call retries.
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
+}
+
 // ── Storage helpers ──────────────────────────────────────────────────────────
 
 function loadAll(): SystemPrompt[] {
@@ -197,7 +258,7 @@ export const systemPrompts = {
   listAll(): Array<
     SystemPrompt | Omit<SystemPrompt, "createdAt" | "updatedAt" | "isPinned">
   > {
-    return [...BUILTIN_PROMPTS, ...loadAll()];
+    return [...builtinPrompts(), ...loadAll()];
   },
 
   get(id: string): SystemPrompt | undefined {
@@ -205,12 +266,12 @@ export const systemPrompts = {
   },
 
   getBuiltin(id: string) {
-    return BUILTIN_PROMPTS.find((p) => p.id === id);
+    return builtinPrompts().find((p) => p.id === id);
   },
 
   /** Get a prompt by id from either user or builtin list. */
   resolve(id: string): string | undefined {
-    const builtin = BUILTIN_PROMPTS.find((p) => p.id === id);
+    const builtin = builtinPrompts().find((p) => p.id === id);
     if (builtin) return builtin.content;
     return loadAll().find((p) => p.id === id)?.content;
   },
@@ -257,7 +318,7 @@ export const systemPrompts = {
 
   /** Fork a builtin into user's own list. */
   forkBuiltin(builtinId: string): SystemPrompt | null {
-    const builtin = BUILTIN_PROMPTS.find((p) => p.id === builtinId);
+    const builtin = builtinPrompts().find((p) => p.id === builtinId);
     if (!builtin) return null;
     return systemPrompts.create({
       name: `${builtin.name} (copy)`,
@@ -280,7 +341,7 @@ export const systemPrompts = {
 
   categories(): string[] {
     const cats = new Set<string>();
-    BUILTIN_PROMPTS.forEach((p) => cats.add(p.category));
+    builtinPrompts().forEach((p) => cats.add(p.category));
     loadAll().forEach((p) => cats.add(p.category));
     return Array.from(cats).sort();
   },

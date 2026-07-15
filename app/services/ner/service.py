@@ -14,11 +14,11 @@ from typing import Any
 from app.common.system_logger import get_logger
 from app.config import MATRX_HOME_DIR
 from app.services.ner.models import (
-    DEFAULT_NER_MODEL_ID,
-    NER_MODEL_BY_ID,
-    NER_MODELS,
-    PII_LABELS,
     NerModelSpec,
+    get_default_ner_model_id,
+    get_ner_model,
+    get_ner_models,
+    get_pii_labels,
 )
 
 logger = get_logger()
@@ -206,7 +206,7 @@ class NerService:
     """Singleton service that owns downloaded NER models and inference."""
 
     def __init__(self) -> None:
-        self._active_model_id = DEFAULT_NER_MODEL_ID
+        self._active_model_id = get_default_ner_model_id()
         self._model: Any = None
         self._loaded_model_id: str | None = None
         self._load_lock = asyncio.Lock()
@@ -221,7 +221,7 @@ class NerService:
 
     def list_models(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        for spec in NER_MODELS:
+        for spec in get_ner_models():
             path = _model_dir(spec)
             rows.append({
                 **asdict(spec),
@@ -245,7 +245,7 @@ class NerService:
             "is_downloading": self._is_downloading,
             "download_model_id": self._download_model_id,
             "model_dir": str(NER_MODELS_DIR),
-            "default_model_id": DEFAULT_NER_MODEL_ID,
+            "default_model_id": get_default_ner_model_id(),
             "deps": deps,
             "last_error": self._last_error,
         }
@@ -376,13 +376,13 @@ class NerService:
     ) -> NerExtraction:
         return await self.extract(
             text=text,
-            labels=list(PII_LABELS),
+            labels=list(get_pii_labels()),
             model_id=model_id,
             threshold=threshold,
         )
 
     def _spec(self, model_id: str) -> NerModelSpec:
-        spec = NER_MODEL_BY_ID.get(model_id)
+        spec = get_ner_model(model_id)
         if spec is None:
             raise NerError("unknown_model", f"unknown NER model: {model_id}")
         return spec

@@ -23,6 +23,7 @@ from app.api.remote_auth import (
     is_instance_owner,
     verify_supabase_token,
 )
+from app.services.catalogs.models import KNOWN_KINDS as _CATALOG_KINDS
 
 logger = get_logger()
 
@@ -72,6 +73,12 @@ _PUBLIC_PATHS = frozenset(
     }
 )
 
+# Resolved remote-catalog reads (GET /catalogs/{kind}) — read-only public
+# metadata (the same rows anyone can read anonymously from Supabase), needed
+# by the desktop webview before auth, same posture as /chat/models. Built
+# from KNOWN_KINDS so an unknown kind is never public.
+_PUBLIC_PATHS = _PUBLIC_PATHS | frozenset(f"/catalogs/{k}" for k in _CATALOG_KINDS)
+
 # Local-bootstrap — allowed WITHOUT a token only on direct loopback, because
 # the legitimate callers (Rust shell, the desktop UI handing the engine its
 # JWT during sign-in) have no verifiable credential to send yet, and the
@@ -90,6 +97,7 @@ _LOCAL_BOOTSTRAP_PATHS = frozenset(
         "/admin/shutdown",
         "/admin/diagnose",
         "/admin/refresh-config",
+        "/admin/refresh-catalogs",
     }
 )
 

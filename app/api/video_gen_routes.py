@@ -51,7 +51,7 @@ from pydantic import BaseModel, Field
 
 from app.common.route_errors import safe_route
 from app.services.video_gen.jobs import get_video_job_store
-from app.services.video_gen.models import VIDEO_GEN_MODELS
+from app.services.video_gen.models import get_video_gen_models
 from app.services.video_gen.service import get_video_gen_service
 
 from app.api.error_envelope import EnvelopeRoute
@@ -234,7 +234,7 @@ async def list_video_gen_models() -> list[VideoGenModelInfo]:
     """List all video models with download + per-model hardware state."""
     svc = get_video_gen_service()
     out: list[VideoGenModelInfo] = []
-    for m in VIDEO_GEN_MODELS:
+    for m in get_video_gen_models():
         hw_ok, hw_reason = svc.model_hardware_check(m)
         out.append(VideoGenModelInfo(
             model_id=m.model_id,

@@ -223,18 +223,16 @@ def _check_gpu() -> tuple[bool, str | None]:
 
 def _check_tts() -> ComponentStatus:
     """Check if the Kokoro TTS model files are present and plausibly complete."""
-    from app.services.tts.models import (
-        ONNX_MODEL_FILENAME, VOICES_BIN_FILENAME,
-        ONNX_MODEL_SIZE_BYTES, VOICES_BIN_SIZE_BYTES,
-    )
+    from app.services.tts.models import get_tts_model_files
 
     tts_dir = MATRX_HOME_DIR / "tts"
-    model_path = tts_dir / ONNX_MODEL_FILENAME
-    voices_path = tts_dir / VOICES_BIN_FILENAME
-    model_ok = model_path.is_file() and model_path.stat().st_size >= ONNX_MODEL_SIZE_BYTES * 0.99
-    voices_ok = voices_path.is_file() and voices_path.stat().st_size >= VOICES_BIN_SIZE_BYTES * 0.99
+    files_ok = all(
+        (tts_dir / spec.filename).is_file()
+        and (tts_dir / spec.filename).stat().st_size >= spec.size_bytes * 0.99
+        for spec in get_tts_model_files()
+    )
 
-    if model_ok and voices_ok:
+    if files_ok:
         return ComponentStatus(
             id="tts_model",
             label="Text-to-Speech",
@@ -933,11 +931,7 @@ async def _download_transcription_model(model: str, request: Request):
 
 async def _download_tts_model(request: Request):
     """Download the Kokoro TTS ONNX model and voices pack, yielding SSE events."""
-    from app.services.tts.models import (
-        ONNX_MODEL_FILENAME, VOICES_BIN_FILENAME,
-        ONNX_MODEL_URL, VOICES_BIN_URL,
-        ONNX_MODEL_SIZE_BYTES, VOICES_BIN_SIZE_BYTES,
-    )
+    from app.services.tts.models import get_tts_model_files
 
     tts_dir = MATRX_HOME_DIR / "tts"
     tts_dir.mkdir(parents=True, exist_ok=True)
@@ -945,9 +939,10 @@ async def _download_tts_model(request: Request):
     for stale in tts_dir.glob("*.tmp"):
         stale.unlink(missing_ok=True)
 
+    _LABELS = {"onnx_model": "Kokoro TTS model", "voices_bin": "TTS voice pack"}
     files = [
-        (ONNX_MODEL_URL, ONNX_MODEL_FILENAME, ONNX_MODEL_SIZE_BYTES, "Kokoro TTS model"),
-        (VOICES_BIN_URL, VOICES_BIN_FILENAME, VOICES_BIN_SIZE_BYTES, "TTS voice pack"),
+        (spec.url, spec.filename, spec.size_bytes, _LABELS.get(spec.role, spec.filename))
+        for spec in get_tts_model_files()
     ]
 
     total_bytes = sum(s for _, _, s, _ in files)

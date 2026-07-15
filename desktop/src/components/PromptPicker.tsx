@@ -13,8 +13,12 @@
  *   <PromptPicker showManage onSelect={(content) => setSystemPrompt(content)} />
  */
 
-import { useState } from "react";
-import { systemPrompts, BUILTIN_PROMPTS } from "@/lib/system-prompts";
+import { useEffect, useState } from "react";
+import {
+  systemPrompts,
+  builtinPrompts,
+  refreshBuiltinPrompts,
+} from "@/lib/system-prompts";
 import type { SystemPrompt } from "@/lib/system-prompts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -234,6 +238,14 @@ function PromptManageDialog({
 
   const reload = () => setUserPrompts(systemPrompts.list());
 
+  // Remote-catalog builtins: kick a refresh and re-render when they land.
+  useEffect(() => {
+    void refreshBuiltinPrompts();
+    const onChanged = () => setUserPrompts(systemPrompts.list());
+    window.addEventListener("matrx-prompts-changed", onChanged);
+    return () => window.removeEventListener("matrx-prompts-changed", onChanged);
+  }, []);
+
   const handleCreate = (data: { name: string; content: string; category: string }) => {
     systemPrompts.create(data);
     reload();
@@ -270,7 +282,7 @@ function PromptManageDialog({
     });
   };
 
-  const filteredBuiltins = filterPrompts(BUILTIN_PROMPTS);
+  const filteredBuiltins = filterPrompts(builtinPrompts());
   const filteredUser = filterPrompts(userPrompts);
 
   return (

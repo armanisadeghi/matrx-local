@@ -14,7 +14,8 @@ from .models import (
     download_model,
     model_exists,
     oww_models_dir,
-    BUNDLED_MODELS,
+    get_bundled_models,
+    get_pretrained_registry,
 )
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "download_model",
     "model_exists",
     "oww_models_dir",
-    "BUNDLED_MODELS",
+    "get_bundled_models",
+    "get_pretrained_registry",
 ]

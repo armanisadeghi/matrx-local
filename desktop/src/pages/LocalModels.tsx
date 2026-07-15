@@ -115,7 +115,7 @@ import type {
 } from "@/lib/llm/types";
 import type { EngineToolSchema } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
-import { systemPrompts, BUILTIN_PROMPTS } from "@/lib/system-prompts";
+import { systemPrompts, builtinPrompts } from "@/lib/system-prompts";
 import { loadSettings } from "@/lib/settings";
 import {
   CONTEXT_LENGTH_OPTIONS,
@@ -3129,7 +3129,7 @@ function SystemPromptSelector({
     systemPrompts.list(),
   );
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const allPrompts = [...BUILTIN_PROMPTS, ...userPrompts];
+  const allPrompts = [...builtinPrompts(), ...userPrompts];
   const activePrompt = allPrompts.find((p) => p.content === value);
 
   const reload = () => {
@@ -3209,7 +3209,7 @@ function SystemPromptSelector({
             </optgroup>
           )}
           <optgroup label="Built-in">
-            {BUILTIN_PROMPTS.map((p) => (
+            {builtinPrompts().map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>
@@ -4685,7 +4685,7 @@ function InferenceTab() {
   };
 
   // Prompt/model display helpers
-  const allPrompts = [...BUILTIN_PROMPTS, ...inferenceUserPrompts];
+  const allPrompts = [...builtinPrompts(), ...inferenceUserPrompts];
   const activePromptName =
     allPrompts.find((p) => p.content === systemPrompt)?.name ?? null;
 

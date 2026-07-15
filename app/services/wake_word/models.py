@@ -20,8 +20,12 @@ from app.common.system_logger import get_logger
 
 logger = get_logger()
 
-# Pre-trained model registry.  Each entry maps a short name to its HuggingFace
-# download URL.  These are the official openWakeWord v0.6 ONNX models.
+# Pre-trained model registry — COMPILED FALLBACK DATA. The live catalog is the
+# remote `catalog_entries` table (kind `wake_word_model`) served through
+# app/services/catalogs — read via get_pretrained_registry() /
+# get_bundled_models() below, never this dict directly. It stays only as the
+# explicit defaults tier and is adapted by app/services/catalogs/compiled.py.
+# These are the official openWakeWord v0.6 ONNX models.
 _PRETRAINED_REGISTRY: dict[str, dict] = {
     "hey_jarvis": {
         "url": "https://huggingface.co/davidscripka/openWakeWord/resolve/main/hey_jarvis_v0.1.onnx",
@@ -50,7 +54,43 @@ _PRETRAINED_REGISTRY: dict[str, dict] = {
 }
 
 # Models we want available immediately at first OWW engine start.
+# (compiled fallback — the live flag is payload.bundled on the catalog rows)
 BUNDLED_MODELS: list[str] = ["hey_jarvis", "alexa"]
+
+
+def get_pretrained_registry() -> dict[str, dict]:
+    """Resolved pre-trained model registry (remote > cache > compiled).
+
+    Shape mirrors ``_PRETRAINED_REGISTRY``: name → {url, size_mb, description,
+    built_in, bundled}. Malformed entries are skipped with a loud log.
+    """
+    from app.services.catalogs import get_catalog  # noqa: PLC0415 — lazy: avoids import cycle
+
+    registry: dict[str, dict] = {}
+    for entry in get_catalog("wake_word_model"):
+        p = entry.payload
+        name = p.get("name") or entry.key
+        url = p.get("url")
+        if not isinstance(name, str) or not isinstance(url, str) or not url:
+            logger.error(
+                "[wake_word] skipping malformed wake_word_model catalog entry %r "
+                "(missing name/url)",
+                entry.key,
+            )
+            continue
+        registry[name] = {
+            "url": url,
+            "size_mb": p.get("size_mb", 0.0),
+            "description": p.get("description", ""),
+            "built_in": bool(p.get("built_in", False)),
+            "bundled": bool(p.get("bundled", False)),
+        }
+    return registry
+
+
+def get_bundled_models() -> list[str]:
+    """Names flagged ``bundled`` in the resolved catalog (auto-download set)."""
+    return [name for name, meta in get_pretrained_registry().items() if meta["bundled"]]
 
 
 @dataclass
@@ -91,8 +131,10 @@ def list_available_models() -> list[OWWModelInfo]:
     mdir = oww_models_dir()
     result: list[OWWModelInfo] = []
 
+    registry = get_pretrained_registry()
+
     # Pre-trained registry
-    for name, meta in _PRETRAINED_REGISTRY.items():
+    for name, meta in registry.items():
         fname = _onnx_filename(name)
         path = mdir / fname
         downloaded = path.exists() and path.stat().st_size > 0
@@ -108,7 +150,7 @@ def list_available_models() -> list[OWWModelInfo]:
         ))
 
     # Custom models: any .onnx files not in the registry
-    known_filenames = {_onnx_filename(n) for n in _PRETRAINED_REGISTRY}
+    known_filenames = {_onnx_filename(n) for n in registry}
     for onnx_file in sorted(mdir.glob("*.onnx")):
         if onnx_file.name not in known_filenames:
             name = onnx_file.stem
@@ -141,14 +183,15 @@ async def download_model(name: str, on_progress=None) -> OWWModelInfo:
         httpx.HTTPError: On download failure.
     """
     # Normalise — strip .onnx suffix for registry lookup
+    registry = get_pretrained_registry()
     lookup_name = name.removesuffix(".onnx")
-    if lookup_name not in _PRETRAINED_REGISTRY:
+    if lookup_name not in registry:
         raise ValueError(
             f"Unknown pre-trained model: {name!r}. "
-            f"Available: {', '.join(_PRETRAINED_REGISTRY)}"
+            f"Available: {', '.join(registry)}"
         )
 
-    meta = _PRETRAINED_REGISTRY[lookup_name]
+    meta = registry[lookup_name]
     url = meta["url"]
     dest = oww_models_dir() / _onnx_filename(lookup_name)
 

@@ -10,6 +10,11 @@ Cross-repo system-of-record (schema, DB, aidream endpoint, admin UI):
 `/Users/armanisadeghi/code/common-docs/app-config/FEATURE.md` — read it before
 touching this feature in ANY repo.
 
+Sibling system: **Remote Catalogs** ([app/services/catalogs/FEATURE.md](../catalogs/FEATURE.md))
+carries the *catalog-shaped* data (models, LoRAs, voices, presets, prompts)
+with the same precedence/cache/refresh architecture — it imports this
+module's semver helpers; keep `app_config` itself deliberately small.
+
 ## Precedence chain (implemented exactly, in `service.py`)
 
 1. **Env var dev override** — a `config.py` URL constant differing from its

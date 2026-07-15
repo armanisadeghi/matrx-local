@@ -81,7 +81,7 @@ import type { Theme } from "@/hooks/use-theme";
 
 declare const __APP_VERSION__: string;
 import { isTauri } from "@/lib/sidecar";
-import { systemPrompts, BUILTIN_PROMPTS } from "@/lib/system-prompts";
+import { systemPrompts, builtinPrompts } from "@/lib/system-prompts";
 import type {
   AutoUpdateState,
   AutoUpdateActions,
@@ -97,7 +97,11 @@ import {
   type AppSettings,
 } from "@/lib/settings";
 import type { StoragePath, StoragePathStats } from "@/lib/api";
-import { parseEnvBlock, type ParsedEnvEntry } from "@/lib/api-key-patterns";
+import {
+  parseEnvBlock,
+  refreshApiKeyPatterns,
+  type ParsedEnvEntry,
+} from "@/lib/api-key-patterns";
 import { Textarea } from "@/components/ui/textarea";
 import {
   ENGINE_DEFAULT_URL,
@@ -921,6 +925,12 @@ export function Settings({
     } finally {
       setApiKeyDeleting((prev) => ({ ...prev, [provider]: false }));
     }
+  }, []);
+
+  // Keep the provider patterns fresh from the remote catalog so a new
+  // provider row in the DB is recognised without an app update.
+  useEffect(() => {
+    void refreshApiKeyPatterns();
   }, []);
 
   const handleBulkEnvChange = useCallback((text: string) => {
@@ -4325,7 +4335,7 @@ function VoiceAssistantSettingsTab({
   const [editName, setEditName] = useState("");
   const [editContent, setEditContent] = useState("");
 
-  const allPrompts = [...BUILTIN_PROMPTS, ...userPrompts];
+  const allPrompts = [...builtinPrompts(), ...userPrompts];
   const selectedPromptId =
     settings.voiceAssistantSystemPromptId || "builtin-voice-assistant";
   const selectedPrompt = allPrompts.find((p) => p.id === selectedPromptId);
@@ -4450,7 +4460,7 @@ function VoiceAssistantSettingsTab({
                 <SelectValue placeholder="Select a prompt…" />
               </SelectTrigger>
               <SelectContent>
-                {BUILTIN_PROMPTS.map((p) => (
+                {builtinPrompts().map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.name}{" "}
                     <span className="text-muted-foreground text-xs ml-1">

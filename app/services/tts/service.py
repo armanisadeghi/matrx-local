@@ -39,25 +39,20 @@ from typing import Any
 from app.common.system_logger import get_logger
 from app.config import MATRX_HOME_DIR
 from app.services.tts.models import (
-    BUILTIN_VOICES,
-    DEFAULT_VOICE_ID,
     EMBEDDING_SHAPE,
-    LANGUAGE_MAP,
     ONNX_MODEL_FILENAME,
-    ONNX_MODEL_SHA256,
-    ONNX_MODEL_SIZE_BYTES,
-    ONNX_MODEL_URL,
     SAMPLE_RATE,
     STREAM_CHUNK_TIMEOUT_SECONDS,
     STREAM_TAG_CHUNK,
     STREAM_TAG_END,
     STREAM_TAG_ERROR,
     STREAM_THRESHOLD_CHARS,
-    VOICE_MAP,
     VOICES_BIN_FILENAME,
-    VOICES_BIN_SHA256,
-    VOICES_BIN_SIZE_BYTES,
-    VOICES_BIN_URL,
+    get_builtin_voices,
+    get_default_voice_id,
+    get_language_map,
+    get_tts_model_files,
+    get_voice_map,
 )
 
 logger = get_logger()
@@ -207,9 +202,9 @@ class TtsService:
 
     @property
     def model_downloaded(self) -> bool:
-        return (
-            self._file_ok(TTS_DIR / ONNX_MODEL_FILENAME, ONNX_MODEL_SIZE_BYTES)
-            and self._file_ok(TTS_DIR / VOICES_BIN_FILENAME, VOICES_BIN_SIZE_BYTES)
+        return all(
+            self._file_ok(TTS_DIR / spec.filename, spec.size_bytes)
+            for spec in get_tts_model_files()
         )
 
     @property
@@ -223,7 +218,7 @@ class TtsService:
             "is_downloading": self._is_downloading,
             "download_progress": self._download_progress,
             "model_dir": str(TTS_DIR),
-            "voice_count": len(BUILTIN_VOICES),
+            "voice_count": len(get_builtin_voices()),
             # Download state surfaced so the UI can distinguish "not downloaded
             # yet" from "downloading now" and know whether a background auto-
             # download will kick off on the next synth request.
@@ -270,7 +265,7 @@ class TtsService:
 
     def list_voices(self) -> list[dict[str, Any]]:
         voices: list[dict[str, Any]] = []
-        for v in BUILTIN_VOICES:
+        for v in get_builtin_voices():
             voices.append({
                 "voice_id": v.voice_id,
                 "name": v.name,
@@ -471,15 +466,16 @@ class TtsService:
             except Exception:
                 pass
 
-        total_bytes = ONNX_MODEL_SIZE_BYTES + VOICES_BIN_SIZE_BYTES
+        model_files = get_tts_model_files()  # resolved catalog: URL/size/SHA per file
+        total_bytes = sum(spec.size_bytes for spec in model_files)
         downloaded = 0
         dl_id = "tts-kokoro-model"
         self._emit_dm_progress(dl_id, "Kokoro TTS Model", "active", 0, total_bytes)
 
         try:
             for url, filename, expected_size, expected_sha in [
-                (ONNX_MODEL_URL, ONNX_MODEL_FILENAME, ONNX_MODEL_SIZE_BYTES, ONNX_MODEL_SHA256),
-                (VOICES_BIN_URL, VOICES_BIN_FILENAME, VOICES_BIN_SIZE_BYTES, VOICES_BIN_SHA256),
+                (spec.url, spec.filename, spec.size_bytes, spec.sha256)
+                for spec in model_files
             ]:
                 dest = TTS_DIR / filename
                 if dest.is_file() and dest.stat().st_size == expected_size:
@@ -670,9 +666,10 @@ class TtsService:
         voices. Returns ``(None, "en-us")`` when the voice cannot be resolved.
         """
         # Builtin
-        voice_info = VOICE_MAP.get(voice_id)
+        language_map = get_language_map()
+        voice_info = get_voice_map().get(voice_id)
         if voice_info:
-            lmeta = LANGUAGE_MAP.get(voice_info.lang_code)
+            lmeta = language_map.get(voice_info.lang_code)
             return voice_id, (lmeta.espeak_fallback if lmeta else "en-us")
 
         # Custom .npy
@@ -681,7 +678,7 @@ class TtsService:
             emb = self._load_custom_embedding(voice_id, npy_path)
             meta = self._read_voice_meta(voice_id)
             lang_code = meta.get("lang_code", "a")
-            lmeta = LANGUAGE_MAP.get(lang_code)
+            lmeta = language_map.get(lang_code)
             return emb, (lmeta.espeak_fallback if lmeta else "en-us")
 
         # Legacy .bin — load the bytes directly into a numpy array (the prior
@@ -745,7 +742,7 @@ class TtsService:
 
     def _resolve_embedding(self, voice_id: str):
         """Get a voice embedding by ID — tries builtin then custom."""
-        if voice_id in VOICE_MAP:
+        if voice_id in get_voice_map():
             return self._builtin_embedding(voice_id)
         npy_path = CUSTOM_VOICES_DIR / f"{voice_id}.npy"
         if npy_path.is_file():
@@ -766,11 +763,15 @@ class TtsService:
     async def synthesize(
         self,
         text: str,
-        voice_id: str = DEFAULT_VOICE_ID,
+        voice_id: str | None = None,
         speed: float = 1.0,
         lang: str | None = None,
     ) -> SynthesisResult:
-        """Synthesize a single complete WAV. Used for short text and previews."""
+        """Synthesize a single complete WAV. Used for short text and previews.
+
+        ``voice_id=None`` resolves to the catalog's flagged default voice.
+        """
+        voice_id = voice_id or get_default_voice_id()
         try:
             text = self._validate_text(text)
         except TtsError as exc:
@@ -851,13 +852,15 @@ class TtsService:
     async def synthesize_stream(
         self,
         text: str,
-        voice_id: str = DEFAULT_VOICE_ID,
+        voice_id: str | None = None,
         speed: float = 1.0,
         lang: str | None = None,
         is_disconnected=None,
         streaming_threshold: int | None = None,
     ) -> AsyncIterator[bytes]:
         """Yield framed v2 bytes for the streaming endpoint.
+
+        ``voice_id=None`` resolves to the catalog's flagged default voice.
 
         Hybrid strategy:
           - Text shorter than the resolved threshold → one ``create()`` call,
@@ -875,6 +878,7 @@ class TtsService:
         ``is_disconnected``: optional async callable; if it returns ``True``
         between chunks we abort the stream (no frames yielded after that).
         """
+        voice_id = voice_id or get_default_voice_id()
         # Validate text first — we want a clean error frame, not a hang.
         try:
             text = self._validate_text(text)

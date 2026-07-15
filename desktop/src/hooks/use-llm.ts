@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invokeTauri as tauriInvoke, isTauri } from "@/lib/sidecar";
 import { engine } from "@/lib/api";
+import { overlayLlmCatalog } from "@/lib/llm/catalog";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
   LlmHardwareResult,
@@ -428,8 +429,10 @@ export function useLlm(): [LlmState, LlmActions] {
     setIsDetecting(true);
     setError(null);
     try {
-      const result = await tauriInvoke<LlmHardwareResult>(
-        "detect_llm_hardware",
+      // Rust owns hardware probing + the recommendation; the browsable model
+      // list is overlaid with the remote catalog (compiled consts = fallback).
+      const result = await overlayLlmCatalog(
+        await tauriInvoke<LlmHardwareResult>("detect_llm_hardware"),
       );
       setHardwareResult(result);
       return result;

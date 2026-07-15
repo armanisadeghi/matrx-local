@@ -53,7 +53,11 @@ from app.services.media_gen.paths import (
     video_models_dir,
 )
 from app.services.video_gen.jobs import VideoJob, get_video_job_store
-from app.services.video_gen.models import VIDEO_GEN_MODELS, VideoGenModel
+from app.services.video_gen.models import (
+    VideoGenModel,
+    get_video_gen_model,
+    get_video_gen_models,
+)
 
 logger = get_logger()
 
@@ -233,10 +237,10 @@ class VideoGenService:
         return {"found": False, "mid_flight": False}
 
     def list_models(self) -> list[VideoGenModel]:
-        return VIDEO_GEN_MODELS
+        return get_video_gen_models()
 
     def get_model(self, model_id: str) -> VideoGenModel | None:
-        return next((m for m in VIDEO_GEN_MODELS if m.model_id == model_id), None)
+        return get_video_gen_model(model_id)
 
     def is_downloaded(self, model_id: str) -> bool:
         return is_model_downloaded(video_models_dir(), model_id)

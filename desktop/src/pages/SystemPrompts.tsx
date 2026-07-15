@@ -3,7 +3,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { systemPrompts, BUILTIN_PROMPTS } from "@/lib/system-prompts";
+import {
+  systemPrompts,
+  builtinPrompts,
+  refreshBuiltinPrompts,
+} from "@/lib/system-prompts";
 import type { SystemPrompt } from "@/lib/system-prompts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,7 +58,7 @@ type PromptEntry =
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function toEntries(userPrompts: SystemPrompt[]): PromptEntry[] {
-  const builtins: PromptEntry[] = BUILTIN_PROMPTS.map((p) => ({
+  const builtins: PromptEntry[] = builtinPrompts().map((p) => ({
     ...p,
     isBuiltin: true as const,
     createdAt: undefined,
@@ -517,6 +521,13 @@ export function SystemPrompts() {
 
   const reload = useCallback(() => setUserPrompts(systemPrompts.list()), []);
 
+  // Remote-catalog builtins: kick a refresh and re-render when they land.
+  useEffect(() => {
+    void refreshBuiltinPrompts();
+    window.addEventListener("matrx-prompts-changed", reload);
+    return () => window.removeEventListener("matrx-prompts-changed", reload);
+  }, [reload]);
+
   // If navigated here with ?select=<id>, open that prompt for editing immediately
   useEffect(() => {
     const id = searchParams.get("select");
@@ -527,7 +538,7 @@ export function SystemPrompts() {
       setMode("edit");
       return;
     }
-    const builtin = BUILTIN_PROMPTS.find((p) => p.id === id);
+    const builtin = builtinPrompts().find((p) => p.id === id);
     if (builtin) {
       setSelected({
         ...builtin,
@@ -649,7 +660,7 @@ export function SystemPrompts() {
   // ── List view ────────────────────────────────────────────────────────────
 
   const userCount = userPrompts.length;
-  const builtinCount = BUILTIN_PROMPTS.length;
+  const builtinCount = builtinPrompts().length;
 
   return (
     <div className="flex h-full flex-col">

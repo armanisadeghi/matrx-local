@@ -57,6 +57,7 @@ import type {
   LlmDownloadProgress,
 } from "@/lib/llm/types";
 import { emitClientLog } from "@/hooks/use-client-log";
+import { overlayLlmCatalog } from "@/lib/llm/catalog";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -199,7 +200,9 @@ export function SetupWizard({
       logLine("warn", `Could not load LLM setup status: ${e}`);
     }
     try {
-      const hw = await invoke<LlmHardwareResult>("detect_llm_hardware");
+      const hw = await overlayLlmCatalog(
+        await invoke<LlmHardwareResult>("detect_llm_hardware"),
+      );
       setLlmHardware(hw);
       logLine(
         "info",

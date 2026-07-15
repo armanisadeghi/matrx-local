@@ -119,3 +119,72 @@ PII_LABELS: tuple[str, ...] = (
     "password",
     "api key",
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Remote-catalog accessors — the canonical read path
+#
+# The live catalogs are the remote `catalog_entries` table (kinds `ner_model`
+# / `ner_pii_labels`) served through app/services/catalogs. The compiled
+# tuples above stay only as the explicit defaults tier (first boot / total
+# network failure) — adapted by app/services/catalogs/compiled.py. Read
+# through these accessors, never the tuples directly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _ram_tuple(payload: dict) -> dict:
+    # JSON has no tuples — the payload carries estimated_ram_mb as a
+    # 2-element array; the dataclass field is a tuple.
+    p = dict(payload)
+    ram = p.get("estimated_ram_mb")
+    if isinstance(ram, list):
+        p["estimated_ram_mb"] = tuple(ram)
+    return p
+
+
+def get_ner_models() -> list[NerModelSpec]:
+    """Resolved NER model catalog (remote > cache > compiled fallback)."""
+    from app.services.catalogs import get_catalog  # noqa: PLC0415 — lazy: avoids import cycle
+    from app.services.catalogs.adapt import entries_to_dataclasses  # noqa: PLC0415
+
+    return entries_to_dataclasses(
+        get_catalog("ner_model"), NerModelSpec, transform=_ram_tuple
+    )
+
+
+def get_ner_model(model_id: str) -> NerModelSpec | None:
+    """Single resolved NER model by id."""
+    return next((m for m in get_ner_models() if m.model_id == model_id), None)
+
+
+def get_default_ner_model_id() -> str:
+    """The catalog's flagged default NER model id (payload.default)."""
+    from app.common.system_logger import get_logger  # noqa: PLC0415
+
+    for m in get_ner_models():
+        if m.default:
+            return m.model_id
+    get_logger().warning(
+        "[ner] no catalog entry flagged default — falling back to the "
+        "compiled DEFAULT_NER_MODEL_ID (%s)",
+        DEFAULT_NER_MODEL_ID,
+    )
+    return DEFAULT_NER_MODEL_ID
+
+
+def get_pii_labels() -> tuple[str, ...]:
+    """Resolved PII label set (kind ner_pii_labels, key 'default')."""
+    from app.common.system_logger import get_logger  # noqa: PLC0415
+    from app.services.catalogs import get_catalog_entry  # noqa: PLC0415
+
+    entry = get_catalog_entry("ner_pii_labels", "default")
+    if entry is not None:
+        labels = entry.payload.get("labels")
+        if isinstance(labels, list) and labels and all(isinstance(x, str) for x in labels):
+            return tuple(labels)
+        get_logger().error(
+            "[ner] ner_pii_labels/default payload is malformed (%r) — falling "
+            "back to the compiled PII_LABELS",
+            labels,
+        )
+    return PII_LABELS

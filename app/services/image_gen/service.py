@@ -51,7 +51,11 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from app.common.system_logger import get_logger
-from app.services.image_gen.models import IMAGE_GEN_MODELS, ImageGenModel
+from app.services.image_gen.models import (
+    ImageGenModel,
+    get_image_gen_model,
+    get_image_gen_models,
+)
 from app.services.media_gen.cancellation import (
     GenerationCancelled,
     friendly_generation_error,
@@ -485,10 +489,10 @@ class ImageGenService:
         return {"found": False, "mid_flight": False}
 
     def list_models(self) -> list[ImageGenModel]:
-        return IMAGE_GEN_MODELS
+        return get_image_gen_models()
 
     def get_model(self, model_id: str) -> ImageGenModel | None:
-        m = next((m for m in IMAGE_GEN_MODELS if m.model_id == model_id), None)
+        m = get_image_gen_model(model_id)
         if m is not None:
             return m
         # Custom registry fallback — user-registered models behave exactly

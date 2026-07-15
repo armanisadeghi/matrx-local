@@ -132,6 +132,16 @@ async def health():
     except Exception:
         logger.warning("[routes] /health app_config status read failed", exc_info=True)
 
+    # Remote-catalogs provenance: {tier, fetched_at, entry_count, kinds} —
+    # sibling of app_config (same precedence model, catalog-shaped data).
+    # Never allowed to break the liveness probe.
+    try:
+        from app.services.catalogs import get_catalogs_service
+
+        payload["catalogs"] = get_catalogs_service().status_payload()
+    except Exception:
+        logger.warning("[routes] /health catalogs status read failed", exc_info=True)
+
     return payload
 
 

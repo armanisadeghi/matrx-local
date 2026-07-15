@@ -90,7 +90,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services.image_gen.service import get_image_gen_service
-from app.services.image_gen.models import IMAGE_GEN_MODELS, WORKFLOW_PRESETS
+from app.services.image_gen.models import (
+    get_image_gen_models,
+    get_workflow_preset,
+    get_workflow_presets,
+)
 from app.services.image_gen.installer import (
     start_install,
     get_active_progress,
@@ -560,7 +564,7 @@ async def list_image_gen_models() -> list[ImageGenModelInfo]:
 
     svc = get_image_gen_service()
     out: list[ImageGenModelInfo] = []
-    for m in [*IMAGE_GEN_MODELS, *list_custom_catalog_models()]:
+    for m in [*get_image_gen_models(), *list_custom_catalog_models()]:
         hw_ok, hw_reason = svc.model_hardware_check(m)
         out.append(
             ImageGenModelInfo(
@@ -634,7 +638,7 @@ async def list_workflow_presets() -> list[WorkflowPresetInfo]:
             height=p.height,
             tags=list(p.tags),
         )
-        for p in WORKFLOW_PRESETS
+        for p in get_workflow_presets()
     ]
 
 
@@ -1293,7 +1297,7 @@ async def list_image_loras() -> LorasResponse:
     curated catalog (verified well-known LoRAs, one click from
     POST /image-gen/loras/download)."""
     from app.services.image_gen.loras import (  # noqa: PLC0415
-        CURATED_LORA_CATALOG,
+        get_curated_lora_catalog,
         list_loras,
         lora_id_for_repo,
     )
@@ -1332,7 +1336,7 @@ async def list_image_loras() -> LorasResponse:
             )
 
     catalog: list[LoraCatalogInfo] = []
-    for e in CURATED_LORA_CATALOG:
+    for e in get_curated_lora_catalog():
         try:
             repo_id = e["repo_id"]
             catalog.append(
@@ -1734,7 +1738,7 @@ async def generate_from_workflow(req: WorkflowGenerateRequest) -> GenerateRespon
             detail=f"Image generation not available: {svc.unavailable_reason}",
         )
 
-    preset = next((p for p in WORKFLOW_PRESETS if p.preset_id == req.preset_id), None)
+    preset = get_workflow_preset(req.preset_id)
     if preset is None:
         raise HTTPException(
             status_code=404, detail=f"Workflow preset not found: {req.preset_id}"

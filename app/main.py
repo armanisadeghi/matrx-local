@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.admin_routes import router as admin_router
+from app.api.catalog_routes import router as catalog_router
 from app.api.routes import router as api_router
 from app.api.tool_routes import router as tool_router
 from app.api.sandbox_routes import router as sandbox_router
@@ -327,6 +328,46 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         print("[phase:app-config] App config FAILED (compiled defaults)", flush=True)
         _registry.failed("app_config", exc)
+
+    # Phase 00b: Remote catalogs (models, LoRAs, voices, presets, prompts).
+    # Sibling of Phase 00 — same never-blocks contract: the resolved catalog
+    # set comes from disk cache or the compiled fallback synchronously; the
+    # network fetch runs as a background task with a 6h refresh loop.
+    # See app/services/catalogs/FEATURE.md.
+    print("[phase:catalogs] Resolving remote catalogs...", flush=True)
+    logger.info("[app/main.py] Phase 00b: Resolving remote catalogs...")
+    _registry.starting("catalogs")
+    try:
+        from app.services.catalogs import get_catalogs_service
+
+        _catalogs_service = get_catalogs_service()  # sync: cache/compiled
+        _boot_catalogs = _catalogs_service.resolved
+        _registry.degraded(
+            "catalogs",
+            reason=f"running on {_boot_catalogs.tier} catalogs until remote fetch completes",
+            tier=_boot_catalogs.tier,
+            fetched_at=_boot_catalogs.fetched_at.isoformat()
+            if _boot_catalogs.fetched_at
+            else None,
+        )
+        await _catalogs_service.start_background()  # non-blocking fetch + loop
+        logger.info(
+            "[app/main.py] Phase 00b: Catalogs applied (tier=%s, %d entries) ✓ — "
+            "background refresh running",
+            _boot_catalogs.tier,
+            len(_boot_catalogs.entries),
+        )
+        print(
+            f"[phase:catalogs] Catalogs applied ({_boot_catalogs.tier})", flush=True
+        )
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 00b: Catalogs service FAILED — consumers will "
+            "read the compiled fallback catalogs",
+            exc_info=True,
+        )
+        print("[phase:catalogs] Catalogs FAILED (compiled fallback)", flush=True)
+        _registry.failed("catalogs", exc)
 
     # Phase 0a: Open local SQLite database (offline-first data store).
     # This MUST be the first phase — all data reads come from SQLite.
@@ -1160,6 +1201,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("[app/main.py] App config loop did not stop cleanly: %s", exc)
         _registry.stopped("app_config")
 
+    # Catalogs refresh loop (mirrors Phase 00b). Best-effort + timeouted.
+    try:
+        from app.services.catalogs import get_catalogs_service as _get_catalogs
+
+        _catalogs = _get_catalogs()
+        if _catalogs.active:
+            _registry.stopping("catalogs")
+            await asyncio.wait_for(_catalogs.stop_background(), timeout=2.0)
+            _registry.stopped("catalogs")
+            logger.info("[app/main.py] Catalogs refresh loop stopped ✓")
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning("[app/main.py] Catalogs loop did not stop cleanly: %s", exc)
+        _registry.stopped("catalogs")
+
     _registry.stopping("sync_engine")
     try:
         sync_eng = get_sync_engine()
@@ -1486,6 +1541,7 @@ app.include_router(token_router)  # Token sync — React pushes JWT to Python
 # kill engine-owned children. Listed in _PUBLIC_PATHS in app/api/auth.py.
 # See app/launcher.py for the ownership/propagation contract.
 app.include_router(admin_router)
+app.include_router(catalog_router)
 app.include_router(api_router)
 app.include_router(tool_router, prefix="/tools", tags=["tools"])
 # Orchestrator-shape sandbox dispatch — invoked by aidream's local-proxy

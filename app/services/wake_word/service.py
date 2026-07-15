@@ -39,7 +39,13 @@ from typing import Any
 import numpy as np
 
 from app.common.system_logger import get_logger
-from .models import oww_models_dir, model_exists, _onnx_filename, BUNDLED_MODELS, download_model
+from .models import (
+    oww_models_dir,
+    model_exists,
+    _onnx_filename,
+    get_bundled_models,
+    download_model,
+)
 
 logger = get_logger()
 
@@ -131,7 +137,7 @@ class WakeWordService:
 
         # Ensure model is present; auto-download BUNDLED_MODELS if missing
         if not model_exists(self._model_name):
-            if self._model_name in BUNDLED_MODELS:
+            if self._model_name in get_bundled_models():
                 await self._emit("wake-word-error", f"Downloading {self._model_name}…")
                 try:
                     await download_model(self._model_name)

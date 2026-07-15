@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useContext, useMemo } from "react";
 import { isTauri } from "@/lib/sidecar";
+import { overlayWhisperCatalog } from "@/lib/transcription/catalog";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
   HardwareDetectionResult,
@@ -244,7 +245,11 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
     setIsDetecting(true);
     setError(null);
     try {
-      const result = await tauriInvoke<HardwareDetectionResult>("detect_hardware");
+      // Rust owns hardware probing + the recommendation; the browsable model
+      // list is overlaid with the remote catalog (compiled consts = fallback).
+      const result = await overlayWhisperCatalog(
+        await tauriInvoke<HardwareDetectionResult>("detect_hardware"),
+      );
       setHardwareResult(result);
       return result;
     } catch (e) {

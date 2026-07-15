@@ -1,0 +1,144 @@
+# Remote Catalogs — DB-backed catalogs consumer
+
+Everything the shipped app treats as *catalog-shaped data* — LLM GGUF models,
+Whisper tiers, image/video-gen models, LoRAs, workflow presets, TTS
+voices/languages/model files, NER models/PII labels, wake-word models,
+built-in system prompts, API-key provider patterns — comes from ONE
+anon-readable Supabase table (`public.catalog_entries`, `app = 'matrx-local'`,
+164 entries across 14 kinds) instead of compiled-in lists. This module
+fetches those rows, caches them to disk, and serves the resolved entries
+process-wide; the legacy in-code lists remain ONLY as the explicitly-labeled
+compiled fallback tier.
+
+Cross-repo system-of-record (table DDL, write RPCs, kind schemas, admin UI,
+aidream endpoints): `/Users/armanisadeghi/code/common-docs/remote-catalogs/FEATURE.md`
+— read it before touching this feature in ANY repo. Sibling system:
+[app_config](../app_config/FEATURE.md) (config-shaped scalars; this module
+mirrors its architecture 1:1 and imports its semver helpers).
+
+## Precedence chain (implemented exactly, in `service.py`)
+
+1. **Fresh remote** — fetched this session (PostgREST primary
+   `GET {SUPABASE_URL}/rest/v1/catalog_entries?app=eq.matrx-local&select=*`
+   with the publishable key; aidream `GET /api/catalogs/matrx-local`
+   fallback; 5s timeouts, works pre-login).
+2. **Last-good disk cache** — `MATRX_HOME_DIR / "catalogs.json"` (dev world
+   caches under `~/.matrx-dev`), written atomically (temp + `os.replace`) on
+   every successful fetch.
+3. **Compiled fallback** — `compiled.py` adapts the legacy in-code lists:
+   Python-sourced kinds LIVE from `app/services/{image_gen,video_gen,tts,
+   ner,wake_word}/models.py` + `image_gen/loras.py` (can never drift);
+   Rust/TS-sourced kinds (`llm_model`, `whisper_model`, `system_prompt`,
+   `api_key_provider`) from `compiled_data.py`, a GENERATED mechanical
+   mirror of the Rust/TS constants (regenerate via the seed extraction if
+   those constants ever change).
+
+There is no env-override tier — catalogs are inventory, not deploy knobs.
+
+## The pieces
+
+| File | Role |
+|---|---|
+| `models.py` | `CatalogEntry` (tolerant of unknown columns, strict on known), `KNOWN_KINDS` (all 14 slugs), `is_valid_kind`, `parse_entries` (empty list = validation failure), typed errors, `ResolvedCatalogs` |
+| `client.py` | `fetch_remote()` — PostgREST primary → aidream fallback; accepts bare array or `{"entries": [...]}`; validation failure = fetch failure for that path |
+| `compiled.py` / `compiled_data.py` | The defaults tier (see above) — mirrors the seed extraction 1:1 |
+| `service.py` | `CatalogsService` engine: sync offline boot, atomic disk cache, 6h loop + `refresh_now()`, launcher reporting, singleton + accessors |
+| `adapt.py` | `entries_to_dataclasses` — payload → legacy dataclass, per-entry fault isolation (skip-and-scream) |
+
+## Accessors (the ONLY read path)
+
+- `get_catalog(kind)` → active entries, sorted by `sort_order` (key
+  tie-break), **version-gated**: entries whose `min_app_version` exceeds the
+  running app version are filtered out (debug log); an unparseable/"0.0.0"
+  app version opens the gate loudly (same posture as app_config). Unknown
+  kind → `ValueError` (a typo'd slug is a code bug, never an empty list).
+- `get_catalog_entry(kind, key)` → single resolved entry or None.
+
+**Consumers** (each `app/services/*/models.py` owns its payload→dataclass
+adaptation; nothing imports the legacy lists directly anymore):
+
+| Kind | Accessor | Consumers |
+|---|---|---|
+| `image_gen_model`, `workflow_preset` | `image_gen/models.py get_image_gen_models/get_image_gen_model/get_default_image_model_id/get_workflow_presets/get_workflow_preset` | `image_gen/service.py`, `api/image_gen_routes.py` |
+| `lora` | `image_gen/loras.py get_curated_lora_catalog` | `api/image_gen_routes.py /loras` |
+| `video_gen_model` | `video_gen/models.py get_video_gen_models/...` | `video_gen/service.py`, `api/video_gen_routes.py` |
+| `tts_voice`, `tts_language`, `tts_model_file` | `tts/models.py get_builtin_voices/get_voice_map/get_default_voice_id/get_languages/get_language_map/get_tts_model_files` | `tts/service.py`, `api/setup_routes.py` (loud recovery: a missing required model file re-adds the compiled spec) |
+| `ner_model`, `ner_pii_labels` | `ner/models.py get_ner_models/get_ner_model/get_default_ner_model_id/get_pii_labels` | `ner/service.py` |
+| `wake_word_model` | `wake_word/models.py get_pretrained_registry/get_bundled_models` | `wake_word/models.py list/download`, `wake_word/service.py` |
+| `llm_model`, `whisper_model`, `system_prompt`, `api_key_provider` | served over HTTP (below) to the desktop webview | `desktop/src/lib/{llm,transcription}/catalog.ts`, `system-prompts.ts`, `api-key-patterns.ts` |
+
+## HTTP surface
+
+- **`GET /catalogs/{kind}`** (`app/api/catalog_routes.py`) — resolved entries
+  + provenance tier. Kind validated against `KNOWN_KINDS`; the per-kind paths
+  are enumerated into `_PUBLIC_PATHS` (app/api/auth.py) so an unknown kind is
+  never public (401 unauthenticated, 404 authenticated).
+- **`GET /health`** carries `catalogs: {tier, fetched_at, entry_count,
+  kinds}` beside `app_config`.
+- **`POST /admin/refresh-catalogs`** (local-bootstrap, like refresh-config)
+  → `refresh_now()` → provenance payload with `error` on failure.
+
+## Desktop (Tauri webview) — chosen integration path
+
+**TS-side merge, zero Rust changes** (evaluated against engine-IPC-from-Rust;
+this is the least-invasive correct path): Rust keeps owning HARDWARE probing
+and the recommendation (`detect_llm_hardware` / `detect_hardware`), and the
+webview overlays the browsable `all_models` list with the engine's resolved
+catalog — `desktop/src/lib/llm/catalog.ts` (`overlayLlmCatalog`, computes the
+Rust-derived `is_split`/`all_part_urls`) and
+`desktop/src/lib/transcription/catalog.ts` (`overlayWhisperCatalog`, filters
+`role === "transcription"`). Wired into `use-llm`, `use-transcription`,
+`use-config-catalogs`, `SetupWizard`. Works because downloads are already
+data-driven: `download_llm_model` takes `filename + urls` from the UI and
+`download_whisper_model` builds its URL from the filename — **a new model row
+in the DB lists AND downloads with no Tauri rebuild**. The Rust consts stay
+as the fallback when the engine is unreachable. `system-prompts.ts`
+(`builtinPrompts()` + `refreshBuiltinPrompts()`, dispatches
+`matrx-prompts-changed`) and `api-key-patterns.ts`
+(`refreshApiKeyPatterns()`) follow the same resolved-with-compiled-fallback
+pattern via `desktop/src/lib/catalogs.ts` (`fetchCatalog(kind)`).
+
+## Invariants
+
+- **Never blocks startup.** Boot resolution is one synchronous disk read
+  (`app/main.py` Phase 00b, right after app_config); the fetch is a
+  background task (6h loop; `MATRX_CATALOGS_REFRESH_INTERVAL` is the
+  defensive dev knob, 60s floor).
+- **Total network failure still yields EVERY kind non-empty** — pinned by
+  `tests/characterization/test_catalogs_offline.py` (exact per-kind counts).
+- **Bootstrap constants are never remotely configurable** (Supabase URL +
+  key, aidream URL — compiled-in).
+- **Invalid payload = fetch failure** — loud warning, fall to the next tier,
+  never partially applied. An EMPTY remote list is a validation failure
+  (zero rows means broken query/RLS, not a real state).
+- **Fault isolation at adaptation** — one malformed entry degrades to "that
+  one item is missing" with an error log, never a blanked catalog.
+- **Loud recovery** — cache/defaults tier = launcher `degraded` with tier
+  metadata; TTS model-file recovery re-adds required compiled specs on a bad
+  catalog edit.
+- **No secrets** — everything here is public by definition; catalogs steer
+  downloads, so artifact hashes ride along where the source publishes them
+  (`artifact_sha256` on the Kokoro files).
+
+## Tests
+
+- `tests/unit/test_catalogs.py` — precedence, cache round trip,
+  min_app_version gate (+0.0.0 fail-open), kind accessors (sorting,
+  is_active, unknown-kind ValueError), adaptation fault isolation, parsing.
+- `tests/characterization/test_catalogs_offline.py` — total network failure:
+  every kind non-empty with exact compiled counts; every consumer accessor
+  answers.
+- `tests/parity/test_catalogs_live.py` — release validation (`network` +
+  `MATRX_LIVE_CHECKS=1`): live PostgREST fetch non-empty for every
+  compiled kind, no unknown kinds live, compiled fallback covers
+  `KNOWN_KINDS` exactly with no duplicate keys; aidream fallback path
+  (skips on 404 until that endpoint deploys, any other failure blocks).
+
+## Change Log
+
+- **2026-07-14 — Created.** Full consumer per the approved cross-repo spec:
+  module (mirroring app_config), Phase 00b wiring, `/health` +
+  `/admin/refresh-catalogs` + public `GET /catalogs/{kind}`, cutover of all
+  8 Python consumer files + 4 desktop TS surfaces (TS-side merge, no Rust
+  changes), compiled lists demoted to labeled fallback, tests + live
+  release validation.

@@ -200,3 +200,122 @@ MAX_VOICE_IMPORT_BYTES = 5 * 1024 * 1024
 
 # Exact embedding shape Kokoro expects. Validated on import.
 EMBEDDING_SHAPE = (510, 1, 256)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Remote-catalog accessors — the canonical read path
+#
+# The live catalogs are the remote `catalog_entries` table (kinds `tts_voice`
+# / `tts_language` / `tts_model_file`) served through app/services/catalogs.
+# The compiled lists/constants above stay only as the explicit defaults tier
+# (first boot / total network failure) — adapted into CatalogEntry form by
+# app/services/catalogs/compiled.py. Read through these accessors, never the
+# lists directly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class TtsModelFile:
+    """One downloadable Kokoro runtime artifact (URL + integrity metadata)."""
+
+    filename: str
+    url: str
+    size_bytes: int
+    sha256: str
+    role: str  # "onnx_model" | "voices_bin"
+    sample_rate: int = SAMPLE_RATE
+
+
+_COMPILED_MODEL_FILES: tuple[TtsModelFile, ...] = (
+    TtsModelFile(
+        filename=ONNX_MODEL_FILENAME,
+        url=ONNX_MODEL_URL,
+        size_bytes=ONNX_MODEL_SIZE_BYTES,
+        sha256=ONNX_MODEL_SHA256,
+        role="onnx_model",
+    ),
+    TtsModelFile(
+        filename=VOICES_BIN_FILENAME,
+        url=VOICES_BIN_URL,
+        size_bytes=VOICES_BIN_SIZE_BYTES,
+        sha256=VOICES_BIN_SHA256,
+        role="voices_bin",
+    ),
+)
+
+
+def get_builtin_voices() -> list[TtsVoice]:
+    """Resolved built-in voice catalog (remote > cache > compiled fallback)."""
+    from app.services.catalogs import get_catalog  # noqa: PLC0415 — lazy: avoids import cycle
+    from app.services.catalogs.adapt import entries_to_dataclasses  # noqa: PLC0415
+
+    return entries_to_dataclasses(get_catalog("tts_voice"), TtsVoice)
+
+
+def get_voice_map() -> dict[str, TtsVoice]:
+    """voice_id → TtsVoice over the resolved catalog."""
+    return {v.voice_id: v for v in get_builtin_voices()}
+
+
+def get_default_voice_id() -> str:
+    """The catalog's flagged default voice (is_default)."""
+    from app.common.system_logger import get_logger  # noqa: PLC0415
+
+    for v in get_builtin_voices():
+        if v.is_default:
+            return v.voice_id
+    get_logger().warning(
+        "[tts] no catalog voice flagged is_default — falling back to the "
+        "compiled DEFAULT_VOICE_ID (%s)",
+        DEFAULT_VOICE_ID,
+    )
+    return DEFAULT_VOICE_ID
+
+
+def get_languages() -> list[TtsLanguage]:
+    """Resolved language catalog (remote > cache > compiled fallback)."""
+    from app.services.catalogs import get_catalog  # noqa: PLC0415
+    from app.services.catalogs.adapt import entries_to_dataclasses  # noqa: PLC0415
+
+    return entries_to_dataclasses(get_catalog("tts_language"), TtsLanguage)
+
+
+def get_language_map() -> dict[str, TtsLanguage]:
+    """lang_code → TtsLanguage over the resolved catalog."""
+    return {lang.lang_code: lang for lang in get_languages()}
+
+
+def get_tts_model_files() -> list[TtsModelFile]:
+    """Resolved Kokoro runtime artifacts (URL + size + SHA-256 per file).
+
+    LOUD RECOVERY: the engine's loader contractually needs BOTH compiled
+    filenames on disk — if the resolved catalog is missing one (a bad remote
+    edit), the compiled spec for the missing file is re-added with an error
+    log so TTS setup can never be broken by a catalog row deletion.
+    """
+    from app.common.system_logger import get_logger  # noqa: PLC0415
+    from app.services.catalogs import get_catalog  # noqa: PLC0415
+    from app.services.catalogs.adapt import entries_to_dataclasses  # noqa: PLC0415
+
+    files = entries_to_dataclasses(get_catalog("tts_model_file"), TtsModelFile)
+    present = {f.filename for f in files}
+    for compiled in _COMPILED_MODEL_FILES:
+        if compiled.filename not in present:
+            get_logger().error(
+                "[tts] RECOVERY: resolved tts_model_file catalog is missing the "
+                "required artifact %s — re-adding the compiled spec (fix the "
+                "catalog row!)",
+                compiled.filename,
+            )
+            files.append(compiled)
+    return files
+
+
+def get_tts_model_file(filename: str) -> TtsModelFile:
+    """Resolved spec for one required artifact (always answers — see above)."""
+    for f in get_tts_model_files():
+        if f.filename == filename:
+            return f
+    # Unreachable for the two compiled filenames (recovery above); loud for
+    # anything else.
+    raise KeyError(f"unknown TTS model file: {filename!r}")

@@ -11,7 +11,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { isTauri } from "@/lib/sidecar";
 import { engine } from "@/lib/api";
-import { systemPrompts } from "@/lib/system-prompts";
+import { overlayLlmCatalog } from "@/lib/llm/catalog";
+import { overlayWhisperCatalog } from "@/lib/transcription/catalog";
+import { systemPrompts, refreshBuiltinPrompts } from "@/lib/system-prompts";
 import type { ModelOption } from "@/hooks/use-chat";
 import type { LlmModelInfo, LlmHardwareResult } from "@/lib/llm/types";
 import type {
@@ -162,8 +164,10 @@ export function useConfigCatalogs(): ConfigCatalogs {
     if (!isTauri()) return;
     setLlmModelsLoading(true);
     try {
-      const result = await tauriInvoke<LlmHardwareResult>(
-        "detect_llm_hardware",
+      // Hardware + recommendation from Rust; model list overlaid with the
+      // remote catalog (engine /catalogs/llm_model; Rust consts = fallback).
+      const result = await overlayLlmCatalog(
+        await tauriInvoke<LlmHardwareResult>("detect_llm_hardware"),
       );
       if (mountedRef.current) {
         setLlmModels(result.all_models);
@@ -181,8 +185,9 @@ export function useConfigCatalogs(): ConfigCatalogs {
     if (!isTauri()) return;
     setWhisperModelsLoading(true);
     try {
-      const result =
-        await tauriInvoke<HardwareDetectionResult>("detect_hardware");
+      const result = await overlayWhisperCatalog(
+        await tauriInvoke<HardwareDetectionResult>("detect_hardware"),
+      );
       if (mountedRef.current) {
         setWhisperModels(result.all_models);
         setWhisperRecommended(result.recommended_filename);
@@ -224,8 +229,11 @@ export function useConfigCatalogs(): ConfigCatalogs {
     }
   }, []);
 
-  // ── Load system prompts (sync from localStorage) ──────────────────────────
+  // ── Load system prompts (sync from localStorage + remote builtins) ────────
   const refreshSystemPrompts = useCallback(() => {
+    // Kick a remote-builtins refresh (fire-and-forget); when it lands it
+    // dispatches "matrx-prompts-changed" for listeners.
+    void refreshBuiltinPrompts();
     const all = systemPrompts.listAll();
     const options: SystemPromptOption[] = all.map((p) => ({
       id: p.id,

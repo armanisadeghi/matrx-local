@@ -126,7 +126,14 @@ class ImageGenModel:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Catalog
+# Catalog — COMPILED FALLBACK DATA
+#
+# The live catalog is the remote `catalog_entries` table (kinds
+# `image_gen_model` / `workflow_preset`) served through
+# app/services/catalogs — read it via the get_*() accessors below, NEVER by
+# importing these lists directly. The lists stay only as the explicit
+# defaults tier (first boot / total network failure) and are adapted into
+# CatalogEntry form by app/services/catalogs/compiled.py.
 # ─────────────────────────────────────────────────────────────────────────────
 
 IMAGE_GEN_MODELS: list[ImageGenModel] = [
@@ -403,3 +410,50 @@ WORKFLOW_PRESETS: list[WorkflowPreset] = [
         tags=["landscape", "scenic"],
     ),
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Remote-catalog accessors — the canonical read path
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def get_image_gen_models() -> list[ImageGenModel]:
+    """Resolved image-gen model catalog (remote > cache > compiled fallback)."""
+    from app.services.catalogs import get_catalog  # noqa: PLC0415 — lazy: avoids import cycle
+    from app.services.catalogs.adapt import entries_to_dataclasses  # noqa: PLC0415
+
+    return entries_to_dataclasses(get_catalog("image_gen_model"), ImageGenModel)
+
+
+def get_image_gen_model(model_id: str) -> ImageGenModel | None:
+    """Single resolved catalog model by HF repo id (custom models NOT included)."""
+    return next((m for m in get_image_gen_models() if m.model_id == model_id), None)
+
+
+def get_default_image_model_id() -> str:
+    """The catalog's flagged default model id (payload.is_default)."""
+    from app.common.system_logger import get_logger  # noqa: PLC0415
+    from app.services.catalogs import get_catalog  # noqa: PLC0415
+
+    for entry in get_catalog("image_gen_model"):
+        if entry.payload.get("is_default"):
+            return str(entry.payload.get("model_id") or entry.key)
+    get_logger().warning(
+        "[image_gen] no catalog entry flagged is_default — falling back to the "
+        "compiled DEFAULT_IMAGE_MODEL_ID (%s)",
+        DEFAULT_IMAGE_MODEL_ID,
+    )
+    return DEFAULT_IMAGE_MODEL_ID
+
+
+def get_workflow_presets() -> list[WorkflowPreset]:
+    """Resolved workflow presets (remote > cache > compiled fallback)."""
+    from app.services.catalogs import get_catalog  # noqa: PLC0415
+    from app.services.catalogs.adapt import entries_to_dataclasses  # noqa: PLC0415
+
+    return entries_to_dataclasses(get_catalog("workflow_preset"), WorkflowPreset)
+
+
+def get_workflow_preset(preset_id: str) -> WorkflowPreset | None:
+    """Single resolved workflow preset by id."""
+    return next((p for p in get_workflow_presets() if p.preset_id == preset_id), None)

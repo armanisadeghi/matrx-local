@@ -130,6 +130,16 @@ export interface LlmHardwareResult {
   reason: string;
   can_upgrade: boolean;
   all_models: LlmModelInfo[];
+  /**
+   * The compiled Rust model consts as originally returned by
+   * `detect_llm_hardware`, preserved by `overlayLlmCatalog` when it replaces
+   * `all_models` with the remote catalog. Recommendation lookups
+   * (`findLlmModelInfo`) fall back here when the Rust-recommended filename
+   * is missing from the remote-overlaid list (deactivated/renamed DB row),
+   * so one-click setup never breaks on a catalog edit. Absent when the
+   * result never went through the overlay.
+   */
+  compiled_all_models?: LlmModelInfo[];
 }
 
 // ── Server Status ─────────────────────────────────────────────────────────

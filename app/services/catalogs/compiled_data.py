@@ -1,12 +1,16 @@
 """Vendored compiled-fallback catalog data for kinds whose source of truth
 lives OUTSIDE Python (Rust consts / desktop TS constants).
 
-GENERATED — do not hand-edit. Produced by the mechanical seed extraction
-(catalog-seeds/build_seeds.py, 2026-07-14) that parsed the Rust/TS sources
-verbatim; regenerate by re-running that extraction if the Rust/TS fallback
-constants ever change. Python-sourced kinds (image/video/TTS/NER/wake-word/
-LoRA/presets) are NOT vendored here — compiled.py adapts them live from
-their legacy in-code lists so they can never drift.
+GENERATED — do not hand-edit. Regenerate with
+
+    uv run python scripts/generate_catalog_fallback.py
+
+whenever the Rust/TS fallback constants change; the drift guard
+(tests/unit/test_catalog_fallback_drift.py) re-extracts from the sources at
+test time and fails the suite until this file is regenerated. Python-sourced
+kinds (image/video/TTS/NER/wake-word/LoRA/presets) are NOT vendored here —
+compiled.py adapts them live from their legacy in-code lists so they can
+never drift.
 
 Shape per kind: list of dicts matching the ``catalog_entries`` seed shape
 (key / payload / artifact_* / sort_order / notes?).
@@ -60,8 +64,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 0,
               'tool_calling_rating': 2,
               'speed': 'Very fast',
-              'description': 'Tiny STEM/math reasoner. Same footprint as Phi 4 Mini but tuned '
-                             'for step-by-step reasoning.',
+              'description': 'Tiny STEM/math reasoner. Same footprint as Phi 4 Mini but tuned for '
+                             'step-by-step reasoning.',
               'knowledge_cutoff': 'Apr 2025',
               'hf_model_card_url': 'https://huggingface.co/microsoft/Phi-4-mini-reasoning',
               'is_uncensored': False,
@@ -91,8 +95,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 3,
               'tool_calling_rating': 3,
               'speed': 'Very fast',
-              'description': 'Smallest Qwen 3.5 with native vision. Ideal for phones, old '
-                             'laptops, and ultra-low RAM machines.',
+              'description': 'Smallest Qwen 3.5 with native vision. Ideal for phones, old laptops, '
+                             'and ultra-low RAM machines.',
               'knowledge_cutoff': 'Feb 2026',
               'hf_model_card_url': 'https://huggingface.co/Qwen/Qwen3.5-2B',
               'is_uncensored': False,
@@ -216,8 +220,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'tool_calling_rating': 2,
               'speed': 'Fast',
               'description': "Google's smallest Gemma 4. Multimodal: text + image input via "
-                             'llama.cpp (audio support pending upstream). 2B effective params '
-                             'with PLE. Ideal for edge devices.',
+                             'llama.cpp (audio support pending upstream). 2B effective params with '
+                             'PLE. Ideal for edge devices.',
               'knowledge_cutoff': 'Apr 2026',
               'hf_model_card_url': 'https://huggingface.co/google/gemma-4-E2B-it',
               'is_uncensored': False,
@@ -271,8 +275,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 0,
               'tool_calling_rating': 2,
               'speed': 'Fast',
-              'description': "Google's ultra-efficient on-device model. Designed for phones "
-                             'and edge devices. Text-only via llama.cpp currently.',
+              'description': "Google's ultra-efficient on-device model. Designed for phones and "
+                             'edge devices. Text-only via llama.cpp currently.',
               'knowledge_cutoff': 'Mar 2025',
               'hf_model_card_url': 'https://huggingface.co/google/gemma-3n-E4B-it',
               'is_uncensored': False,
@@ -302,9 +306,9 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 4,
               'tool_calling_rating': 2,
               'speed': 'Fast',
-              'description': 'Gemma 4 multimodal: text + image input via llama.cpp (audio '
-                             'support pending upstream). 4B effective params. Excellent vision '
-                             'quality for its size. 128K context.',
+              'description': 'Gemma 4 multimodal: text + image input via llama.cpp (audio support '
+                             'pending upstream). 4B effective params. Excellent vision quality for '
+                             'its size. 128K context.',
               'knowledge_cutoff': 'Apr 2026',
               'hf_model_card_url': 'https://huggingface.co/google/gemma-4-E4B-it',
               'is_uncensored': False,
@@ -358,8 +362,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 0,
               'tool_calling_rating': 3,
               'speed': 'Fast',
-              'description': 'Latest R1 distill on Qwen3-8B (May 2025). Stronger reasoning '
-                             'than the older Llama-8B distill at the same size.',
+              'description': 'Latest R1 distill on Qwen3-8B (May 2025). Stronger reasoning than '
+                             'the older Llama-8B distill at the same size.',
               'knowledge_cutoff': 'May 2025',
               'hf_model_card_url': 'https://huggingface.co/deepseek-ai/DeepSeek-R1-0528-Qwen3-8B',
               'is_uncensored': False,
@@ -420,8 +424,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 0,
               'tool_calling_rating': 4,
               'speed': 'Medium',
-              'description': 'Solid mid-size generalist. Prefer Qwen 3.5 9B when available '
-                             '(vision + newer quality).',
+              'description': 'Solid mid-size generalist. Prefer Qwen 3.5 9B when available (vision '
+                             '+ newer quality).',
               'knowledge_cutoff': 'Sep 2024',
               'hf_model_card_url': 'https://huggingface.co/Qwen/Qwen3-8B',
               'is_uncensored': False,
@@ -451,8 +455,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 4,
               'tool_calling_rating': 4,
               'speed': 'Medium',
-              'description': 'Recommended default. Dense 9B with native vision, strong tools, '
-                             'and 262K context — best everyday local model.',
+              'description': 'Recommended default. Dense 9B with native vision, strong tools, and '
+                             '262K context — best everyday local model.',
               'knowledge_cutoff': 'Feb 2026',
               'hf_model_card_url': 'https://huggingface.co/Qwen/Qwen3.5-9B',
               'is_uncensored': False,
@@ -482,8 +486,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 0,
               'tool_calling_rating': 4,
               'speed': 'Medium',
-              'description': 'Compact GLM reasoner. Fits 8 GB machines — the small sibling to '
-                             'GLM 4.7 Flash for mid-RAM agent/reasoning workloads.',
+              'description': 'Compact GLM reasoner. Fits 8 GB machines — the small sibling to GLM '
+                             '4.7 Flash for mid-RAM agent/reasoning workloads.',
               'knowledge_cutoff': 'Apr 2025',
               'hf_model_card_url': 'https://huggingface.co/THUDM/GLM-Z1-9B-0414',
               'is_uncensored': False,
@@ -545,8 +549,7 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'tool_calling_rating': 3,
               'speed': 'Medium',
               'description': 'Gemma 4 Unified 12B — the missing mid-size. Text + image, 256K '
-                             'context, compact mmproj (~167 MB). Best Gemma for 8–16 GB '
-                             'machines.',
+                             'context, compact mmproj (~167 MB). Best Gemma for 8–16 GB machines.',
               'knowledge_cutoff': 'Jun 2026',
               'hf_model_card_url': 'https://huggingface.co/google/gemma-4-12B-it',
               'is_uncensored': False,
@@ -631,8 +634,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 0,
               'tool_calling_rating': 4,
               'speed': 'Medium',
-              'description': "OpenAI's open-source reasoning model — equivalent to o3-mini. "
-                             'Only 3.6B active params (MoE). Apache 2.0.',
+              'description': "OpenAI's open-source reasoning model — equivalent to o3-mini. Only "
+                             '3.6B active params (MoE). Apache 2.0.',
               'knowledge_cutoff': 'Mid 2025',
               'hf_model_card_url': 'https://huggingface.co/openai/gpt-oss-20b',
               'is_uncensored': False,
@@ -693,8 +696,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 0,
               'tool_calling_rating': 4,
               'speed': 'GPU recommended',
-              'description': "Mistral's agentic coding specialist. Dense 24B tuned for "
-                             'software engineering and tool use.',
+              'description': "Mistral's agentic coding specialist. Dense 24B tuned for software "
+                             'engineering and tool use.',
               'knowledge_cutoff': 'Nov 2025',
               'hf_model_card_url': 'https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512',
               'is_uncensored': False,
@@ -724,8 +727,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 0,
               'tool_calling_rating': 5,
               'speed': 'GPU recommended',
-              'description': 'Coding MoE: 30B total / 3B active. Best agentic coding model in '
-                             'the 16–24 GB band. 256K context.',
+              'description': 'Coding MoE: 30B total / 3B active. Best agentic coding model in the '
+                             '16–24 GB band. 256K context.',
               'knowledge_cutoff': 'Jul 2025',
               'hf_model_card_url': 'https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct',
               'is_uncensored': False,
@@ -786,9 +789,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 4,
               'tool_calling_rating': 3,
               'speed': 'GPU recommended',
-              'description': 'Gemma 4 MoE: 26B total / 4B active. Near-31B quality at 4B '
-                             'speed. Text + image multimodal. 256K context. Best value Gemma '
-                             '4.',
+              'description': 'Gemma 4 MoE: 26B total / 4B active. Near-31B quality at 4B speed. '
+                             'Text + image multimodal. 256K context. Best value Gemma 4.',
               'knowledge_cutoff': 'Apr 2026',
               'hf_model_card_url': 'https://huggingface.co/google/gemma-4-26B-A4B-it',
               'is_uncensored': False,
@@ -842,8 +844,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 3,
               'tool_calling_rating': 4,
               'speed': 'GPU recommended',
-              'description': 'Dense 27B with native vision. Arena rank #24 among all '
-                             'open-source models. Choose your size below.',
+              'description': 'Dense 27B with native vision. Arena rank #24 among all open-source '
+                             'models. Choose your size below.',
               'knowledge_cutoff': 'Feb 2026',
               'hf_model_card_url': 'https://huggingface.co/Qwen/Qwen3.5-27B',
               'is_uncensored': False,
@@ -897,8 +899,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 5,
               'tool_calling_rating': 3,
               'speed': 'GPU recommended',
-              'description': "Google's flagship Gemma 4. Dense 31B with top-tier vision. Text "
-                             '+ image multimodal. 256K context. Built-in thinking mode.',
+              'description': "Google's flagship Gemma 4. Dense 31B with top-tier vision. Text + "
+                             'image multimodal. 256K context. Built-in thinking mode.',
               'knowledge_cutoff': 'Apr 2026',
               'hf_model_card_url': 'https://huggingface.co/google/gemma-4-31B-it',
               'is_uncensored': False,
@@ -952,8 +954,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 0,
               'tool_calling_rating': 3,
               'speed': 'GPU recommended',
-              'description': "DeepSeek's 32B reasoning distill. Exceptional chain-of-thought "
-                             'for its size. Fits in 24 GB VRAM.',
+              'description': "DeepSeek's 32B reasoning distill. Exceptional chain-of-thought for "
+                             'its size. Fits in 24 GB VRAM.',
               'knowledge_cutoff': 'Jul 2024',
               'hf_model_card_url': 'https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
               'is_uncensored': False,
@@ -983,8 +985,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 4,
               'tool_calling_rating': 3,
               'speed': 'GPU recommended',
-              'description': "Google's best open multimodal model from the Gemma 3 line. "
-                             'Prefer Gemma 4 26B A4B / 31B for newer quality.',
+              'description': "Google's best open multimodal model from the Gemma 3 line. Prefer "
+                             'Gemma 4 26B A4B / 31B for newer quality.',
               'knowledge_cutoff': 'Mar 2025',
               'hf_model_card_url': 'https://huggingface.co/google/gemma-3-27b-it',
               'is_uncensored': False,
@@ -1014,9 +1016,9 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 4,
               'tool_calling_rating': 4,
               'speed': 'GPU recommended',
-              'description': 'Top open-source MoE model. Only 3B active params — inference '
-                             'speed of a 3B with quality far above. Arena rank #28. Choose '
-                             'your size below.',
+              'description': 'Top open-source MoE model. Only 3B active params — inference speed '
+                             'of a 3B with quality far above. Arena rank #28. Choose your size '
+                             'below.',
               'knowledge_cutoff': 'Feb 2026',
               'hf_model_card_url': 'https://huggingface.co/Qwen/Qwen3.5-35B-A3B',
               'is_uncensored': False,
@@ -1082,9 +1084,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 3,
               'tool_calling_rating': 3,
               'speed': 'Medium',
-              'description': 'Uncensored Qwen3.5-35B MoE (abliterated). No refusals. Essential '
-                             'for sensitive monitoring, analysis, and tasks standard models '
-                             'decline.',
+              'description': 'Uncensored Qwen3.5-35B MoE (abliterated). No refusals. Essential for '
+                             'sensitive monitoring, analysis, and tasks standard models decline.',
               'knowledge_cutoff': 'Feb 2026',
               'hf_model_card_url': 'https://huggingface.co/HauhauCS/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive',
               'is_uncensored': True,
@@ -1224,8 +1225,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 4,
               'tool_calling_rating': 5,
               'speed': 'Server GPU',
-              'description': '122B MoE, only 10B active. Near-frontier quality accessible on '
-                             '48 GB+ servers. Arena rank #16 globally.',
+              'description': '122B MoE, only 10B active. Near-frontier quality accessible on 48 '
+                             'GB+ servers. Arena rank #16 globally.',
               'knowledge_cutoff': 'Feb 2026',
               'hf_model_card_url': 'https://huggingface.co/Qwen/Qwen3.5-122B-A10B',
               'is_uncensored': False,
@@ -1255,8 +1256,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 3,
               'tool_calling_rating': 4,
               'speed': 'Server GPU',
-              'description': "Mistral's latest unified MoE — reasoning + multimodal + coding "
-                             'in one 256k-context model. Released March 2026.',
+              'description': "Mistral's latest unified MoE — reasoning + multimodal + coding in "
+                             'one 256k-context model. Released March 2026.',
               'knowledge_cutoff': 'Mar 2026',
               'hf_model_card_url': 'https://huggingface.co/mistralai/Mistral-Small-4-119B-2603',
               'is_uncensored': False,
@@ -1286,8 +1287,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 4,
               'tool_calling_rating': 4,
               'speed': 'Server GPU',
-              'description': "Meta's Llama 4 MoE with unprecedented 10M token context. "
-                             'Multimodal (text + image). 109B total / 17B active.',
+              'description': "Meta's Llama 4 MoE with unprecedented 10M token context. Multimodal "
+                             '(text + image). 109B total / 17B active.',
               'knowledge_cutoff': 'Mar 2025',
               'hf_model_card_url': 'https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct',
               'is_uncensored': False,
@@ -1379,8 +1380,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 0,
               'tool_calling_rating': 5,
               'speed': 'Server GPU',
-              'description': '80B MoE with only ~3B active. Fast long-context server model — '
-                             'sits between Scout and Qwen 3.5 122B A10B.',
+              'description': '80B MoE with only ~3B active. Fast long-context server model — sits '
+                             'between Scout and Qwen 3.5 122B A10B.',
               'knowledge_cutoff': 'Sep 2025',
               'hf_model_card_url': 'https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct',
               'is_uncensored': False,
@@ -1410,8 +1411,8 @@ COMPILED_LLM_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'LowAlt',
               'vision_rating': 0,
               'tool_calling_rating': 5,
               'speed': 'Server GPU',
-              'description': 'Server-grade coding MoE (~80B / ~3B active). Best practical '
-                             'coding beast for Mac Studio / 64GB+ boxes.',
+              'description': 'Server-grade coding MoE (~80B / ~3B active). Best practical coding '
+                             'beast for Mac Studio / 64GB+ boxes.',
               'knowledge_cutoff': 'Jan 2026',
               'hf_model_card_url': 'https://huggingface.co/Qwen/Qwen3-Coder-Next',
               'is_uncensored': False,
@@ -1438,8 +1439,7 @@ COMPILED_WHISPER_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'ggml-tiny.en.bi
               'ram_required_mb': 390,
               'relative_speed': '~32x realtime',
               'accuracy': 'Good (~5.7% WER)',
-              'description': 'Fastest, lowest resource usage. Best for older or low-RAM '
-                             'machines.',
+              'description': 'Fastest, lowest resource usage. Best for older or low-RAM machines.',
               'download_url': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin',
               'role': 'transcription'},
   'artifact_url': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin',
@@ -1489,10 +1489,10 @@ COMPILED_WHISPER_MODEL_ENTRIES: list[dict[str, Any]] = [{'key': 'ggml-tiny.en.bi
   'artifact_sha256': None,
   'artifact_size_bytes': None,
   'sort_order': 30,
-  'notes': 'VAD companion model; source defines only filename + base URL (downloader.rs), '
-           'struct fields null.'}]
+  'notes': 'VAD companion model; source defines only filename + base URL (downloader.rs), struct '
+           'fields null.'}]
 
-# Source: desktop/src/lib/system-prompts.ts (BUILTIN_PROMPTS)
+# Source: desktop/src/lib/system-prompts.ts
 COMPILED_SYSTEM_PROMPT_ENTRIES: list[dict[str, Any]] = [{'key': 'builtin-assistant',
   'payload': {'id': 'builtin-assistant',
               'name': 'Helpful Assistant',
@@ -1512,17 +1512,16 @@ COMPILED_SYSTEM_PROMPT_ENTRIES: list[dict[str, Any]] = [{'key': 'builtin-assista
  {'key': 'builtin-transcript-polish',
   'payload': {'id': 'builtin-transcript-polish',
               'name': 'Transcript Polish',
-              'content': 'You are a Transcript Cleanup Specialist. You take raw, messy '
-                         'transcripts and produce clean, polished text.\n'
+              'content': 'You are a Transcript Cleanup Specialist. You take raw, messy transcripts '
+                         'and produce clean, polished text.\n'
                          '\n'
-                         'Your job is simple: clean up the transcript while keeping the '
-                         'original meaning completely intact.\n'
+                         'Your job is simple: clean up the transcript while keeping the original '
+                         'meaning completely intact.\n'
                          '\n'
                          'What to fix:\n'
                          '- Transcription errors (misheard words, garbled phrases)\n'
                          '- Punctuation, grammar, and spelling\n'
-                         '- Filler words like "um," "uh," "you know," "like" when used as '
-                         'filler\n'
+                         '- Filler words like "um," "uh," "you know," "like" when used as filler\n'
                          '- Repeated or duplicated words that are clearly stutters or '
                          'transcription artifacts\n'
                          '- Run-on sentences — break them into proper sentences\n'
@@ -1543,9 +1542,9 @@ COMPILED_SYSTEM_PROMPT_ENTRIES: list[dict[str, Any]] = [{'key': 'builtin-assista
                          '- Do not summarize or condense — keep all the substance\n'
                          '\n'
                          'When something is genuinely ambiguous and you cannot tell what was '
-                         'meant, use this format: [OPTION A: first interpretation] / [OPTION '
-                         'B: second interpretation]. Only do this for important ambiguities '
-                         'where the meaning would change.\n',
+                         'meant, use this format: [OPTION A: first interpretation] / [OPTION B: '
+                         'second interpretation]. Only do this for important ambiguities where the '
+                         'meaning would change.\n',
               'category': 'Voice'},
   'artifact_url': None,
   'artifact_sha256': None,
@@ -1554,8 +1553,8 @@ COMPILED_SYSTEM_PROMPT_ENTRIES: list[dict[str, Any]] = [{'key': 'builtin-assista
  {'key': 'builtin-summarize',
   'payload': {'id': 'builtin-summarize',
               'name': 'Summarize',
-              'content': 'You are a summarization specialist. You take text and produce a '
-                         'concise summary that captures every key point.\n'
+              'content': 'You are a summarization specialist. You take text and produce a concise '
+                         'summary that captures every key point.\n'
                          '\n'
                          'Rules:\n'
                          '- Include all important information — do not skip key points\n'
@@ -1572,8 +1571,8 @@ COMPILED_SYSTEM_PROMPT_ENTRIES: list[dict[str, Any]] = [{'key': 'builtin-assista
  {'key': 'builtin-explain',
   'payload': {'id': 'builtin-explain',
               'name': 'Explain Simply',
-              'content': 'You are an explanation specialist. You take complex topics and make '
-                         'them easy to understand for someone with no background.\n'
+              'content': 'You are an explanation specialist. You take complex topics and make them '
+                         'easy to understand for someone with no background.\n'
                          '\n'
                          'Rules:\n'
                          '- Use plain, simple language — no jargon\n'
@@ -1612,17 +1611,17 @@ COMPILED_SYSTEM_PROMPT_ENTRIES: list[dict[str, Any]] = [{'key': 'builtin-assista
  {'key': 'builtin-brainstorm',
   'payload': {'id': 'builtin-brainstorm',
               'name': 'Brainstorm',
-              'content': 'You are a brainstorming specialist. You generate creative, diverse '
-                         'ideas for a given topic.\n'
+              'content': 'You are a brainstorming specialist. You generate creative, diverse ideas '
+                         'for a given topic.\n'
                          '\n'
                          'Rules:\n'
-                         '- Aim for breadth — cover a wide range of approaches, both '
-                         'conventional and unconventional\n'
+                         '- Aim for breadth — cover a wide range of approaches, both conventional '
+                         'and unconventional\n'
                          '- Present each idea as a short bullet point (1-2 sentences max)\n'
                          '- Do not explain or justify ideas unless asked — just list them\n'
                          '- Do not repeat the same idea in different words\n'
-                         '- Do not filter ideas for feasibility unless asked — include bold '
-                         'and unusual ones\n'
+                         '- Do not filter ideas for feasibility unless asked — include bold and '
+                         'unusual ones\n'
                          '- Generate at least 8 ideas unless the topic is very narrow\n',
               'category': 'Creative'},
   'artifact_url': None,
@@ -1640,8 +1639,8 @@ COMPILED_SYSTEM_PROMPT_ENTRIES: list[dict[str, Any]] = [{'key': 'builtin-assista
                          'requires more\n'
                          '- Never use bullet points, numbered lists, markdown, code blocks, or '
                          'headers — plain prose only\n'
-                         '- Never say "Certainly!", "Great question!", "Of course!" or any '
-                         'filler opener — just answer directly\n'
+                         '- Never say "Certainly!", "Great question!", "Of course!" or any filler '
+                         'opener — just answer directly\n'
                          '- If you need to give a long answer, summarize it in 2 sentences and '
                          'offer to elaborate\n'
                          '- Match the pace of conversation: short question → short answer\n'
@@ -1652,7 +1651,7 @@ COMPILED_SYSTEM_PROMPT_ENTRIES: list[dict[str, Any]] = [{'key': 'builtin-assista
   'artifact_size_bytes': None,
   'sort_order': 60}]
 
-# Source: desktop/src/lib/api-key-patterns.ts (PROVIDER_PATTERNS + GLOBAL_STRIP_*)
+# Source: desktop/src/lib/api-key-patterns.ts
 COMPILED_API_KEY_PROVIDER_ENTRIES: list[dict[str, Any]] = [{'key': 'openai',
   'payload': {'names': ['openai', 'open_ai', 'oai', 'openai_api'],
               'env_var_names': ['OPENAI_API_KEY',
@@ -1677,12 +1676,7 @@ COMPILED_API_KEY_PROVIDER_ENTRIES: list[dict[str, Any]] = [{'key': 'openai',
   'artifact_size_bytes': None,
   'sort_order': 10},
  {'key': 'google',
-  'payload': {'names': ['google',
-                        'gemini',
-                        'google_ai',
-                        'googleai',
-                        'gemini_ai',
-                        'google_gemini'],
+  'payload': {'names': ['google', 'gemini', 'google_ai', 'googleai', 'gemini_ai', 'google_gemini'],
               'env_var_names': ['GOOGLE_API_KEY',
                                 'GEMINI_API_KEY',
                                 'GOOGLE_GEMINI_API_KEY',
@@ -1723,9 +1717,7 @@ COMPILED_API_KEY_PROVIDER_ENTRIES: list[dict[str, Any]] = [{'key': 'openai',
   'sort_order': 50},
  {'key': 'together',
   'payload': {'names': ['together', 'togetherai', 'together_ai', 'together_xyz'],
-              'env_var_names': ['TOGETHER_API_KEY',
-                                'TOGETHER_AI_API_KEY',
-                                'TOGETHERAI_API_KEY'],
+              'env_var_names': ['TOGETHER_API_KEY', 'TOGETHER_AI_API_KEY', 'TOGETHERAI_API_KEY'],
               'label': 'Together AI'},
   'artifact_url': None,
   'artifact_sha256': None,
@@ -1786,6 +1778,6 @@ COMPILED_API_KEY_PROVIDER_ENTRIES: list[dict[str, Any]] = [{'key': 'openai',
   'artifact_sha256': None,
   'artifact_size_bytes': None,
   'sort_order': 110,
-  'notes': 'GLOBAL_STRIP_PREFIXES + GLOBAL_STRIP_SUFFIXES (env-var noise stripped before '
-           "provider matching). Key '_strip_lists' impossible: DB key regex forbids leading "
-           'underscore.'}]
+  'notes': 'GLOBAL_STRIP_PREFIXES + GLOBAL_STRIP_SUFFIXES (env-var noise stripped before provider '
+           "matching). Key '_strip_lists' impossible: DB key regex forbids leading underscore."}]
+

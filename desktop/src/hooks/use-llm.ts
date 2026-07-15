@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invokeTauri as tauriInvoke, isTauri } from "@/lib/sidecar";
 import { engine } from "@/lib/api";
-import { overlayLlmCatalog } from "@/lib/llm/catalog";
+import { findLlmModelInfo, overlayLlmCatalog } from "@/lib/llm/catalog";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
   LlmHardwareResult,
@@ -823,9 +823,10 @@ export function useLlm(): [LlmState, LlmActions] {
         (m) => m.filename === hw.recommended_filename,
       );
       if (!alreadyDownloaded) {
-        const modelInfo = hw.all_models.find(
-          (m) => m.filename === hw.recommended_filename,
-        );
+        // findLlmModelInfo falls back to the compiled Rust consts when a
+        // DB catalog edit removed the recommended filename from the
+        // overlaid list — one-click setup must survive that.
+        const modelInfo = findLlmModelInfo(hw, hw.recommended_filename);
         if (!modelInfo) {
           throw new Error(
             `Model info not found for ${hw.recommended_filename}`,

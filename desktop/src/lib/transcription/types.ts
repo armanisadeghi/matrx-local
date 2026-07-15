@@ -27,6 +27,15 @@ export interface HardwareDetectionResult {
   reason: string;
   can_upgrade: boolean;
   all_models: ModelInfo[];
+  /**
+   * The compiled Rust model consts as originally returned by
+   * `detect_hardware`, preserved by `overlayWhisperCatalog` when it replaces
+   * `all_models` with the remote catalog. Recommendation lookups
+   * (`findWhisperModelInfo`) fall back here when the Rust-recommended
+   * filename is missing from the remote-overlaid list. Absent when the
+   * result never went through the overlay.
+   */
+  compiled_all_models?: ModelInfo[];
 }
 
 export interface WhisperSegment {

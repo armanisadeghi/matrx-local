@@ -45,6 +45,7 @@ from app.services.catalogs.models import (
     CatalogEntry,
     CatalogsFetchError,
     CatalogsValidationError,
+    ParseReport,
     parse_entries,
 )
 
@@ -55,6 +56,13 @@ APP_KEY = "matrx-local"
 # Per the spec: 5s total, 5s connect. Catalog fetch is a background concern —
 # it must never hold anything up for long.
 _TIMEOUT = httpx.Timeout(5.0, connect=5.0)
+
+# PostgREST paging: Supabase's max-rows setting silently truncates an
+# unpaginated response (default 1000), so the primary path pages explicitly
+# with Range headers until a short page. The catalog is ~164 rows today;
+# anything past this ceiling is a runaway query, not a real catalog.
+_PAGE_SIZE = 1000
+_MAX_TOTAL_ROWS = 5000
 
 
 def _unwrap_body(body: Any, source: str) -> list[Any]:
@@ -70,29 +78,56 @@ def _unwrap_body(body: Any, source: str) -> list[Any]:
     )
 
 
-async def _fetch_postgrest() -> list[CatalogEntry]:
-    """Primary path: anon PostgREST read with the publishable key."""
+async def _fetch_postgrest(report: ParseReport | None = None) -> list[CatalogEntry]:
+    """Primary path: anon PostgREST read with the publishable key.
+
+    Explicitly ordered (``kind,key``) and paged with Range headers —
+    Supabase's server-side max-rows would otherwise silently truncate a
+    single unranged response at 1000 rows. Pages until a short page;
+    screams (fetch failure) past ``_MAX_TOTAL_ROWS``.
+    """
     url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/catalog_entries"
+    rows: list[Any] = []
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.get(
-            url,
-            params={"app": f"eq.{APP_KEY}", "select": "*"},
-            headers={"apikey": SUPABASE_PUBLISHABLE_KEY},
-        )
-    resp.raise_for_status()
-    return parse_entries(_unwrap_body(resp.json(), "PostgREST"))
+        while True:
+            start = len(rows)
+            resp = await client.get(
+                url,
+                params={
+                    "app": f"eq.{APP_KEY}",
+                    "select": "*",
+                    "order": "kind,key",
+                },
+                headers={
+                    "apikey": SUPABASE_PUBLISHABLE_KEY,
+                    "Range-Unit": "items",
+                    "Range": f"{start}-{start + _PAGE_SIZE - 1}",
+                },
+            )
+            resp.raise_for_status()
+            page = _unwrap_body(resp.json(), "PostgREST")
+            rows.extend(page)
+            if len(rows) > _MAX_TOTAL_ROWS:
+                raise CatalogsValidationError(
+                    f"PostgREST returned more than {_MAX_TOTAL_ROWS} "
+                    f"catalog_entries rows for app={APP_KEY!r} — runaway "
+                    "query/filter, refusing the payload"
+                )
+            if len(page) < _PAGE_SIZE:
+                break
+    return parse_entries(rows, report=report)
 
 
-async def _fetch_aidream() -> list[CatalogEntry]:
+async def _fetch_aidream(report: ParseReport | None = None) -> list[CatalogEntry]:
     """Fallback path: aidream's public catalogs endpoint."""
     url = f"{AIDREAM_SERVER_URL.rstrip('/')}/api/catalogs/{APP_KEY}"
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.get(url)
     resp.raise_for_status()
-    return parse_entries(_unwrap_body(resp.json(), "aidream"))
+    return parse_entries(_unwrap_body(resp.json(), "aidream"), report=report)
 
 
-async def fetch_remote() -> list[CatalogEntry]:
+async def fetch_remote(report: ParseReport | None = None) -> list[CatalogEntry]:
     """Fetch the live catalog rows: PostgREST primary, aidream fallback.
 
     Raises ``CatalogsFetchError`` (with every per-path reason) when both
@@ -101,8 +136,17 @@ async def fetch_remote() -> list[CatalogEntry]:
     """
     failures: list[str] = []
 
+    def _merge(path_report: ParseReport) -> None:
+        # Only the WINNING path's skip stats reach the caller — a failed
+        # path's partial parse must not pollute the surfaced count.
+        if report is not None:
+            report.skipped += path_report.skipped
+            report.reasons.extend(path_report.reasons)
+
     try:
-        entries = await _fetch_postgrest()
+        path_report = ParseReport()
+        entries = await _fetch_postgrest(path_report)
+        _merge(path_report)
         logger.info(
             "[catalogs] fetched %d remote catalog entries via PostgREST (primary)",
             len(entries),
@@ -117,7 +161,9 @@ async def fetch_remote() -> list[CatalogEntry]:
         )
 
     try:
-        entries = await _fetch_aidream()
+        path_report = ParseReport()
+        entries = await _fetch_aidream(path_report)
+        _merge(path_report)
         logger.info(
             "[catalogs] fetched %d remote catalog entries via aidream (fallback)",
             len(entries),

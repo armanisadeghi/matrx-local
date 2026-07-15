@@ -71,7 +71,10 @@ export async function overlayLlmCatalog(
 ): Promise<LlmHardwareResult> {
   try {
     const models = await fetchLlmModelCatalog();
-    return { ...result, all_models: models };
+    // Keep the compiled consts reachable: the Rust recommendation
+    // (recommended_filename) may reference a model a DB edit deactivated
+    // or renamed — findLlmModelInfo falls back to these.
+    return { ...result, all_models: models, compiled_all_models: result.all_models };
   } catch (e) {
     console.warn(
       "[catalogs] llm_model overlay unavailable — using compiled Rust catalog:",
@@ -79,4 +82,30 @@ export async function overlayLlmCatalog(
     );
     return result;
   }
+}
+
+/**
+ * Resolve a model's info by filename — the ONE lookup path for
+ * `recommended_filename`. Checks the (possibly remote-overlaid) `all_models`
+ * list first; when the filename is missing there (a deactivated/renamed DB
+ * row must not break one-click setup) it falls back to the compiled Rust
+ * consts preserved by `overlayLlmCatalog`, with a loud console.warn.
+ */
+export function findLlmModelInfo(
+  hw: LlmHardwareResult,
+  filename: string,
+): LlmModelInfo | undefined {
+  const fromList = hw.all_models.find((m) => m.filename === filename);
+  if (fromList) return fromList;
+  const fromCompiled = hw.compiled_all_models?.find(
+    (m) => m.filename === filename,
+  );
+  if (fromCompiled) {
+    console.warn(
+      `[catalogs] model ${filename} is missing from the remote-overlaid ` +
+        "llm_model catalog (deactivated/renamed DB row?) — falling back to " +
+        "the compiled Rust model info",
+    );
+  }
+  return fromCompiled;
 }

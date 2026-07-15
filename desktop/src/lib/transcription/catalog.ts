@@ -51,7 +51,9 @@ export async function overlayWhisperCatalog(
 ): Promise<HardwareDetectionResult> {
   try {
     const models = await fetchWhisperModelCatalog();
-    return { ...result, all_models: models };
+    // Keep the compiled consts reachable for recommendation lookups —
+    // same posture as overlayLlmCatalog/findLlmModelInfo.
+    return { ...result, all_models: models, compiled_all_models: result.all_models };
   } catch (e) {
     console.warn(
       "[catalogs] whisper_model overlay unavailable — using compiled Rust catalog:",
@@ -59,4 +61,29 @@ export async function overlayWhisperCatalog(
     );
     return result;
   }
+}
+
+/**
+ * Resolve a Whisper model's info by filename — the ONE lookup path for
+ * `recommended_filename`. Falls back to the compiled Rust consts preserved
+ * by `overlayWhisperCatalog` when a deactivated/renamed DB row removed the
+ * recommended filename from the overlaid list, with a loud console.warn.
+ */
+export function findWhisperModelInfo(
+  hw: HardwareDetectionResult,
+  filename: string,
+): ModelInfo | undefined {
+  const fromList = hw.all_models.find((m) => m.filename === filename);
+  if (fromList) return fromList;
+  const fromCompiled = hw.compiled_all_models?.find(
+    (m) => m.filename === filename,
+  );
+  if (fromCompiled) {
+    console.warn(
+      `[catalogs] model ${filename} is missing from the remote-overlaid ` +
+        "whisper_model catalog (deactivated/renamed DB row?) — falling back " +
+        "to the compiled Rust model info",
+    );
+  }
+  return fromCompiled;
 }

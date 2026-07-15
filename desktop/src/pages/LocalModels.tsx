@@ -15,6 +15,7 @@ import type {
   ServerLogLine,
 } from "@/hooks/use-llm";
 import { useLlmApp } from "@/contexts/LlmContext";
+import { findLlmModelInfo } from "@/lib/llm/catalog";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -383,9 +384,9 @@ function SetupTab() {
     ? downloadedModels.some((m) => {
         if (m.filename !== hardwareResult.recommended_filename) return false;
         // Split models are only usable when every part is on disk.
-        const catalog = hardwareResult.all_models.find(
-          (c) => c.filename === m.filename,
-        );
+        // findLlmModelInfo falls back to the compiled Rust consts when the
+        // recommended filename is missing from the remote-overlaid catalog.
+        const catalog = findLlmModelInfo(hardwareResult, m.filename);
         return catalog?.is_split ? m.all_parts_present : true;
       })
     : false;

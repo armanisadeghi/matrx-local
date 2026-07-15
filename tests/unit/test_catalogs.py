@@ -22,6 +22,7 @@ from app.services.catalogs.adapt import entries_to_dataclasses
 from app.services.catalogs.models import (
     CatalogEntry,
     CatalogsValidationError,
+    ParseReport,
     is_valid_kind,
     parse_entries,
 )
@@ -87,11 +88,11 @@ def _make_service(
             encoding="utf-8",
         )
 
-    async def fetcher() -> list[CatalogEntry]:
+    async def fetcher(report: ParseReport | None = None) -> list[CatalogEntry]:
         if fetch_error is not None:
             raise fetch_error
         assert fetch_rows is not None
-        return parse_entries(fetch_rows)
+        return parse_entries(fetch_rows, report=report)
 
     return CatalogsService(
         cache_path=cache_path,
@@ -157,7 +158,7 @@ def test_corrupt_cache_falls_to_compiled(tmp_path: Path) -> None:
         cache_path = tmp_path / "catalogs.json"
         cache_path.write_text(content, encoding="utf-8")
 
-        async def fetcher() -> list[CatalogEntry]:
+        async def fetcher(report: ParseReport | None = None) -> list[CatalogEntry]:
             raise ConnectionError("offline")
 
         svc = CatalogsService(
@@ -186,9 +187,25 @@ def test_parse_entries_rejects_empty_list() -> None:
         parse_entries([])
 
 
-def test_parse_entries_rejects_bad_row() -> None:
-    with pytest.raises(CatalogsValidationError):
+def test_parse_entries_rejects_systemic_corruption() -> None:
+    # 1 of 2 rows malformed = 50% > the 20% floor → the payload is refused.
+    with pytest.raises(CatalogsValidationError, match="systemic-corruption"):
         parse_entries([_row(), {"kind": "lora"}])  # second row missing key/payload
+
+
+def test_parse_entries_skips_isolated_bad_row() -> None:
+    # 1 of 10 rows malformed = 10% < the 20% floor → skip it, keep the rest.
+    rows = [_row(key=f"ok/{i}") for i in range(9)] + [{"kind": "lora"}]
+    report = ParseReport()
+    entries = parse_entries(rows, report=report)
+    assert [e.key for e in entries] == [f"ok/{i}" for i in range(9)]
+    assert report.skipped == 1
+    assert "failed validation" in report.reasons[0]
+
+
+def test_parse_entries_rejects_all_rows_malformed() -> None:
+    with pytest.raises(CatalogsValidationError, match="NO parseable rows"):
+        parse_entries([{"kind": "lora"}, "not-a-dict"])
 
 
 def test_parse_entries_ignores_unknown_columns() -> None:
@@ -325,7 +342,9 @@ def test_cache_write_read_round_trip(tmp_path: Path) -> None:
     assert [p.name for p in tmp_path.iterdir()] == ["catalogs.json"]
 
     # A fresh service boots straight from that cache (tier=cache).
-    async def offline_fetcher() -> list[CatalogEntry]:
+    async def offline_fetcher(
+        report: ParseReport | None = None,
+    ) -> list[CatalogEntry]:
         raise ConnectionError("offline")
 
     svc2 = CatalogsService(
@@ -352,8 +371,128 @@ def test_status_payload(tmp_path: Path) -> None:
     status = svc.status_payload()
     assert status["tier"] == "defaults"
     assert status["kinds"] == {"lora": 1}
+    assert status["skipped_entries"] == 0
+    assert status["kind_floors_active"] == []
     _run(svc.refresh_now())
     status = svc.status_payload()
     assert status["tier"] == "remote"
     assert status["entry_count"] == 2
     assert status["fetched_at"] is not None
+
+
+def test_status_payload_surfaces_skipped_rows(tmp_path: Path) -> None:
+    # 1 malformed row of 10: applied (isolation) but visible in the status.
+    rows = [_row(key=f"ok/{i}") for i in range(9)] + [{"kind": "lora"}]
+    svc = _make_service(tmp_path, fetch_rows=rows)
+    _run(svc.refresh_now())
+    status = svc.status_payload()
+    assert status["tier"] == "remote"
+    assert status["entry_count"] == 9
+    assert status["skipped_entries"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Per-kind emptiness floor (generalized tts_model_file precedent)
+# ---------------------------------------------------------------------------
+
+
+def test_kind_floor_applies_when_remote_empties_a_compiled_kind(
+    tmp_path: Path,
+) -> None:
+    # Remote has ONLY a system_prompt row → the lora kind (non-empty in the
+    # compiled tier) resolves to zero from the remote tier → compiled floor.
+    rows = [_row(kind="system_prompt", key="sp", payload={"id": "sp"})]
+    svc = _make_service(tmp_path, fetch_rows=rows)
+    _run(svc.refresh_now())
+    assert svc.resolved.tier == "remote"
+    assert [e.key for e in svc.get_catalog("lora")] == ["compiled/one"]
+    assert svc.status_payload()["kind_floors_active"] == ["lora"]
+    # Kinds empty in BOTH tiers stay empty — no phantom floor.
+    assert svc.get_catalog("tts_voice") == []
+    assert svc.status_payload()["kind_floors_active"] == ["lora"]
+
+
+def test_kind_floor_lifts_when_kind_recovers(tmp_path: Path) -> None:
+    rows = [_row(kind="system_prompt", key="sp", payload={"id": "sp"})]
+    svc = _make_service(tmp_path, fetch_rows=rows)
+    _run(svc.refresh_now())
+    assert [e.key for e in svc.get_catalog("lora")] == ["compiled/one"]
+    assert svc.status_payload()["kind_floors_active"] == ["lora"]
+
+    svc2 = _make_service(tmp_path, fetch_rows=REMOTE_ROWS)
+    _run(svc2.refresh_now())
+    assert [e.key for e in svc2.get_catalog("lora")] == ["remote/two", "remote/one"]
+    assert svc2.status_payload()["kind_floors_active"] == []
+
+    # Same-instance recovery: the kind coming back lifts the floor.
+    svc._resolved = svc2.resolved
+    assert [e.key for e in svc.get_catalog("lora")] == ["remote/two", "remote/one"]
+    assert svc.status_payload()["kind_floors_active"] == []
+
+
+def test_kind_floor_never_fires_on_defaults_tier(tmp_path: Path) -> None:
+    svc = _make_service(tmp_path, fetch_error=ConnectionError("offline"))
+    assert svc.resolved.tier == "defaults"
+    assert [e.key for e in svc.get_catalog("lora")] == ["compiled/one"]
+    assert svc.status_payload()["kind_floors_active"] == []
+
+
+# ---------------------------------------------------------------------------
+# PostgREST pagination (client.py)
+# ---------------------------------------------------------------------------
+
+
+def _paged_handler(total_rows: int, seen_ranges: list[str]):
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "order=kind%2Ckey" in str(request.url) or "order=kind,key" in str(
+            request.url
+        ), f"missing explicit order: {request.url}"
+        rng = request.headers["Range"]
+        seen_ranges.append(rng)
+        start, end = (int(x) for x in rng.split("-"))
+        rows = [
+            _row(key=f"page/{i}", sort_order=i)
+            for i in range(start, min(end + 1, total_rows))
+        ]
+        return httpx.Response(200, json=rows)
+
+    return handler
+
+
+def test_postgrest_fetch_pages_past_the_1000_row_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from app.services.catalogs import client as client_mod
+
+    seen: list[str] = []
+    transport = httpx.MockTransport(_paged_handler(1500, seen))
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real_client(transport=transport, **kw)
+    )
+
+    entries = _run(client_mod._fetch_postgrest())
+    assert len(entries) == 1500
+    assert seen == ["0-999", "1000-1999"]
+
+
+def test_postgrest_fetch_screams_past_the_sanity_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from app.services.catalogs import client as client_mod
+
+    seen: list[str] = []
+    transport = httpx.MockTransport(_paged_handler(10_000, seen))
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real_client(transport=transport, **kw)
+    )
+
+    with pytest.raises(CatalogsValidationError, match="more than 5000"):
+        _run(client_mod._fetch_postgrest())

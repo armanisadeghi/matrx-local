@@ -67,7 +67,11 @@ export async function fetchCatalog<P = Record<string, unknown>>(
 ): Promise<CatalogEntry<P>[]> {
   const base = engine.engineUrl;
   if (!base) throw new Error("engine not connected");
-  const resp = await fetch(`${base}/catalogs/${kind}`);
+  // 5s cap: a hung engine must read as "unreachable" (throw → compiled
+  // fallback), never stall SetupWizard or a selector behind a dead socket.
+  const resp = await fetch(`${base}/catalogs/${kind}`, {
+    signal: AbortSignal.timeout(5000),
+  });
   if (!resp.ok) throw new Error(`GET /catalogs/${kind} → ${resp.status}`);
   const body = (await resp.json()) as CatalogResponse<P>;
   if (!Array.isArray(body.entries)) {

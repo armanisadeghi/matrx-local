@@ -14,12 +14,12 @@ from pathlib import Path
 
 # Import the service first: it loads app.common before app.config, dodging
 # the pre-existing config↔common import cycle (see app_config service note).
-from app.services.catalogs.models import KNOWN_KINDS, CatalogEntry
+from app.services.catalogs.models import KNOWN_KINDS, CatalogEntry, ParseReport
 from app.services.catalogs.service import CatalogsService
 
 
 def _offline_service(tmp_path: Path) -> CatalogsService:
-    async def fetcher() -> list[CatalogEntry]:
+    async def fetcher(report: ParseReport | None = None) -> list[CatalogEntry]:
         raise ConnectionError("simulated total network failure")
 
     return CatalogsService(

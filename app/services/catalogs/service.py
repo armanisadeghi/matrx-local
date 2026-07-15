@@ -38,6 +38,7 @@ from app.services.catalogs.compiled import compiled_catalog_entries
 from app.services.catalogs.models import (
     CatalogEntry,
     CatalogsError,
+    ParseReport,
     ResolvedCatalogs,
     Tier,
     is_valid_kind,
@@ -102,7 +103,7 @@ class CatalogsService:
         *,
         cache_path: Path | None = None,
         app_version: str | None = None,
-        fetcher: Callable[[], Awaitable[list[CatalogEntry]]] | None = None,
+        fetcher: Callable[[ParseReport], Awaitable[list[CatalogEntry]]] | None = None,
         compiled: Callable[[], list[CatalogEntry]] | None = None,
         refresh_interval_s: int | None = None,
         use_registry: bool = True,
@@ -119,6 +120,14 @@ class CatalogsService:
         self._refresh_lock: asyncio.Lock | None = None
         self.last_error: str | None = None
         self._version_gate_warned = False
+
+        # Fault-isolation visibility: malformed rows skipped while parsing
+        # the currently-applied tier (surfaced in status_payload → /health).
+        self._skipped_entries = 0
+        # Per-kind emptiness floors currently in force (see get_catalog).
+        self._kind_floors_active: set[str] = set()
+        # Lazy per-kind index of the compiled tier, built on first floor check.
+        self._compiled_by_kind: dict[str, list[CatalogEntry]] | None = None
 
         # Boot resolution is synchronous and offline: cache else compiled.
         self._resolved: ResolvedCatalogs = self._load_initial()
@@ -172,7 +181,49 @@ class CatalogsService:
                 )
             out.append(e)
         out.sort(key=lambda e: (e.sort_order, e.key))
+
+        # Per-kind emptiness floor (generalized from the tts_model_file
+        # precedent): a kind that is non-empty in the compiled tier must
+        # never resolve to ZERO entries from a remote/cache tier — a remote
+        # mass-deactivation would otherwise brick that capability between
+        # releases. Fall back to the compiled entries for THAT KIND, loudly.
+        if not out and r.tier != "defaults":
+            floor = self._compiled_kind_entries(kind)
+            if floor:
+                if kind not in self._kind_floors_active:
+                    self._kind_floors_active.add(kind)
+                    logger.warning(
+                        "[catalogs] kind %r resolved to ZERO entries from the "
+                        "%s tier but the compiled fallback has %d — applying "
+                        "the per-kind compiled floor (a remote mass-"
+                        "deactivation must not brick this capability)",
+                        kind,
+                        r.tier,
+                        len(floor),
+                    )
+                return floor
+        if out and kind in self._kind_floors_active:
+            self._kind_floors_active.discard(kind)
+            logger.info(
+                "[catalogs] kind %r recovered (%d entries from the %s tier) — "
+                "per-kind compiled floor lifted",
+                kind,
+                len(out),
+                r.tier,
+            )
         return out
+
+    def _compiled_kind_entries(self, kind: str) -> list[CatalogEntry]:
+        """Active compiled-tier entries for ``kind``, sorted (lazy index)."""
+        if self._compiled_by_kind is None:
+            index: dict[str, list[CatalogEntry]] = {}
+            for e in self._compiled():
+                if e.is_active:
+                    index.setdefault(e.kind, []).append(e)
+            for entries in index.values():
+                entries.sort(key=lambda e: (e.sort_order, e.key))
+            self._compiled_by_kind = index
+        return list(self._compiled_by_kind.get(kind, []))
 
     def get_catalog_entry(self, kind: str, key: str) -> CatalogEntry | None:
         """The single resolved entry for ``(kind, key)``, or None."""
@@ -193,6 +244,12 @@ class CatalogsService:
             "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
             "entry_count": sum(kind_counts.values()),
             "kinds": dict(sorted(kind_counts.items())),
+            # Malformed rows dropped while parsing the applied tier — a
+            # non-zero value is a degraded state an admin must be able to
+            # see where they look (/health).
+            "skipped_entries": self._skipped_entries,
+            # Kinds currently running on the per-kind compiled floor.
+            "kind_floors_active": sorted(self._kind_floors_active),
         }
 
     # ------------------------------------------------------------------
@@ -200,9 +257,11 @@ class CatalogsService:
     # ------------------------------------------------------------------
 
     def _load_initial(self) -> ResolvedCatalogs:
-        cached = self._read_cache()
+        report = ParseReport()
+        cached = self._read_cache(report)
         if cached is not None:
             entries, fetched_at = cached
+            self._skipped_entries = report.skipped
             logger.info(
                 "[catalogs] boot: applied last-good cached catalogs "
                 "(%d entries, fetched_at=%s) — background refresh will follow",
@@ -232,7 +291,9 @@ class CatalogsService:
     # Disk cache — atomic writes (temp file + os.replace), never partial
     # ------------------------------------------------------------------
 
-    def _read_cache(self) -> tuple[list[CatalogEntry], datetime | None] | None:
+    def _read_cache(
+        self, report: ParseReport | None = None
+    ) -> tuple[list[CatalogEntry], datetime | None] | None:
         try:
             if not self._cache_path.exists():
                 return None
@@ -246,7 +307,7 @@ class CatalogsService:
                     type(data).__name__,
                 )
                 return None
-            entries = parse_entries(data.get("entries"))
+            entries = parse_entries(data.get("entries"), report=report)
             fetched_at: datetime | None = None
             raw_fetched = data.get("fetched_at")
             if isinstance(raw_fetched, str):
@@ -311,8 +372,9 @@ class CatalogsService:
             self._refresh_lock = asyncio.Lock()
         async with self._refresh_lock:
             registry = get_registry() if self._use_registry else None
+            report = ParseReport()
             try:
-                entries = await self._fetcher()
+                entries = await self._fetcher(report)
             except (CatalogsError, Exception) as exc:  # noqa: BLE001 — total isolation
                 self.last_error = str(exc)
                 current = self._resolved
@@ -341,6 +403,14 @@ class CatalogsService:
             self._resolved = self._build_resolved(
                 entries, tier="remote", fetched_at=fetched_at
             )
+            self._skipped_entries = report.skipped
+            if report.skipped:
+                logger.warning(
+                    "[catalogs] applied remote catalogs DEGRADED: %d malformed "
+                    "row(s) skipped — %s",
+                    report.skipped,
+                    "; ".join(report.reasons),
+                )
             self.last_error = None
             if registry is not None:
                 registry.ready(
@@ -348,6 +418,7 @@ class CatalogsService:
                     tier="remote",
                     fetched_at=fetched_at.isoformat(),
                     entry_count=len(entries),
+                    skipped_entries=report.skipped,
                 )
             return self._resolved
 

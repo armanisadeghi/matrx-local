@@ -57,7 +57,7 @@ import type {
   LlmDownloadProgress,
 } from "@/lib/llm/types";
 import { emitClientLog } from "@/hooks/use-client-log";
-import { overlayLlmCatalog } from "@/lib/llm/catalog";
+import { findLlmModelInfo, overlayLlmCatalog } from "@/lib/llm/catalog";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -514,9 +514,9 @@ export function SetupWizard({
   const downloadLlmModel = useCallback(async () => {
     if (!llmHardware) return;
     const filename = llmHardware.recommended_filename;
-    const modelInfo = llmHardware.all_models.find(
-      (m) => m.filename === filename,
-    );
+    // Falls back to the compiled Rust consts when the recommended filename
+    // is missing from the remote-overlaid catalog (deactivated DB row).
+    const modelInfo = findLlmModelInfo(llmHardware, filename);
     if (!modelInfo) {
       logLine("error", `No model info found for ${filename}`);
       return;
@@ -669,11 +669,11 @@ export function SetupWizard({
           llmStatus.downloaded_models.length > 0
             ? `${llmStatus.downloaded_models.length} model(s) downloaded`
             : llmHardware
-              ? `Recommended: ${llmHardware.recommended_filename} (~${llmHardware.all_models.find((m) => m.filename === llmHardware.recommended_filename)?.disk_size_gb ?? "?"}GB)`
+              ? `Recommended: ${llmHardware.recommended_filename} (~${findLlmModelInfo(llmHardware, llmHardware.recommended_filename)?.disk_size_gb ?? "?"}GB)`
               : "No models downloaded",
         optional: true,
         size_hint: llmHardware
-          ? `~${llmHardware.all_models.find((m) => m.filename === llmHardware.recommended_filename)?.disk_size_gb ?? "?"}GB`
+          ? `~${findLlmModelInfo(llmHardware, llmHardware.recommended_filename)?.disk_size_gb ?? "?"}GB`
           : null,
         deep_link: null,
       }

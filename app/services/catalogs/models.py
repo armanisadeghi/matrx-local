@@ -18,11 +18,15 @@ Parsing rules mirror app_config exactly:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
+from app.common.system_logger import get_logger
+
 from pydantic import BaseModel, ConfigDict, ValidationError
+
+logger = get_logger()
 
 # Provenance tier of the currently-applied catalog set, in precedence order.
 Tier = Literal["remote", "cache", "defaults"]
@@ -94,14 +98,34 @@ class CatalogEntry(BaseModel):
     updated_at: datetime | None = None
 
 
-def parse_entries(data: Any) -> list[CatalogEntry]:
+@dataclass
+class ParseReport:
+    """Per-parse fault-isolation stats, surfaced up to the service status.
+
+    ``skipped`` counts malformed rows dropped by ``parse_entries``;
+    ``reasons`` carries one human-readable line per dropped row.
+    """
+
+    skipped: int = 0
+    reasons: list[str] = field(default_factory=list)
+
+
+# Sanity floor against systemic corruption: one bad row is that row's
+# problem; more than this fraction malformed means the payload itself is
+# broken (schema change, half-written response) and must not be applied.
+MALFORMED_ROW_FRACTION_LIMIT = 0.2
+
+
+def parse_entries(data: Any, *, report: ParseReport | None = None) -> list[CatalogEntry]:
     """Parse a raw list of row objects into ``CatalogEntry`` models.
 
-    Raises ``CatalogsValidationError`` on any shape/type problem so callers
-    have exactly one exception type meaning "this payload is unusable".
-    An empty list is a validation failure too — the live catalog is never
-    empty (164 seeded entries), so zero rows means a broken query/RLS, not
-    a real state to apply.
+    Per-entry fault isolation: a malformed row is SKIPPED with a loud error
+    log (kind/key/reason) and counted on ``report`` — one bad DB row must
+    never pin the app to a stale tier across all 14 kinds. The whole payload
+    is rejected (``CatalogsValidationError``) only when it is not a list,
+    when it is empty / parses to empty, or when more than
+    ``MALFORMED_ROW_FRACTION_LIMIT`` of the rows are malformed (systemic
+    corruption, not a bad row).
     """
     if not isinstance(data, list):
         raise CatalogsValidationError(
@@ -113,18 +137,37 @@ def parse_entries(data: Any) -> list[CatalogEntry]:
             "rows, so zero rows means a broken query/RLS, not a real state"
         )
     entries: list[CatalogEntry] = []
+    skipped: list[str] = []
     for i, raw in enumerate(data):
         if not isinstance(raw, dict):
-            raise CatalogsValidationError(
-                f"catalog entry #{i} must be a JSON object, got {type(raw).__name__}"
-            )
+            reason = f"entry #{i} is not a JSON object (got {type(raw).__name__})"
+            skipped.append(reason)
+            logger.error("[catalogs] SKIPPING malformed catalog row: %s", reason)
+            continue
         try:
             entries.append(CatalogEntry.model_validate(raw))
         except ValidationError as exc:
-            raise CatalogsValidationError(
-                f"catalog entry #{i} (kind={raw.get('kind')!r}, "
-                f"key={raw.get('key')!r}) failed validation: {exc}"
-            ) from exc
+            reason = (
+                f"entry #{i} (kind={raw.get('kind')!r}, key={raw.get('key')!r}) "
+                f"failed validation: {exc}"
+            )
+            skipped.append(reason)
+            logger.error("[catalogs] SKIPPING malformed catalog row: %s", reason)
+            continue
+    if report is not None:
+        report.skipped += len(skipped)
+        report.reasons.extend(skipped)
+    if not entries:
+        raise CatalogsValidationError(
+            f"catalog_entries payload has NO parseable rows "
+            f"({len(skipped)}/{len(data)} malformed)"
+        )
+    if len(skipped) > MALFORMED_ROW_FRACTION_LIMIT * len(data):
+        raise CatalogsValidationError(
+            f"{len(skipped)}/{len(data)} catalog rows are malformed — above "
+            f"the {MALFORMED_ROW_FRACTION_LIMIT:.0%} systemic-corruption "
+            "floor, refusing to apply this payload"
+        )
     return entries
 
 

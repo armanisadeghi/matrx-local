@@ -100,6 +100,7 @@ from app.tools.arg_models.media_args import (
     ArchiveExtractArgs,
     ImageOcrArgs,
     ImageResizeArgs,
+    OfficeGenerateArgs,
     PdfExtractArgs,
 )
 from app.tools.arg_models.ner_args import ExtractEntitiesArgs, ExtractPiiArgs
@@ -550,6 +551,13 @@ _META: dict[str, ToolMeta] = {
         "Extract text (and optionally images) from a PDF file.",
         "local_media", ("pdf", "extract", "text", "local"), PdfExtractArgs,
         timeout_seconds=60.0,
+    ),
+    "OfficeGenerate": ToolMeta(
+        "local_office_generate",
+        "Generate a Microsoft Office document (.docx / .pptx / .xlsx) from a "
+        "structured spec and write it to a local path.",
+        "local_media", ("office", "docx", "pptx", "xlsx", "generate", "local"),
+        OfficeGenerateArgs, timeout_seconds=60.0,
     ),
     "ArchiveCreate": ToolMeta(
         "local_archive_create",

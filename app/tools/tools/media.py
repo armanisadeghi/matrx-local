@@ -11,6 +11,7 @@ import uuid
 import zipfile
 import tarfile
 from pathlib import Path
+from typing import Any
 
 from app.config import TEMP_DIR
 from app.tools.session import ToolSession
@@ -262,6 +263,86 @@ async def tool_pdf_extract(
         return ToolResult(
             type=ToolResultType.ERROR, output=f"PDF extraction failed: {e}"
         )
+
+
+async def tool_office_generate(
+    session: ToolSession,
+    format: str,
+    spec: dict[str, Any],
+    path: str,
+) -> ToolResult:
+    """Generate a Microsoft Office document (.docx / .pptx / .xlsx) from a
+    structured spec and write it to `path`.
+
+    format: 'docx' | 'pptx' | 'xlsx'.
+    spec: the structured document description, matching the codec spec for the
+      chosen format:
+        docx -> DocumentSpec  {title?, blocks: [{type, text, level?, rows?, header?}]}
+        pptx -> PresentationSpec {title?, subtitle?, slides: [{title?, bullets?, body?, notes?, layout?}]}
+        xlsx -> SpreadsheetSpec {sheets: [{name, columns?, rows, freeze_header?}]}
+    path: destination file path (parent directories are created).
+    """
+    from pydantic import ValidationError
+
+    from matrx_files.specific_handlers.office import (
+        DocumentSpec,
+        PresentationSpec,
+        SpreadsheetSpec,
+        generate_office,
+    )
+
+    spec_classes = {
+        "docx": DocumentSpec,
+        "pptx": PresentationSpec,
+        "xlsx": SpreadsheetSpec,
+    }
+    fmt = (format or "").lower().lstrip(".")
+    spec_cls = spec_classes.get(fmt)
+    if spec_cls is None:
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=f"Unknown format: {format!r}. Use one of: docx, pptx, xlsx.",
+        )
+    if not isinstance(spec, dict):
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=f"spec must be an object matching the {fmt} spec, got {type(spec).__name__}.",
+        )
+
+    try:
+        spec_model = spec_cls.model_validate(spec)
+    except ValidationError as e:
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=f"Invalid {fmt} spec: {e}",
+        )
+
+    try:
+        result = generate_office(spec_model)
+    except Exception as e:
+        return ToolResult(
+            type=ToolResultType.ERROR, output=f"Office generation failed: {e}"
+        )
+
+    data = base64.b64decode(result.base64_data)
+    resolved = session.resolve_path(path)
+    try:
+        os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
+        Path(resolved).write_bytes(data)
+    except OSError as e:
+        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot write file: {e}")
+
+    session.mark_file_read(resolved)
+    return ToolResult(
+        output=f"Wrote {fmt} ({result.byte_size} bytes) to {resolved}",
+        metadata={
+            "path": resolved,
+            "format": fmt,
+            "office_kind": result.office_kind.value,
+            "mime_type": result.mime_type,
+            "size_bytes": result.byte_size,
+        },
+    )
 
 
 def _parse_page_range(pages: str, total: int) -> list[int]:

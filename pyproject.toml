@@ -68,6 +68,14 @@ dependencies = [
     "matrx-connect>=0.1.3",
     "matrx-graph>=0.1.2",
     "matrx-runtime>=0.0.5",
+    # Canonical Office (docx/pptx/xlsx) codec — matrx_files.specific_handlers.office
+    # (extract_office / generate_office + the spec models). Local Read of an Office
+    # file returns markdown via this codec; the OfficeGenerate tool renders bytes
+    # from a spec. NEVER fork/vendor the codec — depend on the published package.
+    # Present transitively via matrx-ai, but the office submodule only exists from
+    # 0.1.10, so we pin the floor here explicitly (Hard Rule 5). Its pure-python
+    # Office deps (python-docx/pptx/openpyxl/xlsxwriter) come in with it.
+    "matrx-files>=0.1.10",
     # matrx-scheduler — see the optional [scheduler] extra below. Kept OUT of
     # core on purpose: the Phase 8 host that uses it is gated off by default
     # (MATRX_LOCAL_SCHEDULER_ENABLED) and imports it lazily, so the engine runs

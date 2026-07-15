@@ -376,6 +376,26 @@ args = [
     # analysis sees none of it. A missing matrx_ai.db._registry killed the AI
     # stack in every packaged build — collect the whole package.
     "--collect-submodules", "matrx_ai",
+    # Office (docx/pptx/xlsx) codec — matrx_files.specific_handlers.office and
+    # its renderers (python-docx/pptx/openpyxl/xlsxwriter) are ALL lazily
+    # imported inside functions (Read of an Office file + the OfficeGenerate
+    # tool), so static analysis misses them — omitting these = ModuleNotFoundError
+    # in the frozen sidecar only. --collect-data ships python-docx/pptx default
+    # template files (default.docx/default.pptx) that Document()/Presentation()
+    # load with no args. Keep in sync with specs/*.spec.
+    "--collect-submodules", "matrx_files",
+    "--collect-submodules", "docx",
+    "--collect-submodules", "pptx",
+    "--collect-submodules", "openpyxl",
+    "--collect-submodules", "xlsxwriter",
+    "--collect-data", "docx",
+    "--collect-data", "pptx",
+    "--hidden-import", "docx",
+    "--hidden-import", "pptx",
+    "--hidden-import", "openpyxl",
+    "--hidden-import", "xlsxwriter",
+    "--hidden-import", "et_xmlfile",
+    "--hidden-import", "matrx_files",
     # google.protobuf is a namespace-package member PyInstaller misses; when
     # absent from the bundle, `import google.protobuf` resolves via sys.path
     # to ~/.matrx/image-gen-packages' protobuf 7.x, which xai-sdk hard-rejects

@@ -112,6 +112,7 @@ from app.tools.tools.media import (
     tool_archive_extract,
     tool_image_ocr,
     tool_image_resize,
+    tool_office_generate,
     tool_pdf_extract,
 )
 from app.tools.tools.ner import tool_extract_entities, tool_extract_pii
@@ -273,6 +274,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "ImageOCR": tool_image_ocr,
     "ImageResize": tool_image_resize,
     "PdfExtract": tool_pdf_extract,
+    "OfficeGenerate": tool_office_generate,
     "ArchiveCreate": tool_archive_create,
     "ArchiveExtract": tool_archive_extract,
     # ── Local NER ───────────────────────────────────────────────────────

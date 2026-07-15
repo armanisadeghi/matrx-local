@@ -1,6 +1,6 @@
 # FEATURE — Local Tools (dispatcher + catalog + actions + tool_sync)
 
-115 legacy tools + **19 action-enum mega-tools** (the W7 collapse, 2026-07-14),
+116 legacy tools + **19 action-enum mega-tools** (the W7 collapse, 2026-07-14),
 one registry, four files that matter. Before touching any of this, know the
 two truths:
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -51,6 +51,25 @@ class PdfExtractArgs(BaseModel):
     extract_images: bool = Field(
         default=False,
         description="If true, also extract embedded images (saves to same directory as PDF).",
+    )
+
+
+class OfficeGenerateArgs(BaseModel):
+    format: Literal["docx", "pptx", "xlsx"] = Field(
+        description="Office document format to generate.",
+    )
+    spec: dict[str, Any] = Field(
+        description=(
+            "Structured document description matching the chosen format:\n"
+            "- docx (DocumentSpec): {title?, blocks: [{type: heading|paragraph|"
+            "bullet|numbered|quote|table|page_break, text?, level?, rows?, header?}]}\n"
+            "- pptx (PresentationSpec): {title?, subtitle?, slides: [{title?, "
+            "bullets?, body?, notes?, layout?}]}\n"
+            "- xlsx (SpreadsheetSpec): {sheets: [{name, columns?, rows, freeze_header?}]}"
+        ),
+    )
+    path: str = Field(
+        description="Destination file path for the generated document (parent directories are created).",
     )
 
 

@@ -8,7 +8,7 @@ per-action contract (the ``note`` tool in matrx-ai is the reference shape).
 This module is the single source of truth for that collapse on the desktop:
 
 * ``ACTION_GROUPS`` — the declarative map: mega-tool → {action → legacy
-  dispatcher tool}. Every one of the 115 legacy tools belongs to exactly one
+  dispatcher tool}. Every one of the 116 legacy tools belongs to exactly one
   group (enforced by ``tests/parity/test_tool_count.py``).
 * ``make_group_handler`` — the runtime fan-out. Mega handlers WRAP the
   existing ``tool_*`` handlers via ``dispatcher.dispatch``; they never
@@ -209,11 +209,12 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
         ),
         ActionGroup(
             "Media", "local_media",
-            "Local media processing: OCR, image resize, PDF extraction, archives.",
-            "desktop-media", ("media", "image", "pdf", "archive", "local", "actions"),
+            "Local media processing: OCR, image resize, PDF extraction, Office generation, archives.",
+            "desktop-media", ("media", "image", "pdf", "office", "archive", "local", "actions"),
             {
                 "ocr": "ImageOCR", "resize": "ImageResize",
-                "pdf_extract": "PdfExtract", "archive_create": "ArchiveCreate",
+                "pdf_extract": "PdfExtract", "office_generate": "OfficeGenerate",
+                "archive_create": "ArchiveCreate",
                 "archive_extract": "ArchiveExtract",
             },
         ),

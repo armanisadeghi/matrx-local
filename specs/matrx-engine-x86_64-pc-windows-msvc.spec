@@ -93,6 +93,24 @@ _matrx_ai_mods = collect_submodules('matrx_ai')
 # static analysis; missing-module hiddenimports are warnings, not errors).
 _protobuf_mods = collect_submodules('google.protobuf') + ['google._upb._message']
 
+# ── Office (docx/pptx/xlsx) codec — matrx_files.specific_handlers.office ──────
+# The canonical Office codec and its renderers (python-docx/pptx/openpyxl/
+# xlsxwriter) are ALL lazily imported inside functions (Read of an Office file
+# and the OfficeGenerate tool), so PyInstaller's static analysis misses every
+# one of them — without this the frozen sidecar raises ModuleNotFoundError the
+# moment an Office document is read or generated. collect_data_files also ships
+# the python-docx / python-pptx default template files (default.docx /
+# default.pptx) that Document()/Presentation() load with no args.
+_office_datas = []
+_office_hidden = collect_submodules('matrx_files')
+for _office_pkg in ('docx', 'pptx', 'openpyxl', 'xlsxwriter', 'et_xmlfile'):
+    try:
+        _office_datas += collect_data_files(_office_pkg)
+        _office_hidden += collect_submodules(_office_pkg)
+    except Exception:
+        pass
+
+
 
 a = Analysis(
     [os.path.join(_ROOT, 'run.py')],
@@ -102,8 +120,8 @@ a = Analysis(
         (os.path.join(_ROOT, 'app'), 'app'),
         (os.path.join(_ROOT, 'scraper-service/app'), 'scraper-service/app'),
         (os.path.join(_ROOT, 'pyproject.toml'), '.'),
-    ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data + _pkg_metadata,
-    hiddenimports=_matrx_ai_mods + _protobuf_mods + [
+    ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data + _pkg_metadata + _office_datas,
+    hiddenimports=_matrx_ai_mods + _protobuf_mods + _office_hidden + [
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
         'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',
         'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto',

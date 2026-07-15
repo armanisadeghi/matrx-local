@@ -48,6 +48,15 @@ async def tool_read(
     if mime and mime.startswith("image/"):
         return _read_image(session, resolved, mime)
 
+    # Office documents (.docx / .pptx / .xlsx) are OpenXML zips — reading them
+    # as UTF-8 returns zip garbage. Route them through the canonical matrx-files
+    # Office codec, which converts the bytes to AI-facing markdown (the same
+    # converged shape a PDF produces). Mirrors tool_pdf_extract's bytes→codec.
+    from matrx_files.specific_handlers.office import classify_office
+
+    if classify_office(mime, resolved) is not None:
+        return _read_office(session, resolved, mime)
+
     try:
         text = Path(resolved).read_text(encoding="utf-8", errors="replace")
     except OSError as e:
@@ -67,6 +76,38 @@ async def tool_read(
 
     session.mark_file_read(resolved)
     return ToolResult(output=numbered, metadata={"path": resolved, "total_lines": total})
+
+
+def _read_office(session: ToolSession, path: str, mime: str | None) -> ToolResult:
+    """Read a Microsoft Office document (.docx/.pptx/.xlsx) as markdown via the
+    canonical matrx-files Office codec. Legacy binary formats (.doc/.ppt/.xls)
+    raise a clear error unless LibreOffice is available on the host."""
+    from matrx_files.specific_handlers.office import OfficeExtractionError, extract_office
+
+    try:
+        raw = Path(path).read_bytes()
+    except OSError as e:
+        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot read file: {e}")
+
+    try:
+        extraction = extract_office(raw, mime_type=mime, file_name=path)
+    except OfficeExtractionError as e:
+        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot read Office document: {e}")
+
+    markdown = extraction.markdown or ""
+    if len(markdown) > MAX_READ_SIZE:
+        markdown = markdown[:MAX_READ_SIZE] + "\n... [truncated]"
+
+    session.mark_file_read(path)
+    return ToolResult(
+        output=markdown,
+        metadata={
+            "path": path,
+            "office_kind": extraction.office_kind.value,
+            "portions": len(extraction.portions),
+            "warnings": extraction.warnings,
+        },
+    )
 
 
 def _read_image(session: ToolSession, path: str, mime: str) -> ToolResult:

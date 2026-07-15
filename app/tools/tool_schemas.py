@@ -48,7 +48,7 @@ TOOL_CATEGORIES: dict[str, list[str]] = {
     "File Watching": ["WatchDirectory", "WatchEvents", "StopWatch"],
     "OS Integration": ["AppleScript", "PowerShellScript", "GetInstalledApps"],
     "Scheduler": ["ScheduleTask", "ListScheduled", "CancelScheduled", "HeartbeatStatus", "PreventSleep"],
-    "Media Processing": ["ImageOCR", "ImageResize", "PdfExtract", "ArchiveCreate", "ArchiveExtract"],
+    "Media Processing": ["ImageOCR", "ImageResize", "PdfExtract", "OfficeGenerate", "ArchiveCreate", "ArchiveExtract"],
     "Local NER": ["ExtractEntities", "ExtractPII"],
     "WiFi & Bluetooth": ["WifiNetworks", "BluetoothDevices", "ConnectedDevices"],
     "Documents": ["ListDocuments", "ListDocumentFolders", "ReadDocument", "WriteDocument", "SearchDocuments"],

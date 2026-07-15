@@ -193,6 +193,10 @@ exe = EXE(
 )
 
 
+# Keep this bundle ID unique for bundle metadata. build-sidecar.sh deliberately
+# overrides the completed Helper's *code signing identifier* to
+# com.aimatrx.desktop so it shares the visible parent's designated requirement
+# and Full Disk Access grant. Keep this in sync with the arm64 spec.
 app = BUNDLE(
     exe,
     name='Matrx Engine.app',

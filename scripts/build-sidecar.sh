@@ -574,14 +574,23 @@ else
     build_with_flags
 fi
 
-# ── Post-build: verify signatures (macOS only) ─────────────────────────────
+# ── Post-build: align the Helper app's TCC identity with AI Matrx (macOS) ──
 #
-# On macOS, PyInstaller's BUNDLE() produces dist/Matrx Engine.app, with the
-# inner Mach-O at Contents/MacOS/Matrx Engine signed by PyInstaller's
-# codesign_identity step. We verify the inner binary here; the outer .app
-# bundle's CodeResources will be created by tauri-bundler when it copies the
-# helper into the parent app via bundle.macOS.files (Tauri's nested-code
-# auto-codesign feature, PR #8259).
+# The engine performs the actual file I/O, but Full Disk Access is presented
+# to the user as a grant for the visible AI Matrx.app. If the nested Helper app
+# keeps the signing identifier generated from its own bundle ID
+# (com.aimatrx.desktop.engine), macOS gives it a separate TCC identity: the UI
+# shows AI Matrx as granted while the engine still gets EPERM for ~/Documents.
+#
+# Apple supports factored applications sharing one designated requirement.
+# Keep the Helper's CFBundleIdentifier unique for bundle/LaunchServices
+# metadata, but re-sign its code with the parent's signing identifier. With
+# the same certificate this generates the same designated requirement as the
+# parent, so one Full Disk Access grant covers the process that touches files.
+#
+# This must happen BEFORE Tauri bundles/signs the parent. Tauri copies the
+# already-valid nested signature into Contents/Frameworks and seals it in the
+# parent signature; changing it after bundling would invalidate notarization.
 #
 # On Windows/Linux, codesign is a no-op — we rely on the OS-native signing
 # performed by tauri-bundler / signtool / Authenticode when the parent app is
@@ -591,9 +600,25 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     HELPER_INNER_BIN="$HELPER_APP_PATH/Contents/MacOS/Matrx Engine"
     if [[ -n "${APPLE_SIGNING_IDENTITY:-}" && -f "$HELPER_INNER_BIN" ]]; then
         echo ""
-        echo "=== Post-Build: Verifying Helper app inner binary signature ==="
-        codesign --verify --verbose "$HELPER_INNER_BIN"
-        echo "  ✅ Inner binary signature valid"
+        echo "=== Post-Build: Aligning Helper TCC identity with AI Matrx ==="
+        PARENT_SIGNING_IDENTIFIER="com.aimatrx.desktop"
+        codesign \
+            --force \
+            --timestamp \
+            --options runtime \
+            --identifier "$PARENT_SIGNING_IDENTIFIER" \
+            --entitlements "$ENTITLEMENTS_FILE" \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            "$HELPER_APP_PATH"
+        codesign --verify --deep --strict --verbose=2 "$HELPER_APP_PATH"
+
+        HELPER_DESIGNATED_REQUIREMENT="$(codesign -dr - "$HELPER_APP_PATH" 2>&1)"
+        if [[ "$HELPER_DESIGNATED_REQUIREMENT" != *"identifier \"$PARENT_SIGNING_IDENTIFIER\""* ]]; then
+            echo "ERROR: Helper app does not share AI Matrx's designated requirement."
+            echo "$HELPER_DESIGNATED_REQUIREMENT"
+            exit 1
+        fi
+        echo "  ✅ Helper signing identifier: $PARENT_SIGNING_IDENTIFIER"
     fi
 fi
 

@@ -221,18 +221,19 @@ exe = EXE(
 #
 # build-sidecar.sh copies this directory into desktop/src-tauri/sidecar/ so
 # that tauri-bundler can pick it up via `bundle.macOS.files` and place it
-# inside the parent app at Contents/Frameworks/Matrx Engine.app/. Tauri's
-# auto-codesign-nested-code feature (PR #8259) then signs the helper as part
-# of the normal bundle/sign/notarize flow — no post-build restructure needed.
+# inside the parent app at Contents/Frameworks/Matrx Engine.app/.
+# build-sidecar.sh gives the completed Helper its final signed identity before
+# Tauri copies it; Tauri then seals that valid nested signature into the parent
+# during the normal bundle/sign/notarize flow. No post-bundle mutation occurs.
 #
 # Bundle identifier choice (com.aimatrx.desktop.engine):
-#   - Sub-domain of the parent (com.aimatrx.desktop) so it reads as a
-#     component of AI Matrx rather than a separate app.
-#   - Distinct enough that macOS gives it its own TCC bucket — meaning users
-#     upgrading from a flat-binary build will see permission prompts the
-#     first time the engine accesses microphone/screen-capture/full-disk.
-#     This is the standard pattern (Chrome Helper, Slack Helper, etc.) and is
-#     a one-time event per upgrade.
+#   - Remains unique bundle/LaunchServices metadata for the nested Helper app.
+#   - build-sidecar.sh re-signs the completed Helper with the parent's code
+#     signing identifier (com.aimatrx.desktop), giving both components the
+#     same designated requirement. This is required because the engine does
+#     the file I/O while Full Disk Access is granted to the visible parent.
+#     Do not remove that post-build identity alignment: a separate Helper TCC
+#     bucket cannot be granted through AI Matrx's permission UI.
 #
 # LSUIElement / LSBackgroundOnly:
 #   - The helper must NEVER appear in the Dock or app switcher; it is a

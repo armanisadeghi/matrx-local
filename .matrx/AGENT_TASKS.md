@@ -349,6 +349,16 @@ Documents-page buttons appear dead. `tauri.conf.json` now explicitly allows
 the System Settings scheme with regression coverage; the broader prompt audit
 in this task remains open.
 
+2026-07-15: Fixed the false Full Disk Access denial after the user had already
+enabled AI Matrx. The visible parent was signed as `com.aimatrx.desktop`, while
+the nested process doing Notes I/O was signed as the separate TCC principal
+`com.aimatrx.desktop.engine`. `build-sidecar.sh` now preserves the unique
+Helper bundle ID but signs release code with the parent's signing identifier,
+giving both components the same designated requirement. Live A/B proof on the
+real Notes directory: installed helper → `degraded:true`/EPERM; identical
+Helper re-signed with the shared requirement → `degraded:false` and recheck
+success. The broader prompt audit remains open.
+
 - [ ] **img2img + LoRA follow-ups (added 2026-07-10, image-gen img2img/LoRA
   build)** — shipped: `init_image_b64`/`strength`/`loras` on
   /image-gen/generate + /image-gen/jobs, `supports_img2img`/`img2img_strength`/

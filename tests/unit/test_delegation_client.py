@@ -220,6 +220,57 @@ def test_tool_error_becomes_is_error_result(tmp_path: Path) -> None:
     assert "definitely_not_an_action" in result["error_message"]
 
 
+def test_large_screen_result_is_compacted_for_delivery() -> None:
+    """Screenshot tools can return multi-megabyte base64 PNGs. The delegation
+    client must compact them before POSTing /tool_results so the conversation
+    does not wedge while text/file tools continue to work."""
+    from app.services.delegation import engine as engine_mod
+    from app.tools.types import ImageData
+
+    server = FakeServer()
+    server.continuation_needed = False
+    server.pending = [
+        _pending_call(
+            tool_name="local_screen",
+            arguments={"action": "screenshot"},
+        )
+    ]
+    engine = _engine(server)
+
+    async def fake_execute(entry: Any, tool_name: str, call_id: str, args: dict[str, Any]) -> dict[str, Any]:
+        image = ImageData(
+            media_type="image/png",
+            base64_data="x" * (engine_mod.MAX_INLINE_IMAGE_BASE64_CHARS + 100),
+        )
+        image_payload, image_note = engine_mod._prepare_delegated_image(image)
+        output: dict[str, Any] = {
+            "output": "Screenshot captured: /tmp/screenshot.png",
+            "metadata": {"path": "/tmp/screenshot.png"},
+        }
+        if image_note:
+            output["metadata"]["delegation_image_note"] = image_note
+        if image_payload is not None:
+            output["image"] = image_payload
+        return {
+            "call_id": call_id,
+            "tool_name": tool_name,
+            "output": output,
+            "is_error": False,
+            "error_message": None,
+            "duration_ms": 1,
+        }
+
+    engine._execute = fake_execute  # type: ignore[method-assign]
+    asyncio.run(_sweep_and_settle(engine))
+
+    result = server.tool_results_bodies[0]["results"][0]
+    assert result["tool_name"] == "local_screen"
+    assert result["is_error"] is False
+    assert result["output"]["metadata"]["path"] == "/tmp/screenshot.png"
+    assert "delegation_image_note" in result["output"]["metadata"]
+    assert "image" not in result["output"]
+
+
 def test_malformed_pending_rows_are_skipped() -> None:
     server = FakeServer()
     server.pending = [{"tool_name": "local_file"}]  # no call_id / conversation_id

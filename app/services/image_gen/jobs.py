@@ -620,18 +620,27 @@ class ImageJobStore:
     # ── transitions ───────────────────────────────────────────────────────────
 
     def next_queued(self) -> ImageJob | None:
-        """Oldest runnable job, or None. Respects pause and retry backoff."""
+        """Oldest runnable job, or None. Respects pause and retry backoff.
+
+        Fresh queued jobs get their first pass before retry jobs come back
+        around. Otherwise a very short retry delay can let an early flaky job
+        jump ahead of healthy jobs behind it in a large batch.
+        """
         with self._lock:
             if self._paused:
                 return None
             now = time.time()
-            for job_id in self._order:
-                job = self._jobs[job_id]
-                if job.status != "queued":
-                    continue
-                if job.next_attempt_at is not None and job.next_attempt_at > now:
-                    continue  # still backing off
-                return job
+            for retry_pass in (False, True):
+                for job_id in self._order:
+                    job = self._jobs[job_id]
+                    if job.status != "queued":
+                        continue
+                    is_retry = job.attempts > 0
+                    if is_retry != retry_pass:
+                        continue
+                    if job.next_attempt_at is not None and job.next_attempt_at > now:
+                        continue  # still backing off
+                    return job
             return None
 
     def next_wakeup(self) -> float | None:

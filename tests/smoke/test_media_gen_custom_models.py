@@ -651,6 +651,7 @@ def test_lora_download_from_civitai(
     assert pend["installed"] is False
     assert pend["source"] == "civitai"
     assert pend["repo_id"] == "civitai:321@555"
+    assert pend["name"] == "Neon Style"
     assert pend["base_family"] == "flux"
 
 
@@ -705,9 +706,11 @@ def test_lora_download_accepts_hf_url(
     """An HF URL in repo_id is normalized to the repo id."""
     from app.api import image_gen_routes
 
-    async def fake_resolve(repo_id: str, weight_name: str | None):
+    async def fake_resolve(
+        repo_id: str, weight_name: str | None, *, weight_is_hint: bool = False
+    ):
         assert repo_id == "acme/neon-lora", repo_id
-        return "neon.safetensors", "sdxl"
+        return "neon.safetensors", "sdxl", None
 
     monkeypatch.setattr(image_gen_routes, "_resolve_lora_weight", fake_resolve)
     r = client.post(
@@ -734,10 +737,13 @@ def test_lora_download_deep_hf_url_uses_captured_weight(
 
     seen: dict[str, Any] = {}
 
-    async def fake_resolve(repo_id: str, weight_name: str | None):
+    async def fake_resolve(
+        repo_id: str, weight_name: str | None, *, weight_is_hint: bool = False
+    ):
         seen["repo_id"] = repo_id
         seen["weight_name"] = weight_name
-        return weight_name or "fallback.safetensors", "sdxl"
+        seen["weight_is_hint"] = weight_is_hint
+        return weight_name or "fallback.safetensors", "sdxl", None
 
     monkeypatch.setattr(image_gen_routes, "_resolve_lora_weight", fake_resolve)
     r = client.post(
@@ -747,5 +753,72 @@ def test_lora_download_deep_hf_url_uses_captured_weight(
         },
     )
     assert r.status_code == 200, r.text
-    assert seen == {"repo_id": "acme/neon-lora", "weight_name": "neon_v2.safetensors"}
+    # A URL-captured weight flows in as a HINT (not a strict user-typed name),
+    # so a slightly-off deep link still auto-resolves instead of failing.
+    assert seen == {
+        "repo_id": "acme/neon-lora",
+        "weight_name": "neon_v2.safetensors",
+        "weight_is_hint": True,
+    }
     assert r.json()["weight_name"] == "neon_v2.safetensors"
+
+
+def test_resolve_lora_weight_hint_vs_strict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the REAL _resolve_lora_weight (the route tests mock it out).
+
+    The whole point of weight_is_hint is a strict-vs-soft fork: a URL-captured
+    weight is a HINT that auto-resolves when it doesn't match a real repo file,
+    while an explicitly-typed weight is validated strictly. Drive the real
+    resolver against a mocked HF repo so both branches are actually covered.
+    """
+    import asyncio
+
+    import huggingface_hub
+    from fastapi import HTTPException
+
+    from app.api import image_gen_routes
+    from app.services.media_gen import paths as mg_paths
+
+    class FakeHfApi:
+        def __init__(self, token: Any = None) -> None:
+            pass
+
+        def model_info(self, repo_id: str) -> SimpleNamespace:
+            return SimpleNamespace(
+                siblings=[
+                    SimpleNamespace(rfilename="real_weight.safetensors"),
+                    SimpleNamespace(rfilename="config.json"),
+                ],
+                card_data={"base_model": "stabilityai/stable-diffusion-xl-base-1.0"},
+            )
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeHfApi)
+    monkeypatch.setattr(mg_paths, "read_hf_token", lambda: None)
+
+    def resolve(weight: str | None, *, hint: bool) -> tuple[str, str, str | None]:
+        return asyncio.run(
+            image_gen_routes._resolve_lora_weight(
+                "acme/neon-lora", weight, weight_is_hint=hint
+            )
+        )
+
+    # (a) URL-derived HINT that doesn't match a real file → auto-resolve to the
+    #     repo's single real .safetensors instead of failing.
+    chosen, _family, _title = resolve(
+        "weight_from_a_slightly_off_url.safetensors", hint=True
+    )
+    assert chosen == "real_weight.safetensors"
+
+    # (b) The SAME non-matching weight typed by the user (hint=False) → strict 400.
+    with pytest.raises(HTTPException) as ei:
+        resolve("weight_from_a_slightly_off_url.safetensors", hint=False)
+    assert ei.value.status_code == 400
+    assert "not a .safetensors file" in str(ei.value.detail)
+
+    # (c) A hint that DOES match a real file is honored exactly.
+    chosen_match, _, _ = resolve("real_weight.safetensors", hint=True)
+    assert chosen_match == "real_weight.safetensors"
+
+    # (d) No weight at all → auto-resolve to the single candidate.
+    chosen_auto, _, _ = resolve(None, hint=False)
+    assert chosen_auto == "real_weight.safetensors"

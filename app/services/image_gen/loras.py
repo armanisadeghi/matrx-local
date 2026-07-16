@@ -5,7 +5,7 @@ Layout (see app/services/media_gen/paths.py):
     ~/.matrx/image-models/loras/<sanitized-repo-id>/
         <weight_name>.safetensors     — the LoRA weights
         lora.json                     — {repo_id, weight_name, base_family,
-                                         size_bytes, added_at}
+                                         name?, source, added_at, ...}
         .download-complete            — written by the DownloadManager; a LoRA
                                         is "installed" ONLY when this exists
 
@@ -104,6 +104,29 @@ def guess_base_family(
         ):
             return "sd15"
     return "unknown"
+
+
+def resolve_lora_display_name(
+    meta: dict[str, Any],
+    *,
+    catalog_by_repo: dict[str, dict[str, Any]] | None = None,
+) -> str | None:
+    """Human label for an installed LoRA.
+
+    Precedence: ``name`` in the on-disk sidecar (Civitai downloads write the
+    model page title here), then a matching curated-catalog entry by
+    ``repo_id``, else None (the UI falls back to ``id``).
+    """
+    raw = meta.get("name")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    repo = meta.get("repo_id")
+    if catalog_by_repo and isinstance(repo, str):
+        cat = catalog_by_repo.get(repo) or {}
+        cat_name = cat.get("name")
+        if isinstance(cat_name, str) and cat_name.strip():
+            return cat_name.strip()
+    return None
 
 
 def check_lora_model_compat(model_lora_family: str, lora_meta: dict[str, Any]) -> None:

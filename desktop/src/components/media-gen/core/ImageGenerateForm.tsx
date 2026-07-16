@@ -382,8 +382,11 @@ function InstalledLoraRow({
           className="h-3.5 w-3.5 accent-violet-500"
         />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-medium" title={lora.repo_id}>
-            {lora.id}
+          <p
+            className="truncate text-xs font-medium"
+            title={lora.name ?? lora.repo_id}
+          >
+            {lora.name || lora.id}
           </p>
           <p className="truncate text-[10px] text-muted-foreground">
             {lora.repo_id}
@@ -921,8 +924,8 @@ export function ImageGenModeToggle({
             </Button>
           </TooltipTrigger>
           <TooltipContent className="max-w-xs">
-            Write one prompt with {"{{variables}}"}, give each variable a list of
-            options, and queue every combination in one go.
+            Write one prompt with {"{{variables}}"}, give each variable a list
+            of options, and queue every combination in one go.
           </TooltipContent>
         </Tooltip>
       </div>

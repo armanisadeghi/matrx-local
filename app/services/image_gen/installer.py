@@ -47,6 +47,10 @@ IMAGE_GEN_PACKAGES = [
     "diffusers>=0.39.0",
     "transformers>=4.51",
     "accelerate>=1.0",
+    "peft>=0.13.1",
+    # Required by diffusers' load_lora_weights / set_adapters / unload_lora_weights
+    # (USE_PEFT_BACKEND gate — without peft every LoRA apply fails with
+    # "PEFT backend is required for this method").
     "sentencepiece>=0.2.0",
     # protobuf intentionally NOT installed here. The engine bundles its own
     # (core dep via matrx-ai → xai-sdk, which hard-rejects protobuf 7). This
@@ -110,7 +114,11 @@ def needs_upgrade() -> bool:
     installed = get_installed_package_versions().get("diffusers")
     if installed is None:
         return True  # marker without diffusers on disk — reinstall
-    return _parse_version(installed) < MIN_DIFFUSERS_VERSION
+    if _parse_version(installed) < MIN_DIFFUSERS_VERSION:
+        return True
+    if get_installed_package_versions().get("peft") is None:
+        return True  # LoRA apply needs peft — older installs predate this dep
+    return False
 
 
 def _purge_shadowing_protobuf(pkg_dir: Path) -> bool:
@@ -145,7 +153,8 @@ def _purge_shadowing_protobuf(pkg_dir: Path) -> bool:
             logger.warning(
                 "[image_gen_installer] PURGED stale protobuf artifact %s from the "
                 "managed image-gen dir — it shadowed the engine's bundled protobuf "
-                "and broke matrx-ai init (see IMAGE_GEN_PACKAGES comment)", v,
+                "and broke matrx-ai init (see IMAGE_GEN_PACKAGES comment)",
+                v,
             )
         except OSError as exc:
             clean = False
@@ -153,7 +162,8 @@ def _purge_shadowing_protobuf(pkg_dir: Path) -> bool:
                 "[image_gen_installer] Could not purge shadowing protobuf artifact "
                 "%s: %s — matrx-ai init would fail with 'Unsupported protobuf "
                 "version'; the image-gen dir will NOT be injected this session",
-                v, exc,
+                v,
+                exc,
             )
     # If google/ was only a protobuf namespace shell, drop the empty husk.
     google_dir = pkg_dir / "google"
@@ -349,7 +359,7 @@ def _do_install(progress: InstallProgress) -> None:
             [
                 python,
                 "-c",
-                "import torch, diffusers, transformers, accelerate; print('ok')",
+                "import torch, diffusers, transformers, accelerate, peft; print('ok')",
             ],
             capture_output=True,
             text=True,

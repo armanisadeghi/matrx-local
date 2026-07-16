@@ -56,18 +56,21 @@ dependencies = [
     # to ``matrx-<pkg>/v<x.y.z>`` (see aidream/.github/workflows/
     # publish-package.yml). There is intentionally no [tool.uv.sources]
     # path override — see the note further down near [tool.uv].
-    # All matrx-* pins resolve from PyPI (matrx-ai 0.4.0 wave, 2026-07-13:
+    # All matrx-* pins resolve from PyPI (matrx-ai 0.4.8 wave, 2026-07-15:
     # client-host tool_source seam + server tool fetch + store-aware
-    # coordinator/drain — the engine.py monkeypatch guard is DELETED; the
-    # 0.4.0 floor is what makes that deletion safe). matrx-connect/graph/
-    # runtime arrive transitively via matrx-ai but are pinned explicitly so a
-    # future matrx-ai dependency reshuffle can't silently downgrade them.
+    # coordinator/drain, PLUS the client_host.agent_source module that
+    # app/services/ai/agent_source.py imports — the 0.4.8 floor is what makes
+    # that import resolvable; the old 0.4.2 wheel had no agent_source submodule.
+    # These floors track the aidream source-of-truth wave exactly (the brain
+    # runs the same versions). matrx-connect/graph/runtime arrive transitively
+    # via matrx-ai but are pinned explicitly so a future matrx-ai dependency
+    # reshuffle can't silently downgrade them.
     "matrx-utils>=2.0.0",
-    "matrx-orm>=3.1.9",
-    "matrx-ai>=0.4.2",
-    "matrx-connect>=0.1.3",
-    "matrx-graph>=0.1.2",
-    "matrx-runtime>=0.0.5",
+    "matrx-orm>=3.1.16",
+    "matrx-ai>=0.4.8",
+    "matrx-connect>=0.1.5",
+    "matrx-graph>=0.1.3",
+    "matrx-runtime>=0.0.6",
     # Canonical Office (docx/pptx/xlsx) codec — matrx_files.specific_handlers.office
     # (extract_office / generate_office + the spec models). Local Read of an Office
     # file returns markdown via this codec; the OfficeGenerate tool renders bytes
@@ -75,7 +78,7 @@ dependencies = [
     # Present transitively via matrx-ai, but the office submodule only exists from
     # 0.1.10, so we pin the floor here explicitly (Hard Rule 5). Its pure-python
     # Office deps (python-docx/pptx/openpyxl/xlsxwriter) come in with it.
-    "matrx-files>=0.1.10",
+    "matrx-files>=0.1.11",
     # matrx-scheduler — see the optional [scheduler] extra below. Kept OUT of
     # core on purpose: the Phase 8 host that uses it is gated off by default
     # (MATRX_LOCAL_SCHEDULER_ENABLED) and imports it lazily, so the engine runs
@@ -132,7 +135,7 @@ transcription = [
 scheduler = [
     # Cross-component scheduling host (surface='desktop'). Optional + lazily
     # imported; the Phase 8 host is gated off by default. Published on PyPI.
-    "matrx-scheduler>=0.3.0",
+    "matrx-scheduler>=0.3.5",
 ]
 image-gen = [
     # Hugging Face diffusers-based image AND video generation (large install).
@@ -148,6 +151,7 @@ image-gen = [
     "diffusers>=0.39.0",
     "transformers>=4.51",
     "accelerate>=1.0",
+    "peft>=0.13.1",
     "sentencepiece>=0.2.0",
     # protobuf intentionally NOT listed: the engine already carries it as a
     # core dep (via matrx-ai → xai-sdk, which hard-rejects protobuf 7). A

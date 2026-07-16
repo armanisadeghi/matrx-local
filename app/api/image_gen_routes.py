@@ -1155,6 +1155,9 @@ class LoraInstalledInfo(BaseModel):
     id: str
     """Store id (sanitized repo id) — pass this in GenerateRequest.loras."""
     repo_id: str
+    name: str | None = None
+    """Human label — Civitai installs store the model page title in lora.json;
+    HF installs may carry a card title; catalog matches backfill older rows."""
     weight_name: str
     base_family: str = "unknown"
     """"sdxl" | "sd15" | "flux" | "unknown" — match against the model's
@@ -1219,7 +1222,7 @@ class LoraDownloadResponse(BaseModel):
 async def _resolve_lora_weight(
     repo_id: str, weight_name: str | None, *, weight_is_hint: bool = False
 ) -> tuple[str, str]:
-    """Resolve (weight_name, base_family) from live HF repo metadata.
+    """Resolve (weight_name, base_family, display_name) from live HF repo metadata.
 
     ``weight_is_hint=True`` marks a weight that was auto-captured from a deep
     URL rather than typed by the user: if it doesn't match a real repo file we
@@ -1288,7 +1291,18 @@ async def _resolve_lora_weight(
             base_model = raw_base
         elif isinstance(raw_base, list) and raw_base and isinstance(raw_base[0], str):
             base_model = raw_base[0]
-    return chosen, guess_base_family(repo_id, chosen, base_model)
+    return chosen, guess_base_family(repo_id, chosen, base_model), _hf_lora_title(info)
+
+
+def _hf_lora_title(info: Any) -> str | None:
+    """Best-effort display title from a Hugging Face model_info response."""
+    card = getattr(info, "card_data", None) or getattr(info, "cardData", None)
+    if card is None or not hasattr(card, "get"):
+        return None
+    title = card.get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    return None
 
 
 @router.get("/loras", response_model=LorasResponse)
@@ -1300,8 +1314,11 @@ async def list_image_loras() -> LorasResponse:
         get_curated_lora_catalog,
         list_loras,
         lora_id_for_repo,
+        resolve_lora_display_name,
     )
 
+    catalog_entries = get_curated_lora_catalog()
+    catalog_by_repo = {e["repo_id"]: e for e in catalog_entries}
     items = list_loras()
     # .get() (not m[...]) so a single odd row can't 500 the endpoint BEFORE the
     # isolated builder loop below even runs.
@@ -1321,6 +1338,7 @@ async def list_image_loras() -> LorasResponse:
                 LoraInstalledInfo(
                     id=m["id"],
                     repo_id=m["repo_id"],
+                    name=resolve_lora_display_name(m, catalog_by_repo=catalog_by_repo),
                     weight_name=m["weight_name"],
                     base_family=str(m.get("base_family") or "unknown"),
                     size_bytes=int(m.get("size_bytes") or 0),
@@ -1332,11 +1350,12 @@ async def list_image_loras() -> LorasResponse:
         except Exception as exc:  # noqa: BLE001 — skip-and-scream, never 500 the list
             logger.error(
                 "[image_gen] Skipping malformed installed LoRA %r: %s",
-                m.get("id") or m.get("repo_id"), exc,
+                m.get("id") or m.get("repo_id"),
+                exc,
             )
 
     catalog: list[LoraCatalogInfo] = []
-    for e in get_curated_lora_catalog():
+    for e in catalog_entries:
         try:
             repo_id = e["repo_id"]
             catalog.append(
@@ -1356,7 +1375,8 @@ async def list_image_loras() -> LorasResponse:
         except Exception as exc:  # noqa: BLE001 — a bad curated entry is a bug, not an outage
             logger.error(
                 "[image_gen] Skipping malformed catalog LoRA %r: %s",
-                e.get("repo_id") or e.get("name"), exc,
+                e.get("repo_id") or e.get("name"),
+                exc,
             )
 
     return LorasResponse(installed=installed, catalog=catalog)
@@ -1427,19 +1447,21 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
     # falls back to auto-pick instead of failing, so the user is never forced to
     # re-pick a file they already pointed us at.
     url_weight = parsed.get("weight_name")
-    weight_name, base_family = await _resolve_lora_weight(
+    weight_name, base_family, hf_name = await _resolve_lora_weight(
         repo_id,
         req.weight_name or url_weight,
         weight_is_hint=req.weight_name is None and url_weight is not None,
     )
     # Metadata sidecar first — the LoRA shows up as pending (installed=false)
     # immediately; the DownloadManager marker flips it to installed.
+    hf_extra = {"name": hf_name} if hf_name else None
     write_lora_meta(
         lora_id,
         repo_id=repo_id,
         weight_name=weight_name,
         base_family=base_family,
         source="hf",
+        extra=hf_extra,
     )
     entry = await get_download_manager().enqueue(
         category="image_gen_lora",

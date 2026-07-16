@@ -147,8 +147,11 @@ LoRA downloads route through the universal DownloadManager (category
 (`lora.json`) is written first so the LoRA shows as *pending* immediately; the
 `.download-complete` marker (written last) flips it to *installed*. A LoRA is
 "installed" only when `lora.json` + marker + weight file all exist
-(`get_installed_lora`). Startup resume reconciles a half-finished LoRA download
-against this same contract (see `downloads/FEATURE.md`).
+(`get_installed_lora`). Civitai downloads persist the model page title as
+`name` in the sidecar; `GET /image-gen/loras` exposes it on installed rows
+(catalog entries backfill older installs that predate the field). Startup resume
+reconciles a half-finished LoRA download against this same contract (see
+`downloads/FEATURE.md`).
 
 ### Family compatibility is HONEST — a mismatch fails loud, never silently hides
 
@@ -158,6 +161,12 @@ raises (naming the mismatch) when a KNOWN family differs from the model's
 `lora_family`; `unknown` is attempted and diffusers' own error surfaces. LoRAs
 are **never filtered out of the UI by family** — they always list; only an
 enabled cross-family selection is rejected at generate time.
+
+**PEFT is required to apply LoRAs.** The managed image-gen install includes
+``peft>=0.13.1`` (diffusers' ``load_lora_weights`` / ``set_adapters`` gate on
+``USE_PEFT_BACKEND``). Older installs without PEFT must re-run
+``POST /image-gen/install`` (``needs_upgrade()`` detects the gap). Generation
+with LoRAs enabled fails loudly with an install prompt if PEFT is still absent.
 
 ## The client side
 

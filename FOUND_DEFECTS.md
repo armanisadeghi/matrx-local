@@ -30,6 +30,42 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ---
 
+## AI / local LLM runtime
+
+### MXL-D-055 — `get_local_llm_status()` is a status *getter* with a destructive side-effect; can self-deregister a healthy/cold llama-server
+- **Area:** `app/services/ai/local_llm_registry.py` `get_local_llm_status()` (lines ~226-255); caller `app/api/chat_routes.py` `/local-llm/connect` (~519-521)
+- **Symptom:** `get_local_llm_status()` does a live `_probe_llama_server()`
+  (single GET `/v1/models`, `timeout=1.0`, no retry) and on ANY failure calls
+  `clear_local_llm()` — nulling `_local_llm_port`/`_local_llm_model` and
+  unregistering the runtime model + UnifiedClient instance. Two consequences:
+  (1) A function named/typed as a status read mutates global registration
+  state — surprising side-effect. (2) `/local-llm/connect` calls
+  `set_local_llm(...)` then immediately `get_local_llm_status()`; if the
+  just-started llama-server can't answer `/v1/models` within 1.0s (cold model
+  load — exactly when connect fires), the status call deregisters what was
+  just registered and returns `available: false`. A concurrent status poll
+  during active inference (llama-server serves one request at a time, so
+  `/v1/models` can stall > 1.0s) can also deregister a healthy, in-use server
+  mid-session, and the next agent turn loses local routing.
+- **Evidence:** `local_llm_registry.py:232-242` (probe-and-`clear_local_llm()`
+  inside the getter), `_probe_llama_server` `timeout=1.0` at
+  `local_llm_registry.py:61-73`, single-failure clear with no debounce/retry;
+  `chat_routes.py:519-521` set→status self-undo. Introduced by commit
+  `51ce67f0e` "Add local target routing for cloud chat".
+- **Status:** open — needs-hw-verification (repro needs a real llama-server
+  under cold-load / concurrent inference).
+- **Analysis stamp:** Analyzed 2026-07-15 — verified in code via adversarial
+  review of the test-fix for `test_runtime_model_registration`. The
+  self-healing intent is right ("loud recovery"), but a single 1.0s probe with
+  no grace and a destructive getter is too aggressive.
+- **Owner hint:** Split the read from the repair: make `get_local_llm_status()`
+  side-effect-free (report `reachable: false` without clearing), and move
+  clear-on-unreachable to an explicit reconciler with a grace window / N-retry
+  (or only clear after K consecutive failures). Don't let a status poll or the
+  connect handshake tear down a cold-but-valid server.
+
+---
+
 ## API keys / credentials
 
 ### MXL-D-051 — Live-position source engine ignores SIGTERM and /admin/shutdown (SIGINT works)
@@ -356,6 +392,31 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   path may not carry Tcl/Tk and is not yet known to be affected.
 - **Owner hint:** packaging; sign only libraries PyInstaller actually collects,
   or add a bounded per-file timeout with a loud failure/explicit safe skip.
+
+### MXL-D-056 — `scheduler` extra claimed "bundled into release builds" but the sidecar build never syncs it
+- **Area:** `pyproject.toml:85` (scheduler-extra comment) vs
+  `scripts/build-sidecar.sh:148` (venv sync) and `build-sidecar.sh:412`
+  (`--hidden-import matrx_scheduler`)
+- **Symptom:** `pyproject.toml` states the `scheduler` extra "is bundled into
+  release builds — see scripts/build-sidecar.sh," but `build-sidecar.sh` syncs
+  only `--extra transcription`, never `--extra scheduler`. So `matrx-scheduler`
+  is absent from the packaged venv and `--hidden-import matrx_scheduler` is a
+  warning-level miss in the shipped binary. Currently inert — the Phase 8
+  scheduler host is gated off by default (`MATRX_LOCAL_SCHEDULER_ENABLED`) and
+  imported lazily — but the moment that host is enabled in a release build it
+  would `ModuleNotFoundError` at runtime (packaged-only, exactly the class
+  Hard Rule 5/6 exist to prevent), and the doc is misleading today.
+- **Evidence:** Surfaced 2026-07-15 by adversarial review of the matrx-* wave
+  bump (an aside, not caused by the bump). `build-sidecar.sh:148` syncs
+  `--extra transcription` only; no `--extra scheduler` anywhere in the build
+  scripts; `matrx-scheduler` has no metadata in the synced venv.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-07-15 — verified in code; runtime impact
+  latent (host gated off), doc claim is wrong now.
+- **Owner hint:** Either add `--extra scheduler` to the release sync (if the
+  host is meant to ship) or correct the `pyproject.toml:85` comment to say it
+  is NOT bundled and must be enabled+synced deliberately. Pick one so doc and
+  build agree.
 
 ## Cross-repo
 

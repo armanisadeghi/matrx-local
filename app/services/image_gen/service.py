@@ -33,8 +33,10 @@ image is aspect-fill resized + center-cropped to the requested dims
 persistence cover img2img identically to text-to-image.
 
 LoRAs: applied per generation INSIDE the gate (_apply_loras) and ALWAYS
-unloaded in a finally — the pipeline is stateless across generations. LoRA
-weights are installed by the DownloadManager into
+unloaded in a finally — the pipeline is stateless across generations. Requires
+``peft`` in the managed image-gen packages (installer.py IMAGE_GEN_PACKAGES) —
+diffusers' ``load_lora_weights`` / ``set_adapters`` gate on USE_PEFT_BACKEND.
+LoRA weights are installed by the DownloadManager into
 ~/.matrx/image-models/loras/ (app/services/image_gen/loras.py).
 """
 
@@ -113,6 +115,7 @@ def friendly_load_error(exc: BaseException) -> str | None:
         f"persists, use 'Update AI packages' in the Image tab."
     )
 
+
 # Runtime minimum: below this the "packages outdated" banner fires and forces a
 # reinstall. Verified that every pipeline class in the current catalog
 # (Flux2Klein / ZImage / QwenImage) already exists and imports in diffusers
@@ -123,6 +126,7 @@ MIN_DIFFUSERS_VERSION = (0, 37, 0)
 
 
 # ── availability check ────────────────────────────────────────────────────────
+
 
 def _check_deps() -> tuple[bool, str]:
     """Return (available, reason). Fast — no heavy imports."""
@@ -140,17 +144,22 @@ def _check_deps() -> tuple[bool, str]:
             # omitted a stdlib module the package lazily imports). That, and any
             # non-ImportError (ABI mismatch, dylib load failure), gets a loud
             # traceback so it isn't hidden behind "packages not installed".
-            benign_missing = (
-                isinstance(exc, ModuleNotFoundError)
-                and exc.name in (pkg, pkg.split(".", 1)[0])
+            benign_missing = isinstance(exc, ModuleNotFoundError) and exc.name in (
+                pkg,
+                pkg.split(".", 1)[0],
             )
             if not benign_missing:
                 logger.warning(
                     "[image_gen] optional package %r is present but failed to import "
                     "(likely a frozen-build gap — a missing stdlib module it lazily "
-                    "imports): %s", pkg, exc, exc_info=True,
+                    "imports): %s",
+                    pkg,
+                    exc,
+                    exc_info=True,
                 )
-            missing.append(f"{pkg} ({exc})" if not isinstance(exc, ImportError) else pkg)
+            missing.append(
+                f"{pkg} ({exc})" if not isinstance(exc, ImportError) else pkg
+            )
     if missing:
         return False, (
             f"Image generation requires optional packages: {', '.join(missing)}. "
@@ -166,6 +175,7 @@ def get_installed_diffusers_version() -> str | None:
     """Installed diffusers version string, or None when not installed."""
     try:
         import diffusers  # noqa: PLC0415
+
         return str(diffusers.__version__)
     except ImportError:
         return None
@@ -190,6 +200,7 @@ def are_packages_outdated() -> bool:
 
 
 # ── image-to-image helpers ────────────────────────────────────────────────────
+
 
 def prepare_init_image(image_bytes: bytes, width: int, height: int) -> Any:
     """Decode + fit an init image to the requested dims.
@@ -239,13 +250,15 @@ def _to_img2img(pipe: Any, model: "ImageGenModel") -> Any:
         logger.warning(
             "[image_gen] AutoPipelineForImage2Image.from_pipe failed for %s "
             "(%s) — trying explicit task-class from_pipe",
-            model.pipeline_type, exc,
+            model.pipeline_type,
+            exc,
         )
         try:
             from diffusers.pipelines.auto_pipeline import (  # noqa: PLC0415
                 AUTO_IMAGE2IMAGE_PIPELINES_MAPPING,
                 _get_task_class,
             )
+
             cls = _get_task_class(
                 AUTO_IMAGE2IMAGE_PIPELINES_MAPPING, type(pipe).__name__
             )
@@ -256,6 +269,19 @@ def _to_img2img(pipe: Any, model: "ImageGenModel") -> Any:
                 f"img2img pipeline could not be constructed from the loaded "
                 f"components ({exc2})"
             ) from exc2
+
+
+def _ensure_peft_for_loras() -> None:
+    """LoRA load/activate/unload in diffusers requires the PEFT backend."""
+    try:
+        import peft  # noqa: F401, PLC0415
+    except ImportError as exc:
+        raise RuntimeError(
+            "LoRA styles require the PEFT package, which is not installed in "
+            "your image-generation environment. Open Image Generation and run "
+            "'Update AI packages' (POST /image-gen/install) — the installer "
+            "will add PEFT automatically."
+        ) from exc
 
 
 def _apply_loras(
@@ -273,6 +299,8 @@ def _apply_loras(
         check_lora_model_compat,
         get_installed_lora,
     )
+
+    _ensure_peft_for_loras()
 
     names: list[str] = []
     scales: list[float] = []
@@ -303,21 +331,25 @@ def _apply_loras(
             ) from exc
         names.append(adapter)
         scales.append(scale)
-        applied.append({
-            "id": lora_id,
-            "repo_id": meta["repo_id"],
-            "weight_name": meta["weight_name"],
-            "scale": scale,
-        })
+        applied.append(
+            {
+                "id": lora_id,
+                "repo_id": meta["repo_id"],
+                "weight_name": meta["weight_name"],
+                "scale": scale,
+            }
+        )
     call_pipe.set_adapters(names, adapter_weights=scales)
     logger.info(
         "[image_gen] Applied %d LoRA(s): %s",
-        len(applied), ", ".join(f"{a['id']}@{a['scale']}" for a in applied),
+        len(applied),
+        ", ".join(f"{a['id']}@{a['scale']}" for a in applied),
     )
     return applied
 
 
 # ── result type ───────────────────────────────────────────────────────────────
+
 
 @dataclass
 class GenerationResult:
@@ -345,6 +377,7 @@ class GenerationResult:
 
 
 # ── service class ─────────────────────────────────────────────────────────────
+
 
 class ImageGenService:
     """Singleton service wrapping a loaded diffusers pipeline.
@@ -420,7 +453,9 @@ class ImageGenService:
             "load_error": self._load_error,
             "load_started_at": self._load_started_at,
             "load_age_seconds": (
-                time.time() - self._load_started_at if self._is_loading and self._load_started_at else None
+                time.time() - self._load_started_at
+                if self._is_loading and self._load_started_at
+                else None
             ),
             "is_generating": bool(gens),
             "cancel_requested": any(g["cancel_requested"] for g in gens),
@@ -505,15 +540,14 @@ class ImageGenService:
         # like catalog models from here on (load/generate/img2img/LoRA flags
         # all come off the bridged ImageGenModel).
         from app.services.image_gen.custom_models import get_custom_model  # noqa: PLC0415
+
         return get_custom_model(model_id)
 
     def is_downloaded(self, model_id: str) -> bool:
         return is_model_downloaded(image_models_dir(), model_id)
 
     def model_hardware_check(self, model: ImageGenModel) -> tuple[bool, str | None]:
-        return check_model_hardware(
-            min_vram_gb=model.vram_gb, min_ram_gb=model.ram_gb
-        )
+        return check_model_hardware(min_vram_gb=model.vram_gb, min_ram_gb=model.ram_gb)
 
     async def start_download(self, model_id: str) -> dict:
         """Queue the model's weights into the universal DownloadManager.
@@ -547,12 +581,14 @@ class ImageGenService:
                 enqueue_custom_download,
                 get_custom_entry,
             )
+
             custom_entry = get_custom_entry(model_id)
             if custom_entry is None:
                 return {"queued": False, "error": f"Unknown custom model: {model_id}"}
             return await enqueue_custom_download(custom_entry)
 
         from app.services.downloads.manager import get_download_manager  # noqa: PLC0415
+
         dest = model_dir(image_models_dir(), model_id)
         entry = await get_download_manager().enqueue(
             category="image_gen",
@@ -684,19 +720,19 @@ class ImageGenService:
             return GenerationResult(
                 success=False,
                 error="strength only applies to image-to-image — provide "
-                      "init_image_b64 (an input image) or omit strength.",
+                "init_image_b64 (an input image) or omit strength.",
             )
         if init_image_bytes is not None and not model.supports_img2img:
             return GenerationResult(
                 success=False,
                 error=f"{model.name} does not support image-to-image "
-                      "(no img2img pipeline exists for this family).",
+                "(no img2img pipeline exists for this family).",
             )
         if strength is not None and not model.img2img_strength:
             return GenerationResult(
                 success=False,
                 error=f"{model.name} performs reference-image editing without "
-                      "a strength control — omit strength for this model.",
+                "a strength control — omit strength for this model.",
             )
 
         if self._gen_gate.locked():
@@ -727,18 +763,23 @@ class ImageGenService:
                 if cancel_event.is_set():
                     logger.info("[image_gen] Generation cancelled during model load")
                     return GenerationResult(
-                        success=False, error="Cancelled", cancelled=True,
+                        success=False,
+                        error="Cancelled",
+                        cancelled=True,
                         model_id=model_id,
                     )
 
                 # Resolve defaults from model catalog
                 resolved_steps = steps if steps is not None else model.recommended_steps
-                resolved_guidance = guidance if guidance is not None else model.recommended_guidance
+                resolved_guidance = (
+                    guidance if guidance is not None else model.recommended_guidance
+                )
                 resolved_width = width if width is not None else model.default_width
                 resolved_height = height if height is not None else model.default_height
                 used_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
 
                 import functools  # noqa: PLC0415
+
                 loop = asyncio.get_running_loop()
                 return await loop.run_in_executor(
                     None,
@@ -769,7 +810,11 @@ class ImageGenService:
     def _load_model_sync(self, model: "ImageGenModel") -> dict:
         with self._lock:
             if self._loaded_model_id == model.model_id and self._pipeline is not None:
-                return {"success": True, "model_id": model.model_id, "already_loaded": True}
+                return {
+                    "success": True,
+                    "model_id": model.model_id,
+                    "already_loaded": True,
+                }
 
             self._is_loading = True
             self._load_started_at = time.time()
@@ -805,12 +850,15 @@ class ImageGenService:
                 # transformers — so they stay bf16. fp8 is NOT supported on
                 # Metal; never attempt it. CPU stays fp32.
                 sd_family = model.pipeline_type in (
-                    "stable-diffusion-xl", "stable-diffusion"
+                    "stable-diffusion-xl",
+                    "stable-diffusion",
                 )
                 if torch.cuda.is_available():
                     device = "cuda"
                     dtype = torch.float16 if sd_family else torch.bfloat16
-                elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                elif (
+                    hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+                ):
                     device = "mps"
                     dtype = torch.float16 if sd_family else torch.bfloat16
                 else:
@@ -863,6 +911,7 @@ class ImageGenService:
                     }
                     if model.pipeline_type == "z-image":
                         from diffusers import ZImagePipeline  # noqa: PLC0415
+
                         sf_cls: Any = ZImagePipeline
                     else:
                         sf_cls = single_file_classes.get(model.pipeline_type)
@@ -880,16 +929,23 @@ class ImageGenService:
                     )
                 elif model.pipeline_type == "flux2-klein":
                     from diffusers import Flux2KleinPipeline  # noqa: PLC0415
-                    pipe = Flux2KleinPipeline.from_pretrained(local_path, **common_kwargs)
+
+                    pipe = Flux2KleinPipeline.from_pretrained(
+                        local_path, **common_kwargs
+                    )
                 elif model.pipeline_type == "z-image":
                     from diffusers import ZImagePipeline  # noqa: PLC0415
+
                     # low_cpu_mem_usage=False per the Z-Image model card.
                     pipe = ZImagePipeline.from_pretrained(
                         local_path, low_cpu_mem_usage=False, **common_kwargs
                     )
                 elif model.pipeline_type == "qwen-image":
                     from diffusers import QwenImagePipeline  # noqa: PLC0415
-                    pipe = QwenImagePipeline.from_pretrained(local_path, **common_kwargs)
+
+                    pipe = QwenImagePipeline.from_pretrained(
+                        local_path, **common_kwargs
+                    )
                 elif model.pipeline_type == "flux":
                     pipe = FluxPipeline.from_pretrained(local_path, **common_kwargs)
                 elif model.pipeline_type == "stable-diffusion-xl":
@@ -901,7 +957,9 @@ class ImageGenService:
                         local_path, **common_kwargs
                     )
                 else:
-                    pipe = DiffusionPipeline.from_pretrained(local_path, **common_kwargs)
+                    pipe = DiffusionPipeline.from_pretrained(
+                        local_path, **common_kwargs
+                    )
 
                 self._load_progress = 80.0
 
@@ -921,12 +979,19 @@ class ImageGenService:
 
                 logger.info(
                     "[image_gen] Model loaded: %s on %s dtype=%s",
-                    model.model_id, device, dtype,
+                    model.model_id,
+                    device,
+                    dtype,
                 )
                 return {"success": True, "model_id": model.model_id, "device": device}
 
             except Exception as exc:
-                logger.error("[image_gen] Failed to load model %s: %s", model.model_id, exc, exc_info=True)
+                logger.error(
+                    "[image_gen] Failed to load model %s: %s",
+                    model.model_id,
+                    exc,
+                    exc_info=True,
+                )
                 self._pipeline = None
                 self._loaded_model_id = None
                 error = friendly_load_error(exc) or str(exc)
@@ -954,6 +1019,7 @@ class ImageGenService:
         self._loaded_model_id = None
         try:
             import torch  # noqa: PLC0415
+
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1007,6 +1073,7 @@ class ImageGenService:
             resolved_strength: float | None = None
             if init_image_bytes is not None:
                 import hashlib  # noqa: PLC0415
+
                 init_image_sha256 = hashlib.sha256(init_image_bytes).hexdigest()
                 call_pipe = _to_img2img(pipe, model)
                 init_image = prepare_init_image(init_image_bytes, width, height)
@@ -1038,6 +1105,7 @@ class ImageGenService:
                 # fitted to the requested dims above.
                 try:
                     import inspect as _inspect  # noqa: PLC0415
+
                     i2i_params = _inspect.signature(call_pipe.__call__).parameters
                     for dim_key in ("width", "height"):
                         if dim_key not in i2i_params:
@@ -1072,6 +1140,7 @@ class ImageGenService:
                 merge_extra_params,
                 validate_pipeline_kwargs,
             )
+
             validate_pipeline_kwargs(call_pipe, extra_params.keys())
             call_kwargs = merge_extra_params(call_kwargs, extra_params)
 
@@ -1126,7 +1195,8 @@ class ImageGenService:
                             "[image_gen] Failed to unload LoRA weights after "
                             "generation — the pipeline may retain adapters "
                             "until the model is reloaded: %s",
-                            unload_exc, exc_info=True,
+                            unload_exc,
+                            exc_info=True,
                         )
             elapsed = time.monotonic() - t0
 
@@ -1145,6 +1215,7 @@ class ImageGenService:
             # silently returning a black rectangle — this exact failure
             # shipped 843-byte black PNGs in live testing (July 2026).
             import numpy as np  # noqa: PLC0415
+
             arr = np.asarray(image)
             if arr.size == 0 or int(arr.max()) == int(arr.min()):
                 raise RuntimeError(
@@ -1168,13 +1239,19 @@ class ImageGenService:
             from app.services.media_gen.library import (  # noqa: PLC0415
                 save_generated_image,
             )
+
             record_params = {
-                k: v for k, v in call_kwargs.items()
-                if k not in (
+                k: v
+                for k, v in call_kwargs.items()
+                if k
+                not in (
                     # "image" (the init PIL image) is deliberately NOT
                     # persisted — the sidecar notes init_image_sha256 instead.
-                    "generator", "callback_on_step_end", "callback",
-                    "callback_steps", "image",
+                    "generator",
+                    "callback_on_step_end",
+                    "callback",
+                    "callback_steps",
+                    "image",
                 )
             }
             record_params["has_init_image"] = init_image_bytes is not None
@@ -1214,8 +1291,11 @@ class ImageGenService:
             logger.info("[image_gen] Generation cancelled: %s", exc)
             release_generation_memory("image_gen")
             return GenerationResult(
-                success=False, error="Cancelled", cancelled=True,
-                model_id=model.model_id, seed=seed,
+                success=False,
+                error="Cancelled",
+                cancelled=True,
+                model_id=model.model_id,
+                seed=seed,
             )
         except Exception as exc:
             # Outermost failure boundary: EVERYTHING (OOM, NaN/black-image
@@ -1225,8 +1305,10 @@ class ImageGenService:
             logger.error("[image_gen] Generation failed: %s", exc, exc_info=True)
             release_generation_memory("image_gen")
             return GenerationResult(
-                success=False, error=friendly_generation_error(exc),
-                model_id=model.model_id, seed=seed,
+                success=False,
+                error=friendly_generation_error(exc),
+                model_id=model.model_id,
+                seed=seed,
             )
 
 

@@ -46,9 +46,7 @@ def test_read_hf_token_resolves_from_key_store_cache(monkeypatch):
 
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
-    monkeypatch.setattr(
-        key_manager, "_user_keys", {"huggingface": "hf_store_token"}
-    )
+    monkeypatch.setattr(key_manager, "_user_keys", {"huggingface": "hf_store_token"})
     assert paths.read_hf_token() == "hf_store_token"
 
 
@@ -67,6 +65,46 @@ def test_read_hf_token_reflects_key_rotation_immediately(monkeypatch):
         assert paths.read_hf_token() is None
         cache["huggingface"] = "hf_rotated"
         assert paths.read_hf_token() == "hf_rotated"
+
+
+def test_needs_upgrade_when_peft_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.image_gen import installer
+
+    monkeypatch.setattr(installer, "is_image_gen_installed", lambda: True)
+    monkeypatch.setattr(
+        installer,
+        "get_installed_package_versions",
+        lambda: {"diffusers": "0.39.0"},
+    )
+    assert installer.needs_upgrade() is True
+
+    monkeypatch.setattr(
+        installer,
+        "get_installed_package_versions",
+        lambda: {"diffusers": "0.39.0", "peft": "0.19.1"},
+    )
+    assert installer.needs_upgrade() is False
+
+
+def test_ensure_peft_for_loras_raises_friendly(monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+    import sys
+
+    from app.services.image_gen import service as svc
+
+    real_import = builtins.__import__
+
+    def _import_without_peft(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "peft":
+            raise ImportError("No module named 'peft'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _import_without_peft)
+    sys.modules.pop("peft", None)
+    with pytest.raises(RuntimeError, match="PEFT package"):
+        svc._ensure_peft_for_loras()
 
 
 def test_read_civitai_key_resolves_from_key_store_cache(monkeypatch):
@@ -90,7 +128,9 @@ def test_hf_url_detection_hub_only():
 
 def test_hf_repo_id_parsed_from_resolve_url():
     assert (
-        _hf_repo_from_url("https://huggingface.co/unsloth/Llama-GGUF/resolve/main/q4.gguf")
+        _hf_repo_from_url(
+            "https://huggingface.co/unsloth/Llama-GGUF/resolve/main/q4.gguf"
+        )
         == "unsloth/Llama-GGUF"
     )
     assert _hf_repo_from_url("https://huggingface.co/api/models/x") is None
@@ -112,7 +152,9 @@ def _classify(exc, token, verdict="valid"):
         return result
 
     with patch("app.services.ai.key_validation.validate_key", fake_validate):
-        return asyncio.run(_classify_hf_auth_failure(exc, "black-forest-labs/FLUX.1-schnell", token))
+        return asyncio.run(
+            _classify_hf_auth_failure(exc, "black-forest-labs/FLUX.1-schnell", token)
+        )
 
 
 def test_hf_401_without_token_asks_for_token():
@@ -239,7 +281,9 @@ def _civitai_http_status(status: int) -> httpx.HTTPStatusError:
         (403, "civ_saved", "key is connected"),
     ],
 )
-def test_civitai_inspect_errors_attribute_saved_key_correctly(monkeypatch, status, key, expected):
+def test_civitai_inspect_errors_attribute_saved_key_correctly(
+    monkeypatch, status, key, expected
+):
     """The pre-download Civitai resolver must not collapse every 401/403 into
     "add your key" — with a saved key, the ask is update the key or unlock
     account access."""

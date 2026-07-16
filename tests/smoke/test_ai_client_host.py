@@ -310,7 +310,7 @@ def test_mock_conversation_round_trips_through_sqlite_store(seam_sandbox, local_
     asyncio.run(_run())
 
 
-def test_runtime_model_registration(seam_sandbox):
+def test_runtime_model_registration(seam_sandbox, monkeypatch):
     """local_llm_registry drives matrx-ai's public runtime-model registry
     (the 0.3.0 replacement for AiModelManager._api_cache pokes)."""
     from matrx_ai.catalog import get_runtime_model
@@ -323,10 +323,30 @@ def test_runtime_model_registration(seam_sandbox):
     assert entry.api_class == "generic_openai_standard"
     assert reg.is_local_llm_available()
 
+    # get_local_llm_status() health-probes the registered port and self-heals a
+    # stale registration (loud recovery — commit 51ce67f0e). No real
+    # llama-server listens on the test port, so simulate a reachable server to
+    # exercise the registration→status wiring this test covers.
+    monkeypatch.setattr(reg, "_probe_llama_server", lambda port: (True, None))
     status = reg.get_local_llm_status()
     assert status["canonical_model_name"] == "local/qwen-test"
+    assert status["reachable"] is True
+    assert status["available"] is True
     assert status["matrx_ai_support"] is True
 
+    # And when the probe fails, status must clear the stale registration.
+    monkeypatch.setattr(
+        reg, "_probe_llama_server", lambda port: (False, "connection refused")
+    )
+    unreachable = reg.get_local_llm_status()
+    assert unreachable["reachable"] is False
+    assert unreachable["available"] is False
+    assert get_runtime_model("local/qwen-test") is None
+    assert not reg.is_local_llm_available()
+
+    # Re-register, then verify explicit clear_local_llm() also tears down.
+    assert reg.set_local_llm(port=65533, model_name="qwen-test") is True
+    assert get_runtime_model("local/qwen-test") is not None
     reg.clear_local_llm()
     assert get_runtime_model("local/qwen-test") is None
     assert not reg.is_local_llm_available()

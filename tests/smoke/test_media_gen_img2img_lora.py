@@ -60,6 +60,9 @@ def _force_image_gen_available(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(service_module, "DEPS_AVAILABLE", True)
     monkeypatch.setattr(service_module, "DEPS_REASON", "")
+    # LoRA apply tests stub the pipeline — peft is an optional managed-package
+    # dep that CI/dev venvs may not carry; the guard is tested separately.
+    monkeypatch.setattr(service_module, "_ensure_peft_for_loras", lambda: None)
 
 
 @pytest.fixture(scope="module")
@@ -684,6 +687,33 @@ def test_jobs_api_echoes_new_fields(
 # ── /loras HTTP contract ──────────────────────────────────────────────────────
 
 
+def test_resolve_lora_display_name_catalog_backfill() -> None:
+    from app.services.image_gen.loras import resolve_lora_display_name
+
+    catalog = {
+        "civitai:580857@2674760": {"name": "Realistic Skin Texture (ZTurbo v4.5)"},
+    }
+    assert (
+        resolve_lora_display_name(
+            {"repo_id": "civitai:580857@2674760", "id": "civitai--580857-2674760"},
+            catalog_by_repo=catalog,
+        )
+        == "Realistic Skin Texture (ZTurbo v4.5)"
+    )
+    assert (
+        resolve_lora_display_name(
+            {
+                "repo_id": "civitai:580857@2674760",
+                "id": "civitai--580857-2674760",
+                "name": "Stored Civitai title",
+            },
+            catalog_by_repo=catalog,
+        )
+        == "Stored Civitai title"
+    )
+    assert resolve_lora_display_name({"repo_id": "acme/x", "id": "acme--x"}) is None
+
+
 def test_loras_list_contract(client: TestClient, lora_store: Path) -> None:
     lora_id = _install_fake_lora(lora_store, "acme/style-sdxl", base_family="sdxl")
 
@@ -699,6 +729,7 @@ def test_loras_list_contract(client: TestClient, lora_store: Path) -> None:
     assert e["base_family"] == "sdxl"
     assert e["size_bytes"] == 16
     assert e["installed"] is True and e["added_at"]
+    assert e.get("name") is None
 
     assert len(data["catalog"]) >= 4
     for c in data["catalog"]:
@@ -726,14 +757,41 @@ def test_loras_list_contract(client: TestClient, lora_store: Path) -> None:
     )
 
 
+def test_loras_list_exposes_civitai_name_from_sidecar(
+    client: TestClient, lora_store: Path
+) -> None:
+    from app.services.image_gen.loras import write_lora_meta
+    from app.services.media_gen.paths import DOWNLOAD_COMPLETE_MARKER
+
+    lora_id = "civitai--580857-2674760"
+    write_lora_meta(
+        lora_id,
+        repo_id="civitai:580857@2674760",
+        weight_name="skin.safetensors",
+        base_family="z-image",
+        source="civitai",
+        extra={"name": "Realistic Skin Texture (ZTurbo v4.5)"},
+    )
+    d = lora_store / lora_id
+    (d / "skin.safetensors").write_bytes(b"\x00" * 16)
+    (d / DOWNLOAD_COMPLETE_MARKER).write_text("ok", encoding="utf-8")
+
+    r = client.get("/image-gen/loras")
+    assert r.status_code == 200
+    row = {e["id"]: e for e in r.json()["installed"]}[lora_id]
+    assert row["name"] == "Realistic Skin Texture (ZTurbo v4.5)"
+
+
 def test_lora_download_routes_through_download_manager(
     client: TestClient, lora_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.api import image_gen_routes
     from app.services.downloads import manager as manager_module
 
-    async def fake_resolve(repo_id: str, weight_name: str | None):
-        return "style.safetensors", "sdxl"
+    async def fake_resolve(
+        repo_id: str, weight_name: str | None, *, weight_is_hint: bool = False
+    ):
+        return "style.safetensors", "sdxl", None
 
     enqueued: list[dict] = []
 

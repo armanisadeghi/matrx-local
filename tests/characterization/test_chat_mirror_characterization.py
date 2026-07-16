@@ -201,9 +201,30 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
         from app.services.ai.conversation_handler import SQLiteConversationStore
 
         store = SQLiteConversationStore()
-        await store.ensure_conversation_exists(
-            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "u1", overrides={"route_mode": "agent", "agent_id": "ag1"}
+        # The canonical agent binding (initial_agent_id / initial_agent_version_id)
+        # is authoritative from the request AppContext — production sets it via
+        # ctx.with_overrides(agent_id=...) in prepare_agent_start, NOT from the
+        # loosely-typed overrides bag. Mirror that here so the gate resolves
+        # ctx.agent_id.
+        from matrx_connect.context.app_context import (
+            AppContext,
+            clear_app_context,
+            set_app_context,
         )
+        from matrx_connect.emitters.stream_emitter import StreamEmitter
+
+        ctx = AppContext(emitter=StreamEmitter(), user_id="u1").with_overrides(
+            agent_id="ag1"
+        )
+        ctx_token = set_app_context(ctx)
+        try:
+            await store.ensure_conversation_exists(
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+                "u1",
+                overrides={"route_mode": "agent"},
+            )
+        finally:
+            clear_app_context(ctx_token)
         await store.create_pending_user_request("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "u1")
         result = await store.persist_completed_request(
             {

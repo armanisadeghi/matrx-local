@@ -635,7 +635,9 @@ class ImageJobStore:
                     job = self._jobs[job_id]
                     if job.status != "queued":
                         continue
-                    is_retry = job.attempts > 0
+                    is_retry = job.attempts > 0 and "restart" not in (
+                        job.last_error or ""
+                    ).lower()
                     if is_retry != retry_pass:
                         continue
                     if job.next_attempt_at is not None and job.next_attempt_at > now:

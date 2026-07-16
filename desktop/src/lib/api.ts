@@ -477,11 +477,16 @@ class EngineAPI {
     if (!this.baseUrl) throw new Error("Engine not discovered");
     const resp = await fetch(`${this.baseUrl}/chat/local-llm/connect`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(await this.authHeaders()),
+      },
       body: JSON.stringify({ port, model_name: modelName }),
     });
     if (!resp.ok)
-      throw new Error(`Failed to connect local LLM: ${resp.status}`);
+      throw new Error(
+        `Failed to connect local LLM: ${resp.status} ${await resp.text().catch(() => resp.statusText)}`,
+      );
   }
 
   /**
@@ -493,10 +498,15 @@ class EngineAPI {
     if (!this.baseUrl) return;
     const resp = await fetch(`${this.baseUrl}/chat/local-llm/disconnect`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(await this.authHeaders()),
+      },
     });
     if (!resp.ok)
-      throw new Error(`Failed to disconnect local LLM: ${resp.status}`);
+      throw new Error(
+        `Failed to disconnect local LLM: ${resp.status} ${await resp.text().catch(() => resp.statusText)}`,
+      );
   }
 
   /** Get the current local LLM registration status from the engine. */
@@ -509,9 +519,13 @@ class EngineAPI {
     instructions: string | null;
   }> {
     if (!this.baseUrl) throw new Error("Engine not discovered");
-    const resp = await fetch(`${this.baseUrl}/chat/local-llm/status`);
+    const resp = await fetch(`${this.baseUrl}/chat/local-llm/status`, {
+      headers: await this.authHeaders(),
+    });
     if (!resp.ok)
-      throw new Error(`Failed to get local LLM status: ${resp.status}`);
+      throw new Error(
+        `Failed to get local LLM status: ${resp.status} ${await resp.text().catch(() => resp.statusText)}`,
+      );
     return resp.json();
   }
 

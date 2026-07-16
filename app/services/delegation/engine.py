@@ -126,6 +126,11 @@ class DelegationEngine:
         # State-transition logging (states, not errors).
         self._last_idle_reason: str | None = None
         self._server_unreachable = False
+        self._last_sweep_at: float | None = None
+        self._last_dispatched_at: float | None = None
+        self._last_delivered_at: float | None = None
+        self._last_resume_at: float | None = None
+        self._last_error: str | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle (launcher-managed; see app/main.py Phase 2f)
@@ -166,6 +171,45 @@ class DelegationEngine:
         logger.info("[delegation] sweep requested: %s", reason)
         self._wake.set()
 
+    def status_payload(self) -> dict[str, Any]:
+        """Cheap, read-only snapshot for diagnostics UIs.
+
+        This intentionally exposes state, not secrets: it never returns the
+        user's JWT, pending call arguments, or tool result bodies.
+        """
+        now = time.time()
+
+        def age(ts: float | None) -> float | None:
+            return round(now - ts, 3) if ts is not None else None
+
+        return {
+            "active": self.active,
+            "server_url": self._client.base_url,
+            "poll_interval_seconds": self._interval,
+            "idle_reason": self._last_idle_reason,
+            "server_unreachable": self._server_unreachable,
+            "last_error": self._last_error,
+            "counts": {
+                "inflight": len(self._inflight),
+                "handled": len(self._handled),
+                "undelivered": len(self._undelivered),
+                "recent_resumes": len(self._recent_resumes),
+                "call_tasks": len(self._call_tasks),
+            },
+            "timestamps": {
+                "last_sweep_at": self._last_sweep_at,
+                "last_dispatched_at": self._last_dispatched_at,
+                "last_delivered_at": self._last_delivered_at,
+                "last_resume_at": self._last_resume_at,
+            },
+            "ages_seconds": {
+                "last_sweep": age(self._last_sweep_at),
+                "last_dispatched": age(self._last_dispatched_at),
+                "last_delivered": age(self._last_delivered_at),
+                "last_resume": age(self._last_resume_at),
+            },
+        }
+
     # ------------------------------------------------------------------
     # Loop
     # ------------------------------------------------------------------
@@ -190,6 +234,7 @@ class DelegationEngine:
     async def sweep_once(self) -> int:
         """One sweep: retry undelivered results, then discover + execute new
         calls. Returns the number of NEW calls dispatched (for tests)."""
+        self._last_sweep_at = time.time()
         creds = await self._get_credentials()
         if creds is None:
             return 0
@@ -206,6 +251,7 @@ class DelegationEngine:
             if not self._server_unreachable:
                 self._server_unreachable = True
                 logger.warning("[delegation] pending_calls unreachable: %s", exc)
+            self._last_error = str(exc)
             return 0
 
         dispatched = 0
@@ -231,6 +277,7 @@ class DelegationEngine:
             dispatched += 1
 
         if dispatched:
+            self._last_dispatched_at = time.time()
             logger.info("[delegation] dispatched %d delegated call(s)", dispatched)
         return dispatched
 
@@ -442,6 +489,7 @@ class DelegationEngine:
             return
 
         self._undelivered.pop(call_id, None)
+        self._last_delivered_at = time.time()
         not_found = response.get("not_found")
         if isinstance(not_found, list) and call_id in not_found:
             logger.error(
@@ -495,6 +543,7 @@ class DelegationEngine:
                     jwt, conversation_id, body
                 )
             except Exception as exc:
+                self._last_error = str(exc)
                 logger.warning(
                     "[delegation] resume failed for conversation=%s request=%s: %s",
                     conversation_id,
@@ -503,6 +552,7 @@ class DelegationEngine:
                 )
                 return
             if outcome.status == "streamed":
+                self._last_resume_at = time.time()
                 logger.info(
                     "[delegation] resume streamed to completion "
                     "(conversation=%s events=%d re-delegated=%d)",

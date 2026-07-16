@@ -434,6 +434,7 @@ def test_idle_without_credentials_makes_no_http_calls() -> None:
     engine = DelegationEngine(client=client, poll_interval=999.0)
 
     async def no_creds() -> None:
+        engine._log_idle("no signed-in user")
         return None
 
     engine._get_credentials = no_creds  # type: ignore[method-assign]
@@ -443,6 +444,12 @@ def test_idle_without_credentials_makes_no_http_calls() -> None:
 
     asyncio.run(run())
     assert server.requests == []
+    status = engine.status_payload()
+    assert status["active"] is False
+    assert status["server_url"] == BASE
+    assert status["idle_reason"] == "no signed-in user"
+    assert status["counts"]["undelivered"] == 0
+    assert status["timestamps"]["last_sweep_at"] is not None
 
 
 def test_unreachable_server_is_a_state_not_a_crash() -> None:
@@ -462,6 +469,9 @@ def test_unreachable_server_is_a_state_not_a_crash() -> None:
         assert engine._server_unreachable is True
 
     asyncio.run(run())
+    status = engine.status_payload()
+    assert status["server_unreachable"] is True
+    assert "no route to host" in status["last_error"]
 
 
 # ---------------------------------------------------------------------------

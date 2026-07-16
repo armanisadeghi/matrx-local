@@ -37,6 +37,15 @@ def test_health_public_even_over_tunnel(http_public: httpx.Client) -> None:
     assert r.status_code == 200, r.text
 
 
+def test_delegation_status_public_even_over_tunnel(http_public: httpx.Client) -> None:
+    r = http_public.get("/chat/delegation/status", headers=_TUNNEL_HEADERS)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "active" in body
+    assert "counts" in body
+    assert "server_url" in body
+
+
 # ---------------------------------------------------------------------------
 # Direct loopback (no tunnel headers) — presence-only boundary preserved
 # ---------------------------------------------------------------------------

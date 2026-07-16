@@ -10,7 +10,22 @@ class SystemInfoArgs(BaseModel):
 
 
 class ScreenshotArgs(BaseModel):
-    pass  # no parameters — captures full screen
+    monitor: str = Field(
+        default="all",
+        description=(
+            "Display to capture: 'all' for the full virtual desktop, 'primary' "
+            "for the primary display, or a 1-based monitor index string from list screens."
+        ),
+    )
+    region: list[int] | None = Field(
+        default=None,
+        min_length=4,
+        max_length=4,
+        description=(
+            "Optional crop rectangle [x, y, width, height]. Coordinates are "
+            "absolute when monitor='all', otherwise relative to the selected monitor."
+        ),
+    )
 
 
 class OpenUrlArgs(BaseModel):

@@ -106,6 +106,10 @@ class DelegationApiClient:
         self._base_url = base_url.rstrip("/")
         self._transport = transport
 
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
     def _client(self, timeout: httpx.Timeout | float = _REQUEST_TIMEOUT) -> httpx.AsyncClient:
         return httpx.AsyncClient(timeout=timeout, transport=self._transport)
 

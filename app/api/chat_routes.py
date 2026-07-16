@@ -140,6 +140,18 @@ async def list_local_tools() -> dict[str, Any]:
         return {"tools": [], "total": 0, "registered": 0, "registry_loaded": False}
 
 
+@router.get("/delegation/status")
+async def delegation_status() -> dict[str, Any]:
+    """Return headless cloud tool-call delegation status.
+
+    This is intentionally diagnostic-only: no JWT, pending-call arguments, or
+    tool result bodies are returned.
+    """
+    from app.services.delegation import get_delegation_engine
+
+    return get_delegation_engine().status_payload()
+
+
 # ---------------------------------------------------------------------------
 # Models endpoint — reads from SQLite (populated by SyncEngine)
 # ---------------------------------------------------------------------------
@@ -539,4 +551,3 @@ async def local_llm_status() -> dict[str, Any]:
     from app.services.ai.local_llm_registry import get_local_llm_status
 
     return get_local_llm_status()
-

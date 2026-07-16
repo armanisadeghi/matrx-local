@@ -1650,6 +1650,7 @@ async def _log_requests_dispatch(request: Request, call_next):
             # AI status — polled on page mount
             "/chat/ai-status",
             "/chat/local-llm/status",
+            "/chat/delegation/status",
             # Device monitoring polling (fires every 2-10s)
             "/devices/system",
             "/devices/permissions",

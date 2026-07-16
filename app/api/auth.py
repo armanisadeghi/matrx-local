@@ -92,6 +92,12 @@ _LOCAL_BOOTSTRAP_PATHS = frozenset(
         "/cloud/reconfigure",
         "/settings",          # PUT /settings runs in parallel with /cloud/configure
         "/chat/sync/trigger",  # force sync — used from setup/diagnostics
+        # Local llama-server bridge. The desktop UI/Rust shell may need to
+        # register a just-started local model before Supabase auth has fully
+        # hydrated in the webview; over the tunnel these still require auth.
+        "/chat/local-llm/connect",
+        "/chat/local-llm/disconnect",
+        "/chat/local-llm/status",
         "/auth/token",        # JWT is the credential being *given* to the engine
         "/admin/status",
         "/admin/shutdown",

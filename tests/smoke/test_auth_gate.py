@@ -80,6 +80,23 @@ def test_tunnel_rejects_junk_token_on_local_bootstrap_route(http_public: httpx.C
     assert r.status_code == 401, r.text
 
 
+def test_local_llm_bridge_status_is_loopback_bootstrap(http_public: httpx.Client) -> None:
+    """The desktop can reconcile an already-running llama-server before the
+    webview token provider has hydrated."""
+    r = http_public.get("/chat/local-llm/status")
+    assert r.status_code == 200, r.text
+
+
+def test_tunnel_rejects_junk_token_on_local_llm_bridge(http_public: httpx.Client) -> None:
+    """The loopback-only local LLM bootstrap exception must not expose the
+    bridge over a Cloudflare tunnel."""
+    r = http_public.get(
+        "/chat/local-llm/status",
+        headers={**_TUNNEL_HEADERS, "Authorization": "Bearer not-a-real-jwt"},
+    )
+    assert r.status_code == 401, r.text
+
+
 def test_tunnel_missing_token_rejected(http_public: httpx.Client) -> None:
     r = http_public.post(
         "/tools/invoke",

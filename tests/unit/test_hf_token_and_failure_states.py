@@ -88,6 +88,21 @@ def test_needs_upgrade_when_peft_missing(
     assert installer.needs_upgrade() is False
 
 
+def test_needs_upgrade_when_diffusers_predates_z_image_lora_fix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """0.37.x crashes on valid Civitai/AI-Toolkit Z-Image LoRAs without alpha."""
+    from app.services.image_gen import installer
+
+    monkeypatch.setattr(installer, "is_image_gen_installed", lambda: True)
+    monkeypatch.setattr(
+        installer,
+        "get_installed_package_versions",
+        lambda: {"diffusers": "0.37.1", "peft": "0.19.1"},
+    )
+    assert installer.needs_upgrade() is True
+
+
 def test_ensure_peft_for_loras_raises_friendly(monkeypatch: pytest.MonkeyPatch) -> None:
     import builtins
     import sys

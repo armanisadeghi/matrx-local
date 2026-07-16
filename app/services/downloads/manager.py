@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import asyncio
 import bisect
+import hashlib
 import json
 import os
+import struct
 import threading
 import time
 import uuid
@@ -69,6 +71,52 @@ _SLOT_EXPAND_COOLDOWN_S = 10.0
 # (32 KB) to reduce buffer competition with the primary download.
 _PRIMARY_CHUNK_BYTES = 65536
 _SECONDARY_CHUNK_BYTES = 32768
+
+
+def _validate_safetensors_file(path: Path, *, expected_sha256: str | None = None) -> None:
+    """Reject a truncated or non-safetensors direct download.
+
+    Civitai LoRAs are downloaded from a signed URL rather than through the
+    Hugging Face snapshot path. A successful HTTP stream alone is not enough
+    to make a file installable: validate the safetensors header and require
+    every declared tensor byte to fit exactly inside the file. This needs no
+    optional ML packages and runs before the completion marker is written.
+    """
+    try:
+        size = path.stat().st_size
+        if size < 9:
+            raise ValueError("file is too small to be a safetensors file")
+        with path.open("rb") as fh:
+            header_size = struct.unpack("<Q", fh.read(8))[0]
+            if header_size <= 0 or header_size > size - 8:
+                raise ValueError("invalid safetensors header length")
+            header = json.loads(fh.read(header_size))
+        tensors = [v for k, v in header.items() if k != "__metadata__"]
+        if not tensors:
+            raise ValueError("safetensors file contains no tensors")
+        ends = []
+        for tensor in tensors:
+            offsets = tensor.get("data_offsets") if isinstance(tensor, dict) else None
+            if not (
+                isinstance(offsets, list)
+                and len(offsets) == 2
+                and all(isinstance(offset, int) for offset in offsets)
+                and 0 <= offsets[0] <= offsets[1]
+            ):
+                raise ValueError("invalid safetensors tensor offsets")
+            ends.append(offsets[1])
+        expected_size = 8 + header_size + max(ends)
+        if expected_size != size:
+            raise ValueError(
+                f"safetensors data is incomplete (expected {expected_size} bytes, got {size})"
+            )
+        if expected_sha256:
+            with path.open("rb") as fh:
+                digest = hashlib.file_digest(fh, "sha256").hexdigest()
+            if digest.lower() != expected_sha256.lower():
+                raise ValueError("safetensors SHA-256 does not match Civitai metadata")
+    except (OSError, ValueError, json.JSONDecodeError, struct.error) as exc:
+        raise ValueError(f"Downloaded file is not a complete safetensors LoRA: {exc}") from exc
 
 
 @dataclass
@@ -940,6 +988,11 @@ class DownloadManager:
         # the same completion marker the HF snapshot path writes — the
         # image/LoRA services treat weights as installed ONLY when it exists.
         if (entry.metadata or {}).get("write_complete_marker"):
+            if (entry.metadata or {}).get("validate_safetensors"):
+                _validate_safetensors_file(
+                    self._part_dest(entry, urls[0], 0),
+                    expected_sha256=(entry.metadata or {}).get("expected_sha256"),
+                )
             from app.services.media_gen.paths import DOWNLOAD_COMPLETE_MARKER  # noqa: PLC0415
             marker_dir = Path((entry.metadata or {})["dest_dir"])
             marker_dir.mkdir(parents=True, exist_ok=True)

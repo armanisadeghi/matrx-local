@@ -1560,7 +1560,13 @@ async def _download_lora_civitai(parsed: dict[str, Any]) -> LoraDownloadResponse
             "dest_dir": str(lora_dir(lora_id)),
             "civitai_download": True,
             "write_complete_marker": True,
+            # A direct Civitai response must be a complete safetensors file
+            # before it becomes visible as an installed LoRA. The manager
+            # verifies its header and data bounds while the temporary file is
+            # still protected by the atomic download path.
+            "validate_safetensors": True,
             "dest_filename": weight_name,
+            "expected_sha256": info.get("sha256"),
             "lora_id": lora_id,
             "model_page_url": f"https://civitai.com/models/{info['model_id']}",
         },

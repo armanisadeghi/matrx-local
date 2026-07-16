@@ -153,6 +153,12 @@ LoRA downloads route through the universal DownloadManager (category
 reconciles a half-finished LoRA download against this same contract (see
 `downloads/FEATURE.md`).
 
+For Civitai LoRAs specifically, the direct signed-URL payload is verified as a
+complete safetensors container and, when Civitai supplies it, against the
+published SHA-256 **before** `.download-complete` is written. A truncated,
+HTML, or mismatched file therefore remains pending and never reaches the
+pipeline loader.
+
 ### Family compatibility is HONEST — a mismatch fails loud, never silently hides
 
 `guess_base_family` maps a LoRA to `sdxl|sd15|flux|z-image|unknown` from the

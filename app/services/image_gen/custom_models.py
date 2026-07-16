@@ -492,7 +492,7 @@ async def resolve_civitai(parsed: dict[str, Any]) -> dict[str, Any]:
     """Resolve a parsed civitai ref → normalized info dict (no weight download).
 
     Returns: {model_id, version_id, model_name, version_name, model_type,
-    base_model, family, file_name, size_kb, download_url}.
+    base_model, family, file_name, size_kb, sha256, download_url}.
     """
     version_id = parsed.get("version_id")
     model_id = parsed.get("model_id")
@@ -541,6 +541,10 @@ async def resolve_civitai(parsed: dict[str, Any]) -> dict[str, Any]:
         "family": map_civitai_base_model(base_model),
         "file_name": str(file.get("name") or f"civitai-{version_id}.safetensors"),
         "size_kb": float(file.get("sizeKB") or 0.0),
+        # Civitai exposes the file digest in version metadata. Preserve it so
+        # the download manager can prove the signed-URL payload is the exact
+        # published weight before making it installable.
+        "sha256": str((file.get("hashes") or {}).get("SHA256") or "").lower() or None,
         "download_url": download_url,
     }
 

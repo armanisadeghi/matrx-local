@@ -641,6 +641,8 @@ def test_lora_download_from_civitai(
     md = kw["metadata"]
     assert md["civitai_download"] is True
     assert md["write_complete_marker"] is True
+    assert md["validate_safetensors"] is True
+    assert md["expected_sha256"] is None
     assert md["dest_filename"] == "neon-style-v2.safetensors"
     assert md["dest_dir"] == str(lora_store / "civitai--321-555")
 

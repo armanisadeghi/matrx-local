@@ -117,12 +117,12 @@ def friendly_load_error(exc: BaseException) -> str | None:
 
 
 # Runtime minimum: below this the "packages outdated" banner fires and forces a
-# reinstall. Verified that every pipeline class in the current catalog
-# (Flux2Klein / ZImage / QwenImage) already exists and imports in diffusers
-# 0.37.1, so the runtime floor is 0.37 — a higher floor would force a pointless
-# multi-GB re-install for users who already have a working 0.37.x. FRESH installs
-# still pin >=0.39 (installer.py / pyproject [image-gen]) to get the newest fixes.
-MIN_DIFFUSERS_VERSION = (0, 37, 0)
+# managed-package upgrade. Diffusers 0.37.x cannot load valid AI-Toolkit/Civitai
+# Z-Image LoRAs that omit per-layer ``.alpha`` tensors: its converter blindly
+# pops those optional keys (MXL-D-054). 0.39 includes the compatible converter
+# and Z-Image key-normalization fixes, so keeping 0.37 installed makes every
+# such adapter fail even though its download is complete and valid.
+MIN_DIFFUSERS_VERSION = (0, 39, 0)
 
 
 # ── availability check ────────────────────────────────────────────────────────

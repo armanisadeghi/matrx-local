@@ -51,7 +51,6 @@ _PUBLIC_PATHS = frozenset(
         "/chat/tools",
         "/chat/tools/by-category",
         "/chat/tools/anthropic",
-        "/chat/delegation/status",  # read-only delegation diagnostics, no secrets
         "/chat/models",         # read-only model list, no user data
         "/chat/agents",         # read-only agent/prompt list, no user data — frontend calls this before auth
         "/chat/sync/status",    # read-only sync status — useful for diagnostics before auth
@@ -99,6 +98,7 @@ _LOCAL_BOOTSTRAP_PATHS = frozenset(
         "/chat/local-llm/connect",
         "/chat/local-llm/disconnect",
         "/chat/local-llm/status",
+        "/chat/delegation/status",  # read-only local diagnostics; tunnel requires auth
         "/auth/token",        # JWT is the credential being *given* to the engine
         "/admin/status",
         "/admin/shutdown",

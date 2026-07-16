@@ -186,7 +186,7 @@ def generate_tool_schema(tool_name: str) -> dict[str, Any] | None:
         if entry is None:  # pragma: no cover — catalog build guarantees presence
             return None
         return {
-            "name": tool_name,
+            "name": entry.cloud_name,
             "description": entry.description,
             "category": _TOOL_TO_CATEGORY.get(tool_name, "Actions"),
             "input_schema": entry.input_schema,

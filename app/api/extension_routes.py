@@ -360,6 +360,38 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> Non
         await session.send(_build_pong(msg.get("timestamp")))
         return
 
+    if msg_type == "extension.identify":
+        from app.api.extension_ws_manager import identify_session
+
+        extension_id = msg.get("extension_id")
+        extension_version = msg.get("extension_version")
+        extension_name = msg.get("extension_name")
+        if not all(
+            isinstance(value, str) and 0 < len(value) <= 256
+            for value in (extension_id, extension_version, extension_name)
+        ):
+            logger.warning(
+                "[extension_ws] invalid extension.identify session=%s", session_id
+            )
+            return
+        identified = identify_session(
+            session_id,
+            extension_id=extension_id,
+            extension_version=extension_version,
+            extension_name=extension_name,
+        )
+        publish_event(
+            "ws.identify",
+            "in",
+            {
+                "session_id": session_id,
+                "extension_id": extension_id,
+                "extension_version": extension_version,
+                "identified": identified,
+            },
+        )
+        return
+
     logger.warning(
         "[extension_ws] unknown message type=%r session=%s",
         msg_type,

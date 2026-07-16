@@ -70,6 +70,13 @@ class ExtensionSession:
     # bookkeeping — no behaviour depends on these values.
     connected_at: float = field(default_factory=time.time)
     last_seen_at: float = field(default_factory=time.time)
+    # Supplied by the extension immediately after the engine's ``hello``.
+    # The engine cannot enumerate Chrome profiles or dormant installs, so
+    # these fields identify only an actually live reverse-channel client.
+    extension_id: Optional[str] = None
+    extension_version: Optional[str] = None
+    extension_name: Optional[str] = None
+    identified_at: Optional[float] = None
 
     async def send(self, payload: Dict[str, Any]) -> bool:
         """Serialize + send a JSON payload. Returns True on success.
@@ -311,6 +318,10 @@ def list_active_sessions() -> List[Dict[str, Any]]:
                 "connected_at": session.connected_at,
                 "last_seen_at": session.last_seen_at,
                 "pending_calls": len(session.pending_calls),
+                "extension_id": session.extension_id,
+                "extension_version": session.extension_version,
+                "extension_name": session.extension_name,
+                "identified_at": session.identified_at,
             }
         )
     return snapshot
@@ -321,6 +332,25 @@ def touch_session(session_id: str) -> None:
     session = _REGISTRY.get(session_id)
     if session is not None:
         session.last_seen_at = time.time()
+
+
+def identify_session(
+    session_id: str,
+    *,
+    extension_id: str,
+    extension_version: str,
+    extension_name: str,
+) -> bool:
+    """Attach the extension's self-reported runtime identity to a live session."""
+    session = _REGISTRY.get(session_id)
+    if session is None:
+        return False
+    session.extension_id = extension_id
+    session.extension_version = extension_version
+    session.extension_name = extension_name
+    session.identified_at = time.time()
+    session.last_seen_at = session.identified_at
+    return True
 
 
 async def disconnect_session(

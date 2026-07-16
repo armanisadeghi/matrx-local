@@ -3838,6 +3838,10 @@ export interface ExtensionSessionInfo {
   connected_at: number; // seconds since epoch
   last_seen_at: number; // seconds since epoch
   pending_calls: number;
+  extension_id?: string | null;
+  extension_version?: string | null;
+  extension_name?: string | null;
+  identified_at?: number | null;
 }
 
 export interface ExtensionInvokeEnvelope {

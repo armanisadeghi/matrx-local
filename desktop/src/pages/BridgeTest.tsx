@@ -684,7 +684,7 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-sm">
                 <Plug className="h-4 w-4 text-emerald-400" />
-                Extension sessions
+                Live extension sessions
                 <Badge variant="secondary" className="ml-1 text-[10px]">
                   {sessions.length}
                 </Badge>
@@ -725,8 +725,9 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
 
               {sessions.length === 0 ? (
                 <div className="rounded border border-dashed border-muted-foreground/30 px-3 py-6 text-center text-xs text-muted-foreground">
-                  No extension sessions. Load the matrx-extend Chrome extension
-                  and confirm it is reaching this engine.
+                  No live extension sessions. Installed or inactive Chrome
+                  profiles cannot be discovered until their extension service
+                  worker connects.
                 </div>
               ) : (
                 <div className="overflow-hidden rounded border">
@@ -734,7 +735,7 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
                     <thead className="bg-muted/50 text-muted-foreground">
                       <tr>
                         <th className="px-3 py-2 text-left font-medium">
-                          Session ID
+                          Extension instance
                         </th>
                         <th className="px-3 py-2 text-left font-medium">
                           Connected
@@ -760,7 +761,12 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
                             className="px-3 py-2 font-mono"
                             title={s.session_id}
                           >
-                            {shortId(s.session_id)}
+                            <div>{s.extension_name ?? "Unidentified client"}</div>
+                            <div className="text-[10px] text-muted-foreground">
+                              {s.extension_id
+                                ? `${shortId(s.extension_id)}${s.extension_version ? ` · v${s.extension_version}` : ""}`
+                                : `session ${shortId(s.session_id)}`}
+                            </div>
                           </td>
                           <td className="px-3 py-2 text-muted-foreground">
                             {formatRelative(s.connected_at)}

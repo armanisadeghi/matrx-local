@@ -38,13 +38,14 @@ logger = get_logger()
 
 # All packages to install (order matters — torch first so its deps land before
 # the diffusers wheel asks for them).
-# diffusers >= 0.39 is REQUIRED by the current model catalogs (Flux2Klein /
-# ZImage / QwenImage / Wan / LTX pipelines). Keep these pins in sync with
+# diffusers 0.39.0 is REQUIRED by the current model catalogs (Flux2Klein /
+# ZImage / QwenImage / Wan / LTX pipelines) and fixes valid Civitai Z-Image
+# LoRAs which omit per-layer alpha tensors. Keep these pins in sync with
 # pyproject.toml [image-gen] and service.py MIN_DIFFUSERS_VERSION.
 IMAGE_GEN_PACKAGES = [
     "torch>=2.6",
     "torchvision",
-    "diffusers>=0.39.0",
+    "diffusers==0.39.0",
     "transformers>=4.51",
     "accelerate>=1.0",
     "peft>=0.13.1",
@@ -63,6 +64,7 @@ IMAGE_GEN_PACKAGES = [
 ]
 
 _TORCH_PACKAGES = {"torch", "torchvision", "torchaudio"}
+_COMPATIBILITY_MIGRATION_MARKER = ".compatibility-upgrade-pending"
 
 
 # ── Install directory ─────────────────────────────────────────────────────────
@@ -76,6 +78,11 @@ def get_image_gen_packages_dir() -> Path:
 def is_image_gen_installed() -> bool:
     """True if the managed image-gen packages directory is complete."""
     return (get_image_gen_packages_dir() / ".install-complete").exists()
+
+
+def _compatibility_migration_pending() -> bool:
+    """Whether an interrupted mandatory runtime migration must be resumed."""
+    return (get_image_gen_packages_dir() / _COMPATIBILITY_MIGRATION_MARKER).exists()
 
 
 def get_installed_package_versions() -> dict[str, str]:
@@ -104,6 +111,8 @@ def needs_upgrade() -> bool:
     catalog's minimum (service.py MIN_DIFFUSERS_VERSION). POST /image-gen/install
     re-runs pip with the upgraded pins in that case instead of short-circuiting.
     """
+    if _compatibility_migration_pending():
+        return True
     if not is_image_gen_installed():
         return False
     from app.services.image_gen.service import (  # noqa: PLC0415 — avoid cycle at import time
@@ -119,6 +128,89 @@ def needs_upgrade() -> bool:
     if get_installed_package_versions().get("peft") is None:
         return True  # LoRA apply needs peft — older installs predate this dep
     return False
+
+
+def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> bool:
+    """Synchronously upgrade a previously installed incompatible runtime.
+
+    This is deliberately a startup migration, not UI advice: shipped app
+    updates must repair every existing image-gen install before importing its
+    optional packages. Only diffusers and its resolved lightweight Python
+    dependencies are touched; models, LoRAs, torch, and user data stay put.
+    The pending marker makes a power/network interruption retry on the next
+    engine start rather than allowing the known-broken loader to run.
+    """
+    if not needs_upgrade():
+        return False
+
+    pkg_dir = get_image_gen_packages_dir()
+    marker = pkg_dir / ".install-complete"
+    pending = pkg_dir / _COMPATIBILITY_MIGRATION_MARKER
+    # A missing marker with no pending migration means image generation was
+    # never installed; optional capabilities must never auto-install themselves.
+    if not marker.exists() and not pending.exists():
+        return False
+
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    if marker.exists():
+        marker.replace(pending)
+
+    progress = progress or InstallProgress(log_prefix="image_gen_runtime_migration")
+    progress.status = "running"
+    try:
+        progress.update("upgrading", 10.0, "Updating required AI runtime…")
+        # Do NOT invoke the full installer: re-installing/altering torch during
+        # an app update is unnecessary and is especially failure-prone on Windows
+        # where native wheel files may be in use. Diffusers is pure Python.
+        _run_pip_streaming(["diffusers==0.39.0"], pkg_dir, progress)
+        progress.update("verifying", 80.0, "Verifying Z-Image LoRA support…")
+        python = _find_python()
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(pkg_dir) + os.pathsep + env.get("PYTHONPATH", "")
+        check = subprocess.run(
+            [
+                python,
+                "-c",
+                "import diffusers; from diffusers import ZImagePipeline; "
+                "assert diffusers.__version__ == '0.39.0'; print('ok')",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+        if check.returncode != 0 or "ok" not in check.stdout:
+            raise RuntimeError(f"Runtime migration verification failed: {check.stderr[-2000:]}")
+        marker.write_text(
+            json.dumps(
+                {
+                    "packages": IMAGE_GEN_PACKAGES,
+                    "versions": get_installed_package_versions(),
+                    "migration": "diffusers-0.39.0-z-image-lora",
+                }
+            ),
+            encoding="utf-8",
+        )
+        # The old runtime was deliberately withheld by the frozen runtime hook,
+        # so this is the first point this process may import image packages.
+        inject_image_gen_path()
+        try:
+            from app.services.image_gen import service as _svc_mod  # noqa: PLC0415
+            from app.services.video_gen import service as _vid_mod  # noqa: PLC0415
+
+            _svc_mod.DEPS_AVAILABLE, _svc_mod.DEPS_REASON = _svc_mod._check_deps()
+            _vid_mod.DEPS_AVAILABLE, _vid_mod.DEPS_REASON = _vid_mod._check_deps()
+        except Exception as exc:
+            raise RuntimeError(f"Runtime migration installed but could not activate packages: {exc}") from exc
+        pending.unlink(missing_ok=True)
+        progress.finish("Required AI runtime update complete")
+        logger.info("[image_gen_installer] Required Diffusers migration complete")
+        return True
+    except Exception:
+        # Keep the pending marker as durable retry state. The service gates
+        # generation while it remains, so a partial pip target cannot load.
+        logger.exception("[image_gen_installer] Required Diffusers migration failed")
+        raise
 
 
 def _purge_shadowing_protobuf(pkg_dir: Path) -> bool:
@@ -394,6 +486,7 @@ def _do_install(progress: InstallProgress) -> None:
                 }
             )
         )
+        (pkg_dir / _COMPATIBILITY_MIGRATION_MARKER).unlink(missing_ok=True)
         inject_image_gen_path()
 
         # Reload availability in the running service
@@ -439,4 +532,28 @@ async def start_install() -> InstallProgress:
     _active_progress = progress
 
     asyncio.get_running_loop().run_in_executor(None, _do_install, progress)
+    return progress
+
+
+async def start_compatibility_migration() -> InstallProgress | None:
+    """Start the mandatory old-runtime migration without blocking app startup.
+
+    The runtime hook has already withheld incompatible optional packages, so
+    this background task cannot expose the old loader. The shared progress
+    singleton lets the existing installer status/SSE/UI show its automatic
+    progress and makes duplicate startup calls harmless.
+    """
+    global _active_progress
+    if not needs_upgrade():
+        return None
+    if _active_progress is not None and _active_progress.status == "running":
+        return _active_progress
+
+    progress = InstallProgress(log_prefix="image_gen_runtime_migration")
+    progress.status = "running"
+    progress._loop = asyncio.get_running_loop()
+    _active_progress = progress
+    asyncio.get_running_loop().run_in_executor(
+        None, migrate_incompatible_runtime, progress
+    )
     return progress

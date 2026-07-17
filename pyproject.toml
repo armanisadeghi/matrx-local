@@ -148,7 +148,10 @@ image-gen = [
     # GPU support install torch with CUDA manually.
     "torch>=2.6",
     "torchvision>=0.18.0",
-    "diffusers>=0.39.0",
+    # Exact release: 0.37.x crashes on valid Civitai/AI-Toolkit Z-Image
+    # adapters without per-layer .alpha tensors. Do not float this critical
+    # loader dependency without validating the Civitai Z-Image fixture.
+    "diffusers==0.39.0",
     "transformers>=4.51",
     "accelerate>=1.0",
     "peft>=0.13.1",

@@ -103,6 +103,70 @@ def test_needs_upgrade_when_diffusers_predates_z_image_lora_fix(
     assert installer.needs_upgrade() is True
 
 
+def test_startup_migrates_old_image_runtime_before_it_can_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """An existing 0.37 install is upgraded automatically, without a UI click."""
+    from app.services.image_gen import installer
+
+    marker = tmp_path / ".install-complete"
+    marker.write_text("old", encoding="utf-8")
+    versions = {"diffusers": "0.37.1", "peft": "0.19.1"}
+    monkeypatch.setattr(installer, "get_image_gen_packages_dir", lambda: tmp_path)
+    monkeypatch.setattr(installer, "get_installed_package_versions", lambda: versions)
+    monkeypatch.setattr(installer, "_find_python", lambda: "python")
+
+    installed: list[list[str]] = []
+
+    def fake_pip(packages, target, progress, extra_index=None):
+        installed.append(packages)
+        assert target == tmp_path and extra_index is None
+        versions["diffusers"] = "0.39.0"
+
+    monkeypatch.setattr(installer, "_run_pip_streaming", fake_pip)
+    monkeypatch.setattr(
+        installer.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="ok\n", stderr=""),
+    )
+
+    assert installer.migrate_incompatible_runtime() is True
+    assert installed == [["diffusers==0.39.0"]]
+    assert marker.exists()
+    assert not (tmp_path / ".compatibility-upgrade-pending").exists()
+    assert installer.needs_upgrade() is False
+
+
+def test_interrupted_runtime_migration_is_durable_and_retried(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from app.services.image_gen import installer
+
+    (tmp_path / ".install-complete").write_text("old", encoding="utf-8")
+    monkeypatch.setattr(installer, "get_image_gen_packages_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        installer, "get_installed_package_versions", lambda: {"diffusers": "0.37.1", "peft": "0.19.1"}
+    )
+    monkeypatch.setattr(installer, "_run_pip_streaming", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("offline")))
+
+    with pytest.raises(RuntimeError, match="offline"):
+        installer.migrate_incompatible_runtime()
+    assert not (tmp_path / ".install-complete").exists()
+    assert (tmp_path / ".compatibility-upgrade-pending").exists()
+    assert installer.needs_upgrade() is True
+
+
+def test_outdated_runtime_is_hard_gated(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.image_gen import service
+
+    monkeypatch.setattr(service, "DEPS_AVAILABLE", True)
+    monkeypatch.setattr(service, "DEPS_REASON", "")
+    monkeypatch.setattr(service, "are_packages_outdated", lambda: True)
+    svc = service.ImageGenService()
+    assert svc.available is False
+    assert "runtime update" in svc.unavailable_reason
+
+
 def test_ensure_peft_for_loras_raises_friendly(monkeypatch: pytest.MonkeyPatch) -> None:
     import builtins
     import sys

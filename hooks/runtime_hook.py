@@ -112,9 +112,12 @@ os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 # sys.path here so subsequent `import torch` / `import diffusers` work
 # without any restart.
 #
-# This runs on every engine start.  If the directory doesn't exist yet (user
-# hasn't installed) it's a no-op — the image-gen service gracefully reports
-# "not available" instead.
+# This runs before application imports. Only inject the exact runtime this app
+# release supports: an older Diffusers directory would otherwise be imported by
+# ``app.main`` before its mandatory migration can repair it. In particular,
+# 0.37.x crashes loading valid Civitai/AI-Toolkit Z-Image LoRAs without
+# per-layer alpha tensors. The main startup migration upgrades a withheld old
+# runtime, verifies it, then injects it in the same process.
 try:
     _ig_dir_candidates = []
     if sys.platform == "win32":
@@ -124,7 +127,10 @@ try:
         _ig_dir_candidates.append(Path.home() / ".matrx" / "image-gen-packages")
 
     for _ig_dir in _ig_dir_candidates:
-        if (_ig_dir / ".install-complete").exists():
+        _complete = (_ig_dir / ".install-complete").exists()
+        _migration_pending = (_ig_dir / ".compatibility-upgrade-pending").exists()
+        _required_diffusers = (_ig_dir / "diffusers-0.39.0.dist-info").exists()
+        if _complete and not _migration_pending and _required_diffusers:
             # Purge any protobuf copy older installs left here BEFORE the dir
             # enters sys.path. The engine bundles its own protobuf (xai-sdk
             # rejects protobuf 7 outright); a copy in this PREPENDED dir
@@ -226,6 +232,13 @@ try:
             except Exception:
                 pass  # patch failure is non-fatal; import will fail naturally if filecmp is missing
 
+            break
+        elif _complete or _migration_pending:
+            print(
+                "[runtime_hook] Withholding incompatible image-gen runtime; "
+                "startup will run the mandatory compatibility migration",
+                file=sys.stderr,
+            )
             break
 except Exception:
     pass  # Never crash on path injection failure

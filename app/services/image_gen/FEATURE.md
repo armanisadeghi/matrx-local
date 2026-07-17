@@ -159,6 +159,18 @@ published SHA-256 **before** `.download-complete` is written. A truncated,
 HTML, or mismatched file therefore remains pending and never reaches the
 pipeline loader.
 
+### Mandatory runtime migration
+
+The packaged app owns the managed `image-gen-packages` runtime across macOS,
+Windows, and Linux. On startup, before that directory is injected into
+`sys.path`, an existing runtime below the required Diffusers version is
+upgraded automatically in the background. This migration changes only
+Diffusers and its resolved Python dependencies—not model weights, LoRAs, or
+Torch—and records a durable pending marker before it starts. An interrupted
+migration retries at the next engine start. Image generation is hard-gated
+until the required runtime is verified, so an old known-broken LoRA converter
+is never used as a fallback.
+
 ### Family compatibility is HONEST — a mismatch fails loud, never silently hides
 
 `guess_base_family` maps a LoRA to `sdxl|sd15|flux|z-image|unknown` from the

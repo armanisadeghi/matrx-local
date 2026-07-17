@@ -188,7 +188,7 @@ export function OutdatedPackagesBanner({
               ? ` (diffusers ${imageStatus.packages_version})`
               : ""}{" "}
             are older than required for the latest image and video models.
-            Update to unlock the new model catalog.
+            The app automatically updates them before generation resumes.
           </p>
         </div>
         {extra}

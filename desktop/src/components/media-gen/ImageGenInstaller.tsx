@@ -171,7 +171,7 @@ export function ImageGenInstaller({
     ? "Update AI packages"
     : "Set up Image Generation";
   const defaultIntro = upgrade
-    ? "A newer version of the on-device AI packages is required for the latest models. Click Update now to upgrade in place — your downloaded models are kept."
+    ? "A required compatibility update is running automatically. Your downloaded models and LoRAs are kept; generation resumes as soon as verification finishes."
     : "AI Matrx can generate images directly on your computer — no cloud subscription needed. Click Install now and we'll download everything automatically. This is a one-time setup (~500 MB – 1 GB).";
 
   return (

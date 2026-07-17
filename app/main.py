@@ -426,7 +426,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # frozen binary's runtime_hook.py already handled it, and a no-op when packages
     # are not yet installed.
     try:
-        from app.services.image_gen.installer import inject_image_gen_path
+        from app.services.image_gen.installer import (
+            inject_image_gen_path,
+            start_compatibility_migration,
+        )
+
+        # Mandatory release migration: the runtime hook withholds the old
+        # directory before any app import. Start an automatic upgrade now, but
+        # do not delay unrelated engine features when the user is offline.
+        # Image generation remains hard-gated until verification activates the
+        # fixed packages in this process.
+        migration = await start_compatibility_migration()
+        if migration:
+            logger.info("[app/main.py] Phase 0a: automatic image-gen runtime migration started")
 
         if inject_image_gen_path():
             logger.info(

@@ -427,10 +427,19 @@ class ImageGenService:
 
     @property
     def available(self) -> bool:
-        return DEPS_AVAILABLE
+        # Never allow the known-broken 0.37.x Z-Image LoRA converter to run.
+        # Startup migrates existing installs before optional packages are
+        # imported; this remains a defense-in-depth gate if migration failed.
+        return DEPS_AVAILABLE and not are_packages_outdated()
 
     @property
     def unavailable_reason(self) -> str:
+        if are_packages_outdated():
+            return (
+                "A required AI runtime update is pending or failed. Image generation "
+                "is paused until Diffusers 0.39.0 is installed; restart or reconnect "
+                "to retry the automatic migration."
+            )
         return DEPS_REASON
 
     @property
@@ -446,7 +455,7 @@ class ImageGenService:
             gens = [dict(g) for g in self._active_gens.values()]
         return {
             "available": self.available,
-            "unavailable_reason": DEPS_REASON if not self.available else None,
+            "unavailable_reason": self.unavailable_reason if not self.available else None,
             "loaded_model_id": self._loaded_model_id,
             "is_loading": self._is_loading,
             "load_progress": self._load_progress,

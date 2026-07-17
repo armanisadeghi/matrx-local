@@ -359,6 +359,15 @@ real Notes directory: installed helper → `degraded:true`/EPERM; identical
 Helper re-signed with the shared requirement → `degraded:false` and recheck
 success. The broader prompt audit remains open.
 
+2026-07-17: Fixed the global Notes action banner regression that made an old
+permission denial look current: its initial check, 15-second poll, and
+"Check again" button were all calling the cached `GET /notes/access` instead
+of the active recheck endpoint. They now perform a real filesystem probe and
+dismiss immediately when access works. macOS CI also fails closed when the
+Helper signing identity is unavailable, and the parent identifier is derived
+from Tauri config rather than duplicated. Windows/Linux paths are unchanged.
+The broader prompt audit remains open.
+
 - [ ] **img2img + LoRA follow-ups (added 2026-07-10, image-gen img2img/LoRA
   build)** — shipped: `init_image_b64`/`strength`/`loras` on
   /image-gen/generate + /image-gen/jobs, `supports_img2img`/`img2img_strength`/

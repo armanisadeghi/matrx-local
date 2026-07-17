@@ -598,10 +598,18 @@ fi
 if [[ "$(uname -s)" == "Darwin" ]]; then
     HELPER_APP_PATH="dist/$HELPER_APP_NAME"
     HELPER_INNER_BIN="$HELPER_APP_PATH/Contents/MacOS/Matrx Engine"
+    if [[ -z "${APPLE_SIGNING_IDENTITY:-}" && "${GITHUB_ACTIONS:-}" == "true" ]]; then
+        echo "ERROR: APPLE_SIGNING_IDENTITY is required for macOS release builds."
+        echo "       Without it, Matrx Engine gets a separate TCC identity and cannot"
+        echo "       use the Full Disk Access grant shown for AI Matrx."
+        exit 1
+    fi
     if [[ -n "${APPLE_SIGNING_IDENTITY:-}" && -f "$HELPER_INNER_BIN" ]]; then
         echo ""
         echo "=== Post-Build: Aligning Helper TCC identity with AI Matrx ==="
-        PARENT_SIGNING_IDENTIFIER="com.aimatrx.desktop"
+        PARENT_SIGNING_IDENTIFIER="$(
+            "$PYTHON_CMD" -c 'import json, pathlib; print(json.loads(pathlib.Path("desktop/src-tauri/tauri.conf.json").read_text())["identifier"])'
+        )"
         codesign \
             --force \
             --timestamp \

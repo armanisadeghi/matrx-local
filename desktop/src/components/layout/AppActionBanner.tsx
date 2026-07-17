@@ -21,6 +21,26 @@ interface AppActionBannerProps {
 
 const NOTES_ACCESS_POLL_MS = 15_000;
 
+type NotesAccessProbe = Pick<typeof engine, "recheckNotesAccess">;
+
+/**
+ * Return a filesystem-verified notes access state.
+ *
+ * The global banner must never use getNotesAccess() here: that endpoint only
+ * returns the engine's cached guard. Using it made both the poll and the
+ * "Check again" button repeat a stale denial forever even after the engine
+ * could read the folder. The Documents page already uses this active probe;
+ * keep the app-wide prompt on the same contract.
+ */
+export function getFreshNotesAccess(
+  notesApi: NotesAccessProbe,
+  opts?: { createDir?: boolean },
+): Promise<NotesAccessStatus> {
+  return notesApi.recheckNotesAccess(
+    opts?.createDir ? { createDir: true } : undefined,
+  );
+}
+
 export function AppActionBanner({ engineStatus }: AppActionBannerProps) {
   const { downloads, openModal } = useDownloadManager();
   const { openSettings } = usePermissionsContext();
@@ -42,9 +62,7 @@ export function AppActionBanner({ engineStatus }: AppActionBannerProps) {
       }
       setCheckingNotes(true);
       try {
-        const next = opts?.createDir
-          ? await engine.recheckNotesAccess({ createDir: true })
-          : await engine.getNotesAccess();
+        const next = await getFreshNotesAccess(engine, opts);
         setNotesAccess(next);
       } catch {
         // Older engines or transient outages should not replace the real

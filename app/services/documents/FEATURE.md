@@ -39,11 +39,15 @@ is the single choke point:
   `notes_access_degraded/reason/kind` on `GET /notes/sync/status`.
 - UI: `desktop/src/components/documents/NotesAccessPrompt.tsx` renders the
   full-page prompt on the Documents page (System Settings deep-link via the
-  permissions system, Check again + 10 s auto-poll). Never show empty lists
+  permissions system, Check again + 10 s auto-poll). The app-wide
+  `AppActionBanner` uses the same active `POST /notes/access/recheck` probe for
+  its initial check, poll, and button; `GET /notes/access` is cached state and
+  must not drive a user-facing "Check again" action. Never show empty lists
   while degraded.
 
 Pinned by `tests/unit/test_notes_access_state.py` (engine) and
-`desktop/src/components/documents/notes-access-prompt.test.tsx` (UI).
+`desktop/src/components/documents/notes-access-prompt.test.tsx` plus
+`desktop/src/components/layout/app-action-banner.test.ts` (UI).
 - `supabase_client.py` — the ONLY wire client for cloud `workbench.notes`.
   ALL remote↔local column mapping lives in `_normalize_note_row`
   (`created_by`↔`user_id`, `deleted_at`→`is_deleted`). Skipping it resurrects

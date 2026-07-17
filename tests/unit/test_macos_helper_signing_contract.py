@@ -29,10 +29,18 @@ def test_helper_keeps_unique_bundle_metadata_on_both_architectures() -> None:
 def test_release_signing_aligns_helper_with_visible_parent() -> None:
     script = BUILD_SCRIPT.read_text(encoding="utf-8")
 
-    assert 'PARENT_SIGNING_IDENTIFIER="com.aimatrx.desktop"' in script
+    assert 'json.loads(pathlib.Path("desktop/src-tauri/tauri.conf.json").read_text())' in script
+    assert '["identifier"]' in script
     assert '--identifier "$PARENT_SIGNING_IDENTIFIER"' in script
     assert 'codesign -dr - "$HELPER_APP_PATH"' in script
     assert 'identifier \\"$PARENT_SIGNING_IDENTIFIER\\"' in script
+
+
+def test_ci_cannot_silently_build_a_separate_helper_tcc_identity() -> None:
+    script = BUILD_SCRIPT.read_text(encoding="utf-8")
+
+    assert '"${GITHUB_ACTIONS:-}" == "true"' in script
+    assert "APPLE_SIGNING_IDENTITY is required for macOS release builds" in script
 
 
 def test_identity_alignment_happens_before_tauri_copy_input() -> None:

@@ -39,10 +39,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import deque
 import io
 import os
 import sys
 import time
+from collections.abc import Iterable
 from typing import Any, Dict, Optional
 
 from app.common.system_logger import get_logger
@@ -94,6 +96,7 @@ _RESUME_CONFLICT_MAX_ATTEMPTS = 4
 
 # Bounded memory for the executed-call guard.
 _HANDLED_CALLS_MAX = 500
+_DIAGNOSTIC_EVENTS_MAX = 80
 
 
 class DelegationEngine:
@@ -131,6 +134,13 @@ class DelegationEngine:
         self._last_delivered_at: float | None = None
         self._last_resume_at: float | None = None
         self._last_error: str | None = None
+        self._last_claimed_pending_count = 0
+        self._last_visible_pending_count = 0
+        self._last_claimed_pending_tools: list[str] = []
+        self._last_visible_pending_tools: list[str] = []
+        self._last_unresolved_tools: list[str] = []
+        self._last_visible_pending: list[dict[str, Any]] = []
+        self._events: deque[dict[str, Any]] = deque(maxlen=_DIAGNOSTIC_EVENTS_MAX)
 
     # ------------------------------------------------------------------
     # Lifecycle (launcher-managed; see app/main.py Phase 2f)
@@ -185,10 +195,19 @@ class DelegationEngine:
         return {
             "active": self.active,
             "server_url": self._client.base_url,
+            "instance_id": _local_instance_id(),
             "poll_interval_seconds": self._interval,
             "idle_reason": self._last_idle_reason,
             "server_unreachable": self._server_unreachable,
             "last_error": self._last_error,
+            "pending": {
+                "claimed_count": self._last_claimed_pending_count,
+                "claimed_tools": self._last_claimed_pending_tools,
+                "visible_count": self._last_visible_pending_count,
+                "visible_tools": self._last_visible_pending_tools,
+                "unresolved_tools": self._last_unresolved_tools,
+                "visible_sample": self._last_visible_pending[:20],
+            },
             "counts": {
                 "inflight": len(self._inflight),
                 "handled": len(self._handled),
@@ -196,6 +215,7 @@ class DelegationEngine:
                 "recent_resumes": len(self._recent_resumes),
                 "call_tasks": len(self._call_tasks),
             },
+            "recent_events": list(self._events),
             "timestamps": {
                 "last_sweep_at": self._last_sweep_at,
                 "last_dispatched_at": self._last_dispatched_at,
@@ -244,6 +264,7 @@ class DelegationEngine:
 
         try:
             pending = await self._client.list_pending_calls(jwt)
+            self._record_pending_snapshot("claimed", pending)
             if self._server_unreachable:
                 self._server_unreachable = False
                 logger.info("[delegation] server reachable again")
@@ -255,6 +276,7 @@ class DelegationEngine:
             return 0
 
         dispatched = 0
+        unresolved: set[str] = set()
         for call in pending:
             call_id = str(call.get("call_id") or "")
             tool_name = str(call.get("tool_name") or "")
@@ -267,8 +289,22 @@ class DelegationEngine:
             entry = self._resolve_tool(tool_name)
             if entry is None:
                 # Not ours — a browser/ui-first tool awaiting its own client.
+                unresolved.add(tool_name)
+                self._event(
+                    "skipped_unresolved_tool",
+                    call_id=call_id,
+                    tool_name=tool_name,
+                    conversation_id=conversation_id,
+                )
                 continue
             self._inflight[call_id] = time.monotonic()
+            self._event(
+                "dispatching",
+                call_id=call_id,
+                tool_name=tool_name,
+                dispatcher=entry.dispatcher_name,
+                conversation_id=conversation_id,
+            )
             task = asyncio.create_task(
                 self._handle_call(call, entry), name=f"delegation-call-{call_id[:12]}"
             )
@@ -279,6 +315,8 @@ class DelegationEngine:
         if dispatched:
             self._last_dispatched_at = time.time()
             logger.info("[delegation] dispatched %d delegated call(s)", dispatched)
+        self._last_unresolved_tools = sorted(unresolved)
+        await self._refresh_visible_pending_diagnostics(jwt, claimed=pending)
         return dispatched
 
     # ------------------------------------------------------------------
@@ -358,6 +396,13 @@ class DelegationEngine:
             entry.dispatcher_name,
             call_id,
             timeout,
+        )
+        self._event(
+            "executing",
+            call_id=call_id,
+            tool_name=tool_name,
+            dispatcher=entry.dispatcher_name,
+            args_keys=sorted(args.keys()),
         )
         started = time.monotonic()
         session = ToolSession()
@@ -469,6 +514,13 @@ class DelegationEngine:
                     call_id,
                     exc,
                 )
+                self._last_error = str(exc)
+                self._event(
+                    "delivery_rejected",
+                    call_id=call_id,
+                    status=exc.status,
+                    error=str(exc),
+                )
                 return
             logger.warning(
                 "[delegation] tool_results delivery failed for call_id=%s (%s) — "
@@ -477,6 +529,8 @@ class DelegationEngine:
                 exc,
             )
             self._undelivered[call_id] = (conversation_id, result_payload)
+            self._last_error = str(exc)
+            self._event("delivery_retry_queued", call_id=call_id, error=str(exc))
             return
         except Exception as exc:
             logger.warning(
@@ -486,6 +540,8 @@ class DelegationEngine:
                 exc,
             )
             self._undelivered[call_id] = (conversation_id, result_payload)
+            self._last_error = str(exc)
+            self._event("delivery_retry_queued", call_id=call_id, error=str(exc))
             return
 
         self._undelivered.pop(call_id, None)
@@ -501,6 +557,12 @@ class DelegationEngine:
             "[delegation] result delivered call_id=%s continuation_needed=%s",
             call_id,
             response.get("continuation_needed"),
+        )
+        self._event(
+            "delivered",
+            call_id=call_id,
+            continuation_needed=bool(response.get("continuation_needed")),
+            user_request_id=response.get("user_request_id"),
         )
         if response.get("continuation_needed") and response.get("user_request_id"):
             await self._maybe_resume(
@@ -560,6 +622,13 @@ class DelegationEngine:
                     outcome.events_seen,
                     outcome.tool_delegated_seen,
                 )
+                self._event(
+                    "resume_streamed",
+                    conversation_id=conversation_id,
+                    user_request_id=user_request_id,
+                    events_seen=outcome.events_seen,
+                    tool_delegated_seen=outcome.tool_delegated_seen,
+                )
                 # Re-entrancy (§2.4): a re-delegated call is a durable row by
                 # now — sweep immediately instead of waiting an interval.
                 self.request_sweep("post-resume re-entrancy check")
@@ -588,6 +657,13 @@ class DelegationEngine:
                 "[delegation] resume declined (%s) for request=%s — no retry",
                 conflict.code,
                 user_request_id,
+            )
+            self._event(
+                "resume_declined",
+                conversation_id=conversation_id,
+                user_request_id=user_request_id,
+                code=conflict.code,
+                retryable=conflict.retryable,
             )
             return
 
@@ -626,6 +702,62 @@ class DelegationEngine:
             },
         }
 
+    async def _refresh_visible_pending_diagnostics(
+        self, jwt: str, *, claimed: list[dict[str, Any]]
+    ) -> None:
+        """Read-only pending-call sweep for diagnosis.
+
+        The normal poll includes ``?instance_id=...`` and therefore only sees
+        rows this desktop may claim. This pass omits the instance_id so support
+        can distinguish "no pending work exists" from "pending work exists but
+        is targeted/claimed elsewhere." Rows from this method are NEVER
+        executed.
+        """
+        should_probe = not claimed or bool(self._last_unresolved_tools)
+        if not should_probe:
+            self._record_pending_snapshot("visible", [])
+            return
+        try:
+            visible = await self._client.list_pending_calls(jwt, claim_for_instance=False)
+        except Exception as exc:
+            self._last_error = str(exc)
+            self._event("visible_pending_probe_failed", error=str(exc))
+            return
+        self._record_pending_snapshot("visible", visible)
+        if not claimed and visible:
+            logger.warning(
+                "[delegation] no claimable pending calls for this instance, but "
+                "%d delegated call(s) are visible for the user. Check "
+                "target_instance_id / claimed_by_instance_id in /chat/delegation/status.",
+                len(visible),
+            )
+            self._event(
+                "visible_but_not_claimed",
+                visible_count=len(visible),
+                tools=_tool_counts(visible),
+            )
+
+    def _record_pending_snapshot(self, kind: str, calls: list[dict[str, Any]]) -> None:
+        tools = _tool_counts(calls)
+        sample = [_summarize_pending_call(c) for c in calls[:20]]
+        if kind == "claimed":
+            self._last_claimed_pending_count = len(calls)
+            self._last_claimed_pending_tools = tools
+        elif kind == "visible":
+            self._last_visible_pending_count = len(calls)
+            self._last_visible_pending_tools = tools
+            self._last_visible_pending = sample
+        self._event(f"pending_{kind}", count=len(calls), tools=tools)
+
+    def _event(self, event: str, **fields: Any) -> None:
+        payload: dict[str, Any] = {
+            "ts": time.time(),
+            "event": event,
+        }
+        for key, value in fields.items():
+            payload[key] = _safe_diag_value(value)
+        self._events.append(payload)
+
 
 # ---------------------------------------------------------------------------
 # Singleton accessor (mirrors chat_sync's get_chat_sync_engine)
@@ -639,6 +771,60 @@ def get_delegation_engine() -> DelegationEngine:
     if _engine is None:
         _engine = DelegationEngine()
     return _engine
+
+
+def _tool_counts(calls: Iterable[dict[str, Any]]) -> list[str]:
+    counts: dict[str, int] = {}
+    for call in calls:
+        name = str(call.get("tool_name") or "")
+        if not name:
+            name = "<missing>"
+        counts[name] = counts.get(name, 0) + 1
+    return [f"{name}:{count}" for name, count in sorted(counts.items())]
+
+
+def _summarize_pending_call(call: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "call_id": _short(str(call.get("call_id") or "")),
+        "conversation_id": _short(str(call.get("conversation_id") or "")),
+        "user_request_id": _short(str(call.get("user_request_id") or "")),
+        "tool_name": str(call.get("tool_name") or ""),
+        "target_instance_id": str(call.get("target_instance_id") or "") or None,
+        "claimed_by_instance_id": str(call.get("claimed_by_instance_id") or "") or None,
+        "claim_expires_at": str(call.get("claim_expires_at") or "") or None,
+        "args_keys": sorted((call.get("arguments") or {}).keys())
+        if isinstance(call.get("arguments"), dict)
+        else [],
+    }
+
+
+def _short(value: str, *, keep: int = 10) -> str:
+    if not value:
+        return ""
+    return value if len(value) <= keep else f"{value[:keep]}…"
+
+
+def _local_instance_id() -> str:
+    try:
+        from app.services.cloud_sync.instance_manager import get_instance_manager
+
+        return get_instance_manager().instance_id
+    except Exception:
+        return ""
+
+
+def _safe_diag_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= 500 else f"{value[:500]}…"
+    if isinstance(value, list):
+        return [_safe_diag_value(v) for v in value[:20]]
+    if isinstance(value, tuple):
+        return [_safe_diag_value(v) for v in list(value)[:20]]
+    if isinstance(value, dict):
+        return {str(k): _safe_diag_value(v) for k, v in list(value.items())[:30]}
+    return str(value)[:500]
 
 
 def _prepare_delegated_image(image: Any) -> tuple[dict[str, str] | None, str | None]:

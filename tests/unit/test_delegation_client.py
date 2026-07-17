@@ -47,6 +47,7 @@ class FakeServer:
 
     def __init__(self) -> None:
         self.pending: list[dict[str, Any]] = []
+        self.visible_pending: list[dict[str, Any]] | None = None
         self.requests: list[httpx.Request] = []
         self.tool_results_bodies: list[dict[str, Any]] = []
         self.resume_bodies: list[dict[str, Any]] = []
@@ -62,7 +63,13 @@ class FakeServer:
         path = request.url.path
         assert request.headers.get("authorization") == f"Bearer {JWT}"
         if path == "/ai/user/pending_calls":
-            return httpx.Response(200, json=self.pending)
+            has_instance = "instance_id" in dict(request.url.params)
+            if has_instance:
+                return httpx.Response(200, json=self.pending)
+            return httpx.Response(
+                200,
+                json=self.pending if self.visible_pending is None else self.visible_pending,
+            )
         if path.endswith("/tool_results"):
             body = json.loads(request.content.decode())
             self.tool_results_bodies.append(body)
@@ -472,6 +479,36 @@ def test_unreachable_server_is_a_state_not_a_crash() -> None:
     status = engine.status_payload()
     assert status["server_unreachable"] is True
     assert "no route to host" in status["last_error"]
+
+
+def test_visible_pending_diagnostics_explain_target_mismatch() -> None:
+    """If the instance-scoped claim poll returns nothing but the user has
+    delegated rows, status must show the visible rows without executing them."""
+    server = FakeServer()
+    server.pending = []
+    server.visible_pending = [
+        _pending_call(
+            tool_name="local_screen",
+            call_id="screen_call",
+            arguments={"action": "screenshot"},
+            target_instance_id="other-desktop",
+            claimed_by_instance_id=None,
+        )
+    ]
+    engine = _engine(server)
+
+    async def run() -> None:
+        assert await engine.sweep_once() == 0
+
+    asyncio.run(run())
+
+    assert server.tool_results_bodies == []
+    status = engine.status_payload()
+    assert status["pending"]["claimed_count"] == 0
+    assert status["pending"]["visible_count"] == 1
+    assert status["pending"]["visible_tools"] == ["local_screen:1"]
+    assert status["pending"]["visible_sample"][0]["target_instance_id"] == "other-desktop"
+    assert any(e["event"] == "visible_but_not_claimed" for e in status["recent_events"])
 
 
 # ---------------------------------------------------------------------------

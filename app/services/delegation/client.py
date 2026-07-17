@@ -124,7 +124,12 @@ class DelegationApiClient:
     # Discovery
     # ------------------------------------------------------------------
 
-    async def list_pending_calls(self, jwt: str) -> list[dict[str, Any]]:
+    async def list_pending_calls(
+        self,
+        jwt: str,
+        *,
+        claim_for_instance: bool = True,
+    ) -> list[dict[str, Any]]:
         """GET /ai/user/pending_calls — every delegated call awaiting this user,
         across all conversations. Caller filters to the tools this desktop owns.
 
@@ -138,14 +143,15 @@ class DelegationApiClient:
         """
         url = f"{self._base_url}/ai/user/pending_calls"
         params: dict[str, str] = {}
-        try:
-            from app.services.cloud_sync.instance_manager import get_instance_manager
+        if claim_for_instance:
+            try:
+                from app.services.cloud_sync.instance_manager import get_instance_manager
 
-            iid = get_instance_manager().instance_id
-            if iid:
-                params["instance_id"] = iid
-        except Exception:
-            logger.debug("[delegation] could not resolve instance_id for pending_calls", exc_info=True)
+                iid = get_instance_manager().instance_id
+                if iid:
+                    params["instance_id"] = iid
+            except Exception:
+                logger.debug("[delegation] could not resolve instance_id for pending_calls", exc_info=True)
         async with self._client() as http:
             resp = await http.get(url, headers=self._headers(jwt), params=params or None)
         if resp.status_code != 200:

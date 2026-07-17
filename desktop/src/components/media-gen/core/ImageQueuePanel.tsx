@@ -400,7 +400,7 @@ function JobFeedCard({
 export function ImageQueuePanel({
   layout = "list",
   limit,
-  heading = "Queue",
+  heading = "Generation history",
   showHeading = true,
 }: {
   layout?: ImageQueueLayout;
@@ -410,8 +410,8 @@ export function ImageQueuePanel({
   showHeading?: boolean;
 }) {
   const [state, actions] = useMediaGenApp();
-  const { imageJobs, imageJobsError, imageJobThumbs } = state;
-  const { cancelImageJob, setImageForm } = actions;
+  const { imageJobs, imageJobsError, imageJobThumbs, canLoadMoreImageHistory } = state;
+  const { cancelImageJob, setImageForm, loadMoreImageHistory } = actions;
 
   const reuseSeed = (seed: number) => setImageForm({ seedText: String(seed) });
   const { openJob, openingJobId, descriptorOf } = useImageJobLightbox({
@@ -459,6 +459,15 @@ export function ImageQueuePanel({
         <div className="flex gap-2 overflow-x-auto pb-1">{items}</div>
       ) : (
         <div className="space-y-2">{items}</div>
+      )}
+      {canLoadMoreImageHistory && (
+        <button
+          type="button"
+          onClick={() => void loadMoreImageHistory()}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          Load older history
+        </button>
       )}
     </div>
   );

@@ -1,7 +1,7 @@
 """PyInstaller runtime hook — set environment variables for bundled tools.
 
 This runs before any application code when the frozen binary starts.
-It injects compile-time config (API URLs, publishable keys) and then
+It injects compile-time Supabase bootstrap config and then
 points Playwright, Tesseract, and ffmpeg to their bundled/user locations
 inside sys._MEIPASS (the PyInstaller extraction directory) or the user's home.
 """
@@ -60,7 +60,8 @@ if sys.platform == "win32":
     except Exception:
         pass  # If reconfigure fails (e.g. no buffer attr), continue — better than crashing.
 
-# Inject API URLs and publishable keys baked in at build time by CI.
+# Inject the Supabase bootstrap values baked in at build time by CI. Runtime
+# service URLs come from remote app config (with its last-good disk cache).
 # Must run before any other module import so dotenv / config.py see the values.
 try:
     from app.bundled_config import apply as _apply_bundled_config

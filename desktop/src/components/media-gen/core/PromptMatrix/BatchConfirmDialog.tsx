@@ -77,8 +77,9 @@ export function BatchConfirmDialog({
             </span>
           </DialogTitle>
           <DialogDescription className="min-w-0 break-words leading-relaxed [overflow-wrap:anywhere]">
-            They run one at a time, in the order shown. You can pause, reorder,
-            or cancel the batch at any point — including after it starts.
+            This is a fresh randomized batch snapshot. It runs one at a time in
+            the order shown; a new batch gets a new random order and seeds.
+            You can pause, reorder, or cancel at any point.
           </DialogDescription>
         </DialogHeader>
 

@@ -46,10 +46,19 @@ export {
   type TokenMatch,
 } from "./parse";
 
-export { MAX_SEED, randomSeed, Rng, sampleIndices } from "./rng";
+export {
+  MAX_SEED,
+  randomSeed,
+  Rng,
+  sampleIndices,
+  secureRandom,
+  shuffled,
+  type RandomSource,
+} from "./rng";
 
 export {
   countPlan,
+  createBatchSnapshot,
   expandMatrix,
   validateSpec,
   type PlanValidation,

@@ -1,4 +1,4 @@
-# prompt-matrix — {{variable}} templates → planned, countable, ordered batches
+# prompt-matrix — {{variable}} templates → planned, countable, randomized batches
 
 Durable rules for `desktop/src/lib/prompt-matrix/` and the UI it drives. Touch
 this code → update this file in the same change.
@@ -11,7 +11,7 @@ Write one prompt with `{{variables}}`, give each variable a list of options, pic
 how to combine them, see **exactly** how many runs that is, and queue them all.
 
 ```
-  const plan  = expandMatrix(spec);                                   // ordered runs + exact total
+  const plan  = createBatchSnapshot(spec);                            // fresh randomized attempt
   const built = buildJobs(target, base, plan.combinations, spec.variables);
   await enqueueImageBatch(built.jobs.map(...), label);                // one request
 ```
@@ -58,12 +58,11 @@ refuses it without ever allocating it. `expandMatrix` materializes at most
 `MAX_MATERIALIZED` (5000) and sets `truncated`. Never compute a total by building
 the list.
 
-**2. Variable ORDER is loop nesting.** `variables[0]` is the outermost loop (the
-one **held frozen** while the others sweep); the last is innermost (changes
-fastest). That is the entire answer to "do you freeze one variable and sweep the
-others?" — you drag it to the top. Results therefore arrive grouped the way a
-human compares them. `syncVariablesWithTokens` **must never re-sort** existing
-variables; a keystroke in the prompt cannot be allowed to undo the user's drag.
+**2. Variable order never determines execution order.** It is retained only as
+the stable structure of a saved template. `createBatchSnapshot()` shuffles whole
+valid combinations with Fisher–Yates before any work is queued, so no variable
+is accidentally held frozen across the first runs. Linked variables and pools
+stay paired because combinations—not individual axes—are shuffled.
 
 **3. Nothing is silently dropped or silently generated.**
 - A `{{token}}` with no variable is an **error**, not an empty string — a 40-minute
@@ -74,13 +73,15 @@ variables; a keystroke in the prompt cannot be allowed to undo the user's drag.
   that names the two typos.
 - Linked variables of unequal length truncate to the shortest **with a warning**.
 
-**4. Randomness is seeded.** All of it goes through `Rng` (mulberry32). A "random
-sample of 50" the user cannot reproduce is not a plan. `Math.random()` appears
-only in `randomSeed()` for "surprise me".
+**4. Every new batch attempt is random.** `createBatchSnapshot()` uses Web Crypto
+entropy for its subset (when sampled), execution order, and one independent
+diffusion seed per image. Stopping and starting a new batch therefore cannot
+return the same leading run sequence. Preview freezes one such snapshot, so the
+jobs a user approves are precisely the jobs that are queued.
 
-**5. A fixed seed is the default.** It is what makes a sweep a comparison: the
-variable becomes the only difference between two images. With a random seed you
-cannot tell your change apart from the noise it started from.
+**5. Recovery is not a new batch.** Retry and restart-resume retain the original
+job's durable seed; they recover an existing attempt. Creating another batch is
+always a fresh random draw.
 
 **6. Never lose typed options.** `syncVariablesWithTokens` keeps a variable whose
 token was momentarily deleted if it holds any hand-typed option. The working spec
@@ -97,10 +98,10 @@ panel sits in the matrix UI itself (with the absolute path shown). See
 
 | Kind | Runs | For |
 |---|---|---|
-| `cartesian` | Πnᵢ | Every combination. Order = nesting (see rule 2). |
+| `cartesian` | Πnᵢ | Every combination, in a fresh randomized order. |
 | `baseline` | 1 + Σ(nᵢ − 1) | Change ONE variable at a time from a baseline. Turns 3 × 10 into **12** runs, not 30 — the escape hatch when the product explodes. |
-| `sample` | N | A reproducible random subset of the product. Probe a huge space before committing. |
-| `zip` | min(nᵢ) | Everything steps in lockstep. |
+| `sample` | N | A fresh random subset of the product, randomly ordered. |
+| `zip` | min(nᵢ) | Lockstep combinations, randomly ordered for execution. |
 
 Plus **link groups**: variables sharing a `linkGroup` step 1:1 instead of
 multiplying (pair a style with its LoRA → 3 × 3 = 3 runs, not 9). And
@@ -124,12 +125,12 @@ the run-count + Queue button **below** them.
   rename the matching `{{token}}` everywhere in the template; parameter-variable
   names are label-only.
 - `BatchConfirmDialog` — the count, a time estimate from **this machine's own**
-  median generation time, and the actual first/last prompts. Nothing is queued
-  without it.
-- `BatchPreviewDialog` — **Preview** builds the batch with the real `buildJobs`
-  path, freezes that snapshot, and lets you review every prompt, copy runs, and
-  checkbox which ones to queue. Queue-from-preview never re-expands — selection
-  only filters the frozen list, so order/seeds/text match what Queue would send.
+  median generation time, and the actual first/last prompts from a fresh random
+  snapshot. Nothing is queued without it.
+- `BatchPreviewDialog` — **Preview** creates a fresh snapshot with the real
+  `buildJobs` path, freezes it, and lets you review every prompt, copy runs, and
+  checkbox which ones to queue. Queue-from-preview never re-expands—selection
+  only filters that frozen snapshot.
 - `BatchQueuePanel` — pause / drag-reorder / cancel-batch / retry, live.
 - **Library panel** — always visible above the variable cards. Save a pool or
   variable with **Save to library**; **Insert** drops it into the current
@@ -143,8 +144,7 @@ the run-count + Queue button **below** them.
 
 ## Tests
 
-`prompt-matrix.test.ts` (`pnpm test:unit`) pins the counting, the nesting order,
-every strategy, seed policy, pool rotate/same (including slots > options),
-validation, and the image target's axes. The count and the emission order are
-the two things a bug in this library turns into wasted GPU-hours — they are
-tested hardest.
+`prompt-matrix.test.ts` (`pnpm test:unit`) pins counting, validation, pool/link
+integrity, and injected-entropy snapshots—including the regression contract that
+two new attempts have different leading runs and seeds. The test source is
+deterministic only to make assertions stable; production snapshots use Web Crypto.

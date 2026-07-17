@@ -1,10 +1,10 @@
 /**
- * Deterministic RNG (mulberry32) — a seeded plan replays identically.
+ * Deterministic RNG (mulberry32) for analysis, imports, and stable tests.
  *
  * Math.random() would make "random sample of 50" unreproducible: the user
- * could never re-run the same 50 combinations, and a resumed/duplicated batch
- * would silently draw a different sample. Every random choice in the planner
- * goes through here.
+ * could never re-run the same 50 combinations. Actual submitted batches use
+ * the Web-Crypto source below through createBatchSnapshot(), so a new attempt
+ * never inherits this deterministic analysis stream.
  */
 export class Rng {
   private state: number;
@@ -38,9 +38,57 @@ export class Rng {
 /** Largest seed the generation engine accepts (2^32 − 1). */
 export const MAX_SEED = 4294967295;
 
+export interface RandomSource {
+  /** Uniform integer in [0, maxExclusive). */
+  int: (maxExclusive: number) => number;
+  /** A seed in the generation engine's accepted uint32 range. */
+  seed: () => number;
+}
+
+function secureUint32(): number {
+  const values = new Uint32Array(1);
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi?.getRandomValues !== undefined) {
+    cryptoApi.getRandomValues(values);
+    return values[0] as number;
+  }
+  // Tauri's renderer provides Web Crypto. This fallback keeps non-browser
+  // tooling usable; it is never the production entropy source.
+  return Math.floor(Math.random() * (MAX_SEED + 1));
+}
+
+/** OS-backed entropy used for every newly created batch snapshot. */
+export const secureRandom: RandomSource = {
+  int(maxExclusive: number): number {
+    if (maxExclusive <= 0) return 0;
+    if (maxExclusive >= MAX_SEED + 1) return secureUint32();
+    // Rejection sampling avoids modulo bias for non-power-of-two ranges.
+    const ceiling = MAX_SEED + 1 - ((MAX_SEED + 1) % maxExclusive);
+    let value = secureUint32();
+    while (value >= ceiling) value = secureUint32();
+    return value % maxExclusive;
+  },
+  seed: secureUint32,
+};
+
 /** A random seed for "surprise me", outside any plan's deterministic stream. */
 export function randomSeed(): number {
-  return Math.floor(Math.random() * (MAX_SEED + 1));
+  return secureRandom.seed();
+}
+
+/** Fisher–Yates shuffle. It returns a new array and never mutates the source. */
+export function shuffled<T>(
+  values: readonly T[],
+  random: RandomSource = secureRandom,
+): T[] {
+  const out = [...values];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = random.int(i + 1);
+    const current = out[i] as T;
+    out[i] = out[j] as T;
+    out[j] = current;
+  }
+  return out;
 }
 
 /**

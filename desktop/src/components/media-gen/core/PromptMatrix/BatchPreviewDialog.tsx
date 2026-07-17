@@ -129,9 +129,9 @@ export function BatchPreviewDialog({
             </span>
           </DialogTitle>
           <DialogDescription className="min-w-0 break-words leading-relaxed [overflow-wrap:anywhere]">
-            Exact jobs from the real matrix build — same order, seeds, and
-            prompts as Queue. Nothing has been sent yet. Uncheck anything you
-            want to skip, then queue the rest.
+            A fresh randomized batch snapshot — Queue uses these exact jobs,
+            order, seeds, and prompts. Nothing has been sent yet. Reopen
+            Preview or start a new batch to draw a different variation set.
           </DialogDescription>
         </DialogHeader>
 

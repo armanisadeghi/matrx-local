@@ -159,7 +159,9 @@ class SyncEngine:
         if client is None:
             logger.debug("[sync_engine] AIDream client not available — skipping model sync")
             await self._sync_meta.set_last_sync(
-                "models", status="skipped", error_message="AIDREAM_SERVER_URL_LIVE not set"
+                "models",
+                status="skipped",
+                error_message="AIDream server URL unavailable from app config",
             )
             return
 
@@ -285,7 +287,9 @@ class SyncEngine:
         if client is None:
             logger.debug("[sync_engine] AIDream client not available — skipping agent sync")
             await self._sync_meta.set_last_sync(
-                "agents", status="skipped", error_message="AIDREAM_SERVER_URL_LIVE not set"
+                "agents",
+                status="skipped",
+                error_message="AIDream server URL unavailable from app config",
             )
             return
 

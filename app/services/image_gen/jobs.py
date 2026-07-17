@@ -164,6 +164,11 @@ class ImageJob:
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
     finished_at: float | None = None
+    # Monotonic terminal-transition sequence.  Timestamps alone are not a
+    # sufficient ordering contract: two jobs can finish in the same clock tick
+    # (particularly in tests or after a fast failure).  This makes the
+    # completed-history order exact and durable across restarts.
+    finished_sequence: int = 0
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -219,6 +224,7 @@ class ImageJobStore:
         self._paused = False
         self._batch_labels: dict[str, str] = {}
         self._batch_created: dict[str, float] = {}
+        self._next_finished_sequence = 0
         # Hot cache of init-image bytes. The durable copy is on disk, keyed by
         # sha256 — this only saves a re-read for jobs enqueued this session.
         self._init_cache: dict[str, bytes] = {}
@@ -306,6 +312,20 @@ class ImageJobStore:
 
                 self._jobs[job.job_id] = job
                 self._order.append(job.job_id)
+                self._next_finished_sequence = max(
+                    self._next_finished_sequence, job.finished_sequence
+                )
+
+            # Older jobs.json files predate finished_sequence. Give terminal
+            # records their historical finish order before the next persist;
+            # all new transitions receive a sequence at the exact moment they
+            # finish.
+            for job in sorted(
+                (j for j in self._jobs.values() if j.status in TERMINAL_STATUSES and j.finished_sequence == 0),
+                key=lambda j: (j.finished_at or 0.0, j.created_at, j.job_id),
+            ):
+                self._next_finished_sequence += 1
+                job.finished_sequence = self._next_finished_sequence
 
             logger.info(
                 "[image_gen] Loaded %d job(s) from history (%d pending resumed%s)",
@@ -319,18 +339,24 @@ class ImageJobStore:
         try:
             path = self._history_path()
             path.parent.mkdir(parents=True, exist_ok=True)
-            # Never evict a pending job to make room for history: keep every
-            # non-terminal job plus the most recent _HISTORY_LIMIT terminal ones.
-            keep: list[str] = []
-            terminal_seen = 0
-            for job_id in reversed(self._order):
-                job = self._jobs[job_id]
-                if job.status in TERMINAL_STATUSES:
-                    if terminal_seen >= _HISTORY_LIMIT:
-                        continue
-                    terminal_seen += 1
-                keep.append(job_id)
-            keep.reverse()
+            # Never evict a pending job to make room for history. Terminal
+            # retention follows terminal completion order, never enqueue order
+            # (a retry or priority insert can make those diverge).
+            terminal_ids = sorted(
+                (
+                    jid
+                    for jid in self._order
+                    if self._jobs[jid].status in TERMINAL_STATUSES
+                ),
+                key=self._history_sort_key,
+                reverse=True,
+            )[:_HISTORY_LIMIT]
+            keep_ids = set(terminal_ids) | {
+                jid
+                for jid in self._order
+                if self._jobs[jid].status not in TERMINAL_STATUSES
+            }
+            keep = [jid for jid in self._order if jid in keep_ids]
 
             live_batches = {self._jobs[j].batch_id for j in keep} - {None}
             payload = {
@@ -499,20 +525,43 @@ class ImageJobStore:
             return self._jobs.get(job_id)
 
     def recent(self, limit: int = 50) -> list[ImageJob]:
-        """Newest first. Pending jobs are ALWAYS included, whatever the limit —
-        a 200-job queue viewed with limit=50 must not hide 150 of them."""
+        """Pending queue first, then terminal history in exact finish order.
+
+        Pending jobs retain queue order because that is what users can act on.
+        Terminal records are a generation *history*, so they are ordered by
+        their terminal transition rather than enqueue order. ``limit`` applies
+        to terminal history only; pending jobs are always included, so a
+        200-job queue never makes previously completed output disappear.
+        """
         with self._lock:
             pending = [
                 j for j in self._order if self._jobs[j].status not in TERMINAL_STATUSES
             ]
-            terminal = [
-                j for j in self._order if self._jobs[j].status in TERMINAL_STATUSES
+            terminal = sorted(
+                (
+                    j for j in self._order if self._jobs[j].status in TERMINAL_STATUSES
+                ),
+                key=self._history_sort_key,
+                reverse=True,
+            )
+            return [self._jobs[j] for j in pending] + [
+                self._jobs[j] for j in terminal[:limit]
             ]
-            room = limit - len(pending)
-            # `terminal[-0:]` is the WHOLE list — spell the empty case out.
-            chosen = terminal[-room:] if room > 0 else []
-            keep = set(chosen) | set(pending)
-            return [self._jobs[j] for j in reversed(self._order) if j in keep]
+
+    def _history_sort_key(self, job_id: str) -> tuple[int, float, float, str]:
+        """Newest terminal transition first; deterministic for legacy rows."""
+        job = self._jobs[job_id]
+        return (
+            job.finished_sequence,
+            job.finished_at or 0.0,
+            job.created_at,
+            job.job_id,
+        )
+
+    def _mark_terminal_locked(self, job: ImageJob) -> None:
+        job.finished_at = time.time()
+        self._next_finished_sequence += 1
+        job.finished_sequence = self._next_finished_sequence
 
     def pending(self) -> list[ImageJob]:
         """Queued + running, in queue order (what the reorder UI shows)."""
@@ -692,7 +741,14 @@ class ImageJobStore:
                 job.elapsed_seconds = round(time.time() - job.started_at, 1)
 
     def mark_completed(
-        self, job_id: str, *, item_id: str, file_path: str, elapsed_seconds: float
+        self,
+        job_id: str,
+        *,
+        item_id: str,
+        file_path: str,
+        elapsed_seconds: float,
+        width: int | None = None,
+        height: int | None = None,
     ) -> None:
         with self._lock:
             job = self._jobs.get(job_id)
@@ -702,8 +758,14 @@ class ImageJobStore:
             job.progress = 1.0
             job.item_id = item_id
             job.file_path = file_path
+            # The request may omit dimensions; history and the synchronous
+            # compatibility endpoint must retain the actual output size.
+            if width is not None:
+                job.width = width
+            if height is not None:
+                job.height = height
             job.error = None
-            job.finished_at = time.time()
+            self._mark_terminal_locked(job)
             job.elapsed_seconds = round(elapsed_seconds, 1)
             self._sweep_init_images_locked()
             self._persist_locked()
@@ -741,7 +803,7 @@ class ImageJobStore:
 
             job.status = "failed"
             job.error = error
-            job.finished_at = time.time()
+            self._mark_terminal_locked(job)
             if job.started_at:
                 job.elapsed_seconds = round(job.finished_at - job.started_at, 1)
             self._sweep_init_images_locked()
@@ -762,7 +824,7 @@ class ImageJobStore:
             if job is None:
                 return
             job.status = "cancelled"
-            job.finished_at = time.time()
+            self._mark_terminal_locked(job)
             if job.started_at:
                 job.elapsed_seconds = round(job.finished_at - job.started_at, 1)
             self._sweep_init_images_locked()
@@ -797,6 +859,7 @@ class ImageJobStore:
             job.current_step = 0
             job.started_at = None
             job.finished_at = None
+            job.finished_sequence = 0
             job.cancel_requested = False
             self._persist_locked()
             return True
@@ -822,7 +885,7 @@ class ImageJobStore:
                 return "not_found"
             if job.status == "queued":
                 job.status = "cancelled"
-                job.finished_at = time.time()
+                self._mark_terminal_locked(job)
                 self._sweep_init_images_locked()
                 self._persist_locked()
                 return "cancelled"
@@ -846,7 +909,7 @@ class ImageJobStore:
             for job in members:
                 if job.status == "queued":
                     job.status = "cancelled"
-                    job.finished_at = time.time()
+                    self._mark_terminal_locked(job)
                     cancelled += 1
                 elif job.status == "running":
                     running_job_id = job.job_id
@@ -1011,6 +1074,8 @@ class ImageJobRunner:
                         item_id=result.item_id,
                         file_path=result.file_path,
                         elapsed_seconds=result.elapsed_seconds,
+                        width=result.width,
+                        height=result.height,
                     )
                     logger.info(
                         "[image_gen] Job %s: completed → item %s",

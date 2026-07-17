@@ -149,6 +149,36 @@ def test_init_images_are_swept_when_no_pending_job_needs_them(
     assert not path.exists(), "the disk must not grow without bound"
 
 
+def test_terminal_history_uses_completion_not_enqueue_order(store: ImageJobStore) -> None:
+    """A retry/priority reorder must never rewrite the completed timeline."""
+    first = _enqueue(store, "first-submitted")
+    second = _enqueue(store, "second-submitted")
+
+    # Complete the later submission first, then the earlier one. This is easy
+    # to reach after retries and is the case the UI must represent faithfully.
+    store.mark_running(second.job_id, total_steps=1, seed=2)
+    store.mark_completed(second.job_id, item_id="second", file_path="/tmp/2", elapsed_seconds=1)
+    store.mark_running(first.job_id, total_steps=1, seed=1)
+    store.mark_completed(first.job_id, item_id="first", file_path="/tmp/1", elapsed_seconds=1)
+
+    history = store.recent()
+    assert [job.job_id for job in history] == [first.job_id, second.job_id]
+    assert history[0].finished_sequence > history[1].finished_sequence
+
+
+def test_pending_queue_does_not_hide_terminal_history(store: ImageJobStore) -> None:
+    """The terminal-history limit is independent from active queue size."""
+    done = _enqueue(store, "already-completed")
+    store.mark_running(done.job_id, total_steps=1, seed=1)
+    store.mark_completed(done.job_id, item_id="done", file_path="/tmp/done", elapsed_seconds=1)
+    for index in range(75):
+        _enqueue(store, f"pending-{index}")
+
+    history = store.recent(limit=1)
+    assert len(history) == 76
+    assert history[-1].job_id == done.job_id
+
+
 # ── retry ─────────────────────────────────────────────────────────────────────
 
 

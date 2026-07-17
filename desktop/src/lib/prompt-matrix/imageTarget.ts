@@ -125,11 +125,14 @@ export function createImageTarget(ctx: ImageTargetContext): MatrixTarget<Job> {
       parse: floatAxis(0, 20),
       apply: (job, value) => ({ ...job, guidance: value as number }),
     },
+    // Kept solely so older saved/imported matrices remain valid. `buildJobs`
+    // always applies the fresh batch-snapshot seed afterwards, and the UI no
+    // longer offers this deterministic axis for new matrices.
     {
       id: "seed",
-      label: "Seed",
+      label: "Legacy seed (randomized per batch)",
       group: "Sampling",
-      hint: "Sweeping the seed overrides the batch seed policy.",
+      hint: "Saved seed sweeps are replaced by fresh random batch seeds.",
       parse: intAxis(0, MAX_SEED),
       apply: (job, value) => ({ ...job, seed: value as number }),
     },

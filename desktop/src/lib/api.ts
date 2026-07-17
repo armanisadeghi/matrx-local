@@ -4494,7 +4494,11 @@ export interface ImageGenJob {
   /** Media-library item id, set on completion. */
   item_id?: string | null;
   file_path?: string | null;
-  created_at?: string;
+  created_at?: number;
+  /** Terminal timestamp; completed history is ordered by this, not enqueue time. */
+  finished_at?: number | null;
+  /** Durable tie-breaker for exact terminal completion order. */
+  finished_sequence?: number;
 
   // ── Batch (prompt matrix) ──────────────────────────────────────────────────
   /** Set when the job belongs to a batch enqueued via POST /image-gen/jobs/batch. */
@@ -4679,8 +4683,11 @@ export async function enqueueImageGenJob(
 
 export async function listImageGenJobs(
   baseUrl: string,
+  limit = 50,
 ): Promise<ImageGenJob[]> {
-  return imageGenFetch<ImageGenJob[]>(imageGenUrl(baseUrl, "/jobs"));
+  return imageGenFetch<ImageGenJob[]>(
+    imageGenUrl(baseUrl, `/jobs?limit=${encodeURIComponent(String(limit))}`),
+  );
 }
 
 export async function getImageGenJob(

@@ -655,7 +655,7 @@ export function useChat({ engineUrl }: UseChatOptions) {
 
         // ── Cloud / Engine Path ───────────────────────────────────────────
         const { data: { session } } = await supabase.auth.getSession();
-        const token = session?.access_token ?? import.meta.env.VITE_ENGINE_API_KEY ?? "";
+        const token = session?.access_token ?? "";
 
         const allMessages = userMsg ? [...existingMessages, userMsg] : existingMessages;
 

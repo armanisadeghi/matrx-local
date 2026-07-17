@@ -88,12 +88,18 @@ class AppConfigV1(BaseModel):
     aidream_server_url: str
     matrx_files_url: str
     scraper_server_url: str
+    web_app_origin: str = "https://www.aimatrx.com"
     # StrictBool: a remote kill-switch must be a real boolean — "yes"/"1"
     # coercion would mask an operator typo as an applied flag.
     flags: dict[str, StrictBool] = {}
     notice: AppConfigNotice | None = None
 
-    @field_validator("aidream_server_url", "matrx_files_url", "scraper_server_url")
+    @field_validator(
+        "aidream_server_url",
+        "matrx_files_url",
+        "scraper_server_url",
+        "web_app_origin",
+    )
     @classmethod
     def _urls_are_https(cls, value: str) -> str:
         return _validate_service_url(value)

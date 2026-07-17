@@ -19,6 +19,7 @@ import {
   Film,
   Image as ImageIcon,
   ListPlus,
+  Layers,
   Loader2,
   RefreshCw,
   Settings2,
@@ -62,7 +63,9 @@ import {
   ImageCommonSettings,
   ImageParamsErrorNotice,
   InputImageControl,
+  ImageGenerateForm,
   LoraStylesSection,
+  useImageGenMode,
 } from "../core/ImageGenerateForm";
 import {
   SourceImageControl,
@@ -178,6 +181,8 @@ export function VariantGallery() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [resultOpen, setResultOpen] = useState(false);
+  const [batchBuilderOpen, setBatchBuilderOpen] = useState(false);
+  const [, setImageGenMode] = useImageGenMode();
 
   const closePicker = useCallback(() => setModelPickerOpen(false), []);
   const imageCtl = useImageGenController({ onAfterSelect: closePicker });
@@ -400,16 +405,31 @@ export function VariantGallery() {
                     }
                   />
                   {isImage && (
-                    <Button
-                      variant="outline"
-                      disabled={!imageReady}
-                      onClick={() => void imageCtl.handleEnqueue()}
-                      className="h-[38px]"
-                      title="Queue this generation and keep editing"
-                    >
-                      <ListPlus className="mr-1.5 h-4 w-4" />
-                      Queue
-                    </Button>
+                    <>
+                      <Button
+                        variant="outline"
+                        disabled={!imageReady}
+                        onClick={() => void imageCtl.handleEnqueue()}
+                        className="h-[38px]"
+                        title="Queue this generation and keep editing"
+                      >
+                        <ListPlus className="mr-1.5 h-4 w-4" />
+                        Queue
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={!imageCtl.defaults}
+                        onClick={() => {
+                          setImageGenMode("batch");
+                          setBatchBuilderOpen(true);
+                        }}
+                        className="h-[38px]"
+                        title="Build a randomized image batch"
+                      >
+                        <Layers className="mr-1.5 h-4 w-4" />
+                        Batch
+                      </Button>
+                    </>
                   )}
                 </div>
               </div>
@@ -623,7 +643,7 @@ export function VariantGallery() {
                   </div>
                 )}
               </div>
-              <ImageQueuePanel layout="chips" limit={12} showHeading={false} />
+              <ImageQueuePanel layout="chips" showHeading={false} />
             </div>
           )}
         </div>
@@ -726,6 +746,18 @@ export function VariantGallery() {
             </DialogDescription>
           </DialogHeader>
           {imageResult && <ImageResultPane hideIdle />}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={batchBuilderOpen} onOpenChange={setBatchBuilderOpen}>
+        <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Randomized image batch</DialogTitle>
+            <DialogDescription>
+              Every new preview or queue action draws a fresh randomized batch.
+            </DialogDescription>
+          </DialogHeader>
+          <ImageGenerateForm ctl={imageCtl} hideNotices />
         </DialogContent>
       </Dialog>
     </div>

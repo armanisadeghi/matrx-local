@@ -7,12 +7,10 @@
  *    cartesian product can be millions of runs; the UI must be able to show
  *    that number (and refuse it) without allocating it.
  *
- * 2. Emission order is meaningful, not incidental. Variable order = loop
- *    nesting: variable[0] is the OUTERMOST loop (changes slowest — the one
- *    that stays "frozen" while everything else sweeps), the last variable is
- *    the innermost (changes fastest). That is the whole answer to "do you
- *    freeze one variable and sweep the others?" — you drag it to the top.
- *    Results therefore arrive grouped the way a human wants to compare them.
+ * 2. Analysis order is never execution order. The deterministic expansion is
+ *    used for counts, validation, and template inspection only. Every actual
+ *    batch goes through createBatchSnapshot(), which shuffles full valid rows
+ *    and assigns fresh seeds immediately before Preview or Queue.
  *
  * Pools (`{{color#1}}` …) are additive: each pool is ONE axis of length n
  * (option count). Strategies / seed policy / RNG never special-case them —
@@ -38,7 +36,14 @@ import {
   tidyPrompt,
   variableKey,
 } from "./parse";
-import { MAX_SEED, Rng, sampleIndices } from "./rng";
+import {
+  MAX_SEED,
+  Rng,
+  type RandomSource,
+  sampleIndices,
+  secureRandom,
+  shuffled,
+} from "./rng";
 
 /**
  * An axis is ONE independent dimension of the product. Usually one variable;
@@ -503,4 +508,47 @@ export function expandMatrix(spec: MatrixSpec): MatrixPlan {
     errors,
     warnings,
   };
+}
+
+/**
+ * Create the concrete work for ONE new batch attempt.
+ *
+ * `expandMatrix` remains the deterministic analyser used for counts,
+ * validation, imports, and saved-template inspection. A submission must never
+ * use that reusable analysis result directly: it needs fresh entropy each time
+ * so a stopped batch cannot begin from the same combinations or noise again.
+ *
+ * We shuffle whole combinations rather than each axis independently. That
+ * preserves linked-variable and pool relationships while making every position
+ * in the queue an unbiased member of the selected combination set.
+ */
+export function createBatchSnapshot(
+  spec: MatrixSpec,
+  random: RandomSource = secureRandom,
+): MatrixPlan {
+  // A sampled strategy must draw a new subset for every attempt as well as a
+  // new execution order. Other strategies use the same selected set but are
+  // still fully shuffled below.
+  const attemptSpec: MatrixSpec =
+    spec.strategy.kind === "sample"
+      ? {
+          ...spec,
+          strategy: { ...spec.strategy, seed: random.seed() },
+        }
+      : spec;
+  const analysed = expandMatrix(attemptSpec);
+  const combinations = shuffled(analysed.combinations, random).map(
+    (combination, index) => ({
+      ...combination,
+      // A batch attempt owns fresh, independent diffusion noise for every run.
+      // Saved fixed/increment/random policies are legacy comparison metadata;
+      // they must not leak into new randomized executions.
+      index,
+      seed: random.seed(),
+      values: { ...combination.values },
+      optionIds: { ...combination.optionIds },
+      rendered: { ...combination.rendered },
+    }),
+  );
+  return { ...analysed, combinations };
 }

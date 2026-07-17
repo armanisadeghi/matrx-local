@@ -100,8 +100,8 @@ class DelegationApiClient:
     ) -> None:
         if not base_url:
             raise ValueError(
-                "[delegation] AIDREAM_SERVER_URL is not configured — cannot build "
-                "the delegation client. Set AIDREAM_SERVER_URL_LIVE in .env."
+                "[delegation] No AIDream server URL was resolved from app config "
+                "— cannot build the delegation client."
             )
         self._base_url = base_url.rstrip("/")
         self._transport = transport

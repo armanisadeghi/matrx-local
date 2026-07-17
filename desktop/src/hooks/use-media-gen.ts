@@ -419,9 +419,11 @@ export interface MediaGenState {
   selectedImageModelId: string | null;
   /** Persistent generate-form state (survives navigation). */
   imageForm: ImageFormState;
-  /** Image job queue, newest first (engine order). */
+  /** Pending queue followed by terminal history in exact completion order. */
   imageJobs: ImageGenJob[];
   imageJobsError: string | null;
+  /** True when an older terminal-history page can be requested. */
+  canLoadMoreImageHistory: boolean;
   /**
    * Whether the queue is draining, and how much is left. Null before the first
    * fetch. `paused` is the master switch for unattended runs: the running job
@@ -525,6 +527,8 @@ export interface MediaGenActions {
   resetImageAll: () => void;
   // Image queue
   refreshImageJobs: () => Promise<void>;
+  /** Fetch the next bounded page of older terminal history. */
+  loadMoreImageHistory: () => Promise<void>;
   /**
    * Enqueue a job (same body as generate). True when accepted.
    * `priority: "next"` puts the job at the FRONT of the pending queue.
@@ -658,6 +662,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     useState<ImageFormState>(INITIAL_IMAGE_FORM);
   const [imageJobs, setImageJobs] = useState<ImageGenJob[]>([]);
   const [imageJobsError, setImageJobsError] = useState<string | null>(null);
+  const [imageHistoryLimit, setImageHistoryLimit] = useState(50);
   const [imageQueueState, setImageQueueState] =
     useState<ImageGenQueueState | null>(null);
   const [imageBatches, setImageBatches] = useState<ImageGenBatch[]>([]);
@@ -728,6 +733,13 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   // never a concurrent one-shot against the engine.
   const imageOneShotInFlightRef = useRef(false);
   const imageJobsRef = useRef<ImageGenJob[]>([]);
+  // A slow polling response must never overwrite newer state from an enqueue,
+  // cancellation, or a later poll.  The server supplies the authoritative
+  // ordering; this guards client delivery order.
+  const imageJobsRefreshRef = useRef(0);
+  /** Prevent a slow older queue poll from overwriting a newer mutation refresh. */
+  const imageQueueRefreshRef = useRef(0);
+  const imageHistoryLimitRef = useRef(50);
   const imageModelsRef = useRef<ImageGenModelInfo[]>([]);
   const imagePresetsRef = useRef<ImageGenWorkflowPreset[]>([]);
   // Video enqueue run id — guards the brief "Starting…" phase so a cancel
@@ -783,16 +795,27 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const refreshImageJobs = useCallback(async () => {
     const base = engine.engineUrl;
     if (!base) return;
+    const requestId = ++imageJobsRefreshRef.current;
     try {
-      const list = await apiListImageGenJobs(base);
+      const list = await apiListImageGenJobs(base, imageHistoryLimitRef.current);
+      if (requestId !== imageJobsRefreshRef.current) return;
       setImageJobs(list);
       setImageJobsError(null);
     } catch (e) {
+      if (requestId !== imageJobsRefreshRef.current) return;
       setImageJobsError(
         e instanceof Error ? e.message : "Failed to load the image job queue",
       );
     }
   }, []);
+
+  const loadMoreImageHistory = useCallback(async (): Promise<void> => {
+    const next = Math.min(1000, imageHistoryLimitRef.current + 50);
+    if (next === imageHistoryLimitRef.current) return;
+    imageHistoryLimitRef.current = next;
+    setImageHistoryLimit(next);
+    await refreshImageJobs();
+  }, [refreshImageJobs]);
 
   const refreshImage = useCallback(async () => {
     const base = engine.engineUrl;
@@ -1156,10 +1179,14 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
           setImageGenerating(false);
           setImageCancelling(false);
           setImageGenStartedAt(null);
+          // /generate now creates a durable job on the server. Refresh after
+          // its synchronous response settles so an initially idle UI sees the
+          // completed record without waiting for navigation or another job.
+          void refreshImageJobs();
         }
       }
     },
-    [isImageEngineBusy, enqueueImageAsNext],
+    [isImageEngineBusy, enqueueImageAsNext, refreshImageJobs],
   );
 
   const generateImageWorkflow = useCallback(
@@ -1234,10 +1261,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
           setImageGenerating(false);
           setImageCancelling(false);
           setImageGenStartedAt(null);
+          void refreshImageJobs();
         }
       }
     },
-    [isImageEngineBusy, enqueueImageAsNext],
+    [isImageEngineBusy, enqueueImageAsNext, refreshImageJobs],
   );
 
   /**
@@ -1346,14 +1374,17 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const refreshImageQueue = useCallback(async () => {
     const base = engine.engineUrl;
     if (!base) return;
+    const requestId = ++imageQueueRefreshRef.current;
     try {
       const [state, batches] = await Promise.all([
         apiGetImageGenQueueState(base),
         apiListImageGenBatches(base),
       ]);
+      if (requestId !== imageQueueRefreshRef.current) return;
       setImageQueueState(state);
       setImageBatches(batches);
     } catch (e) {
+      if (requestId !== imageQueueRefreshRef.current) return;
       const msg = e instanceof Error ? e.message : String(e);
       emitClientLog(
         "warn",
@@ -2484,6 +2515,14 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     imageForm,
     imageJobs,
     imageJobsError,
+    canLoadMoreImageHistory:
+      imageHistoryLimit < 1000 &&
+      imageJobs.filter(
+        (job) =>
+          job.status === "completed" ||
+          job.status === "failed" ||
+          job.status === "cancelled",
+      ).length >= imageHistoryLimit,
     imageQueueState,
     imageBatches,
     imageJobThumbs,
@@ -2528,6 +2567,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       resetImageAdvanced,
       resetImageAll,
       refreshImageJobs,
+      loadMoreImageHistory,
       enqueueImageJob,
       cancelImageJob,
       enqueueImageBatch,
@@ -2581,6 +2621,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       resetImageAdvanced,
       resetImageAll,
       refreshImageJobs,
+      loadMoreImageHistory,
       enqueueImageJob,
       cancelImageJob,
       enqueueImageBatch,

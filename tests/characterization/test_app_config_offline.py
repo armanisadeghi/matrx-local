@@ -20,6 +20,7 @@ from app.config import (
     AIDREAM_SERVER_URL_DEFAULT,
     MATRX_FILES_URL_DEFAULT,
     SCRAPER_SERVER_URL_DEFAULT,
+    WEB_APP_ORIGIN_DEFAULT,
 )
 
 
@@ -49,6 +50,7 @@ def test_total_network_failure_boots_on_compiled_defaults(tmp_path: Path) -> Non
     assert svc.get_aidream_server_url() == AIDREAM_SERVER_URL_DEFAULT
     assert svc.get_matrx_files_url() == MATRX_FILES_URL_DEFAULT
     assert svc.get_scraper_server_url() == SCRAPER_SERVER_URL_DEFAULT
+    assert svc.get_web_app_origin() == WEB_APP_ORIGIN_DEFAULT
     assert svc.get_flag("anything") is False
     assert svc.get_notice() is None
 

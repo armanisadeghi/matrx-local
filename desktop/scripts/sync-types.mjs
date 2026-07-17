@@ -28,10 +28,9 @@ function getArg(name, fallback) {
 
 const useLocal = args.includes("--local") || args.includes("--fast");
 const localBackendUrl = "http://localhost:8000";
-const liveBackendUrl =
-  process.env.VITE_AIDREAM_SERVER_URL_LIVE ||
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  "https://server.app.matrxserver.com";
+// This developer-only schema generator accepts --url for an explicit target.
+// It must not perpetuate an environment-based shipped server-URL path.
+const liveBackendUrl = "https://server.app.matrxserver.com";
 const backendUrl = getArg("--url", useLocal ? localBackendUrl : liveBackendUrl);
 const outDir = resolve(PROJECT_ROOT, "src/types/python-generated");
 const aidreamSyncScript = resolve(PROJECT_ROOT, "../../aidream/scripts/sync-types.mjs");

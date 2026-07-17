@@ -82,10 +82,12 @@ details} via EnvelopeRoute — ADDITIVE: every legacy key ("detail",
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -359,6 +361,10 @@ class ImageJobResponse(BaseModel):
     """"next" when the job was enqueued at the front of the pending queue
     (queue-first Generate). The UI labels such queued jobs "Up next"."""
     created_at: float = 0.0
+    finished_at: float | None = None
+    """Unix timestamp when this attempt reached a terminal state."""
+    finished_sequence: int = 0
+    """Durable, monotonic terminal-transition order for exact history sorting."""
 
     # ── batch (prompt-matrix) grouping ────────────────────────────────────────
     batch_id: str | None = None
@@ -410,6 +416,8 @@ def _image_job_response(job) -> ImageJobResponse:
         cancel_requested=d["cancel_requested"],
         priority=d.get("priority", "normal"),
         created_at=d["created_at"],
+        finished_at=d.get("finished_at"),
+        finished_sequence=d.get("finished_sequence", 0),
         batch_id=d.get("batch_id"),
         batch_index=d.get("batch_index", 0),
         batch_size=d.get("batch_size", 0),
@@ -678,27 +686,20 @@ async def unload_model() -> dict:
     return await svc.unload_model()
 
 
-@router.post("/generate", response_model=GenerateResponse)
-@safe_route("image_gen_generate")
-async def generate_image(req: GenerateRequest) -> GenerateResponse:
-    """Generate an image from a text prompt.
+async def _legacy_generation_response(
+    req: GenerateRequest, svc, model
+) -> GenerateResponse:
+    """Keep invalid/unavailable-model behaviour of the public sync endpoint.
 
-    The model is loaded automatically if not already in memory.
-    Returns a base64-encoded PNG in `image_b64`.
+    Those requests never become generations and therefore must not create a
+    history job. Existing clients receive the long-standing HTTP-200
+    ``success=false`` result rather than a new transport-level error.
     """
-    svc = get_image_gen_service()
-    if not svc.available:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Image generation not available: {svc.unavailable_reason}",
-        )
-    # Unknown models keep the legacy contract (success=false from the
-    # service); img2img/LoRA inputs are validated whenever the model is known.
-    model = svc.get_model(req.model_id) if hasattr(svc, "get_model") else None
     init_bytes: bytes | None = None
     if model is not None:
+        # Keep the original route's validation order and img2img payload when
+        # a known model is not installed yet.
         init_bytes, _init_sha = _validate_generation_inputs(req, model)
-
     result = await svc.generate(
         prompt=req.prompt,
         model_id=req.model_id,
@@ -714,18 +715,129 @@ async def generate_image(req: GenerateRequest) -> GenerateResponse:
         loras=[{"id": s.id, "scale": s.scale} for s in req.loras],
     )
     return GenerateResponse(
-        success=result.success,
-        image_b64=result.image_b64,
-        width=result.width,
-        height=result.height,
-        model_id=result.model_id,
-        elapsed_seconds=result.elapsed_seconds,
-        error=result.error,
-        item_id=result.item_id,
-        file_path=result.file_path,
-        seed=result.seed,
+        success=result.success, image_b64=result.image_b64, width=result.width,
+        height=result.height, model_id=result.model_id,
+        elapsed_seconds=result.elapsed_seconds, error=result.error,
+        item_id=result.item_id, file_path=result.file_path, seed=result.seed,
         cancelled=result.cancelled,
     )
+
+
+async def _enqueue_generation(
+    req: GenerateRequest, *, reject_if_paused: bool = False
+) -> str | JSONResponse:
+    """Validate and persist one image request, then start the shared runner.
+
+    Every submission path (immediate, queued, workflow, batch) must enter this
+    store before work begins.  A "generate now" request merely waits for its
+    own durable job below; it is never a separate, unrecorded execution path.
+    """
+    svc = get_image_gen_service()
+    if not svc.available:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Image generation not available: {svc.unavailable_reason}",
+        )
+    model = svc.get_model(req.model_id) if hasattr(svc, "get_model") else None
+    if model is None:
+        raise HTTPException(status_code=404, detail=f"Unknown model: {req.model_id}")
+    init_bytes: bytes | None = None
+    init_sha: str | None = None
+    init_bytes, init_sha = _validate_generation_inputs(req, model)
+
+    if not svc.is_downloaded(req.model_id):
+        return JSONResponse(  # type: ignore[return-value]
+            status_code=409,
+            content={"detail": "model not downloaded", "needs_download": True},
+        )
+    from app.services.media_gen.params import PROTECTED_PARAMS  # noqa: PLC0415
+    blocked = PROTECTED_PARAMS & set(req.extra_params)
+    if blocked:
+        raise HTTPException(
+            status_code=400,
+            detail=f"extra_params may not override protected parameter(s): "
+            f"{', '.join(sorted(blocked))}.",
+        )
+    from app.services.image_gen.jobs import (  # noqa: PLC0415
+        get_image_job_runner,
+        get_image_job_store,
+    )
+    store = get_image_job_store()
+    if reject_if_paused and store.paused:
+        # A synchronous Generate response cannot honestly wait forever behind
+        # a deliberately paused queue. Queue submissions are still accepted
+        # while paused; immediate callers receive an actionable response.
+        raise HTTPException(
+            status_code=409,
+            detail="Image generation queue is paused. Resume it before generating.",
+        )
+    if init_bytes is not None:
+        init_sha = store.put_init_image(init_bytes)
+    job = store.create(
+        prompt=req.prompt, model_id=req.model_id, negative_prompt=req.negative_prompt,
+        steps=req.steps, guidance=req.guidance, width=req.width, height=req.height,
+        seed=req.seed, has_init_image=init_bytes is not None,
+        init_image_sha256=init_sha, strength=req.strength,
+        loras=[{"id": s.id, "scale": s.scale} for s in req.loras],
+        extra_params=dict(req.extra_params), priority=getattr(req, "priority", "normal"),
+    )
+    get_image_job_runner().ensure_running()
+    return job.job_id
+
+
+async def _await_generation(job_id: str) -> GenerateResponse:
+    """Preserve the synchronous API while execution remains a durable job."""
+    from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+    store = get_image_job_store()
+    while True:
+        job = store.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Generation job was removed")
+        if job.status == "completed":
+            if not job.file_path:
+                raise HTTPException(status_code=500, detail="Completed generation has no file")
+            image_b64 = base64.b64encode(
+                await asyncio.to_thread(Path(job.file_path).read_bytes)
+            ).decode("ascii")
+            return GenerateResponse(
+                success=True, image_b64=image_b64, width=job.width or 0,
+                height=job.height or 0, model_id=job.model_id,
+                elapsed_seconds=job.elapsed_seconds, item_id=job.item_id,
+                file_path=job.file_path, seed=job.seed,
+            )
+        if job.status in {"failed", "cancelled"}:
+            return GenerateResponse(
+                success=False, width=job.width or 0, height=job.height or 0,
+                model_id=job.model_id, elapsed_seconds=job.elapsed_seconds,
+                error=job.error or ("Cancelled" if job.status == "cancelled" else "Generation failed"),
+                seed=job.seed, cancelled=job.status == "cancelled",
+            )
+        await asyncio.sleep(0.05)
+
+
+@router.post("/generate", response_model=GenerateResponse)
+@safe_route("image_gen_generate")
+async def generate_image(req: GenerateRequest) -> GenerateResponse:
+    """Generate now, backed by the same durable history job as queue work."""
+    svc = get_image_gen_service()
+    if not svc.available:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Image generation not available: {svc.unavailable_reason}",
+        )
+    model = svc.get_model(req.model_id) if hasattr(svc, "get_model") else None
+    # Preserve the synchronous API's established result contract for requests
+    # that cannot start. Valid executions below always become durable jobs.
+    if (
+        not hasattr(svc, "get_model")
+        or model is None
+        or not svc.is_downloaded(req.model_id)
+    ):
+        return await _legacy_generation_response(req, svc, model)
+    job_id = await _enqueue_generation(req, reject_if_paused=True)
+    if isinstance(job_id, JSONResponse):
+        return job_id  # type: ignore[return-value]
+    return await _await_generation(job_id)
 
 
 @router.post("/cancel", response_model=CancelGenerationResponse)
@@ -766,68 +878,15 @@ async def enqueue_image_job(req: EnqueueImageJobRequest) -> ImageJobEnqueuedResp
     concrete ``seed`` used. The model must be downloaded (409 otherwise) —
     loading happens automatically when the job runs.
     """
-    svc = get_image_gen_service()
-    if not svc.available:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Image generation not available: {svc.unavailable_reason}",
-        )
-    model = svc.get_model(req.model_id)
-    if model is None:
-        raise HTTPException(status_code=404, detail=f"Unknown model: {req.model_id}")
-    # Malformed img2img/LoRA input is a 400 BEFORE the downloaded check —
-    # a request that can only fail must never enqueue.
-    init_bytes, init_sha = _validate_generation_inputs(req, model)
-    if not svc.is_downloaded(req.model_id):
-        # Never queue a job that can only fail — the weights must exist first.
-        return JSONResponse(  # type: ignore[return-value]
-            status_code=409,
-            content={"detail": "model not downloaded", "needs_download": True},
-        )
-    from app.services.media_gen.params import PROTECTED_PARAMS  # noqa: PLC0415
-
-    blocked = PROTECTED_PARAMS & set(req.extra_params)
-    if blocked:
-        raise HTTPException(
-            status_code=400,
-            detail=f"extra_params may not override protected parameter(s): "
-            f"{', '.join(sorted(blocked))}. prompt has a top-level "
-            "request field; pipeline callbacks are engine-owned "
-            "(progress + cancellation).",
-        )
-
-    from app.services.image_gen.jobs import (  # noqa: PLC0415
-        get_image_job_runner,
-        get_image_job_store,
-    )
-
-    store = get_image_job_store()
-    if init_bytes is not None:
-        # Content-addressed on DISK, so a restart can still run this job.
-        init_sha = store.put_init_image(init_bytes)
-    job = store.create(
-        prompt=req.prompt,
-        model_id=req.model_id,
-        negative_prompt=req.negative_prompt,
-        steps=req.steps,
-        guidance=req.guidance,
-        width=req.width,
-        height=req.height,
-        seed=req.seed,
-        has_init_image=init_bytes is not None,
-        init_image_sha256=init_sha,
-        strength=req.strength,
-        loras=[{"id": s.id, "scale": s.scale} for s in req.loras],
-        extra_params=dict(req.extra_params),
-        priority=req.priority,
-    )
-    get_image_job_runner().ensure_running()
-    return ImageJobEnqueuedResponse(job_id=job.job_id)
+    job_id = await _enqueue_generation(req)
+    if isinstance(job_id, JSONResponse):
+        return job_id  # type: ignore[return-value]
+    return ImageJobEnqueuedResponse(job_id=job_id)
 
 
 @router.get("/jobs", response_model=list[ImageJobResponse])
-async def list_image_jobs(limit: int = 50) -> list[ImageJobResponse]:
-    """Recent jobs, newest first (history survives restarts via jobs.json)."""
+async def list_image_jobs(limit: int = Query(50, ge=1, le=1000)) -> list[ImageJobResponse]:
+    """Pending queue then terminal history in exact completion order."""
     from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
 
     return [_image_job_response(j) for j in get_image_job_store().recent(limit=limit)]
@@ -1758,14 +1817,7 @@ async def get_image_model_params(model_id: str) -> ModelParamsResponse:
 
 @router.post("/generate-workflow", response_model=GenerateResponse)
 async def generate_from_workflow(req: WorkflowGenerateRequest) -> GenerateResponse:
-    """Generate using a preset workflow. The {subject} placeholder is filled with `subject`."""
-    svc = get_image_gen_service()
-    if not svc.available:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Image generation not available: {svc.unavailable_reason}",
-        )
-
+    """Generate a preset through the same durable job path as every image."""
     preset = get_workflow_preset(req.preset_id)
     if preset is None:
         raise HTTPException(
@@ -1775,7 +1827,7 @@ async def generate_from_workflow(req: WorkflowGenerateRequest) -> GenerateRespon
     prompt = preset.prompt_template.replace("{subject}", req.subject)
     model_id = req.model_id or preset.suggested_model_id
 
-    result = await svc.generate(
+    return await generate_image(GenerateRequest(
         prompt=prompt,
         model_id=model_id,
         negative_prompt=preset.negative_prompt,
@@ -1784,20 +1836,7 @@ async def generate_from_workflow(req: WorkflowGenerateRequest) -> GenerateRespon
         width=preset.width,
         height=preset.height,
         seed=req.seed,
-    )
-    return GenerateResponse(
-        success=result.success,
-        image_b64=result.image_b64,
-        width=result.width,
-        height=result.height,
-        model_id=result.model_id,
-        elapsed_seconds=result.elapsed_seconds,
-        error=result.error,
-        item_id=result.item_id,
-        file_path=result.file_path,
-        seed=result.seed,
-        cancelled=result.cancelled,
-    )
+    ))
 
 
 # ── On-demand package installer ────────────────────────────────────────────────

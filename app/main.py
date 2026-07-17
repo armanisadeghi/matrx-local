@@ -54,7 +54,6 @@ from app.config import (
     ALLOWED_ORIGINS,
     ALLOWED_ORIGIN_REGEX,
     MATRX_HOME_DIR,
-    TUNNEL_ENABLED,
 )
 from app.common.system_logger import get_logger
 import app.common.access_log as access_log
@@ -842,7 +841,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Each instance gets a unique random URL from Cloudflare's trycloudflare.com pool.
     # The URL is pushed to Supabase so mobile/web can discover it via app_instances lookup.
     # Users with a CLOUDFLARE_TUNNEL_TOKEN get a stable named tunnel URL instead.
-    tunnel_enabled = settings_sync.get("tunnel_enabled", TUNNEL_ENABLED)
+    # User-controlled setting. Never inherit a packaged-process environment
+    # variable as an end-user preference.
+    tunnel_enabled = settings_sync.get("tunnel_enabled")
     logger.info("[app/main.py] Phase 5: Tunnel enabled=%s", tunnel_enabled)
     if tunnel_enabled:
         print("[phase:tunnel] Starting Cloudflare tunnel...", flush=True)

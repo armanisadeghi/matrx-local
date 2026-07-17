@@ -1,6 +1,6 @@
 # App Config — remote runtime configuration consumer
 
-Non-secret runtime values (server URLs, feature flags, minimum supported
+Non-secret runtime values (server URLs, public web origin, feature flags, minimum supported
 version, operator notice) come from ONE anon-readable Supabase row
 (`public.app_config`, `app = 'matrx-local'`) — never from `.env` (developer-only)
 and never hardcoded at consumer callsites. This module fetches that row,
@@ -18,8 +18,9 @@ module's semver helpers; keep `app_config` itself deliberately small.
 ## Precedence chain (implemented exactly, in `service.py`)
 
 1. **Env var dev override** — a `config.py` URL constant differing from its
-   compiled `*_DEFAULT` (i.e. `AIDREAM_SERVER_URL_LIVE`, `MATRX_FILES_URL`,
-   `SCRAPER_SERVER_URL` env vars). Wins per-key; logged LOUDLY at boot.
+   compiled `*_DEFAULT` (i.e. developer-only `AIDREAM_SERVER_URL_LIVE`,
+   `MATRX_FILES_URL`, `SCRAPER_SERVER_URL` env vars). Wins per-key; logged
+   LOUDLY at boot.
 2. **Fresh remote** — fetched this session (PostgREST primary, aidream
    `GET /api/app-config/matrx-local` fallback; 5s timeouts, publishable key
    only — works pre-login).
@@ -36,7 +37,7 @@ module's semver helpers; keep `app_config` itself deliberately small.
 | `models.py` | `AppConfigV1` / `AppConfigRow` (tolerant of unknown keys, strict on known), `AppConfigNotice`, `ResolvedAppConfig` (+provenance tier), semver gate helpers, typed errors |
 | `client.py` | `fetch_remote()` — PostgREST primary → aidream fallback; validation failure = fetch failure for that path |
 | `service.py` | `AppConfigService` engine: boot resolution (sync, offline), atomic disk cache, 6h refresh loop + `refresh_now()`, launcher-registry reporting, singleton + accessors |
-| `__init__.py` | Public surface: `get_aidream_server_url` / `get_matrx_files_url` / `get_scraper_server_url` / `get_flag` / `get_notice` / `get_app_config` |
+| `__init__.py` | Public surface: `get_aidream_server_url` / `get_matrx_files_url` / `get_scraper_server_url` / `get_web_app_origin` / `get_flag` / `get_notice` / `get_app_config` |
 
 ## Wiring
 
@@ -62,7 +63,10 @@ module's semver helpers; keep `app_config` itself deliberately small.
 - **Version gate:** `update_required` compares the running app version to the
   row's `min_supported_app_version` (tolerant semver tuple compare) — a STATE
   surfaced on `/health` and `/admin/refresh-config`, never an error.
-- **Desktop UI:** `desktop/src/hooks/use-app-config-status.ts` polls
+- **Desktop UI:** `desktop/src/lib/app-config.ts` reads and caches the public
+  row in webview local storage before refreshing it in the background; its
+  AIDream and web-origin consumers never read environment variables.
+  `desktop/src/hooks/use-app-config-status.ts` polls
   `/health` (60s, engine-connected only) and `AppConfigBanner`
   (`desktop/src/components/AppConfigBanner.tsx`, mounted in `AppLayout`)
   renders (a) a persistent non-blocking update-required strip wired into the
@@ -96,14 +100,6 @@ module's semver helpers; keep `app_config` itself deliberately small.
   failures fall back to 6h with a loud warning, and values below 60s are
   clamped (a 0 would hot-loop against Supabase).
 
-## Known limits
-
-- **Desktop webview aidream URL is build-pinned.**
-  `desktop/src/lib/aidream-client.ts` bakes `VITE_AIDREAM_SERVER_URL_LIVE` in
-  at build time, so the webview's direct aidream calls sit OUTSIDE remote
-  config (known exclusion — revisit if it becomes a problem; the Python
-  sidecar's calls are all covered).
-
 ## Tests
 
 - `tests/unit/test_app_config.py` — precedence chain, tolerant/strict parsing,
@@ -119,13 +115,16 @@ module's semver helpers; keep `app_config` itself deliberately small.
 
 ## Change Log
 
+- **2026-07-17 — Desktop resolver parity.** The webview now resolves the
+  same public config row with a validated last-good local cache; the AIDream
+  URL and public web origin no longer come from renderer build variables or
+  hard-coded consumer values.
 - **2026-07-14 — Adversarial-review hardening.** Non-object JSON cache no
   longer crashes boot (falls to defaults); `ai/engine.py` migrated onto
   `get_aidream_server_url()` (restart-applies); `/health` reports
   `env_overrides`; live parity test gated behind `MATRX_LIVE_CHECKS=1`;
   version gate fails open on the `"0.0.0"` probe fallback; refresh-interval
-  knob parse-hardened + clamped to a 60s floor; documented the desktop
-  webview build-pinned URL exclusion.
+  knob parse-hardened + clamped to a 60s floor.
 - **2026-07-14 — Desktop UI surface.** `/health` `app_config` now includes
   `notice`; added `use-app-config-status` polling hook + `AppConfigBanner`
   (update-required strip + once-per-content operator notice) in the Tauri UI.

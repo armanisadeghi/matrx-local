@@ -109,6 +109,7 @@ def test_defaults_when_no_cache_and_no_fetch(tmp_path: Path) -> None:
     assert svc.get_aidream_server_url() == "https://server.app.matrxserver.com"
     assert svc.get_matrx_files_url() == "https://files.matrxserver.com"
     assert svc.get_scraper_server_url() == "https://scraper.app.matrxserver.com"
+    assert svc.get_web_app_origin() == "https://www.aimatrx.com"
 
 
 def test_cache_beats_defaults(tmp_path: Path) -> None:
@@ -131,6 +132,9 @@ def test_remote_beats_cache(tmp_path: Path) -> None:
     resolved = _run(svc.refresh_now())
     assert resolved.tier == "remote"
     assert svc.get_aidream_server_url() == "https://remote.example.com"
+    # Older rows remain valid during the additive rollout; the compiled
+    # fallback is replaced as soon as the admin UI writes web_app_origin.
+    assert svc.get_web_app_origin() == "https://www.aimatrx.com"
     assert svc.get_flag("desktop_beta") is True
     assert svc.get_flag("nonexistent") is False
     assert svc.last_error is None

@@ -498,15 +498,15 @@ print(m.group(1) if m else '1.0.0')
 fi
 
 # ---------------------------------------------------------------------------
-# Step 3b: Bake API URLs and publishable keys into app/bundled_config.py
+# Step 3b: Bake Supabase bootstrap config into app/bundled_config.py
 # ---------------------------------------------------------------------------
 # Required env vars (must be set in CI or local environment):
-#   AIDREAM_SERVER_URL_LIVE, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY
+#   SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY
 echo ""
 echo "=== Writing bundled config ==="
 "$PYTHON_CMD" "$PROJECT_ROOT/scripts/write_bundled_config.py" || {
-    echo "WARNING: write_bundled_config.py failed — API URLs may not be available in the binary."
-    echo "         Set AIDREAM_SERVER_URL_LIVE, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY in your environment."
+    echo "WARNING: write_bundled_config.py failed — Supabase bootstrap config may not be available in the binary."
+    echo "         Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in your environment."
 }
 
 # ── macOS code signing: re-sign Python dylibs AT SOURCE before PyInstaller ──

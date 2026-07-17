@@ -36,6 +36,7 @@ from app.config import (
     MATRX_HOME_DIR,
     SCRAPER_SERVER_URL,
     SCRAPER_SERVER_URL_DEFAULT,
+    WEB_APP_ORIGIN_DEFAULT,
 )
 from app.launcher import get_registry
 from app.services.app_config.client import APP_KEY, fetch_remote
@@ -100,6 +101,7 @@ _COMPILED_DEFAULTS_ROW: dict = {
         "aidream_server_url": AIDREAM_SERVER_URL_DEFAULT,
         "matrx_files_url": MATRX_FILES_URL_DEFAULT,
         "scraper_server_url": SCRAPER_SERVER_URL_DEFAULT,
+        "web_app_origin": WEB_APP_ORIGIN_DEFAULT,
         "flags": {},
         "notice": None,
     },
@@ -117,12 +119,11 @@ _ENV_OVERRIDE_SOURCES: dict[str, tuple[str, str]] = {
 
 
 def _detect_env_overrides() -> dict[str, str]:
-    # WHY value-vs-default and not presence-based: packaged builds inject
-    # AIDREAM_SERVER_URL_LIVE=<compiled default> into the environment via
-    # hooks/runtime_hook.py → bundled_config.apply(), so "is the env var set?"
-    # would flag a permanent override in every production install and kill
-    # remote config for that key forever. Only a value that actually DIFFERS
-    # from the compiled default is a real developer override.
+    # WHY value-vs-default and not presence-based: a developer may set a URL
+    # env var to the shipping default. Presence alone must not flag a
+    # permanent override in production and mask remote config for that key.
+    # Only a value that actually DIFFERS from the compiled default is a real
+    # developer override.
     overrides: dict[str, str] = {}
     for key, (effective, default) in _ENV_OVERRIDE_SOURCES.items():
         if effective and effective.rstrip("/") != default.rstrip("/"):
@@ -196,6 +197,9 @@ class AppConfigService:
 
     def get_scraper_server_url(self) -> str:
         return self._resolved.effective_url("scraper_server_url")
+
+    def get_web_app_origin(self) -> str:
+        return str(self._resolved.row.config.web_app_origin)
 
     def get_flag(self, name: str, default: bool = False) -> bool:
         return self._resolved.row.config.flags.get(name, default)
@@ -493,6 +497,11 @@ def get_matrx_files_url() -> str:
 def get_scraper_server_url() -> str:
     """Effective scraper base URL (env override > remote > cache > default)."""
     return get_app_config_service().get_scraper_server_url()
+
+
+def get_web_app_origin() -> str:
+    """Effective AI Matrx web origin from remote app config."""
+    return get_app_config_service().get_web_app_origin()
 
 
 def get_flag(name: str, default: bool = False) -> bool:

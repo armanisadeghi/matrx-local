@@ -2,11 +2,8 @@
  * AIDream server API client.
  *
  * All reads of shared data (models, prompts, tools) go through this client.
- * The active server URL is read from VITE_AIDREAM_SERVER_URL_LIVE — never hardcoded.
- *
- * URL selection:
- *   - Active URL: import.meta.env.VITE_AIDREAM_SERVER_URL_LIVE
- *   - All available URLs (for debug picker): getAllAIDreamUrls()
+ * The active server URL comes from the cached remote app-config row; the
+ * renderer never reads an AIDream URL from a Vite environment variable.
  *
  * Auth:
  *   - Public endpoints (models, tools): no token needed
@@ -15,29 +12,7 @@
  *     requires a JWT. Callers must skip the fetch when logged out.
  */
 
-// ---------------------------------------------------------------------------
-// URL configuration — reads all VITE_AIDREAM_SERVER_URL_* env vars dynamically
-// ---------------------------------------------------------------------------
-
-/** The active AIDream server base URL. Never fallback to a hardcoded value. */
-export const AIDREAM_SERVER_URL: string = import.meta.env.VITE_AIDREAM_SERVER_URL_LIVE ?? "";
-
-/**
- * Returns all configured AIDream server variants as { label, url } pairs.
- * Used for the debug server-picker dropdown.
- * Suffix is derived from the env var name (e.g. LIVE, DEV, LOCAL, PRODUCTION).
- */
-export function getAllAIDreamUrls(): Array<{ label: string; url: string }> {
-  const prefix = "VITE_AIDREAM_SERVER_URL_";
-  return Object.entries(import.meta.env)
-    .filter(([key]) => key.startsWith(prefix))
-    .map(([key, value]) => ({
-      label: key.replace(prefix, ""),
-      url: String(value),
-    }))
-    .filter(({ url }) => Boolean(url))
-    .sort((a, b) => a.label.localeCompare(b.label));
-}
+import { getAIDreamServerUrl } from "@/lib/app-config";
 
 // ---------------------------------------------------------------------------
 // Request helpers
@@ -52,14 +27,7 @@ async function aidreamGet<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  if (!AIDREAM_SERVER_URL) {
-    throw new Error(
-      "[aidream-client] VITE_AIDREAM_SERVER_URL_LIVE is not set. " +
-        "Add it to desktop/.env to enable AIDream server sync.",
-    );
-  }
-
-  const url = `${AIDREAM_SERVER_URL}/api${path}`;
+  const url = `${await getAIDreamServerUrl()}/api${path}`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -179,13 +147,13 @@ export async function resolveComputeTarget(
   ref: ComputeTargetRef,
   options: RequestOptions = {},
 ): Promise<SandboxBindingPayload | null> {
-  if (!AIDREAM_SERVER_URL) return null;
+  const baseUrl = await getAIDreamServerUrl();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   if (options.jwt) headers["Authorization"] = `Bearer ${options.jwt}`;
   try {
-    const resp = await fetch(`${AIDREAM_SERVER_URL}/api/compute-targets/resolve`, {
+    const resp = await fetch(`${baseUrl}/api/compute-targets/resolve`, {
       method: "POST",
       headers,
       body: JSON.stringify(ref),

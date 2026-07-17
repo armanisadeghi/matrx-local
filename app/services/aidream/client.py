@@ -55,8 +55,8 @@ class AIDreamClient:
     def __init__(self, base_url: str) -> None:
         if not base_url:
             raise ValueError(
-                "[aidream_client] AIDREAM_SERVER_URL_LIVE is not set in .env. "
-                "Cannot create AIDreamClient without a base URL."
+                "[aidream_client] No AIDream server URL was resolved from app "
+                "config. Cannot create AIDreamClient without a base URL."
             )
         self._base_url = base_url.rstrip("/")
 
@@ -171,7 +171,7 @@ def get_aidream_client() -> Optional[AIDreamClient]:
     base_url = get_aidream_server_url()
     if not base_url:
         logger.warning(
-            "[aidream_client] No aidream server URL resolved (app config + env). "
+            "[aidream_client] No AIDream server URL resolved from app config. "
             "Remote sync (models, prompts, tools) is DISABLED. "
             "Data will be served from local SQLite only."
         )

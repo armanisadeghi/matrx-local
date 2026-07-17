@@ -30,6 +30,14 @@ _Last updated: 2026-07-14 (step-7 pass: both official-docs asks APPROVED + appli
 
 ## Active (ranked — quickest wins first within priority)
 
+- [ ] **Add `web_app_origin` to the `matrx-local` app-config row** — the desktop
+  hotfix already reads and caches this public value with the safe existing
+  fallback `https://www.aimatrx.com`; adding it makes the value fully
+  administrator-controlled. In the App Config admin UI, edit `matrx-local`
+  and add `"web_app_origin": "https://www.aimatrx.com"` to `config`, then
+  save. The available MCP identity is not a Super Admin (`42501` from the
+  protected RPC), so an agent cannot perform this dashboard write. This does
+  not block the release because the compiled/cache fallback is identical.
 - [ ] **Publish the next `matrx-ai` package wave after the canonical agent-source changes are committed** — PyPI `0.4.7` was verified to omit `matrx_ai/client_host/agent_source.py`, so Matrx Local intentionally withholds `agent_execution_v1` and routes saved-agent turns through AIDream. Once the AIDream workspace changes are safely committed (the worktree currently also contains unrelated active work), run `./scripts/publish-all-packages.sh --only matrx-ai`; then an agent can raise matrx-local's floor/lock to that published version and re-run the live capability smoke. Do not tag the current dirty worktree wholesale.
 - [ ] **Train “Hey Matrix” OWW model** — no custom model exists yet (app ships stock `hey_jarvis`/`alexa`). **Corrected 2026-07-14:** the old "4 commands + 2 GB" doc was fiction — real openWakeWord training is the full YAML-config pipeline (piper-sample-generator + multi-GB feature/background/RIR datasets). Runbook + honest options in [`docs/wake-word-training.md`](../docs/wake-word-training.md). **Recommended: openWakeWord's official Colab notebook** (`dscripka/openWakeWord` → `notebooks/automatic_model_training.ipynb`, `target_phrase="hey matrix"`) — free GPU, ~1 hr. Local training env is already set up on Arman's Mac (`~/wakeword-train`, imports clean). Decision for Arman: Colab now, full local harness, or defer and ship stock `hey_jarvis` interim. Deliver the resulting `.onnx` via CDN (not the installer) per [`docs/CDN_ASSETS_PLAN.md`](../docs/CDN_ASSETS_PLAN.md).
 - [ ] **Windows EV code-signing cert — IN PROGRESS, check back 2026-07-16** — Before broad public launch (kills SmartScreen warnings). Arman purchased it 2026-03-02; it's mid-provisioning at Sectigo. **Next agent on/after 2026-07-16: check for updates and walk Arman through completion — offer to launch the browser to the Agreement Link.**
@@ -50,7 +58,7 @@ _Last updated: 2026-07-14 (step-7 pass: both official-docs asks APPROVED + appli
       config seam + repoints catalogs. Assets are PUBLIC (never signed URLs);
       CDN base is remote-app-config, not an env var (CLAUDE.md config posture).
 
-**GitHub Actions secrets** (if anything missing on new fork): `AIDREAM_SERVER_URL_LIVE`, `VITE_SUPABASE_*`.
+**GitHub Actions secrets** (if anything missing on new fork): `VITE_SUPABASE_*`.
 
 ---
 
@@ -112,7 +120,7 @@ _Skim and check off or delete. Agents: do not open `.arman/` — leave that to A
 - [x] `app_settings` / `note_folders` verified in Supabase + RLS (historical session).
 - [x] Migrations 003 `forbidden_urls`, 005 hardware columns, 006–008 hardware/tunnel (per prior sessions).
 - [x] llama-server binaries downloaded via `scripts/download-llama-server.sh`.
-- [x] GitHub secrets: `AIDREAM_SERVER_URL_LIVE`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY`.
+- [x] GitHub secrets: `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY` (AIDream URL removed from the packaged build contract on 2026-07-17).
 - [x] Windows installer NSIS + hooks.
 - [x] First-run / setup wizard shipped in app (`FirstRunScreen` + wizard).
 - [x] Moved ask-Arman list from `.arman/ARMAN_TASKS.md` → `.matrx/ARMAN_TASKS.md` (2026-07-12); agents must not enter `.arman/`.

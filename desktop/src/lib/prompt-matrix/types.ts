@@ -59,16 +59,13 @@ export interface MatrixVariable {
 /**
  * How the option lists are combined.
  *
- * - `cartesian` — every combination of every variable. The variable ORDER
- *                 defines loop nesting: the first variable is the outermost
- *                 loop (changes slowest / is "frozen" longest), the last is
- *                 innermost (changes fastest). Reordering is how the user
- *                 controls "freeze this one, sweep the others".
+ * - `cartesian` — every combination of every variable. Each submitted batch
+ *                 shuffles this complete set before execution.
  * - `baseline`  — hold every variable at its baseline option and change ONE
  *                 at a time. 1 + Σ(nᵢ − 1) runs instead of Πnᵢ — the escape
  *                 hatch when the product explodes (3×10 → 12 runs, not 30).
- * - `sample`    — a random sample of `count` distinct combinations drawn from
- *                 the full cartesian product. `seed` makes the draw reproducible.
+ * - `sample`    — a fresh random sample of `count` distinct combinations drawn
+ *                 from the full cartesian product for each submitted batch.
  * - `zip`       — ALL variables step in lockstep (like one big link group).
  *                 Run count = the shortest option list.
  */
@@ -81,25 +78,19 @@ export type MatrixStrategy =
 export type StrategyKind = MatrixStrategy["kind"];
 
 /**
- * How each run's seed is chosen.
- *
- * - `fixed`     — the same seed for every combination. THE setting that makes a
- *                 sweep a real comparison: the variable becomes the only thing
- *                 that changed. (With repeats > 1, each repeat steps the seed,
- *                 otherwise the repeats would be byte-identical.)
- * - `random`    — a fresh seed per run, drawn from the plan's RNG so the plan
- *                 is still reproducible.
- * - `increment` — baseSeed + run index.
+ * Legacy persisted comparison metadata. New submitted batches always receive
+ * fresh random seeds; only `repeats` affects execution. The remaining fields
+ * stay serializable so saved/imported matrices from older releases remain valid.
  */
 export type SeedMode = "fixed" | "random" | "increment";
 
 export interface SeedPolicy {
   mode: SeedMode;
-  /** Base/starting seed. Used by `fixed` and `increment`. */
+  /** Legacy base seed retained for saved-template compatibility. */
   baseSeed: number;
   /** Runs per combination (each gets its own seed). */
   repeats: number;
-  /** Seeds the RNG for `random` mode so a plan replays identically. */
+  /** Legacy planner RNG seed retained for saved-template compatibility. */
   rngSeed: number;
 }
 

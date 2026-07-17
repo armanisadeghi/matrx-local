@@ -218,7 +218,7 @@ def test_sync_models_without_client_records_skipped(
         await engine.sync_models()
         meta = await _sync_status(db, "models")
         assert meta is not None and meta["status"] == "skipped"
-        assert "AIDREAM_SERVER_URL_LIVE" in (meta["error_message"] or "")
+        assert meta["error_message"] == "AIDream server URL unavailable from app config"
         row = await db.fetchone("SELECT COUNT(*) AS cnt FROM ai_models")
         assert row["cnt"] == 0
 

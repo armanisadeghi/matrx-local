@@ -445,24 +445,27 @@ async def ai_provider_status() -> dict[str, Any]:
     This endpoint is public (listed in _PUBLIC_PATHS in auth.py) so it can be
     called before auth is established.
     """
-    import os
+    from app.services.ai.key_manager import get_cached_user_keys
 
-    PROVIDER_ENV_VARS: dict[str, list[str]] = {
-        "anthropic": ["ANTHROPIC_API_KEY"],
-        "openai":    ["OPENAI_API_KEY"],
-        "google":    ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-        "groq":      ["GROQ_API_KEY"],
-        "together":  ["TOGETHER_API_KEY"],
-        "xai":       ["XAI_API_KEY"],
-        "cerebras":  ["CEREBRAS_API_KEY"],
-    }
+    # User API keys live in the app's local key store. Do not infer a user's
+    # configured providers from process environment variables: those are a
+    # developer/runtime concern, not persisted user settings.
+    providers = (
+        "anthropic",
+        "openai",
+        "google",
+        "groq",
+        "together",
+        "xai",
+        "cerebras",
+    )
+    user_keys = get_cached_user_keys()
 
     available: list[str] = []
     missing: list[str] = []
 
-    for provider, env_vars in PROVIDER_ENV_VARS.items():
-        configured = any(os.getenv(var, "").strip() for var in env_vars)
-        if configured:
+    for provider in providers:
+        if user_keys.get(provider, "").strip():
             available.append(provider)
         else:
             missing.append(provider)

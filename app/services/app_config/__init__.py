@@ -21,6 +21,7 @@ from app.services.app_config.service import (
     get_matrx_files_url,
     get_notice,
     get_scraper_server_url,
+    get_web_app_origin,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "get_matrx_files_url",
     "get_notice",
     "get_scraper_server_url",
+    "get_web_app_origin",
 ]

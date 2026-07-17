@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AIDREAM_SERVER_URL, fetchAIDreamModels } from "@/lib/aidream-client";
+import { fetchAIDreamModels } from "@/lib/aidream-client";
+import { getAIDreamServerUrl } from "@/lib/app-config";
 import {
   parseAIDreamStream,
   stringifyStreamDetail,
@@ -153,13 +154,14 @@ function buildRequest(
   target: CloudChatExecutionTarget,
   localModel: string | null,
   engineUrl: string | null | undefined,
+  cloudServerUrl: string,
   options: { agentId?: string; variables?: Record<string, string> } | undefined,
   allMessages: ChatMessage[],
 ): { url: string; body: Record<string, unknown> } {
   const base =
     target === "local"
       ? `${engineUrl}/ai`
-      : `${AIDREAM_SERVER_URL}/api/ai`;
+      : `${cloudServerUrl}/api/ai`;
   const conversationId =
     target === "local"
       ? conversation.localConversationId
@@ -942,10 +944,6 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       if (!hasAgent && !trimmed) return;
       if (isStreaming) return;
 
-      if (executionTarget === "cloud" && !AIDREAM_SERVER_URL) {
-        setRequestError("VITE_AIDREAM_SERVER_URL_LIVE is not set.");
-        return;
-      }
       if (executionTarget === "local" && !engineUrl) {
         setRequestError("Local engine is not connected.");
         return;
@@ -1217,6 +1215,9 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         } = await supabase.auth.getSession();
         const token = session?.access_token ?? "";
         const allMessages = userMessage ? [...existingMessages, userMessage] : existingMessages;
+        const cloudServerUrl = executionTarget === "cloud"
+          ? await getAIDreamServerUrl()
+          : "";
         const requestConversation: Conversation = {
           ...currentConversation,
           ...routePatch,
@@ -1228,6 +1229,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           executionTarget,
           localStatus?.canonical_model_name ?? null,
           engineUrl,
+          cloudServerUrl,
           options,
           allMessages,
         );

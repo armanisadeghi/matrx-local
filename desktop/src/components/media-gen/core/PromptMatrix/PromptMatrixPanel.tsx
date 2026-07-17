@@ -69,6 +69,7 @@ import type { PromptMatrixActions } from "@/hooks/use-prompt-matrix";
 import {
   buildJobs,
   countPlan,
+  createBatchSnapshot,
   downloadMatrixExport,
   extractPoolRefs,
   MAX_BATCH_SIZE,
@@ -77,6 +78,7 @@ import {
   sortSlots,
   variableKey,
   type MatrixSpec,
+  type MatrixPlan,
   type MatrixVariable,
   type ParamAxis,
 } from "@/lib/prompt-matrix";
@@ -159,6 +161,9 @@ export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
     () =>
       target.axes.filter(
         (a) =>
+          // Existing imported seed variables remain executable for backwards
+          // compatibility, but new batches always own fresh random seeds.
+          a.id !== "seed" &&
           !spec.variables.some(
             (v) => v.binding.kind === "param" && v.binding.axisId === a.id,
           ),
@@ -353,10 +358,13 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
   const optionErrors = useOptionErrors();
 
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmPlan, setConfirmPlan] = useState<MatrixPlan | null>(null);
+  const [confirmRuns, setConfirmRuns] = useState<PreviewRun[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewRuns, setPreviewRuns] = useState<PreviewRun[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [queuedNotice, setQueuedNotice] = useState<string | null>(null);
   const [templateName, setTemplateName] = useState("");
   const setCappedTemplateName = useCallback((name: string) => {
     setTemplateName(name.slice(0, MAX_BATCH_LABEL_LENGTH));
@@ -366,7 +374,7 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
 
   /** Same buildJobs path Queue uses — freeze the result for preview/enqueue. */
   const buildSnapshot = useCallback(():
-    | { ok: true; runs: PreviewRun[] }
+    | { ok: true; runs: PreviewRun[]; plan: MatrixPlan }
     | { ok: false; error: string } => {
     if (baseInput === null) {
       return {
@@ -374,10 +382,14 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
         error: "Pick a model and fill in the generation settings first.",
       };
     }
+    const snapshotPlan = createBatchSnapshot(spec);
+    if (snapshotPlan.errors.length > 0) {
+      return { ok: false, error: snapshotPlan.errors.join(" ") };
+    }
     const built = buildJobs<ImageGenerateInput>(
       target,
       baseInput,
-      plan.combinations,
+      snapshotPlan.combinations,
       spec.variables,
     );
     if (built.errors.length > 0) {
@@ -396,14 +408,15 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
         combo_label: b.label,
       },
     }));
-    return { ok: true, runs };
-  }, [baseInput, target, plan.combinations, spec.variables]);
+    return { ok: true, runs, plan: snapshotPlan };
+  }, [baseInput, target, spec]);
 
   const enqueueRuns = useCallback(
     async (runs: readonly PreviewRun[]) => {
       if (runs.length === 0) return;
       setSubmitting(true);
       setSubmitError(null);
+      setQueuedNotice(null);
       const jobs: ImageGenBatchJobSpec[] = runs.map((r) => r.job);
       const rawLabel =
         templateName.trim().length > 0
@@ -413,6 +426,9 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
       const result = await enqueueImageBatch(jobs, label);
       setSubmitting(false);
       if (result.ok) {
+        setQueuedNotice(
+          `Queued randomized batch ${result.batchId.slice(0, 8)} (${result.count} ${result.count === 1 ? "image" : "images"}).`,
+        );
         setConfirmOpen(false);
         setPreviewOpen(false);
         return;
@@ -460,18 +476,27 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
   const canQueue = blockers.length === 0 && !submitting;
 
   const handleConfirm = useCallback(async () => {
-    // Rebuild at confirm time (same path as preview). Preview queue uses the
-    // frozen snapshot instead — see handlePreviewQueue.
+    // The dialog shows a fresh randomized snapshot. Never rebuild here: the
+    // user must get exactly the jobs, order, and seeds they just approved.
+    await enqueueRuns(confirmRuns);
+  }, [confirmRuns, enqueueRuns]);
+
+  const handleOpenConfirm = useCallback(() => {
+    setSubmitError(null);
+    setQueuedNotice(null);
     const snap = buildSnapshot();
     if (!snap.ok) {
       setSubmitError(snap.error);
       return;
     }
-    await enqueueRuns(snap.runs);
-  }, [buildSnapshot, enqueueRuns]);
+    setConfirmPlan(snap.plan);
+    setConfirmRuns(snap.runs);
+    setConfirmOpen(true);
+  }, [buildSnapshot]);
 
   const handleOpenPreview = useCallback(() => {
     setSubmitError(null);
+    setQueuedNotice(null);
     const snap = buildSnapshot();
     if (!snap.ok) {
       setSubmitError(snap.error);
@@ -511,6 +536,15 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
             {submitError}
           </span>
         </div>
+      )}
+
+      {queuedNotice !== null && (
+        <p
+          role="status"
+          className="rounded-md border border-emerald-500/40 bg-emerald-500/10 p-2.5 text-xs text-emerald-800 dark:text-emerald-300"
+        >
+          {queuedNotice}
+        </p>
       )}
 
       <div className="flex flex-wrap items-center gap-2">
@@ -578,10 +612,7 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
           <Button
             className="gap-1.5"
             disabled={!canQueue}
-            onClick={() => {
-              setSubmitError(null);
-              setConfirmOpen(true);
-            }}
+            onClick={handleOpenConfirm}
           >
             <Layers className="h-4 w-4" />
             Queue{total > 0 ? ` ${total.toLocaleString()}` : ""}
@@ -598,7 +629,7 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
       <BatchConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        plan={plan}
+        plan={confirmPlan ?? plan}
         secondsPerRun={secondsPerRun}
         queuedAhead={queuedAhead}
         submitting={submitting}

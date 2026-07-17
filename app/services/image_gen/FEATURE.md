@@ -13,6 +13,18 @@ window, restart the machine, and come back to a finished sweep. Every rule below
 follows from that, and breaking any one of them silently destroys someone's
 overnight run.
 
+### Every image submission is a job
+
+There is no separate one-shot history. `POST /image-gen/generate` and
+`POST /image-gen/generate-workflow` preserve their synchronous response
+contracts by waiting for a durable job, while `/jobs` and `/jobs/batch` return
+immediately. All four paths create the same `ImageJob` before execution.
+
+The displayed generation history is therefore complete: pending work follows
+queue order; terminal work follows `finished_sequence` (with `finished_at` as
+the human-readable timestamp), never enqueue order. Do not reintroduce a
+direct `service.generate()` route call or sort completed results by `created_at`.
+
 ### 1. A restart RESUMES. It never destroys pending work.
 
 `ImageJobStore.load()`:

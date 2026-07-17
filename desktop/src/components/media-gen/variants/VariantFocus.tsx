@@ -21,6 +21,7 @@ import {
   Image as ImageIcon,
   Library,
   ListPlus,
+  Layers,
   Loader2,
   Minus,
   Plus,
@@ -60,10 +61,12 @@ import {
   ImageAdvancedSection,
   ImageCommonSettings,
   ImageFormNotices,
+  ImageGenerateForm,
   ImageParamsErrorNotice,
   ImagePromptField,
   InputImageControl,
   LoraStylesSection,
+  useImageGenMode,
 } from "@/components/media-gen/core/ImageGenerateForm";
 import {
   SourceImageControl,
@@ -303,6 +306,8 @@ function ImageFocusFlow() {
   const { setImageForm, resetImageAll, cancelImageGeneration, refreshImage } =
     actions;
   const ctl = useImageGenController();
+  const [batchBuilderOpen, setBatchBuilderOpen] = useState(false);
+  const [, setImageGenMode] = useImageGenMode();
 
   const feedHasContent =
     !!imageResult || imageGenerating || imageJobs.length > 0;
@@ -437,6 +442,20 @@ function ImageFocusFlow() {
               <ListPlus className="mr-2 h-4 w-4" />
               Queue
             </Button>
+            <Button
+              size="lg"
+              variant="outline"
+              className="h-12 rounded-xl"
+              disabled={!ctl.defaults}
+              onClick={() => {
+                setImageGenMode("batch");
+                setBatchBuilderOpen(true);
+              }}
+              title="Build a randomized image batch"
+            >
+              <Layers className="mr-2 h-4 w-4" />
+              Batch
+            </Button>
           </div>
         </section>
 
@@ -469,6 +488,18 @@ function ImageFocusFlow() {
             <ImageQueuePanel layout="feed" showHeading={false} />
           </section>
         )}
+
+        <Dialog open={batchBuilderOpen} onOpenChange={setBatchBuilderOpen}>
+          <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Randomized image batch</DialogTitle>
+              <DialogDescription>
+                Every new preview or queue action draws a fresh randomized batch.
+              </DialogDescription>
+            </DialogHeader>
+            <ImageGenerateForm ctl={ctl} hideNotices />
+          </DialogContent>
+        </Dialog>
       </div>
     </ImageGenGate>
   );

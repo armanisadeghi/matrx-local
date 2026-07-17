@@ -63,6 +63,7 @@ import {
   ImageGenerateActions,
   ImageGenerateForm,
   ImageParamsErrorNotice,
+  useImageGenMode,
 } from "@/components/media-gen/core/ImageGenerateForm";
 import {
   VideoFormNotices,
@@ -149,6 +150,8 @@ export function VariantStudio() {
 
   // ── Pure-presentation local state ────────────────────────────────────────
   const [mode, setMode] = useState<StudioMode>("image");
+  const [imageMode] = useImageGenMode();
+  const imageBatchActive = mode === "image" && imageMode === "batch";
   const [pickerOpen, setPickerOpen] = useState(false);
   const [workflowsOpen, setWorkflowsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -540,15 +543,17 @@ export function VariantStudio() {
         {/* Sticky action bar */}
         <div className="shrink-0 space-y-2 border-t bg-background/95 p-3">
           {isImage ? (
-            <>
-              <ImageParamsErrorNotice ctl={imageCtl} />
-              <ImageFormNotices ctl={imageCtl} />
-              <ImageGenerateActions
-                ctl={imageCtl}
-                extraDisabled={!modeReady}
-                queueLabel="Queue"
-              />
-            </>
+            imageBatchActive ? null : (
+              <>
+                <ImageParamsErrorNotice ctl={imageCtl} />
+                <ImageFormNotices ctl={imageCtl} />
+                <ImageGenerateActions
+                  ctl={imageCtl}
+                  extraDisabled={!modeReady}
+                  queueLabel="Queue"
+                />
+              </>
+            )
           ) : (
             <>
               <VideoParamsErrorNotice ctl={videoCtl} />
@@ -570,9 +575,9 @@ export function VariantStudio() {
         </div>
 
         {/* Queue rail */}
-        {isImage && (
+        {isImage && !imageBatchActive && (
           <div className="shrink-0 border-t px-4 py-2 empty:hidden">
-            <ImageQueuePanel layout="chips" heading="Queue" />
+            <ImageQueuePanel layout="chips" heading="Generation history" />
           </div>
         )}
         {!isImage && (

@@ -129,14 +129,10 @@ export function buildJobs<TJob>(
       job = axis.apply(job, parsed.value);
     }
 
-    // 3. Seed. A `seed` param axis (if the user swept it) already landed in
-    //    step 2 and wins over the plan's seed policy.
-    const sweptSeed = paramVars.some(
-      (v) => v.binding.kind === "param" && v.binding.axisId === "seed",
-    );
-    if (!sweptSeed) {
-      job = target.applySeed(job, combo.seed);
-    }
+    // 3. A batch snapshot owns its noise. Apply its fresh seed last so no
+    //    parameter axis (including an old imported `seed` axis) can silently
+    //    make consecutive generations deterministic again.
+    job = target.applySeed(job, combo.seed);
 
     jobs.push({
       job,

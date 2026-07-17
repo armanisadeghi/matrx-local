@@ -323,9 +323,10 @@ def test_priority_next_persists_across_reload(
     reloaded = {j.job_id: j for j in store2.recent()}
     assert reloaded[c.job_id].priority == "next"
     assert reloaded[b.job_id].priority == "normal"
-    order = [j.job_id for j in store2.recent()]  # newest-first display order
-    # _order on disk is [A, C, B] → recent() (reversed) is [B, C, A].
-    assert order == [b.job_id, c.job_id, a.job_id]
+    order = [j.job_id for j in store2.recent()]
+    # Pending work is displayed in actionable queue order, unlike terminal
+    # history which is displayed in finish order.
+    assert order == [a.job_id, c.job_id, b.job_id]
 
     # B and C were queued and stay queued; A was caught mid-flight and goes
     # BACK to the queue with its attempt counted (never silently destroyed).
@@ -401,6 +402,60 @@ def test_enqueue_route_accepts_priority_next(
     assert bad.status_code == 422
 
 
+def test_immediate_route_creates_a_completed_history_job(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The synchronous compatibility endpoint cannot bypass job history."""
+    from app.api import image_gen_routes
+    from app.services.image_gen import jobs as jobs_module
+
+    _isolate_image_history(monkeypatch, tmp_path)
+    store = ImageJobStore()
+
+    class StubService:
+        available = True
+        unavailable_reason = ""
+
+        def get_model(self, model_id: str):
+            return MODEL
+
+        def is_downloaded(self, model_id: str) -> bool:
+            return True
+
+    class CompletingRunner:
+        def ensure_running(self) -> None:
+            job = store.next_queued()
+            assert job is not None
+            path = tmp_path / "completed.png"
+            path.write_bytes(b"PNG")
+            assert store.mark_running(job.job_id, total_steps=1, seed=42)
+            store.mark_completed(
+                job.job_id,
+                item_id="item-immediate",
+                file_path=str(path),
+                elapsed_seconds=0.1,
+                width=123,
+                height=456,
+            )
+
+    monkeypatch.setattr(image_gen_routes, "get_image_gen_service", lambda: StubService())
+    monkeypatch.setattr(jobs_module, "get_image_job_store", lambda: store)
+    monkeypatch.setattr(jobs_module, "get_image_job_runner", lambda: CompletingRunner())
+
+    response = client.post(
+        "/image-gen/generate", json={"prompt": "immediate", "model_id": MODEL.model_id}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["image_b64"] == "UE5H"
+    assert response.json()["width"] == 123
+    assert response.json()["height"] == 456
+    history = store.recent()
+    assert len(history) == 1
+    assert history[0].status == "completed"
+    assert history[0].prompt == "immediate"
+    assert history[0].finished_sequence == 1
+
+
 def test_long_prompts_accepted_and_never_truncated(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -410,7 +465,6 @@ def test_long_prompts_accepted_and_never_truncated(
     truncation anywhere on our side. 10k chars remains the sanity bound."""
     from app.api import image_gen_routes
     from app.services.image_gen import jobs as jobs_module
-    from app.services.image_gen.service import GenerationResult
 
     long_prompt = ("a lantern-lit harbor at dusk, volumetric fog, 35mm " * 60).strip()
     assert len(long_prompt) > 2500  # comfortably beyond the old cap
@@ -427,15 +481,13 @@ def test_long_prompts_accepted_and_never_truncated(
         def is_downloaded(self, model_id: str) -> bool:
             return True
 
-        async def generate(self, **kwargs: Any) -> GenerationResult:
-            seen_prompts.append(kwargs["prompt"])
-            return GenerationResult(
-                success=False, error="stub", model_id=MODEL.model_id
-            )
-
     class DummyRunner:
         def ensure_running(self) -> None:
-            pass
+            job = store.next_queued()
+            assert job is not None
+            seen_prompts.append(job.prompt)
+            assert store.mark_running(job.job_id, total_steps=1, seed=1)
+            store.mark_failed(job.job_id, "invalid stub")
 
     _isolate_image_history(monkeypatch, tmp_path)
     store = ImageJobStore()
@@ -445,12 +497,14 @@ def test_long_prompts_accepted_and_never_truncated(
     monkeypatch.setattr(jobs_module, "get_image_job_store", lambda: store)
     monkeypatch.setattr(jobs_module, "get_image_job_runner", lambda: DummyRunner())
 
-    # One-shot: full prompt reaches the service verbatim.
+    # Immediate Generate creates the same durable job as Queue. The full
+    # prompt must survive that path and the compatibility response must return.
     r = client.post("/image-gen/generate", json={
         "prompt": long_prompt, "model_id": MODEL.model_id,
     })
     assert r.status_code == 200, r.text
     assert seen_prompts == [long_prompt]
+    assert store.recent()[0].prompt == long_prompt
 
     # Job enqueue: full prompt persisted verbatim.
     r = client.post("/image-gen/jobs", json={

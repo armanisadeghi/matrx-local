@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { countPlan, expandMatrix, validateSpec } from "./expand";
+import {
+  countPlan,
+  createBatchSnapshot,
+  expandMatrix,
+  validateSpec,
+} from "./expand";
 import {
   extractPoolRefs,
   extractVariableNames,
@@ -368,6 +373,53 @@ describe("seed policy", () => {
   });
 });
 
+// ── submitted batch snapshots ──────────────────────────────────────────────
+
+describe("batch snapshots", () => {
+  it("draws a fresh order and independent seeds for every new batch attempt", () => {
+    const subject = variable("subject", ["cat", "dog", "fox"]);
+    const style = variable("style", ["noir", "anime", "oil"]);
+    const source = spec("{{subject}} {{style}}", [subject, style]);
+
+    // Injected entropy makes this regression test deterministic without
+    // weakening production's Web-Crypto source.
+    const first = createBatchSnapshot(source, new Rng(11));
+    const second = createBatchSnapshot(source, new Rng(29));
+
+    expect(first.total).toBe(9);
+    expect(first.combinations.map((c) => c.index)).toEqual([
+      0, 1, 2, 3, 4, 5, 6, 7, 8,
+    ]);
+    expect(new Set(first.combinations.map((c) => c.label)).size).toBe(9);
+    expect(new Set(first.combinations.map((c) => c.seed)).size).toBe(9);
+    expect(first.combinations.slice(0, 5).map((c) => c.label)).not.toEqual(
+      second.combinations.slice(0, 5).map((c) => c.label),
+    );
+    expect(first.combinations.slice(0, 5).map((c) => c.seed)).not.toEqual(
+      second.combinations.slice(0, 5).map((c) => c.seed),
+    );
+  });
+
+  it("redraws both the subset and execution order for random samples", () => {
+    const subject = variable("subject", ["cat", "dog", "fox", "otter"]);
+    const style = variable("style", ["noir", "anime", "oil", "ink"]);
+    const source = spec(
+      "{{subject}} {{style}}",
+      [subject, style],
+      { kind: "sample", count: 5, seed: 1 },
+    );
+
+    const first = createBatchSnapshot(source, new Rng(3));
+    const second = createBatchSnapshot(source, new Rng(41));
+
+    expect(first.combinations).toHaveLength(5);
+    expect(new Set(first.combinations.map((c) => c.label)).size).toBe(5);
+    expect(first.combinations.map((c) => c.label)).not.toEqual(
+      second.combinations.map((c) => c.label),
+    );
+  });
+});
+
 // ── validation ──────────────────────────────────────────────────────────────
 
 describe("validation", () => {
@@ -709,13 +761,16 @@ describe("image target", () => {
     expect(jobs[1]?.job.height).toBe(1216);
   });
 
-  it("a swept seed axis overrides the batch seed policy", () => {
+  it("a fresh batch snapshot overrides a legacy swept seed axis", () => {
     const seedVar = variable("seed", ["7", "8"], {
       binding: { kind: "param", axisId: "seed" },
     });
-    const plan = expandMatrix(spec("a cat", [seedVar]));
+    const plan = createBatchSnapshot(spec("a cat", [seedVar]), new Rng(73));
     const { jobs } = buildJobs(target, base, plan.combinations, [seedVar]);
-    expect(jobs.map((j) => j.job.seed)).toEqual([7, 8]);
+    expect(jobs.map((j) => j.job.seed)).toEqual(
+      plan.combinations.map((combination) => combination.seed),
+    );
+    expect(jobs.map((j) => j.job.seed)).not.toEqual([7, 8]);
   });
 
   it("sweeps LoRAs, with an empty arm meaning no LoRA", () => {

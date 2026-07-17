@@ -4,6 +4,7 @@ import App from "./App";
 import { windowRole } from "./lib/window-role";
 import { TranscriptOverlay } from "./components/TranscriptOverlay";
 import { PanelApp } from "./panels/PanelApp";
+import { startAppRuntimeConfig } from "./lib/app-config";
 import "./index.css";
 
 /**
@@ -16,6 +17,10 @@ import "./index.css";
  *   • main / peers / browser dev → full App.
  */
 const root = ReactDOM.createRoot(document.getElementById("root")!);
+
+// Start the public admin-config refresh without delaying application windows.
+// The transcript overlay intentionally owns no background work.
+if (windowRole.kind !== "overlay") startAppRuntimeConfig();
 
 const tree =
   windowRole.kind === "overlay" ? (

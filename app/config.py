@@ -95,10 +95,10 @@ ALLOWED_ORIGIN_REGEX = (
 # immediately pushed to Supabase so remote devices discover it automatically.
 #
 # Optional: set CLOUDFLARE_TUNNEL_TOKEN to use a named tunnel with a stable URL.
-# TUNNEL_ENABLED controls auto-start on engine boot.
+# Whether it starts is the user's persisted `tunnel_enabled` setting, never a
+# process environment variable inherited by a shipped desktop app.
 # ---------------------------------------------------------------------------
 CLOUDFLARE_TUNNEL_TOKEN = os.getenv("CLOUDFLARE_TUNNEL_TOKEN", "")
-TUNNEL_ENABLED = os.getenv("TUNNEL_ENABLED", "False").lower() in ("true", "1")
 
 # ---------------------------------------------------------------------------
 # Cloud coordination participation.
@@ -153,6 +153,11 @@ AIDREAM_SERVER_URL_LOCAL = os.getenv(
 # Active URL — bootstrap constant (config fetch + dev override detection).
 # Runtime consumers use app/services/app_config get_aidream_server_url().
 AIDREAM_SERVER_URL = AIDREAM_SERVER_URL_LIVE
+
+# AI Matrx web application — a public application origin used for desktop
+# handoff links. Runtime consumers should resolve this from remote app config;
+# this is only the offline first-launch fallback.
+WEB_APP_ORIGIN_DEFAULT = "https://www.aimatrx.com"
 
 # Matrx Files — the standalone file microservice (EC2/Cloudflare, launched
 # 2026-07-13). ALL desktop file-sync traffic (change feed, uploads, patches,

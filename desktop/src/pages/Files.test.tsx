@@ -8,5 +8,8 @@ describe("Files page", () => {
     expect(html).toContain("This Device");
     expect(html).toContain("Connect to the engine");
     expect(html).toContain("Search names and paths");
+    expect(html).toContain("Search file names and paths");
+    expect(html).toContain("Search scope");
+    expect(html).toContain("aria-label=\"Refresh filesystem locations\"");
   });
 });

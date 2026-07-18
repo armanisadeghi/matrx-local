@@ -28,6 +28,7 @@ from app.services.aidream.client import (
 )
 
 REMOTE_TOOL_CONTEXT_KEY = "remote_tool_request"
+_LOCAL_CONTEXT_TOOLS = frozenset({"load_desktop_tools"})
 
 
 class RemoteToolBridge:
@@ -54,16 +55,26 @@ class RemoteToolBridge:
             registry = ToolRegistry.get_instance()
             handlers = ExternalHandlerRegistry.get_instance()
             definitions: list[ToolDefinition] = []
+            local_context_definitions: list[ToolDefinition] = []
             server_timeouts: dict[str, float] = {}
 
             # Validate the full incoming set before mutating either global
             # registry. A malformed row cannot leave a half-installed catalog.
             for row in rows:
                 name = row.get("name") if isinstance(row, dict) else None
+                if isinstance(name, str) and name in _LOCAL_CONTEXT_TOOLS:
+                    existing = registry.get(name)
+                    local_context_definitions.append(
+                        existing
+                        if _has_in_process_executor(existing)
+                        else _build_local_context_definition(row)
+                    )
+                    continue
                 if (
                     not isinstance(name, str)
                     or not name
                     or name in local_names
+                    or _has_in_process_executor(registry.get(name))
                     or name.startswith("bundle:list_")
                     or row.get("is_active") is False
                 ):
@@ -89,9 +100,21 @@ class RemoteToolBridge:
                 definitions.append(definition)
                 server_timeouts[name] = server_timeout
 
+            local_context_names = {
+                definition.name for definition in local_context_definitions
+            }
+            if local_context_definitions:
+                registry.load_from_definitions(local_context_definitions)
+                for name in local_context_names:
+                    # A prior refresh from an older build may have installed a
+                    # server proxy under this exact name.
+                    handlers._tool_handlers.pop(name, None)  # noqa: SLF001
+
             new_names = {definition.name for definition in definitions}
             count = registry.load_from_definitions(definitions)
             for stale_name in self._loaded_names - new_names:
+                if stale_name in local_context_names:
+                    continue
                 registry.unregister(stale_name)
                 handlers._tool_handlers.pop(stale_name, None)  # noqa: SLF001
             for name in new_names:
@@ -281,6 +304,45 @@ async def _stored_jwt() -> str | None:
         return None
     value = token.get("access_token")
     return value if isinstance(value, str) and value else None
+
+
+def _has_in_process_executor(definition: ToolDefinition | None) -> bool:
+    """Preserve matrx-ai code tools already registered in this process.
+
+    Discovery tools such as ``load_desktop_tools`` queue mutations on the
+    active local request context. Replacing them with an AIDream proxy makes
+    the mutation happen in a different process, so the newly loaded tools can
+    never reach the local model loop.
+    """
+    if definition is None:
+        return False
+    return bool(
+        getattr(definition, "_callable", None)
+        or str(getattr(definition, "function_path", "") or "").strip()
+    )
+
+
+def _build_local_context_definition(row: dict[str, Any]) -> ToolDefinition:
+    """Bind a context-mutating matrx-ai tool to this process."""
+    # Importing the declarations registers the hand-owned callable contracts.
+    from matrx_ai.tools import _generated_declarations as _declarations  # noqa: F401
+    from matrx_ai.tools.declared import get_effective_declared
+
+    name = str(row.get("name") or "")
+    declared = get_effective_declared(name)
+    if declared is None:
+        raise RuntimeError(f"No in-process declaration is registered for {name!r}")
+    definition = ToolDefinition.model_validate(
+        {
+            **row,
+            "tool_id": row.get("id"),
+            "tool_type": ToolType.LOCAL,
+            "function_path": declared.function_path,
+            "admin_only": False,
+        }
+    )
+    definition._callable = declared.func
+    return definition
 
 
 def _is_user_jwt(value: str | None) -> bool:

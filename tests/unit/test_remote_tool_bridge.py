@@ -90,6 +90,7 @@ async def test_refresh_registers_remote_definitions_without_shadowing_local(
     from app.services.ai import remote_tool_bridge as bridge_module
     from app.tools import catalog as catalog_module
     from matrx_ai.tools import external_handlers, registry
+    from matrx_ai.tools.models import ToolDefinition, ToolType
 
     fake_client = _FakeClient(
         rows=[
@@ -101,11 +102,25 @@ async def test_refresh_registers_remote_definitions_without_shadowing_local(
                 "admin_only": True,
             },
             {"id": "local-id", "name": "local_file", "parameters": {}},
+            {
+                "id": "discovery-id",
+                "name": "load_desktop_tools",
+                "parameters": {},
+            },
             {"id": "inactive-id", "name": "inactive_tool", "is_active": False},
             {"id": "bundle-id", "name": "bundle:list_example"},
         ]
     )
     fake_registry = _FakeRegistry()
+    discovery = ToolDefinition(
+        name="load_desktop_tools",
+        tool_id="local-discovery-id",
+        tool_type=ToolType.LOCAL,
+        function_path=(
+            "matrx_ai.tools.implementations.desktop_discovery.load_desktop_tools"
+        ),
+    )
+    fake_registry.load_from_definitions([discovery])
     fake_handlers = _FakeHandlers()
     monkeypatch.setattr(bridge_module, "get_aidream_client", lambda: fake_client)
     monkeypatch.setattr(
@@ -127,8 +142,9 @@ async def test_refresh_registers_remote_definitions_without_shadowing_local(
     count = await RemoteToolBridge().refresh()
 
     assert count == 1
-    assert set(fake_registry.tools) == {"fs_read"}
+    assert set(fake_registry.tools) == {"fs_read", "load_desktop_tools"}
     assert set(fake_handlers._tool_handlers) == {"fs_read"}
+    assert fake_registry.tools["load_desktop_tools"] is discovery
     assert fake_registry.tools["fs_read"].tool_id == "remote-id"
     assert fake_registry.tools["fs_read"].admin_only is False
     assert fake_registry.tools["fs_read"].timeout_seconds == 75
@@ -191,6 +207,59 @@ async def test_remote_execution_forwards_identity_and_injection(
     assert payload["task_id"] == "task-1"
     assert payload["scope_ids"] == ["scope-1"]
     assert payload["source_app"] == "matrx-local"
+
+
+@pytest.mark.anyio
+async def test_refresh_runs_context_mutating_discovery_inside_local_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.ai import remote_tool_bridge as bridge_module
+    from app.tools import catalog as catalog_module
+    from matrx_ai.tools import external_handlers, registry
+    from matrx_ai.tools.models import ToolDefinition, ToolType
+
+    async def local_loader(args, ctx):
+        return None
+
+    local_definition = ToolDefinition(
+        name="load_desktop_tools",
+        tool_id="discovery-id",
+        tool_type=ToolType.LOCAL,
+        function_path="matrx_ai.tools.implementations.desktop_discovery.load_desktop_tools",
+    )
+    local_definition._callable = local_loader
+    fake_registry = _FakeRegistry()
+    fake_handlers = _FakeHandlers()
+    fake_client = _FakeClient(
+        rows=[
+            {
+                "id": "discovery-id",
+                "name": "load_desktop_tools",
+                "parameters": {"category": {"type": "string"}},
+            }
+        ]
+    )
+    monkeypatch.setattr(bridge_module, "get_aidream_client", lambda: fake_client)
+    monkeypatch.setattr(catalog_module, "get_catalog", lambda: ())
+    monkeypatch.setattr(
+        bridge_module,
+        "_build_local_context_definition",
+        lambda row: local_definition,
+    )
+    monkeypatch.setattr(
+        registry.ToolRegistry, "get_instance", staticmethod(lambda: fake_registry)
+    )
+    monkeypatch.setattr(
+        external_handlers.ExternalHandlerRegistry,
+        "get_instance",
+        staticmethod(lambda: fake_handlers),
+    )
+
+    count = await RemoteToolBridge().refresh()
+
+    assert count == 0
+    assert fake_registry.get("load_desktop_tools") is local_definition
+    assert fake_handlers._tool_handlers == {}
 
 
 @pytest.mark.anyio

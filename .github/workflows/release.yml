@@ -15,6 +15,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: matrx-local-release
+  cancel-in-progress: false
+
 jobs:
   verify:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.recover_tag == '' }}
@@ -423,31 +427,34 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Resolved version=${VERSION} tag=${TAG}"
 
-      - name: Resolve draft release
+      - name: Resolve release
         id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
           REPO: ${{ github.repository }}
+          RECOVER_TAG: ${{ inputs.recover_tag }}
         run: |
           set -euo pipefail
           RELEASE_JSON="$({
             gh api --paginate "repos/${REPO}/releases?per_page=100"
           } | jq -sc --arg tag "$TAG" 'add | map(select(.tag_name == $tag)) | first')"
           RELEASE_ID="$(jq -r '.id // empty' <<< "$RELEASE_JSON")"
-          IS_DRAFT="$(jq -r '.draft // empty' <<< "$RELEASE_JSON")"
+          IS_DRAFT="$(jq -r 'if type == "object" then (.draft | tostring) else empty end' <<< "$RELEASE_JSON")"
           if [[ -z "$RELEASE_ID" ]]; then
             echo "Release $TAG was not found in ${REPO}" >&2
             exit 1
           fi
-          if [[ "$IS_DRAFT" != "true" ]]; then
+          if [[ "$IS_DRAFT" != "true" && -z "$RECOVER_TAG" ]]; then
             echo "Release $TAG is not a draft; refusing to mutate a published release" >&2
             exit 1
           fi
           echo "id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
-          echo "Resolved draft release ${TAG} to id=${RELEASE_ID}"
+          echo "is_draft=${IS_DRAFT}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release ${TAG} to id=${RELEASE_ID} draft=${IS_DRAFT}"
 
       - name: Rename release assets
+        if: steps.release.outputs.is_draft == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -464,17 +471,30 @@ jobs:
           # endpoint. Resolve the draft once above, then address it by numeric ID.
           ASSETS_JSON=$(gh api --paginate \
             "repos/${REPO}/releases/${RELEASE_ID}/assets?per_page=100" \
-            --jq '.[] | {id: .id, name: .name}' | jq -s '.')
+            --jq '.[] | {id: .id, name: .name, size: .size, digest: .digest}' | jq -s '.')
 
           rename_asset() {
             local old="$1" new="$2"
             if [[ "$old" == "$new" ]]; then return; fi
-            # Look up the asset ID by name
-            local asset_id
-            asset_id=$(echo "$ASSETS_JSON" | jq -r ".[] | select(.name == \"$old\") | .id")
+            local asset_id destination_id old_digest new_digest old_size new_size
+            asset_id=$(jq -r --arg name "$old" '.[] | select(.name == $name) | .id' <<< "$ASSETS_JSON")
             if [[ -z "$asset_id" ]]; then
               echo "  ⚠  Asset not found: $old (skipping)"
               return
+            fi
+            destination_id=$(jq -r --arg name "$new" '.[] | select(.name == $name) | .id' <<< "$ASSETS_JSON")
+            if [[ -n "$destination_id" ]]; then
+              old_digest=$(jq -r --arg name "$old" '.[] | select(.name == $name) | .digest // empty' <<< "$ASSETS_JSON")
+              new_digest=$(jq -r --arg name "$new" '.[] | select(.name == $name) | .digest // empty' <<< "$ASSETS_JSON")
+              old_size=$(jq -r --arg name "$old" '.[] | select(.name == $name) | .size' <<< "$ASSETS_JSON")
+              new_size=$(jq -r --arg name "$new" '.[] | select(.name == $name) | .size' <<< "$ASSETS_JSON")
+              if [[ -n "$old_digest" && "$old_digest" == "$new_digest" && "$old_size" == "$new_size" ]]; then
+                echo "  🧹 Removing byte-identical duplicate: $old"
+                gh api --method DELETE "repos/${REPO}/releases/assets/${asset_id}" --silent
+                return
+              fi
+              echo "Rename collision: both $old and $new exist with different or unknown content" >&2
+              exit 1
             fi
             echo "  📦 $old → $new"
             # PATCH the asset name in-place — no download/upload needed
@@ -482,7 +502,7 @@ jobs:
               -f name="$new" --silent
           }
 
-          for ASSET in $(echo "$ASSETS_JSON" | jq -r '.[].name'); do
+          while IFS= read -r ASSET; do
             case "$ASSET" in
               # ── macOS Apple Silicon ──
               *_aarch64.app.tar.gz)
@@ -524,24 +544,41 @@ jobs:
               *_x64-setup.nsis.zip.sig)
                 rename_asset "$ASSET" "ai-matrx-windows-installer-${VERSION}.nsis.zip.sig" ;;
 
-              # ── Skip latest.json (patched in next step) ──
-              latest.json)
+              # ── Already normalized or managed by the manifest steps ──
+              "ai-matrx-mac-silicon-${VERSION}.app.tar.gz" | \
+              "ai-matrx-mac-silicon-${VERSION}.app.tar.gz.sig" | \
+              "ai-matrx-mac-silicon-${VERSION}.dmg" | \
+              "ai-matrx-mac-intel-${VERSION}.app.tar.gz" | \
+              "ai-matrx-mac-intel-${VERSION}.app.tar.gz.sig" | \
+              "ai-matrx-mac-intel-${VERSION}.dmg" | \
+              "ai-matrx-linux-${VERSION}.deb" | \
+              "ai-matrx-linux-${VERSION}.deb.sig" | \
+              "ai-matrx-windows-installer-${VERSION}.exe" | \
+              "ai-matrx-windows-installer-${VERSION}.exe.sig" | \
+              "ai-matrx-windows-${VERSION}.msi" | \
+              "ai-matrx-windows-${VERSION}.msi.sig" | \
+              "ai-matrx-windows-installer-${VERSION}.nsis.zip" | \
+              "ai-matrx-windows-installer-${VERSION}.nsis.zip.sig" | \
+              latest.json | latest.recovery.json)
                 echo "  ⏭  Skipping $ASSET" ;;
 
               *)
-                echo "  ⚠  Unknown asset pattern: $ASSET (left as-is)" ;;
+                echo "Unknown release asset: $ASSET" >&2
+                exit 1 ;;
             esac
-          done
+          done < <(jq -r '.[].name' <<< "$ASSETS_JSON")
 
           echo ""
           echo "✅ Asset rename complete"
 
       - name: Patch latest.json URLs
+        if: steps.release.outputs.is_draft == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
           REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
         run: |
           set -euo pipefail
           PREFIX="AI-Matrx_${VERSION}"
@@ -549,16 +586,24 @@ jobs:
 
           rm -rf /tmp/updater
           mkdir -p /tmp/updater
-          if gh release download "$TAG" --repo "$REPO" --pattern "latest.json" --dir /tmp/updater; then
+          ASSET_NAMES="$(gh api --paginate \
+            "repos/${REPO}/releases/${RELEASE_ID}/assets?per_page=100" \
+            --jq '.[].name')"
+          if grep -Fxq "latest.json" <<< "$ASSET_NAMES"; then
+            gh release download "$TAG" --repo "$REPO" \
+              --pattern "latest.json" --dir /tmp/updater
             cp /tmp/updater/latest.json /tmp/updater/latest.recovery.json
             # Keep a recovery source on the draft release until the final
-            # manifest upload succeeds. `--clobber` can delete before upload.
+            # manifest upload succeeds. Clobber can delete before upload.
             gh release upload "$TAG" --repo "$REPO" --clobber /tmp/updater/latest.recovery.json
-          else
+          elif grep -Fxq "latest.recovery.json" <<< "$ASSET_NAMES"; then
             echo "latest.json is absent; recovering from the prior failed attempt"
             gh release download "$TAG" --repo "$REPO" \
               --pattern "latest.recovery.json" --dir /tmp/updater
             cp /tmp/updater/latest.recovery.json /tmp/updater/latest.json
+          else
+            echo "Neither latest.json nor latest.recovery.json exists on $TAG" >&2
+            exit 1
           fi
 
           # Rebuild the URL for each platform key by mapping to the known renamed filename.
@@ -608,18 +653,20 @@ jobs:
           echo "📝 Final latest.json:"
           cat /tmp/updater/latest.json
 
-          # Replace atomically from the release API's perspective. Deleting first
-          # leaves rerun-failed-jobs unable to recover if upload is interrupted.
+          # The separate recovery asset keeps reruns possible if clobber's
+          # delete-then-upload replacement is interrupted.
           gh release upload "$TAG" --repo "$REPO" --clobber /tmp/updater/latest.json
 
           echo ""
           echo "✅ latest.json updated"
 
       - name: Fill missing platforms from previous releases
+        if: steps.release.outputs.is_draft == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Expose shell variables as env vars so the Python heredoc can read them
           TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
           REPO: ${{ github.repository }}
           RELEASE_ID: ${{ steps.release.outputs.id }}
         run: |
@@ -634,6 +681,7 @@ jobs:
           import json, os, subprocess, sys, urllib.parse, urllib.request
 
           tag  = os.environ["TAG"]
+          version = os.environ["VERSION"]
           repo = os.environ["REPO"]
           release_id = os.environ["RELEASE_ID"]
           gh_token = os.environ["GH_TOKEN"]
@@ -654,6 +702,17 @@ jobs:
               })
               with urllib.request.urlopen(req) as r:
                   return json.loads(r.read())
+
+          def published_releases():
+              page = 1
+              while True:
+                  batch = gh_get(f"releases?per_page=100&page={page}")
+                  for release in batch:
+                      if not release.get("draft"):
+                          yield release
+                  if len(batch) < 100:
+                      return
+                  page += 1
 
           def fetch_latest_json(release_tag):
               url = f"https://github.com/{repo}/releases/download/{release_tag}/latest.json"
@@ -684,8 +743,7 @@ jobs:
               print(f"⚠️  Missing platforms in {tag}: {missing}")
               print("Scanning previous releases for backfill candidates...")
 
-              releases = gh_get("releases?per_page=30")
-              for rel in releases:
+              for rel in published_releases():
                   if rel["tag_name"] == tag:
                       continue
                   if not missing:
@@ -717,6 +775,46 @@ jobs:
           current_assets = {
               asset["name"]: asset for asset in current_release.get("assets", [])
           }
+          expected_assets = {
+              f"ai-matrx-mac-silicon-{version}.app.tar.gz",
+              f"ai-matrx-mac-silicon-{version}.app.tar.gz.sig",
+              f"ai-matrx-mac-silicon-{version}.dmg",
+              f"ai-matrx-mac-intel-{version}.app.tar.gz",
+              f"ai-matrx-mac-intel-{version}.app.tar.gz.sig",
+              f"ai-matrx-mac-intel-{version}.dmg",
+              f"ai-matrx-linux-{version}.deb",
+              f"ai-matrx-linux-{version}.deb.sig",
+              f"ai-matrx-windows-installer-{version}.exe",
+              f"ai-matrx-windows-installer-{version}.exe.sig",
+              f"ai-matrx-windows-{version}.msi",
+              f"ai-matrx-windows-{version}.msi.sig",
+              "latest.json",
+              "latest.recovery.json",
+          }
+          optional_nsis = {
+              f"ai-matrx-windows-installer-{version}.nsis.zip",
+              f"ai-matrx-windows-installer-{version}.nsis.zip.sig",
+          }
+          asset_names = set(current_assets)
+          missing_assets = expected_assets - asset_names
+          unknown_assets = asset_names - expected_assets - optional_nsis
+          present_optional = asset_names & optional_nsis
+          if missing_assets:
+              raise SystemExit(f"❌ Missing release assets: {sorted(missing_assets)}")
+          if unknown_assets:
+              raise SystemExit(f"❌ Unexpected release assets: {sorted(unknown_assets)}")
+          if present_optional and present_optional != optional_nsis:
+              raise SystemExit(
+                  f"❌ Incomplete optional NSIS bundle: {sorted(present_optional)}"
+              )
+          empty_assets = sorted(
+              name for name, asset in current_assets.items()
+              if int(asset.get("size") or 0) <= 0
+          )
+          if empty_assets:
+              raise SystemExit(f"❌ Empty release assets: {empty_assets}")
+          print(f"✅ Exact release asset set verified ({len(asset_names)} assets).")
+
           for key in sorted(EXPECTED_PLATFORMS):
               entry = current["platforms"][key]
               signature = str(entry.get("signature") or "").strip()
@@ -762,18 +860,136 @@ jobs:
           print(json.dumps(current, indent=2))
           PYEOF
 
-          # Atomically replace the asset so a failed upload remains recoverable
-          # with GitHub's "rerun failed jobs" action.
+          # The recovery copy remains available while clobber replaces latest.json.
           gh release upload "$TAG" --repo "$REPO" --clobber /tmp/fill/latest.json
           gh release delete-asset "$TAG" --repo "$REPO" --yes \
-            "latest.recovery.json" || true
+            "latest.recovery.json"
 
           echo ""
           echo "✅ Backfilled latest.json uploaded"
 
       - name: Publish verified release
+        if: steps.release.outputs.is_draft == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
           REPO: ${{ github.repository }}
         run: gh release edit "$TAG" --repo "$REPO" --draft=false
+
+      - name: Verify published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/published-release
+          mkdir -p /tmp/published-release
+          gh api "repos/${REPO}/releases/tags/${TAG}" \
+            > /tmp/published-release/release.json
+          gh release download "$TAG" --repo "$REPO" \
+            --pattern latest.json --dir /tmp/published-release
+
+          python3 << 'PYEOF'
+          import json
+          import os
+          import urllib.parse
+          from pathlib import Path
+
+          tag = os.environ["TAG"]
+          version = os.environ["VERSION"]
+          release = json.loads(
+              Path("/tmp/published-release/release.json").read_text()
+          )
+          manifest = json.loads(
+              Path("/tmp/published-release/latest.json").read_text()
+          )
+
+          expected_assets = {
+              f"ai-matrx-mac-silicon-{version}.app.tar.gz",
+              f"ai-matrx-mac-silicon-{version}.app.tar.gz.sig",
+              f"ai-matrx-mac-silicon-{version}.dmg",
+              f"ai-matrx-mac-intel-{version}.app.tar.gz",
+              f"ai-matrx-mac-intel-{version}.app.tar.gz.sig",
+              f"ai-matrx-mac-intel-{version}.dmg",
+              f"ai-matrx-linux-{version}.deb",
+              f"ai-matrx-linux-{version}.deb.sig",
+              f"ai-matrx-windows-installer-{version}.exe",
+              f"ai-matrx-windows-installer-{version}.exe.sig",
+              f"ai-matrx-windows-{version}.msi",
+              f"ai-matrx-windows-{version}.msi.sig",
+              "latest.json",
+          }
+          optional_nsis = {
+              f"ai-matrx-windows-installer-{version}.nsis.zip",
+              f"ai-matrx-windows-installer-{version}.nsis.zip.sig",
+          }
+          expected_platforms = {
+              "darwin-aarch64", "darwin-aarch64-app",
+              "darwin-x86_64", "darwin-x86_64-app",
+              "linux-x86_64", "linux-x86_64-deb",
+              "windows-x86_64", "windows-x86_64-msi",
+              "windows-x86_64-nsis",
+          }
+
+          if release.get("draft") or release.get("prerelease"):
+              raise SystemExit("❌ Release is not a stable public release")
+          assets = {
+              asset["name"]: asset for asset in release.get("assets", [])
+          }
+          names = set(assets)
+          missing = expected_assets - names
+          unknown = names - expected_assets - optional_nsis
+          present_optional = names & optional_nsis
+          if missing or unknown:
+              raise SystemExit(
+                  f"❌ Published asset mismatch: missing={sorted(missing)} "
+                  f"unknown={sorted(unknown)}"
+              )
+          if present_optional and present_optional != optional_nsis:
+              raise SystemExit("❌ Published optional NSIS bundle is incomplete")
+          if any(int(asset.get("size") or 0) <= 0 for asset in assets.values()):
+              raise SystemExit("❌ Published release contains an empty asset")
+          if manifest.get("version") != version:
+              raise SystemExit(
+                  f"❌ Manifest version is {manifest.get('version')}, expected {version}"
+              )
+          platforms = manifest.get("platforms", {})
+          if set(platforms) != expected_platforms:
+              raise SystemExit("❌ Published updater platform set is incomplete")
+          for platform, entry in platforms.items():
+              if not str(entry.get("signature") or "").strip():
+                  raise SystemExit(f"❌ {platform} has an empty signature")
+              url = str(entry.get("url") or "")
+              parsed = urllib.parse.urlparse(url)
+              parts = parsed.path.split("/")
+              try:
+                  download_index = parts.index("download")
+                  asset_tag = parts[download_index + 1]
+                  filename = urllib.parse.unquote(parts[download_index + 2])
+              except (ValueError, IndexError):
+                  raise SystemExit(
+                      f"❌ {platform} has an invalid updater URL: {url}"
+                  )
+              if asset_tag == tag and filename not in assets:
+                  raise SystemExit(
+                      f"❌ {platform} references missing current asset {filename}"
+                  )
+          print(
+              f"✅ {tag}: {len(assets)} assets and "
+              f"{len(platforms)} signed updater entries verified"
+          )
+          PYEOF
+
+          jq -r '.platforms[].url' /tmp/published-release/latest.json |
+            sort -u |
+            while IFS= read -r url; do
+              code=$(curl --retry 3 --retry-all-errors --retry-delay 2 \
+                -LIsS --max-time 60 -o /dev/null -w '%{http_code}' "$url")
+              if [[ "$code" != "200" ]]; then
+                echo "Updater URL returned HTTP $code: $url" >&2
+                exit 1
+              fi
+              echo "✅ HTTP 200: ${url##*/}"
+            done

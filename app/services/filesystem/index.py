@@ -189,6 +189,11 @@ class FilesystemIndex:
                 ).fetchone()
                 if version is None or version["value"] != "2":
                     db.execute("INSERT INTO filesystem_entries_fts(filesystem_entries_fts) VALUES('rebuild')")
+                    db.execute("DELETE FROM filesystem_content_fts")
+                    db.execute(
+                        "INSERT INTO filesystem_content_fts(path,content) "
+                        "SELECT path,content FROM filesystem_content"
+                    )
                     db.execute(
                         "INSERT OR REPLACE INTO filesystem_index_state(key,value) VALUES('fts_schema_version','2')"
                     )
@@ -439,6 +444,9 @@ class FilesystemIndex:
             queued = [str(row["path"]) for row in db.execute("SELECT path FROM filesystem_scan_queue")]
             stale_queue = [queued_path for queued_path in queued if _is_same_or_descendant(queued_path, path)]
             db.executemany("DELETE FROM filesystem_scan_queue WHERE path=?", [(value,) for value in stale_queue])
+            scanned = [str(row["path"]) for row in db.execute("SELECT path FROM filesystem_scanned_dirs")]
+            stale_scanned = [scanned_path for scanned_path in scanned if _is_same_or_descendant(scanned_path, path)]
+            db.executemany("DELETE FROM filesystem_scanned_dirs WHERE path=?", [(value,) for value in stale_scanned])
 
     def search(self, query: str, *, limit: int, offset: int, root: str | None = None) -> list[FileEntry]:
         params: list[object]

@@ -38,8 +38,10 @@ re-enqueuing a priority subtree.
 3. Text-eligible files up to 1 MiB are indexed into local content FTS while
    CPU use is low.
 4. If `fastembed` is installed and semantic indexing is enabled, one durable
-   vector per current text file is generated at low priority. FastEmbed is an
-   optional capability and is never imported during startup.
+   vector per current text file is generated at low priority. The bounded
+   cosine-search consumer is exposed through `/filesystem/search-semantic` and
+   `local_file.semantic_find`. FastEmbed is optional and never imported during
+   startup.
 
 Every tier is additive: unavailable content/embedding work cannot disable
 Places, browsing, or metadata search.
@@ -66,6 +68,8 @@ Stored under `filesystem_index` in the existing settings service:
 - `semantic_enabled`: defaults `false`; reports unavailable when FastEmbed is
   not installed.
 - `embedding_model`: defaults `BAAI/bge-small-en-v1.5`.
+- `max_content_bytes`: defaults to 512 MiB (16 MiB–20 GiB).
+- `max_embedding_entries`: defaults to 10,000 (maximum 50,000).
 
 The structured APIs are `PUT /filesystem/priority-roots` and
 `PUT /filesystem/indexing-settings`; `GET /filesystem/status` reports policy,
@@ -79,6 +83,7 @@ All results carry `namespace: "host"` and a discriminating `kind`:
 - `filesystem.directory-page` (`entries`, `next_cursor`, `total`, `source`)
 - `filesystem.search-page` (`entries`, `next_cursor`, `index_complete`)
 - `filesystem.content-search`
+- `filesystem.semantic-search`
 
 Tool adapters keep their short human-readable `output` for model context and
 place the complete contract in `ToolResult.metadata` for UI renderers.
@@ -92,7 +97,20 @@ noise; they do not omit sibling user directories or mounted volumes.
 
 Directory pages cap at 500 entries. Fallback discovery observes both a time
 deadline and a 50,000-entry budget. Index scans check a cooperative stop event
-between entries and cap a single exceptional directory at 20,000 entries.
+between entries and keep the durable directory lease until the complete
+directory has been observed; exceptionally large directories are never marked
+complete after a truncated prefix.
+
+Canonical `path_key`/`parent_key` values use Windows case-folding when running
+on Windows and native case semantics elsewhere. Descendant search and deletion
+walk parent components recursively—never wildcard `LIKE` prefixes—so `%`, `_`,
+drive, and UNC names cannot broaden an operation. Hidden state combines dotfile
+names with Windows `FILE_ATTRIBUTE_HIDDEN` and macOS `UF_HIDDEN`.
+
+Content and embedding commits compare the claimed size/mtime against both the
+current disk and metadata row. A changed file is returned to the queue instead
+of publishing a stale representation. Quotas bound persistent content/vector
+growth; semantic search also caps each cosine scan at 10,000 vectors.
 
 ## Verification
 

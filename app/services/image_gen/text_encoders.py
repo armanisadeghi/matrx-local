@@ -9,8 +9,8 @@ This module owns their local lifecycle:
         .download-complete
 
 Downloads always use the universal DownloadManager (category
-``image_gen_text_encoder``), are revision-pinned when the catalog supplies a
-commit, and become installed only after every declared file plus the final
+``image_gen_text_encoder``), are always revision-pinned, and become installed
+only after every declared file plus the final
 marker exists.  The stock model encoder is implicit and never copied here.
 """
 

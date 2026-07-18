@@ -72,6 +72,7 @@ def test_needs_upgrade_when_peft_missing(
 ) -> None:
     from app.services.image_gen import installer
 
+    monkeypatch.setattr(installer, "_compatibility_migration_pending", lambda: False)
     monkeypatch.setattr(installer, "is_image_gen_installed", lambda: True)
     monkeypatch.setattr(
         installer,

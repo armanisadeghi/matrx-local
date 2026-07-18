@@ -75,6 +75,16 @@ def test_final_artifact_verification_exists_and_gates_the_release() -> None:
     assert workflow.count("./scripts/verify-macos-artifact.sh") >= 2
 
 
+def test_direct_app_verification_cleanup_cannot_flip_success_to_failure() -> None:
+    """An EXIT trap inherits its final command's status. The first macOS
+    release gate verifies a direct .app, so cleanup must also return success
+    when no updater-archive work directory was created."""
+    verify = VERIFY_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'if [[ -n "$WORKDIR" ]]; then' in verify
+    assert 'cleanup() { [[ -n "$WORKDIR" ]] &&' not in verify
+
+
 def test_release_gate_runs_unit_tests() -> None:
     """tests/unit historically never ran in CI — the signing-contract and
     access-state tests were green-by-assumption. Pin that both gates run them."""

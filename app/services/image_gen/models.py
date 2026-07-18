@@ -40,7 +40,7 @@ class AlternativeTextEncoder:
     repo_id: str
     format: Literal["transformers", "gguf", "state_dict"]
     files: list[str]
-    revision: str | None = None
+    revision: str
     subfolder: str | None = None
     weight_name: str | None = None
     requires_hf_token: bool = False
@@ -54,6 +54,10 @@ class AlternativeTextEncoder:
             raise ValueError(f"invalid text encoder id {self.encoder_id!r}")
         if not self.files:
             raise ValueError(f"text encoder {self.encoder_id!r} declares no files")
+        if not self.revision or not re.fullmatch(r"[0-9a-f]{40}", self.revision):
+            raise ValueError(
+                f"text encoder {self.encoder_id!r} must pin a 40-character commit"
+            )
         for filename in self.files:
             path = PurePosixPath(filename)
             if path.is_absolute() or ".." in path.parts or filename.endswith("/"):

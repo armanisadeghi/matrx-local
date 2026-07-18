@@ -4109,7 +4109,7 @@ export interface ImageGenTextEncoderInfo {
   repo_id: string;
   format: "transformers" | "gguf" | "state_dict";
   files: string[];
-  revision: string | null;
+  revision: string;
   subfolder: string | null;
   weight_name: string | null;
   requires_hf_token: boolean;

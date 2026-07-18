@@ -420,7 +420,11 @@ export function AlternativeTextEncodersSection({
   };
 
   return (
-    <div className="space-y-2 rounded-lg border p-3">
+    <div
+      className="space-y-2 rounded-lg border p-3"
+      role="radiogroup"
+      aria-label="Alternative text encoders"
+    >
       <div>
         <Label className="text-xs">Alternative text encoders</Label>
         <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
@@ -460,7 +464,9 @@ export function AlternativeTextEncodersSection({
         );
         const downloading =
           download?.status === "queued" || download?.status === "active";
-        const failed = download?.status === "failed";
+        const retryable =
+          !encoder.installed &&
+          (download?.status === "failed" || download?.status === "cancelled");
         const isSelected = selectedId === encoder.encoder_id;
         return (
           <div
@@ -518,11 +524,14 @@ export function AlternativeTextEncodersSection({
                   : ""}
               </p>
             </button>
-            {failed && (
+            {retryable && (
               <div className="flex items-start gap-2 border-t px-3 py-2 text-[11px] text-destructive">
                 <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
                 <span className="min-w-0 flex-1 break-words">
-                  {download?.error_msg ?? "Download failed"}
+                  {download?.error_msg ??
+                    (download?.status === "cancelled"
+                      ? "Download cancelled"
+                      : "Download failed")}
                 </span>
                 <Button
                   type="button"

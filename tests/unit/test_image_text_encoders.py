@@ -16,7 +16,7 @@ def _encoder(**overrides) -> AlternativeTextEncoder:
         "repo_id": "org/candidate",
         "format": "gguf",
         "files": ["candidate.gguf"],
-        "revision": "abc123",
+        "revision": "a" * 40,
         "weight_name": "candidate.gguf",
         "license": "apache-2.0",
     }
@@ -57,9 +57,7 @@ def test_install_requires_marker_every_file_and_exact_revision(
 
     (root / ".download-complete").write_text("ok", encoding="utf-8")
     assert text_encoders.is_encoder_installed(spec)
-    assert not text_encoders.is_encoder_installed(
-        _encoder(revision="different-revision")
-    )
+    assert not text_encoders.is_encoder_installed(_encoder(revision="b" * 40))
 
 
 def test_download_is_revision_pinned_and_exactly_allowlisted(
@@ -82,7 +80,7 @@ def test_download_is_revision_pinned_and_exactly_allowlisted(
     result = asyncio.run(text_encoders.start_encoder_download(model, spec.encoder_id))
     assert result["queued"] is True
     assert captured["category"] == "image_gen_text_encoder"
-    assert captured["metadata"]["hf_revision"] == "abc123"
+    assert captured["metadata"]["hf_revision"] == "a" * 40
     assert captured["metadata"]["hf_allow_files"] == spec.files
 
 

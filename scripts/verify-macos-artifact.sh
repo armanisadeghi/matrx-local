@@ -39,7 +39,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PARENT_IDENTIFIER="$(python3 -c 'import json, pathlib, sys; print(json.loads(pathlib.Path(sys.argv[1]).read_text())["identifier"])' "$REPO_ROOT/desktop/src-tauri/tauri.conf.json")"
 
 WORKDIR=""
-cleanup() { [[ -n "$WORKDIR" ]] && rm -rf "$WORKDIR"; }
+cleanup() {
+    if [[ -n "$WORKDIR" ]]; then
+        rm -rf "$WORKDIR"
+    fi
+}
 trap cleanup EXIT
 
 APP_PATH="$ARTIFACT"

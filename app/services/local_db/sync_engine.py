@@ -247,7 +247,13 @@ class SyncEngine:
                 # (app/services/ai/model_catalog.py) — ride along in raw_json.
                 "api_class": api_class or None,
                 "pricing": legacy.get("pricing"),
-                "controls": row.get("controls"),
+                # DB-authored param shaping (aidream GET /api/ai-models →
+                # AiCatalogManager.export_model_routing): matrx-ai's
+                # build_catalog_call_profile consumes control_rules directly,
+                # so this host shapes provider params exactly like the server
+                # (adaptive vs budget Anthropic thinking is a per-model fact).
+                "wire_format": row.get("wire_format"),
+                "control_rules": row.get("control_rules"),
             })
 
         await self._models_repo.upsert_many(models_to_save)

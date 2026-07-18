@@ -538,22 +538,48 @@ if [[ -n "${APPLE_SIGNING_IDENTITY:-}" && "$(uname -s)" == "Darwin" ]]; then
     # executables. The outer EXE gets entitlements via SIDECAR_ENTITLEMENTS
     # (consumed by codesign_identity in the spec file).
 
+    # Per-file timeout (MXL-D-054): codesign occasionally hangs forever on a
+    # single dylib (observed on libtcl9tk9.0.dylib), wedging the whole build
+    # with no error. perl's alarm is used because macOS lacks GNU timeout and
+    # local builds must not require coreutils. A timed-out file is a HARD
+    # build failure — a half-signed dylib set must never ship.
+    SIGN_TIMEOUT_S=120
+    TIMEOUT_COUNT=0
+    sign_one_dylib() {
+        perl -e 'alarm shift @ARGV; exec @ARGV' "$SIGN_TIMEOUT_S" \
+            "${SIGN_BASE[@]}" "$1" 2>/dev/null
+    }
+
     # Re-sign every .dylib and .so in the Python installation.
     # This ensures libpython3.13.dylib and any extension modules packed by
     # PyInstaller carry our Team ID before they are added to the archive.
     SIGNED_COUNT=0
     while IFS= read -r -d '' dylib; do
-        "${SIGN_BASE[@]}" "$dylib" 2>/dev/null && (( SIGNED_COUNT++ )) || true
+        if sign_one_dylib "$dylib"; then
+            (( SIGNED_COUNT++ ))
+        elif (( $? >= 128 )); then
+            echo "  ERROR: codesign timed out after ${SIGN_TIMEOUT_S}s on: $dylib"
+            (( TIMEOUT_COUNT++ ))
+        fi
     done < <(find "$PYTHON_PREFIX" \( -name "*.dylib" -o -name "*.so" \) -print0 2>/dev/null)
 
     # Also sign dylibs in the venv itself (compiled extensions installed by uv/pip)
     VENV_DIR="$PROJECT_ROOT/.venv"
     if [[ -d "$VENV_DIR" ]]; then
         while IFS= read -r -d '' dylib; do
-            "${SIGN_BASE[@]}" "$dylib" 2>/dev/null && (( SIGNED_COUNT++ )) || true
+            if sign_one_dylib "$dylib"; then
+                (( SIGNED_COUNT++ ))
+            elif (( $? >= 128 )); then
+                echo "  ERROR: codesign timed out after ${SIGN_TIMEOUT_S}s on: $dylib"
+                (( TIMEOUT_COUNT++ ))
+            fi
         done < <(find "$VENV_DIR" \( -name "*.dylib" -o -name "*.so" \) -print0 2>/dev/null)
     fi
 
+    if (( TIMEOUT_COUNT > 0 )); then
+        echo "ERROR: $TIMEOUT_COUNT dylib(s) hit the codesign timeout — refusing to ship a half-signed build (MXL-D-054)."
+        exit 1
+    fi
     echo "  ✅ Re-signed $SIGNED_COUNT dylib/so files"
     echo ""
 

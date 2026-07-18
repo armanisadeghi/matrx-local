@@ -49,3 +49,47 @@ def test_identity_alignment_happens_before_tauri_copy_input() -> None:
     signing_step = script.index("PARENT_SIGNING_IDENTIFIER=")
     copy_step = script.index('SRC_APP="dist/$HELPER_APP_NAME"')
     assert signing_step < copy_step
+
+
+VERIFY_SCRIPT = REPO_ROOT / "scripts" / "verify-macos-artifact.sh"
+RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
+
+
+def test_final_artifact_verification_exists_and_gates_the_release() -> None:
+    """Source-text contracts are not enough: the May 2026 helper-identity
+    regression shipped while every script-grep test was green. The release
+    workflow must extract and verify the FINAL artifact."""
+    assert VERIFY_SCRIPT.is_file()
+    verify = VERIFY_SCRIPT.read_text(encoding="utf-8")
+    assert "codesign --verify --deep --strict" in verify
+    assert "spctl --assess" in verify
+    assert "stapler validate" in verify
+    assert "Contents/Frameworks/Matrx Engine.app" in verify
+
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "verify-macos-artifact.sh" in workflow, (
+        "release.yml must invoke the final-artifact verification"
+    )
+    # It must verify BOTH the bundle .app and the updater archive users
+    # actually receive.
+    assert workflow.count("./scripts/verify-macos-artifact.sh") >= 2
+
+
+def test_release_gate_runs_unit_tests() -> None:
+    """tests/unit historically never ran in CI — the signing-contract and
+    access-state tests were green-by-assumption. Pin that both gates run them."""
+    for wf in (RELEASE_WORKFLOW, REPO_ROOT / ".github" / "workflows" / "ci.yml"):
+        assert "pytest tests/smoke tests/parity tests/unit" in wf.read_text(
+            encoding="utf-8"
+        ), f"{wf.name} must run tests/unit"
+
+
+def test_dylib_signing_loops_have_per_file_timeouts() -> None:
+    """MXL-D-054: codesign can hang forever on one dylib. Both re-sign loops
+    must bound each invocation and fail loudly on timeout."""
+    script = BUILD_SCRIPT.read_text(encoding="utf-8")
+    assert "perl -e 'alarm" in script
+    assert "MXL-D-054" in script
+
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "perl -e 'alarm 120; exec @ARGV' codesign" in workflow

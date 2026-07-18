@@ -41,7 +41,7 @@ jobs:
         run: uv run ruff check app || true
 
       - name: Smoke + parity tests
-        run: uv run --frozen pytest tests/smoke tests/parity -q
+        run: uv run --frozen pytest tests/smoke tests/parity tests/unit -q
         env:
           TUNNEL_ENABLED: "0"
           TAURI_SIDECAR: "1"

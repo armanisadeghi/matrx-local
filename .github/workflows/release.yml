@@ -14,6 +14,11 @@ on:
         description: "Finalize an existing draft release without rebuilding (for example, v1.3.134)"
         required: false
         type: string
+      allow_unverified_backfill:
+        description: "Allow updater-manifest backfill entries whose signature key does not match the current updater pubkey (key rotation only — normally leave false)"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: matrx-local-release
@@ -39,7 +44,7 @@ jobs:
         run: uv run python -m compileall -q app run.py
 
       - name: Smoke and parity tests
-        run: uv run --frozen pytest tests/smoke tests/parity -q
+        run: uv run --frozen pytest tests/smoke tests/parity tests/unit -q
         env:
           TUNNEL_ENABLED: "0"
           TAURI_SIDECAR: "1"
@@ -221,17 +226,19 @@ jobs:
             LLAMA_BIN="$DYLIB_DIR/llama-server-x86_64-apple-darwin"
           fi
 
-          # Sign all dylibs first (they are loaded at runtime by the binary)
+          # Sign all dylibs first (they are loaded at runtime by the binary).
+          # Per-file timeout via perl alarm (MXL-D-054): codesign can hang
+          # forever on one file; a hang must fail loudly, not wedge the job.
           if ls "$DYLIB_DIR"/*.dylib 1>/dev/null 2>&1; then
             echo "Signing dylibs in $DYLIB_DIR with identity: $APPLE_SIGNING_IDENTITY"
             for dylib in "$DYLIB_DIR"/*.dylib; do
               echo "  Signing dylib: $(basename "$dylib")"
-              codesign \
+              perl -e 'alarm 120; exec @ARGV' codesign \
                 --force \
                 --timestamp \
                 --options runtime \
                 --sign "$APPLE_SIGNING_IDENTITY" \
-                "$dylib"
+                "$dylib" || { echo "ERROR: codesign failed or timed out on $dylib" >&2; exit 1; }
             done
             echo "✅ All dylibs signed"
           else
@@ -390,6 +397,37 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           args: ${{ matrix.args }}
+
+      # ---- Verify the FINAL macOS artifact (signing/identity/notarization) ----
+      # The build scripts sign; this step PROVES the shipped artifact honors
+      # the contract. It inspects both the bundle .app and the .app inside the
+      # updater .app.tar.gz (what updates actually deliver): deep signature
+      # validity, parent↔helper designated-requirement equivalence (one TCC
+      # identity — the May 2026 false-FDA regression class), entitlements,
+      # Gatekeeper acceptance, and stapled notarization. A failure here fails
+      # the matrix job, so the draft release is never published. Note:
+      # tauri-action has already uploaded assets to the DRAFT at this point —
+      # acceptable, since the draft only publishes when all jobs succeed.
+      - name: Verify macOS artifact signing
+        if: matrix.platform == 'macos-15'
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.args }}" == *"aarch64-apple-darwin"* ]]; then
+            TRIPLE="aarch64-apple-darwin"
+          else
+            TRIPLE="x86_64-apple-darwin"
+          fi
+          BUNDLE_DIR="desktop/src-tauri/target/$TRIPLE/release/bundle/macos"
+          APP="$(find "$BUNDLE_DIR" -maxdepth 1 -name "*.app" -type d | head -1)"
+          [[ -n "$APP" ]] || { echo "No .app found in $BUNDLE_DIR" >&2; exit 1; }
+          ./scripts/verify-macos-artifact.sh "$APP"
+          UPDATER_TAR="$(find "$BUNDLE_DIR" -maxdepth 1 -name "*.app.tar.gz" | head -1)"
+          if [[ -n "$UPDATER_TAR" ]]; then
+            ./scripts/verify-macos-artifact.sh "$UPDATER_TAR"
+          else
+            echo "WARNING: no updater .app.tar.gz found in $BUNDLE_DIR" >&2
+            exit 1
+          fi
 
   # ── Rename assets to human-friendly names ──────────────────────────────────
   rename-assets:
@@ -669,6 +707,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           REPO: ${{ github.repository }}
           RELEASE_ID: ${{ steps.release.outputs.id }}
+          ALLOW_UNVERIFIED_BACKFILL: ${{ inputs.allow_unverified_backfill && 'true' || 'false' }}
         run: |
           set -euo pipefail
 
@@ -736,12 +775,54 @@ jobs:
           with open("/tmp/fill/latest.json") as f:
               current = json.load(f)
 
+          # ── Backfill guard: a backfilled entry ships an OLDER build to
+          # updaters. Two protections:
+          #   1. Key-identity check: the entry's minisign signature must have
+          #      been produced by the CURRENT updater keypair (key IDs match).
+          #      A rotated key means old artifacts are un-installable — and,
+          #      around an identity-transition release, backfilling could
+          #      silently route one architecture to a build with the broken
+          #      helper TCC identity. Refuse unless the operator explicitly
+          #      opts in via the allow_unverified_backfill dispatch input.
+          #   2. Loud logging: every backfill lands in the job step summary,
+          #      not just buried logs.
+          import base64, pathlib
+
+          allow_unverified = os.environ.get("ALLOW_UNVERIFIED_BACKFILL") == "true"
+          summary_lines = []
+
+          def _minisign_key_id(text_blob_b64_lines):
+              """Key ID (8 bytes, hex) from minisign-format text (pub or sig)."""
+              lines = [
+                  l.strip() for l in text_blob_b64_lines.splitlines()
+                  if l.strip() and not l.startswith(("untrusted", "trusted"))
+              ]
+              blob = base64.b64decode(lines[0])
+              return blob[2:10].hex()
+
+          def current_updater_key_id():
+              conf = json.loads(
+                  pathlib.Path("desktop/src-tauri/tauri.conf.json").read_text()
+              )
+              pub_b64 = conf["plugins"]["updater"]["pubkey"]
+              return _minisign_key_id(base64.b64decode(pub_b64).decode())
+
+          def entry_key_id(entry):
+              # latest.json's `signature` is base64 of the whole minisign
+              # .sig file text (Tauri updater format).
+              return _minisign_key_id(base64.b64decode(entry["signature"]).decode())
+
           missing = EXPECTED_PLATFORMS - set(current["platforms"].keys())
           if not missing:
               print(f"✅ All {len(EXPECTED_PLATFORMS)} platforms present — nothing to backfill.")
           else:
               print(f"⚠️  Missing platforms in {tag}: {missing}")
               print("Scanning previous releases for backfill candidates...")
+              try:
+                  expected_key = current_updater_key_id()
+              except Exception as e:
+                  print(f"❌ Could not derive current updater key id: {e}")
+                  sys.exit(1)
 
               for rel in published_releases():
                   if rel["tag_name"] == tag:
@@ -754,17 +835,54 @@ jobs:
                   covered = missing & set(prev_json["platforms"].keys())
                   if not covered:
                       continue
-                  print(f"  📦 Backfilling from {rel['tag_name']}: {covered}")
-                  for key in covered:
-                      current["platforms"][key] = prev_json["platforms"][key]
-                      print(f"     {key} -> {prev_json['platforms'][key]['url']}")
-                  missing -= covered
+                  for key in sorted(covered):
+                      entry = prev_json["platforms"][key]
+                      try:
+                          entry_key = entry_key_id(entry)
+                          verified = entry_key == expected_key
+                      except Exception as e:
+                          entry_key = f"unparseable ({e})"
+                          verified = False
+                      if not verified and not allow_unverified:
+                          print(
+                              f"❌ REFUSING backfill of {key} from {rel['tag_name']}: "
+                              f"updater signature key {entry_key} != current key "
+                              f"{expected_key}. Old artifacts would be "
+                              f"un-installable or carry a pre-fix identity. "
+                              f"Re-run with allow_unverified_backfill=true only "
+                              f"if you know why the key changed."
+                          )
+                          sys.exit(1)
+                      flag = "" if verified else " (UNVERIFIED — operator override)"
+                      print(f"  📦 Backfilling {key} from {rel['tag_name']}{flag}")
+                      print(f"     {key} -> {entry['url']}")
+                      summary_lines.append(
+                          f"| `{key}` | `{rel['tag_name']}` | "
+                          f"{'✅ key match' if verified else '⚠️ UNVERIFIED override'} | "
+                          f"{entry['url']} |"
+                      )
+                      current["platforms"][key] = entry
+                      missing.discard(key)
 
           if missing:
               print(f"❌ Could not find backfill for: {missing} (no prior release has them)")
               sys.exit(1)
           else:
               print("✅ All missing platforms backfilled.")
+
+          if summary_lines:
+              summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary_path:
+                  with open(summary_path, "a") as f:
+                      f.write(
+                          "## ⚠️ Updater manifest backfill\n\n"
+                          "These platform entries were NOT built by this "
+                          "release — they point at a previous release's "
+                          "artifacts:\n\n"
+                          "| Platform | Source release | Signature key | URL |\n"
+                          "|---|---|---|---|\n"
+                          + "\n".join(summary_lines) + "\n"
+                      )
 
           # Keys alone are insufficient: an unexpected Tauri filename can
           # leave a syntactically complete manifest whose URLs all return 404.

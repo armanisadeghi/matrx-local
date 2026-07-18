@@ -11,7 +11,61 @@ on:
   workflow_dispatch:
 
 jobs:
+  verify:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install Python dependencies
+        run: uv sync --extra transcription --no-cache
+
+      - name: Byte-compile Python
+        run: uv run python -m compileall -q app run.py
+
+      - name: Smoke and parity tests
+        run: uv run --frozen pytest tests/smoke tests/parity -q
+        env:
+          TUNNEL_ENABLED: "0"
+          TAURI_SIDECAR: "1"
+          MATRX_CI_HEADLESS: "1"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript typecheck
+        working-directory: desktop
+        run: pnpm tsc -b
+
+      - name: Install Playwright Chromium
+        working-directory: desktop
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Boot smoke (production bundle must render)
+        working-directory: desktop
+        run: SMOKE_PREVIEW=1 pnpm exec playwright test boot.spec.ts --reporter=list
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}
+
   release:
+    needs: verify
     permissions:
       contents: write
     strategy:
@@ -319,7 +373,9 @@ jobs:
           tagName: v__VERSION__
           releaseName: "AI Matrx v__VERSION__"
           releaseBody: "See the assets below to download and install this version."
-          releaseDraft: false
+          # Matrix jobs share one draft. Publish only after every platform and
+          # the updater-asset repair job complete successfully.
+          releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
           args: ${{ matrix.args }}
@@ -444,8 +500,19 @@ jobs:
           PREFIX="AI-Matrx_${VERSION}"
           BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
 
+          rm -rf /tmp/updater
           mkdir -p /tmp/updater
-          gh release download "$TAG" --repo "$REPO" --pattern "latest.json" --dir /tmp/updater
+          if gh release download "$TAG" --repo "$REPO" --pattern "latest.json" --dir /tmp/updater; then
+            cp /tmp/updater/latest.json /tmp/updater/latest.recovery.json
+            # Keep a recovery source on the draft release until the final
+            # manifest upload succeeds. `--clobber` can delete before upload.
+            gh release upload "$TAG" --repo "$REPO" --clobber /tmp/updater/latest.recovery.json
+          else
+            echo "latest.json is absent; recovering from the prior failed attempt"
+            gh release download "$TAG" --repo "$REPO" \
+              --pattern "latest.recovery.json" --dir /tmp/updater
+            cp /tmp/updater/latest.recovery.json /tmp/updater/latest.json
+          fi
 
           # Rebuild the URL for each platform key by mapping to the known renamed filename.
           # This is resilient to whatever Tauri named the original file — we only care about
@@ -494,9 +561,9 @@ jobs:
           echo "📝 Final latest.json:"
           cat /tmp/updater/latest.json
 
-          # Re-upload
-          gh release delete-asset "$TAG" --repo "$REPO" --yes "latest.json"
-          gh release upload "$TAG" --repo "$REPO" /tmp/updater/latest.json
+          # Replace atomically from the release API's perspective. Deleting first
+          # leaves rerun-failed-jobs unable to recover if upload is interrupted.
+          gh release upload "$TAG" --repo "$REPO" --clobber /tmp/updater/latest.json
 
           echo ""
           echo "✅ latest.json updated"
@@ -510,13 +577,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          # All platform keys Tauri expects. If any are absent from the current
-          # latest.json (because a platform build failed), we backfill them from
-          # the most recent previous release that has those entries.
-          # This ensures macOS users always get offered the last good macOS build
-          # even when only Windows/Linux built successfully for the newest version.
+          rm -rf /tmp/fill
+          mkdir -p /tmp/fill
+
+          # All platform keys Tauri expects. If Tauri omitted an updater flavor,
+          # backfill it from the most recent release that carries that flavor.
           python3 << 'PYEOF'
-          import json, os, subprocess, sys, urllib.request
+          import json, os, subprocess, sys, urllib.parse, urllib.request
 
           tag  = os.environ["TAG"]
           repo = os.environ["REPO"]
@@ -564,34 +631,80 @@ jobs:
           missing = EXPECTED_PLATFORMS - set(current["platforms"].keys())
           if not missing:
               print(f"✅ All {len(EXPECTED_PLATFORMS)} platforms present — nothing to backfill.")
-              sys.exit(0)
+          else:
+              print(f"⚠️  Missing platforms in {tag}: {missing}")
+              print("Scanning previous releases for backfill candidates...")
 
-          print(f"⚠️  Missing platforms in {tag}: {missing}")
-          print("Scanning previous releases for backfill candidates...")
-
-          releases = gh_get("releases?per_page=30")
-          # Skip the current release (first in list)
-          for rel in releases:
-              if rel["tag_name"] == tag:
-                  continue
-              if not missing:
-                  break
-              prev_json = fetch_latest_json(rel["tag_name"])
-              if not prev_json:
-                  continue
-              covered = missing & set(prev_json["platforms"].keys())
-              if not covered:
-                  continue
-              print(f"  📦 Backfilling from {rel['tag_name']}: {covered}")
-              for key in covered:
-                  current["platforms"][key] = prev_json["platforms"][key]
-                  print(f"     {key} -> {prev_json['platforms'][key]['url']}")
-              missing -= covered
+              releases = gh_get("releases?per_page=30")
+              for rel in releases:
+                  if rel["tag_name"] == tag:
+                      continue
+                  if not missing:
+                      break
+                  prev_json = fetch_latest_json(rel["tag_name"])
+                  if not prev_json:
+                      continue
+                  covered = missing & set(prev_json["platforms"].keys())
+                  if not covered:
+                      continue
+                  print(f"  📦 Backfilling from {rel['tag_name']}: {covered}")
+                  for key in covered:
+                      current["platforms"][key] = prev_json["platforms"][key]
+                      print(f"     {key} -> {prev_json['platforms'][key]['url']}")
+                  missing -= covered
 
           if missing:
-              print(f"⚠️  Could not find backfill for: {missing} (no prior release has them)")
+              print(f"❌ Could not find backfill for: {missing} (no prior release has them)")
+              sys.exit(1)
           else:
               print("✅ All missing platforms backfilled.")
+
+          # Keys alone are insufficient: an unexpected Tauri filename can
+          # leave a syntactically complete manifest whose URLs all return 404.
+          # Draft assets are not publicly downloadable yet, so validate current
+          # assets through GitHub's authenticated asset API. Backfilled assets
+          # belong to public releases and can be probed through their URLs.
+          current_release = gh_get(f"releases/tags/{tag}")
+          current_assets = {
+              asset["name"]: asset for asset in current_release.get("assets", [])
+          }
+          for key in sorted(EXPECTED_PLATFORMS):
+              entry = current["platforms"][key]
+              signature = str(entry.get("signature") or "").strip()
+              url = str(entry.get("url") or "").strip()
+              if not signature:
+                  raise SystemExit(f"❌ {key} has an empty updater signature")
+              if not url:
+                  raise SystemExit(f"❌ {key} has an empty updater URL")
+              parsed = urllib.parse.urlparse(url)
+              parts = parsed.path.split("/")
+              try:
+                  download_index = parts.index("download")
+                  asset_tag = parts[download_index + 1]
+                  asset_name = urllib.parse.unquote(parts[download_index + 2])
+              except (ValueError, IndexError):
+                  raise SystemExit(f"❌ {key} has an invalid updater URL: {url}")
+
+              if asset_tag == tag:
+                  asset = current_assets.get(asset_name)
+                  if not asset:
+                      raise SystemExit(f"❌ {key} references missing draft asset {asset_name}")
+                  metadata = gh_get(f"releases/assets/{asset['id']}")
+                  if metadata.get("name") != asset_name or int(metadata.get("size") or 0) <= 0:
+                      raise SystemExit(f"❌ {key} draft asset is empty or invalid: {asset_name}")
+              else:
+                  req = urllib.request.Request(url, method="HEAD", headers={
+                      "User-Agent": "release-workflow",
+                  })
+                  try:
+                      with urllib.request.urlopen(req, timeout=30) as response:
+                          if response.status >= 400:
+                              raise RuntimeError(f"HTTP {response.status}")
+                  except Exception as exc:
+                      raise SystemExit(
+                          f"❌ {key} updater URL is unavailable: {url} ({exc})"
+                      )
+              print(f"  ✅ {key}: signed asset reachable")
 
           with open("/tmp/fill/latest.json", "w") as f:
               json.dump(current, f, indent=2)
@@ -600,9 +713,18 @@ jobs:
           print(json.dumps(current, indent=2))
           PYEOF
 
-          # Re-upload the backfilled latest.json
-          gh release delete-asset "$TAG" --repo "$REPO" --yes "latest.json" || true
-          gh release upload "$TAG" --repo "$REPO" /tmp/fill/latest.json
+          # Atomically replace the asset so a failed upload remains recoverable
+          # with GitHub's "rerun failed jobs" action.
+          gh release upload "$TAG" --repo "$REPO" --clobber /tmp/fill/latest.json
+          gh release delete-asset "$TAG" --repo "$REPO" --yes \
+            "latest.recovery.json" || true
 
           echo ""
           echo "✅ Backfilled latest.json uploaded"
+
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: gh release edit "$TAG" --repo "$REPO" --draft=false

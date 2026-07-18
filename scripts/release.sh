@@ -26,6 +26,26 @@
 #   ./scripts/release.sh X.Y.Z       # set exact version
 set -euo pipefail
 
+VERSION_MUTATION_STARTED=false
+RELEASE_COMMITTED=false
+VERSION_FILES=(
+    pyproject.toml
+    desktop/src-tauri/tauri.conf.json
+    desktop/src-tauri/Cargo.toml
+    desktop/src-tauri/Cargo.lock
+    desktop/package.json
+    uv.lock
+)
+
+_restore_failed_version_bump() {
+    local exit_code=$?
+    if [[ "$exit_code" -ne 0 ]] && $VERSION_MUTATION_STARTED && ! $RELEASE_COMMITTED; then
+        git restore --staged --worktree -- "${VERSION_FILES[@]}" 2>/dev/null || true
+        echo -e "\033[1;33m[RECOVERY]\033[0m Restored version manifests and lockfiles after the failed bump." >&2
+    fi
+}
+trap _restore_failed_version_bump EXIT
+
 # ── Failure trap ─────────────────────────────────────────────────────────────
 _on_error() {
     local exit_code=$?
@@ -142,7 +162,10 @@ monitor_build() {
     local start_epoch
     start_epoch=$(date +%s)
 
-    # Build job keys and labels — 4 platform builds + 1 rename post-job
+    # Build job keys and labels — 1 verification gate, 4 platform builds,
+    # and 1 rename/publish post-job.
+    local VERIFY_KEY="verify"
+    local VERIFY_LABEL="Verification"
     local PLATFORM_KEYS=("aarch64-apple-darwin" "x86_64-apple-darwin" "ubuntu" "windows")
     local PLATFORM_LABELS=("macOS ARM" "macOS x86" "Linux" "Windows")
     local POST_JOB_KEY="rename-assets"
@@ -209,8 +232,8 @@ monitor_build() {
         echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
         # Build a combined list: platform keys+labels + rename post-job
-        local all_keys=("${PLATFORM_KEYS[@]}" "$POST_JOB_KEY")
-        local all_labels=("${PLATFORM_LABELS[@]}" "$POST_JOB_LABEL")
+        local all_keys=("$VERIFY_KEY" "${PLATFORM_KEYS[@]}" "$POST_JOB_KEY")
+        local all_labels=("$VERIFY_LABEL" "${PLATFORM_LABELS[@]}" "$POST_JOB_LABEL")
 
         local i
         for i in "${!all_keys[@]}"; do
@@ -287,6 +310,7 @@ monitor_build() {
     # Track which failed jobs we've already printed logs for so we
     # print each failure exactly once, immediately when detected.
     local reported_failures=""
+    local build_failed=false
     # When true, skip the screen-clear so printed failure logs remain visible.
     local preserve_screen=false
 
@@ -301,9 +325,14 @@ monitor_build() {
         local elapsed_str
         elapsed_str=$(printf "%02d:%02d" "$mins" "$secs")
 
-        # Fetch job data
+        # Fetch job data. Never turn a GitHub API failure into an empty,
+        # apparently successful run.
         local jobs_json
-        jobs_json=$(gh run view "$run_id" --repo "$repo" --json jobs 2>/dev/null || echo '{"jobs":[]}')
+        if ! jobs_json=$(gh run view "$run_id" --repo "$repo" --json jobs 2>/dev/null); then
+            warn "Could not fetch job status from GitHub; retrying in 15s."
+            sleep 15
+            continue
+        fi
         local job_count
         job_count=$(echo "$jobs_json" | jq '.jobs | length')
 
@@ -320,7 +349,7 @@ monitor_build() {
         echo ""
         echo -e "${BOLD}  📦 ${PROJECT_NAME} ${version} — Build Monitor${NC}"
         echo -e "  ─────────────────────────────────────────────────────────────"
-        echo -e "  Tag: ${GREEN}${tag}${NC}    Elapsed: ${CYAN}${elapsed_str}${NC}    Jobs: ${BOLD}${job_count}/5${NC}"
+        echo -e "  Tag: ${GREEN}${tag}${NC}    Elapsed: ${CYAN}${elapsed_str}${NC}    Jobs: ${BOLD}${job_count}/6${NC}"
         echo -e "  ─────────────────────────────────────────────────────────────"
         echo ""
 
@@ -332,6 +361,38 @@ monitor_build() {
         if [[ "$job_count" -eq 0 ]]; then
             echo -e "  ${CYAN}🔵 Waiting for jobs to be created...${NC}"
         else
+            # ── Pre-release verification gate ──────────────────────────
+            local verify_index
+            verify_index=$(echo "$jobs_json" | jq -r \
+                '[.jobs[].name] | to_entries[] | select(.value=="verify") | .key' 2>/dev/null | head -1)
+
+            local padded_verify
+            padded_verify=$(printf '%-14s' "$VERIFY_LABEL")
+            if [[ -z "$verify_index" ]]; then
+                echo -e "  🔵 ${CYAN}${padded_verify}${NC}  waiting..."
+            else
+                local v_status v_conclusion v_icon v_color v_step
+                v_status=$(echo "$jobs_json" | jq -r ".jobs[$verify_index].status")
+                v_conclusion=$(echo "$jobs_json" | jq -r ".jobs[$verify_index].conclusion // \"\"")
+                v_icon=$(status_icon "$v_status" "$v_conclusion")
+                v_color=$(status_color "$v_status" "$v_conclusion")
+                v_step=$(current_step "$jobs_json" "$verify_index")
+                [[ ${#v_step} -gt 40 ]] && v_step="${v_step:0:37}..."
+                echo -e "  ${v_icon} ${v_color}${padded_verify}${NC}  ${v_step}"
+
+                if [[ "$v_status" == "completed" ]]; then
+                    completed_count=$((completed_count + 1))
+                    if [[ "$v_conclusion" != "success" ]]; then
+                        any_failed=true
+                        failed_platforms+=("$VERIFY_LABEL")
+                        if [[ "$reported_failures" != *"|${VERIFY_KEY}|"* ]]; then
+                            new_failures+=("$VERIFY_KEY")
+                            reported_failures="${reported_failures}|${VERIFY_KEY}|"
+                        fi
+                    fi
+                fi
+            fi
+
             # ── Platform build jobs ─────────────────────────────────────
             local i
             for i in 0 1 2 3; do
@@ -362,7 +423,7 @@ monitor_build() {
                 echo -e "  ${icon} ${color}${padded_label}${NC}  ${step}"
 
                 if [[ "$j_status" == "completed" ]]; then
-                    (( completed_count++ ))
+                    completed_count=$((completed_count + 1))
                     if [[ "$j_conclusion" != "success" ]]; then
                         any_failed=true
                         failed_platforms+=("$label")
@@ -401,8 +462,8 @@ monitor_build() {
                 echo -e "  ${r_icon} ${r_color}${padded_post}${NC}  ${r_step}"
 
                 if [[ "$r_status" == "completed" ]]; then
-                    (( completed_count++ ))
-                    if [[ "$r_conclusion" != "success" && "$r_conclusion" != "skipped" ]]; then
+                    completed_count=$((completed_count + 1))
+                    if [[ "$r_conclusion" != "success" ]]; then
                         any_failed=true
                         failed_platforms+=("$POST_JOB_LABEL")
                         if [[ "$reported_failures" != *"|${POST_JOB_KEY}|"* ]]; then
@@ -424,8 +485,8 @@ monitor_build() {
             local inline_first=true
             for fail_key in "${new_failures[@]}"; do
                 local fail_label="$fail_key"
-                local all_keys=("${PLATFORM_KEYS[@]}" "$POST_JOB_KEY")
-                local all_labels=("${PLATFORM_LABELS[@]}" "$POST_JOB_LABEL")
+                local all_keys=("$VERIFY_KEY" "${PLATFORM_KEYS[@]}" "$POST_JOB_KEY")
+                local all_labels=("$VERIFY_LABEL" "${PLATFORM_LABELS[@]}" "$POST_JOB_LABEL")
                 local fi_idx
                 for fi_idx in "${!all_keys[@]}"; do
                     if [[ "${all_keys[$fi_idx]}" == "$fail_key" ]]; then
@@ -480,7 +541,12 @@ monitor_build() {
         local run_status
         run_status=$(gh run view "$run_id" --repo "$repo" --json status --jq '.status' 2>/dev/null || echo "unknown")
 
-        if [[ "$run_status" == "completed" ]] || [[ "$completed_count" -ge 5 && "$job_count" -ge 5 ]]; then
+        if [[ "$run_status" == "completed" && ( "$job_count" -lt 6 || "$completed_count" -lt 6 ) ]]; then
+            any_failed=true
+            failed_platforms+=("Incomplete GitHub job data (${completed_count}/${job_count})")
+        fi
+
+        if [[ "$run_status" == "completed" ]] || [[ "$completed_count" -ge 6 && "$job_count" -ge 6 ]]; then
             all_done=true
 
             # Final elapsed time
@@ -492,6 +558,7 @@ monitor_build() {
 
             echo ""
             if $any_failed; then
+                build_failed=true
                 echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
                 echo -e "${RED}  ❌ BUILD FAILED  (${elapsed_str})${NC}"
                 echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -532,6 +599,10 @@ monitor_build() {
             fi
         fi
     done
+
+    if $build_failed; then
+        return 1
+    fi
 }
 
 # ── Parse flags ──────────────────────────────────────────────────────────────
@@ -581,6 +652,11 @@ fi
 
 [[ -f "$VERSION_FILE" ]] || fail "$VERSION_FILE not found."
 
+for required_tool in pnpm uv cargo; do
+    command -v "$required_tool" &>/dev/null \
+        || fail "$required_tool is required for a recoverable release. Install it before retrying."
+done
+
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 [[ "$CURRENT_BRANCH" == "$BRANCH" ]] \
     || fail "Not on '$BRANCH' branch (currently on '$CURRENT_BRANCH'). Switch first."
@@ -591,6 +667,10 @@ fi
 
 if ! git diff --quiet; then
     fail "Uncommitted changes detected. Commit them first."
+fi
+
+if [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+    fail "Untracked files detected. Commit or remove them so required release files cannot be omitted."
 fi
 
 # ── Sync with remote (do-no-harm: runs BEFORE any commit/tag is created) ──────
@@ -676,34 +756,25 @@ fi
 # CI runs `pnpm install --frozen-lockfile` and will fail if pnpm-lock.yaml is
 # out of sync with package.json. Catch this locally before pushing.
 info "Checking pnpm-lock.yaml is up to date with package.json..."
-if ! command -v pnpm &>/dev/null; then
-    warn "pnpm not found — skipping lockfile check. Install pnpm to enable this guard."
-else
-    LOCKFILE_CHECK=$(cd desktop && pnpm install --frozen-lockfile 2>&1) || {
-        echo ""
-        warn "pnpm-lock.yaml is out of sync with package.json. Auto-fixing..."
-        if ! (cd desktop && pnpm install --no-frozen-lockfile 2>&1); then
-            fail "pnpm install failed — fix package.json/pnpm-lock.yaml manually."
-        fi
-        # Stage the updated lockfile so it's included in the release commit
-        git add desktop/pnpm-lock.yaml
-        ok "pnpm-lock.yaml updated and staged."
-    }
-    # Suppress the output but surface it on error — variable consumed above
-    : "${LOCKFILE_CHECK}"
-    ok "pnpm-lock.yaml is up to date."
-fi
+LOCKFILE_CHECK=$(cd desktop && pnpm install --frozen-lockfile 2>&1) || {
+    echo "$LOCKFILE_CHECK" >&2
+    fail "pnpm-lock.yaml is out of sync or install failed. Fix and commit it before releasing."
+}
+ok "pnpm-lock.yaml is up to date."
 
 # ── TypeScript type-check ────────────────────────────────────────────────────
 info "Running TypeScript type-check (pnpm tsc -b)..."
-if ! command -v pnpm &>/dev/null; then
-    warn "pnpm not found — skipping TypeScript check. Install pnpm to enable this guard."
-else
-    if ! (cd desktop && pnpm tsc -b 2>&1); then
-        echo ""
-        fail "TypeScript errors detected. Fix them before releasing (shown above)."
-    fi
-    ok "TypeScript check passed."
+if ! (cd desktop && pnpm tsc -b 2>&1); then
+    echo ""
+    fail "TypeScript errors detected. Fix them before releasing (shown above)."
+fi
+ok "TypeScript check passed."
+
+# Downloads, installs, and typechecking must not silently create source changes
+# that the explicit release staging list would omit.
+if [[ -n "$(git diff --cached --name-only)" ]] || ! git diff --quiet \
+    || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+    fail "Release preparation changed the worktree. Review and commit those files before retrying."
 fi
 
 # ── Read current version ─────────────────────────────────────────────────────
@@ -768,6 +839,7 @@ if $DRY_RUN; then
 fi
 
 # ── Update pyproject.toml ────────────────────────────────────────────────────
+VERSION_MUTATION_STARTED=true
 info "Bumping version in $VERSION_FILE..."
 sedi "s/^version = \"[^\"]*\"/version = \"${NEW_VERSION}\"/" pyproject.toml
 ok "pyproject.toml → $NEW_VERSION"
@@ -791,14 +863,28 @@ pnpm version "$NEW_VERSION" --no-git-tag-version --allow-same-version 2>/dev/nul
 cd "$REPO_ROOT"
 ok "package.json → $NEW_VERSION"
 
+# ── Refresh lockfiles after the project version changes ─────────────────────
+info "Refreshing uv.lock..."
+command -v uv &>/dev/null || fail "uv is required to refresh uv.lock."
+uv lock >/dev/null
+ok "uv.lock → $NEW_VERSION"
+
+info "Refreshing desktop/src-tauri/Cargo.lock..."
+command -v cargo &>/dev/null || fail "cargo is required to refresh Cargo.lock."
+(cd desktop/src-tauri && cargo update -p aimatrx-desktop >/dev/null)
+ok "Cargo.lock → $NEW_VERSION"
+
 # ── Commit ───────────────────────────────────────────────────────────────────
 info "Committing..."
 git add \
     pyproject.toml \
     desktop/src-tauri/tauri.conf.json \
     desktop/src-tauri/Cargo.toml \
-    desktop/package.json
+    desktop/src-tauri/Cargo.lock \
+    desktop/package.json \
+    uv.lock
 git commit -m "$COMMIT_MSG"
+RELEASE_COMMITTED=true
 ok "Committed: '$COMMIT_MSG'"
 
 # ── Tag ──────────────────────────────────────────────────────────────────────

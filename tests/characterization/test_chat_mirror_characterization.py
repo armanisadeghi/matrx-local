@@ -368,11 +368,30 @@ def test_store_preserves_structured_tool_content_across_reload(tmp_path: Path) -
         store = SQLiteConversationStore()
         await store.ensure_conversation_exists(conversation_id, "u1")
         await store.create_pending_user_request(request_id, conversation_id, "u1")
+        tool_row_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa31"
+        await db.execute(
+            "INSERT INTO chat.tool_call "
+            "(id, conversation_id, call_id, tool_name, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'local_system', 'completed', ?, ?)",
+            (
+                tool_row_id,
+                conversation_id,
+                "call-local-system",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+        await db.commit()
 
         await store.persist_completed_request(
             {
                 "conversation_id": conversation_id,
                 "request_id": request_id,
+                "metadata": {
+                    "status": "failed",
+                    "error": {"message": "synthetic failure"},
+                    "trace": "preserved",
+                },
                 "messages": [
                     {"role": "user", "content": "inspect this machine"},
                     {
@@ -386,6 +405,8 @@ def test_store_preserves_structured_tool_content_across_reload(tmp_path: Path) -
                                 "arguments": {"action": "info"},
                             },
                         ],
+                        "status": "failed",
+                        "metadata": {"model_context": "preserved"},
                     },
                     {
                         "role": "tool",
@@ -426,6 +447,114 @@ def test_store_preserves_structured_tool_content_across_reload(tmp_path: Path) -
         assert history[1]["content"] == stored[1][1]
         assert history[2]["content"] == stored[2][1]
         assert history[1]["id"] == rows[1]["id"]
+
+        assistant_row = await db.fetchone(
+            "SELECT status, metadata FROM chat.message WHERE id = ?", (rows[1]["id"],)
+        )
+        assert assistant_row is not None
+        assert assistant_row["status"] == "failed"
+        assert json.loads(assistant_row["metadata"])["model_context"] == "preserved"
+
+        linked_tool = await db.fetchone(
+            "SELECT message_id FROM chat.tool_call WHERE id = ?", (tool_row_id,)
+        )
+        assert linked_tool is not None
+        assert linked_tool["message_id"] == rows[1]["id"]
+
+        request_row = await db.fetchone(
+            "SELECT status, metadata, error FROM chat.user_request WHERE id = ?",
+            (request_id,),
+        )
+        assert request_row is not None
+        assert request_row["status"] == "failed"
+        assert json.loads(request_row["metadata"])["trace"] == "preserved"
+        assert json.loads(request_row["error"])["message"] == "synthetic failure"
+
+    _run(tmp_path, scenario)
+
+
+def test_store_merges_completed_request_and_storage_metadata(tmp_path: Path) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        from types import SimpleNamespace
+
+        from app.services.ai.conversation_handler import SQLiteConversationStore
+
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa41"
+        request_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa42"
+        message_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa43"
+        store = SQLiteConversationStore()
+        await store.ensure_conversation_exists(conversation_id, "u1")
+        await store.create_pending_user_request(request_id, conversation_id, "u1")
+        await store.persist_completed_request(
+            {
+                "conversation_id": conversation_id,
+                "request_id": request_id,
+                "metadata": {"shared": "mid-run"},
+                "messages": [
+                    {
+                        "id": message_id,
+                        "role": "assistant",
+                        "status": "active",
+                        "content": "draft answer",
+                        "metadata": {"phase": "mid-run"},
+                    }
+                ],
+            }
+        )
+
+        class CompletedRequest:
+            request = SimpleNamespace(request_id=request_id)
+            messages = [
+                {
+                    "id": message_id,
+                    "role": "assistant",
+                    "status": "failed",
+                    "content": "corrected final answer",
+                    "metadata": {"phase": "final"},
+                }
+            ]
+            metadata = {
+                "completion_only": "kept",
+                "shared": "completion",
+                "status": "suspended_awaiting_client",
+            }
+
+            def to_storage_dict(self) -> dict[str, Any]:
+                return {
+                    "user_request": {
+                        "status": "paused",
+                        "metadata": {
+                            "storage_only": "kept",
+                            "shared": "storage",
+                        },
+                    }
+                }
+
+        await store.persist_completed_request(
+            CompletedRequest(),
+            conversation_id=conversation_id,
+        )
+
+        row = await db.fetchone(
+            "SELECT status, metadata FROM chat.user_request WHERE id = ?",
+            (request_id,),
+        )
+        assert row is not None
+        assert row["status"] == "paused"
+        metadata = json.loads(row["metadata"])
+        assert metadata["completion_only"] == "kept"
+        assert metadata["storage_only"] == "kept"
+        assert metadata["shared"] == "completion"
+        assert metadata["engine_status"] == "suspended_awaiting_client"
+
+        message = await db.fetchone(
+            "SELECT status, content, metadata FROM chat.message WHERE id = ?",
+            (message_id,),
+        )
+        assert message is not None
+        assert message["status"] == "failed"
+        assert json.loads(message["content"])[0]["text"] == "corrected final answer"
+        assert json.loads(message["metadata"])["phase"] == "final"
 
     _run(tmp_path, scenario)
 
@@ -556,6 +685,60 @@ def test_authenticated_ai_request_refreshes_expired_engine_token(
         assert stored["access_token"] == token
         assert stored["refresh_token"] == "keep-refresh-token"
         assert repo.is_expired(stored) is False
+
+    _run(tmp_path, scenario)
+
+
+def test_ai_request_cannot_replace_a_different_persisted_owner(
+    tmp_path: Path,
+) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        import time
+
+        import jwt
+        import httpx
+
+        from app.api.ai_routes import AIContextMiddleware
+        from app.services.local_db.repositories import TokenRepo
+
+        repo = TokenRepo()
+        await repo.save(
+            access_token="owner-a-token",
+            user_id="owner-a",
+            refresh_token="owner-a-refresh",
+            expires_at=int(time.time()) + 3600,
+        )
+        owner_b_token = jwt.encode(
+            {"sub": "owner-b", "exp": int(time.time()) + 3600},
+            "test-secret-that-is-at-least-32-bytes-long",
+            algorithm="HS256",
+        )
+
+        downstream_called = False
+
+        async def downstream(scope: Any, receive: Any, send: Any) -> None:
+            nonlocal downstream_called
+            downstream_called = True
+
+        transport = httpx.ASGITransport(app=AIContextMiddleware(downstream))
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://desktop.test",
+        ) as client:
+            response = await client.get(
+                "/ai/chat",
+                headers={"Authorization": f"Bearer {owner_b_token}"},
+            )
+
+        assert response.status_code == 403
+        assert response.json()["error"] == "desktop_owner_mismatch"
+        assert downstream_called is False
+
+        stored = await repo.get()
+        assert stored is not None
+        assert stored["user_id"] == "owner-a"
+        assert stored["access_token"] == "owner-a-token"
+        assert stored["refresh_token"] == "owner-a-refresh"
 
     _run(tmp_path, scenario)
 

@@ -377,7 +377,10 @@ def test_desktop_native_capability_injects_discovery_tool_and_typed_state(
             "desktop-native": {
                 "platform": "darwin",
                 "instance_id": "inst-test",
+                "target_instance_id": "inst-other",
                 "tunnel_state": "active",
+                "permissions_granted": ["screen-recording"],
+                "loaded_categories": ["desktop"],
             }
         },
     )
@@ -459,12 +462,84 @@ def test_local_host_injects_desktop_capability_when_browser_reports_none(
         assert client["surface"] == "matrx-user/chat"
         assert client["capabilities"] == ["desktop-native"]
         assert client["state"]["desktop-native"]["instance_id"] == "inst-host"
+        assert "target_instance_id" not in client["state"]["desktop-native"]
+        assert "permissions_granted" not in client["state"]["desktop-native"]
+        assert "loaded_categories" not in client["state"]["desktop-native"]
         assert (
             updated.metadata["client_capabilities_payloads"]["desktop-native"][
                 "platform"
             ]
             == "darwin"
         )
+
+    asyncio.run(scenario())
+
+
+def test_explicit_empty_tool_replacement_stays_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from matrx_ai.capabilities import ClientContext
+    from matrx_ai.config import UnifiedConfig
+    from matrx_ai.tools.models import ToolType
+    from matrx_connect.context.app_context import AppContext
+    from matrx_connect.emitters.stream_emitter import StreamEmitter
+
+    from app.services.ai import local_ai_task
+
+    captured: dict[str, object] = {}
+
+    def fake_merge(config, ctx, specs, excluded=None, **kwargs):
+        captured["names"] = [getattr(spec, "name", None) for spec in specs]
+        captured["excluded"] = list(excluded or [])
+        return ctx
+
+    class PermissiveRegistry:
+        def get(self, name: str):
+            return SimpleNamespace(tool_type=ToolType.LOCAL)
+
+    monkeypatch.setattr("matrx_ai.tools.merge.merge_request_tools", fake_merge)
+    monkeypatch.setattr(local_ai_task, "_registry", lambda: PermissiveRegistry())
+    monkeypatch.setattr(
+        local_ai_task,
+        "_local_desktop_capability_state",
+        lambda: {
+            "platform": "darwin",
+            "engine_version": "1.2.3",
+            "instance_id": "inst-host",
+            "tunnel_state": "none",
+        },
+    )
+
+    ctx = AppContext(
+        emitter=StreamEmitter(),
+        user_id="user-1",
+        is_authenticated=True,
+        metadata={},
+    )
+
+    async def scenario() -> None:
+        config = UnifiedConfig(
+            model="local/test", messages=[], tools=["existing-tool"]
+        )
+        await local_ai_task.apply_request_tools(
+            config,
+            ctx,
+            [],
+            [],
+            client=ClientContext(
+                surface="matrx-user/chat",
+                capabilities=["desktop-native"],
+                state={"desktop-native": {"loaded_categories": ["desktop"]}},
+                amendments={
+                    "add": [{"kind": "registered", "name": "amended-tool"}],
+                    "remove": [],
+                },
+            ),
+        )
+        assert captured["names"] == []
+        assert config.tools == []
 
     asyncio.run(scenario())
 
@@ -555,10 +630,16 @@ def test_chat_stream_with_local_tool_round_trip(ai_app, local_db):
         assert any("use the tool please" in c for c in contents)
         assert any("tool round trip complete" in c for c in contents)
         tool_rows = await local_db.fetchall(
-            "SELECT * FROM chat.tool_call WHERE conversation_id = ?",
+            "SELECT tc.*, m.role AS message_role "
+            "FROM chat.tool_call tc "
+            "LEFT JOIN chat.message m ON m.id = tc.message_id "
+            "WHERE tc.conversation_id = ?",
             (conversation_id,),
         )
         assert tool_rows, "chat.tool_call row missing for the local tool call"
+        assert all(dict(row).get("message_role") == "assistant" for row in tool_rows), (
+            "persisted tool calls must link to their assistant message"
+        )
 
     asyncio.run(_run())
 

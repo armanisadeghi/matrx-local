@@ -233,7 +233,7 @@ def _local_desktop_capability_state() -> dict[str, Any]:
     }
 
 
-def _with_local_desktop_capability(client: Any) -> Any:
+def _with_local_desktop_capability(client: Any, *, advertise: bool = True) -> Any:
     """Add this execution host to the request's client capability envelope.
 
     A browser normally derives ``desktop-native`` from cloud presence. That
@@ -244,11 +244,15 @@ def _with_local_desktop_capability(client: Any) -> Any:
     from matrx_ai.capabilities import ClientContext
 
     context = ClientContext.model_validate(client or {})
-    capabilities = list(dict.fromkeys([*context.capabilities, "desktop-native"]))
+    capabilities = list(context.capabilities)
+    if advertise:
+        capabilities = list(dict.fromkeys([*capabilities, "desktop-native"]))
     state = {name: dict(payload) for name, payload in context.state.items()}
-    desktop_state = dict(state.get("desktop-native") or {})
-    desktop_state.update(_local_desktop_capability_state())
-    state["desktop-native"] = desktop_state
+    if advertise or "desktop-native" in capabilities:
+        # This process is the execution host. Browser routing hints and
+        # previously loaded categories describe a different runtime and must
+        # never leak into this host's in-process tool resolution.
+        state["desktop-native"] = _local_desktop_capability_state()
     return context.model_copy(
         update={
             "capabilities": capabilities,
@@ -295,8 +299,15 @@ async def apply_request_tools(
     from matrx_ai.tools.merge import merge_request_tools
 
     specs = list(tools_replace if tools_replace is not None else tools)
-    client = _with_local_desktop_capability(client)
-    if getattr(client, "capabilities", None):
+    client = _with_local_desktop_capability(
+        client,
+        advertise=tools_replace is None,
+    )
+    amendments = getattr(client, "amendments", None)
+    if tools_replace is None and amendments is not None:
+        specs = [*getattr(amendments, "add", []), *specs]
+        excluded = [*(excluded or []), *getattr(amendments, "remove", [])]
+    if tools_replace is None and getattr(client, "capabilities", None):
         from matrx_ai.capabilities import (
             CapabilityResolutionError,
             resolve_client_capabilities,

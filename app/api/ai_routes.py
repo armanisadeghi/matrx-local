@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict
+from starlette.responses import JSONResponse
 
 from app.common.system_logger import get_logger
 
@@ -202,21 +203,29 @@ def _decode_jwt_sub(token: str) -> str | None:
 
 async def _resolve_user_id(bearer: str | None) -> str:
     """Resolve the request's user identity (single-user desktop posture)."""
-    if bearer:
-        sub = _decode_jwt_sub(bearer)
-        if sub:
-            return sub
+    bearer_sub = _decode_jwt_sub(bearer) if bearer else None
     try:
         from app.services.local_db.repositories import TokenRepo
 
         row = await TokenRepo().get()
         if row and row.get("user_id"):
-            return str(row["user_id"])
+            persisted_user_id = str(row["user_id"])
+            if bearer_sub and bearer_sub != persisted_user_id:
+                raise DesktopOwnerMismatchError
+            return persisted_user_id
+    except DesktopOwnerMismatchError:
+        raise
     except Exception:
         logger.debug("[ai_routes] stored-token user_id lookup failed", exc_info=True)
+    if bearer_sub:
+        return bearer_sub
     # Tokenless/opaque-token caller on loopback (TEST_MODE, local API key).
     # Deterministic single-user identity — the local store is per-machine.
     return "local-user"
+
+
+class DesktopOwnerMismatchError(Exception):
+    """A request JWT belongs to someone other than this desktop owner."""
 
 
 async def _adopt_request_jwt(bearer: str | None, user_id: str) -> None:
@@ -236,19 +245,31 @@ async def _adopt_request_jwt(bearer: str | None, user_id: str) -> None:
         from app.services.ai.engine import set_jwt_cache
         from app.services.local_db.repositories import TokenRepo
 
-        set_jwt_cache(bearer)
         repo = TokenRepo()
         existing = await repo.get()
+        existing_user_id = str((existing or {}).get("user_id") or "")
+        if existing_user_id and existing_user_id != user_id:
+            logger.warning(
+                "[ai_routes] refused request JWT adoption for a different owner "
+                "(persisted_user_id=%s request_user_id=%s)",
+                existing_user_id,
+                user_id,
+            )
+            return
         if (
             existing
             and existing.get("access_token") == bearer
             and not repo.is_expired(existing)
         ):
+            set_jwt_cache(bearer)
             return
+        set_jwt_cache(bearer)
         await repo.save(
             access_token=bearer,
             user_id=user_id,
-            refresh_token=(existing or {}).get("refresh_token"),
+            refresh_token=(existing or {}).get("refresh_token")
+            if existing_user_id == user_id
+            else None,
             expires_at=expires_at,
         )
         logger.info(
@@ -300,7 +321,18 @@ class AIContextMiddleware:
         except (ValueError, TypeError):
             request_id = str(uuid.uuid4())
 
-        user_id = await _resolve_user_id(bearer)
+        try:
+            user_id = await _resolve_user_id(bearer)
+        except DesktopOwnerMismatchError:
+            response = JSONResponse(
+                status_code=403,
+                content={
+                    "error": "desktop_owner_mismatch",
+                    "message": "This desktop is signed in as a different user.",
+                },
+            )
+            await response(scope, receive, send)
+            return
         await _adopt_request_jwt(bearer, user_id)
 
         ctx = AppContext(

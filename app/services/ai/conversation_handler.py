@@ -369,6 +369,8 @@ class SQLiteConversationStore:
                 or str(uuid.uuid4())
             )
             raw_messages = completed.get("messages") or []
+            completed_metadata = dict(completed.get("metadata") or {})
+            user_request_storage: dict[str, Any] = {}
         else:
             conv_id = (
                 conversation_id
@@ -378,10 +380,23 @@ class SQLiteConversationStore:
             request = getattr(completed, "request", None)
             user_request_id = getattr(request, "request_id", None) or str(uuid.uuid4())
             raw_messages = list(getattr(completed, "messages", None) or [])
+            completed_metadata = dict(getattr(completed, "metadata", None) or {})
+            user_request_storage = {}
+            to_storage_dict = getattr(completed, "to_storage_dict", None)
+            if callable(to_storage_dict):
+                try:
+                    storage = to_storage_dict()
+                    user_request_storage = dict(storage.get("user_request") or {})
+                except Exception:
+                    logger.warning(
+                        "[conv_store] could not serialize completed request summary",
+                        exc_info=True,
+                    )
 
         message_ids: list[str] = []
         request_ids: list[str] = [user_request_id]
         assistant_rows_to_announce: list[tuple[str, int]] = []
+        tool_call_links: list[tuple[str, str]] = []
 
         db = get_db()
 
@@ -393,7 +408,8 @@ class SQLiteConversationStore:
         # ids that can never match the uuid5 scheme, and id-only dedupe would
         # duplicate the entire history on every turn (and push the duplicates).
         pos_rows = await db.fetchall(
-            "SELECT id, position, role, status FROM chat.message WHERE conversation_id = ?",
+            "SELECT id, position, role, status, content, metadata "
+            "FROM chat.message WHERE conversation_id = ?",
             (conv_id,),
         )
         occupied = {r["position"]: dict(r) for r in pos_rows}
@@ -403,17 +419,45 @@ class SQLiteConversationStore:
             if norm is None:
                 continue
             existing = occupied.get(position)
+            message_status = _canonical_message_status(norm.get("status"))
+            message_metadata = norm.get("metadata") or {}
             if existing:
-                if existing.get("status") == "pending":
-                    content = norm["content"]
+                content = norm["content"]
+                serialized_content = _serialize_content(content)
+                serialized_metadata = json.dumps(
+                    message_metadata,
+                    ensure_ascii=False,
+                    default=str,
+                )
+                same_message_id = bool(
+                    norm.get("id") and str(norm["id"]) == str(existing["id"])
+                )
+                terminal_update = (
+                    existing.get("role") == norm["role"]
+                    and message_status in {"failed", "abandoned", "deleted"}
+                )
+                may_update = (
+                    existing.get("status") == "pending"
+                    or same_message_id
+                    or terminal_update
+                )
+                changed = (
+                    existing.get("role") != norm["role"]
+                    or existing.get("status") != message_status
+                    or existing.get("content") != serialized_content
+                    or existing.get("metadata") != serialized_metadata
+                )
+                if may_update and changed:
                     await db.execute(
                         """UPDATE chat.message
-                           SET role = ?, status = 'active', content = ?,
+                           SET role = ?, status = ?, content = ?, metadata = ?,
                                content_chars = ?, updated_at = ?
                            WHERE id = ?""",
                         (
                             norm["role"],
-                            _serialize_content(content),
+                            message_status,
+                            serialized_content,
+                            serialized_metadata,
                             _content_chars(content),
                             now,
                             existing["id"],
@@ -423,6 +467,8 @@ class SQLiteConversationStore:
                     await enqueue_change(
                         "chat", "message", str(existing["id"]), db, commit=False
                     )
+                for call_id in _message_tool_call_ids(norm["content"]):
+                    tool_call_links.append((str(existing["id"]), call_id))
                 continue
             msg_id = norm.get("id") or str(
                 uuid.uuid5(_MSG_NAMESPACE, f"{conv_id}:{position}")
@@ -436,13 +482,15 @@ class SQLiteConversationStore:
                         metadata, source, is_visible_to_user, is_visible_to_model,
                         content_chars, tool_results_chars, created_at, updated_at,
                         version)
-                       VALUES (?, ?, ?, ?, 'active', ?, '{}', ?, 1, 1, ?, 0, ?, ?, 1)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, 0, ?, ?, 1)""",
                     (
                         msg_id,
                         conv_id,
                         role,
                         position,
+                        message_status,
                         _serialize_content(content),
+                        json.dumps(message_metadata, ensure_ascii=False, default=str),
                         # Canonical source vocabulary (cloud CHECK constraint
                         # cx_message_source_check): user | agent_template |
                         # system. `source` = row ORIGIN, not authorship —
@@ -460,6 +508,8 @@ class SQLiteConversationStore:
                     await enqueue_change("chat", "message", msg_id, db, commit=False)
                     if role == "assistant":
                         assistant_rows_to_announce.append((msg_id, position))
+                for call_id in _message_tool_call_ids(content):
+                    tool_call_links.append((msg_id, call_id))
             except Exception:
                 logger.error(
                     "[conv_store] Failed to persist message %s (conversation=%s)",
@@ -468,22 +518,75 @@ class SQLiteConversationStore:
                     exc_info=True,
                 )
 
+        for message_id, call_id in tool_call_links:
+            tool_rows = await db.fetchall(
+                "SELECT id, message_id FROM chat.tool_call "
+                "WHERE conversation_id = ? AND call_id = ?",
+                (conv_id, call_id),
+            )
+            for tool_row in tool_rows:
+                if tool_row["message_id"] == message_id:
+                    continue
+                await db.execute(
+                    "UPDATE chat.tool_call SET message_id = ?, updated_at = ? WHERE id = ?",
+                    (message_id, now, tool_row["id"]),
+                )
+                await enqueue_change(
+                    "chat", "tool_call", str(tool_row["id"]), db, commit=False
+                )
+
         # Complete the user_request and touch the conversation rollups.
+        request_status = _canonical_request_status(
+            user_request_storage.get("status") or completed_metadata.get("status")
+        )
+        existing_request = await db.fetchone(
+            "SELECT metadata FROM chat.user_request WHERE id = ?", (user_request_id,)
+        )
+        request_metadata = _deserialize_json_object(
+            existing_request["metadata"] if existing_request else None
+        )
+        request_metadata.update(dict(user_request_storage.get("metadata") or {}))
+        request_metadata.update(completed_metadata)
+        raw_request_status = completed_metadata.get(
+            "status",
+            user_request_storage.get("status"),
+        )
+        if raw_request_status is not None:
+            request_metadata["engine_status"] = str(
+                getattr(raw_request_status, "value", raw_request_status)
+            )
+        request_metadata.setdefault("conversation_id", conv_id)
+        request_error = user_request_storage.get("error") or completed_metadata.get(
+            "error"
+        )
+        if isinstance(request_error, (dict, list)):
+            request_error = json.dumps(request_error, ensure_ascii=False, default=str)
+        elif request_error is not None:
+            request_error = str(request_error)
         await db.execute(
             """UPDATE chat.user_request
-               SET status='completed', completed_at=?, updated_at=?, last_activity_at=?
+               SET status=?, completed_at=?, updated_at=?, last_activity_at=?,
+                   metadata=?, error=?
                WHERE id = ?""",
-            (now, now, now, user_request_id),
+            (
+                request_status,
+                now,
+                now,
+                now,
+                json.dumps(request_metadata, ensure_ascii=False, default=str),
+                request_error,
+                user_request_id,
+            ),
         )
         await enqueue_change("chat", "user_request", user_request_id, db, commit=False)
 
         await db.execute(
             """UPDATE chat.conversation
-               SET message_count = (SELECT COUNT(*) FROM chat.message
+                   SET message_count = (SELECT COUNT(*) FROM chat.message
                                     WHERE conversation_id = ? AND deleted_at IS NULL),
-                   last_request_id = ?, last_request_status = 'completed', updated_at = ?
+                   last_request_id = ?, last_request_status = ?, updated_at = ?
                WHERE id = ?""",
-            (conv_id, user_request_id, now, conv_id),
+            (conv_id, user_request_id, request_status, now, conv_id),
         )
         await enqueue_change("chat", "conversation", conv_id, db, commit=False)
         await db.commit()
@@ -769,6 +872,46 @@ LocalConversationHandler = SQLiteConversationStore
 # Stable namespace for deriving deterministic message ids from
 # (conversation_id, position) so repeated full-history persists are idempotent.
 _MSG_NAMESPACE = uuid.UUID("7df1aa44-43e5-4dca-9c4f-3f2f6f8a1b9e")
+
+_MESSAGE_STATUSES = {
+    "active",
+    "condensed",
+    "summary",
+    "deleted",
+    "pending",
+    "abandoned",
+    "failed",
+}
+_PAUSED_REQUEST_STATUSES = {
+    "suspended_awaiting_client",
+    "suspended_provider_overload",
+    "paused_loop_guard",
+    "max_iterations_exceeded",
+    "truncated",
+}
+
+
+def _canonical_message_status(value: Any) -> str:
+    status = str(getattr(value, "value", value) or "active")
+    return status if status in _MESSAGE_STATUSES else "active"
+
+
+def _canonical_request_status(value: Any) -> str:
+    status = str(getattr(value, "value", value) or "completed")
+    if status in {"failed", "cancelled", "paused"}:
+        return status
+    if status in _PAUSED_REQUEST_STATUSES:
+        return "paused"
+    return "completed"
+
+
+def _message_tool_call_ids(content: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(block.get("call_id") or block.get("id"))
+        for block in content
+        if block.get("type") == "tool_call"
+        and (block.get("call_id") or block.get("id"))
+    ]
 
 
 def _normalize_message(msg: Any) -> dict[str, Any] | None:

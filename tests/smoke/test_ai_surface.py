@@ -198,10 +198,15 @@ def ai_app(seam_sandbox, local_db, monkeypatch: pytest.MonkeyPatch):
         build_local_tool_definitions,
         register_local_tools,
     )
+    from app.services.ai.remote_tool_bridge import build_local_context_definitions
 
     registry = ToolRegistry.get_instance()
+    bundled_definitions = [
+        *build_local_tool_definitions(),
+        *build_local_context_definitions(),
+    ]
     missing = [
-        d for d in build_local_tool_definitions() if registry.get(d.name) is None
+        d for d in bundled_definitions if registry.get(d.name) is None
     ]
     if missing:
         registry.load_from_definitions(missing)

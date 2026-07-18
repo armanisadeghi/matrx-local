@@ -322,6 +322,17 @@ def _has_in_process_executor(definition: ToolDefinition | None) -> bool:
     )
 
 
+def build_local_context_definitions() -> list[ToolDefinition]:
+    """Build bundled definitions for context-mutating matrx-ai tools.
+
+    These tools must exist before a server catalog refresh: they mutate the
+    active local request and are therefore host-owned even while AIDream is
+    offline. A later refresh may add the canonical database metadata without
+    replacing their in-process executors.
+    """
+    return [_build_local_context_definition({"name": name}) for name in sorted(_LOCAL_CONTEXT_TOOLS)]
+
+
 def _build_local_context_definition(row: dict[str, Any]) -> ToolDefinition:
     """Bind a context-mutating matrx-ai tool to this process."""
     # Importing the declarations registers the hand-owned callable contracts.
@@ -332,8 +343,16 @@ def _build_local_context_definition(row: dict[str, Any]) -> ToolDefinition:
     declared = get_effective_declared(name)
     if declared is None:
         raise RuntimeError(f"No in-process declaration is registered for {name!r}")
+    schema = declared.args_model.model_json_schema()
+    description = str(row.get("description") or "").strip()
+    if not description:
+        description = str(getattr(declared.func, "__doc__", "") or "").strip()
     definition = ToolDefinition.model_validate(
         {
+            "parameters": schema.get("properties", {}),
+            "required_params": schema.get("required", []),
+            "description": description,
+            "source_kind": declared.source_kind,
             **row,
             "tool_id": row.get("id"),
             "tool_type": ToolType.LOCAL,
@@ -367,4 +386,9 @@ def get_remote_tool_bridge() -> RemoteToolBridge:
     return _bridge
 
 
-__all__ = ["REMOTE_TOOL_CONTEXT_KEY", "RemoteToolBridge", "get_remote_tool_bridge"]
+__all__ = [
+    "REMOTE_TOOL_CONTEXT_KEY",
+    "RemoteToolBridge",
+    "build_local_context_definitions",
+    "get_remote_tool_bridge",
+]

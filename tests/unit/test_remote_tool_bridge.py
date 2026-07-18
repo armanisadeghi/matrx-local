@@ -10,6 +10,7 @@ from matrx_connect.context.app_context import AppContext
 from app.services.ai.remote_tool_bridge import (
     REMOTE_TOOL_CONTEXT_KEY,
     RemoteToolBridge,
+    build_local_context_definitions,
 )
 from app.services.aidream.client import AIDreamClient
 
@@ -322,3 +323,14 @@ async def test_remote_execution_returns_tool_error_without_agent_identity(
     assert result.success is False
     assert result.error is not None
     assert result.error.error_type == "remote_context_missing"
+
+
+def test_bundled_context_tool_is_executable_without_server_catalog() -> None:
+    definitions = build_local_context_definitions()
+
+    assert [definition.name for definition in definitions] == ["load_desktop_tools"]
+    definition = definitions[0]
+    assert definition._callable is not None
+    assert definition.function_path.endswith(".load_desktop_tools")
+    assert definition.parameters["category"]["type"] == "string"
+    assert "category" in definition.required_params

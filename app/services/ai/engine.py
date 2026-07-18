@@ -513,15 +513,20 @@ async def load_tools_and_register() -> int:
         from matrx_ai.tools.registry import ToolRegistry
 
         from app.services.ai.local_tool_bridge import build_local_tool_definitions
+        from app.services.ai.remote_tool_bridge import build_local_context_definitions
 
         registry = ToolRegistry.get_instance()
+        bundled_definitions = [
+            *build_local_tool_definitions(),
+            *build_local_context_definitions(),
+        ]
         missing = [
-            d for d in build_local_tool_definitions() if registry.get(d.name) is None
+            d for d in bundled_definitions if registry.get(d.name) is None
         ]
         if missing:
             n = registry.load_from_definitions(missing)
             logger.info(
-                "[engine] matrx-ai: backfilled %d/%d local tool definitions from "
+                "[engine] matrx-ai: backfilled %d/%d local/context tool definitions from "
                 "catalog (server registry %s) ✓",
                 n,
                 len(missing),

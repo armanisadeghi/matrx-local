@@ -119,11 +119,24 @@ async def health():
     if supports_agent_execution():
         execution_capabilities.append("agent_execution_v1")
 
+    # Stable machine identity — lets a browser that discovered this engine on
+    # localhost correlate it with its `app_instances` row in Supabase, so
+    # remote-access UIs can hide the tunnel option for a machine that is
+    # already reachable locally. Opaque hardware hash; safe to expose.
+    try:
+        from app.services.cloud_sync.instance_manager import get_instance_manager
+
+        _health_instance_id = get_instance_manager().instance_id
+    except Exception:
+        logger.warning("[routes] /health instance_id read failed", exc_info=True)
+        _health_instance_id = None
+
     payload: dict = {
         "status": "ok",  # liveness literal — see contract note above
         "health": health_state,
         "service": "matrx-local",
         "version": _APP_VERSION,
+        "instance_id": _health_instance_id,
         # Explicit protocol gates for callers that may route paid/executable
         # work here. Reachability alone never implies saved-agent parity.
         "capabilities": execution_capabilities,

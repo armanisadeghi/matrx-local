@@ -432,18 +432,11 @@ The broader prompt audit remains open.
     actual tensor-dtype inspection from safetensors headers (HTTP range
     request on the first 8 bytes + header JSON, still download-free).
 
-- [ ] **Heartbeat never bumps `app_instances.tunnel_updated_at` (discovered
-  2026-07-10, Phase 7 remote-control audit)** — Analyzed 2026-07-10 — verified
-  in code. `app/services/cloud_sync/settings_sync.py::heartbeat` re-asserts
-  `tunnel_url` / `tunnel_ws_url` / `tunnel_active` every 5 min (correct) but
-  omits `tunnel_updated_at`, so that column only moves on explicit
-  start/stop (`instance_manager.update_tunnel_url`) and goes stale while a
-  tunnel is live (observed: stuck at 2026-05-10 on this Mac). Nothing gates
-  on it today (frontend resolve + aidream `_is_online` use `last_seen` +
-  `tunnel_active`), but it misleads humans reading the row. Fix: include
-  `tunnel_updated_at = now` in the heartbeat payload whenever the
-  tunnel_payload dict is included. NOT fixed in Phase 7 because
-  `settings_sync*` was owned by a concurrent agent. (= MXL-D-010)
+- [x] **Heartbeat never bumps `app_instances.tunnel_updated_at` (= MXL-D-010)**
+  — FIXED 2026-07-17: `settings_sync.heartbeat` now includes
+  `tunnel_updated_at = now` whenever the tunnel URL it writes differs from the
+  last URL it wrote (tracked in-memory as `_last_tunnel_url_written`), so the
+  column means "when this URL appeared" rather than "last heartbeat".
 
 - [ ] **Silent no-op PATCHes to `app_instances` (discovered 2026-07-10)** —
   Analyzed 2026-07-10 — verified in code. Both `settings_sync.heartbeat` and

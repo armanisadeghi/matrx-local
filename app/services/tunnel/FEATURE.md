@@ -52,10 +52,18 @@ Two writers, on purpose — keep them consistent:
 2. `settings_sync.heartbeat` — re-asserts the tunnel fields every 5 min so a
    recovered cloud row converges.
 
-Found defects to keep in mind before touching these paths
-(`FOUND_DEFECTS.md`): heartbeat omits `tunnel_updated_at` (MXL-D-010) and both
-writers PATCH blindly — PostgREST 2xx on zero matched rows hides orphaned
-instances (MXL-D-003).
+The heartbeat also bumps `tunnel_updated_at` whenever the URL it writes
+differs from the last one it wrote (in-memory `_last_tunnel_url_written`), so
+the column means "when this URL appeared" (MXL-D-010 fixed 2026-07-17).
+
+Found defect to keep in mind before touching these paths: both writers PATCH
+blindly — PostgREST 2xx on zero matched rows hides orphaned instances
+(MXL-D-003).
+
+`GET /health` exposes `instance_id` (opaque hardware hash, same value as
+`app_instances.instance_id`) so a browser that discovers this engine on
+localhost can correlate it with its cloud row — remote-access UIs use that to
+hide the tunnel option for a machine that is already reachable locally.
 
 Remote consumers resolve this machine via `last_seen` + `tunnel_active`
 (frontend resolve, aidream `_is_online`) — never gate on `tunnel_updated_at`.

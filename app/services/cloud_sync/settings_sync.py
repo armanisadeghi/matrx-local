@@ -647,6 +647,16 @@ class SettingsSync:
                 "tunnel_ws_url": tm.ws_url if tm.running else None,
                 "tunnel_active": tm.running,
             }
+            # Bump tunnel_updated_at only when the URL actually changes
+            # (tunnel restart → new trycloudflare address) so the timestamp
+            # means "when this URL appeared", not "last heartbeat".
+            if tunnel_payload["tunnel_url"] != getattr(
+                self, "_last_tunnel_url_written", object()
+            ):
+                tunnel_payload["tunnel_updated_at"] = datetime.now(
+                    timezone.utc
+                ).isoformat()
+            self._last_tunnel_url_written = tunnel_payload["tunnel_url"]
         except Exception:
             tunnel_payload = {}
 

@@ -534,6 +534,26 @@ async def load_tools_and_register() -> int:
             exc_info=True,
         )
 
+    # --- Phase C: register AIDream-owned tools as authenticated remote handlers ---
+    # A local model runs a hybrid tool loop: OS tools stay in this process;
+    # server-owned tools use AIDream's canonical /ai/tools/execute pipeline.
+    # Offline startup is allowed because request preparation retries the catalog
+    # fetch on demand before rejecting an injected tool.
+    try:
+        from app.services.ai.remote_tool_bridge import get_remote_tool_bridge
+
+        remote_count = await get_remote_tool_bridge().refresh()
+        logger.info(
+            "[engine] matrx-ai: registered %d AIDream remote tool handlers ✓",
+            remote_count,
+        )
+    except Exception:
+        logger.warning(
+            "[engine] matrx-ai: remote tool registry unavailable at startup — "
+            "will retry on the first server-owned tool request",
+            exc_info=True,
+        )
+
     # Only mark loaded when the critical local-tool registration succeeded, so
     # a transient failure doesn't permanently wedge the registry as "loaded".
     _tools_loaded = local_tools_ok

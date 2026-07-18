@@ -52,13 +52,16 @@ class AIDreamClient:
         agents = await client.get("/agents", jwt=user_jwt)
     """
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(
+        self, base_url: str, *, transport: httpx.AsyncBaseTransport | None = None
+    ) -> None:
         if not base_url:
             raise ValueError(
                 "[aidream_client] No AIDream server URL was resolved from app "
                 "config. Cannot create AIDreamClient without a base URL."
             )
         self._base_url = base_url.rstrip("/")
+        self._transport = transport
 
     async def get(self, path: str, jwt: Optional[str] = None) -> Any:
         """Perform a GET request to /api{path}.
@@ -73,7 +76,9 @@ class AIDreamClient:
             headers["Authorization"] = f"Bearer {jwt}"
 
         try:
-            async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as http:
+            async with httpx.AsyncClient(
+                timeout=_REQUEST_TIMEOUT, transport=self._transport
+            ) as http:
                 resp = await http.get(url, headers=headers)
         except httpx.TimeoutException as exc:
             raise AIDreamOfflineError(
@@ -92,6 +97,54 @@ class AIDreamClient:
             raise AIDreamError(
                 resp.status_code,
                 f"[aidream_client] {path} → HTTP {resp.status_code}",
+            )
+
+        return resp.json()
+
+    async def post(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        jwt: Optional[str] = None,
+        timeout: float = 130.0,
+    ) -> Any:
+        """Perform an authenticated JSON POST to ``/api{path}``.
+
+        Tool execution can legitimately run for up to 120 seconds, so callers
+        may use a longer timeout than the catalog-oriented GET default.
+        """
+        url = f"{self._base_url}/api{path}"
+        headers: dict[str, str] = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        if jwt:
+            headers["Authorization"] = f"Bearer {jwt}"
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=timeout, transport=self._transport
+            ) as http:
+                resp = await http.post(url, headers=headers, json=payload)
+        except httpx.TimeoutException as exc:
+            raise AIDreamOfflineError(
+                f"[aidream_client] Timeout reaching {url}"
+            ) from exc
+        except (httpx.ConnectError, httpx.NetworkError) as exc:
+            raise AIDreamOfflineError(
+                f"[aidream_client] Cannot reach {url}: {exc}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise AIDreamOfflineError(
+                f"[aidream_client] HTTP error reaching {url}: {exc}"
+            ) from exc
+
+        if not resp.is_success:
+            detail = resp.text[:1000]
+            raise AIDreamError(
+                resp.status_code,
+                f"[aidream_client] {path} → HTTP {resp.status_code}: {detail}",
             )
 
         return resp.json()

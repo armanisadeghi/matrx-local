@@ -78,6 +78,7 @@ _HEARTBEAT_INTERVAL = float(os.getenv("MATRX_AI_HEARTBEAT_INTERVAL", "5.0"))
 # NOTE: the pydantic models below need the real types at class-definition
 # time; the import-order fix must run before this module's import completes.
 import matrx_ai.orchestrator  # noqa: E402, F401  (import-order fix, see engine.py)
+from matrx_ai.capabilities import ClientContext  # noqa: E402
 from matrx_ai.config.llm_params import LLMParams  # noqa: E402
 from matrx_ai.tools.specs import ToolSpec  # noqa: E402
 
@@ -93,6 +94,7 @@ class LocalAgentStartRequest(BaseModel):
 
     tools: list[ToolSpec] = []
     tools_replace: list[ToolSpec] | None = None
+    client: ClientContext | None = None
 
     conversation_id: str | None = None
     is_new: bool | None = None
@@ -117,6 +119,7 @@ class LocalConversationContinueRequest(BaseModel):
 
     tools: list[ToolSpec] = []
     tools_replace: list[ToolSpec] | None = None
+    client: ClientContext | None = None
 
     store: bool = True
     max_iterations: int = 100
@@ -131,6 +134,7 @@ class LocalResumeRequest(BaseModel):
     debug: bool = False
     tools: list[ToolSpec] = []
     tools_replace: list[ToolSpec] | None = None
+    client: ClientContext | None = None
 
 
 class LocalChatRequest(BaseModel):
@@ -151,6 +155,7 @@ class LocalChatRequest(BaseModel):
 
     tools: list[ToolSpec] = []
     tools_replace: list[ToolSpec] | None = None
+    client: ClientContext | None = None
 
     metadata: dict[str, Any] | None = None
 

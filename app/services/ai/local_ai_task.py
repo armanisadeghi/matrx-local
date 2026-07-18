@@ -152,13 +152,14 @@ def _registry():
     return ToolRegistry.get_instance()
 
 
-def apply_request_tools(
+async def apply_request_tools(
     config: UnifiedConfig,
     ctx: AppContext,
     tools: list[Any],
     tools_replace: list[Any] | None,
     *,
     excluded: list[str] | None = None,
+    client: Any = None,
 ) -> AppContext:
     """Apply the frontend's unified tool injection to ``config``.
 
@@ -175,6 +176,65 @@ def apply_request_tools(
         config.tools = []
         config.custom_tools = []
     registry = _registry()
+    requested_names = {
+        str(name)
+        for name in [
+            *(config.tools or []),
+            *(
+                (getattr(spec, "tool_id", None) or getattr(spec, "name", None))
+                for spec in specs
+                if getattr(spec, "kind", "registered") == "registered"
+            ),
+        ]
+        if name
+    }
+    missing_before_refresh = {
+        name for name in requested_names if registry.get(name) is None
+    }
+    if missing_before_refresh:
+        from app.services.aidream.client import AIDreamError, AIDreamOfflineError
+        from app.services.ai.remote_tool_bridge import get_remote_tool_bridge
+
+        try:
+            await get_remote_tool_bridge().ensure(missing_before_refresh)
+        except (AIDreamError, AIDreamOfflineError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "remote_tool_registry_unavailable",
+                    "message": (
+                        "The agent requested server-owned tools, but AIDream is "
+                        "currently unreachable. The desktop will retry when the "
+                        "server connection is available."
+                    ),
+                },
+            ) from exc
+
+    def _dump(value: Any) -> Any:
+        if value is None:
+            return None
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json", exclude_none=True)
+        return value
+
+    from app.services.ai.remote_tool_bridge import REMOTE_TOOL_CONTEXT_KEY
+
+    ctx = ctx.with_overrides(
+        metadata={
+            **ctx.metadata,
+            REMOTE_TOOL_CONTEXT_KEY: {
+                "tools": [_dump(spec) for spec in tools],
+                "tools_replace": (
+                    [_dump(spec) for spec in tools_replace]
+                    if tools_replace is not None
+                    else None
+                ),
+                "client": _dump(client),
+            },
+        }
+    )
+    set_app_context(ctx)
+
     unknown = [
         getattr(s, "name", None)
         for s in specs
@@ -188,10 +248,8 @@ def apply_request_tools(
             detail={
                 "code": "tool_not_found",
                 "message": (
-                    "client capability/tool injection failed — tool(s) not in the "
-                    f"local registry: {', '.join(sorted(set(unknown)))}. The desktop "
-                    "engine only carries its local OS tool set; cloud-only tools "
-                    "cannot run on the local runtime."
+                    "Tool(s) are not registered locally or in AIDream: "
+                    f"{', '.join(sorted(set(unknown)))}."
                 ),
             },
         )
@@ -294,12 +352,13 @@ async def prepare_agent_start(
         config.store = False
     config.stream = request.stream
 
-    ctx = apply_request_tools(
+    ctx = await apply_request_tools(
         config,
         ctx,
         request.tools,
         request.tools_replace,
         excluded=agent_config.excluded_tools,
+        client=request.client,
     )
     if request.user_input is not None:
         config.append_or_extend_user_input(request.user_input)
@@ -360,6 +419,16 @@ async def prepare_conversation_continue(
     excluded_tools: list[str] = []
 
     if source_id:
+        ctx = ctx.with_overrides(
+            **(
+                {"agent_version_id": source_id}
+                if version_id
+                else {"agent_id": source_id}
+            )
+        )
+        set_app_context(ctx)
+
+    if source_id:
         # Rebuild from the exact canonical definition on every continuation,
         # then append durable history. A failed first turn and a process restart
         # therefore cannot erase the agent's prompt, model, or tools.
@@ -408,12 +477,13 @@ async def prepare_conversation_continue(
     if not ctx.store:
         config.store = False
 
-    ctx = apply_request_tools(
+    ctx = await apply_request_tools(
         config,
         ctx,
         getattr(request, "tools", []),
         getattr(request, "tools_replace", None),
         excluded=excluded_tools,
+        client=getattr(request, "client", None),
     )
 
     return ctx, config, request.max_iterations, request.max_retries_per_iteration
@@ -456,7 +526,13 @@ async def prepare_chat(
     if not ctx.store:
         config.store = False
 
-    ctx = apply_request_tools(config, ctx, request.tools, request.tools_replace)
+    ctx = await apply_request_tools(
+        config,
+        ctx,
+        request.tools,
+        request.tools_replace,
+        client=request.client,
+    )
 
     if request.variables:
         config.replace_variables(request.variables)

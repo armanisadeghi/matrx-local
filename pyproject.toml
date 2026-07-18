@@ -56,7 +56,7 @@ dependencies = [
     # to ``matrx-<pkg>/v<x.y.z>`` (see aidream/.github/workflows/
     # publish-package.yml). There is intentionally no [tool.uv.sources]
     # path override — see the note further down near [tool.uv].
-    # All matrx-* pins resolve from PyPI (matrx-ai 0.4.16 wave, 2026-07-18:
+    # All matrx-* pins resolve from PyPI (matrx-ai 0.4.18 wave, 2026-07-18:
     # client-host capability resolution plus the consolidated desktop discovery
     # contract. The 0.4.16 floor keeps the provider schema aligned with the live
     # desktop registry and declares graph plus scraper browser runtime dependencies.
@@ -66,7 +66,7 @@ dependencies = [
     # reshuffle can't silently downgrade them.
     "matrx-utils>=2.0.0",
     "matrx-orm>=3.1.16",
-    "matrx-ai>=0.4.16",
+    "matrx-ai>=0.4.18",
     "matrx-connect>=0.1.10",
     "matrx-graph>=0.1.5",
     "matrx-runtime>=0.0.6",

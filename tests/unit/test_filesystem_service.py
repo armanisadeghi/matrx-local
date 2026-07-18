@@ -8,8 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.filesystem.index import FilesystemIndex
+from app.services.filesystem import index as filesystem_index_module
 from app.services.filesystem.models import Place, is_hidden
 from app.services.filesystem.roots import normalize_path_key
+from app.services.filesystem import service as filesystem_service_module
 from app.services.filesystem.service import FilesystemService, _minimal_roots
 from app.tools.session import ToolSession
 from app.tools.tools import file_ops
@@ -195,6 +197,65 @@ async def test_index_not_complete_while_directory_lease_is_outstanding(tmp_path:
     assert normalize_path_key(r"\\SERVER\Share\Folder\..\File", platform="win32") == normalize_path_key(
         r"\\server\share\file", platform="win32"
     )
+
+
+@pytest.mark.anyio
+async def test_priority_settings_round_trip_independently_of_merged_places(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    authored = [{"label": "Code first", "path": str(tmp_path / "Code")}]
+    monkeypatch.setattr(
+        filesystem_service_module, "configured_priority_roots", lambda: authored
+    )
+    service = FilesystemService(tmp_path / "index.sqlite3")
+
+    settings = await service.indexing_settings()
+
+    assert settings["priority_roots"] == authored
+    assert settings["content_enabled"] is True
+    assert settings["semantic_enabled"] is False
+
+
+@pytest.mark.anyio
+async def test_inaccessible_directory_stays_partial_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "protected"
+    root.mkdir()
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    place = Place("protected", "Protected", str(root), "configured", 100)
+    service.index.sync_roots([place])
+    claim = service.index.pop_next_directory()
+    assert claim is not None
+
+    real_scandir = filesystem_index_module.os.scandir
+
+    def deny_scan(_path: str) -> os.ScandirIterator[str]:
+        raise PermissionError("permission denied by test")
+
+    monkeypatch.setattr(filesystem_index_module.os, "scandir", deny_scan)
+    with pytest.raises(PermissionError):
+        service.index.index_directory(*claim)
+    retry_delay = service.index.fail_directory(claim[0], PermissionError("permission denied by test"))
+
+    assert retry_delay == 30
+    scan = service.index.scan_status()
+    assert scan["total"] == 1
+    assert scan["failed"] == 1
+    assert scan["ready"] == 0
+    assert scan["failures"][0]["path"] == str(root)
+    status = await service.status()
+    assert status["metadata_state"] == "partial"
+    assert status["index_complete"] is False
+    assert status["directories_failed"] == 1
+
+    monkeypatch.setattr(filesystem_index_module.os, "scandir", real_scandir)
+    service.index.sync_roots([place])
+    retry = service.index.pop_next_directory()
+    assert retry is not None
+    service.index.index_directory(*retry)
+    assert service.index.scan_status()["total"] == 0
 
 
 @pytest.mark.anyio

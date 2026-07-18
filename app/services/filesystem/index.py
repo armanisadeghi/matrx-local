@@ -54,7 +54,11 @@ CREATE TABLE IF NOT EXISTS filesystem_scan_queue (
     priority INTEGER NOT NULL,
     updated_at REAL NOT NULL,
     claimed_at REAL,
-    attempts INTEGER NOT NULL DEFAULT 0
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error_kind TEXT,
+    last_error TEXT,
+    last_failed_at REAL,
+    next_retry_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_filesystem_scan_queue_priority
     ON filesystem_scan_queue(priority DESC, depth ASC, updated_at ASC);
@@ -130,6 +134,16 @@ class FilesystemIndex:
                 db.execute("ALTER TABLE filesystem_scan_queue ADD COLUMN claimed_at REAL")
             if "attempts" not in columns:
                 db.execute("ALTER TABLE filesystem_scan_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+            for name, declaration in (
+                ("last_error_kind", "TEXT"),
+                ("last_error", "TEXT"),
+                ("last_failed_at", "REAL"),
+                ("next_retry_at", "REAL"),
+            ):
+                if name not in columns:
+                    db.execute(
+                        f"ALTER TABLE filesystem_scan_queue ADD COLUMN {name} {declaration}"
+                    )
             root_columns = {row["name"] for row in db.execute("PRAGMA table_info(filesystem_roots)")}
             if "last_claimed_at" not in root_columns:
                 db.execute("ALTER TABLE filesystem_roots ADD COLUMN last_claimed_at REAL")
@@ -233,7 +247,8 @@ class FilesystemIndex:
                         """INSERT INTO filesystem_scan_queue(path,root_id,depth,priority,updated_at)
                            VALUES(?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET
                            root_id=excluded.root_id, priority=MAX(priority,excluded.priority),
-                           updated_at=excluded.updated_at""",
+                           updated_at=excluded.updated_at, claimed_at=NULL,
+                           next_retry_at=NULL""",
                         (root.path, root.id, 0, root.priority * 1000, now),
                     )
 
@@ -249,9 +264,10 @@ class FilesystemIndex:
                 f"""SELECT q.path,q.root_id,q.depth,q.priority
                     FROM filesystem_scan_queue q
                     LEFT JOIN filesystem_roots r ON r.id=q.root_id
-                    WHERE q.claimed_at IS NULL OR q.claimed_at < ?
+                    WHERE (q.claimed_at IS NULL OR q.claimed_at < ?)
+                      AND (q.next_retry_at IS NULL OR q.next_retry_at <= ?)
                     ORDER BY {order} LIMIT 1""",
-                (lease_cutoff,),
+                (lease_cutoff, time.time()),
             ).fetchone()
             if row is None:
                 return None
@@ -280,11 +296,7 @@ class FilesystemIndex:
             parent_device = os.stat(path, follow_symlinks=False).st_dev
         except OSError:
             parent_device = None
-        try:
-            iterator = os.scandir(path)
-        except OSError:
-            self.complete_directory(path)
-            return 0
+        iterator = os.scandir(path)
         with iterator:
             for item in iterator:
                 if stop_event is not None and stop_event.is_set():
@@ -333,11 +345,12 @@ class FilesystemIndex:
             )
             if root_active:
                 db.executemany(
-                    """INSERT INTO filesystem_scan_queue(path,root_id,depth,priority,updated_at)
+                        """INSERT INTO filesystem_scan_queue(path,root_id,depth,priority,updated_at)
                        SELECT ?,?,?,?,? WHERE NOT EXISTS
                        (SELECT 1 FROM filesystem_scanned_dirs WHERE path=? AND scanned_at>=?)
                        ON CONFLICT(path) DO UPDATE SET
-                       priority=MAX(priority,excluded.priority),updated_at=excluded.updated_at""",
+                       priority=MAX(priority,excluded.priority),updated_at=excluded.updated_at,
+                       next_retry_at=NULL""",
                     [(*child, child[0], now - 21600.0) for child in children],
                 )
             db.execute(
@@ -365,6 +378,31 @@ class FilesystemIndex:
                 "UPDATE filesystem_scan_queue SET claimed_at=NULL,updated_at=? WHERE path=?",
                 (time.time(), os.path.abspath(path)),
             )
+
+    def fail_directory(self, path: str, error: OSError) -> float:
+        """Release a failed scan with bounded retry and durable diagnostics."""
+        absolute = os.path.abspath(path)
+        now = time.time()
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT attempts FROM filesystem_scan_queue WHERE path=?", (absolute,)
+            ).fetchone()
+            attempts = max(1, int(row["attempts"])) if row is not None else 1
+            retry_delay = min(6 * 60 * 60, 30 * (2 ** min(attempts - 1, 10)))
+            db.execute(
+                """UPDATE filesystem_scan_queue SET claimed_at=NULL,
+                   last_error_kind=?,last_error=?,last_failed_at=?,next_retry_at=?,updated_at=?
+                   WHERE path=?""",
+                (
+                    type(error).__name__,
+                    str(error)[:500],
+                    now,
+                    now + retry_delay,
+                    now,
+                    absolute,
+                ),
+            )
+        return float(retry_delay)
 
     def _delete_missing_children(self, parent: str, current_keys: set[str], scan_started: float) -> None:
         parent_key = _path_key(parent)
@@ -487,6 +525,32 @@ class FilesystemIndex:
         with self._connect() as db:
             row = db.execute("SELECT COUNT(*) AS count FROM filesystem_scan_queue").fetchone()
             return int(row["count"])
+
+    def scan_status(self, *, failure_limit: int = 25) -> dict[str, object]:
+        """Return queue progress without hiding inaccessible/failed locations."""
+        now = time.time()
+        with self._connect() as db:
+            counts = db.execute(
+                """SELECT COUNT(*) AS total,
+                          SUM(CASE WHEN last_error IS NOT NULL THEN 1 ELSE 0 END) AS failed,
+                          SUM(CASE WHEN claimed_at IS NOT NULL THEN 1 ELSE 0 END) AS claimed,
+                          SUM(CASE WHEN next_retry_at IS NULL OR next_retry_at <= ? THEN 1 ELSE 0 END) AS ready
+                   FROM filesystem_scan_queue""",
+                (now,),
+            ).fetchone()
+            failures = db.execute(
+                """SELECT path,root_id,attempts,last_error_kind,last_error,last_failed_at,next_retry_at
+                   FROM filesystem_scan_queue WHERE last_error IS NOT NULL
+                   ORDER BY last_failed_at DESC LIMIT ?""",
+                (max(0, min(failure_limit, 100)),),
+            ).fetchall()
+        return {
+            "total": int(counts["total"] or 0),
+            "failed": int(counts["failed"] or 0),
+            "claimed": int(counts["claimed"] or 0),
+            "ready": int(counts["ready"] or 0),
+            "failures": [dict(row) for row in failures],
+        }
 
     def entry_count(self) -> int:
         with self._connect() as db:

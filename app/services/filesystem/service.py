@@ -16,7 +16,11 @@ import psutil
 
 from app.services.filesystem.index import FilesystemIndex, _should_skip_directory
 from app.services.filesystem.models import DirectoryPage, FileEntry, Place, SearchPage
-from app.services.filesystem.roots import discover_places
+from app.services.filesystem.roots import (
+    configured_priority_roots,
+    discover_places,
+    normalize_path_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +119,7 @@ class FilesystemService:
             if not raw_path.strip():
                 continue
             path = str(Path(raw_path).expanduser().absolute())
-            key = os.path.normcase(path)
+            key = normalize_path_key(path)
             if key in seen:
                 continue
             seen.add(key)
@@ -127,6 +131,13 @@ class FilesystemService:
         sync.set("filesystem_index", {**current, "priority_roots": normalized})
         await self.refresh_roots()
         return await self.places()
+
+    async def indexing_settings(self) -> dict[str, object]:
+        """Return authored indexing policy; never infer it from merged Places."""
+        return {
+            "priority_roots": configured_priority_roots(),
+            **_indexing_settings(),
+        }
 
     async def set_indexing_settings(
         self,
@@ -284,19 +295,27 @@ class FilesystemService:
         return results
 
     async def status(self) -> dict[str, object]:
-        entries, queued, enrichment = await asyncio.gather(
-            asyncio.to_thread(self.index.entry_count), asyncio.to_thread(self.index.queue_count),
+        entries, scan, enrichment = await asyncio.gather(
+            asyncio.to_thread(self.index.entry_count), asyncio.to_thread(self.index.scan_status),
             asyncio.to_thread(self.index.enrichment_counts),
         )
         settings = _indexing_settings()
         fastembed_available = importlib.util.find_spec("fastembed") is not None
+        queued = int(scan["total"])
+        failed = int(scan["failed"])
+        metadata_state = "partial" if failed else "indexing" if queued else "complete"
         return {
             "started": self._started,
             "database": str(self.index.path),
             "fts5": self.index.fts_available,
             "entries": entries,
             "directories_pending": queued,
-            "index_complete": queued == 0,
+            "directories_failed": failed,
+            "directories_claimed": int(scan["claimed"]),
+            "directories_ready": int(scan["ready"]),
+            "scan_failures": scan["failures"],
+            "metadata_state": metadata_state,
+            "index_complete": metadata_state == "complete",
             "indexed_this_run": self._indexed_this_run,
             "places": len(self._places),
             "last_reconcile_at": self._last_reconcile or None,
@@ -339,6 +358,18 @@ class FilesystemService:
                 await asyncio.sleep(0.01 if priority >= 80_000 else 0.1)
             except asyncio.CancelledError:
                 raise
+            except OSError as exc:
+                if item is not None:
+                    retry_delay = await asyncio.to_thread(
+                        self.index.fail_directory, item[0], exc
+                    )
+                    logger.warning(
+                        "Filesystem directory scan failed; retrying in %.0fs path=%s",
+                        retry_delay,
+                        item[0],
+                        exc_info=True,
+                    )
+                await asyncio.sleep(1.0)
             except Exception:
                 if item is not None:
                     await asyncio.to_thread(self.index.release_directory, item[0])

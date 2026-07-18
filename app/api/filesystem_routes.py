@@ -51,6 +51,11 @@ async def update_indexing_settings(request: IndexingSettingsRequest) -> dict[str
     return await get_filesystem_service().set_indexing_settings(**request.model_dump())
 
 
+@router.get("/indexing-settings")
+async def get_indexing_settings() -> dict[str, object]:
+    return await get_filesystem_service().indexing_settings()
+
+
 @router.get("/list")
 async def list_directory(
     path: str,

@@ -116,7 +116,13 @@ def _standard_user_dirs(home: Path) -> dict[str, tuple[str, Path]]:
     }
 
 
-def _configured_priority_roots() -> list[tuple[str, str]]:
+def configured_priority_roots() -> list[dict[str, str]]:
+    """Return the user-authored priority-root settings without Places dedupe.
+
+    Places are a presentation of discovered locations and intentionally merge
+    overlapping paths.  Settings must round-trip the authored list instead of
+    trying to reconstruct it from that merged presentation.
+    """
     try:
         from app.services.cloud_sync.settings_sync import get_settings_sync
 
@@ -124,12 +130,18 @@ def _configured_priority_roots() -> list[tuple[str, str]]:
         values = stored.get("priority_roots", []) if isinstance(stored, dict) else []
     except Exception:
         values = []
-    roots: list[tuple[str, str]] = []
+    roots: list[dict[str, str]] = []
     for index, raw in enumerate(values):
         if isinstance(raw, str):
-            roots.append((f"priority-{index}", raw))
+            roots.append({"label": Path(raw).name or f"Priority root {index + 1}", "path": raw})
         elif isinstance(raw, dict) and isinstance(raw.get("path"), str):
-            roots.append((str(raw.get("label") or f"priority-{index}"), raw["path"]))
+            path = raw["path"]
+            roots.append(
+                {
+                    "label": str(raw.get("label") or Path(path).name or f"Priority root {index + 1}"),
+                    "path": path,
+                }
+            )
     return roots
 
 
@@ -162,7 +174,9 @@ def discover_places() -> list[Place]:
             )
         )
 
-    for label, raw in _configured_priority_roots():
+    for configured_root in configured_priority_roots():
+        label = configured_root["label"]
+        raw = configured_root["path"]
         path = Path(raw).expanduser().absolute()
         key = normalize_path_key(str(path))
         if key in seen:

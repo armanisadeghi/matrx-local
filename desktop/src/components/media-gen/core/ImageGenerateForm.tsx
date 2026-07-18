@@ -5,6 +5,7 @@
  *  - ImagePromptField        prompt + per-family capacity hint
  *  - ImageCommonSettings     negative → steps/guidance → size → seed (+reset)
  *  - InputImageControl       img2img: drop/pick/paste + preview + strength
+ *  - AlternativeTextEncodersSection model-scoped Standard/alternative choice
  *  - LoraStylesSection       "Styles (LoRA)": installed toggles/scales,
  *                            base-family mismatch warnings, Get-more dialog
  *                            with DownloadManager progress + HF repo paste
@@ -357,6 +358,196 @@ export function InputImageControl({ ctl }: { ctl: ImageGenController }) {
           This model edits from the reference image and your prompt directly —
           it has no strength control.
         </p>
+      )}
+    </div>
+  );
+}
+
+// ── Alternative text encoders ───────────────────────────────────────────────
+
+/**
+ * Explicit model-scoped encoder choice. The stock encoder remains available;
+ * selecting an uninstalled alternative immediately starts its persistent
+ * DownloadManager install and generation stays disabled until it is complete.
+ */
+export function AlternativeTextEncodersSection({
+  ctl,
+}: {
+  ctl: ImageGenController;
+}) {
+  const [, actions] = useMediaGenApp();
+  const { downloads } = useDownloadManager();
+  const encoders = ctl.model?.text_encoders ?? [];
+  const selectedId = ctl.form.textEncoderId;
+  const selected = selectedId
+    ? encoders.find((encoder) => encoder.encoder_id === selectedId)
+    : null;
+  const selectedDownload = selected
+    ? downloads.find(
+        (entry) =>
+          entry.category === "image_gen_text_encoder" &&
+          (entry.filename === selected.encoder_id ||
+            entry.metadata?.["text_encoder_id"] === selected.encoder_id),
+      )
+    : undefined;
+  const { downloadTextEncoder, setImageForm } = actions;
+
+  // Selection is the first-use boundary. This also covers encoders restored
+  // by Remix rather than selected with a click. A failed entry remains present
+  // so retries stay explicit instead of looping.
+  useEffect(() => {
+    if (
+      !ctl.model?.model_id ||
+      !selectedId ||
+      selected?.installed ||
+      (selectedDownload && selectedDownload.status !== "completed")
+    ) {
+      return;
+    }
+    void downloadTextEncoder(ctl.model.model_id, selectedId);
+  }, [
+    ctl.model?.model_id,
+    selectedId,
+    selected?.installed,
+    selectedDownload,
+    downloadTextEncoder,
+  ]);
+
+  if (encoders.length === 0 || !ctl.model) return null;
+
+  const selectEncoder = (encoderId: string | null) => {
+    setImageForm({ textEncoderId: encoderId });
+  };
+
+  return (
+    <div className="space-y-2 rounded-lg border p-3">
+      <div>
+        <Label className="text-xs">Alternative text encoders</Label>
+        <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+          Choose how prompts are encoded. Alternatives download once when first
+          selected and remain installed on this device.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        role="radio"
+        aria-checked={selectedId === null}
+        onClick={() => selectEncoder(null)}
+        className={`w-full rounded-md border px-3 py-2 text-left transition-colors ${
+          selectedId === null
+            ? "border-violet-500 bg-violet-500/5"
+            : "hover:bg-muted/30"
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium">Standard encoder</span>
+          <Badge variant="secondary" className="text-[10px]">
+            Included
+          </Badge>
+        </div>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          The encoder published with {ctl.model.name}.
+        </p>
+      </button>
+
+      {encoders.map((encoder) => {
+        const download = downloads.find(
+          (entry) =>
+            entry.category === "image_gen_text_encoder" &&
+            (entry.filename === encoder.encoder_id ||
+              entry.metadata?.["text_encoder_id"] === encoder.encoder_id),
+        );
+        const downloading =
+          download?.status === "queued" || download?.status === "active";
+        const failed = download?.status === "failed";
+        const isSelected = selectedId === encoder.encoder_id;
+        return (
+          <div
+            key={encoder.encoder_id}
+            className={`rounded-md border transition-colors ${
+              isSelected
+                ? "border-violet-500 bg-violet-500/5"
+                : "hover:bg-muted/30"
+            }`}
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={isSelected}
+              onClick={() => selectEncoder(encoder.encoder_id)}
+              className="w-full px-3 py-2 text-left"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <span className="text-xs font-medium">{encoder.name}</span>
+                <span className="flex shrink-0 flex-wrap justify-end gap-1">
+                  {encoder.unverified && (
+                    <Badge variant="outline" className="text-[9px]">
+                      Unverified
+                    </Badge>
+                  )}
+                  <Badge variant="outline" className="text-[9px] uppercase">
+                    {encoder.format}
+                  </Badge>
+                  {encoder.installed ? (
+                    <Badge variant="secondary" className="text-[9px]">
+                      Installed
+                    </Badge>
+                  ) : downloading ? (
+                    <Badge variant="secondary" className="text-[9px]">
+                      <Loader2 className="mr-1 h-2.5 w-2.5 animate-spin" />
+                      {Math.round(download?.percent ?? 0)}%
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary" className="text-[9px]">
+                      <Download className="mr-1 h-2.5 w-2.5" />
+                      {encoder.download_size_gb > 0
+                        ? formatGb(encoder.download_size_gb)
+                        : "On demand"}
+                    </Badge>
+                  )}
+                </span>
+              </div>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                {encoder.description}
+              </p>
+              <p className="mt-1 text-[10px] text-muted-foreground/80">
+                License: {encoder.license}
+                {encoder.requires_hf_token
+                  ? " · Hugging Face access approval and token required"
+                  : ""}
+              </p>
+            </button>
+            {failed && (
+              <div className="flex items-start gap-2 border-t px-3 py-2 text-[11px] text-destructive">
+                <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+                <span className="min-w-0 flex-1 break-words">
+                  {download?.error_msg ?? "Download failed"}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() =>
+                    void downloadTextEncoder(
+                      ctl.model!.model_id,
+                      encoder.encoder_id,
+                    )
+                  }
+                >
+                  Retry
+                </Button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {selectedId !== null && selected === undefined && (
+        <ErrorNote
+          message={`The recorded text encoder '${selectedId}' is no longer offered for this model. Choose Standard or another alternative.`}
+        />
       )}
     </div>
   );
@@ -1031,6 +1222,7 @@ export function ImageGenerateForm({
 
       <ImageCommonSettings ctl={ctl} showNegative={!batch} />
       <InputImageControl ctl={ctl} />
+      <AlternativeTextEncodersSection ctl={ctl} />
       <LoraStylesSection ctl={ctl} />
       <ImageAdvancedSection ctl={ctl} />
       {!hideNotices && <ImageFormNotices ctl={ctl} />}

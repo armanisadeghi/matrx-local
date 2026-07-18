@@ -115,7 +115,10 @@ export function useImageGenController(options?: {
   const completedImageDownloads = useMemo(
     () =>
       downloads.filter(
-        (d) => d.category === "image_gen" && d.status === "completed",
+        (d) =>
+          (d.category === "image_gen" ||
+            d.category === "image_gen_text_encoder") &&
+          d.status === "completed",
       ).length,
     [downloads],
   );
@@ -161,8 +164,19 @@ export function useImageGenController(options?: {
     [imageForm.advancedText, defaults?.advanced],
   );
   const dimError = dimensionError(imageForm.width, imageForm.height);
+  const selectedTextEncoder = imageForm.textEncoderId
+    ? (model?.text_encoders ?? []).find(
+        (encoder) => encoder.encoder_id === imageForm.textEncoderId,
+      )
+    : null;
+  const textEncoderInvalid =
+    imageForm.textEncoderId !== null && selectedTextEncoder?.installed !== true;
   const formInvalid =
-    !imageForm.prompt.trim() || !defaults || !advanced.ok || dimError !== null;
+    !imageForm.prompt.trim() ||
+    !defaults ||
+    !advanced.ok ||
+    dimError !== null ||
+    textEncoderInvalid;
   const isRevision = imageForm.revision !== null;
 
   const buildInput = useCallback((): ImageGenerateInput | null => {
@@ -190,6 +204,7 @@ export function useImageGenController(options?: {
       useInitImage && d.strength !== null ? imageForm.strength : undefined;
     const loras = enabledLoras.length > 0 ? enabledLoras : undefined;
     const extraParams = adv.count > 0 ? adv.overrides : undefined;
+    const textEncoderId = imageForm.textEncoderId ?? undefined;
     return {
       prompt: imageForm.prompt.trim(),
       model_id: d.modelId,
@@ -210,6 +225,9 @@ export function useImageGenController(options?: {
           }
         : {}),
       ...(loras !== undefined ? { loras } : {}),
+      ...(textEncoderId !== undefined
+        ? { text_encoder_id: textEncoderId }
+        : {}),
       ...(extraParams !== undefined ? { extra_params: extraParams } : {}),
     };
   }, [imageForm]);

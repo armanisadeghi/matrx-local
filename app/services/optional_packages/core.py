@@ -1,14 +1,16 @@
 """Core primitives for on-demand pip installs into user-writable targets.
 
 Copied from the image-gen installer path that already ships to end users:
-find a real Python (never the frozen sidecar), ``pip install --target``,
-stream progress over SSE.
+find a real Python (never the frozen sidecar), install into a target with that
+Python's pip or uv when pip is intentionally absent, and stream progress over
+SSE.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -30,7 +32,12 @@ def packages_dir(name: str) -> Path:
 
     macOS / Linux  →  ~/.matrx/<name>/
     Windows        →  %LOCALAPPDATA%\\AI Matrx\\<name>\\
+    Source-run isolation sets ``MATRX_HOME_DIR``. It must win on every
+    platform so a dev engine can never migrate the installed app's runtime.
     """
+    isolated_home = os.getenv("MATRX_HOME_DIR")
+    if isolated_home:
+        return Path(isolated_home) / name
     if sys.platform == "win32":
         base = Path(os.getenv("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
         return base / "AI Matrx" / name
@@ -175,8 +182,6 @@ def find_python() -> str:
                     logger.debug("[%s] Using uv Python: %s", "optional_packages", exe)
                     return str(exe)
 
-    import shutil
-
     for name in ("python3", "python3.13", "python3.12", "python3.11", "python"):
         found = shutil.which(name)
         if found and found != sys.executable:
@@ -223,24 +228,12 @@ def run_pip_streaming(
     Raises RuntimeError on non-zero exit or inactivity timeout.
     """
     python = find_python()
-    cmd = [
-        python,
-        "-m",
-        "pip",
-        "install",
-        "--target",
-        str(target),
-        "--upgrade",
-        "--no-cache-dir",
-        "--progress-bar",
-        "off",
-        "--disable-pip-version-check",
-    ]
+    cmd = _install_command(python, target)
     if extra_index:
         cmd += ["--extra-index-url", extra_index]
     cmd += packages
 
-    logger.info("[optional_packages] Running pip via: %s", python)
+    logger.info("[optional_packages] Installing packages for Python: %s", python)
     logger.info("[optional_packages] Command: %s", " ".join(cmd))
 
     proc = subprocess.Popen(
@@ -282,5 +275,85 @@ def run_pip_streaming(
         )
     if proc.returncode != 0:
         raise RuntimeError(
-            f"pip exited with code {proc.returncode} while installing {packages}"
+            f"package installer exited with code {proc.returncode} while "
+            f"installing {packages}"
         )
+
+
+def _python_has_pip(python: str) -> bool:
+    """Probe without importing pip into the engine process."""
+    try:
+        result = subprocess.run(
+            [python, "-m", "pip", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _install_command(python: str, target: Path) -> list[str]:
+    """Choose a target installer that works in packaged and uv dev runtimes.
+
+    `uv sync` intentionally creates environments without pip. Source startup
+    migrations still need to repair an existing managed runtime, so use the
+    user's uv executable when available. Packaged installations continue to
+    prefer the selected interpreter's pip and fall back to ensurepip when the
+    interpreter ships it but has not bootstrapped it yet.
+    """
+    if not _python_has_pip(python):
+        uv = shutil.which("uv")
+        if uv:
+            logger.info(
+                "[optional_packages] %s has no pip; using uv for the target install",
+                python,
+            )
+            return [
+                uv,
+                "pip",
+                "install",
+                "--python",
+                python,
+                "--target",
+                str(target),
+                "--upgrade",
+                "--no-cache",
+                "--no-progress",
+            ]
+
+        for extra in ([], ["--user"]):
+            try:
+                subprocess.run(
+                    [python, "-m", "ensurepip", "--upgrade", *extra],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=120,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if _python_has_pip(python):
+                break
+        else:
+            raise RuntimeError(
+                f"Python at {python} has no pip, uv is not installed, and "
+                "ensurepip could not bootstrap pip. Install Python 3 with pip "
+                "and try again."
+            )
+
+    return [
+        python,
+        "-m",
+        "pip",
+        "install",
+        "--target",
+        str(target),
+        "--upgrade",
+        "--no-cache-dir",
+        "--progress-bar",
+        "off",
+        "--disable-pip-version-check",
+    ]

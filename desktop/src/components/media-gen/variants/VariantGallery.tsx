@@ -63,6 +63,7 @@ import {
   ImageCommonSettings,
   ImageParamsErrorNotice,
   InputImageControl,
+  AlternativeTextEncodersSection,
   ImageGenerateForm,
   ImageRevisionBanner,
   LoraStylesSection,
@@ -538,6 +539,7 @@ export function VariantGallery() {
                         <ImageParamsErrorNotice ctl={imageCtl} />
                         <ImageCommonSettings ctl={imageCtl} />
                         <InputImageControl ctl={imageCtl} />
+                        <AlternativeTextEncodersSection ctl={imageCtl} />
                         <LoraStylesSection ctl={imageCtl} />
                       </div>
                     ) : !isImage && videoCtl.defaults ? (

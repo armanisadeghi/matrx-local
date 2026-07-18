@@ -133,6 +133,40 @@ A batch is N jobs sharing a `batch_id` — the unit a user actually thinks in
 | `POST /queue/reorder` | Reorders **queued** jobs only. The running job never moves. Unknown / no-longer-queued ids are ignored — the user dragging a row at the instant it starts running is a no-op, never a resurrection. |
 | `POST /jobs/{id}/retry` | Resets the attempt budget to 0: the user asking again is a new decision, not a continuation of the automatic backoff. 409 if the input image is gone. |
 
+## Alternative text encoders — explicit, model-scoped, durable
+
+The stock encoder is always the explicit **Standard encoder** option. Optional
+replacements live in the owning `image_gen_model` catalog payload's
+`text_encoders` array; compatibility must never be inferred globally. Each
+entry pins the Hugging Face commit, exact allowlisted files, format
+(`transformers`, `gguf`, or `state_dict`), license, declared size, and whether
+the candidate is unverified.
+
+Selecting an uninstalled alternative is the first-use boundary: the desktop
+starts a universal DownloadManager job (`image_gen_text_encoder`) immediately,
+including when Remix restores the selection. The pending metadata is written
+first; `text-encoder.json` + every declared file + `.download-complete` is the
+only installed state. The asset then remains under
+`~/.matrx/image-models/text-encoders/<encoder_id>/` until the installation is
+removed explicitly. Engine startup never downloads an encoder.
+
+Generation is disabled while the selected encoder is absent. The chosen
+`text_encoder_id` is validated before enqueue, persisted on every durable job,
+passed through retries/batches, recorded in the media sidecar, and restored by
+Remix. Changing the choice changes pipeline identity and forces a clean reload;
+the service never mutates an already-loaded standard pipeline in place.
+
+`Flux2KleinPipeline` receives complete Transformers/GGUF tokenizer + encoder
+components during `from_pretrained`. State-dict candidates load strictly over
+the stock encoder so missing or unexpected keys fail loudly. Transformers'
+GGUF loader dequantizes into PyTorch while loading: GGUF reduces download and
+disk size, but must not be presented as equivalent runtime-memory savings.
+
+The current catalog intentionally labels every alternative **Unverified**.
+There is no quality or safety promise until a candidate is tested. Catalog
+removal makes a recorded but no-longer-offered id an explicit UI/API error;
+there is no silent fallback to Standard.
+
 ## LoRA styles & custom models — resolve from an id or ANY url, never an exact one
 
 `loras.py` (store + curated catalog), `custom_models.py` (`parse_ref` /
@@ -196,13 +230,22 @@ pipeline loader.
 
 The packaged app owns the managed `image-gen-packages` runtime across macOS,
 Windows, and Linux. On startup, before that directory is injected into
-`sys.path`, an existing runtime below the required Diffusers version is
-upgraded automatically in the background. This migration changes only
-Diffusers and its resolved Python dependencies—not model weights, LoRAs, or
-Torch—and records a durable pending marker before it starts. An interrupted
-migration retries at the next engine start. Image generation is hard-gated
-until the required runtime is verified, so an old known-broken LoRA converter
-is never used as a fallback.
+`sys.path`, an existing runtime below the required Diffusers/Transformers
+versions or missing PEFT/GGUF support is upgraded automatically in the
+background. This migration changes only managed Python packages—not model
+weights, encoders, LoRAs, or Torch—and records a durable pending marker before
+it starts. An interrupted migration retries at the next engine start. Image
+generation is hard-gated until the required runtime is verified, so an old
+known-broken loader is never used as a fallback.
+
+Source-run `uv` environments intentionally may not contain pip. The shared
+optional-package installer probes the selected interpreter first and uses
+`uv pip install --python ... --target ...` when necessary; packaged Python
+continues to use pip (with `ensurepip` as its final bootstrap path). Never
+assume `sys.executable -m pip` exists merely because Python does.
+`packages_dir()` honors `MATRX_HOME_DIR` before platform defaults, so a dev
+engine can never inspect, withhold, or migrate the installed app's managed
+runtime.
 
 ### Family compatibility is HONEST — a mismatch fails loud, never silently hides
 
@@ -235,3 +278,5 @@ variables; it just runs the jobs the matrix expands into.
 | `tests/smoke/test_media_gen_batch_live.py` | Opt-in (`MATRX_LIVE_GEN=1`): a real 4-run matrix generating real images on a real engine |
 | `tests/smoke/test_media_gen_queue.py`, `test_media_gen_cancel.py` | The generation gate, priority-`next`, mid-flight cancel |
 | `tests/smoke/test_media_gen_img2img_lora.py` | Img2img/LoRA plus revision validation, durable job lineage, and sidecar lineage |
+| `tests/unit/test_image_text_encoders.py` | Revision/file completion contract, pinned DownloadManager request, and gated-token failure |
+| `tests/unit/test_optional_packages_core.py` | pip/uv installer selection for packaged and uv source runtimes |

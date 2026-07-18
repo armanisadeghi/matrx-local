@@ -156,6 +156,10 @@ pattern via `desktop/src/lib/catalogs.ts` (`fetchCatalog(kind)`).
 - **No secrets** — everything here is public by definition; catalogs steer
   downloads, so artifact hashes ride along where the source publishes them
   (`artifact_sha256` on the Kokoro files).
+- **Nested model assets remain model-scoped** — `image_gen_model.text_encoders`
+  carries revision-pinned alternative encoder specs. The consumer adapts each
+  nested object into `AlternativeTextEncoder`; one malformed model row is
+  skipped loudly by the normal per-entry fault-isolation boundary.
 
 ## Tests
 
@@ -181,6 +185,9 @@ pattern via `desktop/src/lib/catalogs.ts` (`fetchCatalog(kind)`).
 
 ## Change Log
 
+- **2026-07-18 — Model-scoped text encoders.** Added tolerant adaptation of
+  revision-pinned alternative encoder specs nested in image-gen model payloads;
+  the live FLUX.2 Klein 4B entry is the first consumer.
 - **2026-07-14 — Adversarial-review hardening.** Drift guard for
   `compiled_data.py` (`scripts/generate_catalog_fallback.py` + drift test);
   per-entry fault isolation in `parse_entries` (20% systemic floor,

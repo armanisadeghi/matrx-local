@@ -179,6 +179,7 @@ class ImageGenStatusResponse(BaseModel):
     available: bool
     unavailable_reason: str | None
     loaded_model_id: str | None
+    loaded_text_encoder_id: str | None = None
     is_loading: bool
     load_progress: float
     load_error: str | None = None
@@ -701,10 +702,7 @@ async def list_image_gen_models() -> list[ImageGenModelInfo]:
                 custom=m.custom,
                 source=m.source,
                 format=m.format,
-                text_encoders=[
-                    encoder_api_info(e)
-                    for e in m.text_encoders
-                ],
+                text_encoders=[encoder_api_info(e) for e in m.text_encoders],
             )
         )
     return out
@@ -731,9 +729,7 @@ async def download_model(req: DownloadModelRequest) -> DownloadModelResponse:
     )
 
 
-@router.post(
-    "/text-encoders/download", response_model=DownloadTextEncoderResponse
-)
+@router.post("/text-encoders/download", response_model=DownloadTextEncoderResponse)
 @safe_route("image_gen_text_encoder_download")
 async def download_text_encoder(
     req: DownloadTextEncoderRequest,
@@ -808,9 +804,18 @@ async def load_model(req: LoadModelRequest) -> LoadModelResponse | JSONResponse:
             status_code=409,
             content={"detail": "model not downloaded", "needs_download": True},
         )
+    if result.get("needs_text_encoder_download"):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": result.get("error", "text encoder not downloaded"),
+                "needs_text_encoder_download": True,
+            },
+        )
     if result.get("hardware_blocked"):
         raise HTTPException(status_code=409, detail=result.get("error"))
     result.pop("needs_download", None)
+    result.pop("needs_text_encoder_download", None)
     result.pop("hardware_blocked", None)
     return LoadModelResponse(**result)
 

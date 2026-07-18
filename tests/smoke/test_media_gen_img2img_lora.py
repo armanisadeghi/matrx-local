@@ -156,6 +156,37 @@ def test_params_strength_default_only_for_strength_families(client: TestClient) 
     )
 
 
+def test_load_reports_missing_selected_text_encoder_as_409(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api import image_gen_routes
+
+    class StubService:
+        available = True
+        unavailable_reason = ""
+
+        async def load_model(self, model_id: str, text_encoder_id: str | None):
+            assert model_id == KLEIN_MODEL.model_id
+            assert text_encoder_id == "candidate"
+            return {
+                "success": False,
+                "error": "Text encoder 'candidate' is not downloaded.",
+                "needs_text_encoder_download": True,
+            }
+
+    monkeypatch.setattr(
+        image_gen_routes, "get_image_gen_service", lambda: StubService()
+    )
+    response = client.post(
+        "/image-gen/load",
+        json={"model_id": KLEIN_MODEL.model_id, "text_encoder_id": "candidate"},
+    )
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["detail"] == "Text encoder 'candidate' is not downloaded."
+    assert body["needs_text_encoder_download"] is True
+
+
 # ── request validation 400s ───────────────────────────────────────────────────
 
 
@@ -984,6 +1015,10 @@ def test_guess_base_family() -> None:
     )
     assert (
         guess_base_family("acme/thing", None, "black-forest-labs/FLUX.1-dev") == "flux"
+    )
+    assert (
+        guess_base_family("acme/thing", None, "black-forest-labs/FLUX.2-klein-4B")
+        == "flux2"
     )
     assert (
         guess_base_family(

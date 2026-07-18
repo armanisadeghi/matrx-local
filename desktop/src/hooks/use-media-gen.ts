@@ -277,7 +277,12 @@ export interface VideoFormDefaults extends Omit<
 
 export interface VideoFormState extends Omit<
   ImageFormState,
-  "defaults" | "initImage" | "strength" | "loras" | "revision"
+  | "defaults"
+  | "initImage"
+  | "strength"
+  | "loras"
+  | "textEncoderId"
+  | "revision"
 > {
   numFrames: number;
   fps: number;
@@ -976,7 +981,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         height: defaults.height,
         seedText: "",
         strength: defaults.strength ?? IMG2IMG_DEFAULT_STRENGTH,
-        textEncoderId: null,
+        // Switching models returns to that model's explicit Standard option.
+        // A params retry for the same model must not discard the user's choice.
+        textEncoderId:
+          prev.defaults?.modelId === model.model_id ? prev.textEncoderId : null,
         advancedText: advancedJsonOf(defaults.advanced),
       }));
     },
@@ -1140,7 +1148,12 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         return false;
       }
       try {
-        await apiDownloadImageGenTextEncoder(base, modelId, textEncoderId);
+        const result = await apiDownloadImageGenTextEncoder(
+          base,
+          modelId,
+          textEncoderId,
+        );
+        if (result.already_installed) await refreshImage();
         setImageGenError(null);
         return true;
       } catch (e) {
@@ -1155,7 +1168,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         return false;
       }
     },
-    [],
+    [refreshImage],
   );
 
   /**

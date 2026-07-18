@@ -2525,9 +2525,9 @@ class EngineAPI {
     roots: FilesystemPriorityRoot[],
   ): Promise<FilesystemPlacesResponse> {
     return this.request<FilesystemPlacesResponse>("/filesystem/priority-roots", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ roots }),
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roots }),
     });
   }
 
@@ -4138,6 +4138,8 @@ export interface ImageGenStatus {
   available: boolean;
   unavailable_reason: string | null;
   loaded_model_id: string | null;
+  /** null means the model's stock encoder is loaded. */
+  loaded_text_encoder_id?: string | null;
   is_loading: boolean;
   load_progress: number;
   /**

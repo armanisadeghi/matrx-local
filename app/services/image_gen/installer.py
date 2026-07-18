@@ -46,7 +46,9 @@ IMAGE_GEN_PACKAGES = [
     "torch>=2.6",
     "torchvision",
     "diffusers==0.39.0",
-    "transformers>=4.51",
+    # 5.3 adds the Qwen3 GGUF metadata path used by selectable FLUX.2 Klein
+    # encoders. Older managed runtimes must migrate before those assets load.
+    "transformers>=5.3.0",
     "accelerate>=1.0",
     "peft>=0.13.1",
     # Required by diffusers' load_lora_weights / set_adapters / unload_lora_weights
@@ -130,6 +132,9 @@ def needs_upgrade() -> bool:
         return True  # marker without diffusers on disk — reinstall
     if _parse_version(installed) < MIN_DIFFUSERS_VERSION:
         return True
+    transformers_version = get_installed_package_versions().get("transformers")
+    if transformers_version is None or _parse_version(transformers_version) < (5, 3, 0):
+        return True
     if get_installed_package_versions().get("peft") is None:
         return True  # LoRA apply needs peft — older installs predate this dep
     if get_installed_package_versions().get("gguf") is None:
@@ -143,7 +148,8 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
     This is deliberately a startup migration, not UI advice: shipped app
     updates must repair every existing image-gen install before importing its
     optional packages. Only diffusers and its resolved lightweight Python
-    dependencies are touched; models, LoRAs, torch, and user data stay put.
+    dependencies are touched; models, encoders, LoRAs, torch, and user data
+    stay put.
     The pending marker makes a power/network interruption retry on the next
     engine start rather than allowing the known-broken loader to run.
     """
@@ -168,13 +174,19 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
         progress.update("upgrading", 10.0, "Updating required AI runtime…")
         # Do NOT invoke the full installer: re-installing/altering torch during
         # an app update is unnecessary and is especially failure-prone on Windows
-        # where native wheel files may be in use. Diffusers is pure Python.
+        # where native wheel files may be in use. These loader dependencies do
+        # not replace the existing Torch runtime.
         _run_pip_streaming(
-            ["diffusers==0.39.0", "peft>=0.13.1", "gguf>=0.10.0"],
+            [
+                "diffusers==0.39.0",
+                "transformers>=5.3.0",
+                "peft>=0.13.1",
+                "gguf>=0.10.0",
+            ],
             pkg_dir,
             progress,
         )
-        progress.update("verifying", 80.0, "Verifying Z-Image LoRA support…")
+        progress.update("verifying", 80.0, "Verifying image runtime support…")
         python = _find_python()
         env = os.environ.copy()
         env["PYTHONPATH"] = str(pkg_dir) + os.pathsep + env.get("PYTHONPATH", "")
@@ -182,8 +194,11 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
             [
                 python,
                 "-c",
-                "import diffusers, gguf, peft; from diffusers import ZImagePipeline; "
-                "assert diffusers.__version__ == '0.39.0'; print('ok')",
+                "import diffusers, gguf, peft, transformers; "
+                "from diffusers import ZImagePipeline; "
+                "assert diffusers.__version__ == '0.39.0'; "
+                "assert tuple(map(int, transformers.__version__.split('.')[:2])) >= (5, 3); "
+                "print('ok')",
             ],
             capture_output=True,
             text=True,
@@ -191,7 +206,9 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
             timeout=60,
         )
         if check.returncode != 0 or "ok" not in check.stdout:
-            raise RuntimeError(f"Runtime migration verification failed: {check.stderr[-2000:]}")
+            raise RuntimeError(
+                f"Runtime migration verification failed: {check.stderr[-2000:]}"
+            )
         marker.write_text(
             json.dumps(
                 {
@@ -212,15 +229,19 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
             _svc_mod.DEPS_AVAILABLE, _svc_mod.DEPS_REASON = _svc_mod._check_deps()
             _vid_mod.DEPS_AVAILABLE, _vid_mod.DEPS_REASON = _vid_mod._check_deps()
         except Exception as exc:
-            raise RuntimeError(f"Runtime migration installed but could not activate packages: {exc}") from exc
+            raise RuntimeError(
+                f"Runtime migration installed but could not activate packages: {exc}"
+            ) from exc
         pending.unlink(missing_ok=True)
         progress.finish("Required AI runtime update complete")
-        logger.info("[image_gen_installer] Required Diffusers migration complete")
+        logger.info("[image_gen_installer] Required image runtime migration complete")
         return True
     except Exception:
         # Keep the pending marker as durable retry state. The service gates
         # generation while it remains, so a partial pip target cannot load.
-        logger.exception("[image_gen_installer] Required Diffusers migration failed")
+        logger.exception(
+            "[image_gen_installer] Required image runtime migration failed"
+        )
         raise
 
 

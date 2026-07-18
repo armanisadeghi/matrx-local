@@ -10,16 +10,18 @@ information from this catalog without hardcoded magic strings.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
+import re
 from typing import Any, Literal
 
 
 PipelineType = Literal[
-    "flux2-klein",          # Flux2KleinPipeline  (present since diffusers 0.37.1; fresh installs pin >=0.39)
-    "z-image",              # ZImagePipeline
-    "qwen-image",           # QwenImagePipeline
-    "flux",                 # FluxPipeline        (FLUX.1 family)
+    "flux2-klein",  # Flux2KleinPipeline  (present since diffusers 0.37.1; fresh installs pin >=0.39)
+    "z-image",  # ZImagePipeline
+    "qwen-image",  # QwenImagePipeline
+    "flux",  # FluxPipeline        (FLUX.1 family)
     "stable-diffusion-xl",  # StableDiffusionXLPipeline
-    "stable-diffusion",     # StableDiffusionPipeline (legacy, no catalog entry)
+    "stable-diffusion",  # StableDiffusionPipeline (legacy, no catalog entry)
 ]
 
 
@@ -46,6 +48,29 @@ class AlternativeTextEncoder:
     unverified: bool = True
     download_size_gb: float = 0.0
     source_url: str | None = None
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", self.encoder_id):
+            raise ValueError(f"invalid text encoder id {self.encoder_id!r}")
+        if not self.files:
+            raise ValueError(f"text encoder {self.encoder_id!r} declares no files")
+        for filename in self.files:
+            path = PurePosixPath(filename)
+            if path.is_absolute() or ".." in path.parts or filename.endswith("/"):
+                raise ValueError(
+                    f"text encoder {self.encoder_id!r} has unsafe file path {filename!r}"
+                )
+        if self.subfolder is not None:
+            subfolder = PurePosixPath(self.subfolder)
+            if subfolder.is_absolute() or ".." in subfolder.parts:
+                raise ValueError(
+                    f"text encoder {self.encoder_id!r} has unsafe subfolder"
+                )
+        if self.format in {"gguf", "state_dict"}:
+            if not self.weight_name or self.weight_name not in self.files:
+                raise ValueError(
+                    f"text encoder {self.encoder_id!r} must declare its weight_name in files"
+                )
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "AlternativeTextEncoder":
@@ -330,6 +355,7 @@ IMAGE_GEN_MODELS: list[ImageGenModel] = [
 DEFAULT_IMAGE_MODEL_ID = "black-forest-labs/FLUX.2-klein-4B"
 
 # ── Workflow presets ──────────────────────────────────────────────────────────
+
 
 @dataclass(frozen=True)
 class WorkflowPreset:

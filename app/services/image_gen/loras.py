@@ -67,7 +67,7 @@ def guess_base_family(
     declared_base_model: str | None = None,
 ) -> str:
     """Best-effort LoRA base-family guess:
-    "sdxl" | "sd15" | "flux" | "z-image" | "unknown".
+    "sdxl" | "sd15" | "flux" | "flux2" | "z-image" | "unknown".
 
     Precedence: the repo's declared ``base_model`` (HF cardData — reliable),
     then repo-id/filename token heuristics. Honest by design — anything
@@ -81,6 +81,8 @@ def guess_base_family(
         haystacks.append(weight_name.lower())
 
     for text in haystacks:
+        if any(token in text for token in ("flux.2", "flux2", "flux-2", "flux_2")):
+            return "flux2"
         if "flux" in text:
             return "flux"
         # Civitai camel form ("ZImageTurbo") and dashed ("z-image-turbo")

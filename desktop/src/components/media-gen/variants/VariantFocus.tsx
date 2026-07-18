@@ -65,6 +65,7 @@ import {
   ImageParamsErrorNotice,
   ImagePromptField,
   InputImageControl,
+  AlternativeTextEncodersSection,
   LoraStylesSection,
   useImageGenMode,
 } from "@/components/media-gen/core/ImageGenerateForm";
@@ -384,6 +385,7 @@ function ImageFocusFlow() {
                   showReset={false}
                 />
                 <InputImageControl ctl={ctl} />
+                <AlternativeTextEncodersSection ctl={ctl} />
                 <LoraStylesSection ctl={ctl} />
               </>
             ) : (

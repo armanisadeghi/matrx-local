@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatMessage, ToolCallResult } from "@/hooks/use-chat";
 import {
   extractToolParts,
+  isFilesystemTool,
   normalizeFilesystemResult,
   reduceLiveToolEvent,
   safeToolOutput,
@@ -290,6 +291,81 @@ describe("filesystem tool results", () => {
       },
     };
     expect(normalizeFilesystemResult(result)?.kind).toBe("filesystem.directory-page");
+  });
+
+  it("recovers metadata nested inside a persisted bridge output envelope", () => {
+    const extracted = extractToolParts([{
+      type: "tool_result",
+      call_id: "persisted-search",
+      name: "local_file",
+      content: JSON.stringify({
+        output: "Found one.",
+        metadata: {
+          kind: "filesystem.search-page",
+          namespace: "host",
+          query: "roadmap",
+          source: "index",
+          index_complete: true,
+          entries: [{ path: "/repo/roadmap.md", name: "roadmap.md", kind: "file" }],
+        },
+      }),
+      is_error: false,
+    }]);
+
+    expect(normalizeFilesystemResult(extracted.results[0]!, "local_file")).toEqual({
+      kind: "filesystem.search-page",
+      namespace: "host",
+      query: "roadmap",
+      source: "index",
+      indexComplete: true,
+      entries: [{ path: "/repo/roadmap.md", name: "roadmap.md", kind: "file" }],
+    });
+  });
+
+  it("gates legacy shape inference to recognized filesystem tools", () => {
+    const generic: ToolCallResult = {
+      tool_call_id: "generic",
+      type: "success",
+      output: JSON.stringify({
+        path: "/repo",
+        entries: [{ path: "/repo/readme.md", name: "readme.md", kind: "file" }],
+      }),
+    };
+
+    expect(normalizeFilesystemResult(generic, "database_query")).toBeNull();
+    expect(normalizeFilesystemResult(generic, "local_file")?.kind).toBe("filesystem.directory-page");
+  });
+
+  it("rejects directory pages without a path and preserves the source", () => {
+    expect(normalizeFilesystemResult({
+      tool_call_id: "missing-path",
+      type: "success",
+      output: "Invalid directory page",
+      metadata: { kind: "filesystem.directory-page", entries: [] },
+    })).toBeNull();
+
+    expect(normalizeFilesystemResult({
+      tool_call_id: "disk-page",
+      type: "success",
+      output: "Directory",
+      metadata: {
+        kind: "filesystem.directory-page",
+        path: "/repo",
+        source: "disk",
+        entries: [],
+      },
+    })).toMatchObject({ source: "disk" });
+  });
+
+  it.each([
+    "ListDirectory",
+    "FindPaths",
+    "SemanticFindPaths",
+    "FilesystemPlaces",
+    "local_filesystem_places",
+    "local_semantic_find_paths",
+  ])("recognizes the canonical filesystem tool name %s", (toolName) => {
+    expect(isFilesystemTool(toolName)).toBe(true);
   });
 
   it("does not retain legacy inline screenshot bytes in UI results", () => {

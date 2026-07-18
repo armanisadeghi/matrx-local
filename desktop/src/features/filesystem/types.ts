@@ -23,6 +23,7 @@ export interface FilesystemDirectoryPage {
   summary?: string;
   nextCursor?: string | null;
   total?: number | null;
+  source?: "index" | "disk";
 }
 
 export interface FilesystemSearchPage {

@@ -162,7 +162,15 @@ function candidateRecords(result: ToolCallResult): UnknownRecord[] {
   const metadata = record(result.metadata);
   // Metadata is the canonical UI contract; output is concise model-facing text
   // and is only a compatibility source when structured metadata is absent.
-  const values = [metadata, record(metadata?.data), output, record(output?.data)];
+  const outputMetadata = record(output?.metadata);
+  const values = [
+    metadata,
+    record(metadata?.data),
+    outputMetadata,
+    record(outputMetadata?.data),
+    output,
+    record(output?.data),
+  ];
   return values.filter((item): item is UnknownRecord => item !== null);
 }
 
@@ -172,7 +180,10 @@ function normalizeDirectory(source: UnknownRecord): FilesystemDirectoryPage | nu
   const entries = rawEntries
     .map(normalizeEntry)
     .filter((entry): entry is FilesystemEntry => entry !== null);
-  const path = stringValue(source.path, source.directory, source.root) ?? "";
+  const path = stringValue(source.path, source.directory, source.root);
+  if (!path) return null;
+  const rawSource = stringValue(source.source);
+  const pageSource = rawSource === "index" || rawSource === "disk" ? rawSource : null;
   return {
     kind: "filesystem.directory-page",
     namespace: normalizeNamespace(source.namespace),
@@ -185,6 +196,7 @@ function normalizeDirectory(source: UnknownRecord): FilesystemDirectoryPage | nu
     ...(numberValue(source.total, source.count) !== null
       ? { total: numberValue(source.total, source.count) }
       : {}),
+    ...(pageSource ? { source: pageSource } : {}),
   };
 }
 
@@ -294,7 +306,11 @@ function normalizePlaces(source: UnknownRecord): FilesystemPlacesResult | null {
   };
 }
 
-export function normalizeFilesystemResult(result: ToolCallResult): FilesystemResult | null {
+export function normalizeFilesystemResult(
+  result: ToolCallResult,
+  toolName?: string,
+): FilesystemResult | null {
+  const allowLegacyShape = toolName ? isFilesystemTool(toolName) : false;
   for (const source of candidateRecords(result)) {
     const kind = stringValue(source.kind, source.result_kind, source.type);
     if (kind === "filesystem.search-page" || kind === "search-page") {
@@ -306,15 +322,15 @@ export function normalizeFilesystemResult(result: ToolCallResult): FilesystemRes
     if (kind === "filesystem.semantic-search" || kind === "semantic-search") {
       return normalizeSemanticSearch(source);
     }
-    if (kind === "filesystem.places" || Array.isArray(source.places)) {
+    if (kind === "filesystem.places" || (allowLegacyShape && Array.isArray(source.places))) {
       const places = normalizePlaces(source);
       if (places) return places;
     }
     if (
       kind === "filesystem.directory-page" ||
       kind === "directory-page" ||
-      Array.isArray(source.entries) ||
-      Array.isArray(source.children)
+      (allowLegacyShape && Array.isArray(source.entries)) ||
+      (allowLegacyShape && Array.isArray(source.children))
     ) {
       const directory = normalizeDirectory(source);
       if (directory) return directory;
@@ -325,7 +341,15 @@ export function normalizeFilesystemResult(result: ToolCallResult): FilesystemRes
 
 export function isFilesystemTool(name: string): boolean {
   const normalized = name.toLowerCase();
-  return normalized === "local_file" || normalized.startsWith("fs_") || normalized.includes("filesystem");
+  return new Set([
+    "local_file",
+    "listdirectory",
+    "findpaths",
+    "semanticfindpaths",
+    "filesystemplaces",
+    "local_filesystem_places",
+    "local_semantic_find_paths",
+  ]).has(normalized) || normalized.startsWith("fs_") || normalized.includes("filesystem");
 }
 
 export interface ExtractedToolParts {

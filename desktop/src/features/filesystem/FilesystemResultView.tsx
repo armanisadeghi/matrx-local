@@ -17,6 +17,9 @@ import { cn } from "@/lib/utils";
 import type {
   FilesystemDirectoryPage,
   FilesystemEntry,
+  FilesystemSearchPage,
+  FilesystemContentSearch,
+  FilesystemSemanticSearch,
   FilesystemPlace,
   FilesystemResult,
 } from "./types";
@@ -272,7 +275,7 @@ function DirectoryPage({
   onLoadChildren,
   onLoadMore,
 }: {
-  result: FilesystemDirectoryPage;
+  result: FilesystemDirectoryPage | FilesystemSearchPage;
   onReference: (paths: string[]) => void;
   onLoadChildren?: (entry: FilesystemEntry) => Promise<FilesystemEntry[]>;
   onLoadMore?: (cursor: string) => void;
@@ -287,10 +290,19 @@ function DirectoryPage({
     });
   }, []);
   const selectedPaths = useMemo(() => [...selected], [selected]);
+  const directoryPath = result.kind === "filesystem.directory-page" ? result.path : "";
   return (
     <div>
       <div className="flex items-center justify-between gap-2 border-b bg-muted/20 pr-2">
-        <Breadcrumbs path={result.path} />
+        {result.kind === "filesystem.directory-page" ? (
+          <Breadcrumbs path={directoryPath} />
+        ) : (
+          <div className="min-w-0 truncate px-2 py-1.5 text-[11px] text-muted-foreground">
+            Results for <span className="font-medium text-foreground">{result.query}</span>
+            {result.source && <span> · {result.source === "index" ? "indexed" : "disk"}</span>}
+            {result.indexComplete === false && <span> · index still improving</span>}
+          </div>
+        )}
         {selectedPaths.length > 0 && (
           <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => onReference(selectedPaths)}>
             <Copy className="mr-1 h-3.5 w-3.5" />Reference {selectedPaths.length}
@@ -321,20 +333,101 @@ function DirectoryPage({
   );
 }
 
+function ContentSearchView({
+  result,
+  onReference,
+}: {
+  result: FilesystemContentSearch;
+  onReference: (paths: string[]) => void;
+}) {
+  return (
+    <div>
+      <div className="border-b bg-muted/20 px-2 py-1.5 text-[11px] text-muted-foreground">
+        Content matches for <span className="font-medium text-foreground">{result.query}</span>
+      </div>
+      <div className="max-h-80 overflow-y-auto p-1">
+        {result.results.length === 0 ? (
+          <div className="p-4 text-center text-xs text-muted-foreground">No content matches.</div>
+        ) : result.results.map((match) => (
+          <div key={match.path} className="group flex items-start gap-2 rounded px-2 py-2 hover:bg-muted/70">
+            <File className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs font-medium" title={match.path}>{match.path}</div>
+              <div className="mt-0.5 line-clamp-3 text-[11px] text-muted-foreground">{match.snippet}</div>
+            </div>
+            <div className="opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+              <PathActions path={match.path} onReference={() => onReference([match.path])} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SemanticSearchView({
+  result,
+  onReference,
+}: {
+  result: FilesystemSemanticSearch;
+  onReference: (paths: string[]) => void;
+}) {
+  return (
+    <div>
+      <div className="border-b bg-muted/20 px-2 py-1.5 text-[11px] text-muted-foreground">
+        Semantic matches for <span className="font-medium text-foreground">{result.query}</span>
+        <span> · {result.model}</span>
+      </div>
+      <div className="max-h-80 overflow-y-auto p-1">
+        {result.results.length === 0 ? (
+          <div className="p-4 text-center text-xs text-muted-foreground">No semantic matches.</div>
+        ) : result.results.map(({ entry, score }) => (
+          <div key={entry.path} className="group flex items-center gap-2 rounded px-2 py-2 hover:bg-muted/70">
+            {entry.kind === "directory" ? (
+              <Folder className="h-4 w-4 shrink-0 text-amber-500" />
+            ) : (
+              <File className="h-4 w-4 shrink-0 text-muted-foreground" />
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs font-medium">{entry.name}</div>
+              <div className="truncate text-[10px] text-muted-foreground" title={entry.path}>{entry.path}</div>
+            </div>
+            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">{score.toFixed(3)}</span>
+            <div className="opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+              <PathActions path={entry.path} onReference={() => onReference([entry.path])} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function FilesystemResultView({ result, onReference, onLoadChildren, onLoadMore }: FilesystemResultViewProps) {
   const reference = useCallback((paths: string[]) => {
     if (onReference) onReference(paths);
     else void navigator.clipboard.writeText(paths.join("\n"));
   }, [onReference]);
-  if (result.kind === "filesystem.places") {
-    return <Places places={result.places} onReference={reference} />;
+  switch (result.kind) {
+    case "filesystem.places":
+      return <Places places={result.places} onReference={reference} />;
+    case "filesystem.content-search":
+      return <ContentSearchView result={result} onReference={reference} />;
+    case "filesystem.semantic-search":
+      return <SemanticSearchView result={result} onReference={reference} />;
+    case "filesystem.directory-page":
+    case "filesystem.search-page":
+      return (
+        <DirectoryPage
+          result={result}
+          onReference={reference}
+          {...(onLoadChildren ? { onLoadChildren } : {})}
+          {...(onLoadMore ? { onLoadMore } : {})}
+        />
+      );
+    default: {
+      const exhaustive: never = result;
+      return exhaustive;
+    }
   }
-  return (
-    <DirectoryPage
-      result={result}
-      onReference={reference}
-      {...(onLoadChildren ? { onLoadChildren } : {})}
-      {...(onLoadMore ? { onLoadMore } : {})}
-    />
-  );
 }

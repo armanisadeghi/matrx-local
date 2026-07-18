@@ -10,6 +10,7 @@ import mimetypes
 import os
 import re
 import shutil
+import uuid
 from pathlib import Path
 
 from app.common.platform_ctx import CAPABILITIES
@@ -35,6 +36,73 @@ def _note_io(path: str, capability: Capability, exc: BaseException | None = None
 
 MAX_READ_SIZE = 256_000
 MAX_INLINE_OUTPUT = 60_000
+
+
+async def tool_filesystem_places(session: ToolSession) -> ToolResult:
+    """Return semantic roots on the user's real local filesystem."""
+    from app.services.filesystem import get_filesystem_service
+
+    places = await get_filesystem_service().places()
+    lines = [f"{place['label']}: {place['path']}" for place in places]
+    return ToolResult(
+        output="Local filesystem places:\n" + "\n".join(lines),
+        metadata={"kind": "filesystem.places", "namespace": "host", "places": places},
+    )
+
+
+async def tool_find_paths(
+    session: ToolSession,
+    query: str,
+    path: str | None = None,
+    cursor: str | None = None,
+    limit: int = 100,
+) -> ToolResult:
+    """Find local paths by name/path using the progressive metadata index."""
+    from app.services.filesystem import get_filesystem_service
+
+    root = session.resolve_path(path) if path else None
+    try:
+        page = await get_filesystem_service().find(
+            query, root=root, cursor=cursor, limit=limit
+        )
+    except (ValueError, PermissionError, asyncio.TimeoutError) as exc:
+        return ToolResult(type=ToolResultType.ERROR, output=f"Path search failed: {exc}")
+    data = page.to_dict()
+    entries = data["entries"]
+    if not entries:
+        summary = f"No local paths found for {query!r}."
+    else:
+        summary = "\n".join(
+            f"{entry['path']}{os.sep if entry['kind'] == 'dir' else ''}"
+            for entry in entries
+        )
+    if data["next_cursor"]:
+        summary += f"\nMore results available (cursor={data['next_cursor']})."
+    if not data["index_complete"]:
+        summary += "\nThe background index is still deepening; later searches may find more."
+    return ToolResult(output=summary, metadata=data)
+
+
+async def tool_semantic_find_paths(
+    session: ToolSession,
+    query: str,
+    limit: int = 20,
+) -> ToolResult:
+    """Find local files by meaning when optional semantic indexing is enabled."""
+    from app.services.filesystem import get_filesystem_service
+
+    try:
+        data = await get_filesystem_service().semantic_find(query, limit=limit)
+    except (ValueError, RuntimeError) as exc:
+        return ToolResult(type=ToolResultType.ERROR, output=str(exc))
+    results = data["results"]
+    if not results:
+        output = f"No semantic matches found for {query!r}."
+    else:
+        output = "\n".join(
+            f"{result['score']:.3f}  {result['entry']['path']}" for result in results
+        )
+    return ToolResult(output=output, metadata=data)
 
 
 async def tool_read(
@@ -221,6 +289,57 @@ def _remove_existing(path: str) -> None:
         os.remove(path)
 
 
+def _copy_path(source: str, destination: str) -> None:
+    if os.path.isdir(source) and not os.path.islink(source):
+        shutil.copytree(source, destination)
+    else:
+        shutil.copy2(source, destination, follow_symlinks=False)
+
+
+def _replace_from_staged_copy(source: str, destination: str, *, remove_source: bool) -> str | None:
+    """Copy fully to a sibling stage, then atomically exchange the destination.
+
+    The existing destination is renamed to a backup before the stage is
+    committed. Any commit failure restores it. This ensures overwrite never
+    destroys the user's destination merely because the subsequent copy/move
+    failed.
+    """
+    parent = os.path.dirname(destination) or "."
+    name = os.path.basename(destination)
+    token = uuid.uuid4().hex
+    stage = os.path.join(parent, f".{name}.matrx-stage-{token}")
+    backup = os.path.join(parent, f".{name}.matrx-backup-{token}")
+    os.makedirs(parent, exist_ok=True)
+    try:
+        _copy_path(source, stage)
+        os.replace(destination, backup)
+        try:
+            os.replace(stage, destination)
+        except BaseException:
+            os.replace(backup, destination)
+            raise
+        cleanup_warning: str | None = None
+        try:
+            _remove_existing(backup)
+        except OSError as exc:
+            cleanup_warning = f"Replacement succeeded, but backup cleanup failed at {backup}: {exc}"
+        if remove_source:
+            try:
+                _remove_existing(source)
+            except OSError as exc:
+                cleanup_warning = (
+                    f"Destination was committed safely, but the original remains at {source}: {exc}"
+                )
+        return cleanup_warning
+    except BaseException:
+        if os.path.lexists(stage):
+            try:
+                _remove_existing(stage)
+            except OSError:
+                pass
+        raise
+
+
 # ── File management: Move / Copy / Delete / Rename / Mkdir ───────────────────
 #
 # These are the elementary verbs an agent needs to actually MANAGE files.
@@ -243,9 +362,9 @@ async def tool_move(
         return ToolResult(type=ToolResultType.ERROR, output=f"Source not found: {src}")
 
     # A pointer source must carry its real bytes with the move — hydrate first.
-    from app.services.file_sync.hydration import ensure_hydrated
+    from app.services.file_sync.hydration import ensure_tree_hydrated
 
-    hydrate_error = await ensure_hydrated(src)
+    hydrate_error = await ensure_tree_hydrated(src)
     if hydrate_error:
         return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
     # Moving a file INTO an existing directory keeps its basename.
@@ -259,10 +378,19 @@ async def tool_move(
                 type=ToolResultType.ERROR,
                 output=f"Destination already exists: {dst}. Pass overwrite=true to replace it.",
             )
-        # overwrite means REPLACE, not merge/nest: without this, moving a
-        # directory onto an existing directory would nest it inside
-        # (shutil.move semantics), silently doing the wrong thing.
-        _remove_existing(dst)
+        try:
+            warning = _replace_from_staged_copy(src, dst, remove_source=True)
+        except OSError as e:
+            _note_io(dst, Capability.REPLACE, e)
+            return ToolResult(type=ToolResultType.ERROR, output=f"Cannot move: {e}")
+        _note_io(dst, Capability.REPLACE)
+        output = f"Moved {src} → {dst}"
+        if warning:
+            output += f"\nWarning: {warning}"
+        return ToolResult(
+            output=output,
+            metadata={"source": src, "destination": dst, "warning": warning},
+        )
 
     try:
         os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
@@ -288,9 +416,9 @@ async def tool_copy(
         return ToolResult(type=ToolResultType.ERROR, output=f"Source not found: {src}")
 
     # Copying a pointer must copy the real bytes, not the placeholder.
-    from app.services.file_sync.hydration import ensure_hydrated
+    from app.services.file_sync.hydration import ensure_tree_hydrated
 
-    hydrate_error = await ensure_hydrated(src)
+    hydrate_error = await ensure_tree_hydrated(src)
     if hydrate_error:
         return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
     if os.path.isdir(dst) and not os.path.isdir(src):
@@ -303,10 +431,19 @@ async def tool_copy(
                 type=ToolResultType.ERROR,
                 output=f"Destination already exists: {dst}. Pass overwrite=true to replace it.",
             )
-        # overwrite means REPLACE, not merge: copytree(dirs_exist_ok=True)
-        # would merge into the existing tree and leave stale files behind,
-        # and dir-over-file would raise. Clear the destination first.
-        _remove_existing(dst)
+        try:
+            warning = _replace_from_staged_copy(src, dst, remove_source=False)
+        except OSError as e:
+            _note_io(dst, Capability.REPLACE, e)
+            return ToolResult(type=ToolResultType.ERROR, output=f"Cannot copy: {e}")
+        _note_io(dst, Capability.REPLACE)
+        output = f"Copied {src} → {dst}"
+        if warning:
+            output += f"\nWarning: {warning}"
+        return ToolResult(
+            output=output,
+            metadata={"source": src, "destination": dst, "warning": warning},
+        )
 
     try:
         os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)

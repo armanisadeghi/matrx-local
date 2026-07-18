@@ -181,6 +181,10 @@ class WebSocketManager:
             }
             if result.image:
                 response["image"] = result.image.model_dump()
+            if result.artifact:
+                response["artifact"] = result.artifact.model_dump(
+                    mode="json", exclude_none=True
+                )
             if result.metadata:
                 response["metadata"] = result.metadata
 

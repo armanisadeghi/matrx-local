@@ -33,6 +33,7 @@ and the handler renames it back before fan-out.
 from __future__ import annotations
 
 import copy
+import json
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -73,6 +74,8 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
                 "move": "Move", "copy": "Copy", "delete": "Delete",
                 "rename": "Rename", "mkdir": "Mkdir", "glob": "Glob",
                 "grep": "Grep", "list": "ListDirectory",
+                "places": "FilesystemPlaces", "find": "FindPaths",
+                "semantic_find": "SemanticFindPaths",
             },
         ),
         ActionGroup(
@@ -398,6 +401,7 @@ def build_group_schemas(
     action_lines: list[str] = []
     platform_sets: list[tuple[str, ...] | None] = []
     timeout = 120.0
+    output_schemas: list[dict[str, Any]] = []
 
     for action in sorted(group.actions):
         target = group.actions[action]
@@ -418,6 +422,8 @@ def build_group_schemas(
         action_lines.append(f"{action}: {_first_sentence(entry.description)}{note}")
         platform_sets.append(entry.platforms)
         timeout = max(timeout, entry.timeout_seconds)
+        if entry.output_schema is not None:
+            output_schemas.append(entry.output_schema)
 
     # Group-level gating only when EVERY member shares the same gate.
     unique_platforms = {p for p in platform_sets}
@@ -464,10 +470,39 @@ def build_group_schemas(
 
     description = group.description + " Actions — " + "; ".join(action_lines) + "."
 
+    output_schema = None
+    if output_schemas:
+        from app.content_ir import generic_tool_output_json_schema
+
+        unique: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        shared_defs: dict[str, Any] = {}
+        for schema in [*output_schemas, generic_tool_output_json_schema()]:
+            branch = copy.deepcopy(schema)
+            defs = branch.pop("$defs", None)
+            if isinstance(defs, dict):
+                for name, definition in defs.items():
+                    existing = shared_defs.get(name)
+                    if existing is not None and existing != definition:
+                        raise RuntimeError(
+                            f"action group {group.dispatcher_name}: conflicting "
+                            f"output-schema $defs entry {name!r}"
+                        )
+                    shared_defs[name] = definition
+            fingerprint = json.dumps(branch, sort_keys=True)
+            if fingerprint not in seen:
+                seen.add(fingerprint)
+                unique.append(branch)
+        output_schema = {
+            **({"$defs": shared_defs} if shared_defs else {}),
+            "oneOf": unique,
+        }
+
     return {
         "description": description,
         "input_schema": input_schema,
         "cloud_parameters": cloud_parameters,
         "platforms": platforms,
         "timeout_seconds": timeout,
+        "output_schema": output_schema,
     }

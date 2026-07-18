@@ -10,6 +10,7 @@ common-docs/matrx-files-service/FEATURE.md.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -74,6 +75,7 @@ class MatrxFilesClient:
         json_body: Any = None,
         data: dict[str, Any] | None = None,
         files: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float = 30.0,
     ) -> Any:
         if not self._base:
@@ -81,6 +83,8 @@ class MatrxFilesClient:
         if not self._jwt:
             raise RuntimeError("No JWT set — user must be authenticated")
         headers = {"Authorization": f"Bearer {self._jwt}"}
+        if extra_headers:
+            headers.update(extra_headers)
         url = f"{self._base}{path}"
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=5.0)) as client:
             resp = await client.request(
@@ -143,14 +147,33 @@ class MatrxFilesClient:
         filename: str,
         mime_type: str | None = None,
         visibility: str = "private",
+        metadata: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Buffered multipart upload. Same file_path ⇒ the canonical managed
         write version-bumps the existing logical file."""
         return await self._request(
             "POST",
             "/files/upload",
-            data={"file_path": file_path, "visibility": visibility},
+            data={
+                "file_path": file_path,
+                "visibility": visibility,
+                **(
+                    {"metadata_json": json.dumps(metadata, separators=(",", ":"))}
+                    if metadata
+                    else {}
+                ),
+            },
             files={"file": (filename, content, mime_type or "application/octet-stream")},
+            extra_headers={
+                **({"X-Request-Id": request_id} if request_id else {}),
+                **(
+                    {"X-Idempotency-Key": idempotency_key}
+                    if idempotency_key
+                    else {}
+                ),
+            },
             timeout=300.0,
         )
 

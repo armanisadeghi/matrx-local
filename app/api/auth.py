@@ -120,6 +120,10 @@ _LOCAL_BOOTSTRAP_PREFIXES = (
     "/devices/",     # device status polling — local UI
     "/fetch-proxy",  # in-app browser iframe navigation (also an SSRF vector)
     "/setup/",       # setup wizard — system probing, installs
+    # Process-local media bytes for the desktop webview. Tunnel callers still
+    # fall through to verified auth; direct <img> requests cannot attach the
+    # API's bearer header.
+    "/artifacts/",
 )
 
 

@@ -20,6 +20,7 @@
 | Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |
 | File sync — the cloud-files replica (`@files/`, pointer/full modes, hydration) | [app/services/file_sync/FEATURE.md](app/services/file_sync/FEATURE.md) |
 | matrx-extend ↔ engine | [docs/MATRX_EXTEND_CONNECTION.md](docs/MATRX_EXTEND_CONNECTION.md) |
+| **Content IR consumer work** (displaying or passing through structured content; not authoring kinds) | [docs/CONTENT_IR_CONSUMER_GUIDE.md](docs/CONTENT_IR_CONSUMER_GUIDE.md) — read before adding a Content IR consumer |
 | Cloud Chat as a Surface — desktop tools for cloud agents (envelope, delegation UI claims, "+" menu, tool exposure setting, remaining-work ledger) | [docs/CLOUD_CHAT_SURFACE.md](docs/CLOUD_CHAT_SURFACE.md) + [app/services/delegation/FEATURE.md](app/services/delegation/FEATURE.md) |
 | **How to test ANY change (pick the right rung)** | **[docs/TESTING_LADDER.md](docs/TESTING_LADDER.md)** — dev/live isolation model + which test mode proves what |
 | **Verify a startup/UI change actually runs** | **[docs/SMOKE_HARNESS.md](docs/SMOKE_HARNESS.md)** — `./scripts/smoke.sh` builds, launches, and hands you the logs |

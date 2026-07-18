@@ -110,6 +110,7 @@ import {
   ENGINE_PORT_BASE,
   ENGINE_PORT_RANGE_LABEL,
 } from "@/lib/engine-ports";
+import { FilesystemIndexSettings } from "@/features/filesystem/FilesystemIndexSettings";
 
 type AuthActions = ReturnType<typeof useAuth>;
 
@@ -2903,6 +2904,8 @@ export function Settings({
 
               return (
                 <>
+                  <FilesystemIndexSettings connected={engineStatus === "connected"} />
+
                   {/* ── User-visible paths table ── */}
                   <Card>
                     <CardHeader className="pb-2">

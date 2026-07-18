@@ -50,6 +50,8 @@ from app.api.hf_token_routes import router as hf_token_router
 from app.api.scrape_routes import router as scrape_router
 from app.api.extension_bridge_routes import router as extension_bridge_router
 from app.api.extension_routes import router as extension_router
+from app.api.artifact_routes import router as artifact_router
+from app.api.filesystem_routes import router as filesystem_router
 from app.services.downloads.routes import router as downloads_router
 from app.config import (
     ALLOWED_ORIGINS,
@@ -391,6 +393,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         print("[phase:database] Local database FAILED (fallbacks active)", flush=True)
         _registry.failed("database", exc)
+
+    # Phase 0a½: Open the independent filesystem metadata index and immediately
+    # return control to startup. Its progressive crawl/watch tasks run only in
+    # this Python process and are stopped during lifespan teardown.
+    _registry.starting("filesystem_index")
+    try:
+        from app.services.filesystem import get_filesystem_service
+
+        _filesystem_service = get_filesystem_service()
+        await _filesystem_service.start()
+        _filesystem_status = await _filesystem_service.status()
+        _registry.ready(
+            "filesystem_index",
+            path=str(_filesystem_status["database"]),
+            entries=_filesystem_status["entries"],
+            directories_pending=_filesystem_status["directories_pending"],
+        )
+    except Exception as exc:
+        logger.warning("[app/main.py] Filesystem index unavailable; direct browsing remains active", exc_info=True)
+        _registry.failed("filesystem_index", exc)
 
     # Phase 0a (post): Warm the in-memory JWT cache from SQLite so matrx-ai has
     # the user's token available immediately on first authenticated API call.
@@ -780,6 +802,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 exc_info=True,
             )
             _registry.failed("delegation", exc)
+
+    # Phase 2g: local-first artifact publisher. Unlike the optional Files
+    # replica, this loop is always active: locally-produced conversation media
+    # must become portable as soon as connectivity and auth are available.
+    _registry.starting("artifact_sync")
+    try:
+        from app.services.artifacts import get_artifact_service
+
+        await get_artifact_service().start_background()
+        logger.info("[app/main.py] Phase 2g: Artifact publisher started ✓")
+        _registry.ready("artifact_sync")
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 2g: Artifact publisher FAILED to start — "
+            "captures remain safe locally and can be synced manually",
+            exc_info=True,
+        )
+        _registry.failed("artifact_sync", exc)
 
     # Phase 3: Start scraper engine
     print("[phase:scraper] Starting scraper engine...", flush=True)
@@ -1262,6 +1302,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
 
     # ── Phase S1: Cancel background asyncio tasks (fast, non-blocking) ────
+    _registry.stopping("filesystem_index")
+    try:
+        from app.services.filesystem import get_filesystem_service
+
+        await asyncio.wait_for(get_filesystem_service().stop(), timeout=3.0)
+        _registry.stopped("filesystem_index")
+    except Exception as exc:
+        _registry.failed("filesystem_index", exc)
+
     # App-config refresh loop (mirrors Phase 00). Best-effort + timeouted.
     try:
         from app.services.app_config import get_app_config_service as _get_app_cfg
@@ -1399,6 +1448,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except (asyncio.TimeoutError, Exception) as exc:
             logger.warning("[app/main.py] Delegation client did not stop cleanly: %s", exc)
             _registry.stopped("delegation")
+
+    try:
+        from app.services.artifacts import get_artifact_service as _get_artifacts
+
+        _artifact_service = _get_artifacts()
+        if _artifact_service.active:
+            _registry.stopping("artifact_sync")
+            await asyncio.wait_for(
+                _artifact_service.stop_background(), timeout=3.0
+            )
+            _registry.stopped("artifact_sync")
+            logger.info("[app/main.py] Artifact publisher stopped ✓")
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning("[app/main.py] Artifact publisher did not stop cleanly: %s", exc)
+        _registry.stopped("artifact_sync")
 
     if _doc_sync.watcher_active:
         try:
@@ -1639,6 +1703,8 @@ app.include_router(cloud_sync_router)
 app.include_router(chat_router)
 app.include_router(data_router)
 app.include_router(permissions_router)
+app.include_router(artifact_router)
+app.include_router(filesystem_router)
 app.include_router(capabilities_router)
 app.include_router(fetch_proxy_router)
 app.include_router(tunnel_router)

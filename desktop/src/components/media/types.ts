@@ -14,7 +14,13 @@
  * components.
  */
 
-import type { ImageGenJob, MediaLibraryItem, VideoGenJob } from "@/lib/api";
+import type {
+  ImageGenJob,
+  MediaLibraryItem,
+  ToolImageData,
+  ToolMediaArtifact,
+  VideoGenJob,
+} from "@/lib/api";
 import type { GeneratedImageResult } from "@/hooks/use-media-gen";
 
 /** Where the bytes actually live — decides which actions apply. */
@@ -26,7 +32,9 @@ export type MediaSource =
   /** A completed image-queue job (its bytes ARE a library item). */
   | "job"
   /** A fresh one-shot generation result (may also be a library item). */
-  | "result";
+  | "result"
+  /** A screenshot or other media value returned by a local tool. */
+  | "tool";
 
 export interface MediaDescriptor {
   /** Unique within its viewing set (library/vault item id, or job id). */
@@ -101,6 +109,47 @@ export function findMediaIndexById(
 }
 
 // ── Builders (the ONLY way a descriptor is constructed) ──────────────────────
+
+export function descriptorFromToolArtifact(
+  artifact: ToolMediaArtifact,
+  localUrl: string,
+): MediaDescriptor {
+  return {
+    id: artifact.artifact_id,
+    kind: "image",
+    url: localUrl,
+    itemId: null,
+    source: "tool",
+    prompt: `${artifact.capture_source} screenshot`,
+    width: artifact.source_width,
+    height: artifact.source_height,
+    fileName: artifact.file_name,
+    fileSizeBytes: artifact.size_bytes,
+    params: {
+      artifact_id: artifact.artifact_id,
+      availability: artifact.availability,
+      checksum: artifact.checksum,
+      ...(artifact.file_id ? { file_id: artifact.file_id } : {}),
+      ...artifact.capture,
+    },
+  };
+}
+
+/** Adapter for legacy tool images; all presentation still uses MediaThumb. */
+export function descriptorFromToolImage(
+  image: ToolImageData,
+  id: string,
+): MediaDescriptor {
+  return {
+    id,
+    kind: "image",
+    url: `data:${image.media_type};base64,${image.base64_data}`,
+    itemId: null,
+    source: "tool",
+    prompt: "Tool image",
+    params: { media_type: image.media_type },
+  };
+}
 
 export function descriptorFromLibraryItem(
   item: MediaLibraryItem,

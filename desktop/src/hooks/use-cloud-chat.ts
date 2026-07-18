@@ -19,7 +19,15 @@ import type {
   ChatMode,
   Conversation,
   ConversationRouteMode,
+  ToolCall,
+  ToolCallResult,
 } from "@/hooks/use-chat";
+import {
+  extractToolParts,
+  reduceLiveToolEvent,
+  stitchHydratedToolMessages,
+  type ExtractedToolParts,
+} from "@/features/filesystem/tool-results";
 import {
   EventType,
   type TypedDataPayload,
@@ -100,6 +108,8 @@ interface ExtractedContent {
   answer: string;
   reasoning: string;
   diagnostics: string[];
+  toolCalls?: ToolCall[];
+  toolResults?: ToolCallResult[];
 }
 
 interface BlockAccumulatorEntry {
@@ -689,11 +699,13 @@ function contentPartToExtracted(part: unknown): ExtractedContent {
   }
 
   if (type === "tool_call" || type === "tool_result" || type === "web_search") {
-    const name = readString(record.name) ?? readString(record.call_id) ?? type;
+    const toolParts = extractToolParts([part]);
     return {
       answer: "",
       reasoning: "",
-      diagnostics: [`${humanizeToken(type)}: ${name}`],
+      diagnostics: [],
+      ...(toolParts.calls.length > 0 ? { toolCalls: toolParts.calls } : {}),
+      ...(toolParts.results.length > 0 ? { toolResults: toolParts.results } : {}),
     };
   }
 
@@ -707,7 +719,9 @@ function hasDisplayableContent(extracted: ExtractedContent): boolean {
   return (
     extracted.answer.trim().length > 0 ||
     extracted.reasoning.trim().length > 0 ||
-    extracted.diagnostics.length > 0
+    extracted.diagnostics.length > 0 ||
+    !!extracted.toolCalls?.length ||
+    !!extracted.toolResults?.length
   );
 }
 
@@ -723,6 +737,8 @@ function extractMessageContent(content: unknown): ExtractedContent {
       answer: mergeText(extracted.map((item) => item.answer)),
       reasoning: mergeText(extracted.map((item) => item.reasoning)),
       diagnostics: extracted.flatMap((item) => item.diagnostics),
+      toolCalls: extracted.flatMap((item) => item.toolCalls ?? []),
+      toolResults: extracted.flatMap((item) => item.toolResults ?? []),
     };
   }
 
@@ -779,6 +795,8 @@ function messageRowToChatMessage(row: CloudMessageRow): ChatMessage {
     timestamp: row.created_at ?? row.updated_at ?? new Date().toISOString(),
     ...(extracted.reasoning ? { reasoning: extracted.reasoning } : {}),
     ...(extracted.diagnostics.length > 0 ? { streamDiagnostics: extracted.diagnostics } : {}),
+    ...(extracted.toolCalls?.length ? { tool_calls: extracted.toolCalls } : {}),
+    ...(extracted.toolResults?.length ? { tool_results: extracted.toolResults } : {}),
     ...(error ? { error } : {}),
   };
 }
@@ -1035,7 +1053,9 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         .limit(200);
 
       if (error) throw error;
-      const messages = ((data ?? []) as CloudMessageRow[]).map(messageRowToChatMessage);
+      const messages = stitchHydratedToolMessages(
+        ((data ?? []) as CloudMessageRow[]).map(messageRowToChatMessage),
+      );
       setConversations((prev) =>
         prev.map((conversation) =>
           conversation.id === id
@@ -1380,6 +1400,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       let diagnostics: string[] = [];
       const answerRenderBlocks = new Map<string, BlockAccumulatorEntry>();
       const reasoningRenderBlocks = new Map<string, BlockAccumulatorEntry>();
+      let liveToolParts: ExtractedToolParts = { calls: [], results: [] };
 
       const setStatus = (status: string) => {
         lastStatus = status;
@@ -1638,6 +1659,11 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
             case EventType.TOOL_EVENT: {
               const toolName = event.data.tool_name || "tool";
               const message = event.data.message || humanizeToken(event.data.event);
+              liveToolParts = reduceLiveToolEvent(liveToolParts, event.data);
+              updateAssistant({
+                tool_calls: liveToolParts.calls,
+                tool_results: liveToolParts.results,
+              });
 
               if (event.data.event === "tool_delegated") {
                 // The server suspended the turn and handed this call to the

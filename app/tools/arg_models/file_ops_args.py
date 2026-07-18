@@ -134,3 +134,32 @@ class ListDirectoryArgs(BaseModel):
         default=False,
         description="If true, include hidden files and directories (names starting with '.').",
     )
+    cursor: str | None = Field(
+        default=None,
+        description="Opaque cursor from a previous list result.",
+    )
+    limit: int = Field(
+        default=100,
+        ge=1,
+        le=500,
+        description="Maximum entries to return in this page.",
+    )
+
+
+class PlacesArgs(BaseModel):
+    """No arguments; returns semantic local roots and accessible volumes."""
+
+
+class FindPathsArgs(BaseModel):
+    query: str = Field(min_length=1, description="File or directory name/path text to find.")
+    path: str | None = Field(
+        default=None,
+        description="Optional root to constrain the search. Omit to search the progressive machine index.",
+    )
+    cursor: str | None = Field(default=None, description="Cursor from a previous result page.")
+    limit: int = Field(default=100, ge=1, le=500, description="Maximum results in this page.")
+
+
+class SemanticFindPathsArgs(BaseModel):
+    query: str = Field(min_length=1, description="Natural-language description of files to find.")
+    limit: int = Field(default=20, ge=1, le=100, description="Maximum similarity-ranked results.")

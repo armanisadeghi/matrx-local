@@ -325,6 +325,26 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
         assert tc["status"] == "completed"
         assert tc["tool_name"] == "X"
         assert json.loads(tc["metadata"])["novel_key"] == "kept"
+        await db.execute(
+            "INSERT INTO chat.tool_trace "
+            "(id, conversation_id, call_id, tool_name, event, args, "
+            "result_preview, metadata, ts, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa33",
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+                "k1",
+                "X",
+                "completed",
+                '{"a": 1}',
+                '{"ok": true}',
+                '{"namespace": "host"}',
+                "2026-07-18T10:00:00Z",
+                "2026-07-18T10:00:00Z",
+                "2026-07-18T10:00:00Z",
+            ),
+        )
+        await db.commit()
 
         # every write enqueued
         q = {
@@ -348,6 +368,9 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
         data = await store.get_conversation_data("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01")
         assert len(data["user_requests"]) == 1
         assert len(data["tool_calls"]) == 1
+        assert data["tool_traces"][0]["call_id"] == "k1"
+        assert data["tool_traces"][0]["args"] == {"a": 1}
+        assert data["tool_traces"][0]["metadata"]["namespace"] == "host"
 
     _run(tmp_path, scenario)
 
@@ -650,6 +673,90 @@ def test_client_host_reservations_are_durable_and_finalized(tmp_path: Path) -> N
             3,
             5,
         ]
+
+    _run(tmp_path, scenario)
+
+
+def test_continuation_reservation_uses_durable_positions_after_history_compaction(
+    tmp_path: Path,
+) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        from types import SimpleNamespace
+
+        from app.services.ai.conversation_handler import SQLiteConversationStore
+
+        class CaptureEmitter:
+            def __init__(self) -> None:
+                self.reserved: list[Any] = []
+
+            async def send_record_reserved(self, payload: Any) -> None:
+                self.reserved.append(payload)
+
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa71"
+        store = SQLiteConversationStore()
+        emitter = CaptureEmitter()
+
+        await store.ensure_conversation_exists(conversation_id, "u1")
+        original = [
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "calling tool"},
+            {
+                "role": "tool",
+                "content": [{"type": "tool_result", "call_id": "call-1", "result": "ok"}],
+            },
+            {"role": "assistant", "content": "intermediate"},
+            {"role": "assistant", "content": "first answer"},
+        ]
+        await store.persist_completed_request(
+            {
+                "conversation_id": conversation_id,
+                "request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa72",
+                "messages": original,
+            }
+        )
+
+        # The model context omits the historical tool and intermediate rows.
+        compacted_config = SimpleNamespace(
+            messages=[
+                SimpleNamespace(role="user", content="first question"),
+                SimpleNamespace(role="assistant", content="first answer"),
+                SimpleNamespace(role="user", content="find my code"),
+            ]
+        )
+        reserved = await store.reserve_stream_messages(
+            compacted_config,
+            conversation_id,
+            "u1",
+            emitter,
+        )
+        assert set(reserved) == {5, 6}
+
+        await store.persist_completed_request(
+            {
+                "conversation_id": conversation_id,
+                "request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa73",
+                "messages": [
+                    {"role": "user", "content": "first question"},
+                    {"role": "assistant", "content": "first answer"},
+                    {"role": "user", "content": "find my code"},
+                    {"role": "assistant", "content": "found it"},
+                ],
+            }
+        )
+
+        rows = [
+            dict(row)
+            for row in await db.fetchall(
+                "SELECT role, position, status, content FROM chat.message "
+                "WHERE conversation_id = ? ORDER BY position",
+                (conversation_id,),
+            )
+        ]
+        assert [row["position"] for row in rows] == list(range(7))
+        assert [row["role"] for row in rows][-2:] == ["user", "assistant"]
+        assert json.loads(rows[5]["content"])[0]["text"] == "find my code"
+        assert json.loads(rows[6]["content"])[0]["text"] == "found it"
+        assert rows[6]["status"] == "active"
 
     _run(tmp_path, scenario)
 

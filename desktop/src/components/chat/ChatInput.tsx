@@ -38,6 +38,8 @@ interface ChatInputProps {
   /** Files attached via the plus menu, shown as removable chips. */
   attachments?: Array<{ id: string; name: string; size: number }>;
   onRemoveAttachment?: (id: string) => void;
+  /** Append a filesystem reference to the current draft without taking control of it. */
+  draftInsertion?: { id: number; text: string } | null;
 }
 
 function formatAttachmentSize(size: number): string {
@@ -71,6 +73,7 @@ export function ChatInput({
   plusMenuSlot,
   attachments = [],
   onRemoveAttachment,
+  draftInsertion,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
   const [showModelDropdown, setShowModelDropdown] = useState(false);
@@ -83,6 +86,12 @@ export function ChatInput({
       setTimeout(() => textareaRef.current?.focus(), 100);
     }
   }, [autoFocus]);
+
+  useEffect(() => {
+    if (!draftInsertion?.text) return;
+    setValue((current) => current ? `${current.trimEnd()}\n${draftInsertion.text}` : draftInsertion.text);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [draftInsertion]);
 
   // Auto-resize textarea
   useEffect(() => {

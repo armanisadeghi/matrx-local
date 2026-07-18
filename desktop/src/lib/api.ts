@@ -65,7 +65,36 @@ export interface EngineToolSchema {
 export interface ToolResult {
   type: "success" | "error";
   output: string;
+  /** Deprecated provider-only inline image. New captures use `artifact`. */
+  image?: ToolImageData;
+  artifact?: ToolMediaArtifact;
   metadata?: Record<string, unknown>;
+}
+
+export interface ToolImageData {
+  media_type: string;
+  base64_data: string;
+}
+
+export interface ToolMediaArtifact {
+  kind: "image_ref";
+  artifact_id: string;
+  availability: "sync_pending" | "cloud_ready" | "sync_failed";
+  media_type: string;
+  file_name: string;
+  size_bytes: number;
+  checksum: string;
+  source_width: number;
+  source_height: number;
+  capture_source: "desktop" | "browser";
+  file_id?: string;
+  media_ref?: { file_id: string; vision_class?: string | null };
+  url?: string;
+  cdn_url?: string;
+  signed_url?: string;
+  download_url?: string;
+  visibility: "private" | "shared" | "public";
+  capture: Record<string, unknown>;
 }
 
 export interface BrowserStatus {
@@ -2488,6 +2517,46 @@ class EngineAPI {
     return this.request<EnginePaths>("/system/paths");
   }
 
+  async getFilesystemPlaces(): Promise<FilesystemPlacesResponse> {
+    return this.request<FilesystemPlacesResponse>("/filesystem/places");
+  }
+
+  async setFilesystemPriorityRoots(
+    roots: FilesystemPriorityRoot[],
+  ): Promise<FilesystemPlacesResponse> {
+    return this.request<FilesystemPlacesResponse>("/filesystem/priority-roots", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roots }),
+    });
+  }
+
+  async getFilesystemIndexStatus(): Promise<FilesystemIndexStatus> {
+    return this.request<FilesystemIndexStatus>("/filesystem/status");
+  }
+
+  async listFilesystem(
+    path: string,
+    options: { cursor?: string; limit?: number; showHidden?: boolean } = {},
+  ): Promise<FilesystemPageResponse> {
+    const params = new URLSearchParams({ path });
+    if (options.cursor) params.set("cursor", options.cursor);
+    if (options.limit != null) params.set("limit", String(options.limit));
+    if (options.showHidden) params.set("show_hidden", "true");
+    return this.request<FilesystemPageResponse>(`/filesystem/list?${params}`);
+  }
+
+  async findFilesystem(
+    query: string,
+    options: { root?: string; cursor?: string; limit?: number } = {},
+  ): Promise<FilesystemPageResponse> {
+    const params = new URLSearchParams({ query });
+    if (options.root) params.set("root", options.root);
+    if (options.cursor) params.set("cursor", options.cursor);
+    if (options.limit != null) params.set("limit", String(options.limit));
+    return this.request<FilesystemPageResponse>(`/filesystem/find?${params}`);
+  }
+
   /** Open a system folder (logs or data) in the file manager. */
   async openSystemFolder(folder: "logs" | "data"): Promise<{ opened: string }> {
     return this.request<{ opened: string }>("/system/open-folder", {
@@ -3630,6 +3699,65 @@ export interface EnginePaths {
     logs: string;
     config: string;
   };
+}
+
+export interface FilesystemPlaceResponse {
+  id: string;
+  label: string;
+  path: string;
+  category: "home" | "standard" | "configured" | "volume";
+  priority: number;
+  available: boolean;
+  configured: boolean;
+}
+
+export interface FilesystemPlacesResponse {
+  kind: "filesystem.places";
+  namespace: "host";
+  places: FilesystemPlaceResponse[];
+}
+
+export interface FilesystemPriorityRoot {
+  path: string;
+  label?: string;
+}
+
+export interface FilesystemIndexStatus {
+  started: boolean;
+  database: string;
+  fts5: boolean;
+  entries: number;
+  directories_pending: number;
+  index_complete: boolean;
+  indexed_this_run: number;
+  places: number;
+  last_reconcile_at: number | null;
+  content_indexing: string;
+  embedding_indexing: string;
+  policy: string;
+}
+
+export interface FilesystemEntryResponse {
+  name: string;
+  path: string;
+  kind: "file" | "dir" | "symlink" | "other";
+  size: number;
+  modified_at: number | null;
+  hidden: boolean;
+  extension: string | null;
+  indexed: boolean;
+}
+
+export interface FilesystemPageResponse {
+  kind: "filesystem.directory-page" | "filesystem.search-page";
+  namespace: "host";
+  entries: FilesystemEntryResponse[];
+  next_cursor: string | null;
+  path?: string;
+  query?: string;
+  total?: number;
+  source?: "index" | "disk";
+  index_complete?: boolean;
 }
 
 // ---- Setup types ----

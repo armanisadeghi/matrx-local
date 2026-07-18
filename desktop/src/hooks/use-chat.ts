@@ -23,6 +23,7 @@ import { isTauri } from "@/lib/sidecar";
 import supabase from "@/lib/supabase";
 import { streamCompletion } from "@/lib/llm/api";
 import { loadSettings } from "@/lib/settings";
+import type { ToolImageData, ToolMediaArtifact } from "@/lib/api";
 
 // ---- Types ----
 
@@ -38,6 +39,8 @@ export interface ToolCallResult {
   tool_call_id: string;
   type: "success" | "error";
   output: string;
+  image?: ToolImageData;
+  artifact?: ToolMediaArtifact;
   metadata?: Record<string, unknown>;
 }
 

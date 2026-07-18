@@ -22,6 +22,7 @@ interface ChatMessagesProps {
   readingMessageId?: string | null;
   onReadAloud?: (messageId: string, content: string) => void;
   onStopReadAloud?: () => void;
+  onReferencePaths?: (paths: string[]) => void;
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -136,12 +137,14 @@ function AssistantMessage({
   isReading,
   onReadAloud,
   onStopReadAloud,
+  onReferencePaths,
 }: {
   message: ChatMessage;
   ttsEnabled?: boolean;
   isReading?: boolean;
   onReadAloud?: (messageId: string, content: string) => void;
   onStopReadAloud?: () => void;
+  onReferencePaths?: (paths: string[]) => void;
 }) {
   return (
     <div className="group py-5 px-4 md:px-0">
@@ -257,6 +260,7 @@ function AssistantMessage({
                   key={tc.id}
                   toolCall={tc}
                   {...(result !== undefined ? { result } : {})}
+                  {...(onReferencePaths ? { onReferencePaths } : {})}
                 />
               );
             })}
@@ -319,6 +323,7 @@ export function ChatMessages({
   readingMessageId,
   onReadAloud,
   onStopReadAloud,
+  onReferencePaths,
 }: ChatMessagesProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -343,6 +348,7 @@ export function ChatMessages({
             isReading={readingMessageId === msg.id}
             {...(onReadAloud !== undefined ? { onReadAloud } : {})}
             {...(onStopReadAloud !== undefined ? { onStopReadAloud } : {})}
+            {...(onReferencePaths ? { onReferencePaths } : {})}
           />
         ),
       )}

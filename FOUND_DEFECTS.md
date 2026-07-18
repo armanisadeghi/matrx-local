@@ -32,6 +32,38 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## AI / local LLM runtime
 
+### MXL-D-058 — Continuation user messages can collide with existing positions and disappear from durable chat history
+- **Area:** `app/services/ai/conversation_handler.py`
+  `SQLiteConversationStore.reserve_stream_messages()` (lines ~224-303)
+- **Symptom:** A continued Cloud Chat turn can run normally while its user
+  message is never inserted into `chat.message`. The reservation derives the
+  new user position from `len(config.messages) - 1`; when matrx-ai sanitizes
+  tool-result/history messages, that length can point at an already occupied
+  position. `_insert()` then treats any existing row at that position as
+  success without checking its role or content. The following assistant row is
+  persisted, leaving durable history with the user's request missing. This can
+  make later turns forget what the user asked and makes conversation audits
+  incomplete.
+- **Evidence:** `conversation_handler.py:238-265` computes positions from the
+  incoming list and returns an existing row ID based only on
+  `(conversation_id, position)`. In live mirror data inspected 2026-07-18,
+  continuation prompts are missing from conversations
+  `c63308ad-1607-4a60-9027-dfae7eeb1c0a` and
+  `238dd10f-1992-4cc1-b13b-74db35a0f021`; each continuation begins with an
+  assistant row even though matching tool-call/trace ledgers prove that a new
+  user request ran.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-07-18 — verified in code and live read-only
+  mirror data.
+- **Owner hint:** Reserve positions from durable conversation state (or a
+  transactional position allocator), never sanitized config length. An
+  occupied position must be validated for the expected role/content/identity,
+  not silently accepted. Add continuation tests with sanitized tool history
+  and determine whether missing user rows can be repaired from surviving
+  request payloads.
+
+---
+
 ### MXL-D-055 — `get_local_llm_status()` is a status *getter* with a destructive side-effect; can self-deregister a healthy/cold llama-server
 - **Area:** `app/services/ai/local_llm_registry.py` `get_local_llm_status()` (lines ~226-255); caller `app/api/chat_routes.py` `/local-llm/connect` (~519-521)
 - **Symptom:** `get_local_llm_status()` does a live `_probe_llama_server()`

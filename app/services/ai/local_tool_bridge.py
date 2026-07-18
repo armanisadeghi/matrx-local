@@ -44,15 +44,35 @@ first AI request.  This replaces the old ``register_local_tools(registry)`` call
 
 from __future__ import annotations
 
+import base64
 import inspect
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from matrx_ai.tools import ExternalToolAdapter, ToolContext, ToolResult
 from matrx_ai.tools.models import ToolError
+from pydantic import Field
 
 logger = logging.getLogger(__name__)
+
+
+class _LocalProviderToolResult(ToolResult):
+    """Compatibility seam until every installed matrx-ai has this field.
+
+    The canonical implementation now lives in matrx-ai itself. Keeping the
+    tiny subclass here makes the offline desktop behavior correct immediately
+    even when it is running an older packaged matrx-ai wheel.
+    """
+
+    provider_content: Any = Field(default=None, exclude=True, repr=False)
+
+    def to_tool_result_content(self) -> dict[str, Any]:
+        payload = super().to_tool_result_content()
+        if self.success and self.provider_content is not None:
+            payload["content"] = self.provider_content
+        return payload
 
 
 # ---------------------------------------------------------------------------
@@ -342,21 +362,42 @@ def _convert_result(
     is_error = local_result.type == ToolResultType.ERROR
     completed_at = time.time()
 
-    output: Any = local_result.output or ""
+    output: Any = {"output": local_result.output or ""}
+    if local_result.metadata:
+        output["metadata"] = local_result.metadata
+    provider_content: Any = None
 
-    # Include image data in output if present.
+    if local_result.artifact is not None:
+        output = local_result.artifact.model_dump(mode="json", exclude_none=True)
+        if local_result.provider_image_path:
+            from matrx_ai.config import ImageContent, TextContent
+
+            image_bytes = Path(local_result.provider_image_path).read_bytes()
+            provider_content = [
+                ImageContent(
+                    base64_data=base64.b64encode(image_bytes).decode("ascii"),
+                    mime_type=local_result.artifact.media_type,
+                ),
+                TextContent(text=local_result.output or "Screenshot captured."),
+            ]
+
+    # Legacy images are also provider-only. Their base64 must not become the
+    # ToolResult output that the execution logger persists.
     if local_result.image is not None:
-        output = {
-            "text": local_result.output,
-            "image": {
-                "media_type": local_result.image.media_type,
-                "base64_data": local_result.image.base64_data,
-            },
-        }
+        from matrx_ai.config import ImageContent, TextContent
 
-    return ToolResult(
+        provider_content = [
+            ImageContent(
+                base64_data=local_result.image.base64_data,
+                mime_type=local_result.image.media_type,
+            ),
+            TextContent(text=local_result.output or "Image produced."),
+        ]
+
+    return _LocalProviderToolResult(
         success=not is_error,
         output=output if not is_error else None,
+        provider_content=provider_content,
         error=(
             ToolError(
                 error_type="tool_error",

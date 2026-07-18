@@ -201,6 +201,24 @@ class FileSyncIndex:
         )
         return [dict(r) for r in rows]
 
+    async def list_by_state_under_path(
+        self, state: str, rel_path: str
+    ) -> list[dict[str, Any]]:
+        """Return every tracked descendant in ``state`` under a local path.
+
+        Directory copy/move needs this unbounded-by-page correctness query:
+        silently copying pointer placeholders would create corrupt zero-byte
+        replicas. The caller controls concurrency while hydrating the rows.
+        """
+        escaped = rel_path.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        prefix = escaped.rstrip("/") + "/%"
+        rows = await get_db().fetchall(
+            "SELECT * FROM file_sync_state WHERE local_state = ? "
+            "AND (rel_path = ? OR rel_path LIKE ? ESCAPE '\\') ORDER BY rel_path",
+            (state, rel_path, prefix),
+        )
+        return [dict(r) for r in rows]
+
     async def counts(self) -> dict[str, int]:
         db = get_db()
         out: dict[str, int] = {}

@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-import base64
+import asyncio
+import io
 import logging
 import os
-import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
-from app.config import TEMP_DIR
+from app.services.artifacts import get_artifact_service
 from app.tools.session import ToolSession
-from app.tools.types import ImageData, ToolResult, ToolResultType
+from app.tools.types import ToolResult, ToolResultType
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 
 def _detect_chrome() -> tuple[bool, str | None, str | None]:
@@ -430,18 +434,11 @@ async def tool_screenshot(
     except OSError as e:
         return ToolResult(type=ToolResultType.ERROR, output=f"Screenshot failed: {e}")
 
-    screenshot_dir = TEMP_DIR / "screenshots"
-    screenshot_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"screenshot_{uuid.uuid4().hex[:8]}.png"
-    filepath = screenshot_dir / filename
-    screenshot.save(str(filepath))
-
-    image_bytes = filepath.read_bytes()
-    b64 = base64.b64encode(image_bytes).decode()
-
     w, h = screenshot.size
+    buffer = io.BytesIO()
+    screenshot.save(buffer, format="PNG")
+    image_bytes = buffer.getvalue()
     meta: dict = {
-        "path": str(filepath),
         "width": w,
         "height": h,
         "monitor": monitor,
@@ -451,10 +448,23 @@ async def tool_screenshot(
     if region:
         meta["region"] = region
 
+    artifact, provider_path = await get_artifact_service().create_screenshot(
+        content=image_bytes,
+        width=w,
+        height=h,
+        capture_source="desktop",
+        capture=meta,
+        session=session,
+    )
+
     return ToolResult(
-        output=f"Screenshot captured: {filepath} ({w}x{h}, {len(image_bytes)} bytes)",
-        image=ImageData(media_type="image/png", base64_data=b64),
-        metadata=meta,
+        output=(
+            f"Screenshot captured ({w}x{h}, {len(image_bytes)} bytes); "
+            f"artifact_id={artifact.artifact_id}"
+        ),
+        artifact=artifact,
+        provider_image_path=provider_path,
+        metadata={**meta, "artifact_id": artifact.artifact_id},
     )
 
 
@@ -462,34 +472,30 @@ async def tool_list_directory(
     session: ToolSession,
     path: str | None = None,
     show_hidden: bool = False,
+    cursor: str | None = None,
+    limit: int = 100,
 ) -> ToolResult:
     target = session.resolve_path(path or ".")
-
-    if not os.path.isdir(target):
-        return ToolResult(
-            type=ToolResultType.ERROR, output=f"Not a directory: {target}"
-        )
-
+    from app.services.filesystem import get_filesystem_service
     try:
-        entries = sorted(os.listdir(target))
-    except OSError as e:
+        page = await get_filesystem_service().list_directory(
+            target, cursor=cursor, limit=limit, show_hidden=show_hidden
+        )
+    except (OSError, ValueError, asyncio.TimeoutError) as e:
         return ToolResult(
             type=ToolResultType.ERROR, output=f"Cannot list directory: {e}"
         )
-
-    if not show_hidden:
-        entries = [e for e in entries if not e.startswith(".")]
-
-    items: list[str] = []
-    for entry in entries:
-        full = os.path.join(target, entry)
-        suffix = "/" if os.path.isdir(full) else ""
-        items.append(f"  {entry}{suffix}")
-
-    header = f"{target}/ ({len(items)} items)"
+    data = page.to_dict()
+    items = [
+        f"  {entry['name']}{os.sep if entry['kind'] == 'dir' else ''}"
+        for entry in data["entries"]
+    ]
+    header = f"{target}{os.sep} ({page.total} items; showing {len(items)})"
+    if page.next_cursor:
+        items.append(f"  ... more (cursor={page.next_cursor})")
     return ToolResult(
         output=header + "\n" + "\n".join(items),
-        metadata={"path": target, "count": len(items)},
+        metadata=data,
     )
 
 

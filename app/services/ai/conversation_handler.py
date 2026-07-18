@@ -38,6 +38,7 @@ Canonical-mapping notes:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from decimal import Decimal
@@ -97,6 +98,7 @@ class SQLiteConversationStore:
     def __init__(self) -> None:
         self._convs = ConversationsRepo()
         self._msgs = MessagesRepo()
+        self._reservation_locks: dict[str, asyncio.Lock] = {}
 
     # ------------------------------------------------------------------
     # ConversationStore protocol — gate
@@ -240,68 +242,90 @@ class SQLiteConversationStore:
             return {}
 
         await self.ensure_conversation_exists(conversation_id, user_id)
-        user_position = len(messages) - 1
-        assistant_position = len(messages)
-        user_norm = _normalize_message(messages[user_position])
+        user_norm = _normalize_message(messages[-1])
         if not user_norm or user_norm["role"] != "user":
             return {}
 
-        db = get_db()
-        now = _now()
-        reservations: dict[int, str] = {}
-        rows_to_announce: list[tuple[str, int, str]] = []
+        # The incoming config is model context, not a durable-position ledger.
+        # Tool-result compaction/sanitization can remove historical messages,
+        # so len(config.messages) is not a safe append position. Allocate from
+        # the canonical mirror instead and serialize reservations per
+        # conversation to prevent concurrent turns choosing the same slots.
+        lock = self._reservation_locks.setdefault(conversation_id, asyncio.Lock())
+        async with lock:
+            db = get_db()
+            max_row = await db.fetchone(
+                "SELECT MAX(position) AS max_position FROM chat.message "
+                "WHERE conversation_id = ?",
+                (conversation_id,),
+            )
+            durable_max = (
+                int(max_row["max_position"])
+                if max_row and max_row["max_position"] is not None
+                else -1
+            )
+            user_position = durable_max + 1
+            assistant_position = user_position + 1
+            now = _now()
+            reservations: dict[int, str] = {}
+            rows_to_announce: list[tuple[str, int, str]] = []
 
-        async def _insert(
-            position: int,
-            role: str,
-            status: str,
-            content: list[dict[str, Any]],
-        ) -> str:
-            existing = await db.fetchone(
-                "SELECT id FROM chat.message WHERE conversation_id = ? AND position = ?",
-                (conversation_id, position),
-            )
-            if existing:
-                return str(existing["id"])
-            message_id = str(
-                uuid.uuid5(_MSG_NAMESPACE, f"{conversation_id}:{position}")
-            )
-            await db.execute(
-                """INSERT INTO chat.message
-                   (id, conversation_id, role, position, status, content,
-                    metadata, source, is_visible_to_user, is_visible_to_model,
-                    content_chars, tool_results_chars, created_at, updated_at,
-                    version)
-                   VALUES (?, ?, ?, ?, ?, ?, '{}', 'user', 1, 1, ?, 0, ?, ?, 1)""",
-                (
-                    message_id,
-                    conversation_id,
-                    role,
-                    position,
-                    status,
-                    _serialize_content(content),
-                    _content_chars(content),
-                    now,
-                    now,
-                ),
-            )
-            await enqueue_change("chat", "message", message_id, db, commit=False)
-            rows_to_announce.append((role, position, message_id))
-            return message_id
+            async def _insert(
+                position: int,
+                role: str,
+                status: str,
+                content: list[dict[str, Any]],
+            ) -> str:
+                existing = await db.fetchone(
+                    "SELECT id, role, content FROM chat.message "
+                    "WHERE conversation_id = ? AND position = ?",
+                    (conversation_id, position),
+                )
+                if existing:
+                    raise RuntimeError(
+                        "message position allocation collision: "
+                        f"conversation={conversation_id} position={position} "
+                        f"expected_role={role} existing_role={existing['role']}"
+                    )
+                message_id = str(
+                    uuid.uuid5(_MSG_NAMESPACE, f"{conversation_id}:{position}")
+                )
+                await db.execute(
+                    """INSERT INTO chat.message
+                       (id, conversation_id, role, position, status, content,
+                        metadata, source, is_visible_to_user, is_visible_to_model,
+                        content_chars, tool_results_chars, created_at, updated_at,
+                        version)
+                       VALUES (?, ?, ?, ?, ?, ?, '{}', 'user', 1, 1, ?, 0, ?, ?, 1)""",
+                    (
+                        message_id,
+                        conversation_id,
+                        role,
+                        position,
+                        status,
+                        _serialize_content(content),
+                        _content_chars(content),
+                        now,
+                        now,
+                    ),
+                )
+                await enqueue_change("chat", "message", message_id, db, commit=False)
+                rows_to_announce.append((role, position, message_id))
+                return message_id
 
-        reservations[user_position] = await _insert(
-            user_position,
-            "user",
-            "active",
-            user_norm["content"],
-        )
-        reservations[assistant_position] = await _insert(
-            assistant_position,
-            "assistant",
-            "pending",
-            [],
-        )
-        await db.commit()
+            reservations[user_position] = await _insert(
+                user_position,
+                "user",
+                "active",
+                user_norm["content"],
+            )
+            reservations[assistant_position] = await _insert(
+                assistant_position,
+                "assistant",
+                "pending",
+                [],
+            )
+            await db.commit()
 
         from matrx_connect.reservations import get_tracker
 
@@ -414,9 +438,24 @@ class SQLiteConversationStore:
         )
         occupied = {r["position"]: dict(r) for r in pos_rows}
         now = _now()
-        for position, msg in enumerate(raw_messages):
-            norm = _normalize_message(msg)
-            if norm is None:
+        normalized_messages = [
+            norm
+            for msg in raw_messages
+            if (norm := _normalize_message(msg)) is not None
+        ]
+        resolved_positions = _resolve_completed_positions(
+            normalized_messages,
+            occupied,
+        )
+        for norm, position in zip(normalized_messages, resolved_positions):
+            if position is None:
+                logger.warning(
+                    "[conv_store] skipped an unmatched compacted history message "
+                    "instead of overwriting a durable position "
+                    "(conversation=%s role=%s)",
+                    conv_id,
+                    norm["role"],
+                )
                 continue
             existing = occupied.get(position)
             message_status = _canonical_message_status(norm.get("status"))
@@ -809,11 +848,33 @@ class SQLiteConversationStore:
             "WHERE conversation_id = ? AND deleted_at IS NULL ORDER BY created_at",
             (conversation_id,),
         )
+        trace_rows = await db.fetchall(
+            "SELECT * FROM chat.tool_trace "
+            "WHERE conversation_id = ? ORDER BY COALESCE(ts, created_at), id",
+            (conversation_id,),
+        )
+        tool_traces: list[dict[str, Any]] = []
+        for trace_row in trace_rows:
+            row = dict(trace_row)
+            for json_col in ("args", "result_preview", "metadata"):
+                raw = row.get(json_col)
+                if isinstance(raw, str) and raw:
+                    try:
+                        row[json_col] = json.loads(raw)
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "[conv_store] Corrupt chat.tool_trace.%s for row %s — "
+                            "returning raw string",
+                            json_col,
+                            row.get("id"),
+                        )
+            tool_traces.append(row)
 
         return {
             "conversation": conv,
             "messages": messages,
             "tool_calls": tool_calls,
+            "tool_traces": tool_traces,
             "media": [dict(r) for r in media_rows],
             "user_requests": user_requests,
             "requests": user_requests,
@@ -889,6 +950,87 @@ _PAUSED_REQUEST_STATUSES = {
     "max_iterations_exceeded",
     "truncated",
 }
+
+
+def _messages_match(existing: dict[str, Any], normalized: dict[str, Any]) -> bool:
+    """Return whether a durable row and normalized model message are identical.
+
+    IDs win when present. Otherwise role plus canonical structured content is
+    the stable identity available after matrx-ai compacts model context.
+    """
+    normalized_id = normalized.get("id")
+    if normalized_id and str(existing.get("id")) == str(normalized_id):
+        return True
+    return (
+        existing.get("role") == normalized.get("role")
+        and existing.get("content") == _serialize_content(normalized["content"])
+    )
+
+
+def _resolve_completed_positions(
+    normalized_messages: list[dict[str, Any]],
+    occupied: dict[int, dict[str, Any]],
+) -> list[int | None]:
+    """Map compacted model history onto canonical durable positions.
+
+    Model context may omit historical tool messages, so its list indexes are
+    not durable message positions. ``reserve_stream_messages`` has already
+    appended the current user and pending assistant rows to the mirror. Match
+    the compacted prefix to existing rows in order, anchor the last user
+    message to the newest matching durable row, and place this turn's suffix
+    contiguously after that anchor.
+
+    If no reserved current-user anchor exists, retain the original positional
+    behavior for compatibility with non-stream persistence callers.
+    """
+    if not normalized_messages:
+        return []
+
+    last_user_index = next(
+        (
+            index
+            for index in range(len(normalized_messages) - 1, -1, -1)
+            if normalized_messages[index]["role"] == "user"
+        ),
+        None,
+    )
+    if last_user_index is None:
+        return list(range(len(normalized_messages)))
+
+    current_user = normalized_messages[last_user_index]
+    anchor_candidates = [
+        position
+        for position, existing in occupied.items()
+        if existing.get("role") == "user"
+        and _messages_match(existing, current_user)
+    ]
+    if not anchor_candidates:
+        return list(range(len(normalized_messages)))
+
+    anchor_position = max(anchor_candidates)
+    resolved: list[int | None] = [None] * len(normalized_messages)
+    resolved[last_user_index] = anchor_position
+
+    prior_position = -1
+    for index in range(last_user_index):
+        normalized = normalized_messages[index]
+        match = next(
+            (
+                position
+                for position in sorted(occupied)
+                if prior_position < position < anchor_position
+                and _messages_match(occupied[position], normalized)
+            ),
+            None,
+        )
+        resolved[index] = match
+        if match is not None:
+            prior_position = match
+
+    for index in range(last_user_index + 1, len(normalized_messages)):
+        resolved[index] = anchor_position + (index - last_user_index)
+
+    return resolved
 
 
 def _canonical_message_status(value: Any) -> str:

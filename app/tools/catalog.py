@@ -78,7 +78,10 @@ from app.tools.arg_models.file_ops_args import (
     EditArgs,
     GlobArgs,
     GrepArgs,
+    FindPathsArgs,
     ListDirectoryArgs,
+    PlacesArgs,
+    SemanticFindPathsArgs,
     MkdirArgs,
     MoveArgs,
     ReadArgs,
@@ -131,6 +134,7 @@ from app.tools.arg_models.system_args import (
     TopProcessesArgs,
 )
 from app.tools.dispatcher import TOOL_HANDLERS
+from app.content_ir import screenshot_artifact_json_schema
 
 # Platform gating shorthands (values are `sys.platform` strings).
 DARWIN: tuple[str, ...] = ("darwin",)
@@ -158,6 +162,7 @@ class ToolMeta:
     arg_model: type | None = None
     timeout_seconds: float = 120.0
     platforms: tuple[str, ...] | None = None
+    output_schema: dict[str, Any] | None = None
 
 
 # NOTE ON PINNED NAMES: the entries below with an explicit ``cloud_name``
@@ -252,6 +257,21 @@ _META: dict[str, ToolMeta] = {
         "List the contents of a directory on the local filesystem.",
         "local_file_ops", ("file", "directory", "list", "local"), ListDirectoryArgs,
     ),
+    "FilesystemPlaces": ToolMeta(
+        "local_filesystem_places",
+        "Return the user's local Home, standard folders, configured priority roots, and accessible volumes.",
+        "local_file_ops", ("file", "directory", "places", "local"), PlacesArgs,
+    ),
+    "FindPaths": ToolMeta(
+        "local_find_paths",
+        "Find files and directories on the user's machine using the progressive metadata index.",
+        "local_file_ops", ("file", "search", "find", "local"), FindPathsArgs,
+    ),
+    "SemanticFindPaths": ToolMeta(
+        "local_semantic_find_paths",
+        "Find local files by meaning using the optional background embedding index.",
+        "local_file_ops", ("file", "search", "semantic", "local"), SemanticFindPathsArgs,
+    ),
     # ── System ───────────────────────────────────────────────────────────
     "SystemInfo": ToolMeta(
         "local_system_info",
@@ -260,9 +280,10 @@ _META: dict[str, ToolMeta] = {
     ),
     "Screenshot": ToolMeta(
         "local_screenshot",
-        "Take a screenshot of the local screen and return it as a base64-encoded image.",
+        "Take a screenshot of the local screen and return a durable Content IR media artifact.",
         "local_system", ("screenshot", "screen", "local"), ScreenshotArgs,
         timeout_seconds=15.0,
+        output_schema=screenshot_artifact_json_schema(),
     ),
     "ListScreens": ToolMeta(category="local_system", tags=("screen", "display", "local")),
     "OpenUrl": ToolMeta(
@@ -371,6 +392,7 @@ _META: dict[str, ToolMeta] = {
         "Take a screenshot of the current browser page or a specific element.",
         "local_browser", ("browser", "screenshot", "playwright", "local"),
         BrowserScreenshotArgs, timeout_seconds=15.0,
+        output_schema=screenshot_artifact_json_schema(),
     ),
     "BrowserEval": ToolMeta(
         "local_browser_eval",
@@ -734,6 +756,7 @@ class CatalogEntry:
     handler: Callable[..., Any]
     timeout_seconds: float
     platforms: tuple[str, ...] | None
+    output_schema: dict[str, Any] | None = None
     version: str = CATALOG_VERSION
     # W7 action collapse: mega-tools (advertised=True) are what the platform
     # sees; legacy per-tool entries stay dispatchable but unadvertised during
@@ -835,6 +858,7 @@ def _build_catalog() -> tuple[CatalogEntry, ...]:
                 handler=handler,
                 timeout_seconds=meta.timeout_seconds,
                 platforms=meta.platforms,
+                output_schema=meta.output_schema,
                 advertised=False,  # legacy tool: collapsed into a mega-tool
             )
         )
@@ -862,6 +886,7 @@ def _build_catalog() -> tuple[CatalogEntry, ...]:
                 handler=TOOL_HANDLERS[group.dispatcher_name],
                 timeout_seconds=composed["timeout_seconds"],
                 platforms=composed["platforms"],
+                output_schema=composed["output_schema"],
                 advertised=True,
                 cloud_parameters=composed["cloud_parameters"],
             )

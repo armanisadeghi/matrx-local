@@ -145,7 +145,9 @@ async def test_refresh_registers_remote_definitions_without_shadowing_local(
     assert count == 1
     assert set(fake_registry.tools) == {"fs_read", "load_desktop_tools"}
     assert set(fake_handlers._tool_handlers) == {"fs_read"}
-    assert fake_registry.tools["load_desktop_tools"] is discovery
+    hydrated_discovery = fake_registry.tools["load_desktop_tools"]
+    assert hydrated_discovery.tool_id == "discovery-id"
+    assert hydrated_discovery._callable is not None
     assert fake_registry.tools["fs_read"].tool_id == "remote-id"
     assert fake_registry.tools["fs_read"].admin_only is False
     assert fake_registry.tools["fs_read"].timeout_seconds == 75
@@ -217,36 +219,25 @@ async def test_refresh_runs_context_mutating_discovery_inside_local_process(
     from app.services.ai import remote_tool_bridge as bridge_module
     from app.tools import catalog as catalog_module
     from matrx_ai.tools import external_handlers, registry
-    from matrx_ai.tools.models import ToolDefinition, ToolType
-
-    async def local_loader(args, ctx):
-        return None
-
-    local_definition = ToolDefinition(
-        name="load_desktop_tools",
-        tool_id="discovery-id",
-        tool_type=ToolType.LOCAL,
-        function_path="matrx_ai.tools.implementations.desktop_discovery.load_desktop_tools",
-    )
-    local_definition._callable = local_loader
     fake_registry = _FakeRegistry()
+    fake_registry.load_from_definitions(build_local_context_definitions())
     fake_handlers = _FakeHandlers()
     fake_client = _FakeClient(
         rows=[
             {
                 "id": "discovery-id",
                 "name": "load_desktop_tools",
-                "parameters": {"category": {"type": "string"}},
+                "description": "Canonical server description",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"category": {"type": "string"}},
+                    "required": ["category"],
+                },
             }
         ]
     )
     monkeypatch.setattr(bridge_module, "get_aidream_client", lambda: fake_client)
     monkeypatch.setattr(catalog_module, "get_catalog", lambda: ())
-    monkeypatch.setattr(
-        bridge_module,
-        "_build_local_context_definition",
-        lambda row: local_definition,
-    )
     monkeypatch.setattr(
         registry.ToolRegistry, "get_instance", staticmethod(lambda: fake_registry)
     )
@@ -259,7 +250,14 @@ async def test_refresh_runs_context_mutating_discovery_inside_local_process(
     count = await RemoteToolBridge().refresh()
 
     assert count == 0
-    assert fake_registry.get("load_desktop_tools") is local_definition
+    hydrated = fake_registry.get("load_desktop_tools")
+    assert hydrated is fake_registry.get("discovery-id")
+    assert hydrated.tool_id == "discovery-id"
+    assert hydrated._callable is not None
+    assert hydrated.description == "Canonical server description"
+    assert hydrated.parameters["category"]["type"] == "string"
+    assert hydrated.required_params == ["category"]
+    assert hydrated.to_anthropic_format()["input_schema"]["required"] == ["category"]
     assert fake_handlers._tool_handlers == {}
 
 
@@ -334,3 +332,43 @@ def test_bundled_context_tool_is_executable_without_server_catalog() -> None:
     assert definition.function_path.endswith(".load_desktop_tools")
     assert definition.parameters["category"]["type"] == "string"
     assert "category" in definition.required_params
+
+
+@pytest.mark.anyio
+async def test_engine_bootstrap_registers_context_tool_while_server_is_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.ai import engine as engine_module
+    from app.services.ai import local_tool_bridge, remote_tool_bridge
+    from matrx_ai.tools import handle_tool_calls, registry
+
+    fake_registry = _FakeRegistry()
+
+    async def no_server_catalog() -> int:
+        return 0
+
+    class OfflineBridge:
+        async def refresh(self) -> int:
+            raise RuntimeError("offline")
+
+    monkeypatch.setattr(engine_module, "_ai_initialized", True)
+    monkeypatch.setattr(engine_module, "_tools_loaded", False)
+    monkeypatch.setattr(engine_module, "_registered_tool_count", 0)
+    monkeypatch.setattr(handle_tool_calls, "initialize_tool_system", no_server_catalog)
+    monkeypatch.setattr(local_tool_bridge, "register_local_tools", lambda: 1)
+    monkeypatch.setattr(local_tool_bridge, "build_local_tool_definitions", list)
+    monkeypatch.setattr(
+        remote_tool_bridge,
+        "get_remote_tool_bridge",
+        lambda: OfflineBridge(),
+    )
+    monkeypatch.setattr(
+        registry.ToolRegistry,
+        "get_instance",
+        staticmethod(lambda: fake_registry),
+    )
+
+    assert await engine_module.load_tools_and_register() == 1
+    discovery = fake_registry.get("load_desktop_tools")
+    assert discovery is not None
+    assert discovery._callable is not None

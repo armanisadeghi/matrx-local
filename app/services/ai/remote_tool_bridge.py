@@ -63,11 +63,8 @@ class RemoteToolBridge:
             for row in rows:
                 name = row.get("name") if isinstance(row, dict) else None
                 if isinstance(name, str) and name in _LOCAL_CONTEXT_TOOLS:
-                    existing = registry.get(name)
                     local_context_definitions.append(
-                        existing
-                        if _has_in_process_executor(existing)
-                        else _build_local_context_definition(row)
+                        _build_local_context_definition(row)
                     )
                     continue
                 if (
@@ -349,12 +346,12 @@ def _build_local_context_definition(row: dict[str, Any]) -> ToolDefinition:
         description = str(getattr(declared.func, "__doc__", "") or "").strip()
     definition = ToolDefinition.model_validate(
         {
+            **row,
             "parameters": schema.get("properties", {}),
             "required_params": schema.get("required", []),
             "description": description,
             "source_kind": declared.source_kind,
-            **row,
-            "tool_id": row.get("id"),
+            "tool_id": row.get("id") or row.get("tool_id"),
             "tool_type": ToolType.LOCAL,
             "function_path": declared.function_path,
             "admin_only": False,

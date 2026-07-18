@@ -50,7 +50,6 @@ from app.services.local_db.outbox import enqueue_change
 from app.services.local_db.repositories import (
     ConversationsRepo,
     MessagesRepo,
-    _content_to_parts,
     _now,
 )
 
@@ -151,7 +150,9 @@ class SQLiteConversationStore:
                 ),
             )
             if cursor.rowcount:
-                await enqueue_change("chat", "conversation", conversation_id, db, commit=False)
+                await enqueue_change(
+                    "chat", "conversation", conversation_id, db, commit=False
+                )
                 logger.debug(
                     "[conv_store] Created conversation %s for user %s",
                     conversation_id,
@@ -205,7 +206,9 @@ class SQLiteConversationStore:
                 ),
             )
             if cursor.rowcount:
-                await enqueue_change("chat", "user_request", request_id, db, commit=False)
+                await enqueue_change(
+                    "chat", "user_request", request_id, db, commit=False
+                )
             await db.commit()
             logger.debug("[conv_store] Ensured pending request %s", request_id)
         except Exception:
@@ -252,7 +255,7 @@ class SQLiteConversationStore:
             position: int,
             role: str,
             status: str,
-            content: str,
+            content: list[dict[str, Any]],
         ) -> str:
             existing = await db.fetchone(
                 "SELECT id FROM chat.message WHERE conversation_id = ? AND position = ?",
@@ -260,7 +263,9 @@ class SQLiteConversationStore:
             )
             if existing:
                 return str(existing["id"])
-            message_id = str(uuid.uuid5(_MSG_NAMESPACE, f"{conversation_id}:{position}"))
+            message_id = str(
+                uuid.uuid5(_MSG_NAMESPACE, f"{conversation_id}:{position}")
+            )
             await db.execute(
                 """INSERT INTO chat.message
                    (id, conversation_id, role, position, status, content,
@@ -274,8 +279,8 @@ class SQLiteConversationStore:
                     role,
                     position,
                     status,
-                    _content_to_parts(content),
-                    len(content),
+                    _serialize_content(content),
+                    _content_chars(content),
                     now,
                     now,
                 ),
@@ -294,7 +299,7 @@ class SQLiteConversationStore:
             assistant_position,
             "assistant",
             "pending",
-            "",
+            [],
         )
         await db.commit()
 
@@ -376,6 +381,7 @@ class SQLiteConversationStore:
 
         message_ids: list[str] = []
         request_ids: list[str] = [user_request_id]
+        assistant_rows_to_announce: list[tuple[str, int]] = []
 
         db = get_db()
 
@@ -399,7 +405,7 @@ class SQLiteConversationStore:
             existing = occupied.get(position)
             if existing:
                 if existing.get("status") == "pending":
-                    text = norm["content"]
+                    content = norm["content"]
                     await db.execute(
                         """UPDATE chat.message
                            SET role = ?, status = 'active', content = ?,
@@ -407,8 +413,8 @@ class SQLiteConversationStore:
                            WHERE id = ?""",
                         (
                             norm["role"],
-                            _content_to_parts(text),
-                            len(text),
+                            _serialize_content(content),
+                            _content_chars(content),
                             now,
                             existing["id"],
                         ),
@@ -422,7 +428,7 @@ class SQLiteConversationStore:
                 uuid.uuid5(_MSG_NAMESPACE, f"{conv_id}:{position}")
             )
             role = norm["role"]
-            text = norm["content"]
+            content = norm["content"]
             try:
                 cursor = await db.execute(
                     """INSERT OR IGNORE INTO chat.message
@@ -436,7 +442,7 @@ class SQLiteConversationStore:
                         conv_id,
                         role,
                         position,
-                        _content_to_parts(text),
+                        _serialize_content(content),
                         # Canonical source vocabulary (cloud CHECK constraint
                         # cx_message_source_check): user | agent_template |
                         # system. `source` = row ORIGIN, not authorship —
@@ -444,7 +450,7 @@ class SQLiteConversationStore:
                         # Message.source default). 'model' 400s on every
                         # push (MXL-D-052).
                         "user",
-                        len(text),
+                        _content_chars(content),
                         now,
                         now,
                     ),
@@ -452,6 +458,8 @@ class SQLiteConversationStore:
                 if cursor.rowcount:
                     message_ids.append(msg_id)
                     await enqueue_change("chat", "message", msg_id, db, commit=False)
+                    if role == "assistant":
+                        assistant_rows_to_announce.append((msg_id, position))
             except Exception:
                 logger.error(
                     "[conv_store] Failed to persist message %s (conversation=%s)",
@@ -479,6 +487,28 @@ class SQLiteConversationStore:
         )
         await enqueue_change("chat", "conversation", conv_id, db, commit=False)
         await db.commit()
+
+        if assistant_rows_to_announce:
+            from matrx_connect.context.app_context import try_get_app_context
+            from matrx_connect.reservations import get_tracker
+
+            ctx = try_get_app_context()
+            emitter = ctx.emitter if ctx is not None else None
+            if emitter is not None:
+                tracker = get_tracker()
+                for message_id, position in assistant_rows_to_announce:
+                    await tracker.reserve(
+                        emitter=emitter,
+                        db_project="matrx",
+                        table="message",
+                        parent_refs={"conversation_id": conv_id},
+                        metadata={
+                            "role": "assistant",
+                            "position": position,
+                            "position_kind": "logical_index",
+                        },
+                        record_id=message_id,
+                    )
 
         logger.debug(
             "[conv_store] Persisted request %s: %d new messages",
@@ -527,7 +557,9 @@ class SQLiteConversationStore:
             )
             raise
 
-    async def _write_tool_call(self, row_id: str, data: dict[str, Any], replace: bool) -> None:
+    async def _write_tool_call(
+        self, row_id: str, data: dict[str, Any], replace: bool
+    ) -> None:
         """Upsert a chat.tool_call row from matrx-ai's tool-log data dict.
 
         Known keys map straight onto canonical columns; anything else is
@@ -570,14 +602,14 @@ class SQLiteConversationStore:
         # birth timestamp with the update time.
         update_sql = ", ".join(
             '"metadata" = json_patch(COALESCE("metadata", \'{}\'), '
-            'COALESCE(excluded."metadata", \'{}\'))'
+            "COALESCE(excluded.\"metadata\", '{}'))"
             if c == "metadata"
             else f'"{c}" = excluded."{c}"'
             for c in columns
             if c not in ("id", "created_at")
         )
         await db.execute(
-            f'INSERT INTO chat.tool_call ({col_sql}) VALUES ({placeholders}) '
+            f"INSERT INTO chat.tool_call ({col_sql}) VALUES ({placeholders}) "
             f"ON CONFLICT(id) DO UPDATE SET {update_sql}",
             values,
         )
@@ -605,7 +637,9 @@ class SQLiteConversationStore:
         """
         conv = await self._convs.get(conversation_id)
         if not conv:
-            raise KeyError(f"conversation {conversation_id!r} not found in local SQLite")
+            raise KeyError(
+                f"conversation {conversation_id!r} not found in local SQLite"
+            )
         return {
             "id": conv.get("id"),
             "mode": conv.get("mode", "chat"),
@@ -625,7 +659,9 @@ class SQLiteConversationStore:
         tool calls, media, user requests, requests."""
         conv = await self._convs.get(conversation_id)
         if not conv:
-            raise KeyError(f"conversation {conversation_id!r} not found in local SQLite")
+            raise KeyError(
+                f"conversation {conversation_id!r} not found in local SQLite"
+            )
 
         messages = await self._msgs.list_by_conversation(conversation_id)
 
@@ -646,7 +682,12 @@ class SQLiteConversationStore:
         tool_calls: list[dict[str, Any]] = []
         for r in tool_rows:
             row = dict(r)
-            for json_col in ("arguments", "metadata", "execution_events", "output_preview"):
+            for json_col in (
+                "arguments",
+                "metadata",
+                "execution_events",
+                "output_preview",
+            ):
                 raw = row.get(json_col)
                 if isinstance(raw, str) and raw:
                     try:
@@ -682,12 +723,30 @@ class SQLiteConversationStore:
     async def _load_history(self, conversation_id: str) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
         try:
-            for row in await self._msgs.list_by_conversation(conversation_id):
+            rows = await get_db().fetchall(
+                "SELECT id, role, status, content, metadata FROM chat.message "
+                "WHERE conversation_id = ? AND deleted_at IS NULL "
+                "ORDER BY position, created_at",
+                (conversation_id,),
+            )
+            for raw_row in rows:
+                row = dict(raw_row)
                 role = row.get("role") or "user"
-                content = row.get("content") or ""
+                content = _deserialize_content(row.get("content"))
                 if not content:
                     continue
-                messages.append({"role": role, "content": content})
+                message: dict[str, Any] = {
+                    "id": row.get("id"),
+                    "role": role,
+                    "content": content,
+                }
+                status = row.get("status")
+                if status and status != "active":
+                    message["status"] = status
+                metadata = _deserialize_json_object(row.get("metadata"))
+                if metadata:
+                    message["metadata"] = metadata
+                messages.append(message)
         except Exception:
             logger.error(
                 "[conv_store] Could not load history for %s — the model will "
@@ -713,49 +772,115 @@ _MSG_NAMESPACE = uuid.UUID("7df1aa44-43e5-4dca-9c4f-3f2f6f8a1b9e")
 
 
 def _normalize_message(msg: Any) -> dict[str, Any] | None:
-    """Convert a UnifiedMessage / dict into {id?, role, content-text}.
+    """Convert a UnifiedMessage/dict to canonical ``chat.message`` content.
 
-    UnifiedMessage.content is a list of UnifiedContent parts; we flatten to
-    plain text for storage as a single canonical text part. Text parts are
-    concatenated; any non-text parts are JSON-dumped so nothing is silently
-    dropped.
+    Structured content must remain structured. Flattening tool calls/results
+    into JSON-looking text makes the transcript appear correct only until the
+    page reloads, at which point neither the frontend nor conversation replay
+    can recognize the tool graph.
     """
+    storage = None
+    to_storage_dict = getattr(msg, "to_storage_dict", None)
+    if callable(to_storage_dict):
+        storage = to_storage_dict()
+
+    if isinstance(storage, dict):
+        role = storage.get("role") or "user"
+        content = storage.get("content")
+        msg_id = storage.get("id")
+        metadata = storage.get("metadata")
+        status = storage.get("status")
     if isinstance(msg, dict):
-        role = msg.get("role") or "user"
-        content = msg.get("content")
-        msg_id = msg.get("id")
-    else:
+        role = (storage or msg).get("role") or "user"
+        content = (storage or msg).get("content")
+        msg_id = (storage or msg).get("id")
+        metadata = (storage or msg).get("metadata")
+        status = (storage or msg).get("status")
+    elif not isinstance(storage, dict):
         role = getattr(msg, "role", None) or "user"
         content = getattr(msg, "content", None)
         msg_id = getattr(msg, "id", None)
+        metadata = getattr(msg, "metadata", None)
+        status = getattr(msg, "status", None)
 
     role = str(getattr(role, "value", role))
-
-    if isinstance(content, str):
-        text = content
-    elif isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            part_text = (
-                part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
-            )
-            if isinstance(part_text, str):
-                parts.append(part_text)
-            else:
-                try:
-                    raw = part if isinstance(part, dict) else dict(getattr(part, "__dict__", {}))
-                    raw = {k: v for k, v in raw.items() if v not in (None, [], {})}
-                    if raw:
-                        parts.append(json.dumps(raw, default=str))
-                except Exception:
-                    pass
-        text = "\n".join(p for p in parts if p)
-    elif content is None:
-        text = ""
-    else:
-        text = str(content)
-
-    row: dict[str, Any] = {"role": role, "content": text}
+    blocks = _normalize_content_blocks(content)
+    row: dict[str, Any] = {"role": role, "content": blocks}
     if msg_id:
         row["id"] = str(msg_id)
+    if isinstance(metadata, dict) and metadata:
+        row["metadata"] = metadata
+    if status and str(status) != "active":
+        row["status"] = str(status)
     return row
+
+
+def _normalize_content_blocks(content: Any) -> list[dict[str, Any]]:
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    if not isinstance(content, list):
+        content = [content]
+
+    blocks: list[dict[str, Any]] = []
+    for part in content:
+        if isinstance(part, str):
+            if part:
+                blocks.append({"type": "text", "text": part})
+            continue
+        if isinstance(part, dict):
+            raw = dict(part)
+        else:
+            serializer = getattr(part, "to_storage_dict", None)
+            if callable(serializer):
+                raw = serializer()
+            else:
+                raw = dict(getattr(part, "__dict__", {}))
+        if not isinstance(raw, dict):
+            continue
+        raw = {key: value for key, value in raw.items() if value not in (None, [], {})}
+        if not raw:
+            continue
+        if "type" not in raw and isinstance(raw.get("text"), str):
+            raw["type"] = "text"
+        blocks.append(raw)
+    return blocks
+
+
+def _serialize_content(content: list[dict[str, Any]]) -> str:
+    return json.dumps(content, ensure_ascii=False, default=str)
+
+
+def _deserialize_content(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, list):
+        return _normalize_content_blocks(raw)
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            return _normalize_content_blocks(raw)
+        return _normalize_content_blocks(decoded)
+    return _normalize_content_blocks(raw)
+
+
+def _deserialize_json_object(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
+
+
+def _content_chars(content: list[dict[str, Any]]) -> int:
+    return sum(
+        len(text)
+        for block in content
+        if isinstance(block, dict)
+        for text in [block.get("text")]
+        if isinstance(text, str)
+    )

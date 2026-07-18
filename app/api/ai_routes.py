@@ -48,6 +48,7 @@ Auth model:
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -218,6 +219,50 @@ async def _resolve_user_id(bearer: str | None) -> str:
     return "local-user"
 
 
+async def _adopt_request_jwt(bearer: str | None, user_id: str) -> None:
+    """Refresh engine-owned auth state from a valid JWT already in use."""
+    if not bearer or user_id == "local-user":
+        return
+    try:
+        import jwt as pyjwt
+
+        claims = pyjwt.decode(bearer, options={"verify_signature": False})
+        if str(claims.get("sub") or "") != user_id:
+            return
+        expires_at = int(claims.get("exp") or 0)
+        if expires_at <= int(time.time()):
+            return
+
+        from app.services.ai.engine import set_jwt_cache
+        from app.services.local_db.repositories import TokenRepo
+
+        set_jwt_cache(bearer)
+        repo = TokenRepo()
+        existing = await repo.get()
+        if (
+            existing
+            and existing.get("access_token") == bearer
+            and not repo.is_expired(existing)
+        ):
+            return
+        await repo.save(
+            access_token=bearer,
+            user_id=user_id,
+            refresh_token=(existing or {}).get("refresh_token"),
+            expires_at=expires_at,
+        )
+        logger.info(
+            "[ai_routes] refreshed engine auth state from authenticated AI request "
+            "(user_id=%s)",
+            user_id,
+        )
+    except Exception:
+        logger.warning(
+            "[ai_routes] could not refresh engine auth state from request JWT",
+            exc_info=True,
+        )
+
+
 class AIContextMiddleware:
     """Sets the matrx-connect AppContext (emitter + identity) per request.
 
@@ -256,6 +301,7 @@ class AIContextMiddleware:
             request_id = str(uuid.uuid4())
 
         user_id = await _resolve_user_id(bearer)
+        await _adopt_request_jwt(bearer, user_id)
 
         ctx = AppContext(
             emitter=StreamEmitter(debug=False, heartbeat_interval=_HEARTBEAT_INTERVAL),

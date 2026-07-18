@@ -91,9 +91,7 @@ _MOCK_EXECUTION_DEFINITION = {
     "revision": "test-revision",
     "name": "Smoke Agent",
     "model_id": "mock-model",
-    "messages": [
-        {"role": "system", "content": "Canonical smoke system prompt."}
-    ],
+    "messages": [{"role": "system", "content": "Canonical smoke system prompt."}],
     "settings": {"temperature": 0.2, "max_output_tokens": 512, "stream": True},
     "tools": [],
     "custom_tools": [],
@@ -202,7 +200,9 @@ def ai_app(seam_sandbox, local_db, monkeypatch: pytest.MonkeyPatch):
     )
 
     registry = ToolRegistry.get_instance()
-    missing = [d for d in build_local_tool_definitions() if registry.get(d.name) is None]
+    missing = [
+        d for d in build_local_tool_definitions() if registry.get(d.name) is None
+    ]
     if missing:
         registry.load_from_definitions(missing)
     register_local_tools()
@@ -354,6 +354,16 @@ def test_desktop_native_capability_injects_discovery_tool_and_typed_state(
 
     monkeypatch.setattr("matrx_ai.tools.merge.merge_request_tools", fake_merge)
     monkeypatch.setattr(local_ai_task, "_registry", lambda: PermissiveRegistry())
+    monkeypatch.setattr(
+        local_ai_task,
+        "_local_desktop_capability_state",
+        lambda: {
+            "platform": "darwin",
+            "engine_version": "1.2.3",
+            "instance_id": "inst-host",
+            "tunnel_state": "active",
+        },
+    )
 
     ctx = AppContext(
         emitter=StreamEmitter(),
@@ -381,9 +391,80 @@ def test_desktop_native_capability_injects_discovery_tool_and_typed_state(
             client=client,
         )
         assert "load_desktop_tools" in captured["names"]
-        assert updated.metadata["client_capabilities_payloads"]["desktop-native"][
-            "instance_id"
-        ] == "inst-test"
+        payload = updated.metadata["client_capabilities_payloads"]["desktop-native"]
+        assert payload["instance_id"] == "inst-host"
+        assert payload["engine_version"] == "1.2.3"
+
+    asyncio.run(scenario())
+
+
+def test_local_host_injects_desktop_capability_when_browser_reports_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from matrx_ai.capabilities import ClientContext
+    from matrx_ai.config import UnifiedConfig
+    from matrx_ai.tools.models import ToolType
+    from matrx_connect.context.app_context import AppContext
+    from matrx_connect.emitters.stream_emitter import StreamEmitter
+
+    from app.services.ai import local_ai_task
+
+    captured: dict[str, object] = {}
+
+    def fake_merge(config, ctx, specs, excluded=None, **kwargs):
+        captured["names"] = [getattr(spec, "name", None) for spec in specs]
+        captured["client"] = ctx.metadata["remote_tool_request"]["client"]
+        return ctx
+
+    class PermissiveRegistry:
+        def get(self, name: str):
+            return SimpleNamespace(tool_type=ToolType.LOCAL)
+
+    monkeypatch.setattr("matrx_ai.tools.merge.merge_request_tools", fake_merge)
+    monkeypatch.setattr(local_ai_task, "_registry", lambda: PermissiveRegistry())
+    monkeypatch.setattr(
+        local_ai_task,
+        "_local_desktop_capability_state",
+        lambda: {
+            "platform": "darwin",
+            "engine_version": "1.2.3",
+            "instance_id": "inst-host",
+            "tunnel_state": "none",
+        },
+    )
+
+    ctx = AppContext(
+        emitter=StreamEmitter(),
+        user_id="user-1",
+        is_authenticated=True,
+        metadata={},
+    )
+
+    async def scenario() -> None:
+        updated = await local_ai_task.apply_request_tools(
+            UnifiedConfig(model="local/test", messages=[]),
+            ctx,
+            [],
+            None,
+            client=ClientContext(
+                surface="matrx-user/chat",
+                capabilities=[],
+                state={},
+            ),
+        )
+        assert captured["names"] == ["load_desktop_tools"]
+        client = captured["client"]
+        assert client["surface"] == "matrx-user/chat"
+        assert client["capabilities"] == ["desktop-native"]
+        assert client["state"]["desktop-native"]["instance_id"] == "inst-host"
+        assert (
+            updated.metadata["client_capabilities_payloads"]["desktop-native"][
+                "platform"
+            ]
+            == "darwin"
+        )
 
     asyncio.run(scenario())
 
@@ -401,10 +482,12 @@ def test_chat_stream_with_local_tool_round_trip(ai_app, local_db):
                 "/chat",
                 json={
                     "ai_model_id": "mock-model",
+                    "agent_id": _AGENT_ID,
                     "messages": [{"role": "user", "content": "use the tool please"}],
                     "conversation_id": conversation_id,
                     "is_new": True,
                     "stream": True,
+                    "tools": [{"kind": "registered", "name": "local_system"}],
                     "metadata": {
                         "mock": {
                             "latency_ms": 60,
@@ -422,7 +505,7 @@ def test_chat_stream_with_local_tool_round_trip(ai_app, local_db):
                     },
                 },
             ) as resp:
-                assert resp.status_code == 200
+                assert resp.status_code == 200, await resp.aread()
                 assert resp.headers.get("x-conversation-id") == conversation_id
                 assert resp.headers.get("x-request-id")
                 events = await _read_stream(resp)
@@ -436,7 +519,9 @@ def test_chat_stream_with_local_tool_round_trip(ai_app, local_db):
             for e in events
             if e["event"] == "data" and e["data"].get("type") == "conversation_id"
         ]
-        assert conv_events and conv_events[0]["data"]["conversation_id"] == conversation_id
+        assert (
+            conv_events and conv_events[0]["data"]["conversation_id"] == conversation_id
+        )
         assert "init" in types
         # The local tool actually ran (tool_event lifecycle on the stream)
         assert "tool_event" in types, f"no tool_event in stream: {sorted(set(types))}"
@@ -445,9 +530,9 @@ def test_chat_stream_with_local_tool_round_trip(ai_app, local_db):
             td for td in tool_events if td.get("tool_name") == "local_system"
         ]
         assert system_events, f"local_system missing from tool events: {tool_events}"
-        assert any(
-            td.get("event") == "tool_completed" for td in system_events
-        ), f"local_system did not complete: {system_events}"
+        assert any(td.get("event") == "tool_completed" for td in system_events), (
+            f"local_system did not complete: {system_events}"
+        )
         # Model answer + terminal envelope
         assert "chunk" in types
         assert "completion" in types
@@ -573,8 +658,7 @@ def test_retry_rehydrates_pinned_agent_after_failed_first_turn(ai_app, local_db)
         assert "completion" in types
         assert types[-1] == "end"
         assert not any(
-            e["event"] == "error" and "model" in str(e["data"]).lower()
-            for e in events
+            e["event"] == "error" and "model" in str(e["data"]).lower() for e in events
         )
 
     asyncio.run(_run())
@@ -624,7 +708,11 @@ def test_error_semantics_match_aidream(ai_app, monkeypatch):
             # Unknown agent → 404 (aidream resolver shape).
             r = await client.post(
                 f"/agents/{uuid.uuid4()}",
-                json={"user_input": "x", "conversation_id": str(uuid.uuid4()), "is_new": True},
+                json={
+                    "user_input": "x",
+                    "conversation_id": str(uuid.uuid4()),
+                    "is_new": True,
+                },
             )
             assert r.status_code == 404
             assert "Agent not found" in r.json()["message"]
@@ -723,13 +811,13 @@ def test_ai_surface_mounted_on_engine(http: httpx.Client):
         # all run on the real engine (not the old blanket 503).
         missing = str(uuid.uuid4())
         r = http.post(f"{base}/conversations/{missing}", json={"user_input": "hi"})
-        assert r.status_code == 404, f"{base} continue → {r.status_code}: {r.text[:200]}"
+        assert r.status_code == 404, (
+            f"{base} continue → {r.status_code}: {r.text[:200]}"
+        )
         assert r.json()["error"] == "conversation_not_found"
 
 
 def test_ai_surface_requires_auth_on_engine(http_public: httpx.Client):
     """The outer AuthMiddleware still gates /ai/* (bearer required)."""
-    r = http_public.post(
-        f"/ai/conversations/{uuid.uuid4()}", json={"user_input": "hi"}
-    )
+    r = http_public.post(f"/ai/conversations/{uuid.uuid4()}", json={"user_input": "hi"})
     assert r.status_code == 401

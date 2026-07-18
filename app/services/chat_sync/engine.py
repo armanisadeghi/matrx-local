@@ -83,6 +83,32 @@ def _parse_ts(value: Any) -> datetime | None:
         return None
 
 
+def _shape_compatible_batches(
+    payloads: list[tuple[dict[str, Any], dict[str, Any]]],
+    batch_size: int,
+) -> list[list[tuple[dict[str, Any], dict[str, Any]]]]:
+    """Group PostgREST upserts by identical object keys.
+
+    PostgREST rejects a JSON array when its objects have different key sets
+    (PGRST102). Mirror encoding intentionally omits ``None`` values, so rows
+    from the same table routinely have different shapes. Grouping retains the
+    merge semantics without turning every healthy push into an error/retry
+    cycle.
+    """
+    by_shape: dict[
+        tuple[str, ...], list[tuple[dict[str, Any], dict[str, Any]]]
+    ] = {}
+    for item in payloads:
+        shape = tuple(sorted(item[1]))
+        by_shape.setdefault(shape, []).append(item)
+
+    batches: list[list[tuple[dict[str, Any], dict[str, Any]]]] = []
+    for items in by_shape.values():
+        for index in range(0, len(items), batch_size):
+            batches.append(items[index : index + batch_size])
+    return batches
+
+
 class ChatSyncEngine:
     """Push the outbox, pull incremental changes, keep the mirror converged."""
 
@@ -307,8 +333,7 @@ class ChatSyncEngine:
                 payload["user_id"] = self._user_id
             payloads.append((entry, payload))
 
-        for i in range(0, len(payloads), _PUSH_BATCH):
-            batch = payloads[i : i + _PUSH_BATCH]
+        for batch in _shape_compatible_batches(payloads, _PUSH_BATCH):
             try:
                 returned = await self._client.upsert_rows(
                     table, [p for _, p in batch], pk_col=pk

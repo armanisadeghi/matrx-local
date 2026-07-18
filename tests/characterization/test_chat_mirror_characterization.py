@@ -87,7 +87,7 @@ async def _seed_v9_bespoke(path: Path) -> None:
     await raw.execute(
         "INSERT INTO tool_call_logs (id,conversation_id,user_request_id,status,data,"
         "created_at,updated_at) VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa31','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21','completed',"
-        "'{\"tool_name\":\"Weather\",\"call_id\":\"cc1\",\"arguments\":{\"q\":1}}',"
+        '\'{"tool_name":"Weather","call_id":"cc1","arguments":{"q":1}}\','
         "'2026-01-01','2026-01-01')"
     )
     # Legacy localStorage-era conversation (non-UUID id) + one that already
@@ -132,28 +132,43 @@ def test_v10_cutover_migrates_and_annihilates_bespoke(tmp_path: Path) -> None:
     asyncio.run(_main())
 
     async def scenario(db: LocalDatabase) -> None:
-        conv = dict(await db.fetchone("SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"))
+        conv = dict(
+            await db.fetchone(
+                "SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"
+            )
+        )
         assert conv["title"] == "Hi"
         assert json.loads(conv["config"]) == {
-            "mode": "chat", "route_mode": "chat", "model": "gpt",
+            "mode": "chat",
+            "route_mode": "chat",
+            "model": "gpt",
         }
         assert conv["initial_agent_id"] == "a1"
         assert conv["message_count"] == 2
 
         msgs = [
             dict(r)
-            for r in await db.fetchall(
-                "SELECT * FROM chat.message ORDER BY position"
-            )
+            for r in await db.fetchall("SELECT * FROM chat.message ORDER BY position")
         ]
         assert [m["position"] for m in msgs] == [0, 1]
         assert json.loads(msgs[0]["content"]) == [{"type": "text", "text": "hello"}]
         assert json.loads(msgs[1]["metadata"])["tool_calls"] == [{"n": 1}]
 
-        ur = dict(await db.fetchone("SELECT * FROM chat.user_request WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21'"))
-        assert json.loads(ur["metadata"])["conversation_id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        ur = dict(
+            await db.fetchone(
+                "SELECT * FROM chat.user_request WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21'"
+            )
+        )
+        assert (
+            json.loads(ur["metadata"])["conversation_id"]
+            == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        )
 
-        tc = dict(await db.fetchone("SELECT * FROM chat.tool_call WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa31'"))
+        tc = dict(
+            await db.fetchone(
+                "SELECT * FROM chat.tool_call WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa31'"
+            )
+        )
         assert tc["tool_name"] == "Weather"
         assert tc["call_id"] == "cc1"
 
@@ -163,7 +178,10 @@ def test_v10_cutover_migrates_and_annihilates_bespoke(tmp_path: Path) -> None:
             for r in await db.fetchall("SELECT entity_type, entity_id FROM sync_queue")
         }
         assert ("chat.conversation", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01") in q
-        assert ("chat.message", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11") in q and ("chat.message", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12") in q
+        assert ("chat.message", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11") in q and (
+            "chat.message",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12",
+        ) in q
         assert ("chat.user_request", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21") in q
         assert ("chat.tool_call", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa31") in q
 
@@ -172,11 +190,17 @@ def test_v10_cutover_migrates_and_annihilates_bespoke(tmp_path: Path) -> None:
         # exists server-side under another id)
         assert ("chat.conversation", "1751234567-abc") not in q
         assert ("chat.conversation", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa03") not in q
-        legacy = dict(await db.fetchone(
-            "SELECT * FROM chat.conversation WHERE id='1751234567-abc'"))
+        legacy = dict(
+            await db.fetchone(
+                "SELECT * FROM chat.conversation WHERE id='1751234567-abc'"
+            )
+        )
         assert legacy["title"] == "Legacy import"
-        linked = dict(await db.fetchone(
-            "SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa03'"))
+        linked = dict(
+            await db.fetchone(
+                "SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa03'"
+            )
+        )
         assert json.loads(linked["metadata"])["legacy_server_conversation_id"] == (
             "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbb01"
         )
@@ -225,7 +249,11 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
             )
         finally:
             clear_app_context(ctx_token)
-        await store.create_pending_user_request("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "u1")
+        await store.create_pending_user_request(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+            "u1",
+        )
         result = await store.persist_completed_request(
             {
                 "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
@@ -252,13 +280,21 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
         )
         assert again["message_ids"] == []
 
-        conv = dict(await db.fetchone("SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"))
+        conv = dict(
+            await db.fetchone(
+                "SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"
+            )
+        )
         assert conv["created_by"] == "u1"
         assert conv["initial_agent_id"] == "ag1"
         assert conv["source_app"] == "matrx_local"
         assert conv["message_count"] == 2
 
-        ur = dict(await db.fetchone("SELECT * FROM chat.user_request WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21'"))
+        ur = dict(
+            await db.fetchone(
+                "SELECT * FROM chat.user_request WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21'"
+            )
+        )
         assert ur["status"] == "completed"
         assert ur["user_id"] == "u1"
 
@@ -266,14 +302,26 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
         await store.log_tool_call_start(
             "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa32",
             {
-                "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "user_request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21",
-                "tool_name": "X", "call_id": "k1", "status": "running",
-                "arguments": {"a": 1}, "success": False, "metadata": {},
+                "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+                "user_request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21",
+                "tool_name": "X",
+                "call_id": "k1",
+                "status": "running",
+                "arguments": {"a": 1},
+                "success": False,
+                "metadata": {},
                 "novel_key": "kept",
             },
         )
-        await store.log_tool_call_update("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa32", {"status": "completed", "success": True})
-        tc = dict(await db.fetchone("SELECT * FROM chat.tool_call WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa32'"))
+        await store.log_tool_call_update(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa32",
+            {"status": "completed", "success": True},
+        )
+        tc = dict(
+            await db.fetchone(
+                "SELECT * FROM chat.tool_call WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa32'"
+            )
+        )
         assert tc["status"] == "completed"
         assert tc["tool_name"] == "X"
         assert json.loads(tc["metadata"])["novel_key"] == "kept"
@@ -288,13 +336,96 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
         assert ("chat.tool_call", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa32") in q
 
         # reads round-trip through the store
-        cfg = await store.get_conversation_config("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01")
+        cfg = await store.get_conversation_config(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        )
         assert cfg["route_mode"] == "agent"
         assert cfg["agent_id"] == "ag1"
-        assert [m["content"] for m in cfg["messages"]] == ["ping", "pong"]
+        assert [m["content"] for m in cfg["messages"]] == [
+            [{"type": "text", "text": "ping"}],
+            [{"type": "text", "text": "pong"}],
+        ]
         data = await store.get_conversation_data("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01")
         assert len(data["user_requests"]) == 1
         assert len(data["tool_calls"]) == 1
+
+    _run(tmp_path, scenario)
+
+
+def test_store_preserves_structured_tool_content_across_reload(tmp_path: Path) -> None:
+    """Client-host persistence must use the same content graph as aidream.
+
+    A tool call/result flattened into a text block still looks vaguely readable,
+    but the frontend cannot render a tool card and the model cannot replay the
+    conversation after an engine restart.
+    """
+
+    async def scenario(db: LocalDatabase) -> None:
+        from app.services.ai.conversation_handler import SQLiteConversationStore
+
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        request_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21"
+        store = SQLiteConversationStore()
+        await store.ensure_conversation_exists(conversation_id, "u1")
+        await store.create_pending_user_request(request_id, conversation_id, "u1")
+
+        await store.persist_completed_request(
+            {
+                "conversation_id": conversation_id,
+                "request_id": request_id,
+                "messages": [
+                    {"role": "user", "content": "inspect this machine"},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "thinking", "text": "I need system info."},
+                            {
+                                "type": "tool_call",
+                                "id": "call-local-system",
+                                "name": "local_system",
+                                "arguments": {"action": "info"},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "call-local-system",
+                                "call_id": "call-local-system",
+                                "name": "local_system",
+                                "content": "platform: Darwin",
+                            }
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "Darwin"}],
+                    },
+                ],
+            }
+        )
+
+        rows = await db.fetchall(
+            "SELECT id, role, content FROM chat.message WHERE conversation_id = ? "
+            "ORDER BY position",
+            (conversation_id,),
+        )
+        stored = [(row["role"], json.loads(row["content"])) for row in rows]
+        assert stored[1][1][0]["type"] == "thinking"
+        assert stored[1][1][1] == {
+            "type": "tool_call",
+            "id": "call-local-system",
+            "name": "local_system",
+            "arguments": {"action": "info"},
+        }
+        assert stored[2][1][0]["type"] == "tool_result"
+
+        history = (await store.get_conversation_config(conversation_id))["messages"]
+        assert history[1]["content"] == stored[1][1]
+        assert history[2]["content"] == stored[2][1]
+        assert history[1]["id"] == rows[1]["id"]
 
     _run(tmp_path, scenario)
 
@@ -304,6 +435,11 @@ def test_client_host_reservations_are_durable_and_finalized(tmp_path: Path) -> N
         from types import SimpleNamespace
 
         from app.services.ai.conversation_handler import SQLiteConversationStore
+        from matrx_connect.context.app_context import (
+            AppContext,
+            clear_app_context,
+            set_app_context,
+        )
 
         class CaptureEmitter:
             def __init__(self) -> None:
@@ -338,18 +474,29 @@ def test_client_host_reservations_are_durable_and_finalized(tmp_path: Path) -> N
             )
         ]
         assert [row["status"] for row in before] == ["active", "pending"]
+        assert json.loads(before[0]["content"]) == [
+            {"type": "text", "text": "hello"}
+        ]
 
         await store.create_pending_user_request(request_id, conversation_id, "u1")
-        await store.persist_completed_request(
-            {
-                "conversation_id": conversation_id,
-                "request_id": request_id,
-                "messages": [
-                    {"role": "user", "content": "hello"},
-                    {"role": "assistant", "content": "world"},
-                ],
-            }
-        )
+        ctx_token = set_app_context(AppContext(emitter=emitter, user_id="u1"))
+        try:
+            await store.persist_completed_request(
+                {
+                    "conversation_id": conversation_id,
+                    "request_id": request_id,
+                    "messages": [
+                        {"role": "user", "content": "hello"},
+                        {"role": "assistant", "content": "calling one"},
+                        {"role": "tool", "content": "result one"},
+                        {"role": "assistant", "content": "calling two"},
+                        {"role": "tool", "content": "result two"},
+                        {"role": "assistant", "content": "world"},
+                    ],
+                }
+            )
+        finally:
+            clear_app_context(ctx_token)
         after = [
             dict(row)
             for row in await db.fetchall(
@@ -358,10 +505,57 @@ def test_client_host_reservations_are_durable_and_finalized(tmp_path: Path) -> N
                 (conversation_id,),
             )
         ]
-        assert len(after) == 2
+        assert len(after) == 6
         assert after[1]["id"] == reserved[1]
         assert after[1]["status"] == "active"
-        assert json.loads(after[1]["content"])[0]["text"] == "world"
+        assert json.loads(after[1]["content"])[0]["text"] == "calling one"
+        assert [payload.metadata["role"] for payload in emitter.reserved] == [
+            "user",
+            "assistant",
+            "assistant",
+            "assistant",
+        ]
+        assert [payload.metadata["position"] for payload in emitter.reserved] == [
+            0,
+            1,
+            3,
+            5,
+        ]
+
+    _run(tmp_path, scenario)
+
+
+def test_authenticated_ai_request_refreshes_expired_engine_token(
+    tmp_path: Path,
+) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        import time
+
+        import jwt
+
+        from app.api.ai_routes import _adopt_request_jwt
+        from app.services.local_db.repositories import TokenRepo
+
+        repo = TokenRepo()
+        await repo.save(
+            access_token="expired-token",
+            user_id="u1",
+            refresh_token="keep-refresh-token",
+            expires_at=1,
+        )
+        token = jwt.encode(
+            {"sub": "u1", "exp": int(time.time()) + 3600},
+            "test-secret-that-is-at-least-32-bytes-long",
+            algorithm="HS256",
+        )
+
+        await _adopt_request_jwt(token, "u1")
+
+        stored = await repo.get()
+        assert stored is not None
+        assert stored["access_token"] == token
+        assert stored["refresh_token"] == "keep-refresh-token"
+        assert repo.is_expired(stored) is False
 
     _run(tmp_path, scenario)
 
@@ -373,16 +567,35 @@ def test_repo_compat_shapes_and_tombstone_delete(tmp_path: Path) -> None:
         convs = ConversationsRepo()
         msgs = MessagesRepo()
         await convs.create(
-            {"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "title": "T", "mode": "chat", "model": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
-             "route_mode": "chat", "agent_id": "a1", "user_id": "u1"}
+            {
+                "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+                "title": "T",
+                "mode": "chat",
+                "model": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+                "route_mode": "chat",
+                "agent_id": "a1",
+                "user_id": "u1",
+            }
         )
         got = await convs.get("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01")
-        assert got["mode"] == "chat" and got["model"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11" and got["agent_id"] == "a1"
-        assert got["server_conversation_id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"  # local id IS canonical
+        assert (
+            got["mode"] == "chat"
+            and got["model"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11"
+            and got["agent_id"] == "a1"
+        )
+        assert (
+            got["server_conversation_id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        )  # local id IS canonical
 
         await msgs.create(
-            {"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11", "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "role": "user",
-             "content": "hello", "tool_calls": [{"x": 1}], "error": "boom"}
+            {
+                "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+                "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+                "role": "user",
+                "content": "hello",
+                "tool_calls": [{"x": 1}],
+                "error": "boom",
+            }
         )
         listed = await msgs.list_by_conversation("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01")
         assert listed[0]["content"] == "hello"
@@ -390,9 +603,15 @@ def test_repo_compat_shapes_and_tombstone_delete(tmp_path: Path) -> None:
         assert listed[0]["error"] == "boom"
         assert listed[0]["position"] == 0
 
-        await convs.update("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", {"title": "T2", "model": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12"})
+        await convs.update(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+            {"title": "T2", "model": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12"},
+        )
         got = await convs.get("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01")
-        assert got["title"] == "T2" and got["model"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12"
+        assert (
+            got["title"] == "T2"
+            and got["model"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12"
+        )
         # config merge must not clobber mode
         assert got["mode"] == "chat"
 
@@ -400,9 +619,17 @@ def test_repo_compat_shapes_and_tombstone_delete(tmp_path: Path) -> None:
         # conversation's messages too (the bespoke schema cascade-deleted)
         await convs.delete("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01")
         assert await convs.get("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01") is None
-        raw = dict(await db.fetchone("SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"))
+        raw = dict(
+            await db.fetchone(
+                "SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"
+            )
+        )
         assert raw["deleted_at"] is not None
-        raw_msg = dict(await db.fetchone("SELECT * FROM chat.message WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11'"))
+        raw_msg = dict(
+            await db.fetchone(
+                "SELECT * FROM chat.message WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11'"
+            )
+        )
         assert raw_msg["deleted_at"] is not None
         # idempotent: nothing left live to tombstone
         n = await msgs.delete_by_conversation("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01")
@@ -424,15 +651,22 @@ def test_message_source_is_canonical_for_all_roles(tmp_path: Path) -> None:
         msgs = MessagesRepo()
         for i, role in enumerate(("user", "assistant", "tool", "system")):
             await msgs.create(
-                {"id": f"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa1{i}",
-                 "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
-                 "role": role, "content": f"m{i}"}
+                {
+                    "id": f"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa1{i}",
+                    "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+                    "role": role,
+                    "content": f"m{i}",
+                }
             )
 
         store = SQLiteConversationStore()
-        await store.ensure_conversation_exists("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02", "u1")
+        await store.ensure_conversation_exists(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02", "u1"
+        )
         await store.create_pending_user_request(
-            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02", "u1"
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02",
+            "u1",
         )
         await store.persist_completed_request(
             {
@@ -445,7 +679,10 @@ def test_message_source_is_canonical_for_all_roles(tmp_path: Path) -> None:
             }
         )
 
-        rows = [dict(r) for r in await db.fetchall("SELECT id, role, source FROM chat.message")]
+        rows = [
+            dict(r)
+            for r in await db.fetchall("SELECT id, role, source FROM chat.message")
+        ]
         assert rows, "no messages written"
         bad = [r for r in rows if r["source"] != "user"]
         assert not bad, f"non-canonical source values written: {bad}"
@@ -471,8 +708,14 @@ def test_v13_repairs_model_source_and_reenqueues(tmp_path: Path) -> None:
             "'{\"legacy_server_conversation_id\": \"srv-1\"}','2026-01-01','2026-01-01')"
         )
         for mid, conv in (
-            ("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"),
-            ("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02"),
+            (
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+            ),
+            (
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12",
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02",
+            ),
             ("1751234567-abc", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"),
         ):
             await db.execute(
@@ -493,7 +736,10 @@ def test_v13_repairs_model_source_and_reenqueues(tmp_path: Path) -> None:
         db2 = LocalDatabase(db.path)
         await db2.connect()  # reruns V13
         try:
-            rows = [dict(r) for r in await db2.fetchall("SELECT id, source FROM chat.message")]
+            rows = [
+                dict(r)
+                for r in await db2.fetchall("SELECT id, source FROM chat.message")
+            ]
             assert all(r["source"] == "user" for r in rows), rows
             queue = [
                 dict(r)
@@ -541,16 +787,46 @@ def _fake_cloud(engine: ChatSyncEngine):
     return pushed
 
 
+def test_postgrest_batches_only_contain_rows_with_matching_keys() -> None:
+    from app.services.chat_sync.engine import _shape_compatible_batches
+
+    payloads = [
+        ({"id": 1}, {"id": "a", "content": []}),
+        ({"id": 2}, {"id": "b", "content": [], "error": {"message": "x"}}),
+        ({"id": 3}, {"id": "c", "content": []}),
+    ]
+
+    batches = _shape_compatible_batches(payloads, batch_size=50)
+
+    assert [[entry["id"] for entry, _ in batch] for batch in batches] == [
+        [1, 3],
+        [2],
+    ]
+    assert all(
+        len({tuple(sorted(payload)) for _, payload in batch}) == 1
+        for batch in batches
+    )
+
+
 def test_push_drains_outbox_parent_first_and_applies_echo(tmp_path: Path) -> None:
     async def scenario(db: LocalDatabase) -> None:
         from app.services.ai.conversation_handler import SQLiteConversationStore
 
         store = SQLiteConversationStore()
-        await store.ensure_conversation_exists("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "u1")
-        await store.create_pending_user_request("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "u1")
+        await store.ensure_conversation_exists(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "u1"
+        )
+        await store.create_pending_user_request(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+            "u1",
+        )
         await store.persist_completed_request(
-            {"conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21",
-             "messages": [{"role": "user", "content": "hi"}]}
+            {
+                "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+                "request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21",
+                "messages": [{"role": "user", "content": "hi"}],
+            }
         )
 
         engine = ChatSyncEngine()
@@ -568,7 +844,11 @@ def test_push_drains_outbox_parent_first_and_applies_echo(tmp_path: Path) -> Non
         assert isinstance(conv_payload["config"], dict)
 
         # echo applied: cloud stamps landed locally, queue drained
-        row = dict(await db.fetchone("SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"))
+        row = dict(
+            await db.fetchone(
+                "SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"
+            )
+        )
         assert row["organization_id"] == "org-1"
         assert row["updated_at"].startswith("2026-07-20T10")
         left = await db.fetchone("SELECT COUNT(*) AS c FROM sync_queue")
@@ -614,25 +894,29 @@ def test_targeted_hydration_fetches_conversation_and_messages(tmp_path: Path) ->
         async def fake_get_rows(table: str, *, params: dict[str, str] | None = None):
             assert params is not None
             if table == "conversation":
-                return [{
-                    "id": conversation_id,
-                    "title": "From web",
-                    "config": {"mode": "chat", "model": "cloud-model"},
-                    "initial_agent_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-                    "created_by": "u1",
-                    "created_at": "2026-07-18T00:00:00+00:00",
-                    "updated_at": "2026-07-18T00:00:00+00:00",
-                }]
+                return [
+                    {
+                        "id": conversation_id,
+                        "title": "From web",
+                        "config": {"mode": "chat", "model": "cloud-model"},
+                        "initial_agent_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                        "created_by": "u1",
+                        "created_at": "2026-07-18T00:00:00+00:00",
+                        "updated_at": "2026-07-18T00:00:00+00:00",
+                    }
+                ]
             if table == "message":
-                return [{
-                    "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
-                    "conversation_id": conversation_id,
-                    "role": "user",
-                    "position": 0,
-                    "content": [{"type": "text", "text": "hello"}],
-                    "created_at": "2026-07-18T00:00:00+00:00",
-                    "updated_at": "2026-07-18T00:00:00+00:00",
-                }]
+                return [
+                    {
+                        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+                        "conversation_id": conversation_id,
+                        "role": "user",
+                        "position": 0,
+                        "content": [{"type": "text", "text": "hello"}],
+                        "created_at": "2026-07-18T00:00:00+00:00",
+                        "updated_at": "2026-07-18T00:00:00+00:00",
+                    }
+                ]
             raise AssertionError(table)
 
         engine.configure_from_persisted_token = configured  # type: ignore[method-assign]
@@ -657,7 +941,13 @@ def test_pull_lww_tombstones_and_pending_protection(tmp_path: Path) -> None:
         from app.services.local_db.repositories import ConversationsRepo
 
         convs = ConversationsRepo()
-        await convs.create({"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "title": "local", "user_id": "u1"})
+        await convs.create(
+            {
+                "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+                "title": "local",
+                "user_id": "u1",
+            }
+        )
         # drain the outbox so LWW comparisons run un-pended
         await db.execute("DELETE FROM sync_queue")
         await db.commit()
@@ -669,15 +959,28 @@ def test_pull_lww_tombstones_and_pending_protection(tmp_path: Path) -> None:
         engine = ChatSyncEngine()
         engine.configure("u1", "jwt")
 
-        async def fake_get(table, cursor_col=None, pk_col=None, cursor_ts=None,
-                           cursor_id=None, limit=500):
+        async def fake_get(
+            table,
+            cursor_col=None,
+            pk_col=None,
+            cursor_ts=None,
+            cursor_id=None,
+            limit=500,
+        ):
             if table == "conversation" and not cursor_ts:
                 return [
-                    {"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "title": "web-newer",
-                     "updated_at": "2026-07-11T00:00:00+00:00"},
-                    {"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02", "title": "web-only", "config": {"mode": "chat"},
-                     "updated_at": "2026-07-11T00:00:00+00:00",
-                     "deleted_at": "2026-07-11T00:00:00+00:00"},
+                    {
+                        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+                        "title": "web-newer",
+                        "updated_at": "2026-07-11T00:00:00+00:00",
+                    },
+                    {
+                        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02",
+                        "title": "web-only",
+                        "config": {"mode": "chat"},
+                        "updated_at": "2026-07-11T00:00:00+00:00",
+                        "deleted_at": "2026-07-11T00:00:00+00:00",
+                    },
                 ]
             return []
 
@@ -689,25 +992,49 @@ def test_pull_lww_tombstones_and_pending_protection(tmp_path: Path) -> None:
         await engine.sync_cycle()
 
         # newer remote wins
-        assert (await db.fetchone(
-            "SELECT title FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"))[0] == "web-newer"
+        assert (
+            await db.fetchone(
+                "SELECT title FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"
+            )
+        )[0] == "web-newer"
         # tombstoned web row lands as a tombstone (hidden from repo, kept in mirror)
         assert await convs.get("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02") is None
-        raw = dict(await db.fetchone("SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02'"))
+        raw = dict(
+            await db.fetchone(
+                "SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02'"
+            )
+        )
         assert raw["deleted_at"] is not None
         # pull never enqueues (no echo loop)
         assert (await db.fetchone("SELECT COUNT(*) AS c FROM sync_queue"))["c"] == 0
         # checkpoint advanced
-        meta = dict(await db.fetchone(
-            "SELECT * FROM sync_meta WHERE entity_type='chat.conversation'"))
-        assert json.loads(meta["last_hash"])["id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02"
+        meta = dict(
+            await db.fetchone(
+                "SELECT * FROM sync_meta WHERE entity_type='chat.conversation'"
+            )
+        )
+        assert (
+            json.loads(meta["last_hash"])["id"]
+            == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02"
+        )
 
         # stale remote must NOT clobber newer local
-        async def fake_get_stale(table, cursor_col=None, pk_col=None, cursor_ts=None,
-                                 cursor_id=None, limit=500):
+        async def fake_get_stale(
+            table,
+            cursor_col=None,
+            pk_col=None,
+            cursor_ts=None,
+            cursor_id=None,
+            limit=500,
+        ):
             if table == "conversation":
-                return [{"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "title": "STALE",
-                         "updated_at": "2026-07-01T00:00:00+00:00"}]
+                return [
+                    {
+                        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+                        "title": "STALE",
+                        "updated_at": "2026-07-01T00:00:00+00:00",
+                    }
+                ]
             return []
 
         engine._client.get_rows_since = fake_get_stale  # type: ignore[method-assign]
@@ -715,24 +1042,39 @@ def test_pull_lww_tombstones_and_pending_protection(tmp_path: Path) -> None:
         await db.execute("DELETE FROM sync_meta")
         await db.commit()
         await engine.sync_cycle()
-        assert (await db.fetchone(
-            "SELECT title FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"))[0] == "web-newer"
+        assert (
+            await db.fetchone(
+                "SELECT title FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"
+            )
+        )[0] == "web-newer"
 
         # pending-outbox protection: local unpushed change beats remote pull
-        await convs.update("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", {"title": "local-edit"})  # enqueues + bumps updated_at
+        await convs.update(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", {"title": "local-edit"}
+        )  # enqueues + bumps updated_at
+
         async def fake_get_remote_newer_than_old(table, **kw):
             if table == "conversation":
-                return [{"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "title": "web-mid",
-                         "updated_at": "2026-07-11T00:00:01+00:00"}]
+                return [
+                    {
+                        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+                        "title": "web-mid",
+                        "updated_at": "2026-07-11T00:00:01+00:00",
+                    }
+                ]
             return []
+
         engine._client.get_rows_since = fake_get_remote_newer_than_old  # type: ignore[method-assign]
         engine._cursors.clear()
         await db.execute("DELETE FROM sync_meta")
         await db.commit()
         # push must not run (would drain the queue) — pull directly
         await engine._pull_changes()
-        assert (await db.fetchone(
-            "SELECT title FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"))[0] == "local-edit"
+        assert (
+            await db.fetchone(
+                "SELECT title FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"
+            )
+        )[0] == "local-edit"
 
     _run(tmp_path, scenario)
 
@@ -742,8 +1084,20 @@ def test_push_poison_row_isolation(tmp_path: Path) -> None:
         from app.services.local_db.repositories import ConversationsRepo
 
         convs = ConversationsRepo()
-        await convs.create({"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa41", "title": "ok", "user_id": "u1"})
-        await convs.create({"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa42", "title": "bad", "user_id": "u1"})
+        await convs.create(
+            {
+                "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa41",
+                "title": "ok",
+                "user_id": "u1",
+            }
+        )
+        await convs.create(
+            {
+                "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa42",
+                "title": "bad",
+                "user_id": "u1",
+            }
+        )
 
         engine = ChatSyncEngine()
         engine.configure("u1", "jwt")
@@ -777,7 +1131,11 @@ def test_generator_is_current() -> None:
 
     repo_root = Path(__file__).resolve().parents[2]
     proc = subprocess.run(
-        [sys.executable, str(repo_root / "scripts" / "generate_mirror_schema.py"), "--check"],
+        [
+            sys.executable,
+            str(repo_root / "scripts" / "generate_mirror_schema.py"),
+            "--check",
+        ],
         capture_output=True,
         text=True,
     )

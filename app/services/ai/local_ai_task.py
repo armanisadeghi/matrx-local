@@ -33,6 +33,7 @@ single definition -> AgentConfig -> UnifiedConfig conversion.
 
 from __future__ import annotations
 
+import sys
 import uuid
 from typing import Any
 
@@ -201,6 +202,61 @@ def _registry():
     return ToolRegistry.get_instance()
 
 
+def _local_desktop_capability_state() -> dict[str, Any]:
+    """Return authoritative runtime state for this desktop engine process."""
+    try:
+        from app.api.routes import _APP_VERSION
+
+        engine_version = str(_APP_VERSION)
+    except Exception:
+        engine_version = ""
+
+    try:
+        from app.services.cloud_sync.instance_manager import get_instance_manager
+
+        instance_id = get_instance_manager().instance_id
+    except Exception:
+        instance_id = ""
+
+    try:
+        from app.api.tunnel_state import get_tunnel_snapshot
+
+        tunnel_state = "active" if get_tunnel_snapshot().get("active") else "none"
+    except Exception:
+        tunnel_state = "none"
+
+    return {
+        "platform": sys.platform,
+        "engine_version": engine_version,
+        "instance_id": instance_id,
+        "tunnel_state": tunnel_state,
+    }
+
+
+def _with_local_desktop_capability(client: Any) -> Any:
+    """Add this execution host to the request's client capability envelope.
+
+    A browser normally derives ``desktop-native`` from cloud presence. That
+    signal can briefly disappear after a desktop restart, and it is not needed
+    once a request is already executing inside Matrx Local: this process is the
+    authoritative proof that the desktop runtime is available.
+    """
+    from matrx_ai.capabilities import ClientContext
+
+    context = ClientContext.model_validate(client or {})
+    capabilities = list(dict.fromkeys([*context.capabilities, "desktop-native"]))
+    state = {name: dict(payload) for name, payload in context.state.items()}
+    desktop_state = dict(state.get("desktop-native") or {})
+    desktop_state.update(_local_desktop_capability_state())
+    state["desktop-native"] = desktop_state
+    return context.model_copy(
+        update={
+            "capabilities": capabilities,
+            "state": state,
+        }
+    )
+
+
 def _apply_request_scope(ctx: AppContext, request: Any) -> AppContext:
     overrides = {
         name: value
@@ -239,7 +295,8 @@ async def apply_request_tools(
     from matrx_ai.tools.merge import merge_request_tools
 
     specs = list(tools_replace if tools_replace is not None else tools)
-    if client is not None and getattr(client, "capabilities", None):
+    client = _with_local_desktop_capability(client)
+    if getattr(client, "capabilities", None):
         from matrx_ai.capabilities import (
             CapabilityResolutionError,
             resolve_client_capabilities,
@@ -311,7 +368,9 @@ async def apply_request_tools(
         ]
         if name
     }
-    bundle_names = sorted(name for name in requested_names if name.startswith("bundle:list_"))
+    bundle_names = sorted(
+        name for name in requested_names if name.startswith("bundle:list_")
+    )
     if bundle_names:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

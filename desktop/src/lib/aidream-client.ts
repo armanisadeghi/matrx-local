@@ -28,9 +28,7 @@ async function aidreamGet<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   const url = `${await getAIDreamServerUrl()}/api${path}`;
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = {};
 
   if (options.jwt) {
     headers["Authorization"] = `Bearer ${options.jwt}`;

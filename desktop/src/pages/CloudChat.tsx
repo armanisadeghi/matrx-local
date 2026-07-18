@@ -252,6 +252,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   const cloudError =
     agentsError ??
     executionError ??
+    cloudChat.modelError ??
     cloudChat.requestError ??
     historyError ??
     localTargetError;

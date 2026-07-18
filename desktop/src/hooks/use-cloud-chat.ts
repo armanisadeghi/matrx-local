@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchAIDreamModels } from "@/lib/aidream-client";
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import {
+  cloudModelDisplayName,
+  type CloudModelOption,
+} from "@/lib/cloud-chat-models";
+import {
   parseAIDreamStream,
   stringifyStreamDetail,
 } from "@/lib/aidream-stream";
@@ -11,7 +15,6 @@ import type {
   ChatMode,
   Conversation,
   ConversationRouteMode,
-  ModelOption,
 } from "@/hooks/use-chat";
 import {
   EventType,
@@ -706,7 +709,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [mode, setMode] = useState<ChatMode>("chat");
   const [model, setModel] = useState("");
-  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
+  const [availableModels, setAvailableModels] = useState<CloudModelOption[]>([]);
   const [modelError, setModelError] = useState<string | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -723,15 +726,34 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
   }, [conversations]);
 
   useEffect(() => {
+    if (availableModels.length === 0) return;
+    setConversations((current) => {
+      let changed = false;
+      const resolved = current.map((conversation) => ({
+        ...conversation,
+        messages: conversation.messages.map((message) => {
+          if (!message.model) return message;
+          const displayName = cloudModelDisplayName(message.model, availableModels);
+          if (displayName === message.model) return message;
+          changed = true;
+          return { ...message, model: displayName };
+        }),
+      }));
+      return changed ? resolved : current;
+    });
+  }, [availableModels]);
+
+  useEffect(() => {
     let cancelled = false;
     fetchAIDreamModels()
       .then((response) => {
         if (cancelled) return;
         const mapped = response.models
           .filter((item) => !item.is_deprecated)
-          .map<ModelOption>((item, index) => {
-            const modelOption: ModelOption = {
+          .map<CloudModelOption>((item, index) => {
+            const modelOption: CloudModelOption = {
               id: item.name,
+              catalogId: item.id,
               label: item.common_name ?? item.name,
               provider: item.provider ?? "cloud",
               capabilities: item.capabilities ?? [],
@@ -749,6 +771,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
             return modelOption;
         });
         setAvailableModels(mapped);
+        setModel((current) => current || mapped[0]?.id || "");
         setModelError(null);
       })
       .catch((error: unknown) => {
@@ -1100,7 +1123,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         role: "assistant",
         content: "",
         timestamp: new Date().toISOString(),
-        model,
+        model: cloudModelDisplayName(model, availableModels),
         isStreaming: true,
       };
 
@@ -1614,6 +1637,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     },
     [
       activeConversationId,
+      availableModels,
       createConversation,
       engineUrl,
       executionTarget,

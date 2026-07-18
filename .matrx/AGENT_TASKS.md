@@ -38,15 +38,6 @@ _(none)_
 > tasks below are scoped investigations. **Needs Arman approval before starting**
 > (per AGENT_TASKS rules).
 
-#### AT-L003 — aidream `GET /ai/user/pending_calls` → 500 SchemaMismatchError
-- **Status:** filed, not started. `code analysis pending`.
-- **Created:** 2026-07-14
-- **Priority:** P1
-- **Log ID:** L003
-- **Scope:** aidream (primary) + matrx-local delegation client
-- **Source files:** `aidream/aidream/services/ai_execution/tool_results.py` (`_claim_pending_calls_for_instance`), `aidream/db/migrations/0172_targetable_desktop_tool_calls.sql`, `matrx-local/app/services/delegation/client.py`, `matrx-local/app/services/delegation/engine.py`
-- **Deliverable:** confirm live `chat.tool_call` schema vs migration 0172; document whether `instance_id` query triggers the failing SQL path.
-
 #### AT-L008 — Local engine 404 on `POST /v2/ai/agents/{id}`
 - **Status:** filed, not started. `code analysis pending`.
 - **Created:** 2026-07-14
@@ -593,6 +584,7 @@ are condensed under Completed. Still open:
 ## Completed
 
 _(one line each, newest first; full detail in git history)_
+- [BUG] Packaged Cloud Chat restored end-to-end: AIDream admits exact Tauri production origins; desktop removes bodyless-GET preflights, exposes catalog failures, resolves model UUID labels, and preserves Error details; live `chat.tool_call` schema verified and local mirror refreshed, closing AT-L003 — 2026-07-17
 - [TASK-002] Restored remote app-config authority for desktop Cloud Chat and compute routing; cached renderer config, removed packaged AIDream env dependency, and verified release checks — 2026-07-17 (`desktop/src/lib/app-config.ts`)
 - [FEAT] Multi-window support (VS Code-style, Arman-approved plan 2026-07-15): full peer windows (`peer-N`, File > New Window / Cmd+Shift+N / tray) + lightweight panel windows (`panel-<page>` for chat, cloud-chat, notes, activity, ports, transcription, tts, media-generation, media-gallery) with per-panel provider manifests; Rust `windows.rs` registry + leader election (`window-leader-changed`), last-full-window-only close-to-tray/shutdown, native menus (`menu.rs`, macOS NSApp Window menu), dynamic tray window list, capabilities globs, `tauri-plugin-window-state` (overlay denylisted); frontend `window-role.ts`/`useWindowLeader` gate background tasks, cloud heartbeat, and auto-update polling to the leader; overlay window no longer boots the full app; transcription-sessions cross-window storage sync + per-label sidebar collapse; docs in `desktop/src/panels/FEATURE.md` — 2026-07-15
 - [FEAT] Application Recovery unified end-to-end: real awaited page refresh + provider-preserving view remounts + page-local crash boundaries, shared watchdog/history and Recovery Center, native renderer reload, PID-scoped engine restart, ownership-safe app relaunch, Windows stale-sidecar-handle repair, backend ServiceController registry + capability-driven image/video repair and truthful engine-restart escalation, supervised durable image worker, media lifecycle teardown, and scoped preview/backup/confirm settings resets; verified with 76 frontend tests, 29 focused Python media/recovery tests (23 pass/6 platform skips), cargo check, production web smoke, and an isolated real-engine boot/probe/clean-shutdown drill — 2026-07-15

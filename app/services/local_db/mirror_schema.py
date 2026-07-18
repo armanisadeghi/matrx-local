@@ -5,8 +5,8 @@ Regenerate with: python scripts/generate_mirror_schema.py
 Source snapshot: schema_mirror/snapshot.json (cloud DB is the spec).
 """
 
-SNAPSHOT_HASH = "ea6cb968533f3551b2a40e99840c065716c2f58fdd4b66004b8f13e8623da6a7"
-SNAPSHOT_GENERATED_AT = "2026-07-14"
+SNAPSHOT_HASH = "4e25f12045cdb91f275122874aab449a9d4e4f23bf7b93b11e776ba50752117e"
+SNAPSHOT_GENERATED_AT = "2026-07-17"
 
 # schema -> table -> {columns, pk, cursor_col, has_deleted_at, create_sql, index_sql}
 MIRROR_TABLES = {
@@ -1002,6 +1002,9 @@ MIRROR_TABLES = {
             "columns": {
                 "arguments": "TEXT",
                 "call_id": "TEXT",
+                "claim_expires_at": "TEXT",
+                "claimed_at": "TEXT",
+                "claimed_by_instance_id": "TEXT",
                 "completed_at": "TEXT",
                 "conversation_id": "TEXT",
                 "cost_usd": "REAL",
@@ -1038,6 +1041,7 @@ MIRROR_TABLES = {
                 "started_at": "TEXT",
                 "status": "TEXT",
                 "success": "INTEGER",
+                "target_instance_id": "TEXT",
                 "tool_name": "TEXT",
                 "tool_name_as_called": "TEXT",
                 "tool_type": "TEXT",
@@ -1049,7 +1053,7 @@ MIRROR_TABLES = {
                 "value_ref_key": "TEXT",
                 "version": "INTEGER"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"tool_call\" (\n    \"id\" TEXT NOT NULL,\n    \"conversation_id\" TEXT,\n    \"message_id\" TEXT,\n    \"user_id\" TEXT,\n    \"user_request_id\" TEXT,\n    \"tool_name\" TEXT,\n    \"tool_type\" TEXT,\n    \"call_id\" TEXT,\n    \"status\" TEXT,\n    \"arguments\" TEXT,\n    \"success\" INTEGER,\n    \"output\" TEXT,\n    \"output_type\" TEXT,\n    \"is_error\" INTEGER,\n    \"error_type\" TEXT,\n    \"error_message\" TEXT,\n    \"duration_ms\" INTEGER,\n    \"started_at\" TEXT,\n    \"completed_at\" TEXT,\n    \"input_tokens\" INTEGER,\n    \"output_tokens\" INTEGER,\n    \"total_tokens\" INTEGER,\n    \"cost_usd\" REAL,\n    \"iteration\" INTEGER,\n    \"retry_count\" INTEGER,\n    \"parent_call_id\" TEXT,\n    \"execution_events\" TEXT,\n    \"persist_key\" TEXT,\n    \"file_path\" TEXT,\n    \"metadata\" TEXT,\n    \"created_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"output_chars\" INTEGER,\n    \"output_preview\" TEXT,\n    \"is_client_delegated\" INTEGER,\n    \"expires_at\" TEXT,\n    \"resolved_at\" TEXT,\n    \"resolution_source\" TEXT,\n    \"tool_name_as_called\" TEXT,\n    \"fault_domain\" TEXT,\n    \"organization_id\" TEXT,\n    \"created_by\" TEXT,\n    \"updated_by\" TEXT,\n    \"updated_at\" TEXT,\n    \"version\" INTEGER,\n    \"value_ref_key\" TEXT,\n    \"model_stub_at\" TEXT,\n    \"runtime_execution_id\" TEXT, PRIMARY KEY (\"id\")\n)",
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"tool_call\" (\n    \"id\" TEXT NOT NULL,\n    \"conversation_id\" TEXT,\n    \"message_id\" TEXT,\n    \"user_id\" TEXT,\n    \"user_request_id\" TEXT,\n    \"tool_name\" TEXT,\n    \"tool_type\" TEXT,\n    \"call_id\" TEXT,\n    \"status\" TEXT,\n    \"arguments\" TEXT,\n    \"success\" INTEGER,\n    \"output\" TEXT,\n    \"output_type\" TEXT,\n    \"is_error\" INTEGER,\n    \"error_type\" TEXT,\n    \"error_message\" TEXT,\n    \"duration_ms\" INTEGER,\n    \"started_at\" TEXT,\n    \"completed_at\" TEXT,\n    \"input_tokens\" INTEGER,\n    \"output_tokens\" INTEGER,\n    \"total_tokens\" INTEGER,\n    \"cost_usd\" REAL,\n    \"iteration\" INTEGER,\n    \"retry_count\" INTEGER,\n    \"parent_call_id\" TEXT,\n    \"execution_events\" TEXT,\n    \"persist_key\" TEXT,\n    \"file_path\" TEXT,\n    \"metadata\" TEXT,\n    \"created_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"output_chars\" INTEGER,\n    \"output_preview\" TEXT,\n    \"is_client_delegated\" INTEGER,\n    \"expires_at\" TEXT,\n    \"resolved_at\" TEXT,\n    \"resolution_source\" TEXT,\n    \"tool_name_as_called\" TEXT,\n    \"fault_domain\" TEXT,\n    \"organization_id\" TEXT,\n    \"created_by\" TEXT,\n    \"updated_by\" TEXT,\n    \"updated_at\" TEXT,\n    \"version\" INTEGER,\n    \"value_ref_key\" TEXT,\n    \"model_stub_at\" TEXT,\n    \"runtime_execution_id\" TEXT,\n    \"target_instance_id\" TEXT,\n    \"claimed_by_instance_id\" TEXT,\n    \"claimed_at\" TEXT,\n    \"claim_expires_at\" TEXT, PRIMARY KEY (\"id\")\n)",
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
@@ -1062,6 +1066,9 @@ MIRROR_TABLES = {
             "pg_types": {
                 "arguments": "jsonb",
                 "call_id": "text",
+                "claim_expires_at": "timestamptz",
+                "claimed_at": "timestamptz",
+                "claimed_by_instance_id": "text",
                 "completed_at": "timestamptz",
                 "conversation_id": "uuid",
                 "cost_usd": "numeric",
@@ -1098,6 +1105,7 @@ MIRROR_TABLES = {
                 "started_at": "timestamptz",
                 "status": "text",
                 "success": "bool",
+                "target_instance_id": "text",
                 "tool_name": "text",
                 "tool_name_as_called": "text",
                 "tool_type": "text",

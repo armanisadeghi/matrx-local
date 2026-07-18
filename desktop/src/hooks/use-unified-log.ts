@@ -20,6 +20,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { formatConsoleArguments } from "@/lib/log-serialization";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -780,8 +781,7 @@ export function initConsoleCapture(): () => void {
   const origWarn = console.warn.bind(console);
   const origError = console.error.bind(console);
 
-  const toMsg = (...args: unknown[]): string =>
-    args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+  const toMsg = (...args: unknown[]): string => formatConsoleArguments(args);
 
   console.log = (...a: unknown[]) => {
     origLog(...a);

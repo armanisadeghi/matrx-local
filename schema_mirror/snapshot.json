@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-07-14",
+ "generated_at": "2026-07-17",
  "schemas": {
   "ai": {
    "api": {
@@ -5057,6 +5057,34 @@
       "name": "runtime_execution_id",
       "nullable": true,
       "udt": "uuid"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "target_instance_id",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "claimed_by_instance_id",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "claimed_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "claim_expires_at",
+      "nullable": true,
+      "udt": "timestamptz"
      }
     ],
     "kind": "table",

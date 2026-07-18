@@ -34,7 +34,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -100,10 +99,9 @@ async def _run(cmd: list[str], timeout: int = 10) -> tuple[str, str, int]:
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        # wait_for abandons communicate() but does NOT kill the child —
-        # system_profiler/PowerShell/ffmpeg kept running (and their pipes
-        # leaked) every time a probe timed out.
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        # Both an internal timeout and an outer permission-scan deadline cancel
+        # communicate() without killing the child. Always reap the OS probe.
         proc.kill()
         try:
             await proc.wait()
@@ -960,7 +958,6 @@ async def check_wifi() -> PermissionResult:
     except Exception as e:
         details = f"WiFi scan failed: {e}"
 
-    wifi_on = len(networks) > 0 or details.startswith("WiFi")
     status = PermissionStatus.GRANTED if networks else PermissionStatus.NOT_DETERMINED
 
     return PermissionResult(
@@ -1788,7 +1785,7 @@ async def check_all_permissions() -> list[dict[str, Any]]:
         check_accessibility(),
         check_bluetooth(),
         check_network(),
-        check_wifi(),
+        asyncio.wait_for(check_wifi(), timeout=10),
         check_screen_recording(),
         check_location(),
         check_contacts(),

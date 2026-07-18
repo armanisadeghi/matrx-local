@@ -6,13 +6,28 @@ import asyncio
 import json
 import logging
 import re
-import subprocess
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
 
 logger = logging.getLogger(__name__)
+
+
+async def _communicate_or_kill(
+    proc: asyncio.subprocess.Process,
+    *,
+    timeout: float,
+) -> tuple[bytes, bytes]:
+    try:
+        return await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        proc.kill()
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+        raise
 
 
 async def tool_wifi_networks(
@@ -41,7 +56,7 @@ async def _wifi_macos(rescan: bool) -> ToolResult:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+        stdout, _ = await _communicate_or_kill(proc, timeout=5)
 
         if proc.returncode == 0:
             output = stdout.decode()
@@ -89,7 +104,7 @@ async def _wifi_macos(rescan: bool) -> ToolResult:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        stdout, _ = await _communicate_or_kill(proc, timeout=8)
         data = json.loads(stdout.decode())
 
         networks = []
@@ -369,7 +384,7 @@ async def _bluetooth_macos() -> ToolResult:
             metadata={"devices": devices, "count": len(devices)},
         )
 
-    except (json.JSONDecodeError, KeyError) as e:
+    except (json.JSONDecodeError, KeyError):
         return ToolResult(output=f"Bluetooth info:\n{stdout.decode()[:3000]}")
 
 

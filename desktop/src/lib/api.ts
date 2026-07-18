@@ -2539,6 +2539,14 @@ class EngineAPI {
     return this.request<FilesystemIndexStatus>("/filesystem/status");
   }
 
+  async prepareFilesystemOpen(path: string): Promise<FilesystemPrepareOpenResponse> {
+    return this.request<FilesystemPrepareOpenResponse>("/filesystem/prepare-open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+  }
+
   async listFilesystem(
     path: string,
     options: { cursor?: string; limit?: number; showHidden?: boolean } = {},
@@ -3775,6 +3783,12 @@ export interface FilesystemEntryResponse {
   hidden: boolean;
   extension: string | null;
   indexed: boolean;
+}
+
+export interface FilesystemPrepareOpenResponse {
+  path: string;
+  ready: boolean;
+  error?: string;
 }
 
 export interface FilesystemPageResponse {

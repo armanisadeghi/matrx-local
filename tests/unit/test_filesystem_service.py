@@ -383,6 +383,46 @@ async def test_scoped_search_page_preserves_root_for_cursor_followups(tmp_path: 
 
 
 @pytest.mark.anyio
+async def test_prepare_open_hydrates_pointer_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "cloud-file.txt"
+    target.touch()
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    hydrated: list[str] = []
+
+    async def hydrate(path: str) -> None:
+        hydrated.append(path)
+        return None
+
+    monkeypatch.setattr("app.services.file_sync.hydration.ensure_hydrated", hydrate)
+
+    assert await service.prepare_open(str(target)) == {
+        "path": str(target),
+        "ready": True,
+    }
+    assert hydrated == [str(target)]
+
+
+@pytest.mark.anyio
+async def test_prepare_open_returns_actionable_hydration_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "offline-pointer.txt"
+    target.touch()
+    service = FilesystemService(tmp_path / "index.sqlite3")
+
+    async def fail_hydration(_path: str) -> str:
+        return "Sign in and reconnect before opening this cloud-backed file."
+
+    monkeypatch.setattr("app.services.file_sync.hydration.ensure_hydrated", fail_hydration)
+
+    result = await service.prepare_open(str(target))
+    assert result["ready"] is False
+    assert "Sign in" in str(result["error"])
+
+
+@pytest.mark.anyio
 async def test_inaccessible_directory_stays_partial_and_retries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

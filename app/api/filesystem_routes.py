@@ -33,6 +33,11 @@ class IndexingSettingsRequest(BaseModel):
     max_embedding_entries: int = Field(default=10_000, ge=100, le=50_000)
 
 
+class PrepareOpenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(min_length=1, max_length=32_768)
+
+
 @router.get("/places")
 async def get_places() -> dict[str, Any]:
     service = get_filesystem_service()
@@ -70,6 +75,15 @@ async def list_directory(
     except (NotADirectoryError, PermissionError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return result.to_dict()
+
+
+@router.post("/prepare-open")
+async def prepare_open(request: PrepareOpenRequest) -> dict[str, object]:
+    """Validate an OS-open target and hydrate managed pointer bytes first."""
+    try:
+        return await get_filesystem_service().prepare_open(request.path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/find")

@@ -13,6 +13,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { engine } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type {
   FilesystemDirectoryPage,
@@ -44,17 +45,35 @@ function parentPath(path: string): string {
 }
 
 async function openPath(path: string): Promise<void> {
-  try {
-    const { open } = await import("@tauri-apps/plugin-shell");
-    await open(path);
-  } catch (reason) {
-    console.error("Unable to open filesystem path", { path, reason });
-  }
+  const prepared = await engine.prepareFilesystemOpen(path);
+  if (!prepared.ready) throw new Error(prepared.error ?? "This file is not ready to open.");
+  const { open } = await import("@tauri-apps/plugin-shell");
+  await open(prepared.path);
 }
 
 function PathActions({ path, onReference }: { path: string; onReference: () => void }) {
+  const [opening, setOpening] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const runOpen = useCallback(async (target: string) => {
+    setOpening(true);
+    setActionError(null);
+    try {
+      await openPath(target);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setActionError(message);
+      console.error("Unable to open filesystem path", { path: target, reason });
+    } finally {
+      setOpening(false);
+    }
+  }, []);
   return (
     <div className="flex shrink-0 items-center gap-1">
+      {actionError && (
+        <span className="max-w-44 truncate text-[10px] text-destructive" role="alert" title={actionError}>
+          {actionError}
+        </span>
+      )}
       <button
         type="button"
         className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -72,9 +91,10 @@ function PathActions({ path, onReference }: { path: string; onReference: () => v
         className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
         title="Open"
         aria-label={`Open ${path}`}
+        disabled={opening}
         onClick={(event) => {
           event.stopPropagation();
-          void openPath(path);
+          void runOpen(path);
         }}
       >
         <FolderOpen className="h-3.5 w-3.5" />
@@ -84,9 +104,10 @@ function PathActions({ path, onReference }: { path: string; onReference: () => v
         className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
         title="Show in containing folder"
         aria-label={`Show ${path} in containing folder`}
+        disabled={opening}
         onClick={(event) => {
           event.stopPropagation();
-          void openPath(parentPath(path));
+          void runOpen(parentPath(path));
         }}
       >
         <MoreHorizontal className="h-3.5 w-3.5" />

@@ -3784,6 +3784,7 @@ export interface FilesystemPageResponse {
   next_cursor: string | null;
   path?: string;
   query?: string;
+  root?: string | null;
   total?: number;
   source?: "index" | "disk";
   index_complete?: boolean;

@@ -30,6 +30,7 @@ export interface FilesystemSearchPage {
   kind: "filesystem.search-page";
   namespace: FilesystemNamespace;
   query: string;
+  root?: string | null;
   entries: FilesystemEntry[];
   summary?: string;
   nextCursor?: string | null;

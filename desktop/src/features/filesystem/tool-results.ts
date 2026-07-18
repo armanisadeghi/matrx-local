@@ -213,6 +213,7 @@ function normalizeSearch(source: UnknownRecord): FilesystemSearchPage | null {
     kind: "filesystem.search-page",
     namespace: normalizeNamespace(source.namespace),
     query,
+    ...(stringValue(source.root) ? { root: stringValue(source.root) } : {}),
     entries,
     ...(stringValue(source.summary) ? { summary: stringValue(source.summary)! } : {}),
     ...(stringValue(source.next_cursor, source.nextCursor)
@@ -306,35 +307,48 @@ function normalizePlaces(source: UnknownRecord): FilesystemPlacesResult | null {
   };
 }
 
+function normalizeFilesystemSource(
+  source: UnknownRecord,
+  allowLegacyShape: boolean,
+): FilesystemResult | null {
+  const kind = stringValue(source.kind, source.result_kind, source.type);
+  if (kind === "filesystem.search-page" || kind === "search-page") {
+    return normalizeSearch(source);
+  }
+  if (kind === "filesystem.content-search" || kind === "content-search") {
+    return normalizeContentSearch(source);
+  }
+  if (kind === "filesystem.semantic-search" || kind === "semantic-search") {
+    return normalizeSemanticSearch(source);
+  }
+  if (kind === "filesystem.places" || (allowLegacyShape && Array.isArray(source.places))) {
+    return normalizePlaces(source);
+  }
+  if (
+    kind === "filesystem.directory-page" ||
+    kind === "directory-page" ||
+    (allowLegacyShape && Array.isArray(source.entries)) ||
+    (allowLegacyShape && Array.isArray(source.children))
+  ) {
+    return normalizeDirectory(source);
+  }
+  return null;
+}
+
+/** Normalize a direct structured engine response through the same UI contract as tool results. */
+export function normalizeFilesystemPayload(payload: unknown): FilesystemResult | null {
+  const source = record(parseJsonValue(payload));
+  return source ? normalizeFilesystemSource(source, false) : null;
+}
+
 export function normalizeFilesystemResult(
   result: ToolCallResult,
   toolName?: string,
 ): FilesystemResult | null {
   const allowLegacyShape = toolName ? isFilesystemTool(toolName) : false;
   for (const source of candidateRecords(result)) {
-    const kind = stringValue(source.kind, source.result_kind, source.type);
-    if (kind === "filesystem.search-page" || kind === "search-page") {
-      return normalizeSearch(source);
-    }
-    if (kind === "filesystem.content-search" || kind === "content-search") {
-      return normalizeContentSearch(source);
-    }
-    if (kind === "filesystem.semantic-search" || kind === "semantic-search") {
-      return normalizeSemanticSearch(source);
-    }
-    if (kind === "filesystem.places" || (allowLegacyShape && Array.isArray(source.places))) {
-      const places = normalizePlaces(source);
-      if (places) return places;
-    }
-    if (
-      kind === "filesystem.directory-page" ||
-      kind === "directory-page" ||
-      (allowLegacyShape && Array.isArray(source.entries)) ||
-      (allowLegacyShape && Array.isArray(source.children))
-    ) {
-      const directory = normalizeDirectory(source);
-      if (directory) return directory;
-    }
+    const normalized = normalizeFilesystemSource(source, allowLegacyShape);
+    if (normalized) return normalized;
   }
   return null;
 }

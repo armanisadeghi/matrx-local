@@ -30,6 +30,8 @@ export interface FilesystemResultViewProps {
   onReference?: (paths: string[]) => void;
   onLoadChildren?: (entry: FilesystemEntry) => Promise<FilesystemEntry[]>;
   onLoadMore?: (cursor: string) => void;
+  loadingMore?: boolean;
+  pagingError?: string | null;
 }
 
 function parentPath(path: string): string {
@@ -123,6 +125,7 @@ function EntryRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [childError, setChildError] = useState<string | null>(null);
   const [loadedChildren, setLoadedChildren] = useState<FilesystemEntry[] | null>(null);
   const directory = entry.kind === "directory";
   const selected = selectedPaths.has(entry.path);
@@ -135,8 +138,11 @@ function EntryRow({
     setExpanded(next);
     if (next && !entry.children && loadedChildren === null && onLoadChildren) {
       setLoading(true);
+      setChildError(null);
       try {
         setLoadedChildren(await onLoadChildren(entry));
+      } catch (reason) {
+        setChildError(reason instanceof Error ? reason.message : String(reason));
       } finally {
         setLoading(false);
       }
@@ -206,6 +212,11 @@ function EntryRow({
           {...(onLoadChildren ? { onLoadChildren } : {})}
         />
       ))}
+      {expanded && childError && (
+        <div className="py-1 pr-2 text-[11px] text-destructive" style={{ paddingLeft: `${44 + depth * 18}px` }}>
+          {childError}
+        </div>
+      )}
     </>
   );
 }
@@ -274,11 +285,15 @@ function DirectoryPage({
   onReference,
   onLoadChildren,
   onLoadMore,
+  loadingMore,
+  pagingError,
 }: {
   result: FilesystemDirectoryPage | FilesystemSearchPage;
   onReference: (paths: string[]) => void;
   onLoadChildren?: (entry: FilesystemEntry) => Promise<FilesystemEntry[]>;
   onLoadMore?: (cursor: string) => void;
+  loadingMore?: boolean;
+  pagingError?: string | null;
 }) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const toggleSelected = useCallback((path: string) => {
@@ -326,9 +341,12 @@ function DirectoryPage({
       </div>
       {result.nextCursor && onLoadMore && (
         <div className="border-t p-2 text-center">
-          <Button type="button" variant="ghost" size="sm" onClick={() => onLoadMore(result.nextCursor!)}>Load more</Button>
+          <Button type="button" variant="ghost" size="sm" disabled={loadingMore} onClick={() => onLoadMore(result.nextCursor!)}>
+            {loadingMore && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Load more
+          </Button>
         </div>
       )}
+      {pagingError && <div className="border-t px-3 py-2 text-[11px] text-destructive">{pagingError}</div>}
     </div>
   );
 }
@@ -403,7 +421,7 @@ function SemanticSearchView({
   );
 }
 
-export function FilesystemResultView({ result, onReference, onLoadChildren, onLoadMore }: FilesystemResultViewProps) {
+export function FilesystemResultView({ result, onReference, onLoadChildren, onLoadMore, loadingMore, pagingError }: FilesystemResultViewProps) {
   const reference = useCallback((paths: string[]) => {
     if (onReference) onReference(paths);
     else void navigator.clipboard.writeText(paths.join("\n"));
@@ -423,6 +441,8 @@ export function FilesystemResultView({ result, onReference, onLoadChildren, onLo
           onReference={reference}
           {...(onLoadChildren ? { onLoadChildren } : {})}
           {...(onLoadMore ? { onLoadMore } : {})}
+          {...(loadingMore != null ? { loadingMore } : {})}
+          {...(pagingError != null ? { pagingError } : {})}
         />
       );
     default: {

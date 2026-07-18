@@ -229,6 +229,7 @@ class FilesystemService:
             str(offset + safe_limit) if has_more and source == "index" else None,
             source=source,
             index_complete=queued == 0,
+            root=resolved_root,
         )
 
     async def semantic_find(self, query: str, *, limit: int = 20) -> dict[str, object]:

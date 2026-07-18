@@ -362,6 +362,27 @@ async def test_priority_settings_round_trip_independently_of_merged_places(
 
 
 @pytest.mark.anyio
+async def test_scoped_search_page_preserves_root_for_cursor_followups(tmp_path: Path) -> None:
+    root = tmp_path / "scope"
+    root.mkdir()
+    (root / "match-one.txt").write_text("one", encoding="utf-8")
+    (root / "match-two.txt").write_text("two", encoding="utf-8")
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    place = Place("scope", "Scope", str(root), "configured", 100)
+    service.index.sync_roots([place])
+    claim = service.index.pop_next_directory()
+    assert claim is not None
+    service.index.index_directory(*claim)
+
+    page = await service.find("match", root=str(root), limit=1)
+
+    assert page.root == str(root.resolve())
+    assert page.to_dict()["root"] == str(root.resolve())
+    assert page.next_cursor == "1"
+
+
+@pytest.mark.anyio
 async def test_inaccessible_directory_stays_partial_and_retries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

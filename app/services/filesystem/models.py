@@ -115,6 +115,7 @@ class SearchPage:
     next_cursor: str | None
     source: Literal["index", "disk"] = "index"
     index_complete: bool = False
+    root: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -125,4 +126,5 @@ class SearchPage:
             "next_cursor": self.next_cursor,
             "source": self.source,
             "index_complete": self.index_complete,
+            "root": self.root,
         }

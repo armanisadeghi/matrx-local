@@ -88,6 +88,7 @@ class SyncEngine:
         self._folder_cache_ids: set[str] = set()
         self._folder_cache_by_name: dict[str, str] = {}
         self._folder_cache_at: float = 0.0
+        self._recovery_hook_installed = False
 
     @property
     def device_id(self) -> str:
@@ -1085,6 +1086,34 @@ class SyncEngine:
         self._watch_task = asyncio.create_task(self._watch_loop())
         logger.info("Document file watcher started: %s", self.fm.base_dir)
 
+    def ensure_recovery_hook(self) -> None:
+        """Restart the watcher THE MOMENT notes access recovers.
+
+        Without this, a recovered denial left the watcher dead for up to a
+        full auto-sync interval (600s) — the user granted access, the prompt
+        cleared, and external edits still went unnoticed for ten minutes.
+        """
+        if self._recovery_hook_installed:
+            return
+        self._recovery_hook_installed = True
+        get_access_health().on_transition(
+            NOTES_RESOURCE, self._on_notes_access_transition
+        )
+
+    def _on_notes_access_transition(self, _resource_id: str, _old: str, new: str):
+        if new != "ok":
+            return None
+        # Returned coroutine is scheduled on the engine loop by the access
+        # service (transitions can originate on the watchfiles thread or a
+        # to_thread probe worker).
+        return self._resume_after_recovery()
+
+    async def _resume_after_recovery(self) -> None:
+        logger.info(
+            "Notes access recovered — restarting file watcher immediately"
+        )
+        await self.start_watcher()
+
     async def stop_watcher(self) -> None:
         self._stop_event.set()
         if self._watch_task:
@@ -1116,6 +1145,7 @@ class SyncEngine:
     async def start_background_sync(self, interval_seconds: int = 600) -> None:
         if self.auto_sync_active:
             return
+        self.ensure_recovery_hook()
         self._auto_stop.clear()
         self._auto_task = asyncio.create_task(
             self._auto_sync_loop(interval_seconds), name="notes-auto-sync"

@@ -126,6 +126,33 @@ def test_watcher_refuses_to_start_while_degraded(
     assert engine.watcher_active is False
 
 
+def test_watcher_restarts_immediately_on_recovery(
+    svc: AccessHealthService, tmp_path: Path
+) -> None:
+    """degraded → ok transition must restart the watcher NOW, not on the next
+    600s auto-sync tick (the historical up-to-10-minute dead-watcher gap)."""
+    engine = SyncEngine(fm=DocumentFileManager(base_dir=tmp_path / "notes"))
+
+    async def scenario() -> None:
+        svc.capture_loop(asyncio.get_running_loop())
+        engine.ensure_recovery_hook()
+        _degrade_notes(svc)
+        await engine.start_watcher()
+        assert engine.watcher_active is False
+        # Recovery: the failing capability succeeds again.
+        svc.record(
+            NOTES_RESOURCE, Capability.ENUMERATE, ok=True, op="test", source="test"
+        )
+        for _ in range(50):
+            if engine.watcher_active:
+                break
+            await asyncio.sleep(0.02)
+        assert engine.watcher_active is True
+        await engine.stop_watcher()
+
+    asyncio.run(scenario())
+
+
 def test_get_status_keeps_frontend_contract_keys(
     svc: AccessHealthService, tmp_path: Path
 ) -> None:

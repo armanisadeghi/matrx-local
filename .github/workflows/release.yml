@@ -9,9 +9,15 @@ on:
   # dispatch from main is equivalent to pushing the tag — downstream jobs
   # resolve the tag from tauri.conf.json instead of github.ref_name.
   workflow_dispatch:
+    inputs:
+      recover_tag:
+        description: "Finalize an existing draft release without rebuilding (for example, v1.3.134)"
+        required: false
+        type: string
 
 jobs:
   verify:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.recover_tag == '' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +72,7 @@ jobs:
 
   release:
     needs: verify
+    if: ${{ needs.verify.result == 'success' }}
     permissions:
       contents: write
     strategy:
@@ -382,7 +389,8 @@ jobs:
 
   # ── Rename assets to human-friendly names ──────────────────────────────────
   rename-assets:
-    needs: release
+    needs: [verify, release]
+    if: ${{ always() && (needs.release.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.recover_tag != '')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -391,18 +399,53 @@ jobs:
 
       - name: Resolve version and tag
         id: version
+        env:
+          RECOVER_TAG: ${{ inputs.recover_tag }}
         # Tag push: derive from the ref. workflow_dispatch: the ref is a branch,
         # so read the version from tauri.conf.json (the same source tauri-action
         # used to create the release tag).
         run: |
-          if [[ "$GITHUB_REF_NAME" == v* ]]; then
+          if [[ -n "$RECOVER_TAG" ]]; then
+            TAG="$RECOVER_TAG"
+            if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "recover_tag must have the form vX.Y.Z (received: $TAG)" >&2
+              exit 1
+            fi
+            VERSION="${TAG#v}"
+          elif [[ "$GITHUB_REF_NAME" == v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
+            TAG="$GITHUB_REF_NAME"
           else
             VERSION="$(jq -r .version desktop/src-tauri/tauri.conf.json)"
+            TAG="v${VERSION}"
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version=${VERSION} tag=v${VERSION}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=${VERSION} tag=${TAG}"
+
+      - name: Resolve draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          RELEASE_JSON="$({
+            gh api --paginate "repos/${REPO}/releases?per_page=100"
+          } | jq -sc --arg tag "$TAG" 'add | map(select(.tag_name == $tag)) | first')"
+          RELEASE_ID="$(jq -r '.id // empty' <<< "$RELEASE_JSON")"
+          IS_DRAFT="$(jq -r '.draft // empty' <<< "$RELEASE_JSON")"
+          if [[ -z "$RELEASE_ID" ]]; then
+            echo "Release $TAG was not found in ${REPO}" >&2
+            exit 1
+          fi
+          if [[ "$IS_DRAFT" != "true" ]]; then
+            echo "Release $TAG is not a draft; refusing to mutate a published release" >&2
+            exit 1
+          fi
+          echo "id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
+          echo "Resolved draft release ${TAG} to id=${RELEASE_ID}"
 
       - name: Rename release assets
         env:
@@ -412,12 +455,16 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${{ steps.version.outputs.version }}"
           REPO="${{ github.repository }}"
+          RELEASE_ID="${{ steps.release.outputs.id }}"
 
           echo "🏷  Tag: $TAG  Version: $VERSION"
           echo ""
 
-          # Fetch asset list as JSON (id + name) in one API call
-          ASSETS_JSON=$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq '.assets[] | {id: .id, name: .name}' | jq -s '.')
+          # Draft releases are intentionally absent from the release-by-tag REST
+          # endpoint. Resolve the draft once above, then address it by numeric ID.
+          ASSETS_JSON=$(gh api --paginate \
+            "repos/${REPO}/releases/${RELEASE_ID}/assets?per_page=100" \
+            --jq '.[] | {id: .id, name: .name}' | jq -s '.')
 
           rename_asset() {
             local old="$1" new="$2"
@@ -574,6 +621,7 @@ jobs:
           # Expose shell variables as env vars so the Python heredoc can read them
           TAG: ${{ steps.version.outputs.tag }}
           REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
         run: |
           set -euo pipefail
 
@@ -587,6 +635,7 @@ jobs:
 
           tag  = os.environ["TAG"]
           repo = os.environ["REPO"]
+          release_id = os.environ["RELEASE_ID"]
           gh_token = os.environ["GH_TOKEN"]
 
           EXPECTED_PLATFORMS = {
@@ -664,7 +713,7 @@ jobs:
           # Draft assets are not publicly downloadable yet, so validate current
           # assets through GitHub's authenticated asset API. Backfilled assets
           # belong to public releases and can be probed through their URLs.
-          current_release = gh_get(f"releases/tags/{tag}")
+          current_release = gh_get(f"releases/{release_id}")
           current_assets = {
               asset["name"]: asset for asset in current_release.get("assets", [])
           }

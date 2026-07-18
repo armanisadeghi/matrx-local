@@ -1758,8 +1758,6 @@ pub fn run() {
             delete_llm_model,
             detect_llm_hardware,
             get_llm_setup_status,
-            save_hf_token,
-            get_hf_token,
             // Floating overlay commands
             show_transcript_overlay,
             hide_transcript_overlay,
@@ -2016,8 +2014,8 @@ pub fn run() {
                     .await
                     {
                         Ok(status) => {
-                            // Persist last_port / last_context_length — reload to preserve
-                            // hf_token and any other fields, then update only these.
+                            // Persist last_port / last_context_length while preserving
+                            // any other fields.
                             let mut updated = LlmConfig::load(&config_dir);
                             updated.last_port = Some(port);
                             updated.last_context_length = Some(ctx);

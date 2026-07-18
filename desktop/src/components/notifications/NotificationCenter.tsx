@@ -3,6 +3,7 @@ import { Bell, X, CheckCheck, Trash2, Info, CheckCircle2, AlertTriangle, XCircle
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { AppNotification, NotificationLevel } from "@/hooks/use-notifications";
+import { dispatchActionNeeded } from "@/features/action-needed";
 
 // ── Per-level styling ─────────────────────────────────────────────────────
 
@@ -58,10 +59,20 @@ function NotificationToast({ notification: n, onDismiss }: ToastProps) {
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold leading-tight">{n.title}</p>
         <p className="mt-0.5 text-xs text-muted-foreground leading-snug line-clamp-3">{n.message}</p>
+        {n.actionNeeded && (
+          <Button
+            size="sm"
+            className="mt-2 h-6 px-2 text-[11px]"
+            onClick={() => void dispatchActionNeeded(n.actionNeeded!)}
+          >
+            {n.actionNeeded.action.label}
+          </Button>
+        )}
       </div>
       <button
         onClick={() => onDismiss(n.id)}
         className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+        aria-label={`Hide ${n.title} toast`}
       >
         <X className="h-3.5 w-3.5" />
       </button>
@@ -173,10 +184,10 @@ export function NotificationCenter({
             <div className="flex items-center gap-1">
               {notifications.length > 0 && (
                 <>
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onMarkAllRead} title="Mark all read">
+                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onMarkAllRead} title="Mark all read" aria-label="Mark all notifications read">
                     <CheckCheck className="h-3.5 w-3.5" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClearAll} title="Clear all">
+                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClearAll} title="Clear all" aria-label="Clear notification history">
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </>
@@ -211,11 +222,21 @@ export function NotificationCenter({
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-semibold">{n.title}</p>
                         <p className="mt-0.5 text-xs text-muted-foreground leading-snug">{n.message}</p>
+                        {n.actionNeeded && (
+                          <Button
+                            size="sm"
+                            className="mt-2 h-6 px-2 text-[11px]"
+                            onClick={() => void dispatchActionNeeded(n.actionNeeded!)}
+                          >
+                            {n.actionNeeded.action.label}
+                          </Button>
+                        )}
                         <p className="mt-1 text-[10px] text-muted-foreground/60">{timeAgo(n.timestamp)}</p>
                       </div>
                       <button
                         onClick={() => onDismiss(n.id)}
                         className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+                        aria-label={`Dismiss ${n.title}`}
                       >
                         <X className="h-3 w-3" />
                       </button>

@@ -12,8 +12,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-# Import the service first: it loads app.common before app.config, dodging
-# the pre-existing config↔common import cycle (see app_config service note).
 from app.services.catalogs.models import KNOWN_KINDS, CatalogEntry, ParseReport
 from app.services.catalogs.service import CatalogsService
 
@@ -46,7 +44,7 @@ def test_total_network_failure_yields_every_kind(tmp_path: Path) -> None:
     # Exact expected compiled counts (the shipped in-code catalogs).
     counts = {kind: len(svc.get_catalog(kind)) for kind in sorted(KNOWN_KINDS)}
     assert counts == {
-        "api_key_provider": 12,
+        "api_key_provider": 13,
         "image_gen_model": 5,
         "llm_model": 38,
         "lora": 13,

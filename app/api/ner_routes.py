@@ -121,12 +121,24 @@ def _raise_ner(exc: NerError) -> None:
         "model_not_downloaded": 409,
         "missing_dependency": 503,
         "download_failed": 502,
+        "hf_token_missing": 409,
+        "hf_token_invalid": 409,
+        "hf_gate_not_accepted": 409,
+        "hf_gate_pending": 409,
         "load_failed": 500,
         "batch_too_large": 413,
     }
     raise HTTPException(
         status_code=status_map.get(exc.code, 500),
-        detail={"detail": exc.message, "code": exc.code},
+        detail={
+            "detail": exc.message,
+            "code": exc.code,
+            "action_needed": (
+                exc.action_needed.model_dump(mode="json", exclude_none=True)
+                if exc.action_needed
+                else None
+            ),
+        },
     ) from exc
 
 

@@ -20,8 +20,6 @@ async function tauriListen<T>(
   return listen<T>(event, handler);
 }
 
-const HF_MIGRATION_SESSION_KEY = "matrx_hf_token_migrated_v1";
-
 export interface ServerStartProgress {
   elapsed_secs: number;
   max_secs: number;
@@ -176,60 +174,21 @@ export function useLlm(): [LlmState, LlmActions] {
   // a circular useCallback dependency (processQueue depends on downloadModel).
   const processQueueRef = useRef<() => Promise<void>>(async () => {});
 
-  const migrateLegacyHfTokenIfNeeded = useCallback(async () => {
-    if (!isTauri()) return;
-    if (
-      typeof sessionStorage !== "undefined" &&
-      sessionStorage.getItem(HF_MIGRATION_SESSION_KEY) === "1"
-    ) {
-      return;
-    }
-    const legacy = await tauriInvoke<string | null>("get_hf_token").catch(
-      () => null,
-    );
-    if (!legacy?.trim()) {
-      if (typeof sessionStorage !== "undefined")
-        sessionStorage.setItem(HF_MIGRATION_SESSION_KEY, "1");
-      return;
-    }
-    if (!engine.engineUrl) return;
-    try {
-      await engine.put("/settings/api-keys/huggingface", {
-        key: legacy.trim(),
-      });
-      await tauriInvoke("save_hf_token", { token: "" });
-      if (typeof sessionStorage !== "undefined")
-        sessionStorage.setItem(HF_MIGRATION_SESSION_KEY, "1");
-    } catch {
-      /* engine offline or unauthenticated — retry later */
-    }
-  }, []);
-
   const refreshHfTokenConfigured = useCallback(async () => {
-    if (!isTauri()) {
+    if (!engine.engineUrl) {
       setHfTokenConfigured(false);
       return;
     }
-    await migrateLegacyHfTokenIfNeeded();
     try {
-      if (engine.engineUrl) {
-        const data = (await engine.get("/settings/api-keys")) as {
-          providers: { provider: string; configured: boolean }[];
-        };
-        const hf = data.providers?.find((p) => p.provider === "huggingface");
-        if (hf?.configured) {
-          setHfTokenConfigured(true);
-          return;
-        }
-      }
+      const data = (await engine.get("/settings/api-keys")) as {
+        providers: { provider: string; configured: boolean }[];
+      };
+      const hf = data.providers?.find((p) => p.provider === "huggingface");
+      setHfTokenConfigured(Boolean(hf?.configured));
     } catch {
-      /* fall through to legacy */
+      setHfTokenConfigured(false);
     }
-    const legacy = await tauriInvoke<string | null>("get_hf_token").catch(
-      () => null,
-    );
-    setHfTokenConfigured(!!legacy?.trim());
-  }, [migrateLegacyHfTokenIfNeeded]);
+  }, []);
 
   // Clean up event listeners on unmount
   useEffect(() => {
@@ -485,7 +444,6 @@ export function useLlm(): [LlmState, LlmActions] {
       );
 
       try {
-        await migrateLegacyHfTokenIfNeeded();
         // Use override token (e.g. freshly entered in wizard) when provided so
         // we don't race against the async engine fetch which could return null.
         const hfTok =
@@ -508,15 +466,7 @@ export function useLlm(): [LlmState, LlmActions] {
         // Stale generation (cancelled, or a newer download owns the state):
         // don't touch shared UI state — just propagate.
         if (downloadGenerationRef.current !== generation) throw e;
-        if (
-          msg.startsWith("XET_TOKEN_REQUIRED") ||
-          msg.startsWith("XET_TOKEN_INVALID")
-        ) {
-          setXetTokenRequired(true);
-          setXetPendingFilename(filename);
-          setXetPendingUrls(urls);
-          // Don't set error — the modal handles this gracefully
-        } else if (!msg.toLowerCase().includes("cancel")) {
+        if (!msg.toLowerCase().includes("cancel")) {
           setError(msg);
           // Forward the error to the Python engine log so it appears in the
           // "Copy Issue Report" output. Rust eprintln! covers the sidecar IPC
@@ -546,7 +496,7 @@ export function useLlm(): [LlmState, LlmActions] {
         }
       }
     },
-    [migrateLegacyHfTokenIfNeeded, refreshHfTokenConfigured],
+    [refreshHfTokenConfigured],
   );
 
   /**
@@ -789,21 +739,9 @@ export function useLlm(): [LlmState, LlmActions] {
       const trimmed = token.trim();
       if (!trimmed) return;
 
-      // Save to llm.json via Rust first — this is synchronous, always available,
-      // and ensures the token survives even if the Python engine is unreachable.
-      await tauriInvoke("save_hf_token", { token: trimmed }).catch(() => {
-        /* non-fatal — Rust save may fail in dev browser mode */
-      });
-
-      // Also save to Python engine SQLite so the key appears in Settings → API Keys.
-      if (engine.engineUrl) {
-        try {
-          await engine.put("/settings/api-keys/huggingface", { key: trimmed });
-        } catch {
-          /* best-effort — llm.json copy above is the guaranteed fallback */
-        }
-        await refreshHfTokenConfigured();
-      }
+      if (!engine.engineUrl) throw new Error("Engine is unavailable");
+      await engine.put("/settings/api-keys/huggingface", { key: trimmed });
+      await refreshHfTokenConfigured();
 
       const pendingFilename = xetPendingFilename;
       const pendingUrls = xetPendingUrls;

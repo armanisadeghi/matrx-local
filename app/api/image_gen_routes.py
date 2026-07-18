@@ -106,6 +106,8 @@ from app.services.image_gen.installer import (
 )
 from app.common.route_errors import safe_route
 from app.common.system_logger import get_logger
+from app.services.action_needed import download_resolution_needed
+from app.services.downloads.failures import hf_token_missing
 
 from app.api.error_envelope import EnvelopeRoute
 
@@ -719,7 +721,21 @@ async def download_model(req: DownloadModelRequest) -> DownloadModelResponse:
     svc = get_image_gen_service()
     result = await svc.start_download(req.model_id)
     if result.get("needs_hf_token"):
-        raise HTTPException(status_code=400, detail=result["error"])
+        resolution = hf_token_missing(req.model_id).resolution
+        action = download_resolution_needed(
+            resolution,
+            feature="image model download",
+            source="image-gen.download",
+            resource_id=req.model_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": resolution.code,
+                "message": result["error"],
+                "action_needed": action.model_dump(mode="json", exclude_none=True),
+            },
+        )
     if result.get("error"):
         raise HTTPException(status_code=404, detail=result["error"])
     return DownloadModelResponse(
@@ -750,7 +766,21 @@ async def download_text_encoder(
         raise HTTPException(status_code=404, detail=f"Unknown model: {req.model_id}")
     result = await start_encoder_download(model, req.text_encoder_id)
     if result.get("needs_hf_token"):
-        raise HTTPException(status_code=400, detail=result["error"])
+        resolution = hf_token_missing(req.text_encoder_id).resolution
+        action = download_resolution_needed(
+            resolution,
+            feature="image text encoder download",
+            source="image-gen.text-encoder-download",
+            resource_id=req.text_encoder_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": resolution.code,
+                "message": result["error"],
+                "action_needed": action.model_dump(mode="json", exclude_none=True),
+            },
+        )
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     return DownloadTextEncoderResponse(

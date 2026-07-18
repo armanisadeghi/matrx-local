@@ -21,9 +21,6 @@ from typing import Any
 import pytest
 from fastapi import HTTPException
 
-# app.main first: importing app.api.settings_routes directly trips a pre-existing
-# circular import through app.config.
-import app.main  # noqa: F401
 from app.api import settings_routes
 from app.services.ai.key_validation import ValidationResult
 

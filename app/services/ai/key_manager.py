@@ -36,6 +36,7 @@ import os
 from collections.abc import Callable
 
 from app.common.system_logger import get_logger
+from app.services.ai.provider_grants import PROVIDER_GRANTS
 
 logger = get_logger()
 
@@ -45,20 +46,7 @@ logger = get_logger()
 # GOOGLE_API_KEY second; fastino mirrors matrx-ai's dual lookup
 # resolve_api_key("PIONEER_API_KEY", "FASTINO_API_KEY").
 PROVIDER_ENV_MAP: dict[str, list[str]] = {
-    "openai":     ["OPENAI_API_KEY"],
-    "anthropic":  ["ANTHROPIC_API_KEY"],
-    "google":     ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-    "groq":       ["GROQ_API_KEY"],
-    "together":   ["TOGETHER_API_KEY"],
-    "xai":        ["XAI_API_KEY"],
-    "cerebras":   ["CEREBRAS_API_KEY"],
-    "elevenlabs": ["ELEVENLABS_API_KEY"],
-    "fastino":    ["PIONEER_API_KEY", "FASTINO_API_KEY"],
-    # Hugging Face Hub (local GGUF downloads via desktop + any Python hub usage)
-    "huggingface": ["HUGGING_FACE_HUB_TOKEN", "HF_TOKEN"],
-    # Civitai — custom image model / LoRA downloads (read via
-    # app.services.media_gen.paths.read_civitai_key; sent only to civitai.com).
-    "civitai": ["CIVITAI_API_KEY", "CIVITAI_API_TOKEN"],
+    key: list(spec.env_vars) for key, spec in PROVIDER_GRANTS.items()
 }
 
 # Reverse index: env var name → provider (first provider that declares it wins;

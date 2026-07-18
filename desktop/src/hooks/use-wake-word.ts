@@ -180,13 +180,9 @@ export function useWakeWord(
   const fireOsNotification = useCallback(async () => {
     if (!isTauri()) return;
     try {
-      const { isPermissionGranted, requestPermission, sendNotification } =
+      const { isPermissionGranted, sendNotification } =
         await import("@tauri-apps/plugin-notification");
-      let granted = await isPermissionGranted();
-      if (!granted) {
-        const perm = await requestPermission();
-        granted = perm === "granted";
-      }
+      const granted = await isPermissionGranted();
       if (granted) {
         sendNotification({
           title: "AI Matrx — Listening",

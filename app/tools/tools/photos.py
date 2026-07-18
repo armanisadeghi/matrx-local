@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import io
 import logging
 import threading
 from typing import Any
 
 from app.common.platform_ctx import PLATFORM
+from app.services.action_needed import os_permission_needed
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
 
@@ -30,24 +30,6 @@ _PERMISSION_HINT = (
 _PH_ACCESS_READ_WRITE = 2
 
 
-def _request_photos_access_sync(timeout: float = 5.0) -> bool:
-    import Photos  # type: ignore[import]
-
-    result: list[bool] = [False]
-    event = threading.Event()
-
-    def handler(status: int) -> None:
-        # 3 = authorized, 4 = limited
-        result[0] = status in (3, 4)
-        event.set()
-
-    Photos.PHPhotoLibrary.requestAuthorizationForAccessLevel_handler_(
-        _PH_ACCESS_READ_WRITE, handler
-    )
-    event.wait(timeout=timeout)
-    return result[0]
-
-
 def _ensure_photos_access() -> None:
     import Photos  # type: ignore[import]
 
@@ -56,16 +38,11 @@ def _ensure_photos_access() -> None:
     if status in (3, 4):
         return
     if status == 0:
-        granted = _request_photos_access_sync()
-        if granted:
-            return
-        raise PermissionError("Photos access denied after prompt.")
+        raise PermissionError("Photos access has not been requested.")
     raise PermissionError(f"Photos authorization status={status}. {_PERMISSION_HINT}")
 
 
 def _asset_to_dict(asset: Any) -> dict[str, Any]:
-    import Photos  # type: ignore[import]
-
     # PHAssetMediaType: 0=unknown, 1=image, 2=video, 3=audio
     media_type_map = {0: "unknown", 1: "image", 2: "video", 3: "audio"}
     media_type = media_type_map.get(int(asset.mediaType()), "unknown")
@@ -163,7 +140,7 @@ async def tool_search_photos(
             None, _search_photos_sync, media_type, limit, favorites_only
         )
     except PermissionError as exc:
-        return ToolResult(output=f"Photos permission denied. {_PERMISSION_HINT}\nDetail: {exc}", type=ToolResultType.ERROR)
+        return ToolResult(output=f"Photos permission denied. {_PERMISSION_HINT}\nDetail: {exc}", type=ToolResultType.ERROR, action_needed=os_permission_needed(feature="Photos library", permission_key="photos", source="tool.photos"))
     except Exception as exc:
         logger.exception("tool_search_photos failed")
         return ToolResult(output=f"Failed to search photos: {exc}", type=ToolResultType.ERROR)
@@ -249,7 +226,7 @@ async def tool_get_photo(
             None, _get_photo_sync, identifier, thumbnail_size
         )
     except PermissionError as exc:
-        return ToolResult(output=f"Photos permission denied. {_PERMISSION_HINT}\nDetail: {exc}", type=ToolResultType.ERROR)
+        return ToolResult(output=f"Photos permission denied. {_PERMISSION_HINT}\nDetail: {exc}", type=ToolResultType.ERROR, action_needed=os_permission_needed(feature="Photos library", permission_key="photos", source="tool.photos"))
     except FileNotFoundError as exc:
         return ToolResult(output=str(exc), type=ToolResultType.ERROR)
     except Exception as exc:

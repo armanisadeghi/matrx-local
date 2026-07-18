@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from app.common.platform_ctx import PLATFORM
+from app.services.action_needed import os_permission_needed
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
 
@@ -36,21 +37,6 @@ _SF_RESTRICTED = 2
 _SF_AUTHORIZED = 3
 
 
-def _request_speech_access_sync(timeout: float = 10.0) -> bool:
-    import Speech  # type: ignore[import]
-
-    result: list[bool] = [False]
-    event = threading.Event()
-
-    def handler(status: int) -> None:
-        result[0] = status == _SF_AUTHORIZED
-        event.set()
-
-    Speech.SFSpeechRecognizer.requestAuthorization_(handler)
-    event.wait(timeout=timeout)
-    return result[0]
-
-
 def _ensure_speech_access() -> None:
     import Speech  # type: ignore[import]
 
@@ -58,10 +44,9 @@ def _ensure_speech_access() -> None:
     if status == _SF_AUTHORIZED:
         return
     if status == _SF_NOT_DETERMINED:
-        granted = _request_speech_access_sync()
-        if granted:
-            return
-        raise PermissionError(f"Speech Recognition denied after prompt. {_PERMISSION_HINT}")
+        raise PermissionError(
+            f"Speech Recognition access has not been requested. {_PERMISSION_HINT}"
+        )
     raise PermissionError(
         f"Speech Recognition authorization status={status}. {_PERMISSION_HINT}"
     )
@@ -151,6 +136,7 @@ async def tool_transcribe_with_speech(
             output=str(exc),
             metadata={"available": False, "hint": _PERMISSION_HINT},
             type=ToolResultType.ERROR,
+            action_needed=os_permission_needed(feature="Apple Speech Recognition", permission_key="speech_recognition", source="tool.speech_recognition"),
         )
     except TimeoutError as exc:
         return ToolResult(output=str(exc), type=ToolResultType.ERROR)
@@ -178,7 +164,7 @@ async def tool_list_speech_locales(session: ToolSession) -> ToolResult:
     def _list_locales_sync() -> list[str]:
         import Speech  # type: ignore[import]
         locales = Speech.SFSpeechRecognizer.supportedLocales()
-        return sorted(str(l.localeIdentifier()) for l in locales)
+        return sorted(str(locale.localeIdentifier()) for locale in locales)
 
     try:
         locales = await asyncio.get_event_loop().run_in_executor(None, _list_locales_sync)

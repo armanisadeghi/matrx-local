@@ -5,7 +5,7 @@ import time
 from io import StringIO
 from pathlib import Path
 from app.config import BASE_DIR, TEMP_DIR
-from app.common import print_link
+from app.common.fancy_prints import print_link
 
 
 def generate_directory_structure(root_dir, ignore_dirs=None, include_dirs=None, ignore_files=None, include_files=None, ignore_extensions=None, include_extensions=None, include_files_override=True, include_text_output=False, text_output_file=None):

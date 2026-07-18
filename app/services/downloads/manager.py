@@ -331,9 +331,10 @@ async def _classify_hf_auth_failure(
     end we're removing. The answer comes from the shared key validator (whoami),
     which is the single canonical "is this key real?" path for every provider.
 
-    Only a definitive `invalid` condemns the token. An `unknown` verdict (HF is
-    down, the network is out) sends the user to the license page instead —
-    harmless, and the far likelier cause.
+    Only a definitive validation verdict changes the attribution. An
+    ``unknown`` verdict means the validator could not establish whether the
+    token works (HF is down, DNS failed, the network is out); converting that
+    uncertainty into a license prompt would be a false diagnosis.
     """
     status = getattr(getattr(exc, "response", None), "status_code", None)
     if status not in (401, 403):
@@ -348,9 +349,10 @@ async def _classify_hf_auth_failure(
         return failures.hf_token_invalid(repo_id)
     if result.verdict != "valid":
         logger.warning(
-            "[downloads] HF token check inconclusive (%s) — assuming the token "
-            "is valid and the model gate is unaccepted", result.message,
+            "[downloads] HF token check inconclusive (%s) — preserving the "
+            "original failure instead of guessing at a model gate", result.message,
         )
+        return exc
     # Token is fine → the gate is the problem. HF distinguishes "you never
     # asked" from "you asked and the authors haven't approved yet" only in the
     # error text ("awaiting a review" / "pending"). Different asks: accept the
@@ -675,6 +677,10 @@ class DownloadManager:
                     speed_bps=spd,
                     eta_seconds=eta,
                     error_msg=entry.error_msg,
+                    # Reconnect snapshots obey the same contract as live
+                    # events.  The key is always present, including explicit
+                    # null, so clients can clear stale actionable state.
+                    resolution=entry.resolution,
                     updated_at=entry.updated_at or _now(),
                     bandwidth_bps=self._bandwidth_bps,
                 ).to_sse()

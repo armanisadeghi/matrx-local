@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -126,17 +127,26 @@ _WIN_CONSENT_HKLM = (
     r"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore"
 )
 
-# All HKCU ConsentStore keys that can be set to "Allow" without elevation.
-_WIN_FORCEABLE_KEYS: list[str] = [
-    "microphone", "webcam", "location", "bluetooth", "bluetoothSync",
-    "contacts", "appointments", "userDataTasks", "chat", "email",
-    "userAccountInformation", "phoneCall", "phoneCallHistory",
-    "radios", "broadFileSystemAccess", "picturesLibrary",
-    "videosLibrary", "documentsLibrary", "musicLibrary",
-    "activity", "appDiagnostics", "wifiData", "wiFiDirect",
-    "humanInterfaceDevice", "usb", "serialCommunication",
-    "gazeInput", "graphicsCaptureWithoutBorder", "userNotificationListener",
-]
+# Public permission names mapped to the *specific* Windows ConsentStore keys
+# needed by that permission.  Keep this allowlist semantic: callers request a
+# Matrx permission, never an arbitrary registry key.  Some entries expand to
+# two closely-related capabilities because Windows splits one user-facing
+# permission across multiple ConsentStore records.
+WINDOWS_GRANTABLE_PERMISSIONS: dict[str, tuple[str, ...]] = {
+    "microphone": ("microphone",),
+    "camera": ("webcam",),
+    "bluetooth": ("bluetooth", "bluetoothSync"),
+    "wifi": ("wifiData", "wiFiDirect"),
+    "screen_recording": ("graphicsCaptureWithoutBorder",),
+    "location": ("location",),
+    "contacts": ("contacts",),
+    "calendar": ("appointments",),
+    "reminders": ("userDataTasks",),
+    "photos": ("picturesLibrary", "videosLibrary"),
+    "messages": ("chat",),
+    "mail": ("email",),
+    "speech_recognition": ("microphone",),
+}
 
 
 def _win_consent_status(key: str) -> PermissionStatus:
@@ -191,23 +201,36 @@ def _win_force_allow(key: str) -> bool:
         return False
 
 
-async def grant_windows_permissions() -> dict[str, bool]:
-    """Force-set all forceable Windows privacy consent keys to Allow.
+async def grant_windows_permissions(permission_names: Iterable[str]) -> dict[str, bool]:
+    """Grant only the explicitly requested Windows permissions.
 
-    Writes HKCU\\...\\ConsentStore\\<key>\\Value = "Allow" for every key in
-    _WIN_FORCEABLE_KEYS.  Runs in a thread pool to avoid blocking the event loop.
-    Returns a dict of {key: success}.
+    Each public permission name is expanded through
+    :data:`WINDOWS_GRANTABLE_PERMISSIONS`, then only those allowlisted HKCU
+    ConsentStore keys are written.  Unknown names fail before any mutation.
+    Runs registry writes in a thread pool and returns ``{registry_key: success}``.
 
     Keys that require HKLM (system-level) access are NOT touched here because
     they require UAC elevation which cannot be obtained from a background sidecar.
     On a well-configured personal machine the HKLM values are already "Allow".
     """
-    loop = asyncio.get_event_loop()
+    requested = list(dict.fromkeys(permission_names))
+    unknown = [name for name in requested if name not in WINDOWS_GRANTABLE_PERMISSIONS]
+    if unknown:
+        raise ValueError(f"Unsupported Windows permission(s): {', '.join(unknown)}")
 
-    def _force_all() -> dict[str, bool]:
-        return {key: _win_force_allow(key) for key in _WIN_FORCEABLE_KEYS}
+    consent_keys = list(
+        dict.fromkeys(
+            key
+            for name in requested
+            for key in WINDOWS_GRANTABLE_PERMISSIONS[name]
+        )
+    )
+    loop = asyncio.get_running_loop()
 
-    return await loop.run_in_executor(None, _force_all)
+    def _force_requested() -> dict[str, bool]:
+        return {key: _win_force_allow(key) for key in consent_keys}
+
+    return await loop.run_in_executor(None, _force_requested)
 
 
 async def _win_enum_audio_endpoints() -> list[dict[str, Any]]:
@@ -297,12 +320,6 @@ async def check_microphone() -> PermissionResult:
     # ── Windows: registry-first approach ─────────────────────────────────────
     if PLATFORM["is_windows"]:
         status = _win_consent_status("microphone")
-
-        # If denied in user registry, force-allow it now (no elevation needed).
-        if status == PermissionStatus.DENIED:
-            if _win_force_allow("microphone"):
-                status = PermissionStatus.GRANTED
-                logger.info("[permissions] microphone: was Deny → forced Allow in HKCU")
 
         # Enumerate via PnP AudioEndpoint (reliable from sidecar, unlike sounddevice).
         all_endpoints = await _win_enum_audio_endpoints()
@@ -455,12 +472,6 @@ async def check_camera() -> PermissionResult:
     elif PLATFORM["is_windows"]:
         # Check registry consent status first
         cam_status = _win_consent_status("webcam")
-
-        # Force-allow if denied in user registry (no elevation needed)
-        if cam_status == PermissionStatus.DENIED:
-            if _win_force_allow("webcam"):
-                cam_status = PermissionStatus.GRANTED
-                logger.info("[permissions] camera: was Deny → forced Allow in HKCU")
 
         ps = CAPABILITIES.get("powershell_path")
         if ps:
@@ -711,12 +722,9 @@ async def check_bluetooth() -> PermissionResult:
             logger.debug("Bluetooth check failed: %s", e)
 
     elif PLATFORM["is_windows"]:
-        # Check registry consent + force-allow if denied
+        # Consent checks are passive. Registry writes happen only through the
+        # explicit grant endpoint after a user action.
         bt_status = _win_consent_status("bluetooth")
-        if bt_status == PermissionStatus.DENIED:
-            if _win_force_allow("bluetooth") and _win_force_allow("bluetoothSync"):
-                bt_status = PermissionStatus.GRANTED
-                logger.info("[permissions] bluetooth: was Deny → forced Allow in HKCU")
 
         ps = CAPABILITIES.get("powershell_path")
         if ps:
@@ -1234,6 +1242,65 @@ async def request_screen_recording() -> PermissionResult:
     return await check_screen_recording()
 
 
+async def request_engine_permission(name: str) -> PermissionResult:
+    """Request an engine-owned macOS grant after an explicit user click."""
+    checker = PERMISSION_CHECKERS.get(name)
+    if checker is None:
+        raise ValueError(f"Unknown permission: {name}")
+    if not PLATFORM["is_mac"]:
+        return await checker()
+    if name == "screen_recording":
+        return await request_screen_recording()
+
+    loop = asyncio.get_running_loop()
+    done: asyncio.Future[None] = loop.create_future()
+
+    def finish(*_args: Any) -> None:
+        if not done.done():
+            loop.call_soon_threadsafe(done.set_result, None)
+
+    if name == "contacts":
+        from Contacts import CNContactStore
+
+        CNContactStore.alloc().init().requestAccessForEntityType_completionHandler_(0, finish)
+    elif name in {"calendar", "reminders"}:
+        from EventKit import EKEventStore
+
+        entity_type = 0 if name == "calendar" else 1
+        store = EKEventStore.alloc().init()
+        if name == "calendar" and hasattr(store, "requestFullAccessToEventsWithCompletion_"):
+            store.requestFullAccessToEventsWithCompletion_(finish)
+        elif name == "reminders" and hasattr(store, "requestFullAccessToRemindersWithCompletion_"):
+            store.requestFullAccessToRemindersWithCompletion_(finish)
+        else:
+            store.requestAccessToEntityType_completion_(entity_type, finish)
+    elif name == "photos":
+        from Photos import PHPhotoLibrary
+
+        PHPhotoLibrary.requestAuthorizationForAccessLevel_handler_(2, finish)
+    elif name == "speech_recognition":
+        from Speech import SFSpeechRecognizer
+
+        SFSpeechRecognizer.requestAuthorization_(finish)
+    elif name == "location":
+        from CoreLocation import CLLocationManager
+
+        manager = CLLocationManager.alloc().init()
+        manager.requestWhenInUseAuthorization()
+        # CoreLocation has no completion callback; keep the manager alive and
+        # give the TCC callback a short window before rechecking.
+        await asyncio.sleep(1.0)
+        return await checker()
+    else:
+        return await checker()
+
+    try:
+        await asyncio.wait_for(done, timeout=30.0)
+    except asyncio.TimeoutError:
+        pass
+    return await checker()
+
+
 async def check_screen_recording() -> PermissionResult:
     """Check screen recording / screenshot permission."""
     _sr_deep_link = (
@@ -1291,11 +1358,11 @@ async def check_screen_recording() -> PermissionResult:
     else:
         return PermissionResult(
             permission="screen_recording",
-            status=PermissionStatus.GRANTED,
-            details="X11/Wayland screen capture available",
-            grant_instructions="For Wayland, ensure the portal is configured for screen sharing",
-            user_details="Screen capture is active",
-            user_instructions="",
+            status=PermissionStatus.UNKNOWN,
+            details="Linux screen capture is verified only by an explicit capture attempt",
+            grant_instructions="Use the Screen Capture feature; your desktop portal may ask you to choose a screen",
+            user_details="Screen capture has not been functionally verified",
+            user_instructions="Start a capture to verify X11/Wayland portal access",
         )
 
 
@@ -1346,11 +1413,6 @@ async def check_location() -> PermissionResult:
 
     if PLATFORM["is_windows"]:
         loc_status = _win_consent_status("location")
-        # Force-allow if denied in user registry
-        if loc_status == PermissionStatus.DENIED:
-            if _win_force_allow("location"):
-                loc_status = PermissionStatus.GRANTED
-                logger.info("[permissions] location: was Deny → forced Allow in HKCU")
 
         instructions = "Settings > Privacy > Location > Allow apps to access your location"
         return PermissionResult(
@@ -1425,7 +1487,7 @@ async def check_calendar() -> PermissionResult:
                 1: PermissionStatus.RESTRICTED,
                 2: PermissionStatus.DENIED,
                 3: PermissionStatus.GRANTED,
-                4: PermissionStatus.GRANTED,  # write-only still means some access
+                4: PermissionStatus.RESTRICTED,
             }.get(code, PermissionStatus.UNKNOWN)
         except ImportError:
             pass
@@ -1463,7 +1525,7 @@ async def check_reminders() -> PermissionResult:
                 1: PermissionStatus.RESTRICTED,
                 2: PermissionStatus.DENIED,
                 3: PermissionStatus.GRANTED,
-                4: PermissionStatus.GRANTED,
+                4: PermissionStatus.RESTRICTED,
             }.get(code, PermissionStatus.UNKNOWN)
         except ImportError:
             pass
@@ -1749,6 +1811,36 @@ async def _macos_check_tcc(service: str, label: str) -> PermissionStatus:
 # Full scan
 # ---------------------------------------------------------------------------
 
+PermissionChecker = Callable[[], Awaitable[PermissionResult]]
+
+# One canonical catalog powers both the all-permissions scan and the
+# single-permission API.  Insertion order is the UI's stable display order.
+PERMISSION_CHECKERS: dict[str, PermissionChecker] = {
+    "microphone": check_microphone,
+    "camera": check_camera,
+    "accessibility": check_accessibility,
+    "bluetooth": check_bluetooth,
+    "network": check_network,
+    "wifi": check_wifi,
+    "screen_recording": check_screen_recording,
+    "location": check_location,
+    "contacts": check_contacts,
+    "calendar": check_calendar,
+    "reminders": check_reminders,
+    "photos": check_photos,
+    "messages": check_messages,
+    "mail": check_mail,
+    "speech_recognition": check_speech_recognition,
+}
+
+
+async def _run_permission_check(name: str, checker: PermissionChecker) -> PermissionResult:
+    # WiFi probes can invoke slow platform tooling; retain the all-scan timeout
+    # while keeping the public catalog's checker itself reusable.
+    if name == "wifi":
+        return await asyncio.wait_for(checker(), timeout=10)
+    return await checker()
+
 
 async def check_all_permissions() -> list[dict[str, Any]]:
     """Run all permission checks concurrently and return structured results.
@@ -1756,23 +1848,7 @@ async def check_all_permissions() -> list[dict[str, Any]]:
     Logs one line per permission showing exactly what was checked and what
     value came back, so the log tells the full story on every platform.
     """
-    names = [
-        "microphone",
-        "camera",
-        "accessibility",
-        "bluetooth",
-        "network",
-        "wifi",
-        "screen_recording",
-        "location",
-        "contacts",
-        "calendar",
-        "reminders",
-        "photos",
-        "messages",
-        "mail",
-        "speech_recognition",
-    ]
+    names = list(PERMISSION_CHECKERS)
 
     logger.info(
         "[permissions] check_all_permissions — platform=%s %s — checking %d permissions",
@@ -1780,21 +1856,10 @@ async def check_all_permissions() -> list[dict[str, Any]]:
     )
 
     results = await asyncio.gather(
-        check_microphone(),
-        check_camera(),
-        check_accessibility(),
-        check_bluetooth(),
-        check_network(),
-        asyncio.wait_for(check_wifi(), timeout=10),
-        check_screen_recording(),
-        check_location(),
-        check_contacts(),
-        check_calendar(),
-        check_reminders(),
-        check_photos(),
-        check_messages(),
-        check_mail(),
-        check_speech_recognition(),
+        *(
+            _run_permission_check(name, checker)
+            for name, checker in PERMISSION_CHECKERS.items()
+        ),
         return_exceptions=True,
     )
 

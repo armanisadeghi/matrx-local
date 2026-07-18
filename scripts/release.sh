@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# release.sh — Bump version, commit, tag, and push.
-# GitHub Actions builds multi-platform desktop binaries on tag push.
+# release.sh — Bump version, commit, tag, push, and start one release workflow.
+# The release commit skips push-triggered workflows; release.sh explicitly
+# dispatches the tag's Release workflow after the atomic push succeeds.
 #
 # Source of truth: pyproject.toml
 # Files kept in sync:
@@ -28,6 +29,9 @@ set -euo pipefail
 
 VERSION_MUTATION_STARTED=false
 RELEASE_COMMITTED=false
+# Keep this list in sync with the push.paths-ignore release-only list in
+# .github/workflows/ci.yml. The Release workflow verifies these
+# commits, so starting the separate CI workflow would duplicate that work.
 VERSION_FILES=(
     pyproject.toml
     desktop/src-tauri/tauri.conf.json
@@ -91,7 +95,7 @@ die_after_commit() {
     trap - ERR
     echo "" >&2
     echo -e "${RED}╔══════════════════════════════════════════════════════════════╗${NC}" >&2
-    echo -e "${RED}║   PUSH INCOMPLETE — release built locally but not pushed   ║${NC}" >&2
+    echo -e "${RED}║               RELEASE INCOMPLETE — SEE BELOW              ║${NC}" >&2
     echo -e "${RED}╚══════════════════════════════════════════════════════════════╝${NC}" >&2
     echo "" >&2
     echo -e "$*" >&2
@@ -116,15 +120,15 @@ sedi() {
     fi
 }
 
-# ── Preflight: check gh CLI is available (required for --monitor) ─────────────
+# ── Preflight: check gh CLI is available ──────────────────────────────
 require_gh() {
     if ! command -v gh &>/dev/null; then
         echo ""
         echo -e "${RED}╔══════════════════════════════════════════════════════════════╗${NC}" >&2
         echo -e "${RED}║              GitHub CLI (gh) is not installed                ║${NC}" >&2
         echo -e "${RED}╠══════════════════════════════════════════════════════════════╣${NC}" >&2
-        echo -e "${RED}║  --monitor and --monitor-only require the gh CLI to poll     ║${NC}" >&2
-        echo -e "${RED}║  GitHub Actions run status.                                  ║${NC}" >&2
+        echo -e "${RED}║  Releases require gh to start the single Release workflow.  ║${NC}" >&2
+        echo -e "${RED}║  --monitor and --monitor-only also use it to poll status.    ║${NC}" >&2
         echo -e "${RED}║                                                              ║${NC}" >&2
         echo -e "${RED}║  Install on macOS:                                           ║${NC}" >&2
         echo -e "${RED}║    brew install gh                                           ║${NC}" >&2
@@ -135,10 +139,6 @@ require_gh() {
         echo -e "${RED}║                                                              ║${NC}" >&2
         echo -e "${RED}║  After installing, authenticate with:                        ║${NC}" >&2
         echo -e "${RED}║    gh auth login                                             ║${NC}" >&2
-        echo -e "${RED}║                                                              ║${NC}" >&2
-        echo -e "${RED}║  The release itself was NOT affected — tag v${NEW_TAG:-?} was  ║${NC}" >&2
-        echo -e "${RED}║  pushed successfully. Monitor builds at:                     ║${NC}" >&2
-        echo -e "${RED}║    https://github.com/${GITHUB_REPO}/actions    ║${NC}" >&2
         echo -e "${RED}╚══════════════════════════════════════════════════════════════╝${NC}" >&2
         echo ""
         return 1
@@ -147,7 +147,7 @@ require_gh() {
         echo ""
         echo -e "${YELLOW}[WARN]${NC}  gh is installed but not authenticated." >&2
         echo -e "        Run ${CYAN}gh auth login${NC} to authenticate, then retry." >&2
-        echo -e "        Monitor builds manually at: ${CYAN}https://github.com/${GITHUB_REPO}/actions${NC}" >&2
+        echo -e "        GitHub Actions: ${CYAN}https://github.com/${GITHUB_REPO}/actions${NC}" >&2
         echo ""
         return 1
     fi
@@ -624,7 +624,7 @@ while [[ $# -gt 0 ]]; do
         --monitor) MONITOR=true; shift ;;
         --monitor-only) MONITOR_ONLY=true; shift ;;
         -h|--help)
-            grep '^#' "$0" | head -20 | sed 's/^# \?//'
+            sed -n '2,/^set -euo pipefail$/p' "$0" | sed -E '$d; s/^# ?//'
             exit 0 ;;
         [0-9]*)    BUMP_TYPE="exact"; EXACT_VERSION="$1"; shift ;;
         *) fail "Unknown flag: $1. Use --patch, --minor, --major, --message, --monitor, --monitor-only, --dry-run, or X.Y.Z." ;;
@@ -644,9 +644,9 @@ if $MONITOR_ONLY; then
 fi
 
 # ── Pre-flight checks ────────────────────────────────────────────────────────
-# Fail fast if --monitor was requested but gh isn't available.
-# Better to know now than after a successful release push.
-if $MONITOR; then
+# The release is dispatched explicitly so its push can skip the redundant CI
+# workflow. Fail before changing anything if that dispatch is unavailable.
+if ! $DRY_RUN; then
     require_gh || exit 1
 fi
 
@@ -804,6 +804,12 @@ if [[ -n "$CUSTOM_MESSAGE" ]]; then
 else
     COMMIT_MSG="release: ${NEW_TAG}"
 fi
+# GitHub applies skip markers only to push/pull_request events. This suppresses
+# both push-triggered workflows (CI for the branch and Release for the tag),
+# after which we dispatch exactly one Release workflow for NEW_TAG below.
+if [[ "$COMMIT_MSG" != *"[skip actions]"* ]]; then
+    COMMIT_MSG="${COMMIT_MSG} [skip actions]"
+fi
 
 # ── Preview ──────────────────────────────────────────────────────────────────
 echo ""
@@ -829,6 +835,7 @@ if $DRY_RUN; then
     preview "Would commit: '$COMMIT_MSG'"
     preview "Would create tag: $NEW_TAG"
     preview "Would push to $REMOTE/$BRANCH"
+    preview "Would dispatch one Release workflow for $NEW_TAG"
     $MONITOR && preview "Would monitor GitHub Actions builds until completion"
     echo ""
     echo -e "  ${CYAN}run.py and app/api/routes.py read the version dynamically${NC}"
@@ -944,7 +951,36 @@ EOF
     fi
 fi
 
-# ── Done ─────────────────────────────────────────────────────────────────────
+# ── Dispatch the one release workflow ────────────────────────────────────────
+# [skip actions] prevented push-triggered CI and Release runs. A manual
+# workflow_dispatch is not affected by commit skip instructions.
+info "Starting the Release workflow for $NEW_TAG..."
+DISPATCHED=false
+DISPATCH_ERROR=""
+for attempt in $(seq 1 12); do
+    if DISPATCH_ERROR=$(gh workflow run release.yml \
+        --repo "$GITHUB_REPO" \
+        --ref "$NEW_TAG" 2>&1); then
+        DISPATCHED=true
+        break
+    fi
+    [[ "$attempt" -lt 12 ]] && sleep 5
+done
+
+if ! $DISPATCHED; then
+    die_after_commit "$(cat <<EOF
+The release commit and tag $NEW_TAG were pushed, but GitHub did not accept the
+Release workflow dispatch after 12 attempts:
+
+$DISPATCH_ERROR
+
+No CI or build workflow was started. Retry safely with:
+    gh workflow run release.yml --repo $GITHUB_REPO --ref $NEW_TAG
+EOF
+)"
+fi
+ok "Started one Release workflow for $NEW_TAG"
+
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}  Released ${PROJECT_NAME} ${NEW_VERSION}${NC}"

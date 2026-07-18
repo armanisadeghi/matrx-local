@@ -21,8 +21,6 @@ from typing import Any
 
 import pytest
 
-import app.common  # noqa: F401 — resolves the app.config/app.common import cycle
-
 import app.services.documents.file_manager as fm_mod
 import app.services.documents.sync_engine as se_mod
 from app.services.access_health import Capability

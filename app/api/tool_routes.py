@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.tools.dispatcher import TOOL_NAMES, dispatch
 from app.tools.session import ToolSession
+from app.services.action_needed import ActionNeeded
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -32,6 +33,7 @@ class ToolResponse(BaseModel):
     image: dict[str, Any] | None = None
     artifact: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
+    action_needed: ActionNeeded | None = None
 
 
 @router.get("/list")
@@ -81,4 +83,5 @@ async def invoke_tool(req: ToolRequest, request: Request) -> ToolResponse:
             else None
         ),
         metadata=result.metadata,
+        action_needed=result.action_needed,
     )

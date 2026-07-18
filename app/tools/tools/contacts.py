@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 from app.common.platform_ctx import PLATFORM
+from app.services.action_needed import os_permission_needed
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
 
@@ -26,8 +27,6 @@ _PERMISSION_HINT = (
 
 def _contact_to_dict(contact: Any) -> dict[str, Any]:
     """Convert a CNContact object to a plain dict."""
-    import Contacts  # type: ignore[import]
-
     phones = []
     for phone_value in contact.phoneNumbers():
         phones.append({
@@ -106,7 +105,6 @@ def _fetch_contacts_sync(query: str | None, limit: int) -> list[dict[str, Any]]:
             store.defaultContainerIdentifier()
         )
 
-    error_ptr = None
     contacts, error = store.unifiedContactsMatchingPredicate_keysToFetch_error_(
         predicate, keys_to_fetch, None
     )
@@ -155,6 +153,7 @@ async def tool_search_contacts(
         return ToolResult(
             output=f"Contacts permission denied. {_PERMISSION_HINT}\nDetail: {exc}",
             type=ToolResultType.ERROR,
+            action_needed=os_permission_needed(feature="Contacts", permission_key="contacts", source="tool.contacts"),
         )
     except Exception as exc:
         logger.exception("tool_search_contacts failed")
@@ -220,6 +219,7 @@ async def tool_get_contact(
         return ToolResult(
             output=f"Contacts permission denied. {_PERMISSION_HINT}\nDetail: {exc}",
             type=ToolResultType.ERROR,
+            action_needed=os_permission_needed(feature="Contacts", permission_key="contacts", source="tool.contacts"),
         )
     except Exception as exc:
         logger.exception("tool_get_contact failed")

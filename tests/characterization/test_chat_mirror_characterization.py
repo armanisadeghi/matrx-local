@@ -22,10 +22,6 @@ import json
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-# ORDER MATTERS: app.common first — importing app.config as the process's
-# first app module trips the app.config <-> app.common circular import.
-import app.common  # noqa: F401
-
 from app.services.local_db import database as database_module
 from app.services.local_db.database import LocalDatabase
 from app.services.local_db.mirror_schema import MIRROR_TABLES

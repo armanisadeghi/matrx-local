@@ -616,12 +616,23 @@ async def resolve_hf(repo_id: str) -> dict[str, Any]:
     except httpx.HTTPStatusError as exc:
         code = exc.response.status_code
         if code in (401, 403):
-            raise InspectError(
-                401,
-                f"Hugging Face denied access to '{repo_id}' ({code}) — the "
-                "repo is gated/private. Add a Hugging Face read token under "
-                "Settings → API Keys → Hugging Face.",
+            from app.services.downloads.failures import ActionableDownloadError
+            from app.services.downloads.manager import _classify_hf_auth_failure
+
+            classified = await _classify_hf_auth_failure(
+                exc, repo_id, read_hf_token()
             )
+            if isinstance(classified, ActionableDownloadError):
+                resolution = classified.resolution
+                raise InspectError(401, resolution.message) from exc
+            # Validation was inconclusive. Preserve uncertainty instead of
+            # accusing the user of a missing token or unaccepted license.
+            raise InspectError(
+                503,
+                f"Hugging Face denied access to '{repo_id}' ({code}), but the "
+                "saved token could not be verified. Check the connection and "
+                "try again; no token or license diagnosis was made.",
+            ) from exc
         if code == 404:
             raise InspectError(
                 404, f"Hugging Face repo '{repo_id}' does not exist (404)."

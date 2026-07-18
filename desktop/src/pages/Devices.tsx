@@ -40,7 +40,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { engine } from "@/lib/api";
 import type { PermissionInfo, PermissionStatusValue } from "@/lib/api";
 import type { EngineStatus } from "@/hooks/use-engine";
-import { PLUGIN_KEYS } from "@/hooks/use-permissions";
+import { PLUGIN_KEYS, type PermissionKey } from "@/hooks/use-permissions";
 import { usePermissionsContext } from "@/contexts/PermissionsContext";
 import { useAudioDevices } from "@/contexts/AudioDevicesContext";
 import type { AudioDeviceInfo } from "@/lib/transcription/types";
@@ -184,18 +184,8 @@ function SectionCard({
 }
 
 function PermissionAlert({ perm }: { perm: PermissionInfo | null }) {
+  const { request } = usePermissionsContext();
   if (!perm || perm.status === "granted") return null;
-
-  const openSettings = () => {
-    const url =
-      perm.deep_link ||
-      "x-apple.systempreferences:com.apple.preference.security?Privacy";
-    import("@tauri-apps/plugin-shell")
-      .then(({ open }) => open(url))
-      .catch(() => {
-        window.open(url, "_blank");
-      });
-  };
 
   const isTriggerRequired =
     PLATFORM.is_mac &&
@@ -220,20 +210,17 @@ function PermissionAlert({ perm }: { perm: PermissionInfo | null }) {
           </p>
         )}
       </div>
-      {isTriggerRequired ? (
-        <div className="shrink-0 flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-amber-600 dark:text-amber-400 border border-amber-500/30 bg-amber-500/10">
+      <button
+        onClick={() => void request(perm.permission as PermissionKey)}
+        className="shrink-0 flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-amber-500 border border-amber-500/30 hover:bg-amber-500/10 transition-colors"
+      >
+        {isTriggerRequired ? (
           <AlertCircle className="h-3 w-3" />
-          Open Feature to Approve
-        </div>
-      ) : (
-        <button
-          onClick={openSettings}
-          className="shrink-0 flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-amber-500 border border-amber-500/30 hover:bg-amber-500/10 transition-colors"
-        >
+        ) : (
           <ExternalLink className="h-3 w-3" />
-          Open Settings
-        </button>
-      )}
+        )}
+        {isTriggerRequired ? "Request Access" : "Open Settings"}
+      </button>
     </div>
   );
 }

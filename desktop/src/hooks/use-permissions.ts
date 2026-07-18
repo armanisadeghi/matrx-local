@@ -236,6 +236,31 @@ const PLUGIN_KEYS = new Set<PermissionKey>([
 // How long to wait after firing a prompt request before re-checking status.
 // AVFoundation completionHandler fires async; we need a small buffer.
 const POST_REQUEST_DELAY_MS = 1200;
+const AV_REQUESTED_PREFIX = "matrx:permission-requested:";
+
+function wasExplicitlyRequested(key: "microphone" | "camera"): boolean {
+  try {
+    return localStorage.getItem(`${AV_REQUESTED_PREFIX}${key}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markExplicitlyRequested(key: "microphone" | "camera"): void {
+  try {
+    localStorage.setItem(`${AV_REQUESTED_PREFIX}${key}`, "1");
+  } catch {
+    // A denied storage write must not prevent the OS grant request.
+  }
+}
+
+export function pluginBooleanPermissionStatus(
+  granted: boolean,
+  explicitlyRequested: boolean,
+): PermissionStatus {
+  if (granted) return "granted";
+  return explicitlyRequested ? "denied" : "not_determined";
+}
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -330,14 +355,11 @@ export function usePermissions(): UsePermissionsReturn {
    *   - full_disk_access     → file-system probe
    *   - input_monitoring     → IOKit
    *
-   * Plugin limitation — microphone & camera: The plugin only returns a boolean
-   * (granted / not-granted). It cannot distinguish between NOT_DETERMINED,
-   * DENIED, and RESTRICTED — all three map to "not_determined" here. This is a
-   * known limitation of tauri-plugin-macos-permissions v2.3.0. Until the plugin
-   * exposes the raw AVAuthorizationStatus integer, users who have explicitly
-   * denied mic/camera access will see "Not Requested" rather than "Denied" in
-   * the UI. The request() flow still correctly directs denied users to System
-   * Settings after the first failed prompt.
+   * Plugin limitation — microphone & camera: The plugin only returns a boolean.
+   * We persist whether this UI has made an explicit native request, allowing a
+   * later false result to be presented as denied instead of "Not Requested"
+   * forever. An installation denied outside this app remains indeterminate
+   * until the user explicitly tries the grant action.
    *
    * Screen recording: Uses CGPreflightScreenCaptureAccess() — a read-only
    * status query that never triggers a permission dialog. Known limitation:
@@ -353,14 +375,18 @@ export function usePermissions(): UsePermissionsReturn {
         let granted: boolean;
         switch (key) {
           case "microphone":
-            // Plugin returns boolean only — see limitation note above.
             granted = await perms.checkMicrophonePermission();
-            return granted ? "granted" : "not_determined";
+            return pluginBooleanPermissionStatus(
+              granted,
+              wasExplicitlyRequested("microphone"),
+            );
 
           case "camera":
-            // Plugin returns boolean only — see limitation note above.
             granted = await perms.checkCameraPermission();
-            return granted ? "granted" : "not_determined";
+            return pluginBooleanPermissionStatus(
+              granted,
+              wasExplicitlyRequested("camera"),
+            );
 
           case "screen_recording": {
             // THE ENGINE is authoritative here, not this window: screen capture
@@ -519,6 +545,7 @@ export function usePermissions(): UsePermissionsReturn {
         case "camera": {
           try {
             const perms = await import("tauri-plugin-macos-permissions-api");
+            markExplicitlyRequested(key);
             if (key === "microphone") {
               await perms.requestMicrophonePermission();
             } else {
@@ -554,6 +581,24 @@ export function usePermissions(): UsePermissionsReturn {
           await delay(POST_REQUEST_DELAY_MS);
           await check(key);
           await openSettings(key);
+          break;
+        }
+
+        case "contacts":
+        case "calendar":
+        case "reminders":
+        case "photos":
+        case "location":
+        case "speech_recognition": {
+          try {
+            await engine.post(`/devices/permissions/request/${key}`, {});
+            await delay(POST_REQUEST_DELAY_MS);
+            const status = await check(key);
+            if (status !== "granted") await openSettings(key);
+          } catch (err) {
+            console.error(`[permissions] Engine request for ${key} failed:`, err);
+            await openSettings(key);
+          }
           break;
         }
 

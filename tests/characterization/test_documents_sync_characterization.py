@@ -25,14 +25,6 @@ from typing import Any
 import pytest
 
 try:
-    # ORDER MATTERS: app.common must be imported before any module whose first
-    # app-level import is app.config. app.config's own import triggers
-    # app/common/__init__.py -> fancy_prints -> app.config (partially
-    # initialized) and raises ImportError when app.config is the FIRST app
-    # module a process touches. Latent defect tracked in
-    # .matrx/AGENT_TASKS.md (circular import app.config <-> app.common).
-    import app.common  # noqa: F401  (see ordering note above)
-
     from app.services.documents.file_manager import content_hash
     from app.services.documents.supabase_client import _normalize_note_row
     from app.services.documents.sync_engine import SyncEngine, _note_id_for_path

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   engine,
   type FilesystemIndexStatus,
@@ -39,13 +40,22 @@ export function indexStateLabel(status: FilesystemIndexStatus | null): string {
   return "Indexing";
 }
 
+type IndexingPolicy = Omit<FilesystemIndexingSettings, "priority_roots">;
+
+export function setContentPolicy(policy: IndexingPolicy, enabled: boolean): IndexingPolicy {
+  return { ...policy, content_enabled: enabled, semantic_enabled: enabled && policy.semantic_enabled };
+}
+
 export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
   const [places, setPlaces] = useState<FilesystemPlaceResponse[]>([]);
   const [roots, setRoots] = useState<FilesystemPriorityRoot[]>([]);
   const [status, setStatus] = useState<FilesystemIndexStatus | null>(null);
+  const [policy, setPolicy] = useState<IndexingPolicy | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [policyDirty, setPolicyDirty] = useState(false);
+  const [savingPolicy, setSavingPolicy] = useState(false);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
 
   const load = useCallback(async () => {
@@ -60,8 +70,11 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
       ]);
       setPlaces(placeResult.places);
       setRoots(authoredPriorityRoots(indexSettings));
+      const { priority_roots: _priorityRoots, ...authoredPolicy } = indexSettings;
+      setPolicy(authoredPolicy);
       setStatus(indexStatus);
       setDirty(false);
+      setPolicyDirty(false);
     } catch (reason) {
       setMessage({ text: reason instanceof Error ? reason.message : String(reason), error: true });
     } finally {
@@ -111,6 +124,21 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
       setSaving(false);
     }
   }, [roots]);
+
+  const savePolicy = useCallback(async () => {
+    if (!policy) return;
+    setSavingPolicy(true);
+    setMessage(null);
+    try {
+      setStatus(await engine.setFilesystemIndexingSettings(policy));
+      setPolicyDirty(false);
+      setMessage({ text: "Local content and semantic indexing settings saved.", error: false });
+    } catch (reason) {
+      setMessage({ text: reason instanceof Error ? reason.message : String(reason), error: true });
+    } finally {
+      setSavingPolicy(false);
+    }
+  }, [policy]);
 
   const discoveredCount = useMemo(() => places.filter((place) => place.available).length, [places]);
 
@@ -162,6 +190,55 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                 {status.scan_failures.length > 3 && (
                   <div className="mt-1 text-muted-foreground">And {status.scan_failures.length - 3} more blocked locations.</div>
                 )}
+              </div>
+            )}
+
+            {policy && (
+              <div className="space-y-3 rounded-md border p-3">
+                <div>
+                  <h3 className="text-sm font-medium">Local understanding</h3>
+                  <p className="text-xs text-muted-foreground">Extracted text and embeddings stay on this device and are quota bounded.</p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="flex items-start justify-between gap-3 rounded-md bg-muted/20 p-3">
+                    <span>
+                      <span className="block text-sm font-medium">Content search</span>
+                      <span className="block text-xs text-muted-foreground">Index text from supported files for private full-text search.</span>
+                    </span>
+                    <Switch checked={policy.content_enabled} onCheckedChange={(enabled) => { setPolicy((current) => current ? setContentPolicy(current, enabled) : current); setPolicyDirty(true); }} />
+                  </label>
+                  <label className="flex items-start justify-between gap-3 rounded-md bg-muted/20 p-3">
+                    <span>
+                      <span className="block text-sm font-medium">Semantic search</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {status?.fastembed_available ? "Create local embeddings for meaning-based search." : "Requires the optional local FastEmbed capability."}
+                      </span>
+                    </span>
+                    <Switch disabled={!policy.content_enabled || status?.fastembed_available === false} checked={policy.semantic_enabled} onCheckedChange={(enabled) => { setPolicy((current) => current ? { ...current, semantic_enabled: enabled } : current); setPolicyDirty(true); }} />
+                  </label>
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <label className="space-y-1 text-xs">
+                    <span className="font-medium">Text storage limit (MiB)</span>
+                    <Input type="number" min={16} max={20 * 1024} value={Math.round(policy.max_content_bytes / (1024 * 1024))} onChange={(event) => { const mib = Number(event.target.value); if (Number.isFinite(mib)) { setPolicy((current) => current ? { ...current, max_content_bytes: Math.round(mib * 1024 * 1024) } : current); setPolicyDirty(true); } }} />
+                    <span className="text-muted-foreground">{status?.content_entries.toLocaleString() ?? "0"} files · {((status?.content_bytes ?? 0) / (1024 * 1024)).toFixed(1)} MiB used</span>
+                  </label>
+                  <label className="space-y-1 text-xs">
+                    <span className="font-medium">Embedding file limit</span>
+                    <Input type="number" min={100} max={50_000} step={100} value={policy.max_embedding_entries} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value)) { setPolicy((current) => current ? { ...current, max_embedding_entries: Math.round(value) } : current); setPolicyDirty(true); } }} />
+                    <span className="text-muted-foreground">{status?.embedding_entries.toLocaleString() ?? "0"} files embedded</span>
+                  </label>
+                  <label className="space-y-1 text-xs">
+                    <span className="font-medium">Embedding model</span>
+                    <Input value={policy.embedding_model} disabled={!policy.semantic_enabled} onChange={(event) => { setPolicy((current) => current ? { ...current, embedding_model: event.target.value } : current); setPolicyDirty(true); }} />
+                    <span className="text-muted-foreground">Model changes rebuild embeddings progressively.</span>
+                  </label>
+                </div>
+                <div className="flex justify-end">
+                  <Button type="button" size="sm" disabled={!policyDirty || savingPolicy} onClick={() => void savePolicy()}>
+                    {savingPolicy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save index settings
+                  </Button>
+                </div>
               </div>
             )}
 

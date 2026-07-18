@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 from app.common.platform_ctx import PLATFORM
+from app.services.action_needed import os_permission_needed
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
 
@@ -44,6 +45,22 @@ def _check_applescript_error(stderr: str, rc: int) -> str | None:
     if "-1743" in stderr or "not authorized" in err_lower or "assistive" in err_lower:
         return f"Automation permission denied. {_AUTOMATION_HINT}"
     return f"AppleScript error (exit {rc}): {stderr.strip()}"
+
+
+def _automation_action(stderr: str, feature: str):
+    err_lower = stderr.lower()
+    if not (
+        "-1743" in stderr
+        or "not authorized" in err_lower
+        or "assistive" in err_lower
+    ):
+        return None
+    return os_permission_needed(
+        feature=feature,
+        permission_key="automation",
+        target="Mail",
+        source="tool.mail",
+    )
 
 
 async def tool_list_emails(
@@ -97,7 +114,11 @@ output
 
     err_msg = _check_applescript_error(stderr, rc)
     if err_msg:
-        return ToolResult(output=err_msg, type=ToolResultType.ERROR)
+        return ToolResult(
+            output=err_msg,
+            type=ToolResultType.ERROR,
+            action_needed=_automation_action(stderr, "Read Mail"),
+        )
 
     emails: list[dict[str, Any]] = []
     for line in stdout.strip().splitlines():
@@ -169,7 +190,11 @@ end tell
 
     err_msg = _check_applescript_error(stderr, rc)
     if err_msg:
-        return ToolResult(output=err_msg, type=ToolResultType.ERROR)
+        return ToolResult(
+            output=err_msg,
+            type=ToolResultType.ERROR,
+            action_needed=_automation_action(stderr, "Send Mail"),
+        )
 
     return ToolResult(
         output=f"Email sent to {to}: {subject}",
@@ -216,7 +241,11 @@ output
 
     err_msg = _check_applescript_error(stderr, rc)
     if err_msg:
-        return ToolResult(output=err_msg, type=ToolResultType.ERROR)
+        return ToolResult(
+            output=err_msg,
+            type=ToolResultType.ERROR,
+            action_needed=_automation_action(stderr, "Mail accounts"),
+        )
 
     accounts: list[dict[str, Any]] = []
     for line in stdout.strip().splitlines():

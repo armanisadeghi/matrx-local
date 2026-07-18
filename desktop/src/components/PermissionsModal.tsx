@@ -180,12 +180,14 @@ interface PermissionRowProps {
   state: PermissionState;
   isRequesting: boolean;
   onRequest: (key: PermissionKey) => void;
+  focused?: boolean;
 }
 
 function PermissionRow({
   state,
   isRequesting,
   onRequest,
+  focused = false,
 }: PermissionRowProps) {
   const isGranted = state.status === "granted";
   const isUnavailable = state.status === "unavailable";
@@ -193,11 +195,13 @@ function PermissionRow({
 
   return (
     <div
+      id={`permission-row-${state.key}`}
+      tabIndex={-1}
       className={`flex items-start gap-4 rounded-lg p-4 transition-colors ${
         isGranted
           ? "bg-green-500/5 dark:bg-green-500/5"
           : "bg-muted/40 hover:bg-muted/60"
-      }`}
+      } ${focused ? "ring-2 ring-primary" : ""}`}
     >
       {/* Icon */}
       <div
@@ -315,7 +319,7 @@ interface PermissionsModalProps {
 export function PermissionsModal({
   open,
   onOpenChange,
-  focusKey: _focusKey,
+  focusKey,
 }: PermissionsModalProps) {
   const { permissions, isLoading, checkAll, request } = usePermissionsContext();
   const [requestingKey, setRequestingKey] = useState<PermissionKey | null>(null);
@@ -326,6 +330,16 @@ export function PermissionsModal({
       checkAll();
     }
   }, [open, checkAll]);
+
+  useEffect(() => {
+    if (!open || !focusKey) return;
+    const timer = window.setTimeout(() => {
+      const row = document.getElementById(`permission-row-${focusKey}`);
+      row?.scrollIntoView({ behavior: "smooth", block: "center" });
+      row?.focus({ preventScroll: true });
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [open, focusKey, permissions]);
 
   const handleRequest = useCallback(
     async (key: PermissionKey) => {
@@ -411,6 +425,7 @@ export function PermissionsModal({
                   state={state}
                   isRequesting={requestingKey === state.key}
                   onRequest={handleRequest}
+                  focused={state.key === focusKey}
                 />
               ))}
 
@@ -428,6 +443,7 @@ export function PermissionsModal({
                       state={state}
                       isRequesting={false}
                       onRequest={handleRequest}
+                      focused={state.key === focusKey}
                     />
                   ))}
               </>

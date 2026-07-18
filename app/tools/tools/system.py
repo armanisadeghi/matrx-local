@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import io
 import logging
 import os
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
+from app.services.action_needed import filesystem_access_needed, os_permission_needed
 from app.services.artifacts import get_artifact_service
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
@@ -429,10 +431,43 @@ async def tool_screenshot(
         rx, ry, rw, rh = region
         bbox = (rx, ry, rx + rw, ry + rh)
 
+    if PLATFORM["is_mac"]:
+        from app.services.permissions.checker import (
+            PermissionStatus,
+            check_screen_recording,
+        )
+
+        permission = await check_screen_recording()
+        if permission.status != PermissionStatus.GRANTED:
+            return ToolResult(
+                type=ToolResultType.ERROR,
+                output=permission.user_details or permission.details,
+                action_needed=os_permission_needed(
+                    feature="Desktop screenshot",
+                    permission_key="screen_recording",
+                    source="tool.screenshot",
+                ),
+            )
+
     try:
         screenshot = _grab_screenshot(bbox=bbox, all_screens=all_screens)
     except OSError as e:
-        return ToolResult(type=ToolResultType.ERROR, output=f"Screenshot failed: {e}")
+        text = str(e).lower()
+        action_needed = None
+        if PLATFORM["is_mac"] and (
+            "screen recording" in text
+            or "screencapture produced an empty file" in text
+        ):
+            action_needed = os_permission_needed(
+                feature="Desktop screenshot",
+                permission_key="screen_recording",
+                source="tool.screenshot",
+            )
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=f"Screenshot failed: {e}",
+            action_needed=action_needed,
+        )
 
     w, h = screenshot.size
     buffer = io.BytesIO()
@@ -482,8 +517,22 @@ async def tool_list_directory(
             target, cursor=cursor, limit=limit, show_hidden=show_hidden
         )
     except (OSError, ValueError, asyncio.TimeoutError) as e:
+        denied = isinstance(e, PermissionError) or (
+            isinstance(e, OSError) and e.errno in (errno.EACCES, errno.EPERM)
+        )
         return ToolResult(
-            type=ToolResultType.ERROR, output=f"Cannot list directory: {e}"
+            type=ToolResultType.ERROR,
+            output=f"Cannot list directory: {e}",
+            action_needed=(
+                filesystem_access_needed(
+                    feature="List directory",
+                    path=str(target),
+                    operation="list",
+                    source="tool.system",
+                )
+                if denied
+                else None
+            ),
         )
     data = page.to_dict()
     items = [

@@ -23,11 +23,6 @@ from typing import Any, Awaitable, Callable
 
 import pytest
 
-# ORDER MATTERS: app.common first — importing app.config as the process's
-# first app module trips the app.config <-> app.common circular import
-# (tracked in .matrx/AGENT_TASKS.md).
-import app.common  # noqa: F401
-
 from app.services.local_db import database as database_module
 from app.services.local_db import sync_engine as sync_engine_module
 from app.services.local_db.database import LocalDatabase

@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import httpx
 
-# app.common before app.config — see the import-cycle note in service.py.
 from app.common.system_logger import get_logger
 
 from app.config import (

@@ -17,34 +17,22 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
 from app.config import TEMP_DIR
 from app.services.permissions.checker import (
-    check_accessibility,
     check_all_permissions,
-    check_bluetooth,
-    check_calendar,
-    check_camera,
-    check_contacts,
-    check_location,
-    check_mail,
-    check_messages,
-    check_microphone,
-    check_network,
-    check_photos,
-    check_reminders,
-    check_screen_recording,
-    check_speech_recognition,
-    check_wifi,
     grant_windows_permissions,
     request_screen_recording,
+    request_engine_permission,
+    PERMISSION_CHECKERS,
     PermissionStatus,
+    WINDOWS_GRANTABLE_PERMISSIONS,
 )
 from app.tools.session import ToolSession
-from app.tools.tools.audio import tool_list_audio_devices, tool_record_audio, tool_play_audio
+from app.tools.tools.audio import tool_list_audio_devices, tool_record_audio
 from app.tools.tools.calendar_tools import (
     tool_list_events,
     tool_create_event,
@@ -135,6 +123,10 @@ class RecordVideoRequest(BaseModel):
 class RecordScreenRequest(BaseModel):
     screen_index: int | None = None
     duration_seconds: int = 5
+
+
+class GrantPermissionsRequest(BaseModel):
+    permissions: list[str] = Field(min_length=1)
 
 
 async def _run(cmd: list[str], timeout: int = 15) -> tuple[str, str, int]:
@@ -254,19 +246,33 @@ async def get_permissions(force_refresh: bool = False):
 
 
 @router.post("/permissions/grant")
-async def grant_permissions():
-    """Force-grant all forceable permissions for the current platform.
+async def grant_permissions(request: GrantPermissionsRequest):
+    """Grant explicitly requested permissions for the current platform.
 
-    On Windows: writes HKCU ConsentStore registry keys to Allow for all
-    privacy capabilities that do not require admin elevation (microphone,
-    webcam, location, bluetooth, broadFileSystemAccess, contacts, etc.).
+    On Windows: expands each public permission name through a fixed allowlist
+    and writes only those HKCU ConsentStore registry keys. Unknown or
+    non-grantable permissions fail before any registry mutation.
     HKLM keys (system policy) are not touched — they require UAC elevation.
 
     On macOS/Linux: returns a no-op success (permissions require user action
     in System Settings / polkit — they cannot be force-granted from a sidecar).
     """
     if PLATFORM["is_windows"]:
-        results = await grant_windows_permissions()
+        requested = list(dict.fromkeys(request.permissions))
+        unsupported = [
+            name for name in requested if name not in WINDOWS_GRANTABLE_PERMISSIONS
+        ]
+        if unsupported:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "unsupported_windows_permission",
+                    "permissions": unsupported,
+                    "available": list(WINDOWS_GRANTABLE_PERMISSIONS),
+                },
+            )
+
+        results = await grant_windows_permissions(requested)
         granted = sum(1 for ok in results.values() if ok)
         failed = [k for k, ok in results.items() if not ok]
         # Granting flips the actual OS state — drop the cached snapshot so
@@ -275,6 +281,7 @@ async def grant_permissions():
         _invalidate_permissions_cache()
         return {
             "platform": "windows",
+            "permissions": requested,
             "granted": granted,
             "total": len(results),
             "failed": failed,
@@ -318,21 +325,41 @@ async def request_screen_recording_permission():
     }
 
 
+@router.post("/permissions/request/{name}")
+async def request_permission(name: str):
+    """Explicit-click request for grants owned by the Python engine process."""
+    requestable = {
+        "screen_recording",
+        "contacts",
+        "calendar",
+        "reminders",
+        "photos",
+        "location",
+        "speech_recognition",
+    }
+    if name not in requestable:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "permission_not_requestable", "permission": name},
+        )
+    result = await request_engine_permission(name)
+    _invalidate_permissions_cache()
+    return result.to_dict()
+
+
 @router.get("/permissions/{name}")
 async def get_permission(name: str):
     """Get a single permission status by name."""
-    checkers = {
-        "microphone": check_microphone,
-        "camera": check_camera,
-        "accessibility": check_accessibility,
-        "bluetooth": check_bluetooth,
-        "network": check_network,
-        "wifi": check_wifi,
-        "screen_recording": check_screen_recording,
-    }
-    checker = checkers.get(name)
+    checker = PERMISSION_CHECKERS.get(name)
     if not checker:
-        return {"error": f"Unknown permission: {name}", "available": list(checkers.keys())}
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "unknown_permission",
+                "permission": name,
+                "available": list(PERMISSION_CHECKERS),
+            },
+        )
     result = await checker()
     return result.to_dict()
 

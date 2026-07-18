@@ -77,6 +77,11 @@ import {
   stopTauriStream,
 } from "@/hooks/use-unified-log";
 import supabase from "@/lib/supabase";
+import {
+  ActionNeededNavigationBridge,
+  ActionNeededSources,
+  actionNeededStore,
+} from "@/features/action-needed";
 
 const SETUP_DISMISSED_KEY = "matrx-setup-dismissed";
 
@@ -154,6 +159,10 @@ function AppInner() {
     refresh,
     restartEngine,
   } = useEngine(auth.isAuthenticated);
+
+  useEffect(() => {
+    if (status !== "connected") actionNeededStore.reset();
+  }, [status]);
 
   const notif = useNotifications();
   const [updateState, updateActions] = useAutoUpdate();
@@ -527,6 +536,8 @@ function AppInner() {
           (not in the provider stack) because it needs engineStatus. */}
       <AccessHealthProvider engineStatus={status}>
       <HashRouter>
+        <ActionNeededSources />
+        <ActionNeededNavigationBridge />
         <Routes>
           <Route path="/overlay" element={<TranscriptOverlay />} />
           <Route path="/auth/callback" element={<AuthCallback />} />

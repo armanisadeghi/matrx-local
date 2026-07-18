@@ -728,10 +728,17 @@ class DelegationEngine:
         duration_ms = int((time.monotonic() - started) * 1000)
         is_error = result.type == ToolResultType.ERROR
         if is_error:
+            structured_output = None
+            if result.action_needed is not None:
+                structured_output = {
+                    "action_needed": result.action_needed.model_dump(
+                        mode="json", exclude_none=True
+                    )
+                }
             return {
                 "call_id": call_id,
                 "tool_name": tool_name,
-                "output": None,
+                "output": structured_output,
                 "is_error": True,
                 "error_message": result.output
                 or "Tool returned an error with no message.",
@@ -765,6 +772,10 @@ class DelegationEngine:
         output: dict[str, Any] = {"output": result.output}
         if result.metadata:
             output["metadata"] = result.metadata
+        if result.action_needed is not None:
+            output["action_needed"] = result.action_needed.model_dump(
+                mode="json", exclude_none=True
+            )
         if result.image is not None:
             # Inline images are a deprecated local/provider-only carrier. A
             # cloud result must be a published Content IR media reference;

@@ -13,11 +13,6 @@ from pathlib import Path
 
 import pytest
 
-# app.config and app.common form an import cycle that only resolves when
-# app.common loads first (the engine's own import order). Tests importing
-# app.config-dependent modules directly must do the same.
-import app.common  # noqa: F401  — must precede app.config-dependent imports
-
 from app.services.paths import manager
 
 

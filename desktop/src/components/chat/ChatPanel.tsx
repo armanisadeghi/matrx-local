@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
-import { AlertTriangle, AlertCircle, X } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { useChat } from "@/hooks/use-chat";
 import { useAgents } from "@/hooks/use-agents";
 import { useChatTts } from "@/hooks/use-chat-tts";
@@ -16,13 +15,13 @@ import { engine as engineAPI } from "@/lib/api";
 import { loadSettings } from "@/lib/settings";
 import type { EngineStatus } from "@/hooks/use-engine";
 import type { ActiveAgent, AgentInfo, PromptVariable } from "@/types/agents";
+import {
+  ActionNeededCard,
+  actionNeededStore,
+  type ActionNeeded,
+} from "@/features/action-needed";
 
 type UseChatReturn = ReturnType<typeof useChat>;
-
-interface AiStatusWarning {
-  message: string;
-  detail: string;
-}
 
 export interface ChatPanelProps {
   engineStatus: EngineStatus;
@@ -42,9 +41,7 @@ export function ChatPanel({
   forceLocalModel = false,
   chatState: externalChat,
 }: ChatPanelProps) {
-  const navigate = useNavigate();
-  const [aiWarning, setAiWarning] = useState<AiStatusWarning | null>(null);
-  const [aiWarningDismissed, setAiWarningDismissed] = useState(false);
+  const [chatRequirement, setChatRequirement] = useState<ActionNeeded | null>(null);
   const [draftInsertion, setDraftInsertion] = useState<{ id: number; text: string } | null>(null);
   // Read this engine's own instance_id (the matrx-local app_instances row this
   // desktop registered as) so the SandboxPicker can label the matching target
@@ -52,23 +49,6 @@ export function ChatPanel({
   const [serviceState] = useServiceStatus(engineStatus);
   const thisDeviceInstanceId = serviceState.cloudDebug?.instance_id ?? null;
 
-
-  useEffect(() => {
-    if (compact || forceLocalModel) return;
-    if (engineStatus !== "connected" || !engineUrl) return;
-    engineAPI
-      .getAiStatus()
-      .then((status) => {
-        if (!status.providers.any_available) {
-          const missing = status.providers.missing;
-          setAiWarning({
-            message: "No AI provider API keys are configured.",
-            detail: `Add at least one key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.) to the engine .env file and restart. Missing: ${missing.join(", ")}.`,
-          });
-        }
-      })
-      .catch((e) => console.warn("[chat] getAiStatus failed:", e));
-  }, [engineStatus, engineUrl, compact, forceLocalModel]);
 
   const {
     builtins,
@@ -228,6 +208,31 @@ export function ChatPanel({
           return;
         }
       }
+      const current = availableModels.find((candidate) => candidate.id === model);
+      if (!forceLocalModel && current?.provider && current.provider !== "local") {
+        try {
+          const readiness = (await engineAPI.get(
+            `/chat/provider-readiness/${encodeURIComponent(current.provider)}`,
+          )) as {
+            provider: string;
+            ready: boolean;
+            action_needed: ActionNeeded | null;
+          };
+          const source = `chat-provider:${current.provider}`;
+          if (!readiness.ready && readiness.action_needed) {
+            const requirement = { ...readiness.action_needed, source };
+            actionNeededStore.reconcileLocal(source, [requirement]);
+            setChatRequirement(requirement);
+            return;
+          }
+          actionNeededStore.reconcileLocal(source, null);
+          setChatRequirement(null);
+        } catch (error) {
+          // A failed preflight is not evidence that a valid key is missing;
+          // let the normal request path surface the transport failure.
+          console.warn("[chat] selected-provider preflight failed:", error);
+        }
+      }
       const submittedVars = { ...variableValues };
       setActiveVariables([]);
       setVariableValues({});
@@ -276,34 +281,7 @@ export function ChatPanel({
         </header>
       )}
 
-      {!compact && aiWarning && !aiWarningDismissed && (
-        <div className="flex items-start gap-3 border-b border-amber-500/30 bg-amber-500/5 px-4 py-2.5">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-medium text-amber-500">
-              {aiWarning.message}
-            </p>
-            {aiWarning.detail && (
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                {aiWarning.detail}
-              </p>
-            )}
-          </div>
-          <button
-            onClick={() => navigate("/settings?tab=api-keys")}
-            className="shrink-0 whitespace-nowrap text-xs text-amber-500 underline transition-colors hover:text-amber-400"
-          >
-            Configure API keys →
-          </button>
-          <button
-            onClick={() => setAiWarningDismissed(true)}
-            className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-            aria-label="Dismiss"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
+      {!compact && chatRequirement && <ActionNeededCard item={chatRequirement} />}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {showWelcome ? (

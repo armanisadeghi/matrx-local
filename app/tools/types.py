@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.content_ir.media import ScreenshotArtifact
+from app.services.action_needed import ActionNeeded
 
 
 class ToolResultType(str, enum.Enum):
@@ -35,3 +36,7 @@ class ToolResult(BaseModel):
     # REST/WebSocket serializers and conversation persistence never do.
     provider_image_path: str | None = Field(default=None, exclude=True, repr=False)
     metadata: dict[str, Any] | None = None
+    # A user-fixable requirement is structured state, never only prose in
+    # ``output``. REST, WebSocket, extension RPC, and agent consumers all carry
+    # this exact model.
+    action_needed: ActionNeeded | None = None

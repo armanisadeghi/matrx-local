@@ -19,8 +19,7 @@ TEMPLATES_VERSION = 1
 
 
 def _prompt_matrix_dir() -> Path:
-    # Lazy import — app.config pulls platform_ctx which can circular-import
-    # during test collection if we bind MATRX_HOME_DIR at module load.
+    # Bind the configured home only when a default store is constructed.
     from app.config import MATRX_HOME_DIR
 
     return MATRX_HOME_DIR / "prompt-matrix"

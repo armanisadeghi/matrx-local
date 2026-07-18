@@ -1532,31 +1532,12 @@ class AppSettingsRepo:
 # ==================================================================
 
 import base64 as _base64
+from app.services.ai.provider_grants import VALID_PROVIDERS
 
 _API_KEYS_SETTINGS_KEY = "api_keys"
 
 # Verdicts only — never a key value. Safe to log, safe to sync.
 _API_KEY_VALIDATION_KEY = "api_key_validation"
-
-# Must stay in sync with PROVIDER_ENV_MAP (app/services/ai/key_manager.py): a
-# provider missing here is unsettable through the API (PUT/bulk 422) and can
-# only be supplied via .env — which is exactly how elevenlabs and fastino were
-# stranded before.
-VALID_PROVIDERS: frozenset[str] = frozenset({
-    "openai",
-    "anthropic",
-    "google",
-    "groq",
-    "together",
-    "xai",
-    "cerebras",
-    "huggingface",
-    # Civitai API key — model/LoRA downloads from civitai.com (image gen).
-    "civitai",
-    "elevenlabs",
-    "fastino",
-})
-
 
 def _encode_key(value: str) -> str:
     # Prefer real encryption-at-rest via the OS keychain; protect() returns

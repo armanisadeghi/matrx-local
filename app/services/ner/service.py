@@ -13,6 +13,7 @@ from typing import Any
 
 from app.common.system_logger import get_logger
 from app.config import MATRX_HOME_DIR
+from app.services.action_needed import ActionNeeded, download_resolution_needed
 from app.services.ner.models import (
     NerModelSpec,
     get_default_ner_model_id,
@@ -36,10 +37,17 @@ _REGISTRY_NAME = "ner"
 class NerError(Exception):
     """Domain error with a stable code for route/tool mapping."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        action_needed: ActionNeeded | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.action_needed = action_needed
 
 
 @dataclass(frozen=True)
@@ -285,6 +293,26 @@ class NerService:
             raise
         except Exception as exc:
             self._last_error = str(exc)
+            from app.services.downloads.failures import ActionableDownloadError
+            from app.services.downloads.manager import _classify_hf_auth_failure
+            from app.services.media_gen.paths import read_hf_token
+
+            classified = await _classify_hf_auth_failure(
+                exc, spec.repo_id, read_hf_token()
+            )
+            if isinstance(classified, ActionableDownloadError):
+                resolution = classified.resolution
+                self._last_error = resolution.message
+                raise NerError(
+                    resolution.code,
+                    resolution.message,
+                    action_needed=download_resolution_needed(
+                        resolution,
+                        feature="named entity recognition",
+                        source="ner.download",
+                        resource_id=spec.repo_id,
+                    ),
+                ) from exc
             raise NerError("download_failed", f"download failed for {spec.model_id}: {exc}") from exc
         finally:
             self._is_downloading = False

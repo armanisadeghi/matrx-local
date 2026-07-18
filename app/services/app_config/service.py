@@ -23,9 +23,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
 
-# app.common MUST be imported before app.config anywhere config might load
-# first (pre-existing config↔common cycle: app/config.py imports
-# app.common.platform_ctx while app/common/__init__.py imports app.config).
 from app.common.system_logger import get_logger
 
 from app.config import (

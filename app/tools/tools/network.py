@@ -10,15 +10,37 @@ domain configs, caching, and content extraction.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Any
 
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
+from app.services.action_needed import ActionNeeded, ActionNeededAction, ActionNeededKind
 
 logger = logging.getLogger(__name__)
+
+
+def _brave_key_needed(feature: str, *, invalid: bool = False) -> ActionNeeded:
+    return ActionNeeded(
+        fingerprint="api-key:brave",
+        code="api_key_invalid" if invalid else "api_key_missing",
+        kind=ActionNeededKind.API_KEY,
+        feature=feature,
+        title="Update your Brave Search API key" if invalid else "Add your Brave Search API key",
+        message=(
+            "Brave Search rejected the saved key. Replace it in Settings."
+            if invalid
+            else "Web search needs a Brave Search key saved in Settings."
+        ),
+        action=ActionNeededAction(
+            kind="settings_api_keys",
+            label="Update API key" if invalid else "Add API key",
+            provider="brave",
+            route="/settings?tab=api-keys&provider=brave",
+        ),
+        source="tools.network",
+    )
 
 
 def _check_forbidden(url: str) -> ToolResult | None:
@@ -488,10 +510,11 @@ async def tool_search(
             output="Scraper engine not initialized.",
         )
 
-    if not engine.search_client:
+    if not engine.ensure_search_client():
         return ToolResult(
             type=ToolResultType.ERROR,
-            output="Search not available — BRAVE_API_KEY not configured.",
+            output="Search needs a Brave Search API key.",
+            action_needed=_brave_key_needed("search"),
         )
 
     start = time.monotonic()
@@ -518,7 +541,13 @@ async def tool_search(
                     })
     except Exception as e:
         logger.exception("Search failed")
-        return ToolResult(type=ToolResultType.ERROR, output=f"Search failed: {type(e).__name__}: {e}")
+        text = str(e).lower()
+        invalid = any(token in text for token in ("401", "403", "unauthorized", "forbidden"))
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=f"Search failed: {type(e).__name__}: {e}",
+            action_needed=_brave_key_needed("search", invalid=True) if invalid else None,
+        )
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
 
@@ -567,10 +596,11 @@ async def tool_research(
             output="Scraper engine not initialized.",
         )
 
-    if not engine.search_client:
+    if not engine.ensure_search_client():
         return ToolResult(
             type=ToolResultType.ERROR,
-            output="Research not available — BRAVE_API_KEY not configured.",
+            output="Research needs a Brave Search API key.",
+            action_needed=_brave_key_needed("research"),
         )
 
     start = time.monotonic()
@@ -599,7 +629,13 @@ async def tool_research(
 
     except Exception as e:
         logger.exception("Research failed")
-        return ToolResult(type=ToolResultType.ERROR, output=f"Research failed: {type(e).__name__}: {e}")
+        text = str(e).lower()
+        invalid = any(token in text for token in ("401", "403", "unauthorized", "forbidden"))
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=f"Research failed: {type(e).__name__}: {e}",
+            action_needed=_brave_key_needed("research", invalid=True) if invalid else None,
+        )
 
     # Persist every successfully scraped page from the research run
     user_id = getattr(session, "user_id", "") or ""

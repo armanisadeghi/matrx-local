@@ -11,8 +11,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-# Import the service first: it loads app.common before app.config, dodging
-# the pre-existing config↔common import cycle (see service.py note).
 from app.services.app_config.models import AppConfigRow
 from app.services.app_config.service import AppConfigService
 

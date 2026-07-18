@@ -10,8 +10,6 @@ pub struct LlmConfig {
     /// so custom/large-context models are not silently clamped to 8192.
     #[serde(default)]
     pub last_context_length: Option<u32>,
-    /// Legacy HuggingFace token fallback only. Prefer engine Settings → API Keys.
-    pub hf_token: Option<String>,
 }
 
 impl LlmConfig {

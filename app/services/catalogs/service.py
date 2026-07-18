@@ -24,8 +24,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
 
-# app.common MUST be imported before app.config (pre-existing config↔common
-# cycle — see the note in app/services/app_config/service.py).
 from app.common.system_logger import get_logger
 
 from app.config import MATRX_HOME_DIR

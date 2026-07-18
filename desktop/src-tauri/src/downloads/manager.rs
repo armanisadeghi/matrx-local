@@ -66,6 +66,19 @@ pub enum DownloadStatus {
     Cancelled,
 }
 
+/// Same wire contract as Python's DownloadResolution. Keeping the payload
+/// typed here prevents native LLM downloads from falling back to raw strings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DownloadResolution {
+    pub code: String,
+    pub title: String,
+    pub message: String,
+    pub action_kind: String,
+    pub action_label: String,
+    pub action_url: Option<String>,
+    pub provider: Option<String>,
+}
+
 impl DownloadStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -89,6 +102,8 @@ pub struct DownloadEntry {
     pub bytes_done: u64,
     pub status: DownloadStatus,
     pub error_msg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<DownloadResolution>,
     pub priority: i32,
     pub part_current: usize,
     pub part_total: usize,
@@ -158,6 +173,7 @@ pub struct DownloadProgressEvent {
     pub speed_bps: f64,
     pub eta_seconds: Option<f64>,
     pub error_msg: Option<String>,
+    pub resolution: Option<DownloadResolution>,
     pub updated_at: String,
     pub bandwidth_bps: f64,
 }
@@ -288,10 +304,58 @@ pub struct DownloadManager {
     semaphore: Arc<Semaphore>,
 }
 
+fn restore_manager_state(db_path: &Path) -> ManagerState {
+    let mut restored = ManagerState::new();
+    match db_load_all(db_path) {
+        Ok(rows) => {
+            for mut row in rows {
+                let id = row.id.clone();
+                if matches!(row.status, DownloadStatus::Queued | DownloadStatus::Active) {
+                    if row.category == "llm" || row.category == "whisper" {
+                        let message =
+                            "Interrupted: app was closed mid-download. Please re-download.";
+                        row.status = DownloadStatus::Failed;
+                        row.error_msg = Some(message.to_string());
+                        row.resolution = None;
+                        row.updated_at = now_str();
+                        let _ = db_update_status(db_path, &id, "failed", Some(message));
+                    } else {
+                        row.status = DownloadStatus::Queued;
+                        row.bytes_done = 0;
+                        row.part_current = 1;
+                        row.error_msg = None;
+                        row.resolution = None;
+                        row.updated_at = now_str();
+                        let _ = db_update_status(db_path, &id, "queued", None);
+                        restored
+                            .cancel_flags
+                            .insert(id.clone(), Arc::new(AtomicBool::new(false)));
+                        restored.insert_pending(
+                            id.clone(),
+                            row.priority,
+                            row.created_at.clone(),
+                        );
+                    }
+                }
+                restored.entries.insert(id, row);
+            }
+        }
+        Err(e) => error!("[downloads] DB restore error: {}", e),
+    }
+    restored
+}
+
 impl DownloadManager {
     /// Create and start the manager. Call once from lib.rs setup.
     pub fn new(app: AppHandle, db_path: PathBuf) -> Arc<Self> {
-        let state = Arc::new(Mutex::new(ManagerState::new()));
+        // Hydrate synchronously before exposing managed state. `dm_list` is
+        // callable immediately after setup; an async restore left a race where
+        // the first window saw an empty history and missed actionable failures.
+        if let Err(e) = init_db(&db_path) {
+            error!("[downloads] DB init error: {}", e);
+        }
+        let restored = restore_manager_state(&db_path);
+        let state = Arc::new(Mutex::new(restored));
         // Start with 1 permit; _maybe_expand_slots() adds permits up to MAX_CONCURRENT
         // as bandwidth headroom is detected, matching the Python manager's behavior.
         let semaphore = Arc::new(Semaphore::new(1));
@@ -301,11 +365,6 @@ impl DownloadManager {
             state: state.clone(),
             semaphore: semaphore.clone(),
         });
-
-        // Initialize DB schema
-        if let Err(e) = init_db(&db_path) {
-            error!("[downloads] DB init error: {}", e);
-        }
 
         // Start dispatcher task
         let mgr_clone = Arc::clone(&mgr);
@@ -319,13 +378,6 @@ impl DownloadManager {
         let db_path_clone = mgr.db_path.clone();
         tauri::async_runtime::spawn(async move {
             periodic_state_log(state_clone, db_path_clone).await;
-        });
-
-        // Re-queue incomplete downloads from previous session
-        let mgr_clone2 = Arc::clone(&mgr);
-        let app_clone2 = app.clone();
-        tauri::async_runtime::spawn(async move {
-            mgr_clone2.resume_incomplete(app_clone2).await;
         });
 
         mgr
@@ -365,6 +417,7 @@ impl DownloadManager {
             bytes_done: 0,
             status: DownloadStatus::Active,
             error_msg: None,
+            resolution: None,
             priority: 0,
             part_current: 1,
             part_total,
@@ -402,6 +455,8 @@ impl DownloadManager {
                     return;
                 }
                 e.status = DownloadStatus::Completed;
+                e.error_msg = None;
+                e.resolution = None;
                 e.bytes_done = total_bytes;
                 if total_bytes > 0 {
                     e.total_bytes = total_bytes;
@@ -422,18 +477,37 @@ impl DownloadManager {
 
     /// Mark an externally-managed download as failed.
     pub async fn mark_external_failed(&self, app: &AppHandle, id: &str, error_msg: &str) {
+        self.mark_external_failed_with_resolution(app, id, error_msg, None).await;
+    }
+
+    /// Mark an external download failed, preserving a typed user action in
+    /// memory, SQLite, list snapshots, and dm-* events.
+    pub async fn mark_external_failed_with_resolution(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        error_msg: &str,
+        resolution: Option<DownloadResolution>,
+    ) {
         let entry_clone = {
             let mut state = self.state.lock().await;
             {
                 let Some(e) = state.entries.get_mut(id) else { return };
                 e.status = DownloadStatus::Failed;
                 e.error_msg = Some(error_msg.to_string());
+                e.resolution = resolution;
                 e.updated_at = now_str();
             }
             state.active_ids.remove(id);
             state.entries.get(id).cloned().unwrap()
         };
-        let _ = db_update_status(&self.db_path, id, "failed", Some(error_msg));
+        let _ = db_update_status_with_resolution(
+            &self.db_path,
+            id,
+            "failed",
+            Some(error_msg),
+            entry_clone.resolution.as_ref(),
+        );
         let now = now_str();
         let pct = entry_clone.percent();
         let ev = build_event(&entry_clone, pct, None, 0.0, &now);
@@ -502,6 +576,7 @@ impl DownloadManager {
             bytes_done: 0,
             status: DownloadStatus::Queued,
             error_msg: None,
+            resolution: None,
             priority,
             part_current: 1,
             part_total,
@@ -719,61 +794,6 @@ impl DownloadManager {
         }
     }
 
-    async fn resume_incomplete(&self, app: AppHandle) {
-        let rows = match db_load_incomplete(&self.db_path) {
-            Ok(r) => r,
-            Err(e) => {
-                error!("[downloads] resume_incomplete DB error: {}", e);
-                return;
-            }
-        };
-
-        for row in rows {
-            let id = row.id.clone();
-
-            // LLM and Whisper downloads are externally managed — mark failed so UI
-            // re-offers the download instead of spinning in a queued state forever.
-            if row.category == "llm" || row.category == "whisper" {
-                warn!(
-                    "[downloads] resume_incomplete: {} (category='{}') was interrupted — marking failed so UI re-offers.",
-                    row.filename, row.category
-                );
-                let _ = db_update_status(
-                    &self.db_path,
-                    &id,
-                    "failed",
-                    Some("Interrupted: app was closed mid-download. Please re-download."),
-                );
-                continue;
-            }
-
-            let mut entry = row;
-            entry.status = DownloadStatus::Queued;
-            entry.bytes_done = 0;
-            entry.part_current = 1;
-            entry.updated_at = now_str();
-
-            let _ = db_update_status(&self.db_path, &id, "queued", None);
-
-            {
-                let mut state = self.state.lock().await;
-                state
-                    .cancel_flags
-                    .insert(id.clone(), Arc::new(AtomicBool::new(false)));
-                state.insert_pending(id.clone(), entry.priority, entry.created_at.clone());
-                state.entries.insert(id.clone(), entry.clone());
-            }
-
-            let now = now_str();
-            let ev = build_event(&entry, 0.0, None, 0.0, &now);
-            let _ = app.emit("dm-queued", &ev);
-            let _ = app.emit("dm-progress", &ev);
-            info!(
-                "[downloads] Resuming: {} (id={} priority={})",
-                entry.filename, id, entry.priority
-            );
-        }
-    }
 }
 
 // ── Download slot handle (moved into spawned tasks) ────────────────────────
@@ -793,6 +813,12 @@ impl DownloadSlotHandle {
         chunk_size: usize,
     ) {
         let id = entry.id.clone();
+        let action_urls = entry.urls.clone();
+        let actionable_resolution = |message: &str| {
+            action_urls.iter().find_map(|url| {
+                universal_hf_resolution(message, url)
+            })
+        };
         match self.download(&app, entry, cancel_flag, chunk_size).await {
             Ok(()) => {}
             Err(e) => {
@@ -808,12 +834,19 @@ impl DownloadSlotHandle {
                     if matches!(e_ref.status, DownloadStatus::Active) {
                         e_ref.status = DownloadStatus::Failed;
                         e_ref.error_msg = Some(e.clone());
+                        e_ref.resolution = actionable_resolution(&e);
                         e_ref.updated_at = now_str();
                     }
                     (e_ref.clone(), state.bandwidth_bps)
                 }; // lock drops here
 
-                let _ = db_update_status(&self.db_path, &id, "failed", Some(&e));
+                let _ = db_update_status_with_resolution(
+                    &self.db_path,
+                    &id,
+                    "failed",
+                    Some(&e),
+                    failed_entry.resolution.as_ref(),
+                );
                 let now = now_str();
                 let pct = failed_entry.percent();
                 let ev = build_event(&failed_entry, pct, None, bw, &now);
@@ -886,15 +919,13 @@ impl DownloadSlotHandle {
             format!("Cannot create dest_dir {}: {}", dest_dir.display(), e)
         })?;
 
-        let hf_token = get_hf_token_from_app(app);
-
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(30))
             .timeout(Duration::from_secs(7200))
             .build()
             .map_err(|e| e.to_string())?;
 
-        let total_bytes = probe_total_bytes(&client, &entry.urls, hf_token.as_deref()).await;
+        let total_bytes = probe_total_bytes(&client, &entry.urls, None).await;
         if total_bytes > 0 {
             let mut state = self.state.lock().await;
             if let Some(e) = state.entries.get_mut(&id) {
@@ -975,7 +1006,7 @@ impl DownloadSlotHandle {
                         &entry.filename,
                         &entry.display_name,
                         &entry.category,
-                        hf_token.as_deref(),
+                        None,
                         &cancel_flag,
                         chunk_size,
                     )
@@ -999,6 +1030,9 @@ impl DownloadSlotHandle {
                             e
                         );
                         warn!("[downloads] {}", last_error);
+                        if universal_hf_resolution(&e, url).is_some() {
+                            break;
+                        }
                     }
                 }
             }
@@ -1259,6 +1293,7 @@ impl DownloadSlotHandle {
                             speed_bps,
                             eta_seconds: eta,
                             error_msg: None,
+                            resolution: None,
                             updated_at: now.clone(),
                             bandwidth_bps: bw,
                         };
@@ -1489,11 +1524,15 @@ fn init_db(path: &Path) -> rusqlite::Result<()> {
              created_at   TEXT NOT NULL,
              updated_at   TEXT NOT NULL,
              completed_at TEXT,
-             metadata     TEXT
+             metadata     TEXT,
+             resolution   TEXT
          );
          CREATE INDEX IF NOT EXISTS idx_dl_status ON downloads(status);
          CREATE INDEX IF NOT EXISTS idx_dl_category ON downloads(category);",
     )?;
+    // Existing user databases predate the typed native resolution column.
+    // SQLite has no ADD COLUMN IF NOT EXISTS, so duplicate-column is benign.
+    let _ = conn.execute("ALTER TABLE downloads ADD COLUMN resolution TEXT", []);
     Ok(())
 }
 
@@ -1501,17 +1540,22 @@ fn db_upsert(path: &Path, entry: &DownloadEntry) -> rusqlite::Result<()> {
     let conn = Connection::open(path)?;
     let urls_json = serde_json::to_string(&entry.urls).unwrap_or_default();
     let metadata: Option<String> = entry.metadata.as_ref().map(|v| v.to_string());
+    let resolution: Option<String> = entry
+        .resolution
+        .as_ref()
+        .and_then(|v| serde_json::to_string(v).ok());
     conn.execute(
         "INSERT INTO downloads
              (id, category, filename, display_name, urls, total_bytes, bytes_done,
               status, error_msg, priority, part_current, part_total,
-              created_at, updated_at, completed_at, metadata)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+              created_at, updated_at, completed_at, metadata, resolution)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
          ON CONFLICT(id) DO UPDATE SET
              status=excluded.status, bytes_done=excluded.bytes_done,
              total_bytes=excluded.total_bytes, error_msg=excluded.error_msg,
              part_current=excluded.part_current, updated_at=excluded.updated_at,
-             completed_at=excluded.completed_at, metadata=excluded.metadata",
+             completed_at=excluded.completed_at, metadata=excluded.metadata,
+             resolution=excluded.resolution",
         params![
             entry.id,
             entry.category,
@@ -1529,6 +1573,7 @@ fn db_upsert(path: &Path, entry: &DownloadEntry) -> rusqlite::Result<()> {
             entry.updated_at,
             entry.completed_at,
             metadata,
+            resolution,
         ],
     )?;
     Ok(())
@@ -1540,13 +1585,30 @@ fn db_update_status(
     status: &str,
     error_msg: Option<&str>,
 ) -> rusqlite::Result<()> {
+    db_update_status_with_resolution(path, id, status, error_msg, None)
+}
+
+fn db_update_status_with_resolution(
+    path: &Path,
+    id: &str,
+    status: &str,
+    error_msg: Option<&str>,
+    resolution: Option<&DownloadResolution>,
+) -> rusqlite::Result<()> {
     let conn = Connection::open(path)?;
     let now = now_str();
     let completed_at: Option<&str> = if status == "completed" { Some(&now) } else { None };
     conn.execute(
         "UPDATE downloads SET status=?1, error_msg=?2, updated_at=?3, \
-         completed_at=COALESCE(?4, completed_at) WHERE id=?5",
-        params![status, error_msg, now, completed_at, id],
+         completed_at=COALESCE(?4, completed_at), resolution=?5 WHERE id=?6",
+        params![
+            status,
+            error_msg,
+            now,
+            completed_at,
+            resolution.and_then(|v| serde_json::to_string(v).ok()),
+            id
+        ],
     )?;
     Ok(())
 }
@@ -1572,7 +1634,7 @@ fn db_update_progress(
     Ok(())
 }
 
-fn db_load_incomplete(path: &Path) -> rusqlite::Result<Vec<DownloadEntry>> {
+fn db_load_all(path: &Path) -> rusqlite::Result<Vec<DownloadEntry>> {
     if !path.exists() {
         return Ok(vec![]);
     }
@@ -1580,9 +1642,8 @@ fn db_load_incomplete(path: &Path) -> rusqlite::Result<Vec<DownloadEntry>> {
     let mut stmt = conn.prepare(
         "SELECT id, category, filename, display_name, urls, total_bytes, bytes_done,
                 status, error_msg, priority, part_current, part_total,
-                created_at, updated_at, completed_at, metadata
+                created_at, updated_at, completed_at, metadata, resolution
          FROM downloads
-         WHERE status IN ('queued','active')
          ORDER BY priority DESC, created_at ASC",
     )?;
 
@@ -1592,6 +1653,16 @@ fn db_load_incomplete(path: &Path) -> rusqlite::Result<Vec<DownloadEntry>> {
         let metadata_raw: Option<String> = row.get(15)?;
         let metadata: Option<serde_json::Value> =
             metadata_raw.and_then(|m| serde_json::from_str(&m).ok());
+        let status_raw: String = row.get(7)?;
+        let status = match status_raw.as_str() {
+            "active" => DownloadStatus::Active,
+            "completed" => DownloadStatus::Completed,
+            "failed" => DownloadStatus::Failed,
+            "cancelled" => DownloadStatus::Cancelled,
+            _ => DownloadStatus::Queued,
+        };
+        let resolution_raw: Option<String> = row.get(16)?;
+        let resolution = resolution_raw.and_then(|raw| serde_json::from_str(&raw).ok());
         Ok(DownloadEntry {
             id: row.get(0)?,
             category: row.get(1)?,
@@ -1600,8 +1671,9 @@ fn db_load_incomplete(path: &Path) -> rusqlite::Result<Vec<DownloadEntry>> {
             urls,
             total_bytes: row.get::<_, i64>(5)? as u64,
             bytes_done: row.get::<_, i64>(6)? as u64,
-            status: DownloadStatus::Queued,
+            status,
             error_msg: row.get(8)?,
+            resolution,
             priority: row.get(9)?,
             part_current: row.get::<_, i64>(10)? as usize,
             part_total: row.get::<_, i64>(11)? as usize,
@@ -1713,8 +1785,101 @@ fn build_event(
         speed_bps: 0.0,
         eta_seconds: eta,
         error_msg: entry.error_msg.clone(),
+        resolution: entry.resolution.clone(),
         updated_at: updated_at.to_string(),
         bandwidth_bps,
+    }
+}
+
+#[cfg(test)]
+mod action_resolution_tests {
+    use super::*;
+
+    fn test_entry(resolution: Option<DownloadResolution>) -> DownloadEntry {
+        DownloadEntry {
+            id: "llm-test".into(),
+            category: "llm".into(),
+            filename: "model.gguf".into(),
+            display_name: "Model".into(),
+            urls: vec!["https://huggingface.co/org/repo/model.gguf".into()],
+            total_bytes: 0,
+            bytes_done: 0,
+            status: DownloadStatus::Failed,
+            error_msg: Some("HTTP 401".into()),
+            resolution,
+            priority: 0,
+            part_current: 1,
+            part_total: 1,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+            completed_at: None,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn native_resolution_persists_and_reloads() {
+        let db = std::env::temp_dir().join(format!(
+            "matrx-download-resolution-{}-{}.db",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_file(&db);
+        init_db(&db).unwrap();
+        let resolution = DownloadResolution {
+            code: "hf_token_missing".into(),
+            title: "Add token".into(),
+            message: "Token required".into(),
+            action_kind: "settings_api_keys".into(),
+            action_label: "Add token".into(),
+            action_url: None,
+            provider: Some("huggingface".into()),
+        };
+        db_upsert(&db, &test_entry(Some(resolution.clone()))).unwrap();
+        let loaded = db_load_all(&db).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].resolution.as_ref(), Some(&resolution));
+        assert_eq!(build_event(&loaded[0], 0.0, None, 0.0, "now").resolution.as_ref(), Some(&resolution));
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[test]
+    fn restore_is_complete_before_manager_state_is_exposed() {
+        let db = std::env::temp_dir().join(format!(
+            "matrx-download-restore-{}-{}.db",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_file(&db);
+        init_db(&db).unwrap();
+
+        let mut external = test_entry(None);
+        external.status = DownloadStatus::Active;
+        db_upsert(&db, &external).unwrap();
+
+        let mut internal = test_entry(None);
+        internal.id = "image-model".into();
+        internal.category = "image_gen".into();
+        internal.status = DownloadStatus::Active;
+        db_upsert(&db, &internal).unwrap();
+
+        let restored = restore_manager_state(&db);
+        assert_eq!(restored.entries.len(), 2);
+        assert!(matches!(
+            restored.entries["llm-test"].status,
+            DownloadStatus::Failed
+        ));
+        assert!(restored.entries["llm-test"]
+            .error_msg
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Interrupted"));
+        assert!(matches!(
+            restored.entries["image-model"].status,
+            DownloadStatus::Queued
+        ));
+        assert_eq!(restored.pending.len(), 1);
+        let _ = std::fs::remove_file(db);
     }
 }
 
@@ -1762,12 +1927,25 @@ async fn probe_total_bytes(
     total
 }
 
-fn get_hf_token_from_app(app: &AppHandle) -> Option<String> {
-    let config_dir = app.path().app_data_dir().ok()?;
-    let config_path = config_dir.join("llm.json");
-    let content = std::fs::read_to_string(config_path).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
-    json.get("hf_token")?.as_str().map(String::from)
+fn universal_hf_resolution(error: &str, url: &str) -> Option<DownloadResolution> {
+    if !url.contains("huggingface.co")
+        || !(error.contains("HTTP 401") || error.contains("HTTP 403"))
+    {
+        return None;
+    }
+    Some(DownloadResolution {
+        code: "hf_token_missing".to_string(),
+        title: "Add a Hugging Face token".to_string(),
+        message: (
+            "This Hugging Face download requires an account token. Add it in API Keys, "
+                .to_string()
+                + "then retry from the feature that requested the download."
+        ),
+        action_kind: "settings_api_keys".to_string(),
+        action_label: "Add token".to_string(),
+        action_url: None,
+        provider: Some("huggingface".to_string()),
+    })
 }
 
 /// Public accessor so lib.rs can get the db path for the manager constructor

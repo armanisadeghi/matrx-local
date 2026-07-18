@@ -25,8 +25,6 @@ import os
 import httpx
 import pytest
 
-# Import the service first: it loads app.common before app.config, dodging
-# the pre-existing config↔common import cycle (see service.py note).
 from app.services.app_config.client import APP_KEY
 from app.services.app_config.models import AppConfigRow, parse_row
 from app.services.app_config.service import _COMPILED_DEFAULTS_ROW

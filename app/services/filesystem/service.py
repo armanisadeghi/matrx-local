@@ -349,7 +349,7 @@ class FilesystemService:
 
     async def _crawl_loop(self) -> None:
         while not self._stop.is_set():
-            item: tuple[str, str, int, int] | None = None
+            item: tuple[str, str, int, int, str] | None = None
             try:
                 if time.time() - self._last_reconcile >= _RECONCILE_SECONDS:
                     await self.refresh_roots()
@@ -364,9 +364,15 @@ class FilesystemService:
                 if item is None:
                     await asyncio.sleep(5.0)
                     continue
-                path, root_id, depth, priority = item
+                path, root_id, depth, priority, claim_token = item
                 count = await asyncio.to_thread(
-                    self.index.index_directory, path, root_id, depth, priority, self._thread_stop
+                    self.index.index_directory,
+                    path,
+                    root_id,
+                    depth,
+                    priority,
+                    claim_token,
+                    self._thread_stop,
                 )
                 self._indexed_this_run += count
                 await asyncio.sleep(0.01 if priority >= 80_000 else 0.1)
@@ -375,18 +381,26 @@ class FilesystemService:
             except OSError as exc:
                 if item is not None:
                     retry_delay = await asyncio.to_thread(
-                        self.index.fail_directory, item[0], exc
+                        self.index.fail_directory, item[0], exc, item[4]
                     )
-                    logger.warning(
-                        "Filesystem directory scan failed; retrying in %.0fs path=%s",
-                        retry_delay,
-                        item[0],
-                        exc_info=True,
-                    )
+                    if retry_delay is not None:
+                        logger.warning(
+                            "Filesystem directory scan failed; retrying in %.0fs path=%s",
+                            retry_delay,
+                            item[0],
+                            exc_info=True,
+                        )
+                    else:
+                        logger.info(
+                            "Filesystem directory scan failed after its claim was superseded: %s",
+                            item[0],
+                        )
                 await asyncio.sleep(1.0)
             except Exception:
                 if item is not None:
-                    await asyncio.to_thread(self.index.release_directory, item[0])
+                    await asyncio.to_thread(
+                        self.index.release_directory, item[0], item[4]
+                    )
                 logger.warning("Filesystem crawl iteration failed; continuing", exc_info=True)
                 await asyncio.sleep(1.0)
 

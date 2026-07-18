@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { engine } from "@/lib/api";
 import { loadSettings, type AppSettings } from "@/lib/settings";
+import { useActionNeeded, type ActionNeeded } from "@/features/action-needed";
 
 export type NotificationLevel = "info" | "success" | "warning" | "error";
 
@@ -11,6 +12,7 @@ export interface AppNotification {
   level: NotificationLevel;
   timestamp: number;
   read: boolean;
+  actionNeeded?: ActionNeeded;
 }
 
 // Programmatically generated tones via Web Audio API — no asset files needed
@@ -61,12 +63,42 @@ function soundForLevel(level: NotificationLevel): "chime" | "alert" | "error" | 
 let _notificationCounter = 0;
 
 export function useNotifications() {
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [baseNotifications, setBaseNotifications] = useState<AppNotification[]>([]);
+  const actionNeeded = useActionNeeded();
+  const [actionReadVersions, setActionReadVersions] = useState<Map<string, number>>(
+    () => new Map(),
+  );
+  const [hiddenActionVersions, setHiddenActionVersions] = useState<Map<string, number>>(
+    () => new Map(),
+  );
   // Toasts that have been hidden (auto-dismiss timer or toast X). Hiding a
   // toast must NOT delete the notification — it stays in the bell history.
   const [hiddenToastIds, setHiddenToastIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const actionToastVersionsRef = useRef<Map<string, number>>(new Map());
+
+  // A resolved requirement may legitimately recur later with the same stable
+  // fingerprint. A newer observation earns a fresh toast; hiding the earlier
+  // toast must not suppress future occurrences forever.
+  useEffect(() => {
+    const recurringIds: string[] = [];
+    for (const item of actionNeeded) {
+      const version = item.observed_at ?? 0;
+      const previous = actionToastVersionsRef.current.get(item.fingerprint);
+      if (previous !== undefined && version > previous) {
+        recurringIds.push(`action:${item.fingerprint}`);
+      }
+      actionToastVersionsRef.current.set(item.fingerprint, version);
+    }
+    if (recurringIds.length > 0) {
+      setHiddenToastIds((prev) => {
+        const next = new Set(prev);
+        recurringIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    }
+  }, [actionNeeded]);
   const soundEnabledRef = useRef(true);
   const soundStyleRef = useRef<AppSettings["notificationSoundStyle"]>("chime");
 
@@ -98,7 +130,7 @@ export function useNotifications() {
       read: false,
     };
 
-    setNotifications((prev) => [notif, ...prev].slice(0, 100));
+    setBaseNotifications((prev) => [notif, ...prev].slice(0, 100));
 
     if (soundEnabledRef.current) {
       // Always honour the user's explicitly chosen sound style.
@@ -109,18 +141,43 @@ export function useNotifications() {
   }, []);
 
   const markRead = useCallback((id: string) => {
-    setNotifications((prev) =>
+    if (id.startsWith("action:")) {
+      const fingerprint = id.slice("action:".length);
+      const item = actionNeeded.find((candidate) => candidate.fingerprint === fingerprint);
+      if (item) {
+        setActionReadVersions((prev) =>
+          new Map(prev).set(fingerprint, item.observed_at ?? 0),
+        );
+      }
+      return;
+    }
+    setBaseNotifications((prev) =>
       prev.map((n) => (n.id === id ? { ...n, read: true } : n))
     );
-  }, []);
+  }, [actionNeeded]);
 
   const markAllRead = useCallback(() => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-  }, []);
+    setBaseNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    setActionReadVersions(
+      new Map(actionNeeded.map((item) => [item.fingerprint, item.observed_at ?? 0])),
+    );
+  }, [actionNeeded]);
 
   const dismiss = useCallback((id: string) => {
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
-  }, []);
+    if (id.startsWith("action:")) {
+      const fingerprint = id.slice("action:".length);
+      const item = actionNeeded.find((candidate) => candidate.fingerprint === fingerprint);
+      if (item) {
+        // Dismissal hides this observation from notification history; the
+        // source-owned state and global banner remain until a recheck resolves it.
+        setHiddenActionVersions((prev) =>
+          new Map(prev).set(fingerprint, item.observed_at ?? 0),
+        );
+      }
+      return;
+    }
+    setBaseNotifications((prev) => prev.filter((n) => n.id !== id));
+  }, [actionNeeded]);
 
   /** Hide a toast popup without deleting the notification from history. */
   const hideToast = useCallback((id: string) => {
@@ -132,9 +189,45 @@ export function useNotifications() {
   }, []);
 
   const clearAll = useCallback(() => {
-    setNotifications([]);
+    setBaseNotifications([]);
     setHiddenToastIds(new Set());
-  }, []);
+    setHiddenActionVersions(
+      new Map(actionNeeded.map((item) => [item.fingerprint, item.observed_at ?? 0])),
+    );
+  }, [actionNeeded]);
+
+  const actionNotifications = useMemo<AppNotification[]>(
+    () =>
+      actionNeeded
+        .filter(
+          (item) =>
+            (hiddenActionVersions.get(item.fingerprint) ?? -1) <
+            (item.observed_at ?? 0),
+        )
+        .map((item) => {
+          const observed = item.observed_at ?? Date.now();
+          const timestamp = observed < 10_000_000_000 ? observed * 1000 : observed;
+          return {
+            id: `action:${item.fingerprint}`,
+            title: item.title,
+            message: item.message,
+            level: "warning" as const,
+            timestamp,
+            read:
+              (actionReadVersions.get(item.fingerprint) ?? -1) >= observed,
+            actionNeeded: item,
+          };
+        }),
+    [actionNeeded, actionReadVersions, hiddenActionVersions],
+  );
+
+  const notifications = useMemo(
+    () =>
+      [...actionNotifications, ...baseNotifications]
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, 100),
+    [actionNotifications, baseNotifications],
+  );
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
@@ -177,4 +270,3 @@ export function useNotifications() {
     [notifications, toasts, unreadCount, addNotification, markRead, markAllRead, dismiss, hideToast, clearAll, setSoundEnabled],
   );
 }
-

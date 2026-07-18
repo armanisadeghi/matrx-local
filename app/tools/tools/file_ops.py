@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import errno
 import logging
 import mimetypes
 import os
@@ -15,6 +16,7 @@ from pathlib import Path
 
 from app.common.platform_ctx import CAPABILITIES
 from app.services.access_health import Capability, get_access_health
+from app.services.action_needed import filesystem_access_needed
 from app.tools.session import ToolSession
 from app.tools.types import ImageData, ToolResult, ToolResultType
 
@@ -36,6 +38,28 @@ def _note_io(path: str, capability: Capability, exc: BaseException | None = None
 
 MAX_READ_SIZE = 256_000
 MAX_INLINE_OUTPUT = 60_000
+
+
+def _io_error_result(
+    *, path: str, operation: str, prefix: str, exc: OSError, feature: str = "Files"
+) -> ToolResult:
+    """Return an evidence-only access request for actual EACCES/EPERM errors."""
+
+    denied = isinstance(exc, PermissionError) or exc.errno in (errno.EACCES, errno.EPERM)
+    return ToolResult(
+        type=ToolResultType.ERROR,
+        output=f"{prefix}: {exc}",
+        action_needed=(
+            filesystem_access_needed(
+                feature=feature,
+                path=path,
+                operation=operation,
+                source="tool.file_ops",
+            )
+            if denied
+            else None
+        ),
+    )
 
 
 async def tool_filesystem_places(session: ToolSession) -> ToolResult:
@@ -65,7 +89,14 @@ async def tool_find_paths(
         page = await get_filesystem_service().find(
             query, root=root, cursor=cursor, limit=limit
         )
-    except (ValueError, PermissionError, asyncio.TimeoutError) as exc:
+    except PermissionError as exc:
+        return _io_error_result(
+            path=str(root or "."),
+            operation="search",
+            prefix="Path search failed",
+            exc=exc,
+        )
+    except (ValueError, asyncio.TimeoutError) as exc:
         return ToolResult(type=ToolResultType.ERROR, output=f"Path search failed: {exc}")
     data = page.to_dict()
     entries = data["entries"]
@@ -144,7 +175,7 @@ async def tool_read(
         text = Path(resolved).read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         _note_io(resolved, Capability.READ, e)
-        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot read file: {e}")
+        return _io_error_result(path=resolved, operation="read", prefix="Cannot read file", exc=e)
     _note_io(resolved, Capability.READ)
 
     lines = text.splitlines(keepends=True)
@@ -172,7 +203,7 @@ def _read_office(session: ToolSession, path: str, mime: str | None) -> ToolResul
     try:
         raw = Path(path).read_bytes()
     except OSError as e:
-        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot read file: {e}")
+        return _io_error_result(path=path, operation="read", prefix="Cannot read file", exc=e)
 
     try:
         extraction = extract_office(raw, mime_type=mime, file_name=path)
@@ -199,7 +230,7 @@ def _read_image(session: ToolSession, path: str, mime: str) -> ToolResult:
     try:
         data = Path(path).read_bytes()
     except OSError as e:
-        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot read image: {e}")
+        return _io_error_result(path=path, operation="read", prefix="Cannot read image", exc=e)
 
     session.mark_file_read(path)
     return ToolResult(
@@ -223,7 +254,7 @@ async def tool_write(
         Path(resolved).write_text(content, encoding="utf-8")
     except OSError as e:
         _note_io(resolved, Capability.WRITE, e)
-        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot write file: {e}")
+        return _io_error_result(path=resolved, operation="write", prefix="Cannot write file", exc=e)
     _note_io(resolved, Capability.WRITE)
 
     session.mark_file_read(resolved)
@@ -245,7 +276,7 @@ async def tool_edit(
     try:
         text = Path(resolved).read_text(encoding="utf-8")
     except OSError as e:
-        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot read file: {e}")
+        return _io_error_result(path=resolved, operation="read", prefix="Cannot read file", exc=e)
 
     count = text.count(old_string)
     if count == 0:
@@ -270,7 +301,7 @@ async def tool_edit(
         Path(resolved).write_text(new_text, encoding="utf-8")
     except OSError as e:
         _note_io(resolved, Capability.WRITE, e)
-        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot write file: {e}")
+        return _io_error_result(path=resolved, operation="write", prefix="Cannot write file", exc=e)
     _note_io(resolved, Capability.WRITE)
 
     return ToolResult(
@@ -382,7 +413,7 @@ async def tool_move(
             warning = _replace_from_staged_copy(src, dst, remove_source=True)
         except OSError as e:
             _note_io(dst, Capability.REPLACE, e)
-            return ToolResult(type=ToolResultType.ERROR, output=f"Cannot move: {e}")
+            return _io_error_result(path=dst, operation="replace", prefix="Cannot move", exc=e)
         _note_io(dst, Capability.REPLACE)
         output = f"Moved {src} → {dst}"
         if warning:
@@ -397,7 +428,7 @@ async def tool_move(
         shutil.move(src, dst)
     except OSError as e:
         _note_io(dst, Capability.REPLACE, e)
-        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot move: {e}")
+        return _io_error_result(path=dst, operation="move", prefix="Cannot move", exc=e)
     _note_io(dst, Capability.REPLACE)
 
     return ToolResult(output=f"Moved {src} → {dst}", metadata={"source": src, "destination": dst})
@@ -435,7 +466,7 @@ async def tool_copy(
             warning = _replace_from_staged_copy(src, dst, remove_source=False)
         except OSError as e:
             _note_io(dst, Capability.REPLACE, e)
-            return ToolResult(type=ToolResultType.ERROR, output=f"Cannot copy: {e}")
+            return _io_error_result(path=dst, operation="replace", prefix="Cannot copy", exc=e)
         _note_io(dst, Capability.REPLACE)
         output = f"Copied {src} → {dst}"
         if warning:
@@ -453,7 +484,7 @@ async def tool_copy(
             shutil.copy2(src, dst)
     except OSError as e:
         _note_io(dst, Capability.WRITE, e)
-        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot copy: {e}")
+        return _io_error_result(path=dst, operation="write", prefix="Cannot copy", exc=e)
     _note_io(dst, Capability.WRITE)
 
     return ToolResult(output=f"Copied {src} → {dst}", metadata={"source": src, "destination": dst})
@@ -505,7 +536,7 @@ async def tool_delete(
             os.remove(resolved)
     except OSError as e:
         _note_io(resolved, Capability.DELETE, e)
-        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot delete: {e}")
+        return _io_error_result(path=resolved, operation="delete", prefix="Cannot delete", exc=e)
     _note_io(resolved, Capability.DELETE)
 
     return ToolResult(
@@ -543,7 +574,7 @@ async def tool_rename(
         os.rename(resolved, dst)
     except OSError as e:
         _note_io(dst, Capability.REPLACE, e)
-        return ToolResult(type=ToolResultType.ERROR, output=f"Cannot rename: {e}")
+        return _io_error_result(path=dst, operation="rename", prefix="Cannot rename", exc=e)
     _note_io(dst, Capability.REPLACE)
 
     return ToolResult(output=f"Renamed {resolved} → {dst}", metadata={"source": resolved, "destination": dst})

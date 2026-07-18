@@ -28,8 +28,6 @@ from collections import Counter
 import httpx
 import pytest
 
-# Import the service first: it loads app.common before app.config, dodging
-# the pre-existing config↔common import cycle (see app_config service note).
 from app.services.catalogs.client import APP_KEY, _fetch_aidream, _fetch_postgrest
 from app.services.catalogs.compiled import compiled_catalog_entries
 from app.services.catalogs.models import KNOWN_KINDS, CatalogEntry

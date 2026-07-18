@@ -38,9 +38,6 @@ import pytest
 # provider import (same import-order fix the engine applies at startup).
 import matrx_ai.orchestrator  # noqa: F401
 
-# app.config ↔ app.common are mutually importing; app.common must win.
-import app.common  # noqa: F401
-
 
 _MOCK_MODEL_ID = str(uuid.uuid4())
 _MOCK_MODEL = {

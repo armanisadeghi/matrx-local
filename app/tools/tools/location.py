@@ -19,6 +19,7 @@ import threading
 from typing import Any
 
 from app.common.platform_ctx import PLATFORM
+from app.services.action_needed import os_permission_needed
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
 
@@ -152,6 +153,7 @@ async def tool_get_location(
             output=str(exc),
             metadata={"available": False, "status": "denied"},
             type=ToolResultType.ERROR,
+            action_needed=os_permission_needed(feature="Device location", permission_key="location", source="tool.location"),
         )
     except Exception as exc:
         logger.exception("tool_get_location failed")
@@ -172,4 +174,13 @@ async def tool_get_location(
         output=output,
         metadata=result,
         type=ToolResultType.SUCCESS if result.get("available") else ToolResultType.ERROR,
+        action_needed=(
+            os_permission_needed(
+                feature="Device location",
+                permission_key="location",
+                source="tool.location",
+            )
+            if result.get("status") == "not_determined"
+            else None
+        ),
     )

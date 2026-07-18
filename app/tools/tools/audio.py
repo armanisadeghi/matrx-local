@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 import os
 import subprocess
@@ -11,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
+from app.services.action_needed import os_permission_needed
 from app.config import TEMP_DIR
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
@@ -278,13 +278,27 @@ async def tool_record_audio(
             type=ToolResultType.ERROR, output="Duration must be 1-300 seconds."
         )
 
+    if PLATFORM["is_mac"]:
+        from app.services.permissions.checker import PermissionStatus, check_microphone
+
+        permission = await check_microphone()
+        if permission.status != PermissionStatus.GRANTED:
+            return ToolResult(
+                type=ToolResultType.ERROR,
+                output=permission.user_details or permission.details,
+                action_needed=os_permission_needed(
+                    feature="Audio recording",
+                    permission_key="microphone",
+                    source="tool.audio",
+                ),
+            )
+
     _ensure_audio_dir()
     filename = f"recording_{uuid.uuid4().hex[:8]}.{format}"
     filepath = AUDIO_DIR / filename
 
     try:
         import sounddevice as sd
-        import numpy as np
 
         # Use the device's native sample rate if not specified — avoids
         # "Invalid sample rate" errors when the caller passes 44100 but
@@ -339,6 +353,10 @@ async def tool_record_audio(
         return await _record_fallback(filepath, duration_seconds, effective_rate, channels)
     except Exception as e:
         err_str = str(e)
+        permission_failure = PLATFORM["is_mac"] and any(
+            marker in err_str.lower()
+            for marker in ("permission", "not permitted", "access denied")
+        )
         if (
             "No Default Input Device" in err_str
             or "Invalid device" in err_str
@@ -353,8 +371,29 @@ async def tool_record_audio(
                     "  • Linux/WSL: Connect a microphone or enable PulseAudio/PipeWire\n"
                     "  • Check available devices with ListAudioDevices tool first"
                 ),
+                action_needed=(
+                    os_permission_needed(
+                        feature="Audio recording",
+                        permission_key="microphone",
+                        source="tool.audio",
+                    )
+                    if permission_failure
+                    else None
+                ),
             )
-        return ToolResult(type=ToolResultType.ERROR, output=f"Recording failed: {e}")
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=f"Recording failed: {e}",
+            action_needed=(
+                os_permission_needed(
+                    feature="Audio recording",
+                    permission_key="microphone",
+                    source="tool.audio",
+                )
+                if permission_failure
+                else None
+            ),
+        )
 
 
 async def _record_fallback(

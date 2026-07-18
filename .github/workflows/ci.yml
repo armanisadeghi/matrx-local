@@ -1,14 +1,21 @@
 name: CI
 
-# Fast, deterministic gate that runs on every push / PR — distinct from the
-# release workflow (which only fires on v* tags and does no verification).
-# This catches the failure classes that previously only surfaced at release
-# time: a broken dependency graph (`uv sync`), Python syntax/import errors,
-# the engine smoke suite, and TypeScript type errors.
+# Fast, deterministic gate for code pushes and PRs. release.sh marks its commit
+# [skip actions] and explicitly dispatches one Release workflow, even when the
+# same push contains earlier local commits. The paths below are a second guard
+# for version-only bumps made outside the script. Keep this list in sync with
+# VERSION_FILES in release.sh.
 
 on:
   push:
     branches: ["**"]
+    paths-ignore:
+      - pyproject.toml
+      - desktop/src-tauri/tauri.conf.json
+      - desktop/src-tauri/Cargo.toml
+      - desktop/src-tauri/Cargo.lock
+      - desktop/package.json
+      - uv.lock
   pull_request:
 
 concurrency:

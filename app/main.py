@@ -13,6 +13,7 @@ from app.api.admin_routes import router as admin_router
 from app.api.catalog_routes import router as catalog_router
 from app.api.routes import router as api_router
 from app.api.tool_routes import router as tool_router
+from app.api.action_needed_routes import router as action_needed_router
 from app.api.sandbox_routes import router as sandbox_router
 from app.api.remote_scraper_routes import router as remote_scraper_router
 from app.api.settings_routes import router as settings_router
@@ -1656,8 +1657,7 @@ app = FastAPI(
 # a registered resource (notes writes, state.json rename, mapped dirs),
 # without this handler it surfaced as an unhandled ASGI 500 to the client.
 # Returns the evidence-based message plus the exact resource/capability/errno
-# so the UI can guide the user. The legacy `notes_access_degraded` key is a
-# frontend contract — keep it until the frontend migrates to /access/health.
+# so the UI can guide the user through the canonical access-health store.
 from fastapi.responses import JSONResponse as _JSONResponse
 from app.services.access_health import AccessDeniedError as _AccessDeniedError
 
@@ -1669,7 +1669,6 @@ async def _access_denied_error_handler(_request: Request, exc: _AccessDeniedErro
         content={
             "detail": str(exc),
             "reason": exc.reason,
-            "notes_access_degraded": True,
             "resource_id": exc.resource_id,
             "path": exc.path,
             "capability": exc.capability.value if exc.capability else None,
@@ -1689,6 +1688,7 @@ app.include_router(admin_router)
 app.include_router(catalog_router)
 app.include_router(api_router)
 app.include_router(tool_router, prefix="/tools", tags=["tools"])
+app.include_router(action_needed_router)
 # Orchestrator-shape sandbox dispatch — invoked by aidream's local-proxy
 # reverse-proxy on behalf of agents that bind to this PC as a compute target.
 # Auth happens per-route via validate_extension_principal (Supabase JWT from

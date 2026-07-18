@@ -2,7 +2,7 @@ import ast
 import os
 import json
 
-from app.common import print_link
+from app.common.fancy_prints import print_link
 from app.config import CODE_SAVES_DIR, BASE_DIR
 
 def get_updated_routes_file():

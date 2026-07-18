@@ -32,8 +32,6 @@ from typing import Any
 
 import httpx
 
-# app.common before app.config — see the import-cycle note in
-# app/services/app_config/service.py.
 from app.common.system_logger import get_logger
 
 from app.config import (

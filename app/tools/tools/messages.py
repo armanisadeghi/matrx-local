@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from app.common.platform_ctx import PLATFORM
+from app.services.action_needed import filesystem_access_needed, os_permission_needed
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
 
@@ -152,6 +153,12 @@ async def tool_list_messages(
             output=str(exc),
             metadata={"available": False, "hint": _fda_hint()},
             type=ToolResultType.ERROR,
+            action_needed=filesystem_access_needed(
+                feature="Messages history",
+                path=str(_CHAT_DB),
+                operation="read",
+                source="tool.messages",
+            ),
         )
     except Exception as exc:
         logger.exception("tool_list_messages failed")
@@ -231,7 +238,17 @@ async def tool_list_conversations(
             None, _get_conversations_sync, limit
         )
     except PermissionError as exc:
-        return ToolResult(output=str(exc), metadata={"available": False}, type=ToolResultType.ERROR)
+        return ToolResult(
+            output=str(exc),
+            metadata={"available": False},
+            type=ToolResultType.ERROR,
+            action_needed=filesystem_access_needed(
+                feature="Messages conversations",
+                path=str(_CHAT_DB),
+                operation="read",
+                source="tool.messages",
+            ),
+        )
     except Exception as exc:
         logger.exception("tool_list_conversations failed")
         return ToolResult(output=f"Failed to list conversations: {exc}", type=ToolResultType.ERROR)
@@ -301,6 +318,12 @@ end tell
             return ToolResult(
                 output=f"Automation permission denied. {_AUTOMATION_HINT}",
                 type=ToolResultType.ERROR,
+                action_needed=os_permission_needed(
+                    feature="Send Messages",
+                    permission_key="automation",
+                    target="Messages",
+                    source="tool.messages",
+                ),
             )
         return ToolResult(
             output=f"Failed to send message (exit {rc}): {stderr.strip() or stdout.strip()}",

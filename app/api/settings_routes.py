@@ -257,35 +257,8 @@ async def get_path_stats(name: str) -> dict[str, Any]:
 # The GET endpoint never returns actual key values — only whether a key is set.
 # This prevents keys from being accidentally logged or sent over the network.
 
-from app.services.local_db.repositories import ApiKeysRepo, VALID_PROVIDERS  # noqa: E402
-
-
-# Human-readable labels shown in the UI
-_PROVIDER_LABELS: dict[str, dict[str, str]] = {
-    "openai":    {"label": "OpenAI",    "description": "GPT-4o, GPT-4o Mini, o3, o4-mini"},
-    "anthropic": {"label": "Anthropic", "description": "Claude Sonnet, Claude Haiku, Claude Opus"},
-    "google":    {"label": "Google",    "description": "Gemini 2.5 Pro, Gemini 2.0 Flash"},
-    "groq":      {"label": "Groq",      "description": "Llama 3.3 70B, Mixtral (fast inference)"},
-    "together":  {"label": "Together AI","description": "Llama, Qwen, Mistral and 100+ open models"},
-    "xai":       {"label": "xAI",       "description": "Grok-2, Grok-3"},
-    "cerebras":  {"label": "Cerebras",  "description": "Llama 3.3 70B (wafer-scale inference)"},
-    "huggingface": {
-        "label": "Hugging Face",
-        "description": "Read token for local GGUF downloads (XET / gated repos); sent only to huggingface.co",
-    },
-    "civitai": {
-        "label": "Civitai",
-        "description": "API key for downloading custom image models and LoRAs from Civitai; sent only to civitai.com",
-    },
-    "elevenlabs": {
-        "label": "ElevenLabs",
-        "description": "Text-to-speech voices; sent only to elevenlabs.io",
-    },
-    "fastino": {
-        "label": "Fastino",
-        "description": "Fastino / Pioneer models",
-    },
-}
+from app.services.local_db.repositories import ApiKeysRepo  # noqa: E402
+from app.services.ai.provider_grants import PROVIDER_GRANTS, VALID_PROVIDERS  # noqa: E402
 
 
 class ApiKeyStatus(BaseModel):
@@ -323,13 +296,13 @@ async def list_api_key_status() -> ApiKeyStatusList:
     validations = await repo.get_validations()
     statuses = []
     for provider in sorted(VALID_PROVIDERS):
-        meta = _PROVIDER_LABELS.get(provider, {"label": provider.title(), "description": ""})
+        meta = PROVIDER_GRANTS[provider]
         configured = await repo.is_configured(provider)
         last = validations.get(provider) or {}
         statuses.append(ApiKeyStatus(
             provider=provider,
-            label=meta["label"],
-            description=meta["description"],
+            label=meta.label,
+            description=meta.description,
             configured=configured,
             testable=provider in PROVIDER_SPECS,
             last_verdict=last.get("verdict"),
@@ -372,11 +345,11 @@ async def set_api_key(provider: str, req: ApiKeySetRequest) -> ApiKeyStatus:
         )
     from app.services.ai.key_manager import set_user_key
     await set_user_key(provider, req.key)
-    meta = _PROVIDER_LABELS.get(provider, {"label": provider.title(), "description": ""})
+    meta = PROVIDER_GRANTS[provider]
     return ApiKeyStatus(
         provider=provider,
-        label=meta["label"],
-        description=meta["description"],
+        label=meta.label,
+        description=meta.description,
         configured=True,
     )
 
@@ -395,11 +368,11 @@ async def delete_api_key(provider: str) -> ApiKeyStatus:
         )
     from app.services.ai.key_manager import delete_user_key
     await delete_user_key(provider)
-    meta = _PROVIDER_LABELS.get(provider, {"label": provider.title(), "description": ""})
+    meta = PROVIDER_GRANTS[provider]
     return ApiKeyStatus(
         provider=provider,
-        label=meta["label"],
-        description=meta["description"],
+        label=meta.label,
+        description=meta.description,
         configured=False,
     )
 

@@ -42,7 +42,6 @@ def _bootstrap_scraper_package() -> None:
 
     scraper_root = str(SCRAPER_SERVICE_ROOT)
 
-    matrx_app = sys.modules.get("app")
     matrx_app_children = {
         k: v for k, v in sys.modules.items()
         if k == "app" or k.startswith("app.")
@@ -241,6 +240,7 @@ class ScraperEngine:
         self._page_cache: Any = None
         self._domain_config_store: Any = None
         self._search_client: Any = None
+        self._search_key: str | None = None
         self._settings: Any = None
         self._started = False
         # PID of the Playwright driver node process (parent of the
@@ -269,6 +269,36 @@ class ScraperEngine:
 
     @property
     def search_client(self) -> Any:
+        return self._search_client
+
+    def ensure_search_client(self) -> Any:
+        """Apply a newly saved Brave key without restarting the engine."""
+        if self._settings is None:
+            return self._search_client
+        try:
+            from app.services.ai.key_manager import get_cached_user_keys
+
+            key = (
+                get_cached_user_keys().get("brave", "").strip()
+                or os.environ.get("BRAVE_API_KEY", "").strip()
+            )
+            if key == (self._search_key or ""):
+                return self._search_client
+            if not key:
+                self._search_client = None
+                self._search_key = None
+                if self._orchestrator is not None:
+                    self._orchestrator.search_client = None
+                return None
+            self._settings.BRAVE_API_KEY = key
+            search_mod = _import_scraper("app.core.search")
+            self._search_client = search_mod.BraveSearchClient(self._settings)
+            self._search_key = key
+            if self._orchestrator is not None:
+                self._orchestrator.search_client = self._search_client
+            logger.info("[scraper/engine.py] Brave Search enabled from user key store")
+        except Exception:
+            logger.exception("[scraper/engine.py] Could not enable Brave Search")
         return self._search_client
 
     async def start(self) -> None:
@@ -368,6 +398,7 @@ class ScraperEngine:
         search_mod = _import_scraper("app.core.search")
         if self._settings.BRAVE_API_KEY:
             self._search_client = search_mod.BraveSearchClient(self._settings)
+            self._search_key = str(self._settings.BRAVE_API_KEY)
             logger.info("[scraper/engine.py] ScraperEngine: Brave Search configured ✓")
         else:
             logger.info("[scraper/engine.py] ScraperEngine: no BRAVE_API_KEY — search disabled")

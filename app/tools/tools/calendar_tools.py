@@ -15,10 +15,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from app.common.platform_ctx import PLATFORM
+from app.services.action_needed import os_permission_needed
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
 
@@ -38,42 +39,17 @@ _EK_ENTITY_EVENT = 0
 _EK_ENTITY_REMINDER = 1
 
 
-def _request_access_sync(entity_type: int, timeout: float = 5.0) -> bool:
-    """Request EKEventStore access for the given entity type. Blocks until the
-    TCC dialog is dismissed or timeout expires. Returns True if granted."""
-    import EventKit  # type: ignore[import]
-
-    result: list[bool] = [False]
-    event = threading.Event()
-
-    def handler(granted: bool, error: Any) -> None:
-        result[0] = granted
-        event.set()
-
-    store = EventKit.EKEventStore.alloc().init()
-    if entity_type == _EK_ENTITY_EVENT:
-        store.requestFullAccessToEventsWithCompletion_(handler)
-    else:
-        store.requestFullAccessToRemindersWithCompletion_(handler)
-
-    event.wait(timeout=timeout)
-    return result[0]
-
-
-def _get_authorized_store(entity_type: int) -> Any:
+def _get_authorized_store(entity_type: int, *, write: bool = False) -> Any:
     """Return an authorized EKEventStore or raise PermissionError."""
     import EventKit  # type: ignore[import]
 
     store = EventKit.EKEventStore.alloc().init()
     status = EventKit.EKEventStore.authorizationStatusForEntityType_(entity_type)
     # 0=notDetermined, 1=restricted, 2=denied, 3=fullAccess, 4=writeOnly
-    if status == 3:
+    if status == 3 or (write and status == 4):
         return store
     if status == 0:
-        granted = _request_access_sync(entity_type)
-        if granted:
-            return store
-        raise PermissionError("EKEventStore access denied after prompt.")
+        raise PermissionError("EKEventStore access has not been requested.")
     raise PermissionError(
         f"EKEventStore authorization status={status}. "
         + (_CALENDAR_HINT if entity_type == _EK_ENTITY_EVENT else _REMINDERS_HINT)
@@ -123,7 +99,6 @@ def _list_events_sync(
     calendar_names: list[str] | None,
     limit: int,
 ) -> list[dict[str, Any]]:
-    import EventKit  # type: ignore[import]
     import Foundation  # type: ignore[import]
 
     store = _get_authorized_store(_EK_ENTITY_EVENT)
@@ -167,7 +142,7 @@ async def tool_list_events(
             None, _list_events_sync, days_ahead, calendar_names, limit
         )
     except PermissionError as exc:
-        return ToolResult(output=f"Calendar permission denied. {_CALENDAR_HINT}\nDetail: {exc}", type=ToolResultType.ERROR)
+        return ToolResult(output=f"Calendar permission denied. {_CALENDAR_HINT}\nDetail: {exc}", type=ToolResultType.ERROR, action_needed=os_permission_needed(feature="Calendar events", permission_key="calendar", source="tool.calendar"))
     except Exception as exc:
         logger.exception("tool_list_events failed")
         return ToolResult(output=f"Failed to list events: {exc}", type=ToolResultType.ERROR)
@@ -190,7 +165,7 @@ def _create_event_sync(
     import EventKit  # type: ignore[import]
     import Foundation  # type: ignore[import]
 
-    store = _get_authorized_store(_EK_ENTITY_EVENT)
+    store = _get_authorized_store(_EK_ENTITY_EVENT, write=True)
 
     start_dt = datetime.fromisoformat(start_iso).astimezone(timezone.utc)
     end_dt = datetime.fromisoformat(end_iso).astimezone(timezone.utc)
@@ -246,7 +221,7 @@ async def tool_create_event(
             None, _create_event_sync, title, start, end, notes, calendar, all_day
         )
     except PermissionError as exc:
-        return ToolResult(output=f"Calendar permission denied. {_CALENDAR_HINT}\nDetail: {exc}", type=ToolResultType.ERROR)
+        return ToolResult(output=f"Calendar permission denied. {_CALENDAR_HINT}\nDetail: {exc}", type=ToolResultType.ERROR, action_needed=os_permission_needed(feature="Calendar events", permission_key="calendar", source="tool.calendar"))
     except Exception as exc:
         logger.exception("tool_create_event failed")
         return ToolResult(output=f"Failed to create event: {exc}", type=ToolResultType.ERROR)
@@ -259,8 +234,6 @@ async def tool_create_event(
 
 
 def _list_reminders_sync(list_names: list[str] | None, include_completed: bool, limit: int) -> list[dict[str, Any]]:
-    import EventKit  # type: ignore[import]
-
     store = _get_authorized_store(_EK_ENTITY_REMINDER)
 
     calendars = None
@@ -310,7 +283,7 @@ async def tool_list_reminders(
             None, _list_reminders_sync, list_names, include_completed, limit
         )
     except PermissionError as exc:
-        return ToolResult(output=f"Reminders permission denied. {_REMINDERS_HINT}\nDetail: {exc}", type=ToolResultType.ERROR)
+        return ToolResult(output=f"Reminders permission denied. {_REMINDERS_HINT}\nDetail: {exc}", type=ToolResultType.ERROR, action_needed=os_permission_needed(feature="Reminders", permission_key="reminders", source="tool.reminders"))
     except Exception as exc:
         logger.exception("tool_list_reminders failed")
         return ToolResult(output=f"Failed to list reminders: {exc}", type=ToolResultType.ERROR)
@@ -331,7 +304,7 @@ def _create_reminder_sync(
     import EventKit  # type: ignore[import]
     import Foundation  # type: ignore[import]
 
-    store = _get_authorized_store(_EK_ENTITY_REMINDER)
+    store = _get_authorized_store(_EK_ENTITY_REMINDER, write=True)
 
     reminder = EventKit.EKReminder.reminderWithEventStore_(store)
     reminder.setTitle_(title)
@@ -388,7 +361,7 @@ async def tool_create_reminder(
             None, _create_reminder_sync, title, notes, due, list_name
         )
     except PermissionError as exc:
-        return ToolResult(output=f"Reminders permission denied. {_REMINDERS_HINT}\nDetail: {exc}", type=ToolResultType.ERROR)
+        return ToolResult(output=f"Reminders permission denied. {_REMINDERS_HINT}\nDetail: {exc}", type=ToolResultType.ERROR, action_needed=os_permission_needed(feature="Reminders", permission_key="reminders", source="tool.reminders"))
     except Exception as exc:
         logger.exception("tool_create_reminder failed")
         return ToolResult(output=f"Failed to create reminder: {exc}", type=ToolResultType.ERROR)

@@ -10,6 +10,7 @@ import re
 import subprocess
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
+from app.services.action_needed import os_permission_needed
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
 
@@ -47,9 +48,22 @@ async def tool_applescript(
         error = stderr.decode("utf-8", errors="replace").strip()
 
         if proc.returncode != 0:
+            permission_denied = any(
+                marker in error.lower()
+                for marker in ("-1743", "not authorized", "not permitted")
+            )
             return ToolResult(
                 type=ToolResultType.ERROR,
                 output=f"AppleScript error:\n{error or output}",
+                action_needed=(
+                    os_permission_needed(
+                        feature="AppleScript automation",
+                        permission_key="automation",
+                        source="tool.applescript",
+                    )
+                    if permission_denied
+                    else None
+                ),
             )
 
         return ToolResult(

@@ -28,10 +28,6 @@ import pytest
 # provider import (same import-order fix the engine applies at startup).
 import matrx_ai.orchestrator  # noqa: F401
 
-# app.config ↔ app.common are mutually importing; app.common must win the
-# race (the engine's own entry modules import it first too).
-import app.common  # noqa: F401
-
 
 # ---------------------------------------------------------------------------
 # Helpers

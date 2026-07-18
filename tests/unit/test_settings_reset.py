@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import app.common  # noqa: F401 — initialize before app.config (known import cycle)
 from app.services.cloud_sync import settings_sync as module
 
 

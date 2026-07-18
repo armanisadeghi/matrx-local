@@ -277,6 +277,22 @@ export function Settings({
   const [apiKeyProviders, setApiKeyProviders] = useState<
     ApiKeyProviderStatus[]
   >([]);
+
+  // Exact action-needed deep links focus the provider that can resolve the
+  // requirement. Settings is keep-alive mounted, so rerun when the provider
+  // cards finish loading as well as when the URL changes.
+  useEffect(() => {
+    const provider = new URLSearchParams(location.search).get("provider");
+    if (activeTab !== "api-keys" || !provider || apiKeyProviders.length === 0) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const card = document.getElementById(`api-key-provider-${provider}`);
+      card?.scrollIntoView({ behavior: "smooth", block: "center" });
+      card?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeTab, apiKeyProviders.length, location.search]);
   const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
   const [apiKeyVisible, setApiKeyVisible] = useState<Record<string, boolean>>(
     {},
@@ -840,14 +856,6 @@ export function Settings({
       }));
       try {
         await engine.put(`/settings/api-keys/${provider}`, { key });
-        // For the HF token, also persist to llm.json via Rust so downloads work
-        // even when the Python engine is temporarily unreachable.
-        if (provider === "huggingface") {
-          const { invoke } = await import("@tauri-apps/api/core");
-          await invoke("save_hf_token", { token: key }).catch(() => {
-            /* non-fatal */
-          });
-        }
         setApiKeyProviders((prev) =>
           prev.map((p) =>
             p.provider === provider ? { ...p, configured: true } : p,
@@ -870,7 +878,35 @@ export function Settings({
         // Test the key we just saved. Catching a bad paste at the moment of
         // saving is the whole point — a key that silently doesn't work until a
         // download fails hours later is the failure mode we're removing.
-        void handleApiKeyTest(provider);
+        const validation = await handleApiKeyTest(provider);
+        const { actionNeededStore } = await import("@/features/action-needed");
+        if (validation?.verdict === "valid" || validation?.verdict === "unsupported") {
+          actionNeededStore.resolve(`api-key:${provider}`, Date.now());
+        } else if (validation) {
+          actionNeededStore.upsert({
+            fingerprint: `api-key:${provider}`,
+            code:
+              validation.verdict === "invalid"
+                ? "api_key_invalid"
+                : "api_key_unverified",
+            kind: "api_key",
+            feature: "provider-keys",
+            title:
+              validation.verdict === "invalid"
+                ? "This API key was rejected"
+                : "This API key could not be verified",
+            message: validation.message,
+            action: {
+              kind: "navigate",
+              label: "Review API key",
+              provider,
+              route: `/settings?tab=api-keys&provider=${encodeURIComponent(provider)}`,
+            },
+            source: `api-key-validation:${provider}`,
+            status: "active",
+            observed_at: Date.now(),
+          });
+        }
       } catch (err) {
         setApiKeyMessages((prev) => ({
           ...prev,
@@ -984,23 +1020,6 @@ export function Settings({
         // Verify everything that just landed, so a stale key pasted from an old
         // .env is caught here rather than at the first download.
         void handleTestAllKeys();
-        // Mirror the single-key save path: persist the HF token to llm.json
-        // via Rust so downloads work even when the engine is unreachable.
-        if (result.saved.includes("huggingface") && isTauri()) {
-          const hfEntry = toSave.find(
-            (e) =>
-              (e.provider ?? bulkCustomMapping[e.rawKey]) === "huggingface",
-          );
-          const hfKey = hfEntry
-            ? (bulkEditedValues[hfEntry.rawKey] ?? hfEntry.rawValue).trim()
-            : "";
-          if (hfKey) {
-            const { invoke } = await import("@tauri-apps/api/core");
-            await invoke("save_hf_token", { token: hfKey }).catch(() => {
-              /* non-fatal */
-            });
-          }
-        }
       }
       // Do NOT clear the form — let the user see what was saved vs errored
     } catch (err) {
@@ -2514,7 +2533,12 @@ export function Settings({
                     const canTest =
                       p.testable && (canSave || p.configured) && !testing;
                     return (
-                      <Card key={p.provider}>
+                      <Card
+                        key={p.provider}
+                        id={`api-key-provider-${p.provider}`}
+                        tabIndex={-1}
+                        className="focus-visible:ring-2 focus-visible:ring-primary"
+                      >
                         <CardContent className="py-4">
                           <div className="flex items-start gap-3">
                             <div className="min-w-0 flex-1 space-y-2">

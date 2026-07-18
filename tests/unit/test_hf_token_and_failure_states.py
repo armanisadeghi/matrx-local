@@ -303,6 +303,13 @@ def test_hf_401_with_dead_token_asks_to_replace_it():
     assert classified.resolution.code == "hf_token_invalid"
 
 
+@pytest.mark.parametrize("verdict", ["unknown", "unavailable", ""])
+def test_hf_inconclusive_token_validation_never_guesses_license(verdict):
+    original = _http_401(403)
+    classified = _classify(original, token="hf_unverified", verdict=verdict)
+    assert classified is original
+
+
 def test_non_auth_error_passes_through_unclassified():
     exc = Exception("boom")
     exc.response = SimpleNamespace(status_code=500)  # type: ignore[attr-defined]
@@ -410,6 +417,50 @@ def test_civitai_inspect_errors_attribute_saved_key_correctly(
     )
 
     assert expected in str(err)
+
+
+@pytest.mark.parametrize(
+    "token,verdict,expected_status,expected_text,forbidden_text",
+    [
+        (None, "unknown", 401, "Hugging Face token", "could not be verified"),
+        ("hf_saved", "invalid", 401, "did not accept the token", "license"),
+        ("hf_saved", "valid", 401, "gated model", "Add your Hugging Face token"),
+        (
+            "hf_saved",
+            "unknown",
+            503,
+            "could not be verified",
+            "accept their license",
+        ),
+    ],
+)
+def test_custom_hf_inspection_uses_shared_auth_attribution(
+    monkeypatch, token, verdict, expected_status, expected_text, forbidden_text
+):
+    from app.services.ai import key_validation
+    from app.services.image_gen import custom_models
+
+    request = httpx.Request("GET", "https://huggingface.co/api/models/org/model")
+    response = httpx.Response(403, request=request)
+
+    async def denied(*_args, **_kwargs):
+        raise httpx.HTTPStatusError(
+            "denied", request=request, response=response
+        )
+
+    async def validate(*_args, **_kwargs):
+        return SimpleNamespace(verdict=verdict, message="validator result")
+
+    monkeypatch.setattr(custom_models, "_http_get_json", denied)
+    monkeypatch.setattr(custom_models, "read_hf_token", lambda: token)
+    monkeypatch.setattr(key_validation, "validate_key", validate)
+
+    with pytest.raises(custom_models.InspectError) as raised:
+        asyncio.run(custom_models.resolve_hf("org/model"))
+
+    assert raised.value.status_code == expected_status
+    assert expected_text in str(raised.value)
+    assert forbidden_text not in str(raised.value)
 
 
 def test_stale_installer_message_becomes_packages_prompt():

@@ -7,12 +7,18 @@ import sqlite3
 import threading
 import time
 import math
+import uuid
 from array import array
 from pathlib import Path
 from typing import Iterable
 
+import psutil
+
 from app.services.filesystem.models import FileEntry, Place, entry_kind, is_hidden
 from app.services.filesystem.roots import normalize_path_key
+
+_DIRECTORY_LEASE_SECONDS = 300.0
+_DIRECTORY_LEASE_REFRESH_SECONDS = 30.0
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -54,6 +60,10 @@ CREATE TABLE IF NOT EXISTS filesystem_scan_queue (
     priority INTEGER NOT NULL,
     updated_at REAL NOT NULL,
     claimed_at REAL,
+    claim_owner TEXT,
+    claim_token TEXT,
+    claim_pid INTEGER,
+    claim_process_started_at REAL,
     attempts INTEGER NOT NULL DEFAULT 0,
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
     last_error_kind TEXT,
@@ -119,6 +129,9 @@ class FilesystemIndex:
     def __init__(self, db_path: Path) -> None:
         self.path = db_path
         self.fts_available = False
+        self._claim_pid = os.getpid()
+        self._claim_process_started_at = _process_started_at(self._claim_pid)
+        self._claim_owner = uuid.uuid4().hex
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10)
@@ -127,6 +140,7 @@ class FilesystemIndex:
         return connection
 
     def initialize(self) -> None:
+        self._ensure_claim_identity()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as db:
             db.executescript(_SCHEMA)
@@ -135,6 +149,16 @@ class FilesystemIndex:
                 db.execute("ALTER TABLE filesystem_scan_queue ADD COLUMN claimed_at REAL")
             if "attempts" not in columns:
                 db.execute("ALTER TABLE filesystem_scan_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+            for name, declaration in (
+                ("claim_owner", "TEXT"),
+                ("claim_token", "TEXT"),
+                ("claim_pid", "INTEGER"),
+                ("claim_process_started_at", "REAL"),
+            ):
+                if name not in columns:
+                    db.execute(
+                        f"ALTER TABLE filesystem_scan_queue ADD COLUMN {name} {declaration}"
+                    )
             if "consecutive_failures" not in columns:
                 db.execute(
                     "ALTER TABLE filesystem_scan_queue "
@@ -194,14 +218,7 @@ class FilesystemIndex:
                     (_path_key(row["path"]), row["rowid"]),
                 )
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_filesystem_embeddings_key_model ON filesystem_embeddings(path_key,model)")
-            # Directory leases belong to this single local engine process. If
-            # it exits while scanning, no worker remains that can complete the
-            # persisted claim, so make it immediately available on startup.
-            # Retry deadlines and failure diagnostics remain intact.
-            db.execute(
-                "UPDATE filesystem_scan_queue SET claimed_at=NULL "
-                "WHERE claimed_at IS NOT NULL"
-            )
+            self._recover_orphaned_claims(db)
             # A process may have exited during optional enrichment. Leases are
             # process-local, so return those rows to the durable queue.
             db.execute("UPDATE filesystem_entries SET content_state='not_indexed' WHERE content_state='indexing'")
@@ -228,6 +245,41 @@ class FilesystemIndex:
             except sqlite3.OperationalError:
                 self.fts_available = False
 
+    def _ensure_claim_identity(self) -> None:
+        """Regenerate the session identity if this object crossed a fork."""
+        pid = os.getpid()
+        if pid == self._claim_pid:
+            return
+        self._claim_pid = pid
+        self._claim_process_started_at = _process_started_at(pid)
+        self._claim_owner = uuid.uuid4().hex
+
+    def _recover_orphaned_claims(self, db: sqlite3.Connection) -> None:
+        """Release only leases whose owning process is no longer alive."""
+        claims = db.execute(
+            """SELECT DISTINCT claim_owner,claim_pid,claim_process_started_at
+               FROM filesystem_scan_queue WHERE claimed_at IS NOT NULL"""
+        ).fetchall()
+        for claim in claims:
+            owner = claim["claim_owner"]
+            pid = claim["claim_pid"]
+            started_at = claim["claim_process_started_at"]
+            if owner and _process_identity_is_live(pid, started_at):
+                continue
+            if owner is None:
+                predicate = "claim_owner IS NULL"
+                params: tuple[object, ...] = ()
+            else:
+                predicate = "claim_owner=?"
+                params = (owner,)
+            db.execute(
+                f"""UPDATE filesystem_scan_queue SET claimed_at=NULL,
+                       claim_owner=NULL,claim_token=NULL,claim_pid=NULL,
+                       claim_process_started_at=NULL
+                    WHERE claimed_at IS NOT NULL AND {predicate}""",
+                params,
+            )
+
     def sync_roots(self, roots: Iterable[Place]) -> None:
         roots = list(roots)
         now = time.time()
@@ -236,16 +288,36 @@ class FilesystemIndex:
             for root in roots
         ]
         with self._connect() as db:
-            db.execute("DELETE FROM filesystem_roots")
+            existing_paths = {
+                str(row["id"]): str(row["path"])
+                for row in db.execute("SELECT id,path FROM filesystem_roots")
+            }
             active_ids = [root.id for root in roots]
+            for root in roots:
+                previous_path = existing_paths.get(root.id)
+                if previous_path is None or previous_path == root.path:
+                    continue
+                # A stable configured ID can move to a different path. Cancel
+                # all work owned by the old location; claim-token validation
+                # prevents an in-flight old scan from committing afterward.
+                db.execute(
+                    "DELETE FROM filesystem_scan_queue WHERE root_id=?",
+                    (root.id,),
+                )
+                self._delete_scanned_descendants(db, previous_path)
             if active_ids:
                 placeholders = ",".join("?" for _ in active_ids)
                 db.execute(
                     f"DELETE FROM filesystem_scan_queue WHERE root_id NOT IN ({placeholders})",
                     active_ids,
                 )
+                db.execute(
+                    f"DELETE FROM filesystem_roots WHERE id NOT IN ({placeholders})",
+                    active_ids,
+                )
             else:
                 db.execute("DELETE FROM filesystem_scan_queue")
+                db.execute("DELETE FROM filesystem_roots")
             db.executemany(
                 """INSERT INTO filesystem_roots
                    (id,label,path,category,priority,available,configured,updated_at)
@@ -257,17 +329,25 @@ class FilesystemIndex:
                 values,
             )
             for root in roots:
+                # Priority is authored policy, not a monotonic score. Recompute
+                # every outstanding row without disturbing its lease or retry.
+                db.execute(
+                    "UPDATE filesystem_scan_queue SET priority=?-depth WHERE root_id=?",
+                    (root.priority * 1000, root.id),
+                )
                 if root.available:
                     db.execute(
                         """INSERT INTO filesystem_scan_queue(path,root_id,depth,priority,updated_at)
                            VALUES(?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET
-                           root_id=excluded.root_id, priority=MAX(priority,excluded.priority),
+                           root_id=excluded.root_id,depth=excluded.depth,
+                           priority=excluded.priority,
                            updated_at=excluded.updated_at""",
                         (root.path, root.id, 0, root.priority * 1000, now),
                     )
 
-    def pop_next_directory(self, *, fair: bool = False) -> tuple[str, str, int, int] | None:
-        lease_cutoff = time.time() - 300.0
+    def pop_next_directory(self, *, fair: bool = False) -> tuple[str, str, int, int, str] | None:
+        self._ensure_claim_identity()
+        lease_cutoff = time.time() - _DIRECTORY_LEASE_SECONDS
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             order = (
@@ -285,15 +365,36 @@ class FilesystemIndex:
             ).fetchone()
             if row is None:
                 return None
-            db.execute(
-                "UPDATE filesystem_scan_queue SET claimed_at=?,attempts=attempts+1 WHERE path=?",
-                (time.time(), row["path"]),
+            claimed_at = time.time()
+            claim_token = uuid.uuid4().hex
+            updated = db.execute(
+                """UPDATE filesystem_scan_queue SET claimed_at=?,claim_owner=?,
+                       claim_token=?,claim_pid=?,claim_process_started_at=?,
+                       attempts=attempts+1 WHERE path=?
+                       AND (claimed_at IS NULL OR claimed_at < ?)""",
+                (
+                    claimed_at,
+                    self._claim_owner,
+                    claim_token,
+                    self._claim_pid,
+                    self._claim_process_started_at,
+                    row["path"],
+                    lease_cutoff,
+                ),
             )
+            if updated.rowcount != 1:
+                return None
             db.execute(
                 "UPDATE filesystem_roots SET last_claimed_at=? WHERE id=?",
-                (time.time(), row["root_id"]),
+                (claimed_at, row["root_id"]),
             )
-            return str(row["path"]), str(row["root_id"]), int(row["depth"]), int(row["priority"])
+            return (
+                str(row["path"]),
+                str(row["root_id"]),
+                int(row["depth"]),
+                int(row["priority"]),
+                claim_token,
+            )
 
     def index_directory(
         self,
@@ -301,11 +402,14 @@ class FilesystemIndex:
         root_id: str,
         depth: int,
         priority: int,
+        claim_token: str,
         stop_event: threading.Event | None = None,
     ) -> int:
-        now = time.time()
+        del priority  # The current root policy is read transactionally at commit.
+        scan_started = time.time()
         rows: list[tuple[object, ...]] = []
-        children: list[tuple[str, str, int, int, float]] = []
+        children: list[tuple[str, int]] = []
+        next_lease_refresh = time.monotonic() + _DIRECTORY_LEASE_REFRESH_SECONDS
         try:
             parent_device = os.stat(path, follow_symlinks=False).st_dev
         except OSError:
@@ -314,12 +418,23 @@ class FilesystemIndex:
         with iterator:
             for item in iterator:
                 if stop_event is not None and stop_event.is_set():
-                    self.release_directory(path)
+                    self.release_directory(path, claim_token)
                     return 0
+                if time.monotonic() >= next_lease_refresh:
+                    if not self._renew_directory(path, claim_token):
+                        return 0
+                    next_lease_refresh = (
+                        time.monotonic() + _DIRECTORY_LEASE_REFRESH_SECONDS
+                    )
                 try:
                     info = item.stat(follow_symlinks=False)
-                except OSError:
+                except FileNotFoundError:
+                    # Concurrent deletion is a successfully observed absence.
                     continue
+                except OSError:
+                    # Permission, device, and network failures are incomplete
+                    # observations. Preserve the prior index and retry.
+                    raise
                 kind = entry_kind(info.st_mode)
                 absolute = os.path.abspath(item.path)
                 suffix = Path(item.name).suffix.lower() or None
@@ -328,7 +443,7 @@ class FilesystemIndex:
                         absolute, _path_key(absolute), os.path.abspath(path),
                         _path_key(path), root_id, item.name, kind,
                         info.st_size if kind == "file" else 0, info.st_mtime,
-                        is_hidden(item.name, info), suffix, now,
+                        is_hidden(item.name, info), suffix, scan_started,
                     )
                 )
                 if (
@@ -336,12 +451,26 @@ class FilesystemIndex:
                     and not _should_skip_directory(item.name)
                     and (parent_device is None or info.st_dev == parent_device)
                 ):
-                    children.append((absolute, root_id, depth + 1, priority - 1, now))
-        self._delete_missing_children(path, {str(row[1]) for row in rows}, now)
+                    children.append((absolute, depth + 1))
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            owned_claim = db.execute(
+                """SELECT 1 FROM filesystem_scan_queue
+                   WHERE path=? AND claim_owner=? AND claim_token=?""",
+                (os.path.abspath(path), self._claim_owner, claim_token),
+            ).fetchone()
+            if owned_claim is None:
+                return 0
             root_active = db.execute(
-                "SELECT 1 FROM filesystem_roots WHERE id=?", (root_id,)
-            ).fetchone() is not None
+                "SELECT priority,available FROM filesystem_roots WHERE id=?",
+                (root_id,),
+            ).fetchone()
+            self._delete_missing_children(
+                db,
+                path,
+                {str(row[1]) for row in rows},
+                scan_started,
+            )
             db.executemany(
                 """INSERT INTO filesystem_entries
                    (path,path_key,parent_path,parent_key,root_id,name,kind,size,modified_at,hidden,extension,indexed_at)
@@ -354,65 +483,128 @@ class FilesystemIndex:
                    content_state=CASE WHEN filesystem_entries.modified_at IS NOT excluded.modified_at
                      THEN 'not_indexed' ELSE filesystem_entries.content_state END,
                    embedding_state=CASE WHEN filesystem_entries.modified_at IS NOT excluded.modified_at
-                     THEN 'not_indexed' ELSE filesystem_entries.embedding_state END""",
+                     THEN 'not_indexed' ELSE filesystem_entries.embedding_state END
+                   WHERE filesystem_entries.indexed_at <= excluded.indexed_at""",
                 rows,
             )
-            if root_active:
+            if root_active is not None and bool(root_active["available"]):
+                root_priority = int(root_active["priority"]) * 1000
                 db.executemany(
-                        """INSERT INTO filesystem_scan_queue(path,root_id,depth,priority,updated_at)
+                    """INSERT INTO filesystem_scan_queue(path,root_id,depth,priority,updated_at)
                        SELECT ?,?,?,?,? WHERE NOT EXISTS
                        (SELECT 1 FROM filesystem_scanned_dirs WHERE path=? AND scanned_at>=?)
                        ON CONFLICT(path) DO UPDATE SET
-                       priority=MAX(priority,excluded.priority),updated_at=excluded.updated_at""",
-                    [(*child, child[0], now - 21600.0) for child in children],
+                       root_id=CASE WHEN excluded.priority > priority
+                         THEN excluded.root_id ELSE root_id END,
+                       depth=CASE WHEN excluded.priority > priority
+                         THEN excluded.depth ELSE depth END,
+                       priority=MAX(priority,excluded.priority),
+                       updated_at=excluded.updated_at""",
+                    [
+                        (
+                            child_path,
+                            root_id,
+                            child_depth,
+                            root_priority - child_depth,
+                            scan_started,
+                            child_path,
+                            scan_started - 21600.0,
+                        )
+                        for child_path, child_depth in children
+                    ],
                 )
             db.execute(
                 "INSERT OR REPLACE INTO filesystem_scanned_dirs(path,scanned_at) VALUES(?,?)",
-                (os.path.abspath(path), now),
+                (os.path.abspath(path), scan_started),
             )
-            db.execute("DELETE FROM filesystem_scan_queue WHERE path=?", (os.path.abspath(path),))
+            completed = db.execute(
+                """DELETE FROM filesystem_scan_queue
+                   WHERE path=? AND claim_owner=? AND claim_token=?""",
+                (os.path.abspath(path), self._claim_owner, claim_token),
+            )
+            if completed.rowcount != 1:
+                raise sqlite3.OperationalError("filesystem directory claim changed during commit")
             db.execute(
                 "INSERT OR REPLACE INTO filesystem_index_state(key,value) VALUES('last_scan_at',?)",
-                (str(now),),
+                (str(scan_started),),
             )
         return len(rows)
 
-    def complete_directory(self, path: str) -> None:
+    def complete_directory(self, path: str, claim_token: str) -> bool:
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            owned = db.execute(
+                """SELECT 1 FROM filesystem_scan_queue
+                   WHERE path=? AND claim_owner=? AND claim_token=?""",
+                (os.path.abspath(path), self._claim_owner, claim_token),
+            ).fetchone()
+            if owned is None:
+                return False
             db.execute(
                 "INSERT OR REPLACE INTO filesystem_scanned_dirs(path,scanned_at) VALUES(?,?)",
                 (os.path.abspath(path), time.time()),
             )
-            db.execute("DELETE FROM filesystem_scan_queue WHERE path=?", (os.path.abspath(path),))
-
-    def release_directory(self, path: str) -> None:
-        with self._connect() as db:
             db.execute(
-                "UPDATE filesystem_scan_queue SET claimed_at=NULL,updated_at=? WHERE path=?",
-                (time.time(), os.path.abspath(path)),
+                """DELETE FROM filesystem_scan_queue
+                   WHERE path=? AND claim_owner=? AND claim_token=?""",
+                (os.path.abspath(path), self._claim_owner, claim_token),
             )
+            return True
 
-    def fail_directory(self, path: str, error: OSError) -> float:
+    def _renew_directory(self, path: str, claim_token: str) -> bool:
+        with self._connect() as db:
+            renewed = db.execute(
+                """UPDATE filesystem_scan_queue SET claimed_at=?
+                   WHERE path=? AND claim_owner=? AND claim_token=?""",
+                (
+                    time.time(),
+                    os.path.abspath(path),
+                    self._claim_owner,
+                    claim_token,
+                ),
+            )
+            return renewed.rowcount == 1
+
+    def release_directory(self, path: str, claim_token: str) -> bool:
+        with self._connect() as db:
+            released = db.execute(
+                """UPDATE filesystem_scan_queue SET claimed_at=NULL,
+                       claim_owner=NULL,claim_token=NULL,claim_pid=NULL,
+                       claim_process_started_at=NULL,updated_at=?
+                   WHERE path=? AND claim_owner=? AND claim_token=?""",
+                (
+                    time.time(),
+                    os.path.abspath(path),
+                    self._claim_owner,
+                    claim_token,
+                ),
+            )
+            return released.rowcount == 1
+
+    def fail_directory(self, path: str, error: OSError, claim_token: str) -> float | None:
         """Release a failed scan with bounded retry and durable diagnostics."""
         absolute = os.path.abspath(path)
         now = time.time()
         with self._connect() as db:
             row = db.execute(
-                "SELECT consecutive_failures FROM filesystem_scan_queue WHERE path=?",
-                (absolute,),
+                """SELECT consecutive_failures FROM filesystem_scan_queue
+                   WHERE path=? AND claim_owner=? AND claim_token=?""",
+                (absolute, self._claim_owner, claim_token),
             ).fetchone()
-            consecutive_failures = (
-                max(0, int(row["consecutive_failures"])) + 1 if row is not None else 1
-            )
+            if row is None:
+                return None
+            consecutive_failures = max(0, int(row["consecutive_failures"])) + 1
             retry_delay = min(
                 6 * 60 * 60,
                 30 * (2 ** min(consecutive_failures - 1, 10)),
             )
-            db.execute(
+            failed = db.execute(
                 """UPDATE filesystem_scan_queue SET claimed_at=NULL,
+                   claim_owner=NULL,claim_token=NULL,claim_pid=NULL,
+                   claim_process_started_at=NULL,
                    consecutive_failures=?,
                    last_error_kind=?,last_error=?,last_failed_at=?,next_retry_at=?,updated_at=?
-                   WHERE path=?""",
+                   WHERE path=? AND claim_owner=? AND claim_token=?""",
                 (
                     consecutive_failures,
                     type(error).__name__,
@@ -421,22 +613,31 @@ class FilesystemIndex:
                     now + retry_delay,
                     now,
                     absolute,
+                    self._claim_owner,
+                    claim_token,
                 ),
             )
+            if failed.rowcount != 1:
+                return None
         return float(retry_delay)
 
-    def _delete_missing_children(self, parent: str, current_keys: set[str], scan_started: float) -> None:
+    def _delete_missing_children(
+        self,
+        db: sqlite3.Connection,
+        parent: str,
+        current_keys: set[str],
+        scan_started: float,
+    ) -> None:
         parent_key = _path_key(parent)
-        with self._connect() as db:
-            existing = {
-                str(row["path_key"]): str(row["path"])
-                for row in db.execute(
-                    "SELECT path,path_key FROM filesystem_entries WHERE parent_key=? AND indexed_at<?",
-                    (parent_key, scan_started),
-                )
-            }
+        existing = {
+            str(row["path_key"]): str(row["path"])
+            for row in db.execute(
+                "SELECT path,path_key FROM filesystem_entries WHERE parent_key=? AND indexed_at<?",
+                (parent_key, scan_started),
+            )
+        }
         for stale_key in set(existing) - current_keys:
-            self.delete_path(existing[stale_key])
+            self._delete_path(db, existing[stale_key], freshness_cutoff=scan_started)
 
     def upsert_path(self, path: str, root_id: str = "watch") -> None:
         absolute = os.path.abspath(path)
@@ -481,31 +682,83 @@ class FilesystemIndex:
                 )
 
     def delete_path(self, path: str) -> None:
-        key = _path_key(path)
         with self._connect() as db:
-            rows = db.execute(
-                """WITH RECURSIVE descendants(path_key) AS (
-                     SELECT ? UNION ALL
-                     SELECT e.path_key FROM filesystem_entries e
-                     JOIN descendants d ON e.parent_key=d.path_key
-                   )
-                   SELECT e.path,e.path_key FROM filesystem_entries e
-                   JOIN descendants d ON d.path_key=e.path_key""",
-                (key,),
-            ).fetchall()
-            paths = [str(row["path"]) for row in rows]
-            keys = [str(row["path_key"]) for row in rows]
-            if paths:
-                db.executemany("DELETE FROM filesystem_content_fts WHERE path=?", [(value,) for value in paths])
-                db.executemany("DELETE FROM filesystem_content WHERE path_key=?", [(value,) for value in keys])
-                db.executemany("DELETE FROM filesystem_embeddings WHERE path_key=?", [(value,) for value in keys])
-                db.executemany("DELETE FROM filesystem_entries WHERE path_key=?", [(value,) for value in reversed(keys)])
-            queued = [str(row["path"]) for row in db.execute("SELECT path FROM filesystem_scan_queue")]
-            stale_queue = [queued_path for queued_path in queued if _is_same_or_descendant(queued_path, path)]
-            db.executemany("DELETE FROM filesystem_scan_queue WHERE path=?", [(value,) for value in stale_queue])
-            scanned = [str(row["path"]) for row in db.execute("SELECT path FROM filesystem_scanned_dirs")]
-            stale_scanned = [scanned_path for scanned_path in scanned if _is_same_or_descendant(scanned_path, path)]
-            db.executemany("DELETE FROM filesystem_scanned_dirs WHERE path=?", [(value,) for value in stale_scanned])
+            self._delete_path(db, path)
+
+    def _delete_path(
+        self,
+        db: sqlite3.Connection,
+        path: str,
+        *,
+        freshness_cutoff: float | None = None,
+    ) -> bool:
+        """Delete a subtree on one transaction, unless a watcher made it newer."""
+        key = _path_key(path)
+        rows = db.execute(
+            """WITH RECURSIVE descendants(path_key) AS (
+                 SELECT ? UNION ALL
+                 SELECT e.path_key FROM filesystem_entries e
+                 JOIN descendants d ON e.parent_key=d.path_key
+               )
+               SELECT e.path,e.path_key,e.indexed_at FROM filesystem_entries e
+               JOIN descendants d ON d.path_key=e.path_key""",
+            (key,),
+        ).fetchall()
+        if freshness_cutoff is not None and any(
+            float(row["indexed_at"]) >= freshness_cutoff for row in rows
+        ):
+            return False
+        paths = [str(row["path"]) for row in rows]
+        keys = [str(row["path_key"]) for row in rows]
+        if paths:
+            db.executemany(
+                "DELETE FROM filesystem_content_fts WHERE path=?",
+                [(value,) for value in paths],
+            )
+            db.executemany(
+                "DELETE FROM filesystem_content WHERE path_key=?",
+                [(value,) for value in keys],
+            )
+            db.executemany(
+                "DELETE FROM filesystem_embeddings WHERE path_key=?",
+                [(value,) for value in keys],
+            )
+            db.executemany(
+                "DELETE FROM filesystem_entries WHERE path_key=?",
+                [(value,) for value in reversed(keys)],
+            )
+        queued = [
+            str(row["path"])
+            for row in db.execute("SELECT path FROM filesystem_scan_queue")
+        ]
+        stale_queue = [
+            queued_path
+            for queued_path in queued
+            if _is_same_or_descendant(queued_path, path)
+        ]
+        db.executemany(
+            "DELETE FROM filesystem_scan_queue WHERE path=?",
+            [(value,) for value in stale_queue],
+        )
+        self._delete_scanned_descendants(db, path)
+        return True
+
+    def _delete_scanned_descendants(
+        self, db: sqlite3.Connection, path: str
+    ) -> None:
+        scanned = [
+            str(row["path"])
+            for row in db.execute("SELECT path FROM filesystem_scanned_dirs")
+        ]
+        stale_scanned = [
+            scanned_path
+            for scanned_path in scanned
+            if _is_same_or_descendant(scanned_path, path)
+        ]
+        db.executemany(
+            "DELETE FROM filesystem_scanned_dirs WHERE path=?",
+            [(value,) for value in stale_scanned],
+        )
 
     def search(self, query: str, *, limit: int, offset: int, root: str | None = None) -> list[FileEntry]:
         params: list[object]
@@ -550,7 +803,7 @@ class FilesystemIndex:
     def scan_status(self, *, failure_limit: int = 25) -> dict[str, object]:
         """Return queue progress without hiding inaccessible/failed locations."""
         now = time.time()
-        lease_cutoff = now - 300.0
+        lease_cutoff = now - _DIRECTORY_LEASE_SECONDS
         with self._connect() as db:
             counts = db.execute(
                 """SELECT COUNT(*) AS total,
@@ -840,6 +1093,30 @@ def _should_skip_directory(name: str) -> bool:
         ".git", ".hg", ".svn", "__pycache__", "node_modules", ".cache",
         "$recycle.bin", "system volume information",
     }
+
+
+def _process_started_at(pid: int) -> float | None:
+    try:
+        return float(psutil.Process(pid).create_time())
+    except (psutil.Error, OSError):
+        return None
+
+
+def _process_identity_is_live(pid: object, started_at: object) -> bool:
+    if not isinstance(pid, int) or not isinstance(started_at, (int, float)):
+        return False
+    try:
+        process = psutil.Process(pid)
+        return (
+            process.is_running()
+            and process.status() != psutil.STATUS_ZOMBIE
+            and abs(float(process.create_time()) - float(started_at)) < 0.01
+        )
+    except psutil.AccessDenied:
+        # Do not steal a lease merely because the OS hides another process.
+        return True
+    except (psutil.Error, OSError):
+        return False
 
 
 def _fts_query(query: str) -> str:

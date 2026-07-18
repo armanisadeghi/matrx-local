@@ -38,6 +38,16 @@ from pydantic import BaseModel
 
 from app.common.background_tasks import fire_and_forget
 from app.common.system_logger import get_logger
+from app.services.ai.provider_grants import (
+    CHAT_PROVIDERS,
+    ENDPOINT_TO_PROVIDER,
+    PROVIDER_GRANTS,
+)
+from app.services.action_needed import (
+    ActionNeeded,
+    ActionNeededAction,
+    ActionNeededKind,
+)
 from app.tools.tool_schemas import (
     generate_all_tool_schemas,
     get_anthropic_tools,
@@ -49,28 +59,10 @@ _agents_sync_task: "asyncio.Task | None" = None
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-# ---------------------------------------------------------------------------
-# Endpoint → provider label mapping (from matrx_ai endpoints field)
-# ---------------------------------------------------------------------------
-_ENDPOINT_TO_PROVIDER: dict[str, str] = {
-    "anthropic_chat": "anthropic",
-    "anthropic_adaptive": "anthropic",
-    "openai_chat": "openai",
-    "google_chat": "google",
-    "groq_chat": "groq",
-    "together_chat": "together",
-    "xai_chat": "xai",
-    "cerebras_chat": "cerebras",
-}
-
-# Providers whose keys we'd realistically have installed locally
-_SUPPORTED_PROVIDERS = {"anthropic", "openai", "google", "groq", "together", "xai", "cerebras"}
-
-
 def _endpoint_to_provider(endpoints: list[str]) -> str | None:
     for ep in endpoints:
-        p = _ENDPOINT_TO_PROVIDER.get(ep)
-        if p in _SUPPORTED_PROVIDERS:
+        p = ENDPOINT_TO_PROVIDER.get(ep)
+        if p in CHAT_PROVIDERS:
             return p
     return None
 
@@ -547,15 +539,7 @@ async def ai_provider_status() -> dict[str, Any]:
     # User API keys live in the app's local key store. Do not infer a user's
     # configured providers from process environment variables: those are a
     # developer/runtime concern, not persisted user settings.
-    providers = (
-        "anthropic",
-        "openai",
-        "google",
-        "groq",
-        "together",
-        "xai",
-        "cerebras",
-    )
+    providers = sorted(CHAT_PROVIDERS)
     user_keys = get_cached_user_keys()
 
     available: list[str] = []
@@ -603,6 +587,79 @@ async def ai_provider_status() -> dict[str, Any]:
         },
         "local_llm": local_llm,
     }
+
+
+class ProviderReadiness(BaseModel):
+    provider: str
+    ready: bool
+    action_needed: ActionNeeded | None = None
+
+
+@router.get("/provider-readiness/{provider}", response_model=ProviderReadiness)
+async def provider_readiness(provider: str) -> ProviderReadiness:
+    """Preflight the exact cloud provider selected for the next chat turn."""
+    provider = provider.strip().lower()
+    if provider not in CHAT_PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"Unknown chat provider '{provider}'")
+
+    from app.services.ai.key_manager import get_cached_user_keys
+
+    if get_cached_user_keys().get(provider, "").strip():
+        from app.services.local_db.repositories import ApiKeysRepo
+
+        try:
+            validation = (await ApiKeysRepo().get_validations()).get(provider) or {}
+        except RuntimeError:
+            # The cached key is authoritative for readiness; persisted
+            # validation is advisory and may be unavailable during early boot.
+            validation = {}
+        if validation.get("verdict") != "invalid":
+            return ProviderReadiness(provider=provider, ready=True)
+
+        spec = PROVIDER_GRANTS[provider]
+        return ProviderReadiness(
+            provider=provider,
+            ready=False,
+            action_needed=ActionNeeded(
+                fingerprint=f"api-key:{provider}",
+                code="api_key_invalid",
+                kind=ActionNeededKind.API_KEY,
+                feature="chat",
+                title=f"Update your {spec.label} API key",
+                message="The provider rejected the saved key. Replace it before sending this message.",
+                action=ActionNeededAction(
+                    kind="settings_api_keys",
+                    label="Update API key",
+                    provider=provider,
+                    route=f"/settings?tab=api-keys&provider={provider}",
+                ),
+                source="chat.provider_readiness",
+            ),
+        )
+
+    spec = PROVIDER_GRANTS[provider]
+    return ProviderReadiness(
+        provider=provider,
+        ready=False,
+        action_needed=ActionNeeded(
+            fingerprint=f"api-key:{provider}",
+            code="api_key_missing",
+            kind=ActionNeededKind.API_KEY,
+            feature="chat",
+            title=f"Add your {spec.label} API key",
+            message=(
+                f"The selected model uses {spec.label}. Save that provider's key "
+                "before sending this message."
+            ),
+            action=ActionNeededAction(
+                kind="settings_api_keys",
+                label="Add API key",
+                provider=provider,
+                route=f"/settings?tab=api-keys&provider={provider}",
+            ),
+            source="chat.provider_readiness",
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

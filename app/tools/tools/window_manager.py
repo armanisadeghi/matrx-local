@@ -7,6 +7,7 @@ import json
 import logging
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
+from app.services.action_needed import os_permission_needed
 from app.tools.session import ToolSession
 from app.tools.tools import NO_GUI_MSG, has_display
 from app.tools.types import ToolResult, ToolResultType
@@ -86,7 +87,19 @@ end tell
         msg = (
             friendly or f"AppleScript error: {stderr.decode(errors='replace').strip()}"
         )
-        return ToolResult(type=ToolResultType.ERROR, output=msg)
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=msg,
+            action_needed=(
+                os_permission_needed(
+                    feature="Window management",
+                    permission_key="accessibility",
+                    source="tool.window-manager",
+                )
+                if friendly
+                else None
+            ),
+        )
 
     windows = []
     for line in stdout.decode().strip().split("\n"):
@@ -285,7 +298,19 @@ end tell
             if proc.returncode != 0:
                 friendly = _check_applescript_error(stderr)
                 msg = friendly or stderr.decode(errors="replace").strip()
-                return ToolResult(type=ToolResultType.ERROR, output=msg)
+                return ToolResult(
+                    type=ToolResultType.ERROR,
+                    output=msg,
+                    action_needed=(
+                        os_permission_needed(
+                            feature="Window focus",
+                            permission_key="accessibility",
+                            source="tool.window-manager",
+                        )
+                        if friendly
+                        else None
+                    ),
+                )
             return ToolResult(output=stdout.decode().strip() or f"Focused: {app_name}")
 
         elif PLATFORM["is_windows"]:
@@ -375,7 +400,19 @@ end tell
             if proc.returncode != 0:
                 friendly = _check_applescript_error(stderr)
                 msg = friendly or stderr.decode(errors="replace").strip()
-                return ToolResult(type=ToolResultType.ERROR, output=msg)
+                return ToolResult(
+                    type=ToolResultType.ERROR,
+                    output=msg,
+                    action_needed=(
+                        os_permission_needed(
+                            feature="Move and resize windows",
+                            permission_key="accessibility",
+                            source="tool.window-manager",
+                        )
+                        if friendly
+                        else None
+                    ),
+                )
             return ToolResult(output=f"Moved/resized {app_name} window")
 
         elif PLATFORM["is_windows"]:
@@ -491,7 +528,22 @@ end tell
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            await asyncio.wait_for(proc.communicate(), timeout=10)
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+            if proc.returncode != 0:
+                friendly = _check_applescript_error(stderr)
+                return ToolResult(
+                    type=ToolResultType.ERROR,
+                    output=friendly or stderr.decode(errors="replace").strip(),
+                    action_needed=(
+                        os_permission_needed(
+                            feature="Window controls",
+                            permission_key="accessibility",
+                            source="tool.window-manager",
+                        )
+                        if friendly
+                        else None
+                    ),
+                )
             return ToolResult(output=f"{action.capitalize()}d: {app_name}")
 
         elif PLATFORM["is_windows"]:

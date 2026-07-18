@@ -7139,8 +7139,8 @@ function LocalModelsInner() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      {/* Global HF token modal — shown when a download requires a token */}
-      <HuggingFaceAccessModal />
+      {/* Retained component is intentionally unreachable during the action-needed cutover. */}
+      {false ? <HuggingFaceAccessModal /> : null}
 
       <Tabs
         value={activeTab}

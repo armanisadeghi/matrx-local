@@ -148,7 +148,7 @@ pub async fn start_llm_server(
     )
     .await?;
 
-    // Persist config — reload first to preserve hf_token and any future fields,
+    // Persist config — reload first to preserve any future fields,
     // then update only the fields this command owns.
     if let Ok(config_dir) = app.path().app_data_dir() {
         let mut config = LlmConfig::load(&config_dir);
@@ -342,29 +342,6 @@ pub fn cancel_llm_download(
 
 // ── HuggingFace Token Management ─────────────────────────────────────────
 
-/// Save a HuggingFace access token (hf_…) to llm.json (legacy fallback only).
-/// Canonical storage is the engine SQLite API key `huggingface`; the UI migrates
-/// tokens there. Pass an empty string to clear llm.json.
-#[tauri::command]
-pub async fn save_hf_token(app: AppHandle, token: String) -> Result<(), String> {
-    let config_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let mut config = LlmConfig::load(&config_dir);
-    config.hf_token = if token.trim().is_empty() {
-        None
-    } else {
-        Some(token.trim().to_string())
-    };
-    config.save(&config_dir)
-}
-
-/// Return the stored HuggingFace token, or null if not set.
-#[tauri::command]
-pub async fn get_hf_token(app: AppHandle) -> Result<Option<String>, String> {
-    let config_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let config = LlmConfig::load(&config_dir);
-    Ok(config.hf_token)
-}
-
 // ── Download ──────────────────────────────────────────────────────────────
 
 /// Download an LLM model from HuggingFace with progress events.
@@ -377,8 +354,7 @@ pub async fn get_hf_token(app: AppHandle) -> Result<Option<String>, String> {
 /// load multi-part GGUF natively when given the first part's path — we do NOT
 /// concatenate parts. `filename` is the first-part filename in this case.
 ///
-/// The desktop passes `hf_token` from engine storage when available; otherwise
-/// llm.json is used as a legacy fallback. The token is injected as
+/// The desktop passes `hf_token` from the canonical engine key store. It is injected as
 /// `Authorization: Bearer <token>` on every request. This is required for:
 ///   - Repos using XET storage (newer HF repos) — plain GET returns binary chunks,
 ///     not the file, without authentication.
@@ -452,14 +428,11 @@ pub async fn download_llm_model(
     std::fs::create_dir_all(&dest_dir)
         .map_err(|e| format!("Failed to create models dir: {}", e))?;
 
-    // Engine API key first, then legacy llm.json (may be None — fine for public repos)
+    // One source of truth: the engine's user API-key store. The historical
+    // plaintext llm.json fallback made deletion/rotation lie until restart.
     let hf_token: Option<String> = hf_token
         .filter(|s| !s.trim().is_empty())
-        .map(|s| s.trim().to_string())
-        .or_else(|| {
-            let config_dir = app.path().app_data_dir().ok()?;
-            LlmConfig::load(&config_dir).hf_token
-        });
+        .map(|s| s.trim().to_string());
 
     // NOTE: HuggingFace now routes ALL public model downloads through XET storage
     // (cas-bridge.xethub.hf.co). Despite the domain name, this endpoint is a
@@ -597,13 +570,25 @@ pub async fn download_llm_model(
                     last_error = format!("Attempt {}: {}", attempt + 1, e);
                     eprintln!("[llm] download '{}': attempt {} FAILED — {}", filename, attempt + 1, e);
                     let _ = tokio::fs::remove_file(&dest_path).await;
+                    if is_non_retryable_hf_error(&e) {
+                        break;
+                    }
                 }
             }
         }
-        let err_msg = format!("Download failed after 3 attempts. Last error: {}", last_error);
+        let err_msg = if is_non_retryable_hf_error(&last_error) {
+            format!("Hugging Face denied the download: {}", last_error)
+        } else {
+            format!("Download failed after 3 attempts. Last error: {}", last_error)
+        };
         eprintln!("[llm] download '{}': FINAL FAILURE — {}", filename, err_msg);
         if let Some(ref dm) = dm_arc {
-            dm.mark_external_failed(&app, &dm_id, &err_msg).await;
+            let resolution = hf_download_resolution(
+                &last_error,
+                hf_token.is_some(),
+                urls.first().map(String::as_str),
+            );
+            dm.mark_external_failed_with_resolution(&app, &dm_id, &err_msg, resolution).await;
         }
         return Err(err_msg);
     }
@@ -749,6 +734,9 @@ pub async fn download_llm_model(
                     last_error = format!("Part {} attempt {}: {}", part_num, attempt + 1, e);
                     eprintln!("[llm] download '{}': part {}/{} attempt {} FAILED — {}", filename, part_num, total_parts, attempt + 1, e);
                     let _ = tokio::fs::remove_file(&part_path).await;
+                    if is_non_retryable_hf_error(&e) {
+                        break;
+                    }
                 }
             }
         }
@@ -757,7 +745,12 @@ pub async fn download_llm_model(
             let err_msg = format!("Failed to download part {}/{}: {}", part_num, total_parts, last_error);
             eprintln!("[llm] download '{}': FINAL FAILURE at part {}/{} — {}", filename, part_num, total_parts, err_msg);
             if let Some(ref dm) = dm_arc {
-                dm.mark_external_failed(&app, &dm_id, &err_msg).await;
+                let resolution = hf_download_resolution(
+                    &last_error,
+                    hf_token.is_some(),
+                    urls.get(i).map(String::as_str),
+                );
+                dm.mark_external_failed_with_resolution(&app, &dm_id, &err_msg, resolution).await;
             }
             return Err(err_msg);
         }
@@ -931,16 +924,33 @@ async fn ensure_mmproj_downloaded(
             Err(e) => {
                 last_error = e;
                 let _ = tokio::fs::remove_file(&dest_path).await;
+                if is_non_retryable_hf_error(&last_error) {
+                    break;
+                }
             }
         }
     }
 
-    let err_msg = format!(
-        "Failed to download mmproj '{}' after 3 attempts: {}",
-        mmproj_filename, last_error
-    );
+    let auth_denied = is_non_retryable_hf_error(&last_error);
+    let err_msg = if auth_denied {
+        format!(
+            "Failed to download mmproj '{}' because Hugging Face denied access: {}",
+            mmproj_filename, last_error
+        )
+    } else {
+        format!(
+            "Failed to download mmproj '{}' after 3 attempts: {}",
+            mmproj_filename, last_error
+        )
+    };
     if let Some(ref dm) = dm_arc {
-        dm.mark_external_failed(app, &dm_id, &err_msg).await;
+        let resolution = hf_download_resolution(
+            &last_error,
+            hf_token.is_some(),
+            Some(mmproj_url),
+        );
+        dm.mark_external_failed_with_resolution(app, &dm_id, &err_msg, resolution)
+            .await;
     }
     Err(err_msg)
 }
@@ -1380,6 +1390,129 @@ fn extract_stem(filename: &str) -> String {
         .to_string()
 }
 
+fn is_non_retryable_hf_error(error: &str) -> bool {
+    error.contains("HTTP 401") || error.contains("HTTP 403")
+}
+
+fn hf_repo_page(url: Option<&str>) -> Option<String> {
+    let raw = url?;
+    let marker = "huggingface.co/";
+    let tail = raw.split(marker).nth(1)?;
+    let mut parts = tail.split('/').filter(|part| !part.is_empty());
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    Some(format!("https://huggingface.co/{}/{}", owner, repo))
+}
+
+fn hf_download_resolution(
+    error: &str,
+    token_present: bool,
+    url: Option<&str>,
+) -> Option<crate::downloads::manager::DownloadResolution> {
+    if !is_non_retryable_hf_error(error) {
+        return None;
+    }
+    if !token_present {
+        return Some(crate::downloads::manager::DownloadResolution {
+            code: "hf_token_missing".to_string(),
+            title: "Add a Hugging Face token".to_string(),
+            message: "This model download requires a Hugging Face token. Save it in API Keys and retry.".to_string(),
+            action_kind: "settings_api_keys".to_string(),
+            action_label: "Add token".to_string(),
+            action_url: None,
+            provider: Some("huggingface".to_string()),
+        });
+    }
+    let lower = error.to_ascii_lowercase();
+    if error.contains("HTTP 401") {
+        return Some(crate::downloads::manager::DownloadResolution {
+            code: "hf_token_invalid".to_string(),
+            title: "Hugging Face rejected your token".to_string(),
+            message: "The saved Hugging Face token was not accepted. Replace it with a current read token, then retry.".to_string(),
+            action_kind: "settings_api_keys".to_string(),
+            action_label: "Update token".to_string(),
+            action_url: None,
+            provider: Some("huggingface".to_string()),
+        });
+    }
+    let (code, title, message, label) = if lower.contains("pending")
+        || lower.contains("awaiting")
+    {
+        (
+            "hf_gate_pending",
+            "Your Hugging Face access request is pending",
+            "Your token was accepted, but this repository is still waiting for its authors to approve your access request.",
+            "Check access status",
+        )
+    } else if lower.contains("gated")
+        || lower.contains("accept")
+        || lower.contains("terms")
+        || lower.contains("restricted")
+    {
+        (
+            "hf_gate_not_accepted",
+            "Accept this model's terms on Hugging Face",
+            "Your token was accepted, but this gated repository requires you to accept its terms before downloading.",
+            "Accept model terms",
+        )
+    } else {
+        (
+            "hf_access_review_needed",
+            "Hugging Face denied model access",
+            "Your token was sent, but this repository denied access. Review the model page and your token permissions, then retry.",
+            "Review model access",
+        )
+    };
+    Some(crate::downloads::manager::DownloadResolution {
+        code: code.to_string(),
+        title: title.to_string(),
+        message: message.to_string(),
+        action_kind: "open_url".to_string(),
+        action_label: label.to_string(),
+        action_url: hf_repo_page(url),
+        provider: Some("huggingface".to_string()),
+    })
+}
+
+#[cfg(test)]
+mod action_needed_tests {
+    use super::{hf_download_resolution, is_non_retryable_hf_error};
+
+    #[test]
+    fn missing_token_is_exact_settings_action() {
+        let resolution = hf_download_resolution(
+            "HTTP 401 for https://huggingface.co/org/repo/resolve/main/model.gguf",
+            false,
+            Some("https://huggingface.co/org/repo/resolve/main/model.gguf"),
+        )
+        .expect("401 must be actionable");
+        assert_eq!(resolution.code, "hf_token_missing");
+        assert_eq!(resolution.action_kind, "settings_api_keys");
+        assert_eq!(resolution.provider.as_deref(), Some("huggingface"));
+    }
+
+    #[test]
+    fn token_present_denial_never_claims_token_missing() {
+        let resolution = hf_download_resolution(
+            "HTTP 403 for https://huggingface.co/org/repo/resolve/main/model.gguf",
+            true,
+            Some("https://huggingface.co/org/repo/resolve/main/model.gguf"),
+        )
+        .expect("403 must be actionable");
+        assert_eq!(resolution.code, "hf_access_review_needed");
+        assert_eq!(resolution.action_kind, "open_url");
+        assert_eq!(resolution.action_url.as_deref(), Some("https://huggingface.co/org/repo"));
+    }
+
+    #[test]
+    fn only_auth_denials_short_circuit_retries() {
+        assert!(is_non_retryable_hf_error("HTTP 401 for x"));
+        assert!(is_non_retryable_hf_error("HTTP 403 for x"));
+        assert!(!is_non_retryable_hf_error("HTTP 429 for x"));
+        assert!(!is_non_retryable_hf_error("HTTP 500 for x"));
+    }
+}
+
 /// Probe the content-length of a URL without downloading it.
 async fn probe_content_length(
     client: &reqwest::Client,
@@ -1440,11 +1573,22 @@ async fn try_download_part(
 
     if !response.status().is_success() {
         let status = response.status();
+        let response_body = response.text().await.unwrap_or_default();
+        let response_excerpt: String = response_body.chars().take(500).collect();
         eprintln!(
             "[llm] try_download_part '{}' part {}/{}: HTTP {} for {}",
             filename, part, total_parts, status, url
         );
-        return Err(format!("HTTP {} for {}", status, url));
+        return Err(format!(
+            "HTTP {} for {}{}",
+            status,
+            url,
+            if response_excerpt.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", response_excerpt)
+            }
+        ));
     }
 
     let part_total = response.content_length().unwrap_or(0);

@@ -5,9 +5,11 @@ from __future__ import annotations
 import inspect
 import logging
 import types
+import errno
 from typing import Any, Callable, Coroutine
 
 from app.tools.session import ToolSession
+from app.services.action_needed.models import filesystem_access_needed
 from app.tools.tools.clipboard import tool_clipboard_read, tool_clipboard_write
 from app.tools.tools.execution import tool_bash, tool_bash_output, tool_task_stop
 from app.tools.tools.file_ops import (
@@ -478,22 +480,51 @@ async def dispatch(
 ) -> ToolResult:
     handler = TOOL_HANDLERS.get(tool_name)
     if handler is None:
-        return ToolResult(
+        result = ToolResult(
             type=ToolResultType.ERROR,
             output=f"Unknown tool: {tool_name}. Available: {', '.join(TOOL_NAMES)}",
         )
-    coerced_input = _coerce_tool_input(handler, tool_input)
-    try:
-        return await handler(session=session, **coerced_input)
-    except TypeError as e:
-        logger.warning("Invalid parameters for tool %s: %s", tool_name, e)
-        return ToolResult(
-            type=ToolResultType.ERROR,
-            output=f"Invalid parameters for {tool_name}: {e}",
-        )
-    except Exception as e:
-        logger.exception("Tool %s failed", tool_name)
-        return ToolResult(
-            type=ToolResultType.ERROR,
-            output=f"Tool {tool_name} failed: {type(e).__name__}: {e}",
-        )
+    else:
+        coerced_input = _coerce_tool_input(handler, tool_input)
+        try:
+            result = await handler(session=session, **coerced_input)
+        except TypeError as e:
+            logger.warning("Invalid parameters for tool %s: %s", tool_name, e)
+            result = ToolResult(
+                type=ToolResultType.ERROR,
+                output=f"Invalid parameters for {tool_name}: {e}",
+            )
+        except (PermissionError, OSError) as e:
+            if not isinstance(e, PermissionError) and getattr(e, "errno", None) not in (
+                errno.EACCES,
+                errno.EPERM,
+            ):
+                logger.exception("Tool %s failed", tool_name)
+                result = ToolResult(
+                    type=ToolResultType.ERROR,
+                    output=f"Tool {tool_name} failed: {type(e).__name__}: {e}",
+                )
+            else:
+                raw_path = getattr(e, "filename", None) or "the requested location"
+                result = ToolResult(
+                    type=ToolResultType.ERROR,
+                    output=f"{tool_name} was denied access to {raw_path}.",
+                    action_needed=filesystem_access_needed(
+                        feature=tool_name,
+                        path=str(raw_path),
+                        operation="access",
+                        source=f"tool:{tool_name}",
+                    ),
+                )
+        except Exception as e:
+            logger.exception("Tool %s failed", tool_name)
+            result = ToolResult(
+                type=ToolResultType.ERROR,
+                output=f"Tool {tool_name} failed: {type(e).__name__}: {e}",
+            )
+    from app.services.action_needed.registry import get_action_needed_registry
+
+    await get_action_needed_registry().reconcile_invocation(
+        tool_name, tool_input, result.action_needed
+    )
+    return result

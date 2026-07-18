@@ -23,13 +23,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from app.services.ai.provider_grants import VALID_PROVIDERS
+
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 TS_PATTERNS_FILE = (
     PROJECT_ROOT / "desktop" / "src" / "lib" / "api-key-patterns.ts"
-)
-REPOSITORIES_FILE = (
-    PROJECT_ROOT / "app" / "services" / "local_db" / "repositories.py"
 )
 
 
@@ -69,27 +68,8 @@ def parse_ts_provider_ids() -> set[str]:
 
 
 def parse_python_valid_providers() -> set[str]:
-    """
-    Extract VALID_PROVIDERS frozenset from repositories.py.
-
-    Looks for:
-        VALID_PROVIDERS: frozenset[str] = frozenset({
-            "openai",
-            ...
-        })
-    """
-    source = REPOSITORIES_FILE.read_text(encoding="utf-8")
-
-    match = re.search(
-        r"VALID_PROVIDERS\s*:\s*frozenset\[str\]\s*=\s*frozenset\(\{(.+?)\}\)",
-        source,
-        re.DOTALL,
-    )
-    assert match, f"Could not find VALID_PROVIDERS in {REPOSITORIES_FILE}"
-
-    block = match.group(1)
-    providers = set(re.findall(r'"([^"]+)"', block))
-    return providers
+    """Read the canonical Python provider catalog."""
+    return set(VALID_PROVIDERS)
 
 
 # ---------------------------------------------------------------------------
@@ -100,12 +80,6 @@ def parse_python_valid_providers() -> set[str]:
 def test_ts_patterns_file_exists() -> None:
     assert TS_PATTERNS_FILE.exists(), (
         f"api-key-patterns.ts not found at {TS_PATTERNS_FILE}"
-    )
-
-
-def test_repositories_file_exists() -> None:
-    assert REPOSITORIES_FILE.exists(), (
-        f"repositories.py not found at {REPOSITORIES_FILE}"
     )
 
 
@@ -120,7 +94,7 @@ def test_ts_providers_all_in_python() -> None:
         f"  {sorted(missing_in_python)}\n\n"
         "The frontend would send these to PUT /settings/api-keys/{provider} "
         "but the backend would reject them. Add them to VALID_PROVIDERS in "
-        "app/services/local_db/repositories.py."
+        "app/services/ai/provider_grants.py."
     )
 
 
@@ -147,8 +121,10 @@ def test_huggingface_in_both() -> None:
         "'huggingface' missing from PROVIDER_PATTERNS in api-key-patterns.ts"
     )
     assert "huggingface" in python_ids, (
-        "'huggingface' missing from VALID_PROVIDERS in repositories.py"
+        "'huggingface' missing from the canonical provider grant catalog"
     )
+
+    assert "brave" in ts_ids and "brave" in python_ids
 
 
 def test_provider_count_reasonable() -> None:

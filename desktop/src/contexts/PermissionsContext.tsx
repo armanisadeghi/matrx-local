@@ -34,3 +34,7 @@ export function usePermissionsContext(): UsePermissionsReturn {
   }
   return ctx;
 }
+
+export function useOptionalPermissionsContext(): UsePermissionsReturn | null {
+  return useContext(PermissionsContext);
+}

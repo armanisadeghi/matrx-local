@@ -136,6 +136,17 @@ export const PROVIDER_PATTERNS: ProviderPattern[] = [
     label: "Civitai",
   },
 
+  // ── Brave Search ───────────────────────────────────────────────────
+  {
+    names: ["brave", "brave_search", "bravesearch"],
+    envVarNames: [
+      "BRAVE_API_KEY",
+      "BRAVE_SEARCH_API_KEY",
+      "BRAVE_SEARCH_KEY",
+    ],
+    label: "Brave Search",
+  },
+
   // ── Groq ──────────────────────────────────────────────────────────────────
   {
     names: ["groq", "groq_ai"],

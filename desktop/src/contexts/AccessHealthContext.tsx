@@ -41,3 +41,7 @@ export function useAccessHealthContext(): UseAccessHealthReturn {
   }
   return ctx;
 }
+
+export function useOptionalAccessHealthContext(): UseAccessHealthReturn | null {
+  return useContext(AccessHealthContext);
+}

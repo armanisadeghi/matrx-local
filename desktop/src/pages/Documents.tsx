@@ -73,11 +73,10 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
   // Gated on specific booleans, not broad objects (CLAUDE.md React rules).
   const access = useAccessHealthContext();
   const { refresh: refreshAccess } = access.actions;
-  const syncSaysDegraded = docs.syncStatus?.notes_access_degraded === true;
   const hasError = docs.error !== null;
   useEffect(() => {
-    if (syncSaysDegraded || hasError) void refreshAccess();
-  }, [syncSaysDegraded, hasError, refreshAccess]);
+    if (hasError) void refreshAccess();
+  }, [hasError, refreshAccess]);
 
   const notesDegraded = access.notesResource?.status === "degraded";
   const { reloadAfterAccessRestored } = docs;

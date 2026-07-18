@@ -10,6 +10,7 @@ from fastapi import WebSocket
 from app.tools.dispatcher import dispatch
 from app.tools.session import ToolSession
 from app.common.system_logger import get_logger
+from app.services.action_needed.registry import get_action_needed_registry
 
 logger = get_logger()
 
@@ -45,12 +46,21 @@ class Connection:
 class WebSocketManager:
     def __init__(self) -> None:
         self.connections: dict[int, Connection] = {}
+        self._unsubscribe_actions = get_action_needed_registry().subscribe(
+            self._broadcast_action_snapshot
+        )
+
+    async def _broadcast_action_snapshot(self, snapshot: dict) -> None:
+        for conn in list(self.connections.values()):
+            await self._send(conn, snapshot)
 
     async def connect(self, websocket: WebSocket, via_tunnel: bool = False) -> Connection:
         await websocket.accept()
         session = ToolSession()
         conn = Connection(websocket, session, via_tunnel=via_tunnel)
         self.connections[id(websocket)] = conn
+        for snapshot in await get_action_needed_registry().snapshots():
+            await self._send(conn, snapshot)
         logger.info(
             "WebSocket connected: %s (session cwd: %s, tunnel=%s)",
             id(websocket),
@@ -187,6 +197,10 @@ class WebSocketManager:
                 )
             if result.metadata:
                 response["metadata"] = result.metadata
+            if result.action_needed:
+                response["action_needed"] = result.action_needed.model_dump(
+                    mode="json", exclude_none=True
+                )
 
             # Log result summary at INFO; full preview only at DEBUG.
             if is_quiet:

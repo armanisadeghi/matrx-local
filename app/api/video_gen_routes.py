@@ -50,6 +50,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app.common.route_errors import safe_route
+from app.services.action_needed import download_resolution_needed
+from app.services.downloads.failures import hf_token_missing
 from app.services.video_gen.jobs import get_video_job_store
 from app.services.video_gen.models import get_video_gen_models
 from app.services.video_gen.service import get_video_gen_service
@@ -277,7 +279,21 @@ async def download_video_model(req: DownloadModelRequest) -> DownloadModelRespon
     """
     result = await get_video_gen_service().start_download(req.model_id)
     if result.get("needs_hf_token"):
-        raise HTTPException(status_code=400, detail=result["error"])
+        resolution = hf_token_missing(req.model_id).resolution
+        action = download_resolution_needed(
+            resolution,
+            feature="video model download",
+            source="video-gen.download",
+            resource_id=req.model_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": resolution.code,
+                "message": result["error"],
+                "action_needed": action.model_dump(mode="json", exclude_none=True),
+            },
+        )
     if result.get("error"):
         raise HTTPException(status_code=404, detail=result["error"])
     return DownloadModelResponse(

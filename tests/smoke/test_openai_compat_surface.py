@@ -16,8 +16,6 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-import app.common  # noqa: F401  (win the app.config <-> app.common import cycle)
-
 
 @pytest.fixture()
 def local_llm_registered(monkeypatch: pytest.MonkeyPatch):

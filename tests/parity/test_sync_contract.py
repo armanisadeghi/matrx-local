@@ -25,11 +25,6 @@ from typing import Any
 
 import pytest
 
-# ORDER MATTERS: app.common first — importing app.config as the process's
-# first app module trips the app.config <-> app.common circular import
-# (tracked in .matrx/AGENT_TASKS.md).
-import app.common  # noqa: F401
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = REPO_ROOT / "docs" / "SYNC_CONTRACT.md"
 

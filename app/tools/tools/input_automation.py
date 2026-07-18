@@ -6,6 +6,7 @@ import asyncio
 import logging
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
+from app.services.action_needed import os_permission_needed
 from app.tools.session import ToolSession
 from app.tools.tools import NO_GUI_MSG, has_display
 from app.tools.types import ToolResult, ToolResultType
@@ -39,6 +40,25 @@ def _check_applescript_error(stderr: bytes) -> str | None:
     return None
 
 
+async def _accessibility_preflight(feature: str) -> ToolResult | None:
+    if not PLATFORM["is_mac"]:
+        return None
+    from app.services.permissions.checker import PermissionStatus, check_accessibility
+
+    permission = await check_accessibility()
+    if permission.status == PermissionStatus.GRANTED:
+        return None
+    return ToolResult(
+        type=ToolResultType.ERROR,
+        output=permission.user_details or permission.details,
+        action_needed=os_permission_needed(
+            feature=feature,
+            permission_key="accessibility",
+            source="tool.input_automation",
+        ),
+    )
+
+
 async def tool_type_text(
     session: ToolSession,
     text: str,
@@ -48,6 +68,10 @@ async def tool_type_text(
     """Type text string via simulated keystrokes. Optionally target a specific app."""
     if not text:
         return ToolResult(type=ToolResultType.ERROR, output="Text must not be empty.")
+
+    blocked = await _accessibility_preflight("Type text")
+    if blocked is not None:
+        return blocked
 
     try:
         if not PLATFORM["is_mac"] and not PLATFORM["is_windows"] and not has_display():
@@ -82,7 +106,19 @@ end tell
                 msg = (
                     friendly or f"AppleScript error: {stderr.decode(errors='replace')}"
                 )
-                return ToolResult(type=ToolResultType.ERROR, output=msg)
+                return ToolResult(
+                    type=ToolResultType.ERROR,
+                    output=msg,
+                    action_needed=(
+                        os_permission_needed(
+                            feature="Type text",
+                            permission_key="accessibility",
+                            source="tool.input_automation",
+                        )
+                        if friendly
+                        else None
+                    ),
+                )
             return ToolResult(
                 output=f"Typed {len(text)} characters"
                 + (f" into {app_name}" if app_name else "")
@@ -139,6 +175,10 @@ async def tool_hotkey(
     if not keys:
         return ToolResult(type=ToolResultType.ERROR, output="Keys must not be empty.")
 
+    blocked = await _accessibility_preflight("Keyboard shortcuts")
+    if blocked is not None:
+        return blocked
+
     parts = [k.strip().lower() for k in keys.split("+")]
     if len(parts) < 2:
         return ToolResult(
@@ -193,9 +233,6 @@ async def tool_hotkey(
             }
 
             if key in special_keys:
-                keystroke = (
-                    f'key code (key code of "{special_keys[key]}") using {{{mod_str}}}'
-                )
                 # Use simpler approach for special keys
                 script_body = f'keystroke "" using {{{mod_str}}}'
                 # Actually, for special keys in AppleScript:
@@ -230,7 +267,19 @@ end tell
                 msg = (
                     friendly or f"AppleScript error: {stderr.decode(errors='replace')}"
                 )
-                return ToolResult(type=ToolResultType.ERROR, output=msg)
+                return ToolResult(
+                    type=ToolResultType.ERROR,
+                    output=msg,
+                    action_needed=(
+                        os_permission_needed(
+                            feature="Keyboard shortcuts",
+                            permission_key="accessibility",
+                            source="tool.input_automation",
+                        )
+                        if friendly
+                        else None
+                    ),
+                )
             return ToolResult(
                 output=f"Sent hotkey: {keys}" + (f" to {app_name}" if app_name else "")
             )
@@ -369,6 +418,10 @@ async def tool_mouse_click(
             output="Button must be 'left', 'right', or 'middle'.",
         )
 
+    blocked = await _accessibility_preflight("Mouse clicks")
+    if blocked is not None:
+        return blocked
+
     try:
         if not PLATFORM["is_mac"] and not PLATFORM["is_windows"] and not has_display():
             return ToolResult(type=ToolResultType.ERROR, output=NO_GUI_MSG)
@@ -499,6 +552,10 @@ async def tool_mouse_move(
     y: int,
 ) -> ToolResult:
     """Move the mouse cursor to screen coordinates."""
+    blocked = await _accessibility_preflight("Mouse movement")
+    if blocked is not None:
+        return blocked
+
     try:
         if not PLATFORM["is_mac"] and not PLATFORM["is_windows"] and not has_display():
             return ToolResult(type=ToolResultType.ERROR, output=NO_GUI_MSG)

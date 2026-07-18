@@ -132,6 +132,11 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         headers=lambda key: {"xi-api-key": key},
         account=_account_name,
     ),
+    "brave": ProviderSpec(
+        url="https://api.search.brave.com/res/v1/web/search",
+        headers=lambda key: {"X-Subscription-Token": key},
+        params=lambda key: {"q": "Matrx credential check", "count": "1"},
+    ),
     # fastino: no public auth-only endpoint. Deliberately absent → "unsupported",
     # which the UI renders as "can't be tested" rather than a scary red X.
 }

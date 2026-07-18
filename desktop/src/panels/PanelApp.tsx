@@ -11,8 +11,15 @@
  * rather than duplicating the login/OAuth flow.
  */
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
+import { HashRouter } from "react-router-dom";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { AppActionBanner } from "@/components/layout/AppActionBanner";
+import {
+  ActionNeededNavigationBridge,
+  ActionNeededSources,
+  actionNeededStore,
+} from "@/features/action-needed";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
 import { useEngine } from "@/hooks/use-engine";
@@ -50,6 +57,10 @@ function PanelInner({ page }: { page: PanelPage }) {
   useTheme(); // applies the persisted light/dark class to this window
   const { status, url, tools } = useEngine(auth.isAuthenticated);
 
+  useEffect(() => {
+    if (status !== "connected") actionNeededStore.reset();
+  }, [status]);
+
   let body: ReactNode;
   if (auth.loading) {
     body = (
@@ -64,16 +75,27 @@ function PanelInner({ page }: { page: PanelPage }) {
       </div>
     );
   } else {
+    const ctx = { status, url, tools, user: auth.user };
+    const surface = (
+      <>
+        <ActionNeededSources />
+        {entry.render(ctx)}
+      </>
+    );
     // Compose the manifest's providers around the page, outermost first.
     body = entry.providers.reduceRight<ReactNode>(
-      (children, Provider) => <Provider>{children}</Provider>,
-      entry.render({ status, url, tools, user: auth.user }),
+      (children, provider) => provider.wrap(children, ctx),
+      surface,
     );
   }
 
   return (
-    <PanelLayout title={entry.title} status={status}>
-      {body}
-    </PanelLayout>
+    <HashRouter>
+      <ActionNeededNavigationBridge />
+      <PanelLayout title={entry.title} status={status}>
+        <AppActionBanner engineStatus={status} />
+        {body}
+      </PanelLayout>
+    </HashRouter>
   );
 }

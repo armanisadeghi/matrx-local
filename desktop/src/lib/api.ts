@@ -11,6 +11,24 @@ import { enginePortList } from "@/lib/engine-ports";
 
 const DISCOVERY_PORTS = enginePortList();
 
+async function reportActionNeededErrorPayload(payload: unknown): Promise<void> {
+  if (!payload || typeof payload !== "object") return;
+  const body = payload as Record<string, unknown>;
+  const detail =
+    body.detail && typeof body.detail === "object"
+      ? (body.detail as Record<string, unknown>)
+      : undefined;
+  const details =
+    body.details && typeof body.details === "object"
+      ? (body.details as Record<string, unknown>)
+      : undefined;
+  const actionNeeded =
+    body.action_needed ?? detail?.action_needed ?? details?.action_needed;
+  if (!actionNeeded) return;
+  const { reportActionNeeded } = await import("@/features/action-needed/store");
+  reportActionNeeded(actionNeeded as import("@/features/action-needed").ActionNeeded);
+}
+
 /** Operator broadcast carried by the remote app config (level-styled, shown once). */
 export interface AppConfigNotice {
   level: "info" | "warning" | "critical";
@@ -69,6 +87,8 @@ export interface ToolResult {
   image?: ToolImageData;
   artifact?: ToolMediaArtifact;
   metadata?: Record<string, unknown>;
+  /** Canonical source-owned remediation state for a blocked tool operation. */
+  action_needed?: import("@/features/action-needed").ActionNeeded | null;
 }
 
 export interface ToolImageData {
@@ -95,6 +115,21 @@ export interface ToolMediaArtifact {
   download_url?: string;
   visibility: "private" | "shared" | "public";
   capture: Record<string, unknown>;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function toolInvocationKey(tool: string, input: Record<string, unknown>): string {
+  return `${tool}:${stableJson(input)}`;
 }
 
 export interface BrowserStatus {
@@ -173,7 +208,7 @@ class EngineAPI {
   private ws: WebSocket | null = null;
   private pendingRequests = new Map<
     string,
-    { resolve: (v: ToolResult) => void; reject: (e: Error) => void }
+    { resolve: (v: ToolResult) => void; reject: (e: Error) => void; invocationKey: string }
   >();
   private eventListeners = new Map<string, Set<(data: unknown) => void>>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -954,6 +989,8 @@ class EngineAPI {
     }
 
     const result: ToolResult = await resp.json();
+    const { reconcileToolActionNeeded } = await import("@/features/action-needed/store");
+    reconcileToolActionNeeded(toolInvocationKey(tool, input), result.action_needed);
     console.info(`[api/invokeTool] ✓ ${tool} — ${elapsed}ms`, {
       callId,
       resultType: result.type,
@@ -1008,10 +1045,17 @@ class EngineAPI {
       this.ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          void import("@/features/action-needed/store").then(
+            ({ ingestActionNeededMessage }) => ingestActionNeededMessage(data),
+          );
           // If this is a response to a pending request
           if (data.id && this.pendingRequests.has(data.id)) {
             const pending = this.pendingRequests.get(data.id)!;
             this.pendingRequests.delete(data.id);
+            void import("@/features/action-needed/store").then(
+              ({ reconcileToolActionNeeded }) =>
+                reconcileToolActionNeeded(pending.invocationKey, data.action_needed),
+            );
             if (data.type === "error") {
               pending.reject(new Error(data.output || data.error));
             } else {
@@ -1092,7 +1136,11 @@ class EngineAPI {
     const id = `req-${++this.requestIdCounter}`;
 
     return new Promise((resolve, reject) => {
-      this.pendingRequests.set(id, { resolve, reject });
+      this.pendingRequests.set(id, {
+        resolve,
+        reject,
+        invocationKey: toolInvocationKey(tool, input),
+      });
       try {
         this.ws!.send(JSON.stringify({ id, tool, input }));
       } catch (e) {
@@ -1880,10 +1928,19 @@ class EngineAPI {
       }
       throw e;
     }
-    if (!resp.ok)
-      throw new Error(
-        `${init?.method ?? "GET"} ${path} failed: ${resp.status}`,
-      );
+    if (!resp.ok) {
+      const payload = await resp.json().catch(() => null);
+      await reportActionNeededErrorPayload(payload);
+      const message =
+        payload && typeof payload === "object"
+          ? String(
+              (payload as Record<string, unknown>).message ??
+                (payload as Record<string, unknown>).detail ??
+                `HTTP ${resp.status}`,
+            )
+          : `HTTP ${resp.status}`;
+      throw new Error(`${init?.method ?? "GET"} ${path} failed: ${message}`);
+    }
     return resp.json();
   }
 
@@ -2523,6 +2580,16 @@ class EngineAPI {
 
   async getFilesystemIndexingSettings(): Promise<FilesystemIndexingSettings> {
     return this.request<FilesystemIndexingSettings>("/filesystem/indexing-settings");
+  }
+
+  async setFilesystemIndexingSettings(
+    settings: Omit<FilesystemIndexingSettings, "priority_roots">,
+  ): Promise<FilesystemIndexStatus> {
+    return this.request<FilesystemIndexStatus>("/filesystem/indexing-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
   }
 
   async setFilesystemPriorityRoots(
@@ -3769,8 +3836,15 @@ export interface FilesystemIndexStatus {
   indexed_this_run: number;
   places: number;
   last_reconcile_at: number | null;
+  content_entries: number;
+  embedding_entries: number;
+  content_bytes: number;
   content_indexing: string;
   embedding_indexing: string;
+  embedding_model: string;
+  max_content_bytes: number;
+  max_embedding_entries: number;
+  fastembed_available: boolean;
   policy: string;
 }
 
@@ -4388,6 +4462,7 @@ async function imageGenFetch<T>(
     let detail = body;
     try {
       const parsed = JSON.parse(body) as { detail?: unknown };
+      await reportActionNeededErrorPayload(parsed);
       if (parsed.detail) detail = stringifyErrorDetail(parsed.detail, body);
     } catch {
       // use raw body
@@ -5357,6 +5432,7 @@ async function videoGenFetch<T>(
     let detail = body;
     try {
       const parsed = JSON.parse(body) as { detail?: unknown };
+      await reportActionNeededErrorPayload(parsed);
       if (parsed.detail) detail = stringifyErrorDetail(parsed.detail, body);
     } catch {
       // use raw body

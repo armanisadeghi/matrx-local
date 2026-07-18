@@ -232,7 +232,7 @@ async def handle_tool(args: Dict[str, Any], req: Optional[Request]) -> Dict[str,
     # ToolResult is a Pydantic model — model_dump() is the v2 idiom and
     # also exists on v1 models via the compatibility shim.
     if hasattr(result, "model_dump"):
-        result_payload: Any = result.model_dump()
+        result_payload: Any = result.model_dump(mode="json", exclude_none=True)
     elif hasattr(result, "dict"):
         result_payload = result.dict()
     else:

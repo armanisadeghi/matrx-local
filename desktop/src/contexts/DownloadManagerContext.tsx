@@ -539,3 +539,7 @@ export function useDownloadManager(): DownloadManagerContextValue {
   }
   return ctx;
 }
+
+export function useOptionalDownloadManager(): DownloadManagerContextValue | null {
+  return useContext(DownloadManagerContext);
+}

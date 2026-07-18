@@ -28,8 +28,15 @@ class PlaywrightBrowserPool:
         for browser in self._browsers:
             try:
                 await browser.close()
-            except Exception:
-                logger.exception("Error closing browser")
+            except Exception as exc:
+                # Playwright may close the shared driver before individual
+                # Browser proxies during app teardown. The browsers are
+                # already gone in that case; reporting three red tracebacks
+                # turns a clean shutdown into a false incident.
+                if "Connection closed while reading from the driver" in str(exc):
+                    logger.debug("Browser driver already closed during shutdown")
+                else:
+                    logger.exception("Error closing browser")
         self._browsers.clear()
 
         if self._playwright:

@@ -970,6 +970,27 @@ def test_ensure_hydrated_returns_error_string_when_hydrate_raises(
     run_scenario(tmp_path, monkeypatch, scenario)
 
 
+def test_ensure_hydrated_fails_closed_when_pointer_state_cannot_be_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        target = engine.root / "uncertain.txt"
+        target.touch()
+
+        async def fail_lookup(_path: str) -> dict[str, Any] | None:
+            raise RuntimeError("mirror unavailable")
+
+        engine._index.get_state_by_path = fail_lookup  # type: ignore[method-assign]
+
+        message = await hydration_module.ensure_hydrated(str(target))
+        assert message is not None
+        assert "could not verify" in message
+        assert "placeholder was not opened" in message
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
 # ---------------------------------------------------------------------------
 # Regressions — adversarial-review fixes (commit 56340714e)
 # ---------------------------------------------------------------------------

@@ -102,3 +102,45 @@ async def test_clear_pauses_background_index_but_direct_browsing_still_works(
     assert status["metadata_state"] == "paused"
     assert status["entries"] == 0
     assert [entry.name for entry in page.entries] == ["visible.txt"]
+
+
+@pytest.mark.anyio
+async def test_unavailable_authored_root_keeps_status_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unavailable = tmp_path / "unmounted-archive"
+    authored = [{"path": str(unavailable), "label": "Archive drive"}]
+    monkeypatch.setattr(filesystem_service_module, "configured_priority_roots", lambda: authored)
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    service._places = [
+        Place("archive", "Archive drive", str(unavailable), "configured", 130, False, True)
+    ]
+
+    status = await service.status()
+
+    assert status["metadata_state"] == "partial"
+    assert status["index_complete"] is False
+    assert status["unavailable_priority_roots"] == authored
+
+
+@pytest.mark.anyio
+async def test_partial_index_search_merges_index_and_bounded_disk_results(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    indexed = root / "needle-indexed.txt"
+    unindexed = root / "needle-unindexed.txt"
+    indexed.write_text("indexed", encoding="utf-8")
+    unindexed.write_text("unindexed", encoding="utf-8")
+    place = Place("root", "Root", str(root), "configured", 100)
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    service._places = [place]
+    service.index.sync_roots([place])
+    service.index.upsert_path(str(indexed), place.id)
+
+    page = await service.find("needle", limit=10)
+
+    assert page.source == "hybrid"
+    assert {entry.path for entry in page.entries} == {str(indexed), str(unindexed)}
+    assert page.index_complete is False

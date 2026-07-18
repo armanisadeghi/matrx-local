@@ -113,7 +113,7 @@ class SearchPage:
     query: str
     entries: tuple[FileEntry, ...]
     next_cursor: str | None
-    source: Literal["index", "disk"] = "index"
+    source: Literal["index", "disk", "hybrid"] = "index"
     index_complete: bool = False
     root: str | None = None
 

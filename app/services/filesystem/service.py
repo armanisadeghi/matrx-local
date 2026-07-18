@@ -259,28 +259,61 @@ class FilesystemService:
         safe_limit = min(max(1, limit), MAX_PAGE_SIZE)
         offset = _decode_cursor(cursor)
         resolved_root = str(Path(root).expanduser().absolute()) if root else None
-        entries = await asyncio.wait_for(
+        queued = await asyncio.to_thread(self.index.queue_count)
+        index_search = asyncio.wait_for(
             asyncio.to_thread(
                 self.index.search, clean, limit=safe_limit + 1, offset=offset, root=resolved_root
             ),
             timeout=min(max(timeout_seconds, 0.1), 10.0),
         )
-        source = "index"
-        if not entries and offset == 0:
-            entries = await asyncio.wait_for(
-                asyncio.to_thread(self._bounded_disk_find, clean, resolved_root, safe_limit + 1, timeout_seconds),
+        disk_search = (
+            asyncio.wait_for(
+                asyncio.to_thread(
+                    self._bounded_disk_find,
+                    clean,
+                    resolved_root,
+                    safe_limit + 1,
+                    timeout_seconds,
+                ),
                 timeout=min(max(timeout_seconds + 0.25, 0.25), 10.25),
             )
-            source = "disk"
-        has_more = len(entries) > safe_limit
-        entries = entries[:safe_limit]
-        queued = await asyncio.to_thread(self.index.queue_count)
+            if offset == 0 and queued > 0
+            else None
+        )
+        if disk_search is not None:
+            indexed_entries, disk_entries = await asyncio.gather(index_search, disk_search)
+            indexed_has_more = len(indexed_entries) > safe_limit
+            by_path = {entry.path: entry for entry in indexed_entries[:safe_limit]}
+            for entry in disk_entries:
+                by_path.setdefault(entry.path, entry)
+            entries = list(by_path.values())[:safe_limit]
+            source = "hybrid"
+            has_more = indexed_has_more
+        else:
+            entries = await index_search
+            source = "index"
+            if not entries and offset == 0:
+                entries = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._bounded_disk_find,
+                        clean,
+                        resolved_root,
+                        safe_limit + 1,
+                        timeout_seconds,
+                    ),
+                    timeout=min(max(timeout_seconds + 0.25, 0.25), 10.25),
+                )
+                source = "disk"
+            has_more = len(entries) > safe_limit
+            entries = entries[:safe_limit]
+        paused = bool(_indexing_settings()["paused"])
+        unavailable = self._unavailable_priority_roots()
         return SearchPage(
             clean,
             tuple(entries),
             str(offset + safe_limit) if has_more and source == "index" else None,
             source=source,
-            index_complete=queued == 0,
+            index_complete=queued == 0 and not paused and not unavailable,
             root=resolved_root,
         )
 
@@ -357,8 +390,10 @@ class FilesystemService:
         fastembed_available = importlib.util.find_spec("fastembed") is not None
         queued = int(scan["total"])
         failed = int(scan["failed"])
+        unavailable_priority_roots = self._unavailable_priority_roots()
         metadata_state = (
-            "partial" if failed else "paused" if paused else "indexing" if queued else "complete"
+            "partial" if failed or unavailable_priority_roots
+            else "paused" if paused else "indexing" if queued else "complete"
         )
         return {
             "started": self._started,
@@ -370,6 +405,7 @@ class FilesystemService:
             "directories_claimed": int(scan["claimed"]),
             "directories_ready": int(scan["ready"]),
             "scan_failures": scan["failures"],
+            "unavailable_priority_roots": unavailable_priority_roots,
             "metadata_state": metadata_state,
             "index_complete": metadata_state == "complete",
             "paused": paused,
@@ -391,6 +427,18 @@ class FilesystemService:
             "fastembed_available": fastembed_available,
             "policy": "priority roots first; all discovered accessible volumes remain queued",
         }
+
+    def _unavailable_priority_roots(self) -> list[dict[str, str]]:
+        available = {
+            normalize_path_key(place.path)
+            for place in self._places
+            if place.available
+        }
+        return [
+            {"path": str(root["path"]), "label": str(root.get("label") or root["path"])}
+            for root in configured_priority_roots()
+            if root.get("path") and normalize_path_key(str(root["path"])) not in available
+        ]
 
     async def _crawl_loop(self) -> None:
         while not self._stop.is_set():

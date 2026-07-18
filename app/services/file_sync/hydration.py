@@ -33,9 +33,13 @@ async def ensure_hydrated(abs_path: str) -> str | None:
 
     try:
         state = await engine._index.get_state_by_path(rel)
-    except Exception:
-        logger.debug("[file_sync] hydration state lookup failed for %s", rel, exc_info=True)
-        return None
+    except Exception as exc:
+        logger.error("[file_sync] hydration state lookup failed for %s", rel, exc_info=True)
+        return (
+            f"{rel} is inside the managed Files folder, but Matrx could not verify whether "
+            f"its bytes are stored locally ({exc}). Check file sync status and retry; "
+            "the placeholder was not opened as real content."
+        )
     if state is None or state["local_state"] != "pointer":
         return None
 

@@ -155,6 +155,10 @@ class ImageGenModelInfo(BaseModel):
     """"catalog" | "hf" | "civitai"."""
     format: str = "diffusers"
     """"diffusers" | "single_file"."""
+    text_encoders: list[dict[str, Any]] = Field(default_factory=list)
+    """Model-compatible optional text encoders, each with local installed
+    state. The standard encoder is implicit and always available with the
+    downloaded base model."""
 
 
 class WorkflowPresetInfo(BaseModel):
@@ -208,6 +212,19 @@ class DownloadModelResponse(BaseModel):
 
 class LoadModelRequest(BaseModel):
     model_id: str
+    text_encoder_id: str | None = None
+
+
+class DownloadTextEncoderRequest(BaseModel):
+    model_id: str
+    text_encoder_id: str
+
+
+class DownloadTextEncoderResponse(BaseModel):
+    queued: bool
+    download_id: str | None = None
+    already_installed: bool = False
+    text_encoder_id: str
 
 
 class LoadModelResponse(BaseModel):
@@ -265,6 +282,10 @@ class GenerateRequest(BaseModel):
     """INSTALLED LoRA ids (+ per-LoRA scale) to apply for THIS generation
     only — always unloaded afterwards. Unknown id or base-family mismatch
     → 400 naming the LoRA. GET /image-gen/loras for installed ids."""
+    text_encoder_id: str | None = None
+    """Optional model-scoped replacement text encoder. Omit for the standard
+    encoder. The selected asset must be fully downloaded before this request
+    can be queued."""
     extra_params: dict[str, Any] = Field(default_factory=dict)
     """Arbitrary diffusers pipeline kwargs, merged LAST over the computed call
     kwargs — your values override every default. ``prompt`` can never be
@@ -357,6 +378,7 @@ class ImageJobResponse(BaseModel):
     revision_root_item_id: str | None = None
     loras: list[dict[str, Any]] = []
     """The requested LoRAs: [{"id", "scale"}]."""
+    text_encoder_id: str | None = None
     extra_params: dict[str, Any] = {}
     params: dict[str, Any] = {}
     """Replayable generation snapshot, including revision lineage."""
@@ -426,6 +448,8 @@ def _image_job_response(job) -> ImageJobResponse:
             params[target] = d[source]
     if d.get("loras"):
         params["loras"] = d["loras"]
+    if d.get("text_encoder_id"):
+        params["text_encoder_id"] = d["text_encoder_id"]
     return ImageJobResponse(
         job_id=d["job_id"],
         status=d["status"],
@@ -443,6 +467,7 @@ def _image_job_response(job) -> ImageJobResponse:
         revision_parent_item_id=d.get("revision_parent_item_id"),
         revision_root_item_id=d.get("revision_root_item_id"),
         loras=d.get("loras", []),
+        text_encoder_id=d.get("text_encoder_id"),
         extra_params=d["extra_params"],
         params=params,
         progress=d["progress"],
@@ -601,6 +626,27 @@ def _validate_generation_inputs(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
 
+    if req.text_encoder_id is not None:
+        from app.services.image_gen.text_encoders import (  # noqa: PLC0415
+            get_model_encoder,
+            is_encoder_installed,
+        )
+
+        encoder = get_model_encoder(model, req.text_encoder_id)
+        if encoder is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Text encoder '{req.text_encoder_id}' is not offered "
+                f"for {model.name}.",
+            )
+        if not is_encoder_installed(encoder):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Text encoder '{req.text_encoder_id}' is not fully "
+                "downloaded yet. Select it in Alternative text encoders and "
+                "wait for its download to complete.",
+            )
+
     return init_bytes, init_sha
 
 
@@ -620,6 +666,7 @@ async def list_image_gen_models() -> list[ImageGenModelInfo]:
     """List all available models (curated catalog + user-registered custom
     models, flagged custom=true) with download + hardware state."""
     from app.services.image_gen.custom_models import list_custom_catalog_models  # noqa: PLC0415
+    from app.services.image_gen.text_encoders import encoder_api_info  # noqa: PLC0415
 
     svc = get_image_gen_service()
     out: list[ImageGenModelInfo] = []
@@ -654,6 +701,10 @@ async def list_image_gen_models() -> list[ImageGenModelInfo]:
                 custom=m.custom,
                 source=m.source,
                 format=m.format,
+                text_encoders=[
+                    encoder_api_info(e)
+                    for e in m.text_encoders
+                ],
             )
         )
     return out
@@ -677,6 +728,40 @@ async def download_model(req: DownloadModelRequest) -> DownloadModelResponse:
         queued=bool(result.get("queued")),
         download_id=result.get("download_id"),
         already_downloaded=bool(result.get("already_downloaded")),
+    )
+
+
+@router.post(
+    "/text-encoders/download", response_model=DownloadTextEncoderResponse
+)
+@safe_route("image_gen_text_encoder_download")
+async def download_text_encoder(
+    req: DownloadTextEncoderRequest,
+) -> DownloadTextEncoderResponse:
+    """Install one model-compatible optional text encoder on demand.
+
+    The universal DownloadManager owns progress, restart recovery and the
+    completion marker. Once installed, the asset remains available to every
+    future generation on this installation.
+    """
+    from app.services.image_gen.text_encoders import (  # noqa: PLC0415
+        start_encoder_download,
+    )
+
+    svc = get_image_gen_service()
+    model = svc.get_model(req.model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail=f"Unknown model: {req.model_id}")
+    result = await start_encoder_download(model, req.text_encoder_id)
+    if result.get("needs_hf_token"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return DownloadTextEncoderResponse(
+        queued=bool(result.get("queued")),
+        download_id=result.get("download_id"),
+        already_installed=bool(result.get("already_installed")),
+        text_encoder_id=req.text_encoder_id,
     )
 
 
@@ -715,7 +800,7 @@ async def load_model(req: LoadModelRequest) -> LoadModelResponse | JSONResponse:
             status_code=503,
             detail=f"Image generation not available: {svc.unavailable_reason}",
         )
-    result = await svc.load_model(req.model_id)
+    result = await svc.load_model(req.model_id, req.text_encoder_id)
     if result.get("needs_download"):
         # Contract: flat body {"detail": "...", "needs_download": true} — a
         # dict HTTPException detail would nest it under another "detail".
@@ -772,6 +857,7 @@ async def _legacy_generation_response(
             else None
         ),
         loras=[{"id": s.id, "scale": s.scale} for s in req.loras],
+        text_encoder_id=req.text_encoder_id,
     )
     return GenerateResponse(
         success=result.success,
@@ -861,6 +947,7 @@ async def _enqueue_generation(
             else None
         ),
         loras=[{"id": s.id, "scale": s.scale} for s in req.loras],
+        text_encoder_id=req.text_encoder_id,
         extra_params=dict(req.extra_params),
         priority=getattr(req, "priority", "normal"),
     )
@@ -1173,6 +1260,7 @@ async def enqueue_image_batch(req: EnqueueBatchRequest) -> EnqueueBatchResponse:
                     else None
                 ),
                 "loras": [{"id": s.id, "scale": s.scale} for s in spec.loras],
+                "text_encoder_id": spec.text_encoder_id,
                 "extra_params": dict(spec.extra_params),
                 "variables": dict(spec.variables),
                 "combo_label": spec.combo_label,

@@ -155,6 +155,7 @@ image-gen = [
     "accelerate>=1.0",
     "peft>=0.13.1",
     "sentencepiece>=0.2.0",
+    "gguf>=0.10.0",
     # protobuf intentionally NOT listed: the engine already carries it as a
     # core dep (via matrx-ai → xai-sdk, which hard-rejects protobuf 7). A
     # second copy in the runtime image-gen dir shadowed the engine's and

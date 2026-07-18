@@ -59,6 +59,16 @@ def image_loras_dir() -> Path:
     return image_models_dir() / "loras"
 
 
+def image_text_encoders_dir() -> Path:
+    """Optional image text encoders, installed once and reused permanently.
+
+    Layout: ``~/.matrx/image-models/text-encoders/<encoder-id>/``.  Keeping
+    these outside model directories avoids duplicating a compatible encoder
+    if multiple catalog models intentionally reference it later.
+    """
+    return image_models_dir() / "text-encoders"
+
+
 def generated_videos_dir() -> Path:
     return MATRX_HOME_DIR / "generated" / "videos"
 

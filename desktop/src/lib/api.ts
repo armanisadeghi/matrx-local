@@ -4098,6 +4098,26 @@ export interface ImageGenModelInfo {
    * picker.  Optional until every engine build reports it.
    */
   custom?: boolean;
+  /** Optional model-compatible replacements for the stock text encoder. */
+  text_encoders?: ImageGenTextEncoderInfo[];
+}
+
+export interface ImageGenTextEncoderInfo {
+  encoder_id: string;
+  name: string;
+  description: string;
+  repo_id: string;
+  format: "transformers" | "gguf" | "state_dict";
+  files: string[];
+  revision: string | null;
+  subfolder: string | null;
+  weight_name: string | null;
+  requires_hf_token: boolean;
+  license: string;
+  unverified: boolean;
+  download_size_gb: number;
+  source_url: string | null;
+  installed: boolean;
 }
 
 export interface ImageGenWorkflowPreset {
@@ -4458,6 +4478,26 @@ export async function downloadImageGenModel(
   });
 }
 
+/** Install a model-compatible optional text encoder through DownloadManager. */
+export async function downloadImageGenTextEncoder(
+  baseUrl: string,
+  model_id: string,
+  text_encoder_id: string,
+): Promise<{
+  queued: boolean;
+  download_id: string | null;
+  already_installed: boolean;
+  text_encoder_id: string;
+}> {
+  return imageGenFetch(
+    imageGenUrl(baseUrl, "/text-encoders/download"),
+    {
+      method: "POST",
+      body: JSON.stringify({ model_id, text_encoder_id }),
+    },
+  );
+}
+
 export async function unloadImageGenModel(baseUrl: string): Promise<void> {
   await imageGenFetch(imageGenUrl(baseUrl, "/unload"), { method: "POST" });
 }
@@ -4481,6 +4521,8 @@ export async function generateImage(
     revision?: { parent_item_id: string; root_item_id?: string };
     /** LoRA adapters to apply, each with its scale. */
     loras?: { id: string; scale: number }[];
+    /** Optional model-compatible replacement text encoder. */
+    text_encoder_id?: string;
     /** Extra pipeline kwargs merged into the diffusers call (user wins). */
     extra_params?: Record<string, unknown>;
   },
@@ -4580,6 +4622,7 @@ export interface ImageGenJob {
   params?: Record<string, unknown>;
   revision_parent_item_id?: string | null;
   revision_root_item_id?: string | null;
+  text_encoder_id?: string | null;
   /** Media-library item id, set on completion. */
   item_id?: string | null;
   file_path?: string | null;

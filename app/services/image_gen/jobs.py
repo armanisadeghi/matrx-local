@@ -121,6 +121,8 @@ class ImageJob:
     """First media-library item in this revision branch."""
     loras: list[dict[str, Any]] = field(default_factory=list)
     """Requested LoRAs: [{"id": <installed-lora-id>, "scale": float}]."""
+    text_encoder_id: str | None = None
+    """Optional model-scoped text encoder; None uses the stock component."""
     extra_params: dict[str, Any] = field(default_factory=dict)
     status: ImageJobStatus = "queued"
     progress: float = 0.0
@@ -1072,6 +1074,7 @@ class ImageJobRunner:
                     revision_parent_item_id=job.revision_parent_item_id,
                     revision_root_item_id=job.revision_root_item_id,
                     loras=job.loras,
+                    text_encoder_id=job.text_encoder_id,
                     progress_callback=lambda step, total: self._store.update_progress(
                         job_id, step, total
                     ),

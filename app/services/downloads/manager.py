@@ -45,7 +45,17 @@ from app.services.local_db.database import get_db
 logger = get_logger()
 
 DownloadStatus = Literal["queued", "active", "completed", "failed", "cancelled"]
-DownloadCategory = Literal["llm", "whisper", "image_gen", "video_gen", "tts", "ner", "file_sync"]
+DownloadCategory = Literal[
+    "llm",
+    "whisper",
+    "image_gen",
+    "image_gen_lora",
+    "image_gen_text_encoder",
+    "video_gen",
+    "tts",
+    "ner",
+    "file_sync",
+]
 
 # Maximum number of simultaneous downloads.
 MAX_CONCURRENT = 3
@@ -1185,6 +1195,7 @@ class DownloadManager:
 
         md = entry.metadata or {}
         repo_id: str = md["hf_repo_id"]
+        revision: str | None = md.get("hf_revision") or None
         dest_dir = Path(md["dest_dir"])
 
         try:
@@ -1207,7 +1218,10 @@ class DownloadManager:
         api = HfApi(token=token)
         try:
             info = await loop.run_in_executor(
-                None, lambda: api.repo_info(repo_id, files_metadata=True)
+                None,
+                lambda: api.repo_info(
+                    repo_id, revision=revision, files_metadata=True
+                ),
             )
         except Exception as exc:
             # repo_info is the FIRST authenticated call, so this is where a
@@ -1270,6 +1284,7 @@ class DownloadManager:
                     hf_hub_download(
                         repo_id=repo_id,
                         filename=fname,
+                        revision=revision,
                         local_dir=str(dest_dir),
                         token=token,
                     )

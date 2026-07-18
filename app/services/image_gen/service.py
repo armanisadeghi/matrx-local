@@ -408,6 +408,7 @@ class ImageGenService:
         self._gen_gate = asyncio.Lock()
         self._pipeline: Any = None
         self._loaded_model_id: str | None = None
+        self._loaded_text_encoder_id: str | None = None
         self._is_loading = False
         self._load_progress: float = 0.0
         self._load_error: str | None = None
@@ -459,6 +460,7 @@ class ImageGenService:
             if not self.available
             else None,
             "loaded_model_id": self._loaded_model_id,
+            "loaded_text_encoder_id": self._loaded_text_encoder_id,
             "is_loading": self._is_loading,
             "load_progress": self._load_progress,
             "load_error": self._load_error,
@@ -620,7 +622,9 @@ class ImageGenService:
         )
         return {"queued": True, "download_id": entry.id}
 
-    async def load_model(self, model_id: str) -> dict:
+    async def load_model(
+        self, model_id: str, text_encoder_id: str | None = None
+    ) -> dict:
         """Load a model pipeline into memory. No-op if already loaded.
 
         NEVER triggers a network download: when the local weights are absent
@@ -642,6 +646,26 @@ class ImageGenService:
                 "needs_download": True,
             }
 
+        encoder = None
+        if text_encoder_id is not None:
+            from app.services.image_gen.text_encoders import (  # noqa: PLC0415
+                get_model_encoder,
+                is_encoder_installed,
+            )
+
+            encoder = get_model_encoder(model, text_encoder_id)
+            if encoder is None:
+                return {
+                    "success": False,
+                    "error": f"Unknown text encoder '{text_encoder_id}' for {model.name}.",
+                }
+            if not is_encoder_installed(encoder):
+                return {
+                    "success": False,
+                    "error": f"Text encoder '{text_encoder_id}' is not downloaded.",
+                    "needs_text_encoder_download": True,
+                }
+
         hw_ok, hw_reason = self.model_hardware_check(model)
         if not hw_ok:
             return {
@@ -653,12 +677,18 @@ class ImageGenService:
         # Hold the async lock across the check-and-load so concurrent callers
         # serialize instead of racing into two parallel model loads.
         async with self._load_lock:
-            if self._loaded_model_id == model_id and self._pipeline is not None:
+            if (
+                self._loaded_model_id == model_id
+                and self._loaded_text_encoder_id == text_encoder_id
+                and self._pipeline is not None
+            ):
                 return {"success": True, "model_id": model_id, "already_loaded": True}
 
             loop = asyncio.get_running_loop()
             self._event_loop = loop  # Captured before entering the thread pool
-            return await loop.run_in_executor(None, self._load_model_sync, model)
+            return await loop.run_in_executor(
+                None, self._load_model_sync, model, encoder
+            )
 
     async def unload_model(self) -> dict:
         """Unload the current pipeline and free VRAM."""
@@ -684,6 +714,7 @@ class ImageGenService:
         revision_parent_item_id: str | None = None,
         revision_root_item_id: str | None = None,
         loras: list[dict[str, Any]] | None = None,
+        text_encoder_id: str | None = None,
     ) -> GenerationResult:
         """Generate an image. Loads the model if not already loaded.
 
@@ -768,6 +799,24 @@ class ImageGenService:
                 "use Z-Image or FLUX.",
             )
 
+        if text_encoder_id is not None:
+            from app.services.image_gen.text_encoders import (  # noqa: PLC0415
+                get_model_encoder,
+                is_encoder_installed,
+            )
+
+            encoder = get_model_encoder(model, text_encoder_id)
+            if encoder is None:
+                return GenerationResult(
+                    success=False,
+                    error=f"Unknown text encoder '{text_encoder_id}' for {model.name}.",
+                )
+            if not is_encoder_installed(encoder):
+                return GenerationResult(
+                    success=False,
+                    error=f"Text encoder '{text_encoder_id}' is not downloaded.",
+                )
+
         if self._gen_gate.locked():
             logger.info(
                 "[image_gen] Generation request (%s) waiting for the in-flight "
@@ -784,8 +833,12 @@ class ImageGenService:
             )
             try:
                 # Load if needed
-                if self._loaded_model_id != model_id or self._pipeline is None:
-                    load_result = await self.load_model(model_id)
+                if (
+                    self._loaded_model_id != model_id
+                    or self._loaded_text_encoder_id != text_encoder_id
+                    or self._pipeline is None
+                ):
+                    load_result = await self.load_model(model_id, text_encoder_id)
                     if not load_result.get("success"):
                         return GenerationResult(
                             success=False,
@@ -835,6 +888,7 @@ class ImageGenService:
                         revision_parent_item_id=revision_parent_item_id,
                         revision_root_item_id=revision_root_item_id,
                         loras=list(loras or []),
+                        text_encoder_id=text_encoder_id,
                     ),
                 )
             finally:
@@ -842,9 +896,18 @@ class ImageGenService:
 
     # ── sync internals (run in thread pool) ──────────────────────────────────
 
-    def _load_model_sync(self, model: "ImageGenModel") -> dict:
+    def _load_model_sync(
+        self, model: "ImageGenModel", text_encoder: Any = None
+    ) -> dict:
         with self._lock:
-            if self._loaded_model_id == model.model_id and self._pipeline is not None:
+            text_encoder_id = (
+                text_encoder.encoder_id if text_encoder is not None else None
+            )
+            if (
+                self._loaded_model_id == model.model_id
+                and self._loaded_text_encoder_id == text_encoder_id
+                and self._pipeline is not None
+            ):
                 return {
                     "success": True,
                     "model_id": model.model_id,
@@ -855,7 +918,11 @@ class ImageGenService:
             self._load_started_at = time.time()
             self._load_progress = 0.0
             self._load_error = None
-            logger.info("[image_gen] Loading model: %s", model.model_id)
+            logger.info(
+                "[image_gen] Loading model: %s (text_encoder=%s)",
+                model.model_id,
+                text_encoder_id or "standard",
+            )
 
             try:
                 # Unload existing pipeline first
@@ -965,9 +1032,39 @@ class ImageGenService:
                 elif model.pipeline_type == "flux2-klein":
                     from diffusers import Flux2KleinPipeline  # noqa: PLC0415
 
+                    encoder_kwargs: dict[str, Any] = {}
+                    if text_encoder is not None and text_encoder.format != "state_dict":
+                        from app.services.image_gen.text_encoders import (  # noqa: PLC0415
+                            load_encoder_components,
+                        )
+
+                        alt_encoder, alt_tokenizer = load_encoder_components(
+                            text_encoder, dtype=dtype
+                        )
+                        encoder_kwargs = {
+                            "text_encoder": alt_encoder,
+                            "tokenizer": alt_tokenizer,
+                        }
                     pipe = Flux2KleinPipeline.from_pretrained(
-                        local_path, **common_kwargs
+                        local_path, **common_kwargs, **encoder_kwargs
                     )
+                    if text_encoder is not None and text_encoder.format == "state_dict":
+                        from app.services.image_gen.text_encoders import (  # noqa: PLC0415
+                            encoder_dir,
+                        )
+
+                        if not text_encoder.weight_name:
+                            raise RuntimeError(
+                                f"State-dict encoder '{text_encoder.encoder_id}' has no weight_name"
+                            )
+                        state = torch.load(
+                            encoder_dir(text_encoder.encoder_id)
+                            / text_encoder.weight_name,
+                            map_location="cpu",
+                            weights_only=True,
+                        )
+                        pipe.text_encoder.load_state_dict(state, strict=True)
+                        del state
                 elif model.pipeline_type == "z-image":
                     from diffusers import ZImagePipeline  # noqa: PLC0415
 
@@ -1009,14 +1106,16 @@ class ImageGenService:
 
                 self._pipeline = pipe
                 self._loaded_model_id = model.model_id
+                self._loaded_text_encoder_id = text_encoder_id
                 self._device = device
                 self._load_progress = 100.0
 
                 logger.info(
-                    "[image_gen] Model loaded: %s on %s dtype=%s",
+                    "[image_gen] Model loaded: %s on %s dtype=%s text_encoder=%s",
                     model.model_id,
                     device,
                     dtype,
+                    text_encoder_id or "standard",
                 )
                 return {"success": True, "model_id": model.model_id, "device": device}
 
@@ -1029,6 +1128,7 @@ class ImageGenService:
                 )
                 self._pipeline = None
                 self._loaded_model_id = None
+                self._loaded_text_encoder_id = None
                 error = friendly_load_error(exc) or str(exc)
                 # Surfaced in GET /image-gen/status as load_error so a
                 # reconnecting UI sees WHY the model is not loaded.
@@ -1047,11 +1147,14 @@ class ImageGenService:
     def _unload_sync_locked(self) -> None:
         """Must be called with self._lock held."""
         if self._pipeline is None:
+            self._loaded_model_id = None
+            self._loaded_text_encoder_id = None
             return
         # Clear the references FIRST — even if the cache cleanup below fails,
         # the service must never keep reporting a model as loaded.
         self._pipeline = None
         self._loaded_model_id = None
+        self._loaded_text_encoder_id = None
         try:
             import torch  # noqa: PLC0415
 
@@ -1087,6 +1190,7 @@ class ImageGenService:
         revision_parent_item_id: str | None = None,
         revision_root_item_id: str | None = None,
         loras: list[dict[str, Any]] | None = None,
+        text_encoder_id: str | None = None,
     ) -> GenerationResult:
         with self._lock:
             if self._pipeline is None:
@@ -1302,6 +1406,8 @@ class ImageGenService:
                 )
             if applied_loras:
                 record_params["loras"] = applied_loras
+            if text_encoder_id is not None:
+                record_params["text_encoder_id"] = text_encoder_id
             item = save_generated_image(
                 png_bytes,
                 model_id=model.model_id,

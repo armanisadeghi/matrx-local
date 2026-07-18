@@ -9,6 +9,8 @@ export type DownloadCategory =
   | "llm"
   | "whisper"
   | "image_gen"
+  | "image_gen_lora"
+  | "image_gen_text_encoder"
   | "video_gen"
   | "tts"
   | "file_sync";

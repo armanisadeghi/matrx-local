@@ -10,7 +10,7 @@ information from this catalog without hardcoded magic strings.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 
 PipelineType = Literal[
@@ -21,6 +21,37 @@ PipelineType = Literal[
     "stable-diffusion-xl",  # StableDiffusionXLPipeline
     "stable-diffusion",     # StableDiffusionPipeline (legacy, no catalog entry)
 ]
+
+
+@dataclass(frozen=True)
+class AlternativeTextEncoder:
+    """One optional, model-compatible replacement for the stock text encoder.
+
+    These records live inside an ``image_gen_model`` catalog payload because
+    compatibility is model-specific.  Assets are downloaded on demand and are
+    never fetched implicitly during engine startup.
+    """
+
+    encoder_id: str
+    name: str
+    description: str
+    repo_id: str
+    format: Literal["transformers", "gguf", "state_dict"]
+    files: list[str]
+    revision: str | None = None
+    subfolder: str | None = None
+    weight_name: str | None = None
+    requires_hf_token: bool = False
+    license: str = "unknown"
+    unverified: bool = True
+    download_size_gb: float = 0.0
+    source_url: str | None = None
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "AlternativeTextEncoder":
+        """Strictly adapt one catalog object; the model entry is fault-isolated
+        by the normal catalog adapter if any required field is malformed."""
+        return cls(**payload)
 
 
 @dataclass(frozen=True)
@@ -105,6 +136,11 @@ class ImageGenModel:
     and differs from this fails loudly BEFORE any weights load."""
 
     tags: list[str] = field(default_factory=list)
+
+    text_encoders: list[AlternativeTextEncoder] = field(default_factory=list)
+    """Optional replacements for the stock encoder.  Empty for families that
+    do not expose compatible alternatives.  The standard encoder is implicit
+    and is selected by sending no ``text_encoder_id``."""
 
     # ── custom-model fields (user-registered models; catalog entries keep the
     #    defaults — see app/services/image_gen/custom_models.py) ──────────────
@@ -422,7 +458,16 @@ def get_image_gen_models() -> list[ImageGenModel]:
     from app.services.catalogs import get_catalog  # noqa: PLC0415 — lazy: avoids import cycle
     from app.services.catalogs.adapt import entries_to_dataclasses  # noqa: PLC0415
 
-    return entries_to_dataclasses(get_catalog("image_gen_model"), ImageGenModel)
+    def _adapt(payload: dict[str, Any]) -> dict[str, Any]:
+        payload["text_encoders"] = [
+            AlternativeTextEncoder.from_payload(item)
+            for item in payload.get("text_encoders", [])
+        ]
+        return payload
+
+    return entries_to_dataclasses(
+        get_catalog("image_gen_model"), ImageGenModel, transform=_adapt
+    )
 
 
 def get_image_gen_model(model_id: str) -> ImageGenModel | None:

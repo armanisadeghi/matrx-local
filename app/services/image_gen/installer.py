@@ -53,6 +53,11 @@ IMAGE_GEN_PACKAGES = [
     # (USE_PEFT_BACKEND gate — without peft every LoRA apply fails with
     # "PEFT backend is required for this method").
     "sentencepiece>=0.2.0",
+    # Transformers' GGUF loader dequantizes alternative Klein text encoders
+    # into PyTorch tensors. Required only by that selectable encoder format,
+    # but installed with the managed runtime so choosing it never asks users
+    # to open a terminal.
+    "gguf>=0.10.0",
     # protobuf intentionally NOT installed here. The engine bundles its own
     # (core dep via matrx-ai → xai-sdk, which hard-rejects protobuf 7). This
     # dir is PREPENDED to sys.path, so a protobuf copy here shadowed the
@@ -127,6 +132,8 @@ def needs_upgrade() -> bool:
         return True
     if get_installed_package_versions().get("peft") is None:
         return True  # LoRA apply needs peft — older installs predate this dep
+    if get_installed_package_versions().get("gguf") is None:
+        return True  # selectable GGUF text encoders need Transformers' parser
     return False
 
 
@@ -162,7 +169,11 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
         # Do NOT invoke the full installer: re-installing/altering torch during
         # an app update is unnecessary and is especially failure-prone on Windows
         # where native wheel files may be in use. Diffusers is pure Python.
-        _run_pip_streaming(["diffusers==0.39.0"], pkg_dir, progress)
+        _run_pip_streaming(
+            ["diffusers==0.39.0", "peft>=0.13.1", "gguf>=0.10.0"],
+            pkg_dir,
+            progress,
+        )
         progress.update("verifying", 80.0, "Verifying Z-Image LoRA support…")
         python = _find_python()
         env = os.environ.copy()
@@ -171,7 +182,7 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
             [
                 python,
                 "-c",
-                "import diffusers; from diffusers import ZImagePipeline; "
+                "import diffusers, gguf, peft; from diffusers import ZImagePipeline; "
                 "assert diffusers.__version__ == '0.39.0'; print('ok')",
             ],
             capture_output=True,
@@ -186,7 +197,7 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
                 {
                     "packages": IMAGE_GEN_PACKAGES,
                     "versions": get_installed_package_versions(),
-                    "migration": "diffusers-0.39.0-z-image-lora",
+                    "migration": "diffusers-0.39.0-peft-gguf-text-encoders",
                 }
             ),
             encoding="utf-8",

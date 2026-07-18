@@ -29,6 +29,7 @@ import {
   loadImageGenModel as apiLoadImageGenModel,
   unloadImageGenModel as apiUnloadImageGenModel,
   downloadImageGenModel as apiDownloadImageGenModel,
+  downloadImageGenTextEncoder as apiDownloadImageGenTextEncoder,
   generateImage as apiGenerateImage,
   generateImageFromWorkflow as apiGenerateImageWorkflow,
   enqueueImageGenJob as apiEnqueueImageGenJob,
@@ -148,6 +149,8 @@ export interface ImageGenerateInput {
   revision?: ImageRevisionRequest;
   /** Enabled LoRA adapters with their scales. */
   loras?: { id: string; scale: number }[];
+  /** Optional model-compatible replacement text encoder. */
+  text_encoder_id?: string;
   /**
    * Extra diffusers pipeline kwargs (advanced settings) merged into the call.
    * Only CHANGED keys should be sent — the UI diffs against the defaults from
@@ -255,6 +258,8 @@ export interface ImageFormState {
   strength: number;
   /** LoRA selections (persist across model switches; mismatches are warned). */
   loras: SelectedLora[];
+  /** null = the stock encoder bundled with the selected model. */
+  textEncoderId: string | null;
   /** Active button-driven revision branch, or null for normal generation. */
   revision: {
     parentItemId: string;
@@ -296,6 +301,7 @@ const INITIAL_IMAGE_FORM: ImageFormState = {
   initImage: null,
   strength: IMG2IMG_DEFAULT_STRENGTH,
   loras: [],
+  textEncoderId: null,
   revision: null,
 };
 
@@ -355,6 +361,7 @@ const FORM_OWNED_PARAM_KEYS = new Set([
   "guidance_scale",
   "strength",
   "loras",
+  "text_encoder_id",
   "has_init_image",
   "init_image_sha256",
 ]);
@@ -402,6 +409,13 @@ function recordedLoras(
     }
   }
   return out;
+}
+
+function recordedTextEncoder(
+  params: Record<string, unknown> | undefined,
+): string | null {
+  const value = params?.["text_encoder_id"];
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 export interface MediaGenState {
@@ -503,6 +517,11 @@ export interface MediaGenActions {
   loadImageModel: (modelId: string) => Promise<MediaLoadResult>;
   unloadImageModel: () => Promise<void>;
   downloadImageModel: (modelId: string) => Promise<boolean>;
+  /** Start the persistent on-demand download for a model-compatible encoder. */
+  downloadTextEncoder: (
+    modelId: string,
+    textEncoderId: string,
+  ) => Promise<boolean>;
   /** Resolves true only when a result was produced; false on any failure. */
   generateImage: (input: ImageGenerateInput) => Promise<boolean>;
   /** Resolves true only when a result was produced; false on any failure. */
@@ -957,6 +976,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         height: defaults.height,
         seedText: "",
         strength: defaults.strength ?? IMG2IMG_DEFAULT_STRENGTH,
+        textEncoderId: null,
         advancedText: advancedJsonOf(defaults.advanced),
       }));
     },
@@ -993,6 +1013,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         strength:
           strength ?? prev.defaults?.strength ?? IMG2IMG_DEFAULT_STRENGTH,
         loras: recordedLoras(p),
+        textEncoderId: recordedTextEncoder(p),
         advancedText: advancedJsonOf(advanced),
       };
     });
@@ -1036,6 +1057,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         height: d.height,
         seedText: "",
         strength: d.strength ?? IMG2IMG_DEFAULT_STRENGTH,
+        textEncoderId: null,
         advancedText: advancedJsonOf(d.advanced),
       };
     });
@@ -1102,6 +1124,33 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         );
         setImageGenError(
           e instanceof Error ? e.message : "Failed to start download",
+        );
+        return false;
+      }
+    },
+    [],
+  );
+
+  const downloadTextEncoder = useCallback(
+    async (modelId: string, textEncoderId: string): Promise<boolean> => {
+      const base = engine.engineUrl;
+      if (!base) {
+        logEngineNotConnected("text encoder download");
+        setImageGenError(ENGINE_NOT_CONNECTED_ACTION);
+        return false;
+      }
+      try {
+        await apiDownloadImageGenTextEncoder(base, modelId, textEncoderId);
+        setImageGenError(null);
+        return true;
+      } catch (e) {
+        const message =
+          e instanceof Error ? e.message : "Failed to start text encoder download";
+        setImageGenError(message);
+        emitClientLog(
+          "error",
+          `[media-gen] text encoder download failed for ${modelId}/${textEncoderId}: ${message}`,
+          "engine",
         );
         return false;
       }
@@ -2665,6 +2714,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       loadImageModel,
       unloadImageModel,
       downloadImageModel,
+      downloadTextEncoder,
       generateImage,
       generateImageWorkflow,
       cancelImageGeneration,
@@ -2721,6 +2771,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       loadImageModel,
       unloadImageModel,
       downloadImageModel,
+      downloadTextEncoder,
       generateImage,
       generateImageWorkflow,
       cancelImageGeneration,

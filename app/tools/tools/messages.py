@@ -24,10 +24,17 @@ logger = logging.getLogger(__name__)
 
 _CHAT_DB = Path.home() / "Library" / "Messages" / "chat.db"
 
-_FDA_HINT = (
-    "Full Disk Access is required to read Messages. "
-    "Grant it in System Settings → Privacy & Security → Full Disk Access, then restart the app."
-)
+def _fda_hint() -> str:
+    """Diagnosis-aware remediation from the canonical access-health authority.
+
+    chat.db is itself one of the FDA-protected probe locations, so when FDA
+    is provably granted this correctly stops telling the user to grant it
+    again (the failure has another cause), and when it's provably denied the
+    grant instructions are justified.
+    """
+    from app.services.access_health import fda_hint
+
+    return fda_hint()
 _AUTOMATION_HINT = (
     "Automation access to Messages is required to send messages. "
     "Grant it in System Settings → Privacy & Security → Automation → AI Matrx → Messages."
@@ -54,14 +61,14 @@ def _list_messages_sync(
 ) -> list[dict[str, Any]]:
     if not _CHAT_DB.exists():
         raise PermissionError(
-            f"chat.db not found at {_CHAT_DB}. {_FDA_HINT}"
+            f"chat.db not found at {_CHAT_DB}. {_fda_hint()}"
         )
 
     try:
         conn = sqlite3.connect(f"file:{_CHAT_DB}?mode=ro", uri=True, timeout=5.0)
         conn.row_factory = sqlite3.Row
     except sqlite3.OperationalError as exc:
-        raise PermissionError(f"Cannot open chat.db: {exc}. {_FDA_HINT}") from exc
+        raise PermissionError(f"Cannot open chat.db: {exc}. {_fda_hint()}") from exc
 
     try:
         where_clauses = []
@@ -143,7 +150,7 @@ async def tool_list_messages(
     except PermissionError as exc:
         return ToolResult(
             output=str(exc),
-            metadata={"available": False, "hint": _FDA_HINT},
+            metadata={"available": False, "hint": _fda_hint()},
             type=ToolResultType.ERROR,
         )
     except Exception as exc:
@@ -159,13 +166,13 @@ async def tool_list_messages(
 
 def _get_conversations_sync(limit: int) -> list[dict[str, Any]]:
     if not _CHAT_DB.exists():
-        raise PermissionError(f"chat.db not found. {_FDA_HINT}")
+        raise PermissionError(f"chat.db not found. {_fda_hint()}")
 
     try:
         conn = sqlite3.connect(f"file:{_CHAT_DB}?mode=ro", uri=True, timeout=5.0)
         conn.row_factory = sqlite3.Row
     except sqlite3.OperationalError as exc:
-        raise PermissionError(f"Cannot open chat.db: {exc}. {_FDA_HINT}") from exc
+        raise PermissionError(f"Cannot open chat.db: {exc}. {_fda_hint()}") from exc
 
     try:
         rows = conn.execute("""

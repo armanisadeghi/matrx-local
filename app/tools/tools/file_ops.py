@@ -13,10 +13,25 @@ import shutil
 from pathlib import Path
 
 from app.common.platform_ctx import CAPABILITIES
+from app.services.access_health import Capability, get_access_health
 from app.tools.session import ToolSession
 from app.tools.types import ImageData, ToolResult, ToolResultType
 
 logger = logging.getLogger(__name__)
+
+
+def _note_io(path: str, capability: Capability, exc: BaseException | None = None) -> None:
+    """Feed tool I/O outcomes into the canonical access-health evidence.
+
+    A no-op for paths outside registered resource roots, and never raises.
+    This is what keeps the health view honest: an agent actively writing the
+    notes tree IS proof of access, and a permission failure there is evidence
+    the banner can show — the two can no longer contradict each other.
+    """
+    try:
+        get_access_health().note_external_io(path, capability, exc=exc)
+    except Exception:
+        logger.debug("access-health tool hook failed", exc_info=True)
 
 MAX_READ_SIZE = 256_000
 MAX_INLINE_OUTPUT = 60_000
@@ -60,7 +75,9 @@ async def tool_read(
     try:
         text = Path(resolved).read_text(encoding="utf-8", errors="replace")
     except OSError as e:
+        _note_io(resolved, Capability.READ, e)
         return ToolResult(type=ToolResultType.ERROR, output=f"Cannot read file: {e}")
+    _note_io(resolved, Capability.READ)
 
     lines = text.splitlines(keepends=True)
     total = len(lines)
@@ -137,7 +154,9 @@ async def tool_write(
     try:
         Path(resolved).write_text(content, encoding="utf-8")
     except OSError as e:
+        _note_io(resolved, Capability.WRITE, e)
         return ToolResult(type=ToolResultType.ERROR, output=f"Cannot write file: {e}")
+    _note_io(resolved, Capability.WRITE)
 
     session.mark_file_read(resolved)
     return ToolResult(output=f"Wrote {len(content)} bytes to {resolved}")
@@ -182,7 +201,9 @@ async def tool_edit(
     try:
         Path(resolved).write_text(new_text, encoding="utf-8")
     except OSError as e:
+        _note_io(resolved, Capability.WRITE, e)
         return ToolResult(type=ToolResultType.ERROR, output=f"Cannot write file: {e}")
+    _note_io(resolved, Capability.WRITE)
 
     return ToolResult(
         output=f"Edited {resolved} ({replaced} replacement{'s' if replaced != 1 else ''})"
@@ -247,7 +268,9 @@ async def tool_move(
         os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
         shutil.move(src, dst)
     except OSError as e:
+        _note_io(dst, Capability.REPLACE, e)
         return ToolResult(type=ToolResultType.ERROR, output=f"Cannot move: {e}")
+    _note_io(dst, Capability.REPLACE)
 
     return ToolResult(output=f"Moved {src} → {dst}", metadata={"source": src, "destination": dst})
 
@@ -292,7 +315,9 @@ async def tool_copy(
         else:
             shutil.copy2(src, dst)
     except OSError as e:
+        _note_io(dst, Capability.WRITE, e)
         return ToolResult(type=ToolResultType.ERROR, output=f"Cannot copy: {e}")
+    _note_io(dst, Capability.WRITE)
 
     return ToolResult(output=f"Copied {src} → {dst}", metadata={"source": src, "destination": dst})
 
@@ -342,7 +367,9 @@ async def tool_delete(
         else:
             os.remove(resolved)
     except OSError as e:
+        _note_io(resolved, Capability.DELETE, e)
         return ToolResult(type=ToolResultType.ERROR, output=f"Cannot delete: {e}")
+    _note_io(resolved, Capability.DELETE)
 
     return ToolResult(
         output=f"Permanently deleted {kind}: {resolved}",
@@ -378,7 +405,9 @@ async def tool_rename(
     try:
         os.rename(resolved, dst)
     except OSError as e:
+        _note_io(dst, Capability.REPLACE, e)
         return ToolResult(type=ToolResultType.ERROR, output=f"Cannot rename: {e}")
+    _note_io(dst, Capability.REPLACE)
 
     return ToolResult(output=f"Renamed {resolved} → {dst}", metadata={"source": resolved, "destination": dst})
 
@@ -401,7 +430,9 @@ async def tool_mkdir(
         else:
             os.mkdir(resolved)
     except OSError as e:
+        _note_io(resolved, Capability.CREATE, e)
         return ToolResult(type=ToolResultType.ERROR, output=f"Cannot create directory: {e}")
+    _note_io(resolved, Capability.CREATE)
 
     return ToolResult(output=f"Created directory: {resolved}", metadata={"path": resolved, "created": True})
 

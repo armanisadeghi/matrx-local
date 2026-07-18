@@ -444,10 +444,16 @@ def test_retry_rehydrates_pinned_agent_after_failed_first_turn(ai_app, local_db)
     asyncio.run(_run())
 
 
-def test_error_semantics_match_aidream(ai_app):
+def test_error_semantics_match_aidream(ai_app, monkeypatch):
     """404 conversation_not_found / 409 conversation_already_exists /
     resume 404+409 / 422 tool_not_found — all in the {error,message,details}
     envelope the frontend parses."""
+    from app.services.ai.remote_tool_bridge import get_remote_tool_bridge
+
+    async def _still_missing(names):
+        return set(names)
+
+    monkeypatch.setattr(get_remote_tool_bridge(), "ensure", _still_missing)
 
     async def _run() -> None:
         async with _client(ai_app) as client:

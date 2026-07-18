@@ -25,7 +25,7 @@ import json
 import time
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, Request, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect
 
@@ -151,6 +151,51 @@ async def handle_rpc(
             error=str(e),
             data={"error_type": type(e).__name__},
         )
+
+
+# ---------------------------------------------------------------------------
+# /extension/pair — loopback-only pairing bootstrap
+# ---------------------------------------------------------------------------
+
+
+class PairResponse(BaseModel):
+    pair_token: str
+    engine_version: str
+    service: str = "matrx-local"
+
+
+@router.api_route("/pair", methods=["GET", "POST"], response_model=PairResponse)
+async def extension_pair(req: Request) -> PairResponse:
+    """Hand the engine's pairing token to a caller on direct loopback.
+
+    This is the zero-touch pairing path for the Chrome extension (and the
+    read path for the desktop UI's "pair code" display). No bearer is
+    required — the caller may not have any credential yet, and the loopback
+    socket is the trust boundary (AuthMiddleware lists this path as
+    local-bootstrap). Handing out the token grants nothing that loopback
+    presence doesn't already grant; its purpose is to let the extension
+    authenticate WITHOUT ever transmitting the user's Supabase JWT
+    (matrx-extend audit P1-5).
+
+    Over the Cloudflare tunnel this endpoint is HARD-REJECTED regardless of
+    auth: the token must never be fetchable remotely. Remote pairing is a
+    manual copy of the code shown in the desktop app's Settings.
+    """
+    from app.api.remote_auth import headers_indicate_tunnel
+    from app.services.pairing import get_or_create_pair_token
+
+    if headers_indicate_tunnel(req.headers):
+        await record_metric("pair", 0.0, ok=False, error="rejected over tunnel")
+        raise HTTPException(
+            status_code=403,
+            detail="Pairing is only available on the local machine",
+        )
+
+    token = get_or_create_pair_token()
+    await record_metric("pair", 0.0, ok=True)
+    publish_event("pair", "in", {"method": req.method})
+    logger.info("[extension_routes] pairing token issued over loopback (%s)", req.method)
+    return PairResponse(pair_token=token, engine_version=_APP_VERSION)
 
 
 # ---------------------------------------------------------------------------

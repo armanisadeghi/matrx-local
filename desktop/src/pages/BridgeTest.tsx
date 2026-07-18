@@ -594,6 +594,10 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
                 </code>
               </div>
 
+              <PairingSection isEngineReady={isEngineReady} />
+
+              <Separator />
+
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
@@ -1147,6 +1151,91 @@ function RpcResultCard({
         </pre>
       ) : (
         <div className="text-muted-foreground">Not run yet.</div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pairing — sub-section inside Panel 1.
+//
+// Shows the engine-issued pairing token. Same-machine extensions auto-pair
+// over loopback without ever seeing this screen; the visible code exists so
+// the user can manually pair an extension running on ANOTHER machine (over
+// the tunnel, where `/extension/pair` is hard-rejected by design). Hidden
+// behind a reveal toggle so a screen-share doesn't leak it.
+// ---------------------------------------------------------------------------
+
+function PairingSection({ isEngineReady }: { isEngineReady: boolean }) {
+  const [pairToken, setPairToken] = useState<string | null>(null);
+  const [pairError, setPairError] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const fetchPairInfo = useCallback(async () => {
+    try {
+      const info = await engine.extensionGetPairInfo();
+      setPairToken(info.pair_token);
+      setPairError(null);
+    } catch (e) {
+      setPairError(String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isEngineReady) return;
+    void fetchPairInfo();
+  }, [isEngineReady, fetchPairInfo]);
+
+  const copyToken = useCallback(async () => {
+    if (!pairToken) return;
+    await navigator.clipboard.writeText(pairToken);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }, [pairToken]);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-xs font-medium">
+        <ShieldCheck className="h-3.5 w-3.5 text-sky-400" />
+        Extension pairing
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Extensions on this computer pair automatically. To pair a browser on
+        another machine, copy this code into the extension&apos;s Settings →
+        Desktop Bridge → Pair code.
+      </p>
+      {pairError ? (
+        <p className="text-xs text-destructive">{pairError}</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <code className="rounded bg-muted px-2 py-1 font-mono text-xs">
+            {pairToken === null
+              ? "(unavailable)"
+              : revealed
+                ? pairToken
+                : `${pairToken.slice(0, 12)}…`}
+          </code>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={pairToken === null}
+            onClick={() => setRevealed((r) => !r)}
+          >
+            {revealed ? "Hide" : "Reveal"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={pairToken === null}
+            onClick={copyToken}
+          >
+            {copied ? (
+              <Check className="mr-2 h-3.5 w-3.5 text-emerald-400" />
+            ) : null}
+            {copied ? "Copied" : "Copy"}
+          </Button>
+        </div>
       )}
     </div>
   );

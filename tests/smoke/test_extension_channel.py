@@ -71,6 +71,71 @@ def test_rpc_requires_bearer(engine_url: str) -> None:
     assert r.status_code == 401
 
 
+# ---------------------------------------------------------------------------
+# Pairing bootstrap: POST /extension/pair (loopback, no auth) → engine-issued
+# token → that token authenticates /extension/rpc AND /extension/ws.
+# ---------------------------------------------------------------------------
+
+
+def test_pair_issues_stable_token_without_auth(engine_url: str) -> None:
+    r = httpx.post(f"{engine_url}/extension/pair", timeout=10)
+    assert r.status_code == 200, r.text[:200]
+    body = r.json()
+    assert body["service"] == "matrx-local"
+    token = body["pair_token"]
+    assert isinstance(token, str) and token.startswith("mxl_pair_")
+    # Stable across calls (persisted, not re-minted per request).
+    again = httpx.post(f"{engine_url}/extension/pair", timeout=10).json()
+    assert again["pair_token"] == token
+    # GET works too (desktop UI read path).
+    got = httpx.get(f"{engine_url}/extension/pair", timeout=10).json()
+    assert got["pair_token"] == token
+
+
+def test_pair_rejected_over_tunnel_headers(engine_url: str) -> None:
+    # A cloudflared-fronted request carries tunnel marker headers; pairing
+    # must hard-reject those regardless of any auth presented.
+    r = httpx.post(
+        f"{engine_url}/extension/pair",
+        headers={"Cf-Connecting-Ip": "203.0.113.7"},
+        timeout=10,
+    )
+    assert r.status_code in (401, 403), r.text[:200]
+
+
+def test_pair_token_authenticates_rpc_and_ws(engine_url: str) -> None:
+    pair_token = httpx.post(f"{engine_url}/extension/pair", timeout=10).json()["pair_token"]
+
+    # HTTP RPC with the pair token as bearer.
+    r = httpx.post(
+        f"{engine_url}/extension/rpc",
+        json={"command": "health"},
+        headers={"Authorization": f"Bearer {pair_token}"},
+        timeout=10,
+    )
+    assert r.status_code == 200, r.text[:200]
+    assert r.json()["ok"] is True
+
+    # WS upgrade with the pair token in ?token= (browser posture).
+    from websockets.sync.client import connect as ws_connect
+
+    ws_url = f"ws://127.0.0.1:{TEST_PORT}/extension/ws?token={pair_token}"
+    with ws_connect(ws_url, open_timeout=10) as ws:
+        hello = json.loads(ws.recv(timeout=10))
+        assert hello["type"] == "hello"
+        assert hello["session_id"]
+
+
+def test_wrong_pair_token_is_rejected(engine_url: str) -> None:
+    r = httpx.post(
+        f"{engine_url}/extension/rpc",
+        json={"command": "health"},
+        headers={"Authorization": "Bearer mxl_pair_definitely-not-the-real-one"},
+        timeout=10,
+    )
+    assert r.status_code == 401
+
+
 def test_rpc_health_version_capabilities(ext_http: httpx.Client) -> None:
     for command in ("health", "version", "capabilities"):
         r = ext_http.post("/extension/rpc", json={"command": command})

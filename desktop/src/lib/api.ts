@@ -3116,6 +3116,19 @@ class EngineAPI {
     }) as Promise<ExtensionRpcResponse>;
   }
 
+  /**
+   * GET /extension/pair — the engine-issued pairing token.
+   *
+   * Loopback-only on the engine side (tunnel requests are hard-rejected),
+   * which is fine here: the desktop UI always talks to the engine over
+   * loopback. Shown in the Bridge Test panel so the user can manually pair
+   * a REMOTE browser's extension; same-machine extensions auto-pair via
+   * this endpoint without any user action.
+   */
+  async extensionGetPairInfo(): Promise<ExtensionPairInfo> {
+    return this.request("/extension/pair");
+  }
+
   /** GET /extension/sessions — list every active extension WS session. */
   async extensionListSessions(): Promise<{
     sessions: ExtensionSessionInfo[];
@@ -3831,6 +3844,12 @@ export interface ExtensionRpcResponse {
   ok: boolean;
   data?: unknown;
   error?: string;
+}
+
+export interface ExtensionPairInfo {
+  pair_token: string;
+  engine_version: string;
+  service: string;
 }
 
 export interface ExtensionSessionInfo {

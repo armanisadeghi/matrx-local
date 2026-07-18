@@ -100,6 +100,10 @@ _LOCAL_BOOTSTRAP_PATHS = frozenset(
         "/chat/local-llm/status",
         "/chat/delegation/status",  # read-only local diagnostics; tunnel requires auth
         "/auth/token",        # JWT is the credential being *given* to the engine
+        # Extension pairing bootstrap — the pairing token IS the credential
+        # being handed out, so the caller cannot present one yet. The route
+        # itself additionally hard-rejects tunnel-originated requests.
+        "/extension/pair",
         "/admin/status",
         "/admin/shutdown",
         "/admin/diagnose",

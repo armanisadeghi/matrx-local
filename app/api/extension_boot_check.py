@@ -76,6 +76,7 @@ CheckStatus = Literal["ok", "warn", "fail"]
 
 _EXPECTED_HTTP_ROUTES: tuple[str, ...] = (
     "/extension/rpc",
+    "/extension/pair",
     "/extension/sessions",
     "/extension/sessions/disconnect",
     "/extension/invoke",

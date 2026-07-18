@@ -21,6 +21,7 @@ channel.
 | File | What it does | Direction |
 |---|---|---|
 | `app/api/extension_routes.py` | `POST /extension/rpc` (dispatches into `HANDLERS`) + the `/extension/ws` reverse-push WebSocket route. | both |
+| `app/services/pairing.py` + `POST/GET /extension/pair` (in `extension_routes.py`) | **Pairing bootstrap.** Engine-issued persistent secret (`~/.matrx/pairing.json`, `mxl_pair_…`). The endpoint is token-free on direct loopback (local-bootstrap path) and HARD-REJECTED over the tunnel; the extension auto-pairs through it with zero user action, and the desktop Bridge Test page shows the code for manual remote pairing. The token authenticates all `/extension/*` (HTTP + WS), including over the tunnel (a paired caller is an owner device — skips the owner check). | extension → local |
 | `app/api/extension_handlers.py` | The `HANDLERS` registry — `health`, `version`, `capabilities`, `tool` (generic dispatcher passthrough). Plus `invoke_command(command, args, request=None)` — the transport-agnostic dispatch every non-HTTP transport uses. **One command surface for all transports.** | extension → local |
 | `app/tools/dispatcher.py` | `dispatch(tool_name, tool_input, session) -> ToolResult` — the public function the `tool` command uses to reach all ~80 engine tools. | extension → local |
 | `app/api/extension_invoke.py` | `invoke_extension_tool(tool_name, args, session_id, timeout_seconds=30)` — engine-side outbound RPC primitive. Sends `extension.invoke` over `/extension/ws`, awaits the correlated `extension.result` by `callId`. | local → extension |
@@ -117,8 +118,17 @@ The engine is reachable via **three** paths:
 
 - Bearer token in `Authorization` header (REST) or `?token=` query param (WS
   upgrades — browsers cannot set WS headers).
-- The extension uses the pairing token (Settings → Pair desktop) — it never
-  sends the raw Supabase access token to a probed localhost port (audit P1-5).
+- The extension uses the ENGINE-ISSUED pairing token — it never sends the raw
+  Supabase access token to a probed localhost port (audit P1-5). Pairing is
+  zero-touch on the same machine: on first use the extension calls
+  `POST /extension/pair` (loopback-only) and stores the returned
+  `mxl_pair_…` secret; a 401 later (rotated/stale token) auto-clears and
+  re-pairs once. Remote browsers pair manually by copying the code from the
+  desktop app (Settings → Bridge Test → Extension pairing) into the
+  extension's Settings → Desktop bridge → Pair code.
+- `extension_auth` accepts the pair token as a bearer BEFORE the JWT paths
+  (constant-time compare, `app/services/pairing.py`); pair-token principals
+  carry `via_pairing=True` and skip the tunnel owner check.
 - **`/extension/*` validation** (`app/api/extension_auth.py::validate_extension_principal`):
   a malformed bearer (not a JWT) fails closed with 401. Well-formed tokens:
   1. **JWKS / asymmetric (RS256/ES256)** — verified locally against

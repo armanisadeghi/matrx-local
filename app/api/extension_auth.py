@@ -306,6 +306,11 @@ class ExtensionPrincipal:
     is_anon: bool
     raw_token: str
     verified: bool
+    # True when the bearer was the engine-issued pairing token rather than a
+    # Supabase JWT. A paired caller is by definition one of the owner's own
+    # devices (the token is only obtainable over loopback or by copying it
+    # from the desktop UI), so pairing satisfies the tunnel owner check.
+    via_pairing: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +426,23 @@ async def _verify_token(token: str, *, via_tunnel: bool = False) -> ExtensionPri
     Raises on malformed tokens, failed crypto verification, or an
     unverifiable token arriving over the tunnel. Callers map to 401 / 1008.
     """
+    # Engine-issued pairing token — the extension's canonical credential
+    # (it never sends the user's Supabase JWT to a probed localhost port,
+    # per its audit P1-5). Constant-time compare inside. A paired caller is
+    # one of the owner's own devices, so this is accepted over the tunnel
+    # too; the token itself is only obtainable over loopback.
+    from app.services.pairing import matches_pair_token
+
+    if matches_pair_token(token):
+        return ExtensionPrincipal(
+            user_id="",
+            email=None,
+            is_anon=False,
+            raw_token=token,
+            verified=True,
+            via_pairing=True,
+        )
+
     # Peek at the token header to choose the validation path.
     try:
         import jwt as _jwt
@@ -569,8 +591,9 @@ async def validate_extension_principal(request: Request) -> ExtensionPrincipal:
         ) from exc
 
     # Owner-only over the tunnel: a valid token from another AI Matrx user must
-    # not reach this instance's extension/sandbox surface.
-    if _via_tunnel and not await is_instance_owner(principal.user_id):
+    # not reach this instance's extension/sandbox surface. Paired principals
+    # skip this — the pairing token is itself proof of owner-device access.
+    if _via_tunnel and not principal.via_pairing and not await is_instance_owner(principal.user_id):
         _log_rejection("http", request.url.path, "not_instance_owner", method=request.method)
         raise HTTPException(status_code=403, detail="Not authorized for this instance")
 
@@ -634,7 +657,7 @@ async def validate_extension_principal_ws(
         )
         return None
 
-    if _via_tunnel and not await is_instance_owner(principal.user_id):
+    if _via_tunnel and not principal.via_pairing and not await is_instance_owner(principal.user_id):
         _log_rejection("ws", websocket.url.path, "not_instance_owner")
         await websocket.close(
             code=WS_CLOSE_POLICY_VIOLATION,

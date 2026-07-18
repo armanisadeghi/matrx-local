@@ -33,7 +33,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { isTauri } from "@/lib/sidecar";
-import { engine } from "@/lib/api";
+import { engine, type PermissionInfo } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -244,6 +244,17 @@ const POST_REQUEST_DELAY_MS = 1200;
 export interface UsePermissionsReturn {
   permissions: Map<PermissionKey, PermissionState>;
   isLoading: boolean;
+  /**
+   * The engine's raw per-device permission list (Dashboard/Devices rows).
+   * ONE shared copy — pages must consume this instead of fetching their own
+   * engine.getDevicePermissions() snapshot (the historical private copies
+   * were never reconciled with each other or with the plugin results).
+   */
+  devicePermissions: PermissionInfo[];
+  /** Engine-reported platform for the device list ("Darwin", "Windows"...). */
+  devicePlatform: string;
+  deviceLastRefresh: Date | null;
+  refreshDevicePermissions: (force?: boolean) => Promise<void>;
   check: (key: PermissionKey) => Promise<PermissionStatus>;
   checkAll: () => Promise<void>;
   request: (key: PermissionKey) => Promise<void>;
@@ -285,6 +296,9 @@ export function usePermissions(): UsePermissionsReturn {
     buildInitialState,
   );
   const [isLoading, setIsLoading] = useState(true);
+  const [devicePermissions, setDevicePermissions] = useState<PermissionInfo[]>([]);
+  const [devicePlatform, setDevicePlatform] = useState("");
+  const [deviceLastRefresh, setDeviceLastRefresh] = useState<Date | null>(null);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -430,6 +444,9 @@ export function usePermissions(): UsePermissionsReturn {
     const engineCheck = (async () => {
       try {
         const result = await engine.getDevicePermissions();
+        setDevicePermissions(result.permissions);
+        setDevicePlatform(result.platform);
+        setDeviceLastRefresh(new Date());
         for (const p of result.permissions) {
           const key = p.permission as PermissionKey;
           if (!PLUGIN_KEYS.has(key)) {
@@ -449,6 +466,32 @@ export function usePermissions(): UsePermissionsReturn {
     await Promise.all([...pluginChecks, engineCheck]);
     setIsLoading(false);
   }, [checkPluginPermission, updatePermission]);
+
+  /**
+   * Refresh the shared engine device-permission list (Dashboard/Devices).
+   * `force` bypasses the engine's TTL cache — use from explicit "Refresh"
+   * affordances only. Also folds statuses back into the permission Map so
+   * every consumer stays consistent.
+   */
+  const refreshDevicePermissions = useCallback(
+    async (force: boolean = false) => {
+      try {
+        const result = await engine.getDevicePermissions(force);
+        setDevicePermissions(result.permissions);
+        setDevicePlatform(result.platform);
+        setDeviceLastRefresh(new Date());
+        for (const p of result.permissions) {
+          const key = p.permission as PermissionKey;
+          if (!PLUGIN_KEYS.has(key)) {
+            updatePermission(key, p.status as PermissionStatus, p.details);
+          }
+        }
+      } catch {
+        // Engine unreachable — keep the last known list.
+      }
+    },
+    [updatePermission],
+  );
 
   // ── Request ────────────────────────────────────────────────────────────────
 
@@ -568,7 +611,18 @@ export function usePermissions(): UsePermissionsReturn {
   // recheck path. macOS TCC status for CGPreflightScreenCaptureAccess only
   // updates after an app restart anyway, so auto-recheck provides no real value.
 
-  return { permissions, isLoading, check, checkAll, request, openSettings };
+  return {
+    permissions,
+    isLoading,
+    devicePermissions,
+    devicePlatform,
+    deviceLastRefresh,
+    refreshDevicePermissions,
+    check,
+    checkAll,
+    request,
+    openSettings,
+  };
 }
 
 // ---------------------------------------------------------------------------

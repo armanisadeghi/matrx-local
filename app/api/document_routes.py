@@ -19,7 +19,6 @@ import asyncio
 import base64
 import json as _json
 import logging
-import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,7 +29,6 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.services.access_health import get_access_health
 from app.services.documents.access_resources import (
-    NOTES_RESOURCE,
     register_mapping,
     unregister_mapping,
 )
@@ -973,53 +971,10 @@ async def revert_note(note_id: str, req: RevertRequest, request: Request) -> dic
 # Sync endpoints — explicit user-triggered sync operations
 # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Notes access health — TEMPORARY response-shape adapters over the canonical
-# access-health service (app/services/access_health). The state itself lives
-# ONLY in that service; these endpoints exist until the frontend migrates to
-# GET /access/health + POST /access/recheck, then they are deleted.
-# ---------------------------------------------------------------------------
-
-
-class AccessRecheckRequest(BaseModel):
-    # "Create folder" action for the missing_dir case (Windows/Linux, or a
-    # user-deleted notes dir). On macOS-without-FDA the mkdir itself is
-    # denied, so this degrades to the permission prompt — never a crash.
-    create_dir: bool = False
-
-
-def _access_payload() -> dict[str, Any]:
-    health = get_access_health().health(NOTES_RESOURCE) or {}
-    degraded = health.get("status") == "degraded"
-    return {
-        "degraded": degraded,
-        "reason": health.get("message") if degraded else None,
-        "kind": health.get("kind"),
-        "base_dir": str(file_manager.base_dir),
-        "platform": sys.platform,
-    }
-
-
-@router.get("/access")
-async def notes_access_status() -> dict[str, Any]:
-    """Current notes-directory access state (no filesystem probe)."""
-    return _access_payload()
-
-
-@router.post("/access/recheck")
-async def notes_access_recheck(req: AccessRecheckRequest | None = None) -> dict[str, Any]:
-    """Actively re-probe the notes directory ("Check again" button).
-
-    Clears the degraded state the moment access is restored — no engine
-    restart needed. With ``create_dir`` it also creates a missing notes
-    folder ("Create folder" button).
-    """
-    create = bool(req.create_dir) if req is not None else False
-    service = get_access_health()
-    await asyncio.to_thread(
-        service.recheck, [NOTES_RESOURCE], create_missing=create
-    )
-    return _access_payload()
+# Notes access health lives in the canonical access-health surface:
+# GET /access/health, POST /access/recheck, POST /access/reset
+# (app/api/access_routes.py). The old /notes/access* adapters were deleted
+# once the frontend migrated — do not reintroduce a notes-only access view.
 
 
 @router.get("/sync/status")

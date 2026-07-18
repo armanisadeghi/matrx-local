@@ -56,7 +56,6 @@ export function Dashboard({
   user,
   onSignOut,
 }: DashboardProps) {
-  const [permissions, setPermissions] = useState<PermissionInfo[]>([]);
   const [installingBrowser, setInstallingBrowser] = useState(false);
   const [browserInstallMessage, setBrowserInstallMessage] = useState<
     string | null
@@ -64,23 +63,20 @@ export function Dashboard({
   const [browserInstallError, setBrowserInstallError] = useState(false);
   const [permissionsModalOpen, setPermissionsModalOpen] = useState(false);
 
-  // Tauri-plugin-backed permission states (authoritative TCC identity for the .app bundle)
-  const { permissions: nativePermissions, isLoading: nativePermsLoading } =
-    usePermissionsContext();
-
-  const loadPermissions = useCallback(async () => {
-    if (engineStatus !== "connected") return;
-    try {
-      const result = await engine.getDevicePermissions();
-      setPermissions(result.permissions);
-    } catch {
-      // non-critical
-    }
-  }, [engineStatus]);
+  // Shared permission stores: plugin-backed Map (authoritative TCC identity
+  // for the .app bundle) + the ONE engine device-permission list. No private
+  // page-level copies (they drifted from each other historically).
+  const {
+    permissions: nativePermissions,
+    isLoading: nativePermsLoading,
+    devicePermissions: permissions,
+    refreshDevicePermissions,
+  } = usePermissionsContext();
 
   useEffect(() => {
-    loadPermissions();
-  }, [loadPermissions]);
+    if (engineStatus !== "connected") return;
+    void refreshDevicePermissions();
+  }, [engineStatus, refreshDevicePermissions]);
 
   const installBrowser = useCallback(async () => {
     setInstallingBrowser(true);

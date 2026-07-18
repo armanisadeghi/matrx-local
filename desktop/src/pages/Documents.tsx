@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDocuments } from "@/hooks/use-documents";
+import { useAccessHealthContext } from "@/contexts/AccessHealthContext";
+import { deriveAccessPresentation } from "@/hooks/use-access-health";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import { FolderTree } from "@/components/documents/FolderTree";
 import { NoteList } from "@/components/documents/NoteList";
@@ -61,17 +63,31 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
     if (docs.error) setErrorDismissed(false);
   }, [docs.error]);
 
-  // Access can degrade MID-session (e.g. a save hits the OS wall and 503s,
-  // or a background sync flags it). Whenever another surface reports the
-  // degraded flag — or any error appears — refresh the access state so the
-  // first-class prompt takes over instead of a raw error banner. Gated on
-  // the specific booleans, not broad objects (CLAUDE.md React rules).
-  const { loadNotesAccess } = docs;
+  // Access health comes from the app-wide store (single poll owner). Two
+  // page-level concerns remain:
+  //   1. Access can degrade MID-session (a save 503s, background sync flags
+  //      it) — nudge the shared store to refresh so the first-class prompt
+  //      takes over instead of a raw error banner.
+  //   2. When access RECOVERS, reload everything the degraded state was
+  //      blocking so the page comes alive without a restart.
+  // Gated on specific booleans, not broad objects (CLAUDE.md React rules).
+  const access = useAccessHealthContext();
+  const { refresh: refreshAccess } = access.actions;
   const syncSaysDegraded = docs.syncStatus?.notes_access_degraded === true;
   const hasError = docs.error !== null;
   useEffect(() => {
-    if (syncSaysDegraded || hasError) void loadNotesAccess();
-  }, [syncSaysDegraded, hasError, loadNotesAccess]);
+    if (syncSaysDegraded || hasError) void refreshAccess();
+  }, [syncSaysDegraded, hasError, refreshAccess]);
+
+  const notesDegraded = access.notesResource?.status === "degraded";
+  const { reloadAfterAccessRestored } = docs;
+  const wasDegradedRef = useRef(false);
+  useEffect(() => {
+    if (wasDegradedRef.current && !notesDegraded) {
+      void reloadAfterAccessRestored();
+    }
+    wasDegradedRef.current = notesDegraded;
+  }, [notesDegraded, reloadAfterAccessRestored]);
 
   useRealtimeSync({
     userId,
@@ -164,13 +180,32 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
     );
   }
 
-  // Notes-directory access is degraded (macOS Full Disk Access not granted,
-  // folder permissions, or a missing folder): show the first-class prompt
-  // instead of empty lists and console errors. It re-probes via
-  // docs.recheckAccess and unmounts itself the moment access is granted.
-  if (docs.notesAccess?.degraded) {
+  // Notes-directory access is degraded: show the first-class prompt instead
+  // of empty lists and console errors. The shared store's 10s degraded poll
+  // auto-clears it the moment access is granted.
+  if (notesDegraded && access.notesResource && access.health) {
+    const resource = access.notesResource;
     return (
-      <NotesAccessPrompt access={docs.notesAccess} onRecheck={docs.recheckAccess} />
+      <NotesAccessPrompt
+        resource={resource}
+        presentation={deriveAccessPresentation(
+          resource,
+          access.health,
+          access.parentFdaProbe,
+        )}
+        checking={access.checking}
+        onRecheck={async (opts) => {
+          const health = await access.actions.recheck({
+            resourceIds: [resource.resource_id],
+            createMissing: opts?.createMissing ?? false,
+          });
+          if (!health) return null;
+          const fresh = health.resources.find(
+            (r) => r.resource_id === resource.resource_id,
+          );
+          return { degraded: fresh?.status === "degraded" };
+        }}
+      />
     );
   }
 

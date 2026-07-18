@@ -1,80 +1,101 @@
 /**
  * NotesAccessPrompt — render-logic pins (node env, react-dom/server).
  *
- * The prompt is the user-facing half of the notes access-degraded STATE
- * (engine: notes_access_guard + GET /notes/access). These tests pin that
- * each degraded kind/platform renders the right explanation and actions:
- *
- *   - macOS permission  → Full Disk Access copy + "Open System Settings"
- *   - missing_dir       → "Create folder" action, no macOS settings button
- *   - non-mac permission→ the engine's actionable reason verbatim, no
- *                         macOS settings button
- *
- * No jsdom in this repo, so we assert on static markup — interaction
- * behavior (recheck/poll) lives in the engine tests
- * (tests/unit/test_notes_access_state.py) and the hook wiring.
+ * The prompt is a PURE renderer of the shared access-health store: it shows
+ * the presentation derived by deriveAccessPresentation and the resource's
+ * resolved path, with the right actions per evidence. Polling and state live
+ * in AccessHealthContext, so these tests only pin markup.
  */
 
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { NotesAccessStatus } from "@/lib/api";
+import type { AccessResourceHealth } from "@/lib/api";
+import { deriveAccessPresentation } from "@/hooks/use-access-health";
 import { PermissionsProvider } from "@/contexts/PermissionsContext";
 import { NotesAccessPrompt } from "./NotesAccessPrompt";
 
-function render(access: NotesAccessStatus): string {
+function resource(
+  overrides: Partial<AccessResourceHealth> = {},
+): AccessResourceHealth {
+  return {
+    resource_id: "notes-canonical",
+    label: "Notes folder",
+    root: "/Users/test/Documents/Matrx/Notes",
+    provenance: "default",
+    status: "degraded",
+    kind: "permission",
+    message: "The OS denied write on /Users/test/Documents/Matrx/Notes (errno 13).",
+    capabilities: {},
+    last_success_at: null,
+    last_failure: null,
+    recent: [],
+    generation: 1,
+    ...overrides,
+  };
+}
+
+function render(
+  res: AccessResourceHealth,
+  platform: string,
+  fdaStatus: "granted" | "denied" | "indeterminate" | null,
+): string {
+  const presentation = deriveAccessPresentation(
+    res,
+    {
+      platform,
+      fda: fdaStatus
+        ? {
+            status: fdaStatus,
+            evidence: [],
+            source: "engine-process probe",
+            checked_at: 0,
+          }
+        : null,
+    },
+    null,
+  );
   return renderToStaticMarkup(
     <PermissionsProvider>
-      <NotesAccessPrompt access={access} onRecheck={async () => null} />
+      <NotesAccessPrompt
+        resource={res}
+        presentation={presentation}
+        checking={false}
+        onRecheck={async () => null}
+      />
     </PermissionsProvider>,
   );
 }
 
-const base = {
-  degraded: true as const,
-  base_dir: "/Users/test/Documents/Matrx/Notes",
-};
-
 describe("NotesAccessPrompt", () => {
-  it("macOS permission denial → Full Disk Access explanation + System Settings action", () => {
-    const html = render({
-      ...base,
-      kind: "permission",
-      reason: "macOS denied access to ~/Documents — grant Full Disk Access…",
-      platform: "darwin",
-    });
-    expect(html).toContain("Matrx needs access to your notes folder");
+  it("positively-established macOS FDA denial → FDA copy + System Settings action", () => {
+    const html = render(resource(), "darwin", "denied");
     expect(html).toContain("Full Disk Access");
     expect(html).toContain("Open System Settings");
+    expect(html).toContain("/Users/test/Documents/Matrx/Notes");
     expect(html).toContain("Check again");
-    expect(html).toContain(base.base_dir);
-    expect(html).not.toContain("Create folder");
   });
 
-  it("missing notes folder → Create folder action, no macOS settings button", () => {
-    const html = render({
-      ...base,
-      kind: "missing_dir",
-      reason: `Notes folder does not exist: ${base.base_dir}`,
-      platform: "win32",
-    });
-    expect(html).toContain("Your notes folder is missing");
+  it("unestablished macOS cause → evidence copy, settings offered as secondary", () => {
+    const html = render(resource(), "darwin", "indeterminate");
+    expect(html).toContain("errno 13");
+    expect(html).toContain("Open System Settings");
+    expect(html).not.toContain("Privacy controls are blocking");
+  });
+
+  it("missing_dir → Create folder action, no System Settings button", () => {
+    const html = render(
+      resource({ kind: "missing_dir" }),
+      "darwin",
+      "indeterminate",
+    );
     expect(html).toContain("Create folder");
-    expect(html).toContain("Check again");
     expect(html).not.toContain("Open System Settings");
   });
 
-  it("non-mac permission denial → renders the engine's actionable reason", () => {
-    const reason =
-      "The operating system denied access to the notes folder — check the " +
-      "folder's permissions and ownership";
-    const html = render({
-      ...base,
-      kind: "permission",
-      reason,
-      platform: "linux",
-    });
-    expect(html).toContain("check the\nfolder&#x27;s permissions".replace("\n", " "));
+  it("non-mac permission denial → evidence message, never mentions FDA", () => {
+    const html = render(resource(), "linux", null);
+    expect(html).toContain("errno 13");
+    expect(html).not.toContain("Full Disk Access");
     expect(html).not.toContain("Open System Settings");
-    expect(html).not.toContain("Create folder");
   });
 });

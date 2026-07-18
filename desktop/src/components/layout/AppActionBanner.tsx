@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   AlertTriangle,
   Download,
@@ -8,45 +8,32 @@ import {
   Settings,
 } from "lucide-react";
 
+import { useAccessHealthContext } from "@/contexts/AccessHealthContext";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 import { usePermissionsContext } from "@/contexts/PermissionsContext";
 import { useResolutionAction } from "@/components/downloads/useResolutionAction";
 import { Button } from "@/components/ui/button";
-import { engine, type NotesAccessStatus } from "@/lib/api";
+import { deriveAccessPresentation } from "@/hooks/use-access-health";
 import type { EngineStatus } from "@/hooks/use-engine";
 
 interface AppActionBannerProps {
   engineStatus: EngineStatus;
 }
 
-const NOTES_ACCESS_POLL_MS = 15_000;
-
-type NotesAccessProbe = Pick<typeof engine, "recheckNotesAccess">;
-
 /**
- * Return a filesystem-verified notes access state.
- *
- * The global banner must never use getNotesAccess() here: that endpoint only
- * returns the engine's cached guard. Using it made both the poll and the
- * "Check again" button repeat a stale denial forever even after the engine
- * could read the folder. The Documents page already uses this active probe;
- * keep the app-wide prompt on the same contract.
+ * Global action banner. Pure RENDERER of shared stores:
+ *   - Access health comes from AccessHealthContext (the app's single poll
+ *     owner, generation-fenced). This component holds no access state and
+ *     runs no poll of its own — the historical dual-poller stale-response
+ *     clobber cannot recur here.
+ *   - Copy is evidence-based via deriveAccessPresentation: the definitive
+ *     "Full Disk Access" claim renders only on a positive engine diagnosis.
  */
-export function getFreshNotesAccess(
-  notesApi: NotesAccessProbe,
-  opts?: { createDir?: boolean },
-): Promise<NotesAccessStatus> {
-  return notesApi.recheckNotesAccess(
-    opts?.createDir ? { createDir: true } : undefined,
-  );
-}
-
-export function AppActionBanner({ engineStatus }: AppActionBannerProps) {
+export function AppActionBanner(_props: AppActionBannerProps) {
   const { downloads, openModal } = useDownloadManager();
   const { openSettings } = usePermissionsContext();
   const dispatchDownloadAction = useResolutionAction();
-  const [notesAccess, setNotesAccess] = useState<NotesAccessStatus | null>(null);
-  const [checkingNotes, setCheckingNotes] = useState(false);
+  const access = useAccessHealthContext();
 
   const actionNeededDownloads = useMemo(
     () => downloads.filter((d) => d.status === "failed" && d.resolution != null),
@@ -54,45 +41,21 @@ export function AppActionBanner({ engineStatus }: AppActionBannerProps) {
   );
   const firstDownloadResolution = actionNeededDownloads[0]?.resolution ?? null;
 
-  const refreshNotesAccess = useCallback(
-    async (opts?: { createDir?: boolean }) => {
-      if (engineStatus !== "connected") {
-        setNotesAccess(null);
-        return;
-      }
-      setCheckingNotes(true);
-      try {
-        const next = await getFreshNotesAccess(engine, opts);
-        setNotesAccess(next);
-      } catch {
-        // Older engines or transient outages should not replace the real
-        // problem with banner noise. The feature page still handles its own
-        // degraded state when available.
-      } finally {
-        setCheckingNotes(false);
-      }
-    },
-    [engineStatus],
-  );
+  // Show the most relevant degraded resource: canonical notes first, then
+  // any mapped dir / replica — each with copy naming ITS actual path.
+  const worst =
+    access.degradedResources.find((r) => r.resource_id === "notes-canonical") ??
+    access.degradedResources[0] ??
+    null;
+  const presentation =
+    worst && access.health
+      ? deriveAccessPresentation(worst, access.health, access.parentFdaProbe)
+      : null;
 
-  useEffect(() => {
-    if (engineStatus !== "connected") {
-      setNotesAccess(null);
-      return;
-    }
-    void refreshNotesAccess();
-    const id = window.setInterval(() => void refreshNotesAccess(), NOTES_ACCESS_POLL_MS);
-    return () => window.clearInterval(id);
-  }, [engineStatus, refreshNotesAccess]);
-
-  const notesNeedsAction = notesAccess?.degraded === true;
   const hasDownloadActions = actionNeededDownloads.length > 0;
+  if (!presentation && !hasDownloadActions) return null;
 
-  if (!notesNeedsAction && !hasDownloadActions) return null;
-
-  const isMacNotesPermission =
-    notesAccess?.platform === "darwin" && notesAccess.kind === "permission";
-  const isMissingNotesDir = notesAccess?.kind === "missing_dir";
+  const checking = access.checking;
 
   return (
     <div className="border-b border-amber-300/60 bg-amber-50/95 px-4 py-2 text-amber-950 shadow-sm dark:border-amber-800/50 dark:bg-amber-950/35 dark:text-amber-100">
@@ -114,18 +77,14 @@ export function AppActionBanner({ engineStatus }: AppActionBannerProps) {
                   </span>
                 </p>
               )}
-              {notesNeedsAction && (
+              {presentation && (
                 <p className="flex min-w-0 items-center gap-1.5">
-                  {isMissingNotesDir ? (
+                  {presentation.primaryAction === "create_folder" ? (
                     <FolderPlus className="h-3.5 w-3.5 shrink-0" />
                   ) : (
                     <FolderLock className="h-3.5 w-3.5 shrink-0" />
                   )}
-                  <span className="truncate">
-                    {isMacNotesPermission
-                      ? "macOS is blocking the notes folder. Grant Full Disk Access so notes can sync."
-                      : notesAccess?.reason ?? "The notes folder needs attention before notes can sync."}
-                  </span>
+                  <span className="truncate">{presentation.body}</span>
                 </p>
               )}
             </div>
@@ -152,7 +111,7 @@ export function AppActionBanner({ engineStatus }: AppActionBannerProps) {
               Open downloads
             </Button>
           )}
-          {isMacNotesPermission && (
+          {presentation?.showFdaAction && (
             <Button
               size="sm"
               className="h-7 bg-amber-600 px-2.5 text-xs text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
@@ -162,27 +121,32 @@ export function AppActionBanner({ engineStatus }: AppActionBannerProps) {
               Open System Settings
             </Button>
           )}
-          {isMissingNotesDir && (
+          {presentation?.primaryAction === "create_folder" && worst && (
             <Button
               size="sm"
               className="h-7 bg-amber-600 px-2.5 text-xs text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
-              disabled={checkingNotes}
-              onClick={() => void refreshNotesAccess({ createDir: true })}
+              disabled={checking}
+              onClick={() =>
+                void access.actions.recheck({
+                  resourceIds: [worst.resource_id],
+                  createMissing: true,
+                })
+              }
             >
               <FolderPlus className="mr-1.5 h-3.5 w-3.5" />
-              Create notes folder
+              Create folder
             </Button>
           )}
-          {notesNeedsAction && (
+          {presentation && (
             <Button
               size="sm"
               variant="outline"
               className="h-7 border-amber-300 bg-background/70 px-2.5 text-xs dark:border-amber-800"
-              disabled={checkingNotes}
-              onClick={() => void refreshNotesAccess()}
+              disabled={checking}
+              onClick={() => void access.actions.recheck()}
             >
               <RefreshCw
-                className={`mr-1.5 h-3.5 w-3.5 ${checkingNotes ? "animate-spin" : ""}`}
+                className={`mr-1.5 h-3.5 w-3.5 ${checking ? "animate-spin" : ""}`}
               />
               Check again
             </Button>

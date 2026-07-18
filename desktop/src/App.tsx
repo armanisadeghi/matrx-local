@@ -50,6 +50,7 @@ import {
 import { CompactRecorderWindow } from "@/components/CompactRecorderWindow";
 import { MenuEventBridge } from "@/components/MenuEventBridge";
 import { PermissionsProvider } from "@/contexts/PermissionsContext";
+import { AccessHealthProvider } from "@/contexts/AccessHealthContext";
 import { AudioDevicesProvider } from "@/contexts/AudioDevicesContext";
 import { LlmProvider } from "@/contexts/LlmContext";
 import { WakeWordProvider } from "@/contexts/WakeWordContext";
@@ -519,6 +520,10 @@ function AppInner() {
 
   return (
     <TooltipProvider delayDuration={150}>
+      {/* ONE access-health store app-wide (banner, Documents, Recovery,
+          Settings) — single poll owner, generation-fenced updates. Lives here
+          (not in the provider stack) because it needs engineStatus. */}
+      <AccessHealthProvider engineStatus={status}>
       <HashRouter>
         <Routes>
           <Route path="/overlay" element={<TranscriptOverlay />} />
@@ -584,6 +589,7 @@ function AppInner() {
         <DownloadManagerModal />
         <DevTerminalPanel />
       </HashRouter>
+      </AccessHealthProvider>
     </TooltipProvider>
   );
 }

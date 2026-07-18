@@ -138,25 +138,6 @@ export interface SystemInfo {
   home_dir: string;
 }
 
-/**
- * Thrown by invokeToolGuarded() when a required macOS permission is not granted.
- * The UI layer catches this and shows the PermissionsModal or PermissionDeniedBanner.
- */
-export class PermissionRequiredError extends Error {
-  constructor(
-    public readonly permissionKey: string,
-    public readonly permissionLabel: string,
-    public readonly permissionDescription: string,
-    public readonly tool: string,
-  ) {
-    super(
-      `"${tool}" requires ${permissionLabel} access. ` +
-        `Go to System Settings → Privacy & Security to grant it.`,
-    );
-    this.name = "PermissionRequiredError";
-  }
-}
-
 class EngineAPI {
   private baseUrl: string | null = null;
   private wsUrl: string | null = null;
@@ -951,117 +932,6 @@ class EngineAPI {
       hasMetadata: !!result.metadata,
     });
     return result;
-  }
-
-  /**
-   * Maps tool names to the macOS permission keys they require.
-   * Used by invokeToolGuarded() to perform pre-flight checks.
-   */
-  static readonly TOOL_PERMISSION_REQUIREMENTS: Readonly<
-    Record<string, ReadonlyArray<string>>
-  > = {
-    // Audio
-    RecordAudio: ["microphone"],
-    TranscribeAudio: ["microphone"],
-    ListAudioDevices: ["microphone"],
-    PlayAudio: ["microphone"],
-    // Screen
-    Screenshot: ["screen_recording"],
-    BrowserScreenshot: ["screen_recording"],
-    // Keyboard / mouse automation
-    TypeText: ["accessibility"],
-    Hotkey: ["accessibility"],
-    MouseClick: ["accessibility"],
-    MouseMove: ["accessibility"],
-    // Window management
-    ListWindows: ["accessibility"],
-    FocusWindow: ["accessibility"],
-    MoveWindow: ["accessibility"],
-    MinimizeWindow: ["accessibility"],
-    // App automation
-    LaunchApp: ["accessibility"],
-    FocusApp: ["accessibility"],
-    KillProcess: ["accessibility"],
-    // AppleScript — requires both accessibility and Apple Events
-    AppleScript: ["accessibility", "automation"],
-    PowerShellScript: ["automation"],
-    // File system (Full Disk Access for paths outside app sandbox)
-    ReadFile: ["full_disk_access"],
-    WriteFile: ["full_disk_access"],
-    DeleteFile: ["full_disk_access"],
-    ListDirectory: ["full_disk_access"],
-    SearchFiles: ["full_disk_access"],
-    WatchDirectory: ["full_disk_access"],
-    // Personal data
-    SearchContacts: ["contacts"],
-    GetContact: ["contacts"],
-    ListEvents: ["calendar"],
-    CreateEvent: ["calendar"],
-    SearchPhotos: ["photos"],
-    GetPhoto: ["photos"],
-    // Bluetooth / local network
-    BluetoothDevices: ["bluetooth"],
-    ConnectedDevices: ["bluetooth", "local_network"],
-    WifiNetworks: ["local_network"],
-    NetworkScan: ["local_network"],
-    MDNSDiscover: ["local_network"],
-    // Location
-    GetLocation: ["location"],
-    // Input monitoring
-    MonitorInput: ["input_monitoring"],
-    // Reminders
-    ListReminders: ["reminders"],
-    CreateReminder: ["reminders"],
-    // Messages (iMessage/SMS)
-    ListMessages: ["messages", "full_disk_access"],
-    ListConversations: ["messages", "full_disk_access"],
-    SendMessage: ["messages", "automation"],
-    // Mail
-    ListEmails: ["mail", "automation"],
-    SendEmail: ["mail", "automation"],
-    GetEmailAccounts: ["mail", "automation"],
-    // Speech Recognition
-    TranscribeWithAppleSpeech: ["speech_recognition", "microphone"],
-    ListSpeechLocales: ["speech_recognition"],
-  } as const;
-
-  /**
-   * Invoke a tool with pre-flight permission checking.
-   *
-   * If the required permission is already granted (or unknown), proceeds normally.
-   * If a required permission is denied or not_determined, throws a
-   * PermissionRequiredError instead of calling the engine.
-   *
-   * The caller (UI layer) should catch PermissionRequiredError and display the
-   * PermissionsModal or PermissionDeniedBanner.
-   *
-   * @param tool - Tool name matching TOOL_PERMISSION_REQUIREMENTS keys
-   * @param input - Tool parameters
-   * @param permissionSnapshot - Current permission states from usePermissions hook
-   */
-  async invokeToolGuarded(
-    tool: string,
-    input: Record<string, unknown>,
-    permissionSnapshot: Map<
-      string,
-      { status: string; label: string; description: string }
-    >,
-  ): Promise<ToolResult> {
-    const required = EngineAPI.TOOL_PERMISSION_REQUIREMENTS[tool];
-    if (required) {
-      for (const key of required) {
-        const state = permissionSnapshot.get(key);
-        if (state && state.status !== "granted" && state.status !== "unknown") {
-          throw new PermissionRequiredError(
-            key,
-            state.label,
-            state.description,
-            tool,
-          );
-        }
-      }
-    }
-    return this.invokeTool(tool, input);
   }
 
   /** Connect via WebSocket for persistent, stateful sessions. */
@@ -2340,24 +2210,40 @@ class EngineAPI {
   }
 
   /**
-   * Current notes-directory access state (macOS Full Disk Access, folder
-   * permissions, missing folder). Cheap — reads the engine's guard, no
-   * filesystem probe. Works signed-out; the notes dir is local.
+   * Canonical filesystem access-health snapshot (all registered resources:
+   * notes, mapped dirs, files replica). Cheap — in-memory evidence, no
+   * filesystem probe. Works signed-out; the resources are local.
    */
-  async getNotesAccess(): Promise<NotesAccessStatus> {
-    return this.docRequest("GET", "/access");
+  async getAccessHealth(): Promise<AccessHealth> {
+    return this.request("/access/health");
   }
 
   /**
-   * Actively re-probe notes-directory access ("Check again"). Clears the
-   * engine's degraded state the moment access is restored. Pass
-   * `createDir: true` for the "Create folder" action when the notes folder
-   * is simply missing.
+   * Actively re-probe access ("Check again"). Runs the engine's capability
+   * probe (enumerate/create/write/replace/delete with a disposable probe
+   * file) and clears stale degraded state the moment access is restored.
+   * Pass `createMissing: true` for the "Create folder" action.
    */
-  async recheckNotesAccess(opts?: { createDir?: boolean }): Promise<NotesAccessStatus> {
-    return this.docRequest("POST", "/access/recheck", {
-      create_dir: opts?.createDir ?? false,
+  async recheckAccess(opts?: {
+    resourceIds?: string[];
+    createMissing?: boolean;
+  }): Promise<AccessHealth> {
+    return this.request("/access/recheck", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        resource_ids: opts?.resourceIds ?? null,
+        create_missing: opts?.createMissing ?? false,
+      }),
     });
+  }
+
+  /**
+   * Clear ALL access evidence and re-probe everything. The backend behind
+   * every user-facing "reset" that could involve access state.
+   */
+  async resetAccessHealth(): Promise<AccessHealth> {
+    return this.request("/access/reset", { method: "POST" });
   }
 
   /** Trigger a sync. Mode: "push" | "pull" | "bidirectional" */
@@ -3393,24 +3279,74 @@ export interface SyncStatus {
   /** True while the OS is denying access to the notes directory. */
   notes_access_degraded?: boolean;
   notes_access_reason?: string | null;
-  notes_access_kind?: NotesAccessKind | null;
+  notes_access_kind?: AccessKind | null;
 }
 
-/** Why notes-directory access is degraded. */
-export type NotesAccessKind = "permission" | "missing_dir";
+/** Why a resource's access is degraded. */
+export type AccessKind = "permission" | "missing_dir";
+
+/** Filesystem operations the engine tracks separately per resource. */
+export type AccessCapability =
+  | "enumerate"
+  | "read"
+  | "create"
+  | "write"
+  | "replace"
+  | "delete";
+
+/** One piece of evidence: an actual filesystem operation and its outcome. */
+export interface AccessObservation {
+  path: string;
+  capability: AccessCapability;
+  ok: boolean;
+  errno: number | null;
+  error: string | null;
+  op: string;
+  source: string;
+  at: number;
+  generation: number;
+}
+
+/** Health of one registered resource (notes dir, a mapped dir, files replica). */
+export interface AccessResourceHealth {
+  resource_id: string;
+  label: string;
+  root: string;
+  provenance: "default" | "override" | "fallback" | "mapped";
+  status: "ok" | "degraded" | "unknown";
+  kind: AccessKind | null;
+  /** Evidence-based, diagnosis-aware sentence from the engine. */
+  message: string;
+  capabilities: Partial<Record<AccessCapability, AccessObservation>>;
+  last_success_at: number | null;
+  last_failure: AccessObservation | null;
+  recent: AccessObservation[];
+  generation: number;
+}
 
 /**
- * Notes-directory access health — the state behind the Documents page's
- * Full-Disk-Access prompt. Served by GET /notes/access; POST
- * /notes/access/recheck actively re-probes (and can create a missing dir).
+ * Engine-process Full Disk Access diagnosis. `denied` is POSITIVE evidence
+ * (an FDA-protected location exists and was refused) — the only verdict that
+ * justifies telling the user to grant FDA. `granted` exonerates FDA.
  */
-export interface NotesAccessStatus {
-  degraded: boolean;
-  reason: string | null;
-  kind: NotesAccessKind | null;
-  base_dir: string;
+export interface AccessFdaDiagnosis {
+  status: "granted" | "denied" | "indeterminate" | "not_applicable";
+  evidence: Array<{ probe: string; result: string }>;
+  source: string;
+  checked_at: number;
+}
+
+/**
+ * Canonical filesystem access-health snapshot — GET /access/health.
+ * Replaces the old single-boolean notes access state.
+ */
+export interface AccessHealth {
+  generation: number;
   /** Engine's sys.platform: "darwin" | "win32" | "linux" | ... */
   platform: string;
+  degraded: boolean;
+  resources: AccessResourceHealth[];
+  fda: AccessFdaDiagnosis | null;
 }
 
 export interface SyncResult {

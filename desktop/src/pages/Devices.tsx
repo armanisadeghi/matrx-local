@@ -1884,46 +1884,42 @@ function ResourceBar({
 // ---------------------------------------------------------------------------
 
 export function Devices({ engineStatus }: DevicesProps) {
-  // Engine REST: provides device listings and rich instruction text per permission.
-  const [enginePermissions, setEnginePermissions] = useState<
-    Record<string, PermissionInfo>
-  >({});
   const [loading, setLoading] = useState(false);
-  const [platform, setPlatform] = useState<string>("");
-  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
-  // Tauri plugin: authoritative TCC status for microphone, camera, screen_recording,
-  // accessibility, full_disk_access, and input_monitoring on macOS.
+  // Shared stores only — the engine device list and the Tauri plugin Map both
+  // live in PermissionsContext (ONE copy app-wide; the old private
+  // page-level copy drifted from the Dashboard's).
   const {
     permissions: pluginPermissions,
     checkAll: recheckPlugin,
     isLoading: pluginLoading,
+    devicePermissions,
+    devicePlatform: platform,
+    deviceLastRefresh: lastRefresh,
+    refreshDevicePermissions,
   } = usePermissionsContext();
+
+  const enginePermissions = useMemo(() => {
+    const map: Record<string, PermissionInfo> = {};
+    for (const ep of devicePermissions) {
+      map[ep.permission] = ep;
+    }
+    return map;
+  }, [devicePermissions]);
 
   const loadPermissions = useCallback(
     async (forceRefresh = false) => {
       if (engineStatus !== "connected") return;
       setLoading(true);
       try {
-        const result = await engine.getDevicePermissions(forceRefresh);
-        setPlatform(result.platform);
-        const map: Record<string, PermissionInfo> = {};
-        for (const ep of result.permissions) {
-          map[ep.permission] = ep;
-        }
-        setEnginePermissions(map);
-        setLastRefresh(new Date());
+        await refreshDevicePermissions(forceRefresh);
       } catch (err) {
-        // Was previously ``console.error("...", err)`` which serialised an
-        // ``Error`` instance to ``{}`` in the captured log file (Error
-        // properties are non-enumerable, so JSON.stringify drops them).
-        // Route through the unified logger so we get message + stack.
         logWarn("devices", "load permissions", err);
       } finally {
         setLoading(false);
       }
     },
-    [engineStatus],
+    [engineStatus, refreshDevicePermissions],
   );
 
   useEffect(() => {

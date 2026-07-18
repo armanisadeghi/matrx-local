@@ -71,6 +71,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useLocation } from "react-router-dom";
 import type { EngineStatus } from "@/hooks/use-engine";
 import { engine } from "@/lib/api";
+import { useAccessHealthContext } from "@/contexts/AccessHealthContext";
 import type {
   ProxyStatus,
   InstanceInfo,
@@ -257,6 +258,9 @@ export function Settings({
 
   // Storage paths state
   const [storagePaths, setStoragePaths] = useState<StoragePath[]>([]);
+  // Shared access-health store: path changes re-probe server-side; refresh
+  // the store so any stale degraded banner clears immediately.
+  const { refresh: refreshAccessHealth } = useAccessHealthContext().actions;
   const [pathEditing, setPathEditing] = useState<string | null>(null); // name of path being edited
   const [pathEditValue, setPathEditValue] = useState("");
   const [pathSaving, setPathSaving] = useState<string | null>(null);
@@ -497,13 +501,14 @@ export function Settings({
           prev.map((p) => (p.name === name ? updated : p)),
         );
         setPathEditing(null);
+        void refreshAccessHealth();
       } catch (err) {
         setPathError(err instanceof Error ? err.message : "Failed to set path");
       } finally {
         setPathSaving(null);
       }
     },
-    [pathEditValue],
+    [pathEditValue, refreshAccessHealth],
   );
 
   const resetPathToDefault = useCallback(async (name: string) => {
@@ -514,12 +519,13 @@ export function Settings({
       setStoragePaths((prev) =>
         prev.map((p) => (p.name === name ? updated : p)),
       );
+      void refreshAccessHealth();
     } catch (err) {
       setPathError(err instanceof Error ? err.message : "Failed to reset path");
     } finally {
       setPathSaving(null);
     }
-  }, []);
+  }, [refreshAccessHealth]);
 
   const addForbiddenUrl = useCallback(async () => {
     const url = newForbiddenUrl.trim();

@@ -1,50 +1,49 @@
 /**
  * NotesAccessPrompt — first-class, gentle full-page state shown when the
- * engine reports that it cannot access the notes directory.
+ * canonical access-health authority reports the notes directory degraded.
  *
- * This replaces the old failure mode (silently empty folder/note lists and
- * console errors) with a plain-English explanation and the exact actions
- * that fix it:
- *
- *   - macOS permission denial → "Open System Settings" deep-links straight
- *     to Privacy & Security → Full Disk Access via the existing permissions
- *     system (usePermissionsContext.openSettings — never hand-rolled).
- *   - Missing notes folder (any OS) → "Create folder" asks the engine to
- *     create it (POST /notes/access/recheck { create_dir: true }).
- *   - "Check again" re-probes on demand, and a quiet 10s poll auto-dismisses
- *     the prompt the moment access is granted — no restart, no extra click.
- *
- * The engine treats access-degraded as a STATE (notes_access_guard), so this
- * component is purely a renderer of that state plus the recheck trigger.
+ * Pure RENDERER: state, polling, and stale-response protection live in
+ * AccessHealthContext (the app's single poll owner — it actively re-probes
+ * every 10s while degraded, so this prompt auto-dismisses the moment access
+ * is granted). Copy comes from deriveAccessPresentation and is evidence-
+ * based: the definitive "Full Disk Access" claim renders only when the
+ * engine positively established the denial.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { FolderLock, FolderPlus, RefreshCw, Settings } from "lucide-react";
-import type { NotesAccessStatus } from "@/lib/api";
+import type { AccessResourceHealth } from "@/lib/api";
+import type { AccessPresentation } from "@/hooks/use-access-health";
 import { usePermissionsContext } from "@/contexts/PermissionsContext";
 
 interface NotesAccessPromptProps {
-  access: NotesAccessStatus;
-  /** Re-probe access on the engine; resolves with the fresh state. */
-  onRecheck: (opts?: { createDir?: boolean }) => Promise<NotesAccessStatus | null>;
+  resource: AccessResourceHealth;
+  presentation: AccessPresentation;
+  checking: boolean;
+  /** Re-probe access on the engine; resolves null on transient failure,
+   * otherwise whether THIS resource is still degraded. */
+  onRecheck: (opts?: {
+    createMissing?: boolean;
+  }) => Promise<{ degraded: boolean } | null>;
 }
 
-/** How often to quietly re-probe while the prompt is visible. */
-const AUTO_RECHECK_MS = 10_000;
-
-export function NotesAccessPrompt({ access, onRecheck }: NotesAccessPromptProps) {
+export function NotesAccessPrompt({
+  resource,
+  presentation,
+  checking,
+  onRecheck,
+}: NotesAccessPromptProps) {
   const { openSettings } = usePermissionsContext();
   const [busy, setBusy] = useState<"recheck" | "create" | null>(null);
   const [lastCheckFailed, setLastCheckFailed] = useState(false);
 
-  const isMacPermission = access.platform === "darwin" && access.kind === "permission";
-  const isMissingDir = access.kind === "missing_dir";
+  const isMissingDir = presentation.primaryAction === "create_folder";
 
   const runRecheck = useCallback(
-    async (createDir: boolean) => {
-      setBusy(createDir ? "create" : "recheck");
+    async (createMissing: boolean) => {
+      setBusy(createMissing ? "create" : "recheck");
       try {
-        const result = await onRecheck(createDir ? { createDir: true } : undefined);
+        const result = await onRecheck(createMissing ? { createMissing: true } : undefined);
         // Still degraded after an explicit click → tell the user the check
         // ran (otherwise the unchanged screen looks like a dead button).
         setLastCheckFailed(result === null || result.degraded);
@@ -54,17 +53,6 @@ export function NotesAccessPrompt({ access, onRecheck }: NotesAccessPromptProps)
     },
     [onRecheck],
   );
-
-  // Quiet auto-poll: the user typically grants Full Disk Access in System
-  // Settings and switches back — the prompt should already be gone. Gated on
-  // the stable onRecheck callback only; cleaned up on unmount (the parent
-  // unmounts this component as soon as access.degraded is false).
-  useEffect(() => {
-    const id = setInterval(() => {
-      void onRecheck();
-    }, AUTO_RECHECK_MS);
-    return () => clearInterval(id);
-  }, [onRecheck]);
 
   return (
     <div className="flex h-full items-center justify-center p-6">
@@ -77,25 +65,16 @@ export function NotesAccessPrompt({ access, onRecheck }: NotesAccessPromptProps)
           )}
         </div>
 
-        <h2 className="text-base font-semibold">
-          {isMissingDir
-            ? "Your notes folder is missing"
-            : "Matrx needs access to your notes folder"}
-        </h2>
+        <h2 className="text-base font-semibold">{presentation.title}</h2>
 
-        <p className="mt-2 text-sm text-muted-foreground">
-          {isMacPermission
-            ? "Matrx needs Full Disk Access to read and sync your notes folder. Grant it once in System Settings and your notes will appear automatically."
-            : (access.reason ??
-              "The notes folder can't be read right now. Fix the folder's permissions and check again.")}
-        </p>
+        <p className="mt-2 text-sm text-muted-foreground">{presentation.body}</p>
 
         <p className="mt-3 rounded-md bg-muted px-3 py-1.5 font-mono text-xs text-muted-foreground break-all">
-          {access.base_dir}
+          {resource.root}
         </p>
 
         <div className="mt-6 flex flex-col items-center gap-2">
-          {isMacPermission && (
+          {presentation.showFdaAction && (
             <button
               onClick={() => void openSettings("full_disk_access")}
               className="flex w-full items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
@@ -108,7 +87,7 @@ export function NotesAccessPrompt({ access, onRecheck }: NotesAccessPromptProps)
           {isMissingDir && (
             <button
               onClick={() => void runRecheck(true)}
-              disabled={busy !== null}
+              disabled={busy !== null || checking}
               className="flex w-full items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
             >
               <FolderPlus className="h-4 w-4" />
@@ -118,7 +97,7 @@ export function NotesAccessPrompt({ access, onRecheck }: NotesAccessPromptProps)
 
           <button
             onClick={() => void runRecheck(false)}
-            disabled={busy !== null}
+            disabled={busy !== null || checking}
             className="flex w-full items-center justify-center gap-2 rounded-md border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-60"
           >
             <RefreshCw

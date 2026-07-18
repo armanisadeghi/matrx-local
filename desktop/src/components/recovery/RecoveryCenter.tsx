@@ -4,6 +4,7 @@ import { recovery } from "@/lib/recovery";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { getEngineRecoveryStatus, runEngineRecoveryAction, type EngineRecoveryStatus, type RecoveryServiceAction } from "@/lib/api";
+import { useAccessHealthContext } from "@/contexts/AccessHealthContext";
 
 interface Props { open: boolean; onOpenChange: (open: boolean) => void; route: string }
 
@@ -46,6 +47,7 @@ export function RecoveryCenter({ open, onOpenChange, route }: Props) {
           <Button variant="destructive" onClick={() => void recovery.restartEngine()}>Restart engine</Button>
           <Button variant="destructive" onClick={() => void recovery.restartApp("Recovery Center application restart")}>Restart app</Button>
         </div>
+        <AccessHealthSection />
         <section className="space-y-2 border-t pt-3">
           <div className="flex items-center justify-between"><h3 className="text-sm font-medium">Feature health</h3><Button size="sm" variant="ghost" onClick={() => void refreshServices()}><RefreshCw className="mr-1 h-3 w-3" />Refresh</Button></div>
           {serviceError && <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">{serviceError}</p>}
@@ -75,5 +77,50 @@ export function RecoveryCenter({ open, onOpenChange, route }: Props) {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Folder access — surfaces the canonical access-health store with a real
+ * reset. "Reset access state" is the ONLY sanctioned way to clear stale
+ * access evidence: it clears everything server-side and re-probes, so a
+ * stuck denial (or stuck success) cannot survive it. Historically no reset
+ * feature touched access state at all — this card closes that gap.
+ */
+function AccessHealthSection() {
+  const access = useAccessHealthContext();
+  const resources = access.health?.resources ?? [];
+  return (
+    <section className="space-y-2 border-t pt-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-medium">Folder access</h3>
+        <div className="flex gap-1">
+          <Button size="sm" variant="ghost" disabled={access.checking} onClick={() => void access.actions.recheck()}>
+            <RefreshCw className={`mr-1 h-3 w-3 ${access.checking ? "animate-spin" : ""}`} />Check
+          </Button>
+          <Button size="sm" variant="outline" disabled={access.checking} onClick={() => void access.actions.reset()}>
+            <RotateCcw className="mr-1 h-3 w-3" />Reset access state
+          </Button>
+        </div>
+      </div>
+      {resources.length === 0 && (
+        <p className="text-xs text-muted-foreground">No access information yet — the engine may still be starting.</p>
+      )}
+      {resources.map((resource) => (
+        <div key={resource.resource_id} className="flex items-center gap-2 rounded-lg border p-2 text-xs">
+          {resource.status === "degraded" ? (
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="font-medium">{resource.label}</div>
+            <div className="truncate text-muted-foreground">
+              {resource.status === "degraded" ? resource.message : resource.root}
+            </div>
+          </div>
+        </div>
+      ))}
+    </section>
   );
 }

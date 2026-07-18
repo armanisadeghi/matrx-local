@@ -17,7 +17,6 @@ import type {
   DocNote,
   DocVersion,
   CreateNoteData,
-  NotesAccessStatus,
   SyncStatus,
   SyncResult,
   ConflictDetail,
@@ -32,12 +31,6 @@ export interface DocumentsState {
   activeNote: DocNote | null;
   versions: DocVersion[];
   syncStatus: SyncStatus | null;
-  /**
-   * Notes-directory access health. When `degraded` the page renders the
-   * first-class access prompt (Full Disk Access / folder permissions /
-   * missing folder) instead of empty lists — see NotesAccessPrompt.
-   */
-  notesAccess: NotesAccessStatus | null;
   conflicts: ConflictDetail[];
   activeFolderId: string | null;
   searchQuery: string;
@@ -54,7 +47,6 @@ const INITIAL_STATE: DocumentsState = {
   activeNote: null,
   versions: [],
   syncStatus: null,
-  notesAccess: null,
   conflicts: [],
   activeFolderId: null,
   searchQuery: "",
@@ -497,19 +489,6 @@ export function useDocuments(
     }
   }, [engineReady, userId, update]);
 
-  // ── Notes-directory access health — works signed-out (local dir) ─────────
-
-  const loadNotesAccess = useCallback(async () => {
-    if (!engineReady) return;
-    try {
-      const notesAccess = await engine.getNotesAccess();
-      update({ notesAccess });
-    } catch {
-      // Non-critical — an old engine without /notes/access simply never
-      // shows the prompt (previous behavior).
-    }
-  }, [engineReady, update]);
-
   const loadConflicts = useCallback(async () => {
     if (!engineReady) return;
     try {
@@ -563,32 +542,18 @@ export function useDocuments(
   );
 
   /**
-   * "Check again" / "Create folder": actively re-probe access on the engine.
-   * When access has been restored, reload everything the degraded state was
-   * blocking so the page comes alive without a restart.
+   * Reload everything a degraded access state was blocking, once access has
+   * been restored (called by the page when the shared access-health store
+   * transitions degraded → ok).
    */
-  const recheckAccess = useCallback(
-    async (opts?: { createDir?: boolean }) => {
-      if (!engineReady) return null;
-      try {
-        const notesAccess = await engine.recheckNotesAccess(opts);
-        const wasDegraded = stateRef.current.notesAccess?.degraded ?? false;
-        update({ notesAccess });
-        if (wasDegraded && !notesAccess.degraded) {
-          await loadTree();
-          await loadNotes(stateRef.current.activeFolderId);
-          if (userId) {
-            await loadSyncStatus();
-            await loadConflicts();
-          }
-        }
-        return notesAccess;
-      } catch {
-        return null; // transient engine hiccup — prompt stays, user can retry
-      }
-    },
-    [engineReady, userId, update, loadTree, loadNotes, loadSyncStatus, loadConflicts],
-  );
+  const reloadAfterAccessRestored = useCallback(async () => {
+    await loadTree();
+    await loadNotes(stateRef.current.activeFolderId);
+    if (userId) {
+      await loadSyncStatus();
+      await loadConflicts();
+    }
+  }, [loadTree, loadNotes, userId, loadSyncStatus, loadConflicts]);
 
   const setNoteExcluded = useCallback(
     async (noteId: string, excluded: boolean) => {
@@ -616,7 +581,6 @@ export function useDocuments(
     if (engineReady) {
       loadTree();
       loadNotes();
-      loadNotesAccess();
       if (userId) {
         loadSyncStatus();
         loadConflicts();
@@ -657,7 +621,6 @@ export function useDocuments(
     userId,
     loadTree,
     loadNotes,
-    loadNotesAccess,
     loadSyncStatus,
     loadConflicts,
     update,
@@ -683,8 +646,7 @@ export function useDocuments(
     revertNote,
     triggerSync,
     loadSyncStatus,
-    loadNotesAccess,
-    recheckAccess,
+    reloadAfterAccessRestored,
     loadConflicts,
     resolveConflict,
     setNoteExcluded,

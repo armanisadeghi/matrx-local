@@ -22,7 +22,13 @@ describe("filesystem tool results", () => {
         total: 120,
         entries: [
           { name: "matrx", path: "C:\\Users\\Ada\\Code\\matrx", kind: "dir", size: 0 },
-          { name: "README.md", path: "C:\\Users\\Ada\\Code\\README.md", kind: "file", size: 42 },
+          {
+            name: "README.md",
+            path: "C:\\Users\\Ada\\Code\\README.md",
+            kind: "file",
+            size: 42,
+            modified_at: 1_721_234_567.25,
+          },
         ],
       }),
     };
@@ -35,8 +41,240 @@ describe("filesystem tool results", () => {
       total: 120,
       entries: [
         { name: "matrx", path: "C:\\Users\\Ada\\Code\\matrx", kind: "directory", size: 0 },
-        { name: "README.md", path: "C:\\Users\\Ada\\Code\\README.md", kind: "file", size: 42 },
+        {
+          name: "README.md",
+          path: "C:\\Users\\Ada\\Code\\README.md",
+          kind: "file",
+          size: 42,
+          modifiedAt: 1_721_234_567.25,
+        },
       ],
+    });
+  });
+
+  it("keeps search pages distinct and preserves paging state", () => {
+    const result: ToolCallResult = {
+      tool_call_id: "search-1",
+      type: "success",
+      output: "Two likely matches.",
+      metadata: {
+        kind: "filesystem.search-page",
+        namespace: "host",
+        query: "quarterly report",
+        source: "disk",
+        index_complete: false,
+        next_cursor: "100",
+        entries: [
+          {
+            path: "/Users/ada/Documents/report.md",
+            name: "report.md",
+            kind: "file",
+            modified_at: 0,
+          },
+          { path: "", name: "invalid", kind: "file" },
+        ],
+      },
+    };
+
+    expect(normalizeFilesystemResult(result)).toEqual({
+      kind: "filesystem.search-page",
+      namespace: "host",
+      query: "quarterly report",
+      source: "disk",
+      indexComplete: false,
+      nextCursor: "100",
+      entries: [
+        {
+          path: "/Users/ada/Documents/report.md",
+          name: "report.md",
+          kind: "file",
+          modifiedAt: 0,
+        },
+      ],
+    });
+  });
+
+  it("normalizes content matches without inventing entries", () => {
+    const result: ToolCallResult = {
+      tool_call_id: "content-1",
+      type: "success",
+      output: JSON.stringify({
+        kind: "filesystem.content-search",
+        namespace: "host",
+        query: "lease recovery",
+        results: [
+          { path: "/repo/design.md", snippet: "Crash-safe [lease recovery]" },
+          { path: "/repo/empty.md", snippet: "" },
+          { path: "/repo/missing-snippet.md" },
+          "not-a-match",
+        ],
+      }),
+    };
+
+    expect(normalizeFilesystemResult(result)).toEqual({
+      kind: "filesystem.content-search",
+      namespace: "host",
+      query: "lease recovery",
+      results: [
+        { path: "/repo/design.md", snippet: "Crash-safe [lease recovery]" },
+        { path: "/repo/empty.md", snippet: "" },
+      ],
+    });
+  });
+
+  it("normalizes semantic matches with finite scores and entry metadata", () => {
+    const result: ToolCallResult = {
+      tool_call_id: "semantic-1",
+      type: "success",
+      output: "Semantic matches found.",
+      metadata: {
+        kind: "filesystem.semantic-search",
+        namespace: "host",
+        query: "filesystem design",
+        model: "BAAI/bge-small-en-v1.5",
+        results: [
+          {
+            score: 0.912,
+            entry: {
+              path: "/repo/filesystem.md",
+              name: "filesystem.md",
+              kind: "file",
+              size: 81,
+              modified_at: 1_721_234_567,
+              hidden: false,
+            },
+          },
+          { score: Number.NaN, entry: { path: "/repo/bad.md", name: "bad.md", kind: "file" } },
+          { score: 0.5, entry: { name: "missing-path.md", kind: "file" } },
+        ],
+      },
+    };
+
+    expect(normalizeFilesystemResult(result)).toEqual({
+      kind: "filesystem.semantic-search",
+      namespace: "host",
+      query: "filesystem design",
+      model: "BAAI/bge-small-en-v1.5",
+      results: [
+        {
+          score: 0.912,
+          entry: {
+            path: "/repo/filesystem.md",
+            name: "filesystem.md",
+            kind: "file",
+            size: 81,
+            modifiedAt: 1_721_234_567,
+            hidden: false,
+          },
+        },
+      ],
+    });
+  });
+
+  it("preserves place policy metadata, including false and zero values", () => {
+    const result: ToolCallResult = {
+      tool_call_id: "places-1",
+      type: "success",
+      output: "Places on this computer.",
+      metadata: {
+        kind: "filesystem.places",
+        namespace: "host",
+        places: [
+          {
+            id: "volume-1",
+            label: "Archive",
+            path: "/Volumes/Archive",
+            alias: "@archive",
+            category: "volume",
+            priority: 0,
+            available: false,
+            configured: false,
+          },
+          { id: "invalid", label: "Missing", category: "volume" },
+        ],
+      },
+    };
+
+    expect(normalizeFilesystemResult(result)).toEqual({
+      kind: "filesystem.places",
+      namespace: "host",
+      places: [
+        {
+          id: "volume-1",
+          label: "Archive",
+          path: "/Volumes/Archive",
+          alias: "@archive",
+          category: "volume",
+          priority: 0,
+          available: false,
+          configured: false,
+        },
+      ],
+    });
+  });
+
+  it("prefers canonical metadata over JSON-looking display output", () => {
+    const result: ToolCallResult = {
+      tool_call_id: "metadata-first",
+      type: "success",
+      output: JSON.stringify({
+        kind: "filesystem.directory-page",
+        path: "/wrong",
+        entries: [],
+      }),
+      metadata: {
+        kind: "filesystem.search-page",
+        namespace: "host",
+        query: "right",
+        source: "index",
+        index_complete: true,
+        entries: [],
+      },
+    };
+
+    expect(normalizeFilesystemResult(result)).toEqual({
+      kind: "filesystem.search-page",
+      namespace: "host",
+      query: "right",
+      source: "index",
+      indexComplete: true,
+      entries: [],
+    });
+  });
+
+  it.each([
+    { kind: "filesystem.search-page", query: "missing entries" },
+    { kind: "filesystem.search-page", entries: [] },
+    { kind: "filesystem.content-search", query: "missing results" },
+    { kind: "filesystem.semantic-search", query: "q", model: "m" },
+    { kind: "filesystem.semantic-search", query: "q", results: [] },
+  ])("rejects malformed explicit structured result %#", (metadata) => {
+    expect(normalizeFilesystemResult({
+      tool_call_id: "malformed",
+      type: "success",
+      output: "Malformed result",
+      metadata,
+    })).toBeNull();
+  });
+
+  it("maps unsupported namespaces and search sources without widening the contract", () => {
+    const normalized = normalizeFilesystemResult({
+      tool_call_id: "unknown-policy",
+      type: "success",
+      output: "Result",
+      metadata: {
+        kind: "filesystem.search-page",
+        namespace: "remote-mystery",
+        query: "q",
+        source: "network",
+        entries: [],
+      },
+    });
+    expect(normalized).toEqual({
+      kind: "filesystem.search-page",
+      namespace: "unknown",
+      query: "q",
+      entries: [],
     });
   });
 

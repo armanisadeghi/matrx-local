@@ -1,13 +1,15 @@
 import type { EnginePaths } from "@/lib/api";
 
 export type FilesystemEntryKind = "directory" | "file" | "symlink" | "other";
+export type FilesystemNamespace = "host" | "workspace" | "managed-files" | "notes" | "unknown";
+export type FilesystemModifiedAt = number | string;
 
 export interface FilesystemEntry {
   name: string;
   path: string;
   kind: FilesystemEntryKind;
   size?: number | null;
-  modifiedAt?: string | null;
+  modifiedAt?: FilesystemModifiedAt | null;
   hidden?: boolean;
   hasChildren?: boolean;
   children?: FilesystemEntry[];
@@ -15,12 +17,50 @@ export interface FilesystemEntry {
 
 export interface FilesystemDirectoryPage {
   kind: "filesystem.directory-page";
-  namespace: "host" | "workspace" | "managed-files" | "notes" | "unknown";
+  namespace: FilesystemNamespace;
   path: string;
   entries: FilesystemEntry[];
   summary?: string;
   nextCursor?: string | null;
   total?: number | null;
+}
+
+export interface FilesystemSearchPage {
+  kind: "filesystem.search-page";
+  namespace: FilesystemNamespace;
+  query: string;
+  entries: FilesystemEntry[];
+  summary?: string;
+  nextCursor?: string | null;
+  source?: "index" | "disk";
+  indexComplete?: boolean;
+}
+
+export interface FilesystemContentMatch {
+  path: string;
+  snippet: string;
+}
+
+export interface FilesystemContentSearch {
+  kind: "filesystem.content-search";
+  namespace: FilesystemNamespace;
+  query: string;
+  results: FilesystemContentMatch[];
+  summary?: string;
+}
+
+export interface FilesystemSemanticMatch {
+  score: number;
+  entry: FilesystemEntry;
+}
+
+export interface FilesystemSemanticSearch {
+  kind: "filesystem.semantic-search";
+  namespace: FilesystemNamespace;
+  query: string;
+  model: string;
+  results: FilesystemSemanticMatch[];
+  summary?: string;
 }
 
 export interface FilesystemPlace {
@@ -36,11 +76,17 @@ export interface FilesystemPlace {
 
 export interface FilesystemPlacesResult {
   kind: "filesystem.places";
+  namespace: FilesystemNamespace;
   places: FilesystemPlace[];
   summary?: string;
 }
 
-export type FilesystemResult = FilesystemDirectoryPage | FilesystemPlacesResult;
+export type FilesystemResult =
+  | FilesystemDirectoryPage
+  | FilesystemSearchPage
+  | FilesystemContentSearch
+  | FilesystemSemanticSearch
+  | FilesystemPlacesResult;
 
 const PLACE_ALIASES: ReadonlyArray<[string, string]> = [
   ["@home", "Home"],

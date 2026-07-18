@@ -1,11 +1,19 @@
 import type { ChatMessage, ToolCall, ToolCallResult } from "@/hooks/use-chat";
 import type { ToolImageData, ToolMediaArtifact } from "@/lib/api";
 import type {
+  FilesystemContentMatch,
+  FilesystemContentSearch,
   FilesystemDirectoryPage,
   FilesystemEntry,
   FilesystemEntryKind,
+  FilesystemModifiedAt,
+  FilesystemNamespace,
+  FilesystemPlace,
   FilesystemPlacesResult,
   FilesystemResult,
+  FilesystemSearchPage,
+  FilesystemSemanticMatch,
+  FilesystemSemanticSearch,
 } from "./types";
 
 type UnknownRecord = Record<string, unknown>;
@@ -28,6 +36,29 @@ function numberValue(...values: unknown[]): number | null {
     if (typeof value === "number" && Number.isFinite(value)) return value;
   }
   return null;
+}
+
+function modifiedAtValue(...values: unknown[]): FilesystemModifiedAt | null | undefined {
+  for (const value of values) {
+    if (value === null) return null;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return undefined;
+}
+
+const FILESYSTEM_NAMESPACES = new Set<FilesystemNamespace>([
+  "host",
+  "workspace",
+  "managed-files",
+  "notes",
+  "unknown",
+]);
+
+function normalizeNamespace(value: unknown): FilesystemNamespace {
+  return typeof value === "string" && FILESYSTEM_NAMESPACES.has(value as FilesystemNamespace)
+    ? value as FilesystemNamespace
+    : "unknown";
 }
 
 export function parseJsonValue(value: unknown): unknown {
@@ -109,13 +140,13 @@ function normalizeEntry(value: unknown): FilesystemEntry | null {
     ?.map(normalizeEntry)
     .filter((entry): entry is FilesystemEntry => entry !== null);
   const size = numberValue(source.size, source.size_bytes);
-  const modifiedAt = stringValue(source.modified_at, source.mtime, source.modified);
+  const modifiedAt = modifiedAtValue(source.modified_at, source.mtime, source.modified);
   return {
     name,
     path,
     kind: entryKind(source.kind ?? source.type, source),
     ...(size !== null ? { size } : {}),
-    ...(modifiedAt ? { modifiedAt } : {}),
+    ...(modifiedAt !== undefined ? { modifiedAt } : {}),
     ...(typeof source.hidden === "boolean" ? { hidden: source.hidden } : {}),
     ...(typeof source.has_children === "boolean"
       ? { hasChildren: source.has_children }
@@ -129,7 +160,9 @@ function normalizeEntry(value: unknown): FilesystemEntry | null {
 function candidateRecords(result: ToolCallResult): UnknownRecord[] {
   const output = record(parseJsonValue(result.output));
   const metadata = record(result.metadata);
-  const values = [output, record(output?.data), metadata, record(metadata?.data)];
+  // Metadata is the canonical UI contract; output is concise model-facing text
+  // and is only a compatibility source when structured metadata is absent.
+  const values = [metadata, record(metadata?.data), output, record(output?.data)];
   return values.filter((item): item is UnknownRecord => item !== null);
 }
 
@@ -140,14 +173,9 @@ function normalizeDirectory(source: UnknownRecord): FilesystemDirectoryPage | nu
     .map(normalizeEntry)
     .filter((entry): entry is FilesystemEntry => entry !== null);
   const path = stringValue(source.path, source.directory, source.root) ?? "";
-  const namespaceValue = stringValue(source.namespace);
-  const namespaces = new Set(["host", "workspace", "managed-files", "notes"]);
-  const namespace = namespaceValue && namespaces.has(namespaceValue)
-    ? (namespaceValue as FilesystemDirectoryPage["namespace"])
-    : "unknown";
   return {
     kind: "filesystem.directory-page",
-    namespace,
+    namespace: normalizeNamespace(source.namespace),
     path,
     entries,
     ...(stringValue(source.summary) ? { summary: stringValue(source.summary)! } : {}),
@@ -160,22 +188,107 @@ function normalizeDirectory(source: UnknownRecord): FilesystemDirectoryPage | nu
   };
 }
 
+function normalizeSearch(source: UnknownRecord): FilesystemSearchPage | null {
+  if (!Array.isArray(source.entries)) return null;
+  const query = stringValue(source.query);
+  if (!query) return null;
+  const entries = source.entries
+    .map(normalizeEntry)
+    .filter((entry): entry is FilesystemEntry => entry !== null);
+  const rawSource = stringValue(source.source);
+  const pageSource = rawSource === "index" || rawSource === "disk" ? rawSource : null;
+  return {
+    kind: "filesystem.search-page",
+    namespace: normalizeNamespace(source.namespace),
+    query,
+    entries,
+    ...(stringValue(source.summary) ? { summary: stringValue(source.summary)! } : {}),
+    ...(stringValue(source.next_cursor, source.nextCursor)
+      ? { nextCursor: stringValue(source.next_cursor, source.nextCursor) }
+      : {}),
+    ...(pageSource ? { source: pageSource } : {}),
+    ...(typeof source.index_complete === "boolean"
+      ? { indexComplete: source.index_complete }
+      : typeof source.indexComplete === "boolean"
+        ? { indexComplete: source.indexComplete }
+        : {}),
+  };
+}
+
+function normalizeContentMatch(value: unknown): FilesystemContentMatch | null {
+  const source = record(value);
+  if (!source) return null;
+  const path = stringValue(source.path);
+  if (!path || typeof source.snippet !== "string") return null;
+  return { path, snippet: source.snippet };
+}
+
+function normalizeContentSearch(source: UnknownRecord): FilesystemContentSearch | null {
+  if (!Array.isArray(source.results)) return null;
+  const query = stringValue(source.query);
+  if (!query) return null;
+  return {
+    kind: "filesystem.content-search",
+    namespace: normalizeNamespace(source.namespace),
+    query,
+    results: source.results
+      .map(normalizeContentMatch)
+      .filter((match): match is FilesystemContentMatch => match !== null),
+    ...(stringValue(source.summary) ? { summary: stringValue(source.summary)! } : {}),
+  };
+}
+
+function normalizeSemanticMatch(value: unknown): FilesystemSemanticMatch | null {
+  const source = record(value);
+  if (!source) return null;
+  const score = numberValue(source.score);
+  const entry = normalizeEntry(source.entry);
+  return score === null || entry === null ? null : { score, entry };
+}
+
+function normalizeSemanticSearch(source: UnknownRecord): FilesystemSemanticSearch | null {
+  if (!Array.isArray(source.results)) return null;
+  const query = stringValue(source.query);
+  const model = stringValue(source.model);
+  if (!query || !model) return null;
+  return {
+    kind: "filesystem.semantic-search",
+    namespace: normalizeNamespace(source.namespace),
+    query,
+    model,
+    results: source.results
+      .map(normalizeSemanticMatch)
+      .filter((match): match is FilesystemSemanticMatch => match !== null),
+    ...(stringValue(source.summary) ? { summary: stringValue(source.summary)! } : {}),
+  };
+}
+
 function normalizePlaces(source: UnknownRecord): FilesystemPlacesResult | null {
   if (!Array.isArray(source.places)) return null;
-  const places = source.places.flatMap((value, index) => {
+  const places = source.places.flatMap((value, index): FilesystemPlace[] => {
     const item = record(value);
     if (!item) return [];
     const path = stringValue(item.path);
     if (!path) return [];
+    const category = item.category === "home" || item.category === "standard" ||
+      item.category === "configured" || item.category === "volume"
+      ? item.category
+      : null;
+    const priority = numberValue(item.priority);
     return [{
       id: stringValue(item.id, item.alias) ?? `place-${index}`,
       label: stringValue(item.label, item.name, item.alias) ?? basename(path),
       path,
       ...(stringValue(item.alias) ? { alias: stringValue(item.alias)! } : {}),
+      ...(category ? { category } : {}),
+      ...(priority !== null ? { priority } : {}),
+      ...(typeof item.available === "boolean" ? { available: item.available } : {}),
+      ...(typeof item.configured === "boolean" ? { configured: item.configured } : {}),
     }];
   });
   return {
     kind: "filesystem.places",
+    namespace: normalizeNamespace(source.namespace),
     places,
     ...(stringValue(source.summary) ? { summary: stringValue(source.summary)! } : {}),
   };
@@ -184,6 +297,15 @@ function normalizePlaces(source: UnknownRecord): FilesystemPlacesResult | null {
 export function normalizeFilesystemResult(result: ToolCallResult): FilesystemResult | null {
   for (const source of candidateRecords(result)) {
     const kind = stringValue(source.kind, source.result_kind, source.type);
+    if (kind === "filesystem.search-page" || kind === "search-page") {
+      return normalizeSearch(source);
+    }
+    if (kind === "filesystem.content-search" || kind === "content-search") {
+      return normalizeContentSearch(source);
+    }
+    if (kind === "filesystem.semantic-search" || kind === "semantic-search") {
+      return normalizeSemanticSearch(source);
+    }
     if (kind === "filesystem.places" || Array.isArray(source.places)) {
       const places = normalizePlaces(source);
       if (places) return places;

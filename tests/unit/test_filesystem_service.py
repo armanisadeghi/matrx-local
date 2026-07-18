@@ -96,6 +96,151 @@ def test_windows_normalization_handles_drive_and_unc_paths() -> None:
     assert normalize_path_key("C:/Users/Me/Code", platform="win32") == normalize_path_key(
         r"c:\users\me\code", platform="win32"
     )
+    assert normalize_path_key(r"\\?\C:\Users\Me\Code", platform="win32") == normalize_path_key(
+        r"c:\users\me\code", platform="win32"
+    )
+    assert normalize_path_key(
+        r"\\?\UNC\SERVER\Share\Folder\..\File", platform="win32"
+    ) == normalize_path_key(r"\\server\share\file", platform="win32")
+
+
+def test_root_sync_preserves_claim_and_retry_state(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    place = Place("root", "Root", str(root), "configured", 100)
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    index.sync_roots(iter([place]))
+    claim = index.pop_next_directory()
+    assert claim is not None
+    index.sync_roots(iter([place]))
+    assert index.scan_status()["claimed"] == 1
+    assert index.pop_next_directory() is None
+    assert index.fail_directory(claim[0], PermissionError("denied")) == 30
+
+    index.sync_roots(iter([place]))
+
+    scan = index.scan_status()
+    assert scan["ready"] == 0
+    assert scan["failed"] == 1
+    assert scan["failures"][0]["attempts"] == 1
+    assert scan["failures"][0]["consecutive_failures"] == 1
+    assert index.pop_next_directory() is None
+
+
+def test_child_rediscovery_preserves_retry_state(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    child = root / "child"
+    child.mkdir(parents=True)
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    index.sync_roots([Place("root", "Root", str(root), "configured", 100)])
+    root_claim = index.pop_next_directory()
+    assert root_claim is not None
+    index.index_directory(*root_claim)
+    child_claim = index.pop_next_directory()
+    assert child_claim is not None
+    assert child_claim[0] == str(child)
+    assert index.fail_directory(child_claim[0], PermissionError("denied")) == 30
+
+    with index._connect() as db:
+        db.execute(
+            "UPDATE filesystem_scanned_dirs SET scanned_at=0 WHERE path=?", (str(root),)
+        )
+    index.sync_roots([Place("root", "Root", str(root), "configured", 100)])
+    refreshed_root = index.pop_next_directory()
+    assert refreshed_root is not None
+    assert refreshed_root[0] == str(root)
+    index.index_directory(*refreshed_root)
+
+    scan = index.scan_status()
+    assert scan["total"] == 1
+    assert scan["ready"] == 0
+    assert scan["failures"][0]["path"] == str(child)
+    assert scan["failures"][0]["consecutive_failures"] == 1
+
+
+def test_claims_do_not_inflate_failure_backoff_and_success_resets_it(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    place = Place("root", "Root", str(root), "configured", 100)
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    index.sync_roots([place])
+
+    first = index.pop_next_directory()
+    assert first is not None
+    index.release_directory(first[0])
+    second = index.pop_next_directory()
+    assert second is not None
+    index.release_directory(second[0])
+    third = index.pop_next_directory()
+    assert third is not None
+    assert index.fail_directory(third[0], PermissionError("denied")) == 30
+    failure = index.scan_status()["failures"][0]
+    assert failure["attempts"] == 3
+    assert failure["consecutive_failures"] == 1
+
+    with index._connect() as db:
+        db.execute(
+            "UPDATE filesystem_scan_queue SET next_retry_at=0 WHERE path=?", (str(root),)
+        )
+    recovered = index.pop_next_directory()
+    assert recovered is not None
+    assert index.fail_directory(recovered[0], PermissionError("denied twice")) == 60
+    assert index.scan_status()["failures"][0]["consecutive_failures"] == 2
+    with index._connect() as db:
+        db.execute(
+            "UPDATE filesystem_scan_queue SET next_retry_at=0 WHERE path=?", (str(root),)
+        )
+    recovered = index.pop_next_directory()
+    assert recovered is not None
+    index.index_directory(*recovered)
+    index.sync_roots([place])
+    fresh = index.pop_next_directory()
+    assert fresh is not None
+    assert index.fail_directory(fresh[0], PermissionError("denied again")) == 30
+    assert index.scan_status()["failures"][0]["consecutive_failures"] == 1
+
+
+def test_initialize_recovers_persisted_directory_claim_without_erasing_retry(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    db_path = tmp_path / "index.sqlite3"
+    index = FilesystemIndex(db_path)
+    index.initialize()
+    index.sync_roots([Place("root", "Root", str(root), "configured", 100)])
+    assert index.pop_next_directory() is not None
+    assert index.scan_status()["ready"] == 0
+
+    restarted = FilesystemIndex(db_path)
+    restarted.initialize()
+
+    assert restarted.scan_status()["ready"] == 1
+    assert restarted.pop_next_directory() is not None
+
+
+def test_scan_status_ready_excludes_live_claim_but_includes_stale_claim(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    index.sync_roots([Place("root", "Root", str(root), "configured", 100)])
+    assert index.pop_next_directory() is not None
+    assert index.scan_status()["ready"] == 0
+
+    with index._connect() as db:
+        db.execute(
+            "UPDATE filesystem_scan_queue SET claimed_at=? WHERE path=?",
+            (filesystem_index_module.time.time() - 301, str(root)),
+        )
+    stale = index.scan_status()
+    assert stale["claimed"] == 0
+    assert stale["ready"] == 1
 
 
 def test_component_safe_delete_handles_wildcards_without_sibling_damage(tmp_path: Path) -> None:
@@ -252,6 +397,11 @@ async def test_inaccessible_directory_stays_partial_and_retries(
 
     monkeypatch.setattr(filesystem_index_module.os, "scandir", real_scandir)
     service.index.sync_roots([place])
+    assert service.index.pop_next_directory() is None
+    with service.index._connect() as db:
+        db.execute(
+            "UPDATE filesystem_scan_queue SET next_retry_at=0 WHERE path=?", (str(root),)
+        )
     retry = service.index.pop_next_directory()
     assert retry is not None
     service.index.index_directory(*retry)

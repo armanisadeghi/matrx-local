@@ -62,7 +62,13 @@ def normalize_path_key(path: str, *, platform: str | None = None) -> str:
     """Stable dedupe key, including Windows drive/UNC semantics in tests."""
     target = platform or sys.platform
     if target.startswith("win"):
-        return ntpath.normcase(ntpath.normpath(path.replace("/", "\\")))
+        windows_path = path.replace("/", "\\")
+        folded = windows_path.casefold()
+        if folded.startswith("\\\\?\\unc\\"):
+            windows_path = "\\\\" + windows_path[8:]
+        elif folded.startswith("\\\\?\\"):
+            windows_path = windows_path[4:]
+        return ntpath.normcase(ntpath.normpath(windows_path))
     return os.path.normcase(os.path.normpath(path))
 
 

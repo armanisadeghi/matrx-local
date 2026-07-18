@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS filesystem_scan_queue (
     updated_at REAL NOT NULL,
     claimed_at REAL,
     attempts INTEGER NOT NULL DEFAULT 0,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
     last_error_kind TEXT,
     last_error TEXT,
     last_failed_at REAL,
@@ -134,6 +135,11 @@ class FilesystemIndex:
                 db.execute("ALTER TABLE filesystem_scan_queue ADD COLUMN claimed_at REAL")
             if "attempts" not in columns:
                 db.execute("ALTER TABLE filesystem_scan_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+            if "consecutive_failures" not in columns:
+                db.execute(
+                    "ALTER TABLE filesystem_scan_queue "
+                    "ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0"
+                )
             for name, declaration in (
                 ("last_error_kind", "TEXT"),
                 ("last_error", "TEXT"),
@@ -188,6 +194,14 @@ class FilesystemIndex:
                     (_path_key(row["path"]), row["rowid"]),
                 )
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_filesystem_embeddings_key_model ON filesystem_embeddings(path_key,model)")
+            # Directory leases belong to this single local engine process. If
+            # it exits while scanning, no worker remains that can complete the
+            # persisted claim, so make it immediately available on startup.
+            # Retry deadlines and failure diagnostics remain intact.
+            db.execute(
+                "UPDATE filesystem_scan_queue SET claimed_at=NULL "
+                "WHERE claimed_at IS NOT NULL"
+            )
             # A process may have exited during optional enrichment. Leases are
             # process-local, so return those rows to the durable queue.
             db.execute("UPDATE filesystem_entries SET content_state='not_indexed' WHERE content_state='indexing'")
@@ -215,6 +229,7 @@ class FilesystemIndex:
                 self.fts_available = False
 
     def sync_roots(self, roots: Iterable[Place]) -> None:
+        roots = list(roots)
         now = time.time()
         values = [
             (root.id, root.label, root.path, root.category, root.priority, root.available, root.configured, now)
@@ -247,8 +262,7 @@ class FilesystemIndex:
                         """INSERT INTO filesystem_scan_queue(path,root_id,depth,priority,updated_at)
                            VALUES(?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET
                            root_id=excluded.root_id, priority=MAX(priority,excluded.priority),
-                           updated_at=excluded.updated_at, claimed_at=NULL,
-                           next_retry_at=NULL""",
+                           updated_at=excluded.updated_at""",
                         (root.path, root.id, 0, root.priority * 1000, now),
                     )
 
@@ -349,8 +363,7 @@ class FilesystemIndex:
                        SELECT ?,?,?,?,? WHERE NOT EXISTS
                        (SELECT 1 FROM filesystem_scanned_dirs WHERE path=? AND scanned_at>=?)
                        ON CONFLICT(path) DO UPDATE SET
-                       priority=MAX(priority,excluded.priority),updated_at=excluded.updated_at,
-                       next_retry_at=NULL""",
+                       priority=MAX(priority,excluded.priority),updated_at=excluded.updated_at""",
                     [(*child, child[0], now - 21600.0) for child in children],
                 )
             db.execute(
@@ -385,15 +398,23 @@ class FilesystemIndex:
         now = time.time()
         with self._connect() as db:
             row = db.execute(
-                "SELECT attempts FROM filesystem_scan_queue WHERE path=?", (absolute,)
+                "SELECT consecutive_failures FROM filesystem_scan_queue WHERE path=?",
+                (absolute,),
             ).fetchone()
-            attempts = max(1, int(row["attempts"])) if row is not None else 1
-            retry_delay = min(6 * 60 * 60, 30 * (2 ** min(attempts - 1, 10)))
+            consecutive_failures = (
+                max(0, int(row["consecutive_failures"])) + 1 if row is not None else 1
+            )
+            retry_delay = min(
+                6 * 60 * 60,
+                30 * (2 ** min(consecutive_failures - 1, 10)),
+            )
             db.execute(
                 """UPDATE filesystem_scan_queue SET claimed_at=NULL,
+                   consecutive_failures=?,
                    last_error_kind=?,last_error=?,last_failed_at=?,next_retry_at=?,updated_at=?
                    WHERE path=?""",
                 (
+                    consecutive_failures,
                     type(error).__name__,
                     str(error)[:500],
                     now,
@@ -529,17 +550,21 @@ class FilesystemIndex:
     def scan_status(self, *, failure_limit: int = 25) -> dict[str, object]:
         """Return queue progress without hiding inaccessible/failed locations."""
         now = time.time()
+        lease_cutoff = now - 300.0
         with self._connect() as db:
             counts = db.execute(
                 """SELECT COUNT(*) AS total,
                           SUM(CASE WHEN last_error IS NOT NULL THEN 1 ELSE 0 END) AS failed,
-                          SUM(CASE WHEN claimed_at IS NOT NULL THEN 1 ELSE 0 END) AS claimed,
-                          SUM(CASE WHEN next_retry_at IS NULL OR next_retry_at <= ? THEN 1 ELSE 0 END) AS ready
+                          SUM(CASE WHEN claimed_at >= ? THEN 1 ELSE 0 END) AS claimed,
+                          SUM(CASE WHEN (claimed_at IS NULL OR claimed_at < ?)
+                                    AND (next_retry_at IS NULL OR next_retry_at <= ?)
+                                   THEN 1 ELSE 0 END) AS ready
                    FROM filesystem_scan_queue""",
-                (now,),
+                (lease_cutoff, lease_cutoff, now),
             ).fetchone()
             failures = db.execute(
-                """SELECT path,root_id,attempts,last_error_kind,last_error,last_failed_at,next_retry_at
+                """SELECT path,root_id,attempts,consecutive_failures,
+                          last_error_kind,last_error,last_failed_at,next_retry_at
                    FROM filesystem_scan_queue WHERE last_error IS NOT NULL
                    ORDER BY last_failed_at DESC LIMIT ?""",
                 (max(0, min(failure_limit, 100)),),

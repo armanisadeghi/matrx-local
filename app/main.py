@@ -17,6 +17,7 @@ from app.api.sandbox_routes import router as sandbox_router
 from app.api.remote_scraper_routes import router as remote_scraper_router
 from app.api.settings_routes import router as settings_router
 from app.api.document_routes import router as document_router  # notes — local-first
+from app.api.access_routes import router as access_router  # filesystem access health
 from app.api.proxy_routes import router as proxy_router
 from app.api.cloud_sync_routes import router as cloud_sync_router
 from app.api.chat_routes import router as chat_router
@@ -655,11 +656,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # months of no sync because everything hinged on frontend traffic.
     _registry.starting("notes_sync")
     try:
+        from app.services.access_health import get_access_health
+        from app.services.documents.access_resources import (
+            NOTES_RESOURCE,
+            register_all_mappings,
+            register_notes_canonical,
+        )
         from app.services.documents.sync_engine import sync_engine as _doc_sync
 
+        # Canonical access-health authority: capture the loop (flushes any
+        # import-time transitions), register the documents resources, and
+        # probe them BEFORE claiming ready. Startup must report the truth —
+        # the historical bug was marking notes_sync READY unconditionally and
+        # only discovering a denied ~/Documents on the first failing op.
+        _access = get_access_health()
+        _access.capture_loop(asyncio.get_running_loop())
+        register_notes_canonical()
+        _mapping_ids = register_all_mappings()
+        await asyncio.to_thread(_access.recheck, [NOTES_RESOURCE, *_mapping_ids])
+
         await _doc_sync.start_background_sync()
-        logger.info("[app/main.py] Phase 2c: Notes auto-sync started ✓")
-        _registry.ready("notes_sync")
+        if _access.is_degraded(NOTES_RESOURCE):
+            reason = _access.message(NOTES_RESOURCE)
+            logger.warning(
+                "[app/main.py] Phase 2c: Notes auto-sync started but notes dir "
+                "is NOT accessible: %s",
+                reason,
+            )
+            _registry.degraded("notes_sync", reason=reason)
+        else:
+            logger.info("[app/main.py] Phase 2c: Notes auto-sync started ✓")
+            _registry.ready("notes_sync")
     except Exception as exc:
         logger.error(
             "[app/main.py] Phase 2c: Notes auto-sync FAILED to start — notes will only sync manually",
@@ -695,7 +722,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         from app.services.file_sync import get_file_sync_engine
 
-        await get_file_sync_engine().start_background_sync()
+        _fs_engine = get_file_sync_engine()
+        # Register the replica root with the access-health authority and
+        # probe it once so /access/health reports its true state at boot.
+        from app.services.access_health import get_access_health as _get_access
+
+        _get_access().register(
+            "files-replica",
+            resolver=lambda: _fs_engine.root,
+            label="Files folder",
+        )
+        await asyncio.to_thread(_get_access().recheck, ["files-replica"])
+
+        await _fs_engine.start_background_sync()
         logger.info("[app/main.py] Phase 2e: File sync started ✓")
         _registry.ready("file_sync")
     except Exception as exc:
@@ -1588,6 +1627,7 @@ app.include_router(sandbox_router, prefix="/sandbox", tags=["sandbox"])
 app.include_router(remote_scraper_router)
 app.include_router(settings_router)
 app.include_router(document_router, prefix="/notes")
+app.include_router(access_router)
 app.include_router(proxy_router)
 app.include_router(cloud_sync_router)
 app.include_router(chat_router)

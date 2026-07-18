@@ -169,7 +169,9 @@ def test_a_batch_naming_an_undownloaded_model_is_refused_with_409(
 
     store = _isolate(monkeypatch, tmp_path)
     monkeypatch.setattr(
-        image_gen_routes, "get_image_gen_service", lambda: _StubService(downloaded=False)
+        image_gen_routes,
+        "get_image_gen_service",
+        lambda: _StubService(downloaded=False),
     )
     monkeypatch.setattr(jobs_module, "get_image_job_store", lambda: store)
 
@@ -380,11 +382,11 @@ def test_runner_drains_a_whole_batch_unattended(
 ) -> None:
     """THE test. A real batch, the real runner, drained end to end:
 
-      • every run executes, in queue order
-      • a transient failure RETRIES rather than costing an image
-      • a hopeless failure gives up immediately instead of burning the budget
-      • one bad job never stalls or kills the drain
-      • the batch roll-up ends consistent
+    • every run executes, in queue order
+    • a transient failure RETRIES rather than costing an image
+    • a hopeless failure gives up immediately instead of burning the budget
+    • one bad job never stalls or kills the drain
+    • the batch roll-up ends consistent
     """
     from app.services.image_gen import jobs as jobs_module
     from app.services.image_gen import service as service_module
@@ -411,34 +413,48 @@ def test_runner_drains_a_whole_batch_unattended(
                 flaky_attempts["count"] += 1
                 if flaky_attempts["count"] == 1:
                     return SimpleNamespace(
-                        success=False, cancelled=False,
-                        error="CUDA out of memory", item_id=None,
-                        file_path=None, elapsed_seconds=0.1,
+                        success=False,
+                        cancelled=False,
+                        error="CUDA out of memory",
+                        item_id=None,
+                        file_path=None,
+                        elapsed_seconds=0.1,
                     )
             if prompt == "hopeless":
                 return SimpleNamespace(
-                    success=False, cancelled=False,
-                    error="Unknown model: gone", item_id=None,
-                    file_path=None, elapsed_seconds=0.1,
+                    success=False,
+                    cancelled=False,
+                    error="Unknown model: gone",
+                    item_id=None,
+                    file_path=None,
+                    elapsed_seconds=0.1,
                 )
             if prompt == "crash":
                 raise RuntimeError("synthetic crash inside generate")
 
             return SimpleNamespace(
-                success=True, cancelled=False, error=None,
-                item_id=f"item-{prompt}", file_path=f"/{prompt}.png",
+                success=True,
+                cancelled=False,
+                error=None,
+                item_id=f"item-{prompt}",
+                file_path=f"/{prompt}.png",
                 elapsed_seconds=0.1,
+                width=512,
+                height=512,
             )
 
-    monkeypatch.setattr(
-        service_module, "get_image_gen_service", lambda: FlakyService()
-    )
+    monkeypatch.setattr(service_module, "get_image_gen_service", lambda: FlakyService())
 
     prompts = ["one", "flaky", "hopeless", "two", "crash", "three"]
     batch_id, jobs = store.create_batch(
         [
-            {"prompt": p, "model_id": MODEL.model_id, "max_attempts": 2,
-             "variables": {"n": p}, "combo_label": f"n={p}"}
+            {
+                "prompt": p,
+                "model_id": MODEL.model_id,
+                "max_attempts": 2,
+                "variables": {"n": p},
+                "combo_label": f"n={p}",
+            }
             for p in prompts
         ],
         label="Overnight",
@@ -518,8 +534,14 @@ def test_a_paused_queue_stops_after_the_running_job(
             started.set()
             await asyncio.sleep(0.15)  # in flight while the pause lands
             return SimpleNamespace(
-                success=True, cancelled=False, error=None,
-                item_id="i", file_path="/x.png", elapsed_seconds=0.15,
+                success=True,
+                cancelled=False,
+                error=None,
+                item_id="i",
+                file_path="/x.png",
+                elapsed_seconds=0.15,
+                width=512,
+                height=512,
             )
 
     monkeypatch.setattr(service_module, "get_image_gen_service", lambda: SlowService())

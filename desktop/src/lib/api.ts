@@ -2521,6 +2521,10 @@ class EngineAPI {
     return this.request<FilesystemPlacesResponse>("/filesystem/places");
   }
 
+  async getFilesystemIndexingSettings(): Promise<FilesystemIndexingSettings> {
+    return this.request<FilesystemIndexingSettings>("/filesystem/indexing-settings");
+  }
+
   async setFilesystemPriorityRoots(
     roots: FilesystemPriorityRoot[],
   ): Promise<FilesystemPlacesResponse> {
@@ -3722,12 +3726,37 @@ export interface FilesystemPriorityRoot {
   label?: string;
 }
 
+export interface FilesystemIndexingSettings {
+  priority_roots: FilesystemPriorityRoot[];
+  content_enabled: boolean;
+  semantic_enabled: boolean;
+  embedding_model: string;
+  max_content_bytes: number;
+  max_embedding_entries: number;
+}
+
+export interface FilesystemScanFailure {
+  path: string;
+  root_id: string;
+  attempts: number;
+  consecutive_failures: number;
+  last_error_kind: string | null;
+  last_error: string;
+  last_failed_at: number | null;
+  next_retry_at: number | null;
+}
+
 export interface FilesystemIndexStatus {
   started: boolean;
   database: string;
   fts5: boolean;
   entries: number;
   directories_pending: number;
+  directories_failed: number;
+  directories_claimed: number;
+  directories_ready: number;
+  scan_failures: FilesystemScanFailure[];
+  metadata_state: "complete" | "indexing" | "partial";
   index_complete: boolean;
   indexed_this_run: number;
   places: number;

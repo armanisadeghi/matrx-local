@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import {
   engine,
   type FilesystemIndexStatus,
+  type FilesystemIndexingSettings,
   type FilesystemPlaceResponse,
   type FilesystemPriorityRoot,
 } from "@/lib/api";
@@ -27,6 +28,17 @@ async function pickDirectory(): Promise<string | null> {
   }
 }
 
+export function authoredPriorityRoots(settings: FilesystemIndexingSettings): FilesystemPriorityRoot[] {
+  return settings.priority_roots.map((root) => ({ ...root }));
+}
+
+export function indexStateLabel(status: FilesystemIndexStatus | null): string {
+  if (!status?.started) return "Waiting";
+  if (status.metadata_state === "partial") return "Needs attention";
+  if (status.metadata_state === "complete") return "Current";
+  return "Indexing";
+}
+
 export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
   const [places, setPlaces] = useState<FilesystemPlaceResponse[]>([]);
   const [roots, setRoots] = useState<FilesystemPriorityRoot[]>([]);
@@ -41,12 +53,13 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
     setLoading(true);
     setMessage(null);
     try {
-      const [placeResult, indexStatus] = await Promise.all([
+      const [placeResult, indexSettings, indexStatus] = await Promise.all([
         engine.getFilesystemPlaces(),
+        engine.getFilesystemIndexingSettings(),
         engine.getFilesystemIndexStatus(),
       ]);
       setPlaces(placeResult.places);
-      setRoots(placeResult.places.filter((place) => place.id.startsWith("priority-")).map((place) => ({ path: place.path, label: place.label })));
+      setRoots(authoredPriorityRoots(indexSettings));
       setStatus(indexStatus);
       setDirty(false);
     } catch (reason) {
@@ -62,11 +75,13 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
 
   useEffect(() => {
     if (!connected || status?.index_complete !== false) return;
+    const active = (status.directories_ready ?? 0) > 0 || (status.directories_claimed ?? 0) > 0;
+    const delay = active ? 5_000 : 30_000;
     const interval = window.setInterval(() => {
       void engine.getFilesystemIndexStatus().then(setStatus).catch(() => undefined);
-    }, 5_000);
+    }, delay);
     return () => window.clearInterval(interval);
-  }, [connected, status?.index_complete]);
+  }, [connected, status?.index_complete, status?.directories_claimed, status?.directories_ready]);
 
   const addRoot = useCallback(async () => {
     const path = await pickDirectory();
@@ -81,8 +96,12 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
     try {
       const result = await engine.setFilesystemPriorityRoots(roots);
       setPlaces(result.places);
-      setRoots(result.places.filter((place) => place.id.startsWith("priority-")).map((place) => ({ path: place.path, label: place.label })));
-      setStatus(await engine.getFilesystemIndexStatus());
+      const [indexSettings, indexStatus] = await Promise.all([
+        engine.getFilesystemIndexingSettings(),
+        engine.getFilesystemIndexStatus(),
+      ]);
+      setRoots(authoredPriorityRoots(indexSettings));
+      setStatus(indexStatus);
       setDirty(false);
       window.dispatchEvent(new Event("matrx-filesystem-roots-changed"));
       setMessage({ text: "Priority locations saved. Background indexing has been reprioritized.", error: false });
@@ -115,15 +134,36 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
           <p className="py-4 text-center text-sm text-muted-foreground">Connect to the engine to manage filesystem discovery.</p>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
               <Metric value={status?.entries.toLocaleString() ?? "—"} label="Indexed entries" />
               <Metric value={status?.directories_pending.toLocaleString() ?? "—"} label="Directories pending" />
+              <Metric value={status?.directories_failed.toLocaleString() ?? "—"} label="Directories blocked" />
               <Metric value={discoveredCount || "—"} label="Available locations" />
               <div className="rounded-md border bg-muted/20 p-3">
-                <Badge variant={status?.index_complete ? "success" : "secondary"}>{status?.index_complete ? "Current" : status?.started ? "Indexing" : "Waiting"}</Badge>
+                <Badge variant={status?.metadata_state === "complete" ? "success" : status?.metadata_state === "partial" ? "destructive" : "secondary"}>
+                  {indexStateLabel(status)}
+                </Badge>
                 <div className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">{status?.fts5 ? "Fast path search enabled" : "Portable search mode"}</div>
               </div>
             </div>
+
+            {status?.metadata_state === "partial" && status.scan_failures.length > 0 && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+                <div className="font-medium text-amber-800 dark:text-amber-200">
+                  Some locations could not be indexed. Matrx will retry automatically; check that these folders still exist and that Matrx has permission to read them.
+                </div>
+                <ul className="mt-2 space-y-1 text-muted-foreground">
+                  {status.scan_failures.slice(0, 3).map((failure) => (
+                    <li key={failure.path} className="truncate" title={`${failure.path}: ${failure.last_error}`}>
+                      <code>{failure.path}</code> — {failure.last_error_kind ?? "unavailable"}
+                    </li>
+                  ))}
+                </ul>
+                {status.scan_failures.length > 3 && (
+                  <div className="mt-1 text-muted-foreground">And {status.scan_failures.length - 3} more blocked locations.</div>
+                )}
+              </div>
+            )}
 
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">

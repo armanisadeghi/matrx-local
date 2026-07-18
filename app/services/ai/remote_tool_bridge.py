@@ -149,6 +149,12 @@ class RemoteToolBridge:
                 if isinstance(client_context, dict)
                 else None
             ) or "matrx-user/chat"
+            source_app = app_ctx.source_app
+            if source_app == "matrx_local":
+                # matrx-ai uses the underscore spelling for its internal tool
+                # source. AIDream's request provenance registry deliberately
+                # uses the product name ``matrx-local``.
+                source_app = "matrx-local"
 
             payload = {
                 "agent_id": agent_id,
@@ -165,7 +171,7 @@ class RemoteToolBridge:
                 "project_id": app_ctx.project_id,
                 "task_id": app_ctx.task_id,
                 "scope_ids": request_context.get("scope_ids"),
-                "source_app": app_ctx.source_app,
+                "source_app": source_app,
                 "source_feature": app_ctx.source_feature,
                 "store": app_ctx.store,
             }

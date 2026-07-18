@@ -209,6 +209,42 @@ def test_browser_gets_grace_period_before_desktop_fallback(
     assert len(server.resume_bodies) == 1
 
 
+def test_ui_claim_defers_resume_then_self_heals_on_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """While the desktop Cloud Chat UI holds a stream claim the engine
+    executes + delivers but leaves /resume to the UI; releasing (or losing)
+    the claim lets the retained result obligation resume headlessly."""
+    from app.services.delegation import engine as engine_module
+
+    server = FakeServer()
+    server.pending = [_pending_call(tmp_path)]
+    engine = _engine(server)
+    monkeypatch.setattr(engine_module, "_BROWSER_RESUME_GRACE_SECONDS", 0.0)
+
+    engine.claim_ui_stream("conv_1", ttl_seconds=60.0)
+    asyncio.run(_sweep_and_settle(engine))
+
+    # Delivered, but no resume — the UI owns the continuation stream.
+    assert len(server.tool_results_bodies) == 1
+    assert server.resume_bodies == []
+    # Retained obligation survives so an abandoned claim self-heals.
+    assert "call_1" in engine._undelivered
+
+    state = engine.ui_conversation_state("conv_1")
+    assert state["claimed"] is True
+    assert state["continuation"]["user_request_id"] == "req_1"
+    assert state["continuation"]["needed"] is True
+    assert state["calls"][0]["state"] == "delivered"
+
+    # Claim gone → next sweep re-posts the retained result (idempotent) and
+    # resumes headlessly since continuation is still needed.
+    engine.release_ui_stream("conv_1")
+    asyncio.run(_sweep_and_settle(engine))
+    assert len(server.resume_bodies) == 1
+    assert engine.ui_conversation_state("conv_1")["claimed"] is False
+
+
 # ---------------------------------------------------------------------------
 # Ownership + dedup
 # ---------------------------------------------------------------------------

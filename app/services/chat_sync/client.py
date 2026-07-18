@@ -129,6 +129,20 @@ class SupabaseChatClient:
                 params[cursor_col] = f"gt.{cursor_ts}"
         return await self._request("GET", table, params=params)
 
+    async def get_rows(
+        self,
+        table: str,
+        *,
+        params: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch rows with explicit PostgREST filters.
+
+        Used for targeted hydration when the web asks this desktop to continue
+        a conversation before the periodic mirror cursor has reached it.
+        """
+        query = {"select": "*", **(params or {})}
+        return await self._request("GET", table, params=query)
+
     # ------------------------------------------------------------------
     # Push — batched upserts
     # ------------------------------------------------------------------

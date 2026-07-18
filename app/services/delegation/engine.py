@@ -27,6 +27,13 @@ its own work by tool name: a pending call whose ``tool_name`` resolves in
 ``app.tools.catalog.get_by_cloud_name`` belongs to this engine. Anything
 else (browser tools, ui-first tools) is silently left for its owner.
 
+USER TOOL EXPOSURE GATE: the ``cloud_tools`` settings key
+({"disabled_tools": [<cloud_name>, ...]}, cloud-authoritative via the
+whole-blob app_settings sync — see settings_sync.py DEFAULT_SETTINGS) is read
+FRESH at every sweep via :func:`get_disabled_cloud_tools`. A pending call for
+a disabled tool is never executed; it is answered with an explicit
+``is_error`` result so the agent hears a clear refusal instead of a hang.
+
 Failure posture: states, not errors. No JWT / expired JWT → idle (the
 frontend refreshes tokens; we just read TokenRepo each tick). Server
 unreachable → warn once per transition, keep polling. A tool execution
@@ -111,6 +118,39 @@ _BROWSER_RESUME_GRACE_SECONDS = float(
 _HANDLED_CALLS_MAX = 500
 _DIAGNOSTIC_EVENTS_MAX = 80
 
+# Error result delivered for a delegated call whose tool the user disabled
+# (settings key ``cloud_tools.disabled_tools``). Also asserted by tests.
+DISABLED_TOOL_ERROR_MESSAGE = "This tool is disabled on this computer by the user."
+
+# Loud-recovery guard: warn exactly once per process on a malformed
+# ``cloud_tools`` settings value instead of once per sweep.
+_warned_malformed_cloud_tools = False
+
+
+def get_disabled_cloud_tools() -> frozenset[str]:
+    """Cloud tool names the user disabled on this machine (``cloud_tools`` key).
+
+    Read FRESH on every call — the setting is cloud-authoritative through the
+    whole-blob app_settings sync and must take effect on the very next sweep,
+    so nothing here may cache. A malformed value is treated as "nothing
+    disabled" and logged loudly once per process.
+    """
+    from app.services.cloud_sync.settings_sync import get_settings_sync
+
+    raw = get_settings_sync().get("cloud_tools")
+    disabled = raw.get("disabled_tools") if isinstance(raw, dict) else None
+    if not isinstance(disabled, list):
+        global _warned_malformed_cloud_tools
+        if not _warned_malformed_cloud_tools:
+            logger.warning(
+                "[delegation] settings key 'cloud_tools' is malformed (%r) — "
+                "treating as no tools disabled",
+                raw,
+            )
+            _warned_malformed_cloud_tools = True
+        return frozenset()
+    return frozenset(str(name) for name in disabled if isinstance(name, str) and name)
+
 
 class DelegationEngine:
     """Background loop: sweep pending delegated calls, execute, deliver, resume."""
@@ -158,6 +198,20 @@ class DelegationEngine:
         self._last_unresolved_tools: list[str] = []
         self._last_visible_pending: list[dict[str, Any]] = []
         self._events: deque[dict[str, Any]] = deque(maxlen=_DIAGNOSTIC_EVENTS_MAX)
+        # conversation_id → claim expiry (time.time()). While a local UI
+        # stream claim is live the engine still executes + delivers, but
+        # DEFERS /resume to the UI so the continuation streams into the open
+        # Cloud Chat view. The retained result obligation (`_undelivered`)
+        # re-evaluates continuation each sweep, so an abandoned claim
+        # self-heals into the normal headless resume.
+        self._ui_claims: Dict[str, float] = {}
+        # conversation_id → delegation facts for the local UI poller.
+        self._conversation_facts: Dict[str, dict[str, Any]] = {}
+        # Tool names whose "disabled by the user" block was already logged.
+        # States, not errors: one INFO per transition, not one per sweep.
+        # Pruned each sweep to the currently-disabled set so re-disabling
+        # (or a new blocked call after re-enabling) logs again.
+        self._blocked_logged: set[str] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle (launcher-managed; see app/main.py Phase 2f)
@@ -198,6 +252,98 @@ class DelegationEngine:
         logger.info("[delegation] sweep requested: %s", reason)
         self._wake.set()
 
+    # ------------------------------------------------------------------
+    # Local UI stream claims (Cloud Chat continuation ownership)
+    # ------------------------------------------------------------------
+
+    def claim_ui_stream(
+        self, conversation_id: str, ttl_seconds: float = 30.0
+    ) -> dict[str, Any]:
+        """The desktop Cloud Chat UI declares it is attached to this
+        conversation and will own POST /resume. The UI re-claims on every
+        poll; when the claim lapses the engine's retained result obligation
+        resumes headlessly on the next sweep."""
+        ttl = max(1.0, min(float(ttl_seconds), 300.0))
+        fresh = conversation_id not in self._ui_claims
+        self._ui_claims[conversation_id] = time.time() + ttl
+        if fresh:
+            self._event("ui_claim", conversation_id=conversation_id, ttl=ttl)
+        return self.ui_conversation_state(conversation_id)
+
+    def release_ui_stream(self, conversation_id: str) -> None:
+        if self._ui_claims.pop(conversation_id, None) is not None:
+            self._event("ui_claim_released", conversation_id=conversation_id)
+            # Re-evaluate any retained continuation promptly.
+            self.request_sweep("ui_claim_released")
+
+    def _ui_claim_active(self, conversation_id: str) -> bool:
+        now = time.time()
+        expired = [c for c, exp in self._ui_claims.items() if exp <= now]
+        for c in expired:
+            del self._ui_claims[c]
+            self._event("ui_claim_expired", conversation_id=c)
+        return conversation_id in self._ui_claims
+
+    def ui_conversation_state(self, conversation_id: str) -> dict[str, Any]:
+        """Snapshot for the local UI poller: per-call execution state plus
+        the pending continuation (user_request_id) once the last sibling
+        result lands. Never includes arguments or result bodies."""
+        facts = self._conversation_facts.get(conversation_id, {})
+        return {
+            "conversation_id": conversation_id,
+            "claimed": self._ui_claim_active(conversation_id),
+            "calls": list(facts.get("calls", {}).values()),
+            "continuation": facts.get("continuation"),
+        }
+
+    def _note_call(
+        self, conversation_id: str, call_id: str, tool_name: str, state: str
+    ) -> None:
+        facts = self._conversation_facts.setdefault(
+            conversation_id, {"calls": {}, "continuation": None}
+        )
+        facts["calls"][call_id] = {
+            "call_id": call_id,
+            "tool_name": tool_name,
+            "state": state,
+            "ts": time.time(),
+        }
+        # Bounded memory: keep facts for at most 8 conversations / 40 calls.
+        if len(self._conversation_facts) > 8:
+            oldest = min(
+                self._conversation_facts,
+                key=lambda c: max(
+                    (v["ts"] for v in self._conversation_facts[c]["calls"].values()),
+                    default=0.0,
+                ),
+            )
+            if oldest != conversation_id:
+                del self._conversation_facts[oldest]
+        if len(facts["calls"]) > 40:
+            for stale in sorted(facts["calls"], key=lambda k: facts["calls"][k]["ts"])[
+                : len(facts["calls"]) - 40
+            ]:
+                del facts["calls"][stale]
+
+    def _note_continuation(
+        self,
+        conversation_id: str,
+        user_request_id: str | None,
+        needed: bool,
+    ) -> None:
+        facts = self._conversation_facts.setdefault(
+            conversation_id, {"calls": {}, "continuation": None}
+        )
+        facts["continuation"] = (
+            {
+                "user_request_id": user_request_id,
+                "needed": needed,
+                "ts": time.time(),
+            }
+            if user_request_id
+            else None
+        )
+
     def status_payload(self) -> dict[str, Any]:
         """Cheap, read-only snapshot for diagnostics UIs.
 
@@ -231,6 +377,7 @@ class DelegationEngine:
                 "undelivered": len(self._undelivered),
                 "recent_resumes": len(self._recent_resumes),
                 "call_tasks": len(self._call_tasks),
+                "ui_claims": len(self._ui_claims),
             },
             "recent_events": list(self._events),
             "timestamps": {
@@ -297,6 +444,11 @@ class DelegationEngine:
             self._last_error = str(exc)
             return 0
 
+        # User tool-exposure gate — read the CURRENT setting once per sweep
+        # (never cached across sweeps; cloud sync may have changed it).
+        disabled_tools = get_disabled_cloud_tools()
+        self._blocked_logged &= disabled_tools
+
         dispatched = 0
         unresolved: set[str] = set()
         for call in pending:
@@ -318,6 +470,41 @@ class DelegationEngine:
                     tool_name=tool_name,
                     conversation_id=conversation_id,
                 )
+                continue
+            if tool_name in disabled_tools:
+                # Never executed — answered with an explicit error result so
+                # the agent hears a refusal instead of a stranded turn.
+                if tool_name not in self._blocked_logged:
+                    logger.info(
+                        "[delegation] %s is disabled on this computer by the "
+                        "user — delegated calls are refused with an error "
+                        "result (first blocked call_id=%s)",
+                        tool_name,
+                        call_id,
+                    )
+                    self._blocked_logged.add(tool_name)
+                self._mark_handled(call_id)
+                self._note_call(conversation_id, call_id, tool_name, "blocked")
+                self._event(
+                    "blocked_disabled_tool",
+                    call_id=call_id,
+                    tool_name=tool_name,
+                    conversation_id=conversation_id,
+                )
+                refusal = {
+                    "call_id": call_id,
+                    "tool_name": tool_name,
+                    "output": None,
+                    "is_error": True,
+                    "error_message": DISABLED_TOOL_ERROR_MESSAGE,
+                    "duration_ms": 0,
+                }
+                task = asyncio.create_task(
+                    self._deliver(conversation_id, call_id, refusal),
+                    name=f"delegation-blocked-{call_id[:12]}",
+                )
+                self._call_tasks.add(task)
+                task.add_done_callback(self._call_tasks.discard)
                 continue
             try:
                 queued = await self._outbox.enqueue(call)
@@ -412,6 +599,7 @@ class DelegationEngine:
                         "[delegation] execution claim lost for call_id=%s", call_id
                     )
                     return
+                self._note_call(conversation_id, call_id, tool_name, "executing")
                 owner_task = asyncio.current_task()
 
                 async def keep_execution_lease() -> None:
@@ -646,12 +834,32 @@ class DelegationEngine:
             continuation_needed=bool(response.get("continuation_needed")),
             user_request_id=response.get("user_request_id"),
         )
+        self._note_call(
+            conversation_id,
+            call_id,
+            str(result_payload.get("tool_name", "")),
+            "delivered",
+        )
         if response.get("continuation_needed") and response.get("user_request_id"):
             user_request_id = str(response["user_request_id"])
+            self._note_continuation(conversation_id, user_request_id, True)
             # Keep the executed result until continuation is either streamed or
             # proven terminal. Re-posting it is idempotent and lets a later
             # sweep recover from a lost acknowledgement or failed /resume.
             self._undelivered[call_id] = (conversation_id, result_payload)
+            if self._ui_claim_active(conversation_id):
+                # The local Cloud Chat UI owns this continuation stream; it
+                # reads user_request_id off ui_conversation_state and calls
+                # /resume itself. The retained obligation above re-evaluates
+                # on later sweeps, so a vanished UI degrades to the normal
+                # headless resume once the claim expires.
+                self._event(
+                    "resume_deferred_to_ui",
+                    conversation_id=conversation_id,
+                    user_request_id=user_request_id,
+                    call_id=call_id,
+                )
+                return
             if (
                 user_request_id not in self._recent_resumes
                 and _BROWSER_RESUME_GRACE_SECONDS > 0
@@ -682,6 +890,7 @@ class DelegationEngine:
 
         self._undelivered.pop(call_id, None)
         await self._clear_outbox(call_id)
+        self._note_continuation(conversation_id, None, False)
 
     async def _restore_outbox(self) -> bool:
         """Restore executed results before reading the cloud pending ledger."""

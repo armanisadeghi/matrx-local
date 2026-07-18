@@ -50,6 +50,7 @@ import {
   MemoryStick,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { CloudAgentToolsCard } from "@/components/settings/CloudAgentToolsCard";
 import { SubTabBar } from "@/components/layout/SubTabBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -3869,6 +3870,9 @@ export function Settings({
           {/* ── Cloud & Account Tab ──────────────────────────── */}
           {activeTab === "cloud" && (
             <>
+              {/* Cloud agent tool exposure (synced, web-controllable) */}
+              <CloudAgentToolsCard engineUrl={engineUrl ?? null} />
+
               {/* Cloud Sync */}
               <Card>
                 <CardHeader className="pb-3">

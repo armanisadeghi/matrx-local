@@ -135,6 +135,70 @@ class ChatSyncEngine:
         self._last_cycle = summary
         return summary
 
+    async def configure_from_persisted_token(self) -> bool:
+        """Refresh sync credentials from the desktop's durable auth token."""
+        repo = TokenRepo()
+        row = await repo.get()
+        if not row or not row.get("access_token") or not row.get("user_id"):
+            return False
+        if repo.is_expired(row):
+            return False
+        self.configure(str(row["user_id"]), str(row["access_token"]))
+        return True
+
+    async def flush_pending(self) -> dict[str, Any]:
+        """Push local chat writes immediately without waiting for the timer.
+
+        AI turns use this before their terminal completion event so the web
+        route can resolve the new canonical conversation as soon as it promotes
+        from ``/chat/new`` to ``/chat/{id}``.
+        """
+        if not await self.configure_from_persisted_token():
+            raise RuntimeError("chat sync engine not configured (no valid user/JWT)")
+        async with self._sync_lock:
+            pushed = await self._push_pending()
+        return pushed
+
+    async def hydrate_conversation(self, conversation_id: str) -> bool:
+        """Pull one cloud conversation and its history into the local mirror.
+
+        The periodic keyset pull is intentionally eventual. An interactive
+        continuation cannot wait up to five minutes, and a cursor may already
+        be past an older conversation, so this lookup is exact and RLS-scoped.
+        """
+        if not _looks_like_uuid(conversation_id):
+            return False
+        if not await self.configure_from_persisted_token():
+            raise RuntimeError("chat sync engine not configured (no valid user/JWT)")
+
+        async with self._sync_lock:
+            rows = await self._client.get_rows(
+                "conversation",
+                params={"id": f"eq.{conversation_id}", "limit": "1"},
+            )
+            if not rows:
+                return False
+
+            await self._apply_remote_row("conversation", rows[0], source="pull")
+            messages = await self._client.get_rows(
+                "message",
+                params={
+                    "conversation_id": f"eq.{conversation_id}",
+                    "order": "position.asc,created_at.asc,id.asc",
+                    "limit": "5000",
+                },
+            )
+            for row in messages:
+                await self._apply_remote_row("message", row, source="pull")
+            await get_db().commit()
+
+        logger.info(
+            "[chat_sync] targeted hydration complete conversation=%s messages=%d",
+            conversation_id,
+            len(messages),
+        )
+        return True
+
     # ------------------------------------------------------------------
     # Outbound — drain the outbox
     # ------------------------------------------------------------------

@@ -11,9 +11,14 @@ import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessages } from "@/components/chat/ChatMessages";
 import { ChatSidebar } from "@/components/chat/ChatSidebar";
 import { GuidedVariableInputs } from "@/components/chat/GuidedVariableInputs";
+import { CloudChatPlusMenu } from "@/components/chat/PlusMenu";
 import { Button } from "@/components/ui/button";
 import { useCloudAgents } from "@/hooks/use-cloud-agents";
-import { type CloudChatExecutionTarget, useCloudChat } from "@/hooks/use-cloud-chat";
+import {
+  type ChatAttachment,
+  type CloudChatExecutionTarget,
+  useCloudChat,
+} from "@/hooks/use-cloud-chat";
 import type { EngineStatus } from "@/hooks/use-engine";
 import { cn } from "@/lib/utils";
 import type { AgentInfo, PromptVariable } from "@/types/agents";
@@ -65,6 +70,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   const [activeAgent, setActiveAgent] = useState<AgentInfo | null>(null);
   const [activeVariables, setActiveVariables] = useState<PromptVariable[]>([]);
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const cloudChat = useCloudChat({ engineUrl });
   const cloudAgents = useCloudAgents();
   const {
@@ -79,8 +85,11 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
     localLlmStatus,
     mode,
     model,
+    availableModels,
     renameConversation,
     refreshLocalLlmStatus,
+    runControls,
+    runControlActions,
     selectConversation,
     sendMessage,
     setExecutionTarget,
@@ -222,15 +231,28 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   const handleSend = useCallback(
     async (content: string) => {
       const submittedVariables = { ...variableValues };
+      const submittedAttachments = attachments;
       setActiveVariables([]);
       setVariableValues({});
+      setAttachments([]);
       await sendMessage(content, {
         ...(activeAgentWithVariables?.id ? { agentId: activeAgentWithVariables.id } : {}),
         variables: submittedVariables,
+        ...(submittedAttachments.length > 0
+          ? { attachments: submittedAttachments }
+          : {}),
       });
     },
-    [activeAgentWithVariables?.id, sendMessage, variableValues],
+    [activeAgentWithVariables?.id, attachments, sendMessage, variableValues],
   );
+
+  const handleAddAttachments = useCallback((files: ChatAttachment[]) => {
+    setAttachments((prev) => [...prev, ...files]);
+  }, []);
+
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((file) => file.id !== id));
+  }, []);
 
   const handleVariableChange = useCallback((name: string, value: string) => {
     setVariableValues((prev) => ({ ...prev, [name]: value }));
@@ -366,6 +388,23 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
             selectedAgentId={selectedAgentId}
             showModelSelector={false}
             showModeSelector={false}
+            attachments={attachments}
+            onRemoveAttachment={handleRemoveAttachment}
+            plusMenuSlot={
+              <CloudChatPlusMenu
+                engineUrl={engineUrl}
+                models={availableModels}
+                runControls={runControls}
+                onModelOverride={runControlActions.setModelOverride}
+                onTemperature={runControlActions.setTemperature}
+                onMaxTokens={runControlActions.setMaxTokens}
+                onExcludedTools={runControlActions.setExcludedTools}
+                onResetOverrides={runControlActions.resetOverrides}
+                attachments={attachments}
+                onAddAttachments={handleAddAttachments}
+                disabled={isStreaming}
+              />
+            }
           />
         </div>
       </div>

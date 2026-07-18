@@ -217,9 +217,18 @@ def ai_app(seam_sandbox, local_db, monkeypatch: pytest.MonkeyPatch):
     asyncio.run(_seed())
 
     import app.api.ai_routes as ai_routes
+    import app.services.ai.local_ai_task as local_ai_task
 
     # Fast heartbeat so a sub-second mock stream still carries beats.
     monkeypatch.setattr(ai_routes, "_HEARTBEAT_INTERVAL", 0.02)
+    # These wire-contract tests intentionally use matrx-ai's mock provider.
+    # Local-model ownership has dedicated tests below and a real llama-server
+    # acceptance run; keep the mock stream fixture focused on event/persistence.
+    monkeypatch.setattr(
+        local_ai_task,
+        "bind_active_local_model",
+        lambda config: str(config.model),
+    )
     return ai_routes.build_ai_app()
 
 
@@ -259,6 +268,67 @@ def _event_types(events: list[dict[str, Any]]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def test_local_execution_rebinds_cloud_model_and_offering(monkeypatch):
+    from matrx_ai.config import UnifiedConfig
+
+    from app.services.ai import local_llm_registry
+    from app.services.ai.local_ai_task import bind_active_local_model
+
+    monkeypatch.setattr(
+        local_llm_registry,
+        "resolve_local_llm_model",
+        lambda requested_model=None: {
+            "port": 11434,
+            "base_url": "http://127.0.0.1:11434/v1",
+            "model_name": "custom-model.gguf",
+            "canonical_model_name": "local/custom-model.gguf",
+        },
+    )
+    config = UnifiedConfig.from_dict(
+        {
+            "model": "claude-sonnet-5",
+            "offering_id": str(uuid.uuid4()),
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+    config.runtime_offering_id = str(uuid.uuid4())
+    config.matrx_model_name = "claude-sonnet-5"
+
+    assert bind_active_local_model(config) == "local/custom-model.gguf"
+    assert config.model == "local/custom-model.gguf"
+    assert config.offering_id is None
+    assert config.runtime_offering_id is None
+    assert config.matrx_model_name is None
+
+
+def test_local_execution_refuses_cloud_fallback_without_registered_model(
+    monkeypatch,
+):
+    from fastapi import HTTPException
+    from matrx_ai.config import UnifiedConfig
+
+    from app.services.ai import local_llm_registry
+    from app.services.ai.local_ai_task import bind_active_local_model
+
+    monkeypatch.setattr(
+        local_llm_registry,
+        "resolve_local_llm_model",
+        lambda requested_model=None: None,
+    )
+    config = UnifiedConfig.from_dict(
+        {
+            "model": "claude-sonnet-5",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        bind_active_local_model(config)
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["code"] == "local_model_not_available"
+    assert "No cloud provider was called" in exc_info.value.detail["message"]
+
+
 def test_chat_stream_with_local_tool_round_trip(ai_app, local_db):
     """POST /chat: mock provider emits a REAL local tool call; the stream
     carries the full aidream vocabulary; SQLite holds the turn + tool log."""
@@ -284,7 +354,10 @@ def test_chat_stream_with_local_tool_round_trip(ai_app, local_db):
                             "mode": "text",
                             "text": "tool round trip complete",
                             "tool_calls": [
-                                {"name": "local_system_info", "arguments": {}}
+                                {
+                                    "name": "local_system",
+                                    "arguments": {"action": "info"},
+                                }
                             ],
                         }
                     },
@@ -309,9 +382,13 @@ def test_chat_stream_with_local_tool_round_trip(ai_app, local_db):
         # The local tool actually ran (tool_event lifecycle on the stream)
         assert "tool_event" in types, f"no tool_event in stream: {sorted(set(types))}"
         tool_events = [e["data"] for e in events if e["event"] == "tool_event"]
+        system_events = [
+            td for td in tool_events if td.get("tool_name") == "local_system"
+        ]
+        assert system_events, f"local_system missing from tool events: {tool_events}"
         assert any(
-            td.get("tool_name") == "local_system_info" for td in tool_events
-        ), f"local_system_info missing from tool events: {tool_events}"
+            td.get("event") == "tool_completed" for td in system_events
+        ), f"local_system did not complete: {system_events}"
         # Model answer + terminal envelope
         assert "chunk" in types
         assert "completion" in types
@@ -573,9 +650,9 @@ def test_tool_call_decimal_values_persist(local_db):
 
 
 def test_ai_surface_mounted_on_engine(http: httpx.Client):
-    """The /ai surface is live on the real engine at BOTH mounts — the 503
+    """The /ai surface is live on the real engine at all compatibility mounts — the 503
     ai_surface_migration_pending stub is gone — and errors are enveloped."""
-    for base in ("/ai", "/chat/ai"):
+    for base in ("/ai", "/v2/ai", "/chat/ai"):
         r = http.get(f"{base}/status")
         assert r.status_code == 200, f"{base}/status → {r.status_code}: {r.text[:200]}"
         body = r.json()

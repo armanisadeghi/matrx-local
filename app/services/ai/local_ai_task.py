@@ -62,6 +62,55 @@ logger = get_logger()
 
 
 # ---------------------------------------------------------------------------
+# Local model ownership
+# ---------------------------------------------------------------------------
+
+
+def bind_active_local_model(config: UnifiedConfig) -> str:
+    """Make the desktop-owned llama-server the only model for a local run.
+
+    Saved agent definitions intentionally retain their cloud model and offering
+    metadata so they remain portable. Once the web client routes the run to
+    Matrx Local, however, execution ownership has changed: the active local
+    llama-server is authoritative. Letting the agent model or a frontend model
+    override survive here can call a paid cloud provider from the desktop or
+    fail on a cloud-only offering UUID.
+    """
+    from app.services.ai.local_llm_registry import resolve_local_llm_model
+
+    target = resolve_local_llm_model()
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "local_model_not_available",
+                "message": (
+                    "Matrx Local received this agent run, but its Python engine "
+                    "is not connected to the llama-server currently used by the "
+                    "desktop app. Start a local model or wait for engine "
+                    "registration to complete. No cloud provider was called."
+                ),
+            },
+        )
+
+    canonical = str(target["canonical_model_name"])
+    previous_model = str(getattr(config, "model", "") or "")
+    config.model = canonical
+    # Offering pins are meaningful only inside the server's ai.offering graph.
+    # A synthetic local runtime model has its own catalog profile and must never
+    # inherit a cloud offering or a prior overload reroute.
+    config.offering_id = None
+    config.runtime_offering_id = None
+    config.matrx_model_name = None
+    logger.info(
+        "[local_ai_task] bound local execution model %s (agent/request model was %s)",
+        canonical,
+        previous_model or "unset",
+    )
+    return canonical
+
+
+# ---------------------------------------------------------------------------
 # Conversation gate — aidream resolve_conversation semantics over local SQLite
 # ---------------------------------------------------------------------------
 
@@ -388,6 +437,7 @@ async def prepare_agent_start(
         config.replace_variables(request.variables)
     if overrides:
         config.apply_overrides(overrides)
+    bind_active_local_model(config)
 
     metadata = {
         **ctx.metadata,
@@ -449,6 +499,18 @@ async def prepare_conversation_continue(
     """
     _validate_uuid(conversation_id)
     ctx = _apply_request_scope(ctx, request)
+
+    if not await conversation_exists(conversation_id):
+        try:
+            from app.services.chat_sync import get_chat_sync_engine
+
+            await get_chat_sync_engine().hydrate_conversation(conversation_id)
+        except Exception:
+            logger.warning(
+                "[local_ai_task] targeted conversation hydration failed for %s",
+                conversation_id,
+                exc_info=True,
+            )
 
     if not await conversation_exists(conversation_id):
         raise HTTPException(
@@ -531,17 +593,10 @@ async def prepare_conversation_continue(
             config_overrides=request.config_overrides,
         )
 
-    if not getattr(config, "model", None):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "code": "conversation_model_missing",
-                "message": (
-                    f"Conversation {conversation_id!r} has no persisted model or "
-                    "pinned executable-agent definition."
-                ),
-            },
-        )
+    # A continuation may carry a cloud model persisted by an older desktop
+    # build. Local ownership is re-applied every turn so stale conversation
+    # state cannot escape to a provider.
+    bind_active_local_model(config)
 
     config.stream = getattr(request, "stream", True)
     if not ctx.store:
@@ -618,6 +673,7 @@ async def prepare_chat(
         config.replace_variables(request.variables)
     if request.config_overrides:
         config.apply_overrides(request.config_overrides)
+    bind_active_local_model(config)
 
     return ctx, config, request.max_iterations, request.max_retries_per_iteration
 
@@ -655,6 +711,22 @@ async def run_local_ai_task(
         InitPayload(operation="user_request", operation_id=operation_id)
     )
 
+    if ctx.store and ctx.conversation_id:
+        try:
+            from app.services.ai.conversation_handler import get_conversation_store
+
+            await get_conversation_store().reserve_stream_messages(
+                config,
+                ctx.conversation_id,
+                ctx.user_id or "local-user",
+                emitter,
+            )
+        except Exception:
+            logger.error(
+                "[local_ai_task] durable stream message reservation failed",
+                exc_info=True,
+            )
+
     unrecognized = getattr(config, "_unrecognized_keys", [])
     if unrecognized:
         await emitter.send_warning(
@@ -678,6 +750,39 @@ async def run_local_ai_task(
     )
 
     _update_agent_cache(completed)
+
+    if ctx.store:
+        try:
+            from app.services.chat_sync import get_chat_sync_engine
+
+            pushed = await get_chat_sync_engine().flush_pending()
+            if pushed.get("failed"):
+                raise RuntimeError(
+                    f"{pushed['failed']} chat mirror row(s) failed to push"
+                )
+            logger.info(
+                "[local_ai_task] flushed persisted turn to cloud (sent=%s)",
+                pushed.get("sent", 0),
+            )
+        except Exception as exc:
+            logger.error(
+                "[local_ai_task] immediate chat mirror flush failed; the local "
+                "turn completed but web route promotion may be delayed: %s",
+                exc,
+                exc_info=True,
+            )
+            await emitter.send_warning(
+                WarningPayload(
+                    code="chat_mirror_flush_failed",
+                    system_message=str(exc),
+                    user_message=(
+                        "The response completed locally, but conversation sync "
+                        "to the web is delayed. Matrx Local will retry automatically."
+                    ),
+                    level="high",
+                    recoverable=True,
+                )
+            )
 
     await _emit_completion(emitter, completed, operation_id)
     await emitter.send_end()

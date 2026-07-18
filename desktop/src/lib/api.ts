@@ -471,9 +471,10 @@ class EngineAPI {
    * Non-fatal — errors are caught and logged by the caller.
    */
   async connectLocalLlm(port: number, modelName: string): Promise<void> {
-    // Throw (don't silently no-op) when discovery hasn't completed — callers
-    // retry or surface the failure. A silent return here left auto-started
-    // llama-servers unregistered with the engine forever.
+    // The llama-server-ready event can beat sidecar discovery during startup.
+    // Heal the engine URL here instead of dropping the one event that joins
+    // the desktop model process to the Python agent runtime.
+    if (!this.baseUrl) await this.rediscover();
     if (!this.baseUrl) throw new Error("Engine not discovered");
     const resp = await fetch(`${this.baseUrl}/chat/local-llm/connect`, {
       method: "POST",
@@ -518,6 +519,7 @@ class EngineAPI {
     matrx_ai_support: boolean;
     instructions: string | null;
   }> {
+    if (!this.baseUrl) await this.rediscover();
     if (!this.baseUrl) throw new Error("Engine not discovered");
     const resp = await fetch(`${this.baseUrl}/chat/local-llm/status`, {
       headers: await this.authHeaders(),

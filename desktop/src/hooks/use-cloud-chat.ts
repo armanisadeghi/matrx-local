@@ -10,6 +10,10 @@ import {
   stringifyStreamDetail,
 } from "@/lib/aidream-stream";
 import supabase from "@/lib/supabase";
+import {
+  buildDesktopClientContext,
+  type DesktopClientContext,
+} from "@/lib/desktop-client-context";
 import type {
   ChatMessage,
   ChatMode,
@@ -31,6 +35,29 @@ const HISTORY_COLUMNS =
   "id, title, description, status, message_count, initial_agent_id, last_model_id, source_app, source_feature, created_at, updated_at";
 
 export type CloudChatExecutionTarget = "cloud" | "local";
+
+/** A text-like file attached to the next message via the "+" menu. */
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  size: number;
+  content: string;
+}
+
+/** Per-conversation run controls set from the composer "+" menu. */
+export interface CloudChatRunControls {
+  modelOverride: string | null;
+  temperature: number | null;
+  maxTokens: number | null;
+  excludedTools: string[];
+}
+
+const DEFAULT_RUN_CONTROLS: CloudChatRunControls = {
+  modelOverride: null,
+  temperature: null,
+  maxTokens: null,
+  excludedTools: [],
+};
 
 interface UseCloudChatOptions {
   engineUrl?: string | null;
@@ -160,6 +187,9 @@ function buildRequest(
   cloudServerUrl: string,
   options: { agentId?: string; variables?: Record<string, string> } | undefined,
   allMessages: ChatMessage[],
+  clientContext: DesktopClientContext | null,
+  runControls: CloudChatRunControls,
+  attachments: ChatAttachment[],
 ): { url: string; body: Record<string, unknown> } {
   const base =
     target === "local"
@@ -169,18 +199,53 @@ function buildRequest(
     target === "local"
       ? conversation.localConversationId
       : conversation.cloudConversationId ?? conversation.serverConversationId;
+  // Cloud requests merge the "+" menu run controls; the local target keeps
+  // its existing model-only override behavior untouched.
+  const cloudOverrides: Record<string, unknown> = {
+    ...(runControls.modelOverride ? { model: runControls.modelOverride } : {}),
+    ...(runControls.temperature != null
+      ? { temperature: runControls.temperature }
+      : {}),
+    ...(runControls.maxTokens != null
+      ? { max_tokens: runControls.maxTokens }
+      : {}),
+  };
   const configOverrides =
-    target === "local" && localModel ? { model: localModel } : undefined;
+    target === "local"
+      ? localModel
+        ? { model: localModel }
+        : undefined
+      : Object.keys(cloudOverrides).length > 0
+        ? cloudOverrides
+        : undefined;
+  // aidream accepts user_input as a plain string OR a content-part array;
+  // attachments switch it to the array form with one text part per file.
+  const attachmentParts = attachments.map((file) => ({
+    type: "text" as const,
+    text: `Attached file: ${file.name}\n\n${file.content}`,
+  }));
+  const userInput: string | Array<{ type: "text"; text: string }> =
+    attachmentParts.length > 0
+      ? [
+          ...(userContent ? [{ type: "text" as const, text: userContent }] : []),
+          ...attachmentParts,
+        ]
+      : userContent;
+  // The surface envelope makes this machine an active tool executor for the
+  // turn. Cloud requests only — the local engine IS the desktop already.
+  const clientEnvelope =
+    target === "cloud" && clientContext ? { client: clientContext } : {};
 
   if (conversationId) {
     return {
       url: `${base}/conversations/${conversationId}`,
       body: {
-        user_input: userContent,
+        user_input: userInput,
         stream: true,
         source_app: CLOUD_SOURCE_APP,
         source_feature: CLOUD_SOURCE_FEATURE,
         ...(configOverrides ? { config_overrides: configOverrides } : {}),
+        ...clientEnvelope,
       },
     };
   }
@@ -191,8 +256,9 @@ function buildRequest(
       source_app: CLOUD_SOURCE_APP,
       source_feature: CLOUD_SOURCE_FEATURE,
       ...(configOverrides ? { config_overrides: configOverrides } : {}),
+      ...clientEnvelope,
     };
-    if (userContent) body.user_input = userContent;
+    if (userContent || attachmentParts.length > 0) body.user_input = userInput;
     if (options.variables && Object.keys(options.variables).length > 0) {
       body.variables = options.variables;
     }
@@ -202,18 +268,117 @@ function buildRequest(
     };
   }
 
+  const apiMessages = toApiMessages(allMessages);
+  if (attachmentParts.length > 0) {
+    const last = apiMessages[apiMessages.length - 1];
+    if (last?.role === "user") {
+      last.content = [...last.content, ...attachmentParts];
+    }
+  }
+
   return {
     url: `${base}/chat`,
     body: {
       ai_model_id: localModel ?? currentModel,
-      messages: toApiMessages(allMessages),
+      messages: apiMessages,
       stream: true,
       max_iterations: 20,
       source_app: CLOUD_SOURCE_APP,
       source_feature: CLOUD_SOURCE_FEATURE,
       ...(configOverrides ? { config_overrides: configOverrides } : {}),
+      ...clientEnvelope,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Delegated-tool continuation (suspend/resume) — UI side.
+//
+// When a cloud agent calls a `matrx-local` tool, aidream suspends the turn
+// and ends the stream; the local delegation engine executes the tool. The UI
+// claims continuation ownership over loopback so the resumed segment streams
+// into THIS open chat instead of being drained headlessly. Protocol doc:
+// matrx-frontend/features/agents/docs/CLIENT_TOOL_SUSPEND_RESUME.md; engine
+// half: app/services/delegation/engine.py (ui claims).
+// ---------------------------------------------------------------------------
+
+const DELEGATION_POLL_MS = 1000;
+const DELEGATION_CLAIM_TTL_SECONDS = 20;
+// Longest mega-tool execution timeout is Shell at 900s; add headroom.
+const DELEGATION_WAIT_CAP_MS = 16 * 60 * 1000;
+
+interface EngineDelegationState {
+  claimed?: boolean;
+  calls?: Array<{ call_id: string; tool_name: string; state: string }>;
+  continuation?: { user_request_id?: string | null; needed?: boolean } | null;
+}
+
+async function claimDelegationUi(
+  engineUrl: string,
+  conversationId: string,
+): Promise<EngineDelegationState | null> {
+  try {
+    const response = await fetch(`${engineUrl}/chat/delegation/ui-claim`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        ttl_seconds: DELEGATION_CLAIM_TTL_SECONDS,
+      }),
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as EngineDelegationState;
+  } catch {
+    return null;
+  }
+}
+
+function releaseDelegationUi(engineUrl: string, conversationId: string): void {
+  void fetch(`${engineUrl}/chat/delegation/ui-release`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversation_id: conversationId }),
+    signal: AbortSignal.timeout(4000),
+  }).catch(() => {
+    // Claim TTL expiry makes the engine self-heal; release is best-effort.
+  });
+}
+
+/**
+ * Poll the local engine until the delegated calls resolve and a continuation
+ * (`user_request_id`) is available, re-claiming UI ownership on every poll.
+ * Returns null when the wait is abandoned — the engine's headless resume
+ * then finishes the conversation once the claim expires.
+ */
+async function waitForDelegatedContinuation(
+  engineUrl: string,
+  conversationId: string,
+  signal: AbortSignal,
+  onStatus: (status: string) => void,
+): Promise<string | null> {
+  const startedAt = Date.now();
+  while (!signal.aborted && Date.now() - startedAt < DELEGATION_WAIT_CAP_MS) {
+    const state = await claimDelegationUi(engineUrl, conversationId);
+    if (state) {
+      const continuation = state.continuation;
+      if (continuation?.needed && continuation.user_request_id) {
+        return continuation.user_request_id;
+      }
+      const executing = state.calls?.filter((c) => c.state === "executing") ?? [];
+      if (executing.length > 0) {
+        onStatus(
+          `Running on this computer: ${executing.map((c) => c.tool_name).join(", ")}...`,
+        );
+      } else {
+        onStatus("Waiting for local tool results...");
+      }
+    } else {
+      onStatus("Waiting for the local engine...");
+    }
+    await new Promise((resolve) => setTimeout(resolve, DELEGATION_POLL_MS));
+  }
+  return null;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -717,6 +882,9 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
   const [executionTarget, setExecutionTarget] = useState<CloudChatExecutionTarget>("cloud");
   const [localLlmStatus, setLocalLlmStatus] = useState<LocalLlmStatus | null>(null);
   const [localLlmError, setLocalLlmError] = useState<string | null>(null);
+  const [runControls, setRunControls] = useState<CloudChatRunControls>(
+    DEFAULT_RUN_CONTROLS,
+  );
   const abortRef = useRef<AbortController | null>(null);
   const conversationsRef = useRef(conversations);
 
@@ -957,12 +1125,36 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     }
   }, []);
 
+  const runControlActions = useMemo(
+    () => ({
+      setModelOverride: (modelOverride: string | null) =>
+        setRunControls((prev) => ({ ...prev, modelOverride })),
+      setTemperature: (temperature: number | null) =>
+        setRunControls((prev) => ({ ...prev, temperature })),
+      setMaxTokens: (maxTokens: number | null) =>
+        setRunControls((prev) => ({ ...prev, maxTokens })),
+      setExcludedTools: (excludedTools: string[]) =>
+        setRunControls((prev) => ({ ...prev, excludedTools })),
+      resetOverrides: () =>
+        setRunControls((prev) => ({
+          ...DEFAULT_RUN_CONTROLS,
+          excludedTools: prev.excludedTools,
+        })),
+    }),
+    [],
+  );
+
   const sendMessage = useCallback(
     async (
       content: string,
-      options?: { agentId?: string; variables?: Record<string, string> },
+      options?: {
+        agentId?: string;
+        variables?: Record<string, string>;
+        attachments?: ChatAttachment[];
+      },
     ) => {
       const trimmed = content.trim();
+      const attachments = options?.attachments ?? [];
       const hasAgent = Boolean(options?.agentId);
       if (!hasAgent && !trimmed) return;
       if (isStreaming) return;
@@ -1093,14 +1285,23 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         );
       }
 
-      const userMessage: ChatMessage | null = trimmed
-        ? {
-            id: generateId(),
-            role: "user",
-            content: trimmed,
-            timestamp: new Date().toISOString(),
-          }
-        : null;
+      const attachmentNote =
+        attachments.length > 0
+          ? `[Attached: ${attachments.map((file) => file.name).join(", ")}]`
+          : "";
+      const userMessage: ChatMessage | null =
+        trimmed || attachmentNote
+          ? {
+              id: generateId(),
+              role: "user",
+              content: trimmed
+                ? attachmentNote
+                  ? `${trimmed}\n\n${attachmentNote}`
+                  : trimmed
+                : attachmentNote,
+              timestamp: new Date().toISOString(),
+            }
+          : null;
 
       if (userMessage) {
         setConversations((prev) =>
@@ -1109,7 +1310,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
             const isFirst = conversation.messages.length === 0;
             return {
               ...conversation,
-              title: isFirst ? generateTitle(trimmed) : conversation.title,
+              title: isFirst ? generateTitle(trimmed || userMessage.content) : conversation.title,
               messages: [...conversation.messages, userMessage],
               updated_at: new Date().toISOString(),
             };
@@ -1232,6 +1433,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         updateAssistant({ content: accumulated });
       };
 
+      let claimedDelegationConversation: string | null = null;
       try {
         const {
           data: { session },
@@ -1245,6 +1447,12 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           ...currentConversation,
           ...routePatch,
         };
+        const clientContext =
+          executionTarget === "cloud"
+            ? await buildDesktopClientContext(engineUrl, {
+                removeTools: runControls.excludedTools,
+              })
+            : null;
         const { url, body } = buildRequest(
           requestConversation,
           trimmed,
@@ -1255,44 +1463,25 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           cloudServerUrl,
           options,
           allMessages,
+          clientContext,
+          runControls,
+          attachments,
         );
 
-        const response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify(body),
-          signal: abort.signal,
-        });
-
-        if (!response.ok || !response.body) {
-          const rawErrorText = await response.text().catch(() => `HTTP ${response.status}`);
-          const errorText = rawErrorText || `HTTP ${response.status} ${response.statusText}`;
-          const label = executionTarget === "local" ? "Local AI" : "AIDream";
-          const message = `${label} request failed (${response.status}): ${errorText}`;
-          setRequestError(message);
-          updateAssistant({
-            content: "",
-            isStreaming: false,
-            streamStatus: "Request failed.",
-            error: message,
-          });
-          return;
-        }
-
-        const headerConversationId = response.headers.get("X-Conversation-ID");
         const existingTargetConversationId =
           executionTarget === "local"
             ? requestConversation.localConversationId
             : requestConversation.cloudConversationId ?? requestConversation.serverConversationId;
-        if (headerConversationId && !existingTargetConversationId) {
-          updateConversationMeta(conversationIdPatch(executionTarget, headerConversationId));
-        }
+        let cloudConversationId =
+          executionTarget === "cloud" ? existingTargetConversationId ?? null : null;
+        // Delegated (locally-executed) tool calls observed in the current
+        // stream segment; a non-empty set at segment end means the turn was
+        // suspended and must be resumed after the engine runs the tools.
+        const delegatedCallsThisSegment = new Set<string>();
+        let requestUrl = url;
+        let requestBody: Record<string, unknown> = body;
 
-        setStatus(`Connected to ${serviceLabel}.`);
-
+        const consumeSegment = async (response: Response) => {
         for await (const event of parseAIDreamStream(response, abort.signal)) {
           eventCount += 1;
 
@@ -1353,6 +1542,9 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               if (type === "conversation_id") {
                 const conversationIdValue = readString(record?.conversation_id);
                 if (conversationIdValue) {
+                  if (executionTarget === "cloud") {
+                    cloudConversationId = conversationIdValue;
+                  }
                   updateConversationMeta(conversationIdPatch(executionTarget, conversationIdValue));
                 }
               } else if (type === "conversation_labeled") {
@@ -1446,6 +1638,20 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
             case EventType.TOOL_EVENT: {
               const toolName = event.data.tool_name || "tool";
               const message = event.data.message || humanizeToken(event.data.event);
+
+              if (event.data.event === "tool_delegated") {
+                // The server suspended the turn and handed this call to the
+                // local engine. Claim continuation ownership immediately so
+                // the engine defers /resume to this open chat view.
+                delegatedCallsThisSegment.add(event.data.call_id);
+                setStatus(`${toolName}: running on this computer...`);
+                if (executionTarget === "cloud" && engineUrl && cloudConversationId) {
+                  claimedDelegationConversation = cloudConversationId;
+                  void claimDelegationUi(engineUrl, cloudConversationId);
+                }
+                break;
+              }
+
               setStatus(`${toolName}: ${message}`);
 
               if (event.data.event === "tool_error") {
@@ -1589,6 +1795,88 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
             }
           }
         }
+        };
+
+        // Segment loop: the first segment is the original request; each
+        // delegated-tool suspension yields a /resume segment that streams
+        // into the same assistant message. Bounded to keep a pathological
+        // agent from looping forever.
+        const maxStreamSegments = 25;
+        for (let segment = 0; segment < maxStreamSegments; segment += 1) {
+          delegatedCallsThisSegment.clear();
+          const response = await fetch(requestUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify(requestBody),
+            signal: abort.signal,
+          });
+
+          if (!response.ok || !response.body) {
+            const rawErrorText = await response.text().catch(() => `HTTP ${response.status}`);
+            const errorText = rawErrorText || `HTTP ${response.status} ${response.statusText}`;
+            const label = executionTarget === "local" ? "Local AI" : "AIDream";
+            const message = `${label} request failed (${response.status}): ${errorText}`;
+            setRequestError(message);
+            updateAssistant({
+              content: accumulated,
+              isStreaming: false,
+              streamStatus: "Request failed.",
+              error: message,
+            });
+            return;
+          }
+
+          const headerConversationId = response.headers.get("X-Conversation-ID");
+          if (headerConversationId) {
+            if (executionTarget === "cloud" && !cloudConversationId) {
+              cloudConversationId = headerConversationId;
+            }
+            if (!existingTargetConversationId) {
+              updateConversationMeta(conversationIdPatch(executionTarget, headerConversationId));
+            }
+          }
+
+          setStatus(`Connected to ${serviceLabel}.`);
+          await consumeSegment(response);
+
+          if (
+            executionTarget !== "cloud" ||
+            delegatedCallsThisSegment.size === 0 ||
+            !cloudConversationId ||
+            !engineUrl
+          ) {
+            break;
+          }
+
+          claimedDelegationConversation = cloudConversationId;
+          setStatus("Agent is using tools on this computer...");
+          const userRequestId = await waitForDelegatedContinuation(
+            engineUrl,
+            cloudConversationId,
+            abort.signal,
+            setStatus,
+          );
+          if (!userRequestId) {
+            if (!abort.signal.aborted) {
+              addDiagnostic(
+                "Local tool continuation was handed off to the background engine; the final reply lands in the conversation history.",
+              );
+              setStatus("Local tools finished in the background.");
+            }
+            break;
+          }
+          sawTerminalEvent = false;
+          streamHadError = false;
+          requestUrl = `${cloudServerUrl}/api/ai/conversations/${cloudConversationId}/resume`;
+          requestBody = {
+            user_request_id: userRequestId,
+            stream: true,
+            ...(clientContext ? { client: clientContext } : {}),
+          };
+        }
 
         if (!accumulated && !diagnostics.length && !sawTerminalEvent && eventCount === 0) {
           const message = `${serviceLabel} returned an empty stream with no events.`;
@@ -1631,6 +1919,9 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           });
         }
       } finally {
+        if (claimedDelegationConversation && engineUrl) {
+          releaseDelegationUi(engineUrl, claimedDelegationConversation);
+        }
         setIsStreaming(false);
         void refreshConversations();
       }
@@ -1646,6 +1937,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       model,
       refreshConversations,
       refreshLocalLlmStatus,
+      runControls,
     ],
   );
 
@@ -1684,6 +1976,8 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     executionTarget,
     localLlmStatus,
     localLlmError,
+    runControls,
+    runControlActions,
     groupedConversations,
     createConversation,
     selectConversation,

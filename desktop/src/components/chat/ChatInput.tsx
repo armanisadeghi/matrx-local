@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { ArrowUp, Square, Plus, ChevronDown, Cpu } from "lucide-react";
+import { ArrowUp, Square, Plus, ChevronDown, Cpu, FileText, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LOCAL_MODEL_PREFIX, type ChatMode } from "@/hooks/use-chat";
 import type { AgentInfo } from "@/types/agents";
@@ -30,6 +30,19 @@ interface ChatInputProps {
   agentsLoading?: boolean;
   showModelSelector?: boolean;
   showModeSelector?: boolean;
+  /**
+   * Optional replacement for the dead "+" stub — Cloud Chat passes its
+   * fully-wired plus menu here; local chat keeps the stub untouched.
+   */
+  plusMenuSlot?: React.ReactNode;
+  /** Files attached via the plus menu, shown as removable chips. */
+  attachments?: Array<{ id: string; name: string; size: number }>;
+  onRemoveAttachment?: (id: string) => void;
+}
+
+function formatAttachmentSize(size: number): string {
+  if (size >= 1024) return `${Math.round(size / 1024)} KB`;
+  return `${size} B`;
 }
 
 const modeLabels: Record<ChatMode, string> = {
@@ -55,6 +68,9 @@ export function ChatInput({
   agentsLoading = false,
   showModelSelector = true,
   showModeSelector = true,
+  plusMenuSlot,
+  attachments = [],
+  onRemoveAttachment,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
   const [showModelDropdown, setShowModelDropdown] = useState(false);
@@ -142,6 +158,34 @@ export function ChatInput({
 
       {/* Composer Container */}
       <div className="glass relative rounded-xl transition-shadow focus-within:shadow-md">
+        {/* Attached-file chips */}
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-3 pt-2">
+            {attachments.map((file) => (
+              <span
+                key={file.id}
+                className="inline-flex max-w-[220px] items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-1.5 py-0.5 text-[11px] text-foreground"
+              >
+                <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <span className="truncate">{file.name}</span>
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {formatAttachmentSize(file.size)}
+                </span>
+                {onRemoveAttachment && (
+                  <button
+                    type="button"
+                    onClick={() => onRemoveAttachment(file.id)}
+                    title={`Remove ${file.name}`}
+                    className="ml-0.5 shrink-0 rounded text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
+
         {/* Textarea */}
         <textarea
           ref={textareaRef}
@@ -165,13 +209,15 @@ export function ChatInput({
         <div className="flex items-center justify-between px-2 pb-1.5">
           {/* Left: Attach + Agent + Model */}
           <div className="flex items-center gap-1">
-            {/* Attach / plus button */}
-            <button
-              className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground"
-              title="Attach files"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
+            {/* Attach / plus button — replaced by the wired menu when provided */}
+            {plusMenuSlot ?? (
+              <button
+                className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground"
+                title="Attach files"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            )}
 
             {/* Agent selector */}
             {onAgentChange && (

@@ -68,7 +68,7 @@ dependencies = [
     "matrx-utils>=2.0.0",
     "matrx-orm>=3.1.16",
     "matrx-ai>=0.4.8",
-    "matrx-connect>=0.1.5",
+    "matrx-connect>=0.1.10",
     "matrx-graph>=0.1.3",
     "matrx-runtime>=0.0.6",
     # Canonical Office (docx/pptx/xlsx) codec — matrx_files.specific_handlers.office

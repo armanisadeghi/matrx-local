@@ -24,9 +24,10 @@ process-stream.ts):
     injection failures, resume 404 user_request_not_found / 409
     not_resumable.
 
-Mounting: ``build_ai_app()`` is mounted at BOTH ``/ai`` (the canonical
-aidream-compatible surface) and ``/chat/ai`` (the desktop UI's historical
-path) — one app, two mounts, zero drift. See app/main.py Phase 1b.
+Mounting: ``build_ai_app()`` is mounted at ``/ai`` (the canonical
+aidream-compatible surface), ``/v2/ai`` (the current frontend spine), and
+``/chat/ai`` (the desktop UI's historical path) — one app, three mounts, zero
+drift. See app/main.py Phase 1b.
 
 Auth model:
   * The engine's outer AuthMiddleware (app/api/auth.py) already gates
@@ -264,7 +265,10 @@ class AIContextMiddleware:
             token=bearer,
             request_id=request_id,
             route=request.url.path,
-            source_app="matrx_local",
+            # Conversation provenance uses the canonical hyphenated producer
+            # registered by AIDream. The underscore spelling belongs only to
+            # matrx-ai's internal client-host/tool-source identity.
+            source_app="matrx-local",
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
@@ -426,9 +430,14 @@ async def ai_surface_status() -> dict[str, Any]:
         tools_loaded,
     )
 
-    capabilities = ["chat_execution_v1", "conversation_execution_v1"]
+    capabilities = [
+        "chat_execution_v1",
+        "conversation_execution_v1",
+        "chat_execution_v2",
+        "conversation_execution_v2",
+    ]
     if supports_agent_execution():
-        capabilities.append("agent_execution_v1")
+        capabilities.extend(["agent_execution_v1", "agent_execution_v2"])
 
     return {
         "surface": "local-ai",

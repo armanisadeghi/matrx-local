@@ -299,6 +299,73 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
     _run(tmp_path, scenario)
 
 
+def test_client_host_reservations_are_durable_and_finalized(tmp_path: Path) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        from types import SimpleNamespace
+
+        from app.services.ai.conversation_handler import SQLiteConversationStore
+
+        class CaptureEmitter:
+            def __init__(self) -> None:
+                self.reserved: list[Any] = []
+
+            async def send_record_reserved(self, payload: Any) -> None:
+                self.reserved.append(payload)
+
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        request_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21"
+        config = SimpleNamespace(
+            messages=[SimpleNamespace(role="user", content="hello")]
+        )
+        emitter = CaptureEmitter()
+        store = SQLiteConversationStore()
+
+        reserved = await store.reserve_stream_messages(
+            config, conversation_id, "u1", emitter
+        )
+        assert set(reserved) == {0, 1}
+        assert [payload.metadata["role"] for payload in emitter.reserved] == [
+            "user",
+            "assistant",
+        ]
+
+        before = [
+            dict(row)
+            for row in await db.fetchall(
+                "SELECT id, role, position, status, content FROM chat.message "
+                "WHERE conversation_id = ? ORDER BY position",
+                (conversation_id,),
+            )
+        ]
+        assert [row["status"] for row in before] == ["active", "pending"]
+
+        await store.create_pending_user_request(request_id, conversation_id, "u1")
+        await store.persist_completed_request(
+            {
+                "conversation_id": conversation_id,
+                "request_id": request_id,
+                "messages": [
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "world"},
+                ],
+            }
+        )
+        after = [
+            dict(row)
+            for row in await db.fetchall(
+                "SELECT id, role, position, status, content FROM chat.message "
+                "WHERE conversation_id = ? ORDER BY position",
+                (conversation_id,),
+            )
+        ]
+        assert len(after) == 2
+        assert after[1]["id"] == reserved[1]
+        assert after[1]["status"] == "active"
+        assert json.loads(after[1]["content"])[0]["text"] == "world"
+
+    _run(tmp_path, scenario)
+
+
 def test_repo_compat_shapes_and_tombstone_delete(tmp_path: Path) -> None:
     async def scenario(db: LocalDatabase) -> None:
         from app.services.local_db.repositories import ConversationsRepo, MessagesRepo
@@ -506,6 +573,81 @@ def test_push_drains_outbox_parent_first_and_applies_echo(tmp_path: Path) -> Non
         assert row["updated_at"].startswith("2026-07-20T10")
         left = await db.fetchone("SELECT COUNT(*) AS c FROM sync_queue")
         assert left["c"] == 0
+
+    _run(tmp_path, scenario)
+
+
+def test_flush_pending_pushes_without_running_a_pull(tmp_path: Path) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        from app.services.ai.conversation_handler import SQLiteConversationStore
+
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        store = SQLiteConversationStore()
+        await store.ensure_conversation_exists(conversation_id, "u1")
+
+        engine = ChatSyncEngine()
+        engine.configure("u1", "jwt")
+        pushed = _fake_cloud(engine)
+
+        async def configured() -> bool:
+            return True
+
+        engine.configure_from_persisted_token = configured  # type: ignore[method-assign]
+        summary = await engine.flush_pending()
+
+        assert summary == {"sent": 1, "failed": 0}
+        assert [table for table, _ in pushed] == ["conversation"]
+        assert (await db.fetchone("SELECT COUNT(*) AS c FROM sync_queue"))["c"] == 0
+
+    _run(tmp_path, scenario)
+
+
+def test_targeted_hydration_fetches_conversation_and_messages(tmp_path: Path) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        engine = ChatSyncEngine()
+        engine.configure("u1", "jwt")
+
+        async def configured() -> bool:
+            return True
+
+        async def fake_get_rows(table: str, *, params: dict[str, str] | None = None):
+            assert params is not None
+            if table == "conversation":
+                return [{
+                    "id": conversation_id,
+                    "title": "From web",
+                    "config": {"mode": "chat", "model": "cloud-model"},
+                    "initial_agent_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                    "created_by": "u1",
+                    "created_at": "2026-07-18T00:00:00+00:00",
+                    "updated_at": "2026-07-18T00:00:00+00:00",
+                }]
+            if table == "message":
+                return [{
+                    "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+                    "conversation_id": conversation_id,
+                    "role": "user",
+                    "position": 0,
+                    "content": [{"type": "text", "text": "hello"}],
+                    "created_at": "2026-07-18T00:00:00+00:00",
+                    "updated_at": "2026-07-18T00:00:00+00:00",
+                }]
+            raise AssertionError(table)
+
+        engine.configure_from_persisted_token = configured  # type: ignore[method-assign]
+        engine._client.get_rows = fake_get_rows  # type: ignore[method-assign]
+
+        assert await engine.hydrate_conversation(conversation_id) is True
+        assert await db.fetchone(
+            "SELECT id FROM chat.conversation WHERE id = ?", (conversation_id,)
+        )
+        message = await db.fetchone(
+            "SELECT content FROM chat.message WHERE conversation_id = ?",
+            (conversation_id,),
+        )
+        assert json.loads(message["content"])[0]["text"] == "hello"
+        assert (await db.fetchone("SELECT COUNT(*) AS c FROM sync_queue"))["c"] == 0
 
     _run(tmp_path, scenario)
 

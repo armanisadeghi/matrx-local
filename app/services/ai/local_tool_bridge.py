@@ -49,7 +49,7 @@ import logging
 import time
 from typing import Any
 
-from matrx_ai.tools import ExternalToolAdapter, ToolContext, ToolResult, external_tool
+from matrx_ai.tools import ExternalToolAdapter, ToolContext, ToolResult
 from matrx_ai.tools.models import ToolError
 
 logger = logging.getLogger(__name__)
@@ -213,7 +213,17 @@ class LocalToolBridge(ExternalToolAdapter):
             ``async (args: dict, ctx: ToolContext) -> ToolResult``
         """
         sig = inspect.signature(handler)
-        param_names = [p for p in sig.parameters if p != "session"]
+        accepts_var_kwargs = any(
+            param.kind is inspect.Parameter.VAR_KEYWORD
+            for param in sig.parameters.values()
+        )
+        named_params = {
+            name
+            for name, param in sig.parameters.items()
+            if name != "session"
+            and param.kind
+            in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
 
         async def tool_handler(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             started_at = time.time()
@@ -242,15 +252,19 @@ class LocalToolBridge(ExternalToolAdapter):
                         call_id=ctx.call_id,
                     )
 
-            # Build kwargs — only pass params the handler signature accepts.
-            kwargs: dict[str, Any] = {}
-            for name in param_names:
-                param = sig.parameters[name]
-                if name in validated_args:
-                    kwargs[name] = validated_args[name]
-                elif param.default is not inspect.Parameter.empty:
-                    pass  # use the handler's default
-                # else: required param missing — handler will raise a meaningful error
+            # Action-enum mega-tools intentionally accept ``**tool_input`` so
+            # one handler can fan out to each action variant. Preserve the
+            # whole validated payload for those handlers; filtering by the
+            # literal VAR_KEYWORD parameter name (``tool_input``) drops every
+            # argument and turns valid actions into ``action=None``.
+            if accepts_var_kwargs:
+                kwargs = dict(validated_args)
+            else:
+                kwargs = {
+                    name: validated_args[name]
+                    for name in named_params
+                    if name in validated_args
+                }
 
             try:
                 local_result = await handler(session, **kwargs)

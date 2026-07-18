@@ -118,6 +118,36 @@ execution path. Do not add one.
   The server-side `expires_at` (30 days) is an abandonment TTL, not a
   deadline — do not "fix" slow tools by raising it.
 
+## Local UI stream claims (Cloud Chat continuation ownership)
+
+The desktop's own Cloud Chat page is a stream-attached client (like a web
+tab), but it reaches this engine over loopback, so it gets a FIRST-CLASS
+claim instead of racing the 2.5 s browser grace window:
+
+- `POST /chat/delegation/ui-claim {conversation_id, ttl_seconds}` — the UI
+  declares it owns `/resume` for that conversation. Re-claimed on every poll
+  (`claim_ui_stream`); response doubles as the conversation state snapshot.
+- While a claim is live, `_deliver` still executes + delivers results but
+  SKIPS the headless resume (`resume_deferred_to_ui` event). The retained
+  result obligation (`_undelivered`) re-evaluates each sweep, so an
+  abandoned claim (closed window, crashed UI) self-heals into the normal
+  headless resume once the TTL lapses — no new execution path, no new race.
+- `GET /chat/delegation/conversation/{id}` — per-call state
+  (executing/delivered) + pending continuation `{user_request_id, needed}`
+  for the UI poller. `POST /chat/delegation/ui-release` on stream end.
+- UI half: `desktop/src/hooks/use-cloud-chat.ts` (multi-segment stream loop:
+  `tool_delegated` → claim → poll → `POST /resume` with the desktop client
+  envelope). Pinned by `test_ui_claim_defers_resume_then_self_heals_on_release`.
+
+## User tool exposure gate
+
+Settings key `cloud_tools` (`{"disabled_tools": [<cloud_name>...]}`) —
+cloud-authoritative via the app_settings whole-blob sync, editable in
+Settings → Cloud & Account → Cloud Agent Tools (and from the web). Read
+FRESH every sweep (`get_disabled_cloud_tools`); a disabled tool's delegated
+call is answered with an explicit `is_error` result, never executed and
+never silently dropped. Pinned by `tests/unit/test_delegation_disabled_tools.py`.
+
 ## Lifecycle
 
 Managed service `delegation`, registered in `app/main.py` Phase 2f

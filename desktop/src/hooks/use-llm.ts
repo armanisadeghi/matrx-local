@@ -247,6 +247,50 @@ export function useLlm(): [LlmState, LlmActions] {
     void refreshHfTokenConfigured();
 
     let mounted = true;
+    let registrationInFlight = false;
+
+    const reconcileEngineRegistration = async (
+      knownStatus?: LlmServerStatus,
+    ): Promise<void> => {
+      if (registrationInFlight || !mounted) return;
+      registrationInFlight = true;
+      try {
+        const status =
+          knownStatus ??
+          (await tauriInvoke<LlmServerStatus>("get_llm_server_status"));
+        if (!status.running || !status.port) return;
+        if (mounted) setServerStatus(status);
+
+        let engineStatus: Awaited<ReturnType<typeof engine.getLocalLlmStatus>> | null =
+          null;
+        try {
+          engineStatus = await engine.getLocalLlmStatus();
+        } catch {
+          // connectLocalLlm performs its own sidecar re-discovery below.
+        }
+        if (
+          engineStatus?.available &&
+          engineStatus.port === status.port &&
+          engineStatus.model_name === (status.model_name ?? "")
+        ) {
+          return;
+        }
+
+        await engine.connectLocalLlm(status.port, status.model_name ?? "");
+        const verified = await engine.getLocalLlmStatus();
+        if (!verified.available || verified.port !== status.port) {
+          throw new Error(
+            `Engine registration verification failed for llama-server port ${status.port}`,
+          );
+        }
+        console.log(
+          `[use-llm] Registered llama-server with engine (model=${verified.model_name}, port=${verified.port})`,
+        );
+      } finally {
+        registrationInFlight = false;
+      }
+    };
+
     const setupListeners = async () => {
       // Remove any previously registered listeners before adding new ones.
       // This prevents accumulation if the effect ever re-runs (e.g. due to
@@ -262,18 +306,14 @@ export function useLlm(): [LlmState, LlmActions] {
             setStartingModelName(null);
             setServerStartProgress(null);
             setServerLogs([]);
-            // Notify Python engine so agents can route to the local model.
-            engine
-              .connectLocalLlm(
-                event.payload.port,
-                event.payload.model_name ?? "",
-              )
-              .catch((err) => {
-                console.warn(
-                  "[use-llm] Failed to notify engine of local LLM start:",
-                  err,
-                );
-              });
+            // Join the Tauri model process to the Python agent runtime now;
+            // the periodic reconciler below retries if sidecar startup races.
+            void reconcileEngineRegistration(event.payload).catch((err) => {
+              console.warn(
+                "[use-llm] Failed to register local LLM with engine; retrying:",
+                err,
+              );
+            });
           }
         },
       );
@@ -348,53 +388,24 @@ export function useLlm(): [LlmState, LlmActions] {
     };
     setupListeners();
 
-    // Reconcile an ALREADY-RUNNING llama-server with the Python engine.
-    // The auto-start path in lib.rs emits llm-server-ready during Tauri
-    // setup — before this hook mounts — and Tauri does not replay events to
-    // late listeners, so without this pass the engine never learns the
-    // server exists and agents cannot route to the local model. Retries
-    // cover the window where engine discovery (baseUrl) hasn't completed.
-    const reconcileEngineRegistration = async () => {
-      const RETRY_DELAY_MS = 3000;
-      const MAX_ATTEMPTS = 10;
-      for (let attempt = 0; attempt < MAX_ATTEMPTS && mounted; attempt++) {
-        try {
-          const status = await tauriInvoke<LlmServerStatus>(
-            "get_llm_server_status",
-          );
-          if (!status.running || !status.port) return; // nothing to reconcile
-          if (mounted) setServerStatus(status);
-          try {
-            const engineStatus = await engine.getLocalLlmStatus();
-            if (engineStatus.available && engineStatus.port === status.port) {
-              return; // engine already knows about this server
-            }
-          } catch {
-            // Engine not discovered yet — fall through to connect (which
-            // throws in that case) and retry on the next attempt.
-          }
-          await engine.connectLocalLlm(status.port, status.model_name ?? "");
-          console.log(
-            "[use-llm] Reconciled auto-started llama-server with engine (port",
-            status.port,
-            ")",
-          );
-          return;
-        } catch {
-          // Engine not up / not discovered yet — retry below.
-        }
-        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
-      }
-      if (mounted) {
+    // Reconcile an ALREADY-RUNNING llama-server with the Python engine. The
+    // ready event is not replayed to late listeners, and either process can
+    // restart independently, so this is a durable invariant rather than a
+    // bounded startup retry.
+    const reconcile = () => {
+      void reconcileEngineRegistration().catch((err) => {
         console.warn(
-          "[use-llm] Could not register running llama-server with the engine after retries — local model will be unavailable to agents",
+          "[use-llm] Local LLM is running but engine registration is unavailable; retrying:",
+          err,
         );
-      }
+      });
     };
-    void reconcileEngineRegistration();
+    reconcile();
+    const registrationTimer = window.setInterval(reconcile, 10_000);
 
     return () => {
       mounted = false;
+      window.clearInterval(registrationTimer);
       // Also unlisten here so that if this effect re-runs (dependency change),
       // listeners from this run are removed before the next run adds new ones.
       // The [] cleanup useEffect is the final guard for the unmount case.

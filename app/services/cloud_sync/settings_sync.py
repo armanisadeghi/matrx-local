@@ -137,6 +137,20 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "tts_auto_clean_markdown": False,
     # Extension bridge
     "extension_broadcast_enabled": True,
+    # Cloud agent tools — which advertised local tools cloud agents may run on
+    # THIS machine via the delegation engine (app/services/delegation/engine.py).
+    # Shape: {"disabled_tools": ["<cloud_name>", ...]} where each entry is a
+    # canonical tool cloud name from app/tools/catalog.py (e.g. "local_shell").
+    # Empty list = every advertised tool is allowed. Enforced fresh at every
+    # delegation sweep; a delegated call for a disabled tool is answered with
+    # an explicit is_error result, never silently dropped. Rides the standard
+    # whole-blob app_settings sync like every other key here. Engine-owned:
+    # intentionally NOT mirrored into desktop/src/lib/settings.ts — the UI
+    # reads/writes it through GET /chat/local-tools + PUT
+    # /chat/local-tools/exposure (like forbidden_urls, single writer = engine).
+    # NOTE: docs/official/settings-catalog.md is the canonical catalog doc but
+    # is edit-restricted; its staleness for this key is flagged in FOUND_DEFECTS.md.
+    "cloud_tools": {"disabled_tools": []},
     # Voice assistant (mirror desktop/src/lib/settings.ts defaults)
     "voice_assistant_system_prompt_id": "builtin-voice-assistant",
     "voice_silence_timeout_ms": 1400,
@@ -148,7 +162,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 RESET_SCOPES: dict[str, tuple[str, ...]] = {
     "application": ("launch_", "minimize_", "theme", "auto_check_", "update_check_", "sidebar_", "notification_"),
     "network": ("headless_", "scrape_", "proxy_", "tunnel_", "file_sync_", "extension_"),
-    "ai": ("chat_", "llm_", "transcription_", "tts_", "wake_word_", "voice_"),
+    "ai": ("chat_", "llm_", "transcription_", "tts_", "wake_word_", "voice_", "cloud_tools"),
     "identity": ("instance_name",),
 }
 

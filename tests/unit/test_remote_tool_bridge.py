@@ -168,6 +168,7 @@ async def test_remote_execution_forwards_identity_and_injection(
         organization_id="org-1",
         project_id="project-1",
         task_id="task-1",
+        source_app="matrx_local",
     )
     monkeypatch.setattr(context_module, "get_app_context", lambda: app_ctx)
 
@@ -189,6 +190,7 @@ async def test_remote_execution_forwards_identity_and_injection(
     assert payload["project_id"] == "project-1"
     assert payload["task_id"] == "task-1"
     assert payload["scope_ids"] == ["scope-1"]
+    assert payload["source_app"] == "matrx-local"
 
 
 @pytest.mark.anyio

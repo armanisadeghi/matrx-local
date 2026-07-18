@@ -7,6 +7,10 @@ Provides:
   GET  /chat/models                  — AI models from local SQLite cache
   GET  /chat/agents                  — agents/prompts from local SQLite cache
   GET  /chat/local-tools             — local OS tools registered in matrx-ai registry
+                                       (each item carries `enabled` from the
+                                       user's cloud_tools exposure setting)
+  PUT  /chat/local-tools/exposure    — set which tools cloud agents may use here
+                                       (settings key `cloud_tools.disabled_tools`)
   POST /chat/local-llm/connect       — register running llama-server with the agent pipeline
   POST /chat/local-llm/disconnect    — deregister local LLM (server stopped)
   GET  /chat/local-llm/status        — current local LLM registration status
@@ -108,8 +112,10 @@ async def list_local_tools() -> dict[str, Any]:
         from app.tools.catalog import get_catalog
         from matrx_ai.tools.registry import ToolRegistry
         from app.services.ai.engine import tools_loaded
+        from app.services.delegation.engine import get_disabled_cloud_tools
 
         registry = ToolRegistry.get_instance()
+        disabled = get_disabled_cloud_tools()
         tools_out = []
 
         for entry in get_catalog():
@@ -126,6 +132,10 @@ async def list_local_tools() -> dict[str, Any]:
                 "registered": tool_def is not None,
                 "timeout_seconds": entry.timeout_seconds,
                 "advertised": entry.advertised,
+                # User exposure gate: whether cloud agents may run this tool
+                # on this machine (settings key cloud_tools.disabled_tools,
+                # enforced in the delegation engine at sweep time).
+                "enabled": entry.cloud_name not in disabled,
             })
 
         registered_count = sum(1 for t in tools_out if t["registered"])
@@ -134,10 +144,62 @@ async def list_local_tools() -> dict[str, Any]:
             "total": len(tools_out),
             "registered": registered_count,
             "registry_loaded": tools_loaded(),
+            "disabled_tools": sorted(disabled),
         }
     except Exception:
         logger.warning("Failed to list local tools", exc_info=True)
-        return {"tools": [], "total": 0, "registered": 0, "registry_loaded": False}
+        return {
+            "tools": [],
+            "total": 0,
+            "registered": 0,
+            "registry_loaded": False,
+            "disabled_tools": [],
+        }
+
+
+class ToolExposureRequest(BaseModel):
+    """Cloud tool names (catalog cloud_name) that cloud agents may NOT use here."""
+
+    disabled_tools: list[str]
+
+
+@router.put("/local-tools/exposure")
+async def set_local_tool_exposure(body: ToolExposureRequest) -> dict[str, Any]:
+    """Update the user's cloud-agent tool exposure for this machine.
+
+    Writes the `cloud_tools` settings key ({"disabled_tools": [...]}) through
+    the standard settings service, so the value persists locally and rides the
+    existing whole-blob app_settings cloud sync. The delegation engine reads
+    the setting fresh at every sweep — no restart needed.
+    """
+    from app.services.cloud_sync.settings_sync import get_settings_sync
+    from app.tools.catalog import get_catalog
+
+    known = {entry.cloud_name for entry in get_catalog()}
+    requested = [name.strip() for name in body.disabled_tools if name.strip()]
+    unknown = sorted(set(requested) - known)
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown tool name(s): {unknown}. Use cloud names from GET /chat/local-tools.",
+        )
+    disabled = sorted(set(requested))
+
+    sync = get_settings_sync()
+    sync.set("cloud_tools", {"disabled_tools": disabled})
+    logger.info(
+        "[tool-exposure] cloud agent tool exposure updated: %d tool(s) disabled%s",
+        len(disabled),
+        f" ({', '.join(disabled)})" if disabled else "",
+    )
+
+    # Push the settings blob to the cloud now (same posture as
+    # PUT /cloud/settings); the periodic sync remains the backstop.
+    push_result = None
+    if sync.is_configured:
+        push_result = await sync.push_to_cloud()
+
+    return {"disabled_tools": disabled, "push_result": push_result}
 
 
 @router.get("/delegation/status")
@@ -150,6 +212,41 @@ async def delegation_status() -> dict[str, Any]:
     from app.services.delegation import get_delegation_engine
 
     return get_delegation_engine().status_payload()
+
+
+class UiClaimRequest(BaseModel):
+    conversation_id: str
+    ttl_seconds: float = 30.0
+
+
+@router.post("/delegation/ui-claim")
+async def delegation_ui_claim(body: UiClaimRequest) -> dict[str, Any]:
+    """The desktop Cloud Chat UI claims continuation ownership for a
+    conversation: the engine keeps executing delegated calls but defers
+    POST /resume to the UI while the claim is alive. The UI re-claims on
+    every poll; the response doubles as the conversation delegation state."""
+    from app.services.delegation import get_delegation_engine
+
+    return get_delegation_engine().claim_ui_stream(
+        body.conversation_id, ttl_seconds=body.ttl_seconds
+    )
+
+
+@router.post("/delegation/ui-release")
+async def delegation_ui_release(body: UiClaimRequest) -> dict[str, Any]:
+    """Release a UI stream claim (chat closed / stream finished)."""
+    from app.services.delegation import get_delegation_engine
+
+    get_delegation_engine().release_ui_stream(body.conversation_id)
+    return {"released": True}
+
+
+@router.get("/delegation/conversation/{conversation_id}")
+async def delegation_conversation_state(conversation_id: str) -> dict[str, Any]:
+    """Per-conversation delegation snapshot for the local UI poller."""
+    from app.services.delegation import get_delegation_engine
+
+    return get_delegation_engine().ui_conversation_state(conversation_id)
 
 
 # ---------------------------------------------------------------------------

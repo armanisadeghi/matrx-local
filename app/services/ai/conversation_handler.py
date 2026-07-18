@@ -218,6 +218,104 @@ class SQLiteConversationStore:
             )
             raise
 
+    async def reserve_stream_messages(
+        self,
+        config: Any,
+        conversation_id: str,
+        user_id: str,
+        emitter: Any,
+    ) -> dict[int, str]:
+        """Create and announce the first user/assistant anchors for a turn.
+
+        matrx-ai deliberately disables its ORM WriteCoordinator in client-host
+        mode, which also skips the server's normal message reservations. The
+        desktop store owns those rows here so the frontend receives the same
+        durable ``record_reserved`` contract while chunks are streaming.
+        """
+        messages = list(getattr(config, "messages", None) or [])
+        if not messages:
+            return {}
+
+        await self.ensure_conversation_exists(conversation_id, user_id)
+        user_position = len(messages) - 1
+        assistant_position = len(messages)
+        user_norm = _normalize_message(messages[user_position])
+        if not user_norm or user_norm["role"] != "user":
+            return {}
+
+        db = get_db()
+        now = _now()
+        reservations: dict[int, str] = {}
+        rows_to_announce: list[tuple[str, int, str]] = []
+
+        async def _insert(
+            position: int,
+            role: str,
+            status: str,
+            content: str,
+        ) -> str:
+            existing = await db.fetchone(
+                "SELECT id FROM chat.message WHERE conversation_id = ? AND position = ?",
+                (conversation_id, position),
+            )
+            if existing:
+                return str(existing["id"])
+            message_id = str(uuid.uuid5(_MSG_NAMESPACE, f"{conversation_id}:{position}"))
+            await db.execute(
+                """INSERT INTO chat.message
+                   (id, conversation_id, role, position, status, content,
+                    metadata, source, is_visible_to_user, is_visible_to_model,
+                    content_chars, tool_results_chars, created_at, updated_at,
+                    version)
+                   VALUES (?, ?, ?, ?, ?, ?, '{}', 'user', 1, 1, ?, 0, ?, ?, 1)""",
+                (
+                    message_id,
+                    conversation_id,
+                    role,
+                    position,
+                    status,
+                    _content_to_parts(content),
+                    len(content),
+                    now,
+                    now,
+                ),
+            )
+            await enqueue_change("chat", "message", message_id, db, commit=False)
+            rows_to_announce.append((role, position, message_id))
+            return message_id
+
+        reservations[user_position] = await _insert(
+            user_position,
+            "user",
+            "active",
+            user_norm["content"],
+        )
+        reservations[assistant_position] = await _insert(
+            assistant_position,
+            "assistant",
+            "pending",
+            "",
+        )
+        await db.commit()
+
+        from matrx_connect.reservations import get_tracker
+
+        tracker = get_tracker()
+        for role, position, message_id in rows_to_announce:
+            await tracker.reserve(
+                emitter=emitter,
+                db_project="matrx",
+                table="message",
+                parent_refs={"conversation_id": conversation_id},
+                metadata={
+                    "role": role,
+                    "position": position,
+                    "position_kind": "logical_index",
+                },
+                record_id=message_id,
+            )
+        return reservations
+
     # ------------------------------------------------------------------
     # ConversationStore protocol — persistence
     # ------------------------------------------------------------------
@@ -289,16 +387,36 @@ class SQLiteConversationStore:
         # ids that can never match the uuid5 scheme, and id-only dedupe would
         # duplicate the entire history on every turn (and push the duplicates).
         pos_rows = await db.fetchall(
-            "SELECT position FROM chat.message WHERE conversation_id = ?",
+            "SELECT id, position, role, status FROM chat.message WHERE conversation_id = ?",
             (conv_id,),
         )
-        occupied = {r["position"] for r in pos_rows}
+        occupied = {r["position"]: dict(r) for r in pos_rows}
         now = _now()
         for position, msg in enumerate(raw_messages):
-            if position in occupied:
-                continue
             norm = _normalize_message(msg)
             if norm is None:
+                continue
+            existing = occupied.get(position)
+            if existing:
+                if existing.get("status") == "pending":
+                    text = norm["content"]
+                    await db.execute(
+                        """UPDATE chat.message
+                           SET role = ?, status = 'active', content = ?,
+                               content_chars = ?, updated_at = ?
+                           WHERE id = ?""",
+                        (
+                            norm["role"],
+                            _content_to_parts(text),
+                            len(text),
+                            now,
+                            existing["id"],
+                        ),
+                    )
+                    message_ids.append(str(existing["id"]))
+                    await enqueue_change(
+                        "chat", "message", str(existing["id"]), db, commit=False
+                    )
                 continue
             msg_id = norm.get("id") or str(
                 uuid.uuid5(_MSG_NAMESPACE, f"{conv_id}:{position}")

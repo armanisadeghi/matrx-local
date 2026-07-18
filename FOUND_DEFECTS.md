@@ -376,23 +376,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   deleting. If unused, `git rm` both.
 - **Owner hint:** whoever does the CDN installer-slimming work — fold into that.
 
-### MXL-D-054 — Local signed sidecar build can hang forever while re-signing Tcl/Tk
-- **Area:** `scripts/build-sidecar.sh` / macOS local release signing
-- **Symptom:** the pre-build loop that re-signs every `.dylib`/`.so` under the
-  complete Python installation has no per-file timeout. On this machine it
-  blocked indefinitely in `codesign --force --sign … libtcl9tk9.0.dylib`, so
-  PyInstaller never started and the build emitted no further progress.
-- **Evidence:** reproduced 2026-07-15 with the valid Developer ID identity:
-  the build remained on the same `codesign` PID/file for >4m30s; an isolated
-  retry wrapped in `timeout 15` also timed out (`exit 124`) on the same 1.7 MB
-  linker-signed dylib. Signing the completed `Matrx Engine.app` with that
-  identity succeeds, so this is file-specific rather than a missing identity.
-- **Status:** open
-- **Analysis stamp:** Analyzed 2026-07-15 — reproduced locally. The CI release
-  path may not carry Tcl/Tk and is not yet known to be affected.
-- **Owner hint:** packaging; sign only libraries PyInstaller actually collects,
-  or add a bounded per-file timeout with a loud failure/explicit safe skip.
-
 ### MXL-D-056 — `scheduler` extra claimed "bundled into release builds" but the sidecar build never syncs it
 - **Area:** `pyproject.toml:85` (scheduler-extra comment) vs
   `scripts/build-sidecar.sh:148` (venv sync) and `build-sidecar.sh:412`
@@ -417,6 +400,25 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   host is meant to ship) or correct the `pyproject.toml:85` comment to say it
   is NOT bundled and must be enabled+synced deliberately. Pick one so doc and
   build agree.
+
+### MXL-D-057 — `app.config` ↔ `app.common` import cycle makes import order load-bearing
+- **Area:** `app/config.py:5` (imports `app.common.platform_ctx`) ↔
+  `app/common/__init__.py` → `fancy_prints.py:4` (imports `app.config`)
+- **Symptom:** any module (or test) that imports `app.config`-dependent code
+  BEFORE `app.common` crashes with `ImportError: cannot import name
+  'LOG_VCPRINT' from partially initialized module 'app.config'`. The engine
+  only boots because its entrypoints happen to import `app.common` first.
+- **Evidence:** reproduced 2026-07-18 while adding
+  `tests/smoke/test_paths_provenance.py` — importing
+  `app.services.paths.manager` first fails; the test now carries an explicit
+  `import app.common` workaround with a comment.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-07-18 — the cycle only resolves in one
+  direction (app.common first). Fix direction: `fancy_prints` should read
+  `LOG_VCPRINT` lazily (or from env) instead of importing `app.config` at
+  module level, killing the cycle.
+- **Owner hint:** whoever next touches `app/common/fancy_prints.py` or
+  `app/config.py`; small, self-contained.
 
 ## Cross-repo
 

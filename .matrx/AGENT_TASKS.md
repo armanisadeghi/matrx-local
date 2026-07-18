@@ -359,6 +359,26 @@ Helper signing identity is unavailable, and the parent identifier is derived
 from Tauri config rather than duplicated. Windows/Linux paths are unchanged.
 The broader prompt audit remains open.
 
+2026-07-18: **Replaced the entire notes access model with the canonical
+access-health system** (`app/services/access_health/FEATURE.md`) — this
+supersedes the FDA sub-thread of this task. The global `notes_access_guard`
+(one boolean any mapped-dir EACCES poisoned with a hardcoded "grant Full Disk
+Access" reason, and any success cleared) is deleted. Now: resource/capability-
+scoped evidence with generation fencing; per-mapping isolation; a disposable-
+file capability probe (enumerate/create/write/replace/delete); a positive-
+evidence engine-process FDA diagnosis (the FDA message renders ONLY when
+provably denied — when provably granted the message exonerates it); truthful
+Phase 2c startup probing; immediate watcher restart on recovery; generic tool
+I/O feeding the same evidence (the engine "talks to itself" now);
+`GET /access/health` + `POST /access/recheck` + `POST /access/reset`; ONE
+frontend store (`AccessHealthContext`, generation-fenced, single poll owner —
+the dual-poller stale-clobber is structurally gone); RecoveryCenter "Folder
+access" card with a real reset; `tests/unit` now runs in CI; release.yml
+verifies the FINAL .app (parent↔helper designated-requirement equivalence,
+spctl, stapler) via `scripts/verify-macos-artifact.sh` and guards updater
+backfill by signature key. The broader prompt audit (proactive notifications
+for ALL grant types) remains open.
+
 - [ ] **img2img + LoRA follow-ups (added 2026-07-10, image-gen img2img/LoRA
   build)** — shipped: `init_image_b64`/`strength`/`loras` on
   /image-gen/generate + /image-gen/jobs, `supports_img2img`/`img2img_strength`/
@@ -577,6 +597,7 @@ are condensed under Completed. Still open:
 ## Completed
 
 _(one line each, newest first; full detail in git history)_
+- [BUG] MXL-D-054 fixed: per-file perl-alarm timeout (120s) on both macOS dylib re-sign loops (`build-sidecar.sh` + release.yml); a codesign hang is now a loud hard failure instead of an eternal silent wedge — 2026-07-18
 - [FEAT] Cloud Chat is now a platform Surface: every cloud request declares `client:{surface:"matrx-local/desktop", capabilities:["desktop-native"], state}` so aidream auto-injects the desktop tools (agent-level `auto_tools_disabled`/allow-lists respected); in-view delegated-tool continuation via loopback UI stream claims (engine defers `/resume` while claimed, self-heals on TTL); desktop tool taxonomy consolidated 9→2 categories (`desktop`/`desktop-web`) across actions.py + live DB (aidream migration 0201, applied + ledgered) with stale 0171 bundles deactivated; composer "+" menu (model/temperature/max-tokens overrides, per-conversation tool exclusions, text-file attachments, coming-soon rows); web-controllable `cloud_tools.disabled_tools` exposure setting synced via app_settings and enforced each sweep + Settings → Cloud card; docs in docs/CLOUD_CHAT_SURFACE.md + delegation FEATURE.md; 171 unit tests + tsc green — 2026-07-18
 - [BUG] Packaged Cloud Chat restored end-to-end: AIDream admits exact Tauri production origins; desktop removes bodyless-GET preflights, exposes catalog failures, resolves model UUID labels, and preserves Error details; live `chat.tool_call` schema verified and local mirror refreshed, closing AT-L003 — 2026-07-17
 - [TASK-002] Restored remote app-config authority for desktop Cloud Chat and compute routing; cached renderer config, removed packaged AIDream env dependency, and verified release checks — 2026-07-17 (`desktop/src/lib/app-config.ts`)

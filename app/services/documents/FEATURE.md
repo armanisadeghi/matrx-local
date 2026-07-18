@@ -16,38 +16,51 @@ contract conversation, not a test edit.
   reconcile, credentials from the persisted `auth_tokens` row). The watcher
   auto-starts on documents traffic and in the auto-sync tick.
 - `file_manager.py` — note files under `~/matrx-notes/`, `.sync/state.json`
-  checkpoint, `.sync/conflicts/<id>/{local,remote}.md`, access guard.
+  checkpoint, `.sync/conflicts/<id>/{local,remote}.md`. Records access
+  evidence into the canonical access-health service; holds NO access state.
+- `access_resources.py` — registers the documents-domain resources with the
+  access-health authority: `notes-canonical` (mirrors into the `notes_sync`
+  registry service) and one `notes-mapping:<folder_id>:<sha8>` per mapped
+  directory (registered on create/load, unregistered on delete).
 
-## Access-degraded is a STATE, not an error stream (2026-07-13)
+## Access-degraded is a STATE — owned by `app/services/access_health` (2026-07-18)
 
-When the OS blocks the notes dir (macOS without Full Disk Access, folder
-permissions, or a missing folder), `notes_access_guard` in `file_manager.py`
-is the single choke point:
+All access-health state lives in the canonical service
+(`app/services/access_health/FEATURE.md`). The old module-level
+`notes_access_guard` was **deleted** — it was a single global boolean that a
+failure in ANY mapped dir poisoned (global false "Full Disk Access" banner)
+and a success anywhere cleared. Rules for this package:
 
-- **One WARN per degradation** + `registry.degraded("notes_sync", reason)`;
-  a successful op (or probe) clears back to READY. Never per-op ERROR spam.
-- Carries `kind` (`"permission"` | `"missing_dir"`) and a
-  **platform-appropriate** reason (FDA wording only on `darwin`).
-- Auto-sync skips quietly while degraded (`_access_skipped`) and lets one
-  probe op through per 60 s (`should_skip_sync`) → recovers WITHOUT restart.
+- `_atomic_write` is **pure** (raises OSError untouched, zero state side
+  effects). Callers wrap it in `observing(<their resource>, REPLACE, ...)` so
+  evidence lands on the right resource. Never re-add state mutations to it.
+- `sync_to_mapped_dirs` observes **per mapping** (pass `folder_id`); a bad
+  external dir degrades only its own `notes-mapping:*` resource.
 - **Read paths degrade, never raise.** `.exists()`/`.is_file()` stats are
-  themselves denied while degraded and must sit INSIDE the guard's
-  try/except (`list_conflicts`, `list_folders`, `load_local_mappings`);
-  an unguarded stat escaped `GET /notes/sync/status` as a raw 500 once.
-- API: `GET /notes/access` (state), `POST /notes/access/recheck`
-  (active probe; `create_dir` = the "Create folder" action), and
-  `notes_access_degraded/reason/kind` on `GET /notes/sync/status`.
-- UI: `desktop/src/components/documents/NotesAccessPrompt.tsx` renders the
-  full-page prompt on the Documents page (System Settings deep-link via the
-  permissions system, Check again + 10 s auto-poll). The app-wide
-  `AppActionBanner` uses the same active `POST /notes/access/recheck` probe for
-  its initial check, poll, and button; `GET /notes/access` is cached state and
-  must not drive a user-facing "Check again" action. Never show empty lists
-  while degraded.
+  themselves denied while blocked and must sit INSIDE try/except
+  (`list_conflicts`, `list_folders`, `load_local_mappings`) with a
+  `record(...)` failure observation; an unguarded stat escaped
+  `GET /notes/sync/status` as a raw 500 once.
+- Auto-sync skips quietly while degraded (`_access_skipped` →
+  `should_attempt`, one probe op per 60 s) and the watcher **restarts
+  immediately** on the degraded→ok transition (`ensure_recovery_hook`) —
+  never wait for the next 600 s tick.
+- Startup (main.py Phase 2c) probes `notes-canonical` + all mappings BEFORE
+  reporting `notes_sync` ready/degraded. Never claim READY unprobed.
+- API: `GET /access/health`, `POST /access/recheck`, `POST /access/reset`
+  (`app/api/access_routes.py`) — plus the stable
+  `notes_access_degraded/reason/kind` keys on `GET /notes/sync/status`.
+  The old `/notes/access*` endpoints are deleted; do not reintroduce a
+  notes-only access view.
+- UI: one store — `AccessHealthContext` (single poll owner,
+  generation-fenced). `NotesAccessPrompt` and `AppActionBanner` are pure
+  renderers; copy comes from `deriveAccessPresentation` and only claims FDA
+  on a positive engine diagnosis. Never show empty lists while degraded.
 
-Pinned by `tests/unit/test_notes_access_state.py` (engine) and
-`desktop/src/components/documents/notes-access-prompt.test.tsx` plus
-`desktop/src/components/layout/app-action-banner.test.ts` (UI).
+Pinned by `tests/smoke/test_access_health.py`,
+`tests/characterization/test_notes_access_cutover.py` (engine) and
+`desktop/src/hooks/use-access-health.test.ts` +
+`desktop/src/components/documents/notes-access-prompt.test.tsx` (UI).
 - `supabase_client.py` — the ONLY wire client for cloud `workbench.notes`.
   ALL remote↔local column mapping lives in `_normalize_note_row`
   (`created_by`↔`user_id`, `deleted_at`→`is_deleted`). Skipping it resurrects

@@ -37,7 +37,8 @@ other agents (schema migrations, settings tests), use `./scripts/dev.sh
 ### 1. Engine only — `./scripts/dev.sh` (or `uv run python run.py`) — seconds
 **Trust for:** tool handlers, API endpoints, request/response contracts,
 DB/business logic — anything reachable via `curl http://127.0.0.1:22240/...`
-or pytest (`tests/smoke/`, `tests/characterization/`).
+or pytest (`tests/smoke/`, `tests/characterization/`, `tests/unit/` — all
+three run in CI and in the release verify gate).
 **Blind to:** packaging (see the poison list), lifecycle ownership, how
 Rust/React consume the API.
 Remember: `uv sync --all-extras`, never plain `uv sync`.

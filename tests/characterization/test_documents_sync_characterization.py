@@ -136,7 +136,9 @@ class FakeFileManager:
     def load_local_mappings(self) -> dict[str, list[str]]:
         return {}
 
-    def sync_to_mapped_dirs(self, file_path: str, mapped: list[str]) -> None:
+    def sync_to_mapped_dirs(
+        self, file_path: str, mapped: list[str], folder_id: str = ""
+    ) -> None:
         raise AssertionError("sync_to_mapped_dirs must not run with empty mappings")
 
 

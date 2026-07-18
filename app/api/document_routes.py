@@ -28,11 +28,15 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
+from app.services.access_health import get_access_health
+from app.services.documents.access_resources import (
+    NOTES_RESOURCE,
+    register_mapping,
+    unregister_mapping,
+)
 from app.services.documents.file_manager import (
     content_hash,
     file_manager,
-    notes_access_guard,
-    probe_notes_access,
 )
 from app.services.documents.supabase_client import supabase_docs
 from app.services.documents.sync_engine import sync_engine
@@ -970,13 +974,10 @@ async def revert_note(note_id: str, req: RevertRequest, request: Request) -> dic
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Notes access health — the STATE behind the UI's Full-Disk-Access prompt.
-#
-# Access-degraded (macOS without Full Disk Access, bad folder permissions, or
-# a missing notes folder) is a state, not an error stream: the guard in
-# file_manager.py logs once and flips the notes_sync registry service to
-# DEGRADED; these endpoints let the UI render a first-class prompt and offer
-# "Check again" / "Create folder" actions instead of empty lists and 500s.
+# Notes access health — TEMPORARY response-shape adapters over the canonical
+# access-health service (app/services/access_health). The state itself lives
+# ONLY in that service; these endpoints exist until the frontend migrates to
+# GET /access/health + POST /access/recheck, then they are deleted.
 # ---------------------------------------------------------------------------
 
 
@@ -987,9 +988,13 @@ class AccessRecheckRequest(BaseModel):
     create_dir: bool = False
 
 
-def _access_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
+def _access_payload() -> dict[str, Any]:
+    health = get_access_health().health(NOTES_RESOURCE) or {}
+    degraded = health.get("status") == "degraded"
     return {
-        **snapshot,
+        "degraded": degraded,
+        "reason": health.get("message") if degraded else None,
+        "kind": health.get("kind"),
         "base_dir": str(file_manager.base_dir),
         "platform": sys.platform,
     }
@@ -998,7 +1003,7 @@ def _access_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
 @router.get("/access")
 async def notes_access_status() -> dict[str, Any]:
     """Current notes-directory access state (no filesystem probe)."""
-    return _access_payload(notes_access_guard.snapshot())
+    return _access_payload()
 
 
 @router.post("/access/recheck")
@@ -1010,10 +1015,11 @@ async def notes_access_recheck(req: AccessRecheckRequest | None = None) -> dict[
     folder ("Create folder" button).
     """
     create = bool(req.create_dir) if req is not None else False
-    snapshot = await asyncio.to_thread(
-        probe_notes_access, file_manager.base_dir, create_missing=create
+    service = get_access_health()
+    await asyncio.to_thread(
+        service.recheck, [NOTES_RESOURCE], create_missing=create
     )
-    return _access_payload(snapshot)
+    return _access_payload()
 
 
 @router.get("/sync/status")
@@ -1190,6 +1196,11 @@ async def create_mapping(req: MappingRequest, request: Request) -> dict[str, Any
     if req.local_path not in local_mappings[req.folder_id]:
         local_mappings[req.folder_id].append(req.local_path)
     file_manager.save_local_mappings(local_mappings)
+    # Each mapped dir is its own access-health resource — probe it right away
+    # so a bad mapping surfaces as ITS OWN degraded entry, never as a global
+    # notes/FDA claim.
+    resource_id = register_mapping(req.folder_id, req.local_path)
+    await asyncio.to_thread(get_access_health().recheck, [resource_id])
     return {"folder_id": req.folder_id, "local_path": req.local_path}
 
 
@@ -1207,6 +1218,7 @@ async def delete_mapping(
             if not local_mappings[folder_id]:
                 del local_mappings[folder_id]
             file_manager.save_local_mappings(local_mappings)
+        unregister_mapping(folder_id, local_path)
     return {"status": "deleted"}
 
 

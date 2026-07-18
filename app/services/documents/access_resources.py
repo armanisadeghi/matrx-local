@@ -30,9 +30,11 @@ def mapping_resource_id(folder_id: str, mapped_path: str) -> str:
 
 
 def _notes_root() -> Path:
-    from app.services.documents.file_manager import file_manager
+    # Resolved via the path manager (NOT file_manager.base_dir) so this stays
+    # importable while file_manager itself is mid-import.
+    from app.services.paths.manager import safe_dir
 
-    return file_manager.base_dir
+    return safe_dir("notes")
 
 
 def _notes_provenance() -> Provenance:

@@ -1588,22 +1588,28 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# NotesAccessError → clean 503. On macOS without Full Disk Access, notes
-# writes (state.json rename, note files) raise NotesAccessError; without this
-# handler that surfaced as an unhandled ASGI 500 to the client. Return the
-# actionable message and the degraded reason so the UI can guide the user.
+# AccessDeniedError → clean 503. When the OS denies a filesystem operation on
+# a registered resource (notes writes, state.json rename, mapped dirs),
+# without this handler it surfaced as an unhandled ASGI 500 to the client.
+# Returns the evidence-based message plus the exact resource/capability/errno
+# so the UI can guide the user. The legacy `notes_access_degraded` key is a
+# frontend contract — keep it until the frontend migrates to /access/health.
 from fastapi.responses import JSONResponse as _JSONResponse
-from app.services.documents.file_manager import NotesAccessError as _NotesAccessError
+from app.services.access_health import AccessDeniedError as _AccessDeniedError
 
 
-@app.exception_handler(_NotesAccessError)
-async def _notes_access_error_handler(_request: Request, exc: _NotesAccessError):
+@app.exception_handler(_AccessDeniedError)
+async def _access_denied_error_handler(_request: Request, exc: _AccessDeniedError):
     return _JSONResponse(
         status_code=exc.http_status,
         content={
             "detail": str(exc),
             "reason": exc.reason,
             "notes_access_degraded": True,
+            "resource_id": exc.resource_id,
+            "path": exc.path,
+            "capability": exc.capability.value if exc.capability else None,
+            "errno": exc.errno,
             "op": exc.op,
         },
     )

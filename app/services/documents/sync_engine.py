@@ -38,12 +38,12 @@ from typing import Any
 
 from app.common.platform_ctx import PLATFORM
 
+from app.services.access_health import get_access_health
+from app.services.documents.access_resources import NOTES_RESOURCE
 from app.services.documents.file_manager import (
     DocumentFileManager,
-    NotesAccessError,
     content_hash,
     file_manager,
-    notes_access_guard,
 )
 from app.services.documents.supabase_client import SupabaseDocClient, supabase_docs
 
@@ -165,10 +165,11 @@ class SyncEngine:
         result carrying the actionable reason. The guard lets one probe op
         through every recheck interval so restored access clears the state.
         """
-        if notes_access_guard.should_skip_sync():
+        access = get_access_health()
+        if not access.should_attempt(NOTES_RESOURCE):
             return {
                 "sync_skipped": True,
-                "reason": notes_access_guard.reason,
+                "reason": access.message(NOTES_RESOURCE),
                 "notes_access_degraded": True,
             }
         return None
@@ -1045,7 +1046,7 @@ class SyncEngine:
         local_mappings = self.fm.load_local_mappings()
         mapped_paths = local_mappings.get(folder_id, [])
         if mapped_paths:
-            self.fm.sync_to_mapped_dirs(file_path, mapped_paths)
+            self.fm.sync_to_mapped_dirs(file_path, mapped_paths, folder_id=folder_id)
 
     # ── Device identity ──────────────────────────────────────────────────────
 
@@ -1073,10 +1074,11 @@ class SyncEngine:
     async def start_watcher(self) -> None:
         if self.watcher_active:
             return
-        if notes_access_guard.is_degraded or not self.fm.base_dir.exists():
+        access = get_access_health()
+        if access.is_degraded(NOTES_RESOURCE) or not self.fm.base_dir.exists():
             logger.warning(
                 "Document file watcher NOT started — notes dir inaccessible (%s)",
-                notes_access_guard.reason or str(self.fm.base_dir),
+                access.message(NOTES_RESOURCE),
             )
             return
         self._stop_event.clear()
@@ -1588,6 +1590,11 @@ class SyncEngine:
     def get_status(self) -> dict[str, Any]:
         state = self.fm.load_sync_state()
         conflicts = self.fm.list_conflicts()
+        # Access-degraded is surfaced so the UI can prompt with an actionable,
+        # EVIDENCE-BASED message instead of silently showing an empty list.
+        # Field names are a frontend contract — keep them stable.
+        notes_health = get_access_health().health(NOTES_RESOURCE) or {}
+        degraded = notes_health.get("status") == "degraded"
         return {
             "configured": self.is_configured,
             "device_id": self.device_id,
@@ -1598,12 +1605,9 @@ class SyncEngine:
             "conflict_count": len(conflicts),
             "watcher_active": self.watcher_active,
             "base_dir": str(self.fm.base_dir),
-            # Surface the macOS Full Disk Access / permission-denied condition
-            # so the UI can prompt the user with an actionable message instead
-            # of silently showing an empty, non-syncing notes list.
-            "notes_access_degraded": notes_access_guard.is_degraded,
-            "notes_access_reason": notes_access_guard.reason,
-            "notes_access_kind": notes_access_guard.kind,
+            "notes_access_degraded": degraded,
+            "notes_access_reason": notes_health.get("message") if degraded else None,
+            "notes_access_kind": notes_health.get("kind"),
         }
 
 

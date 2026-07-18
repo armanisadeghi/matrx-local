@@ -12,253 +12,35 @@ optional, best-effort, and never blocks a local operation.
 
 from __future__ import annotations
 
-import errno
 import hashlib
 import json
 import logging
 import os
 import re
 import shutil
-import sys
 import tempfile
-import threading
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# ── macOS "Full Disk Access" / permission-denied guard ──────────────────────
+# ── Access health ────────────────────────────────────────────────────────────
 #
-# On a packaged macOS app WITHOUT Full Disk Access, every listdir/rename/write
-# against ~/Documents/Matrx/Notes raises PermissionError / EPERM. Left
-# unguarded that produced four separate defects: repeated WARN spam on every
-# folder/conflict listing, permission errors mis-diagnosed as "corrupt sync
-# state" (triggering pointless resets), and an unhandled ASGI PermissionError
-# renaming the sync temp file onto state.json (a 500 to the client).
-#
-# This guard is the single choke point. Per the engine's "loud recovery, no
-# silent defaults" doctrine it fires ONCE per engine run: it flips the
-# `notes_sync` registry service to DEGRADED with an actionable reason and logs
-# a single WARN, then suppresses further spam until access returns (a
-# successful op clears it back to READY) or a modest recheck interval elapses.
+# All access-health state lives in the canonical access_health service
+# (app/services/access_health/FEATURE.md). This module records evidence
+# against the "notes-canonical" resource (or the per-mapping resource for
+# mapped-directory writes) and NEVER holds its own access state. The old
+# global _NotesAccessGuard — which any EACCES anywhere poisoned and any
+# success anywhere cleared, always with a hardcoded "grant Full Disk Access"
+# reason — was deleted 2026-07; do not reintroduce a module-level flag here.
 
-_NOTES_SERVICE = "notes_sync"
-# Platform-appropriate, user-actionable reason for a permission denial.
-# macOS: the fix is Full Disk Access. Windows/Linux: FDA does not exist —
-# the fix is folder permissions/ownership, so say that instead.
-if sys.platform == "darwin":
-    _DEGRADED_REASON = (
-        "macOS denied access to ~/Documents — grant Full Disk Access in "
-        "System Settings > Privacy & Security"
-    )
-else:
-    _DEGRADED_REASON = (
-        "The operating system denied access to the notes folder — check the "
-        "folder's permissions and ownership"
-    )
-# While degraded, let one probe op through this often to detect restored access.
-_RECHECK_INTERVAL_S = 60.0
-
-
-class NotesAccessError(RuntimeError):
-    """The OS denied access to the notes directory (e.g. macOS Full Disk
-    Access not granted).
-
-    Carries an actionable, user-facing message and a stable ``http_status`` so
-    API layers return a clean, structured response instead of leaking an ASGI
-    500. Raised by the write/rename path (`_atomic_write` → `save_sync_state`)
-    which callers cannot meaningfully degrade past.
-    """
-
-    http_status = 503
-
-    def __init__(self, message: str = _DEGRADED_REASON, *, op: str = "") -> None:
-        super().__init__(message)
-        self.op = op
-        self.reason = message
-
-
-def _is_permission_error(exc: BaseException) -> bool:
-    """True for macOS/POSIX permission denials (PermissionError or EPERM/EACCES)."""
-    if isinstance(exc, PermissionError):
-        return True
-    return isinstance(exc, OSError) and exc.errno in (errno.EPERM, errno.EACCES)
-
-
-class _NotesAccessGuard:
-    """Tracks whether the OS is currently denying access to the notes dir.
-
-    Thread-safe: notes ops run from the async lifespan, request handlers, and
-    the file-watcher thread. All state changes go through a single lock.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._degraded = False
-        self._reason: str | None = None
-        self._kind: str | None = None  # "permission" | "missing_dir"
-        self._last_denied_at = 0.0
-
-    def note_denied(self, exc: BaseException, op: str) -> None:
-        """Record a permission denial. Logs + transitions the registry ONCE."""
-        with self._lock:
-            already = self._degraded
-            self._degraded = True
-            self._reason = _DEGRADED_REASON
-            self._kind = "permission"
-            self._last_denied_at = time.monotonic()
-        if already:
-            return
-        logger.warning(
-            "[notes] %s (while %s: %s). Skipping notes sync until access is "
-            "restored.",
-            _DEGRADED_REASON,
-            op,
-            exc,
-        )
-        try:
-            from app.launcher import get_registry
-
-            get_registry().degraded(_NOTES_SERVICE, reason=_DEGRADED_REASON)
-        except Exception:  # registry is best-effort — never mask the real error
-            logger.debug("[notes] could not mark notes_sync degraded", exc_info=True)
-
-    def note_missing(self, path: Path) -> None:
-        """Record that the notes directory itself does not exist.
-
-        Distinct from a permission denial: the fix is "create the folder",
-        not "grant access". Logs + transitions the registry ONCE, same as
-        note_denied.
-        """
-        reason = f"Notes folder does not exist: {path}"
-        with self._lock:
-            already = self._degraded
-            self._degraded = True
-            self._reason = reason
-            self._kind = "missing_dir"
-            self._last_denied_at = time.monotonic()
-        if already:
-            return
-        logger.warning(
-            "[notes] %s. Skipping notes sync until the folder exists.", reason
-        )
-        try:
-            from app.launcher import get_registry
-
-            get_registry().degraded(_NOTES_SERVICE, reason=reason)
-        except Exception:
-            logger.debug("[notes] could not mark notes_sync degraded", exc_info=True)
-
-    def note_ok(self) -> None:
-        """A notes op succeeded — clear degraded state back to READY (once)."""
-        with self._lock:
-            if not self._degraded:
-                return
-            self._degraded = False
-            self._reason = None
-            self._kind = None
-        logger.info("[notes] access to notes directory restored — notes_sync ready")
-        try:
-            from app.launcher import get_registry
-
-            get_registry().ready(_NOTES_SERVICE)
-        except Exception:
-            logger.debug("[notes] could not mark notes_sync ready", exc_info=True)
-
-    @property
-    def is_degraded(self) -> bool:
-        with self._lock:
-            return self._degraded
-
-    @property
-    def reason(self) -> str | None:
-        with self._lock:
-            return self._reason
-
-    @property
-    def kind(self) -> str | None:
-        """Why access is degraded: "permission" | "missing_dir" | None."""
-        with self._lock:
-            return self._kind
-
-    def snapshot(self) -> dict[str, Any]:
-        """Consistent {degraded, reason, kind} view for API surfaces."""
-        with self._lock:
-            return {
-                "degraded": self._degraded,
-                "reason": self._reason,
-                "kind": self._kind,
-            }
-
-    def should_skip_sync(self) -> bool:
-        """True while degraded AND inside the recheck backoff window.
-
-        Returns False (do not skip) when healthy, or once per
-        ``_RECHECK_INTERVAL_S`` while degraded so a single probe op can detect
-        that access has been restored and clear the state.
-        """
-        with self._lock:
-            if not self._degraded:
-                return False
-            if time.monotonic() - self._last_denied_at >= _RECHECK_INTERVAL_S:
-                # Let one op through to probe; reset the window so we don't
-                # start spamming again if it fails.
-                self._last_denied_at = time.monotonic()
-                return False
-            return True
-
-
-# Module-level singleton — the single source of truth for notes access health.
-notes_access_guard = _NotesAccessGuard()
-
-
-def probe_notes_access(base_dir: Path, *, create_missing: bool = False) -> dict[str, Any]:
-    """Actively re-probe access to the notes directory and update the guard.
-
-    This is the "Check again" mechanism behind POST /notes/access/recheck: the
-    UI shows a first-class prompt while degraded (macOS Full Disk Access,
-    folder permissions, or a missing folder) and calls this to detect that the
-    user fixed it — without restarting the engine.
-
-    - Missing dir + ``create_missing`` → try to create it ("Create folder").
-    - Missing dir otherwise → guard flips to kind="missing_dir".
-    - Exists → attempt a real listdir; PermissionError → kind="permission".
-    - Any success → guard clears back to READY (note_ok logs once).
-
-    Returns the guard snapshot after the probe.
-    """
-    try:
-        exists = base_dir.exists()
-    except OSError as e:
-        if _is_permission_error(e):
-            notes_access_guard.note_denied(e, f"probing {base_dir}")
-            return notes_access_guard.snapshot()
-        raise
-    if not exists:
-        if create_missing:
-            try:
-                base_dir.mkdir(parents=True, exist_ok=True)
-            except OSError as e:
-                if _is_permission_error(e):
-                    notes_access_guard.note_denied(e, f"creating {base_dir}")
-                    return notes_access_guard.snapshot()
-                raise
-            notes_access_guard.note_ok()
-            return notes_access_guard.snapshot()
-        notes_access_guard.note_missing(base_dir)
-        return notes_access_guard.snapshot()
-    try:
-        with os.scandir(base_dir) as it:
-            next(it, None)
-    except OSError as e:
-        if _is_permission_error(e):
-            notes_access_guard.note_denied(e, f"listing {base_dir}")
-            return notes_access_guard.snapshot()
-        raise
-    notes_access_guard.note_ok()
-    return notes_access_guard.snapshot()
+from app.services.access_health import Capability, get_access_health
+from app.services.documents.access_resources import (
+    NOTES_RESOURCE,
+    mapping_resource_id,
+    register_notes_canonical,
+)
 
 # These module-level names are used as fallbacks during import-time initialisation
 # before the path manager is fully loaded. After that, DocumentFileManager.base_dir
@@ -321,7 +103,16 @@ def _ensure_dirs() -> None:
         (notes / ".sync").mkdir(parents=True, exist_ok=True)
         (notes / ".sync" / "conflicts").mkdir(parents=True, exist_ok=True)
     except PermissionError as e:
-        notes_access_guard.note_denied(e, "creating .sync metadata dirs")
+        get_access_health().record(
+            NOTES_RESOURCE,
+            Capability.CREATE,
+            ok=False,
+            path=str(notes / ".sync"),
+            errno=e.errno,
+            error=str(e),
+            op="creating .sync metadata dirs",
+            source="file_manager",
+        )
 
 
 def _atomic_write(target: Path, content: str) -> None:
@@ -330,39 +121,32 @@ def _atomic_write(target: Path, content: str) -> None:
     On all POSIX systems and modern Windows, os.replace() is atomic within the
     same filesystem, so a crash mid-write leaves either the old file or the new
     file fully intact — never a partial write.
+
+    PURE by design: raises the underlying OSError untouched and records NO
+    access-health state. Callers wrap it in the access service's
+    ``observing(<their resource>, REPLACE, ...)`` so evidence lands on the
+    right resource. (Its previous guard side effects meant one bad mapped dir
+    globally poisoned notes health — the canonical false-FDA defect.)
     """
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
-    except PermissionError as e:
-        # macOS denied access before we even opened the temp file. Surface a
-        # structured error instead of leaking a raw PermissionError up the ASGI
-        # stack (the state.json 500 in the original report).
-        notes_access_guard.note_denied(e, f"preparing write to {target}")
-        raise NotesAccessError(op=f"write {target.name}") from e
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
         os.replace(tmp_path, target)
-    except PermissionError as e:
-        # The classic failure: the sibling temp file wrote fine but the
-        # os.replace() rename onto the target is denied. Clean up and raise the
-        # structured error so the HTTP surface returns a clean 503, not a 500.
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        notes_access_guard.note_denied(e, f"renaming temp file onto {target}")
-        raise NotesAccessError(op=f"write {target.name}") from e
     except Exception:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
         raise
-    else:
-        # A successful write proves access is back — clear any degraded state.
-        notes_access_guard.note_ok()
+
+
+def _observing_notes(capability: Capability, op: str, path: Path):
+    """Shorthand: observe one canonical-notes filesystem operation."""
+    return get_access_health().observing(
+        NOTES_RESOURCE, capability, op=op, source="file_manager", path=str(path)
+    )
 
 
 def _safe_filename(name: str) -> str:
@@ -460,9 +244,10 @@ class DocumentFileManager:
         return False
 
     def list_folders(self) -> list[str]:
+        access = get_access_health()
         try:
-            # .exists() stats through the parent — on macOS without Full Disk
-            # Access even that stat is denied, so it must sit inside the guard.
+            # .exists() stats through the parent — on macOS without access
+            # even that stat is denied, so it must sit inside the try.
             if not self.base_dir.exists():
                 return []
             folders = sorted(
@@ -471,10 +256,25 @@ class DocumentFileManager:
                 if d.is_dir() and not d.name.startswith(".")
             )
         except PermissionError as e:
-            # Route through the guard: one WARN + registry.degraded, then quiet.
-            notes_access_guard.note_denied(e, f"listing folders in {self.base_dir}")
+            access.record(
+                NOTES_RESOURCE,
+                Capability.ENUMERATE,
+                ok=False,
+                path=str(self.base_dir),
+                errno=e.errno,
+                error=str(e),
+                op="listing note folders",
+                source="file_manager",
+            )
             return []
-        notes_access_guard.note_ok()
+        access.record(
+            NOTES_RESOURCE,
+            Capability.ENUMERATE,
+            ok=True,
+            path=str(self.base_dir),
+            op="listing note folders",
+            source="file_manager",
+        )
         return folders
 
     # ── Note file operations ─────────────────────────────────────────────────
@@ -498,8 +298,9 @@ class DocumentFileManager:
         else:
             target = self.note_path(folder_name, label)
 
-        target.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write(target, content)
+        with _observing_notes(Capability.REPLACE, f"writing note {target.name}", target):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write(target, content)
         return self.relative_path(target)
 
     def read_note(self, file_path: str) -> str | None:
@@ -575,7 +376,16 @@ class DocumentFileManager:
                         }
                     )
         except PermissionError as e:
-            notes_access_guard.note_denied(e, f"listing notes in {folder}")
+            get_access_health().record(
+                NOTES_RESOURCE,
+                Capability.ENUMERATE,
+                ok=False,
+                path=str(folder),
+                errno=e.errno,
+                error=str(e),
+                op=f"listing notes in {folder.name}",
+                source="file_manager",
+            )
         return results
 
     def scan_all(self) -> list[dict[str, str]]:
@@ -640,8 +450,15 @@ class DocumentFileManager:
                 return []
             return [d.name for d in self._conflicts_dir.iterdir() if d.is_dir()]
         except PermissionError as e:
-            notes_access_guard.note_denied(
-                e, f"listing conflicts in {self._conflicts_dir}"
+            get_access_health().record(
+                NOTES_RESOURCE,
+                Capability.ENUMERATE,
+                ok=False,
+                path=str(self._conflicts_dir),
+                errno=e.errno,
+                error=str(e),
+                op="listing sync conflicts",
+                source="file_manager",
             )
             return []
 
@@ -659,8 +476,14 @@ class DocumentFileManager:
         self,
         file_path: str,
         mapped_paths: list[str],
+        folder_id: str = "",
     ) -> list[str]:
         """Copy a canonical .md file to all mapped directories.
+
+        Each mapped directory carries its OWN access-health resource: a dead
+        external drive or read-only mapped folder degrades only that mapping,
+        never the canonical notes health — and a healthy mapping's success
+        never clears another mapping's (or the canonical dir's) failure.
 
         Returns list of successfully written paths.
         """
@@ -671,16 +494,30 @@ class DocumentFileManager:
         content = source.read_text(encoding="utf-8")
         filename = source.name
         written: list[str] = []
+        access = get_access_health()
 
         for mapped_dir in mapped_paths:
             target = Path(mapped_dir) / filename
+            resource_id = mapping_resource_id(folder_id, mapped_dir)
             try:
-                target.parent.mkdir(parents=True, exist_ok=True)
                 # Atomic temp+rename like the canonical note write, so a crash
                 # mid-write can't leave a truncated/corrupt mapped-dir copy.
-                _atomic_write(target, content)
+                if access.is_registered(resource_id):
+                    with access.observing(
+                        resource_id,
+                        Capability.REPLACE,
+                        op=f"syncing {filename} to mapped dir",
+                        source="file_manager",
+                        path=str(target),
+                    ):
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        _atomic_write(target, content)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    _atomic_write(target, content)
                 written.append(str(target))
             except Exception:
+                # Best-effort per mapping: log + evidence (above), keep going.
                 logger.warning(
                     "Failed to sync to mapped dir: %s", target, exc_info=True
                 )
@@ -707,10 +544,24 @@ class DocumentFileManager:
     def load_sync_state(self) -> dict[str, Any]:
         _ensure_dirs()
         state_file = self._state_file()
+        access = get_access_health()
+
+        def _read_denied(e: PermissionError, op: str) -> None:
+            access.record(
+                NOTES_RESOURCE,
+                Capability.READ,
+                ok=False,
+                path=str(state_file),
+                errno=e.errno,
+                error=str(e),
+                op=op,
+                source="file_manager",
+            )
+
         try:
             is_file = state_file.is_file()
         except PermissionError as e:
-            notes_access_guard.note_denied(e, "checking sync state")
+            _read_denied(e, "checking sync state")
             return self._default_sync_state()
         if is_file:
             try:
@@ -718,7 +569,7 @@ class DocumentFileManager:
             except PermissionError as e:
                 # Permission denial is NOT corruption. Do not "reset" state —
                 # there is nothing wrong with it; we simply can't read it.
-                notes_access_guard.note_denied(e, "reading sync state")
+                _read_denied(e, "reading sync state")
                 return self._default_sync_state()
             except OSError:
                 logger.debug(
@@ -734,16 +585,22 @@ class DocumentFileManager:
                 # case that warrants resetting.
                 logger.warning("Corrupt sync state (invalid JSON), resetting")
                 return self._default_sync_state()
-            notes_access_guard.note_ok()
+            access.record(
+                NOTES_RESOURCE,
+                Capability.READ,
+                ok=True,
+                path=str(state_file),
+                op="reading sync state",
+                source="file_manager",
+            )
             return state
         return self._default_sync_state()
 
     def save_sync_state(self, state: dict[str, Any]) -> None:
         _ensure_dirs()
-        _atomic_write(
-            self._state_file(),
-            json.dumps(state, indent=2, default=str),
-        )
+        target = self._state_file()
+        with _observing_notes(Capability.REPLACE, "saving sync state", target):
+            _atomic_write(target, json.dumps(state, indent=2, default=str))
 
     def load_local_mappings(self) -> dict[str, list[str]]:
         """Load directory mappings config.
@@ -756,18 +613,30 @@ class DocumentFileManager:
             if mappings_file.is_file():
                 return json.loads(mappings_file.read_text(encoding="utf-8"))
         except PermissionError as e:
-            notes_access_guard.note_denied(e, "reading local mappings")
+            get_access_health().record(
+                NOTES_RESOURCE,
+                Capability.READ,
+                ok=False,
+                path=str(mappings_file),
+                errno=e.errno,
+                error=str(e),
+                op="reading local mappings",
+                source="file_manager",
+            )
         except (json.JSONDecodeError, OSError):
             pass
         return {}
 
     def save_local_mappings(self, mappings: dict[str, list[str]]) -> None:
         _ensure_dirs()
-        _atomic_write(
-            self._mappings_file(),
-            json.dumps(mappings, indent=2),
-        )
+        target = self._mappings_file()
+        with _observing_notes(Capability.REPLACE, "saving local mappings", target):
+            _atomic_write(target, json.dumps(mappings, indent=2))
 
+
+# Register the canonical notes resource BEFORE the singleton's _ensure_dirs
+# runs, so even import-time permission failures land as evidence.
+register_notes_canonical()
 
 # Module-level singleton
 file_manager = DocumentFileManager()

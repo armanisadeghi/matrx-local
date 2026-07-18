@@ -152,6 +152,24 @@ def _registry():
     return ToolRegistry.get_instance()
 
 
+def _apply_request_scope(ctx: AppContext, request: Any) -> AppContext:
+    overrides = {
+        name: value
+        for name in (
+            "organization_id",
+            "project_id",
+            "task_id",
+            "source_app",
+            "source_feature",
+        )
+        if (value := getattr(request, name, None)) is not None
+    }
+    scope_ids = getattr(request, "scope_ids", None)
+    if scope_ids is not None:
+        overrides["metadata"] = {**ctx.metadata, "scope_ids": list(scope_ids)}
+    return ctx.with_overrides(**overrides) if overrides else ctx
+
+
 async def apply_request_tools(
     config: UnifiedConfig,
     ctx: AppContext,
@@ -172,6 +190,19 @@ async def apply_request_tools(
     from matrx_ai.tools.merge import merge_request_tools
 
     specs = tools_replace if tools_replace is not None else tools
+    agent_specs = [spec for spec in specs if getattr(spec, "kind", None) == "agent"]
+    if agent_specs:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "remote_agent_tool_projection_unsupported",
+                "message": (
+                    "Agent-as-tool request projections are not yet executable "
+                    "inside the local model host. Use registered local/server "
+                    "tools for this turn."
+                ),
+            },
+        )
     if tools_replace is not None:
         config.tools = []
         config.custom_tools = []
@@ -188,6 +219,19 @@ async def apply_request_tools(
         ]
         if name
     }
+    bundle_names = sorted(name for name in requested_names if name.startswith("bundle:list_"))
+    if bundle_names:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "remote_dynamic_bundle_unsupported",
+                "message": (
+                    "Dynamic server tool bundles cannot mutate a local model's "
+                    f"active toolset: {', '.join(bundle_names)}. Attach the "
+                    "bundle member tools directly to this agent."
+                ),
+            },
+        )
     missing_before_refresh = {
         name for name in requested_names if registry.get(name) is None
     }
@@ -230,6 +274,7 @@ async def apply_request_tools(
                     else None
                 ),
                 "client": _dump(client),
+                "scope_ids": ctx.metadata.get("scope_ids"),
             },
         }
     )
@@ -250,6 +295,29 @@ async def apply_request_tools(
                 "message": (
                     "Tool(s) are not registered locally or in AIDream: "
                     f"{', '.join(sorted(set(unknown)))}."
+                ),
+            },
+        )
+
+    from matrx_ai.tools.models import ToolType
+
+    remote_names = sorted(
+        name
+        for name in requested_names
+        if (
+            (definition := registry.get(name)) is not None
+            and definition.tool_type == ToolType.EXTERNAL_HANDLER
+        )
+    )
+    if remote_names and not (ctx.agent_id or ctx.agent_version_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "remote_agent_identity_required",
+                "message": (
+                    "Server-owned tools require a saved agent identity for "
+                    f"authorization: {', '.join(remote_names)}. Send agent_id "
+                    "or agent_version_id, or use the agent execution route."
                 ),
             },
         )
@@ -279,6 +347,7 @@ async def prepare_agent_start(
     agent_id is informational.
     """
     _validate_uuid(agent_id, "agent_version_id" if request.is_version else "agent_id")
+    ctx = _apply_request_scope(ctx, request)
 
     from app.services.ai.engine import supports_agent_execution
 
@@ -379,6 +448,7 @@ async def prepare_conversation_continue(
     ``conversation_not_found`` code when the row is missing.
     """
     _validate_uuid(conversation_id)
+    ctx = _apply_request_scope(ctx, request)
 
     if not await conversation_exists(conversation_id):
         raise HTTPException(
@@ -498,6 +568,16 @@ async def prepare_chat(
     Same conversation-gate matrix as the agent path; the config comes from
     the request body (ai_model_id + messages [+ system_instruction]).
     """
+    ctx = _apply_request_scope(ctx, request)
+    agent_version_id = getattr(request, "agent_version_id", None)
+    agent_id = getattr(request, "agent_id", None)
+    if agent_version_id:
+        _validate_uuid(agent_version_id, "agent_version_id")
+        ctx = ctx.with_overrides(agent_version_id=agent_version_id)
+    elif agent_id:
+        _validate_uuid(agent_id, "agent_id")
+        ctx = ctx.with_overrides(agent_id=agent_id)
+
     conversation_id, skip_persistence = await resolve_conversation_gate(
         request.conversation_id, request.is_new
     )

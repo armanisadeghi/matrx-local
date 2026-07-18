@@ -30,6 +30,10 @@ class AIDreamOfflineError(Exception):
     """Raised when the AIDream server is unreachable or returns a network error."""
 
 
+class AIDreamTimeoutError(AIDreamOfflineError):
+    """Raised when a request times out and the remote outcome may be unknown."""
+
+
 class AIDreamError(Exception):
     """Raised when the AIDream server returns a non-2xx HTTP response."""
 
@@ -81,7 +85,7 @@ class AIDreamClient:
             ) as http:
                 resp = await http.get(url, headers=headers)
         except httpx.TimeoutException as exc:
-            raise AIDreamOfflineError(
+            raise AIDreamTimeoutError(
                 f"[aidream_client] Timeout reaching {url}"
             ) from exc
         except (httpx.ConnectError, httpx.NetworkError) as exc:
@@ -128,7 +132,7 @@ class AIDreamClient:
             ) as http:
                 resp = await http.post(url, headers=headers, json=payload)
         except httpx.TimeoutException as exc:
-            raise AIDreamOfflineError(
+            raise AIDreamTimeoutError(
                 f"[aidream_client] Timeout reaching {url}"
             ) from exc
         except (httpx.ConnectError, httpx.NetworkError) as exc:

@@ -83,7 +83,16 @@ from matrx_ai.config.llm_params import LLMParams  # noqa: E402
 from matrx_ai.tools.specs import ToolSpec  # noqa: E402
 
 
-class LocalAgentStartRequest(BaseModel):
+class LocalScopedRequest(BaseModel):
+    organization_id: str | None = None
+    project_id: str | None = None
+    task_id: str | None = None
+    scope_ids: list[str] | None = None
+    source_app: str | None = None
+    source_feature: str | None = None
+
+
+class LocalAgentStartRequest(LocalScopedRequest):
     """Mirror of aidream AgentStartRequest (local-honored subset)."""
 
     user_input: str | list[dict[str, Any]] | None = None
@@ -108,7 +117,7 @@ class LocalAgentStartRequest(BaseModel):
     # ignore-extras behavior (client, user, sandbox, context, memory, ...).
 
 
-class LocalConversationContinueRequest(BaseModel):
+class LocalConversationContinueRequest(LocalScopedRequest):
     """Mirror of aidream ConversationContinueRequest (local-honored subset)."""
 
     user_input: str | list[dict[str, Any]] | None = None
@@ -126,7 +135,7 @@ class LocalConversationContinueRequest(BaseModel):
     max_retries_per_iteration: int = 2
 
 
-class LocalResumeRequest(BaseModel):
+class LocalResumeRequest(LocalScopedRequest):
     """Mirror of aidream ResumeRequest."""
 
     user_request_id: str
@@ -137,13 +146,15 @@ class LocalResumeRequest(BaseModel):
     client: ClientContext | None = None
 
 
-class LocalChatRequest(BaseModel):
+class LocalChatRequest(LocalScopedRequest):
     """Mirror of aidream ChatRequest (local-honored subset)."""
 
     model_config = ConfigDict(extra="allow")
 
     ai_model_id: str
     messages: list[dict[str, Any]]
+    agent_id: str | None = None
+    agent_version_id: str | None = None
 
     conversation_id: str | None = None
     is_new: bool | None = None

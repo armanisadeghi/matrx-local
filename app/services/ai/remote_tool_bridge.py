@@ -8,6 +8,7 @@ one unified agent config without knowing where a tool runs.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -22,6 +23,7 @@ from matrx_ai.tools.models import (
 from app.services.aidream.client import (
     AIDreamError,
     AIDreamOfflineError,
+    AIDreamTimeoutError,
     get_aidream_client,
 )
 
@@ -33,43 +35,71 @@ class RemoteToolBridge:
 
     def __init__(self) -> None:
         self._loaded_names: set[str] = set()
+        self._server_timeouts: dict[str, float] = {}
+        self._refresh_lock = asyncio.Lock()
 
     async def refresh(self) -> int:
         """Fetch all canonical server tools and install exact-name handlers."""
-        client = get_aidream_client()
-        if client is None:
-            raise AIDreamOfflineError("AIDream server URL is not configured")
+        async with self._refresh_lock:
+            client = get_aidream_client()
+            if client is None:
+                raise AIDreamOfflineError("AIDream server URL is not configured")
 
-        rows = await client.fetch_tools()
-        from app.tools.catalog import get_catalog
-        from matrx_ai.tools.external_handlers import ExternalHandlerRegistry
-        from matrx_ai.tools.registry import ToolRegistry
+            rows = await client.fetch_tools()
+            from app.tools.catalog import get_catalog
+            from matrx_ai.tools.external_handlers import ExternalHandlerRegistry
+            from matrx_ai.tools.registry import ToolRegistry
 
-        local_names = {entry.cloud_name for entry in get_catalog()}
-        registry = ToolRegistry.get_instance()
-        handlers = ExternalHandlerRegistry.get_instance()
-        definitions: list[ToolDefinition] = []
+            local_names = {entry.cloud_name for entry in get_catalog()}
+            registry = ToolRegistry.get_instance()
+            handlers = ExternalHandlerRegistry.get_instance()
+            definitions: list[ToolDefinition] = []
+            server_timeouts: dict[str, float] = {}
 
-        for row in rows:
-            name = row.get("name") if isinstance(row, dict) else None
-            if not isinstance(name, str) or not name or name in local_names:
-                continue
+            # Validate the full incoming set before mutating either global
+            # registry. A malformed row cannot leave a half-installed catalog.
+            for row in rows:
+                name = row.get("name") if isinstance(row, dict) else None
+                if (
+                    not isinstance(name, str)
+                    or not name
+                    or name in local_names
+                    or name.startswith("bundle:list_")
+                    or row.get("is_active") is False
+                ):
+                    continue
+                try:
+                    server_timeout = max(float(row.get("timeout_seconds") or 120.0), 1.0)
+                except (TypeError, ValueError):
+                    server_timeout = 120.0
+                definition = ToolDefinition.model_validate(
+                    {
+                        **row,
+                        "tool_id": row.get("id"),
+                        "tool_type": ToolType.EXTERNAL_HANDLER,
+                        "function_path": "",
+                        # AIDream owns the real role check. The desktop cannot
+                        # infer server admin status from a loopback credential.
+                        "admin_only": False,
+                        # The outer executor must outlive the inner server
+                        # timeout plus HTTP response propagation.
+                        "timeout_seconds": server_timeout + 30.0,
+                    }
+                )
+                definitions.append(definition)
+                server_timeouts[name] = server_timeout
 
-            # Exact-name handlers outrank LocalToolBridge's native fallback.
-            handlers._tool_handlers[name] = self.execute  # noqa: SLF001
-            definition = ToolDefinition.model_validate(
-                {
-                    **row,
-                    "tool_id": row.get("id"),
-                    "tool_type": ToolType.EXTERNAL_HANDLER,
-                    "function_path": "",
-                }
-            )
-            definitions.append(definition)
-
-        count = registry.load_from_definitions(definitions)
-        self._loaded_names = {definition.name for definition in definitions}
-        return count
+            new_names = {definition.name for definition in definitions}
+            count = registry.load_from_definitions(definitions)
+            for stale_name in self._loaded_names - new_names:
+                registry.unregister(stale_name)
+                handlers._tool_handlers.pop(stale_name, None)  # noqa: SLF001
+            for name in new_names:
+                # Exact-name handlers outrank LocalToolBridge's native fallback.
+                handlers._tool_handlers[name] = self.execute  # noqa: SLF001
+            self._loaded_names = new_names
+            self._server_timeouts = server_timeouts
+            return count
 
     async def ensure(self, names: set[str]) -> set[str]:
         """Refresh on demand and return names still absent from the registry."""
@@ -98,7 +128,9 @@ class RemoteToolBridge:
                     retryable=False,
                 )
 
-            jwt = app_ctx.token or await _stored_jwt()
+            jwt = (
+                app_ctx.token if _is_user_jwt(app_ctx.token) else None
+            ) or await _stored_jwt()
             if not jwt:
                 return self._error(
                     ctx,
@@ -129,6 +161,13 @@ class RemoteToolBridge:
                 "tools": request_context.get("tools", []),
                 "tools_replace": request_context.get("tools_replace"),
                 "client": client_context,
+                "organization_id": app_ctx.organization_id,
+                "project_id": app_ctx.project_id,
+                "task_id": app_ctx.task_id,
+                "scope_ids": request_context.get("scope_ids"),
+                "source_app": app_ctx.source_app,
+                "source_feature": app_ctx.source_feature,
+                "store": app_ctx.store,
             }
             client = get_aidream_client()
             if client is None:
@@ -137,6 +176,7 @@ class RemoteToolBridge:
                 "/ai/tools/execute",
                 payload,
                 jwt=jwt,
+                timeout=self._server_timeouts.get(ctx.tool_name, 120.0) + 15.0,
             )
             if not isinstance(response, dict):
                 raise AIDreamError(502, "AIDream returned a non-object tool result")
@@ -161,6 +201,17 @@ class RemoteToolBridge:
                 completed_at=time.time(),
                 tool_name=ctx.tool_name,
                 call_id=ctx.call_id,
+            )
+        except AIDreamTimeoutError as exc:
+            return self._error(
+                ctx,
+                started_at,
+                "server_result_unknown",
+                (
+                    f"{exc}. The server may have completed this tool; do not "
+                    "automatically repeat a mutating call."
+                ),
+                retryable=False,
             )
         except AIDreamOfflineError as exc:
             return self._error(
@@ -224,6 +275,18 @@ async def _stored_jwt() -> str | None:
         return None
     value = token.get("access_token")
     return value if isinstance(value, str) and value else None
+
+
+def _is_user_jwt(value: str | None) -> bool:
+    if not isinstance(value, str) or value.count(".") != 2:
+        return False
+    try:
+        import jwt as pyjwt
+
+        claims = pyjwt.decode(value, options={"verify_signature": False})
+        return bool(claims.get("sub"))
+    except Exception:
+        return False
 
 
 _bridge: RemoteToolBridge | None = None

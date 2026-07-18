@@ -32,6 +32,8 @@ use downloads::commands::*;
 mod floating_overlay;
 use floating_overlay::*;
 
+mod filesystem;
+
 mod windows;
 mod menu;
 
@@ -1720,6 +1722,7 @@ pub fn run() {
             set_compact_mode,
             proxy_fetch,
             get_pending_oauth_url,
+            filesystem::open_filesystem_path,
             // Transcription commands
             detect_hardware,
             download_whisper_model,

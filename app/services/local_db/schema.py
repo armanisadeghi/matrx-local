@@ -714,7 +714,9 @@ CREATE TABLE IF NOT EXISTS delegation_outbox (
     conversation_id  TEXT NOT NULL,
     user_request_id  TEXT NOT NULL DEFAULT '',
     tool_name        TEXT NOT NULL,
-    state            TEXT NOT NULL DEFAULT 'executing',
+    state            TEXT NOT NULL DEFAULT 'queued',
+    owner_id         TEXT,
+    lease_expires_at TEXT,
     result_payload   TEXT,
     created_at       TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at       TEXT NOT NULL DEFAULT (datetime('now'))

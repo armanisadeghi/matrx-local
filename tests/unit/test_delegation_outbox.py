@@ -31,7 +31,7 @@ def test_sqlite_outbox_survives_reopen(tmp_path: Path) -> None:
         assert await outbox.enqueue(call) is True
         assert await outbox.mark_executing("call-1") is True
         assert await outbox.mark_executing("call-1") is False
-        await outbox.store_result("call-1", result)
+        assert await outbox.store_result("call-1", result)
         await db.close()
 
         reopened = LocalDatabase(path=tmp_path / "matrx.db")
@@ -67,5 +67,52 @@ def test_execution_claim_is_compare_and_swap() -> None:
             outbox.mark_executing("call-1"),
         )
         assert sorted((first, second)) == [False, True]
+
+    asyncio.run(run())
+
+
+def test_live_execution_lease_cannot_be_stolen() -> None:
+    async def run() -> None:
+        shared: dict[str, dict] = {}
+        winner = MemoryDelegationOutbox(owner_id="winner", entries=shared)
+        contender = MemoryDelegationOutbox(owner_id="contender", entries=shared)
+        call = {
+            "call_id": "call-1",
+            "conversation_id": "conversation-1",
+            "user_request_id": "request-1",
+            "tool_name": "local_file",
+        }
+        assert await winner.enqueue(call)
+        assert await winner.mark_executing("call-1")
+        assert await contender.claim_abandoned_execution("call-1") is False
+        assert shared["call-1"]["owner_id"] == "winner"
+
+        shared["call-1"]["lease_expires_at"] = 0.0
+        assert await contender.claim_abandoned_execution("call-1") is True
+        assert shared["call-1"]["owner_id"] == "contender"
+
+    asyncio.run(run())
+
+
+def test_stale_owner_cannot_persist_result_after_takeover() -> None:
+    async def run() -> None:
+        shared: dict[str, dict] = {}
+        stale = MemoryDelegationOutbox(owner_id="stale", entries=shared)
+        winner = MemoryDelegationOutbox(owner_id="winner", entries=shared)
+        call = {
+            "call_id": "call-1",
+            "conversation_id": "conversation-1",
+            "user_request_id": "request-1",
+            "tool_name": "local_file",
+        }
+        assert await stale.enqueue(call)
+        assert await stale.mark_executing("call-1")
+        shared["call-1"]["lease_expires_at"] = 0.0
+        assert await winner.claim_abandoned_execution("call-1")
+
+        stale_result = {"call_id": "call-1", "output": "late"}
+        assert await stale.store_result("call-1", stale_result) is False
+        assert shared["call-1"]["state"] == "executing"
+        assert shared["call-1"]["result"] is None
 
     asyncio.run(run())

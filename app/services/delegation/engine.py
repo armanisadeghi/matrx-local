@@ -45,6 +45,7 @@ import os
 import sys
 import time
 from collections.abc import Iterable
+from contextlib import suppress
 from typing import Any, Dict, Literal, Optional
 
 from app.common.system_logger import get_logger
@@ -285,6 +286,7 @@ class DelegationEngine:
         try:
             pending = await self._client.list_pending_calls(jwt)
             self._record_pending_snapshot("claimed", pending)
+            await self._discard_orphaned_queued_calls(pending)
             if self._server_unreachable:
                 self._server_unreachable = False
                 logger.info("[delegation] server reachable again")
@@ -410,8 +412,50 @@ class DelegationEngine:
                         "[delegation] execution claim lost for call_id=%s", call_id
                     )
                     return
-                result_payload = await self._execute(entry, tool_name, call_id, args)
-            await self._outbox.store_result(call_id, result_payload)
+                owner_task = asyncio.current_task()
+
+                async def keep_execution_lease() -> None:
+                    while True:
+                        await asyncio.sleep(30.0)
+                        try:
+                            owned = await self._outbox.heartbeat_execution(call_id)
+                        except Exception:
+                            logger.warning(
+                                "[delegation] execution lease heartbeat failed "
+                                "(call_id=%s)",
+                                call_id,
+                                exc_info=True,
+                            )
+                            continue
+                        if not owned:
+                            logger.error(
+                                "[delegation] execution lease lost; cancelling stale "
+                                "owner (call_id=%s)",
+                                call_id,
+                            )
+                            if owner_task is not None:
+                                owner_task.cancel()
+                            return
+
+                lease_task = asyncio.create_task(
+                    keep_execution_lease(),
+                    name=f"delegation-lease-{call_id[:12]}",
+                )
+                try:
+                    result_payload = await self._execute(
+                        entry, tool_name, call_id, args
+                    )
+                finally:
+                    lease_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await lease_task
+            if not await self._outbox.store_result(call_id, result_payload):
+                logger.error(
+                    "[delegation] stale execution result fenced before delivery "
+                    "(call_id=%s)",
+                    call_id,
+                )
+                return
             self._mark_handled(call_id)
             await self._deliver(conversation_id, call_id, result_payload)
         except asyncio.CancelledError:
@@ -668,6 +712,20 @@ class DelegationEngine:
                 # It never crossed the execution boundary. Leave it queued;
                 # the durable cloud row will schedule it below.
                 continue
+            if entry.get("state") == "executing":
+                try:
+                    recovered = await self._outbox.claim_abandoned_execution(call_id)
+                except Exception:
+                    logger.warning(
+                        "[delegation] failed to inspect execution lease call_id=%s",
+                        call_id,
+                        exc_info=True,
+                    )
+                    return False
+                if not recovered:
+                    # Another engine still owns a live lease. Never synthesize
+                    # an ambiguous-restart error while its tool is running.
+                    continue
             payload = entry.get("result")
             if not isinstance(payload, dict):
                 payload = {
@@ -682,7 +740,14 @@ class DelegationEngine:
                     "duration_ms": 0,
                 }
                 try:
-                    await self._outbox.store_result(call_id, payload)
+                    stored = await self._outbox.store_result(call_id, payload)
+                    if not stored:
+                        logger.info(
+                            "[delegation] abandoned execution recovery lost its "
+                            "ownership race call_id=%s",
+                            call_id,
+                        )
+                        continue
                 except Exception:
                     logger.error(
                         "[delegation] failed to persist ambiguous restart result call_id=%s",
@@ -699,6 +764,32 @@ class DelegationEngine:
                 state=entry.get("state"),
             )
         return True
+
+    async def _discard_orphaned_queued_calls(
+        self, pending_calls: list[dict[str, Any]]
+    ) -> None:
+        """Drop never-executed queue entries absent from the cloud ledger."""
+        pending_ids = {
+            str(call.get("call_id"))
+            for call in pending_calls
+            if isinstance(call.get("call_id"), str)
+        }
+        try:
+            entries = await self._outbox.list_entries()
+            for entry in entries:
+                call_id = str(entry.get("call_id") or "")
+                if (
+                    call_id
+                    and entry.get("state") == "queued"
+                    and call_id not in pending_ids
+                ):
+                    if await self._outbox.delete_if_queued(call_id):
+                        self._event("orphaned_queue_discarded", call_id=call_id)
+        except Exception:
+            # Queue cleanup is hygiene, never a reason to block valid calls.
+            logger.warning(
+                "[delegation] orphaned queued-call cleanup failed", exc_info=True
+            )
 
     async def _clear_outbox(self, call_id: str) -> None:
         try:

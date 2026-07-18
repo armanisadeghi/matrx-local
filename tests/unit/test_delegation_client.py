@@ -406,7 +406,9 @@ def test_failed_resume_reposts_result_until_continuation_succeeds(
         attempts["n"] += 1
         if attempts["n"] == 1:
             return httpx.Response(503, text="temporary resume outage")
-        return httpx.Response(200, content=b'{"event":"end"}\n')
+        return httpx.Response(
+            200, content=b'{"event":"end","data":{"reason":"complete"}}\n'
+        )
 
     server.resume_responder = resume
 
@@ -466,6 +468,25 @@ def test_truncated_resume_stream_keeps_retry_obligation(
     assert "terminal end event" in (engine._last_error or "")
 
 
+def test_cancelled_resume_stream_keeps_retry_obligation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.delegation import engine as engine_module
+
+    monkeypatch.setattr(engine_module, "_BROWSER_RESUME_GRACE_SECONDS", 0.0)
+    server = FakeServer()
+    server.pending = [_pending_call(tmp_path)]
+    server.resume_responder = lambda request: httpx.Response(
+        200, content=b'{"event":"end","data":{"reason":"cancelled"}}\n'
+    )
+    engine = _engine(server)
+
+    asyncio.run(_sweep_and_settle(engine))
+
+    assert "call_1" in engine._undelivered
+
+
+
 def test_restart_redelivers_saved_result_without_reexecution(tmp_path: Path) -> None:
     server = FakeServer()
     server.continuation_needed = False
@@ -483,7 +504,7 @@ def test_restart_redelivers_saved_result_without_reexecution(tmp_path: Path) -> 
     async def seed_and_run() -> None:
         assert await outbox.enqueue(server.pending[0])
         assert await outbox.mark_executing("call_1")
-        await outbox.store_result("call_1", saved)
+        assert await outbox.store_result("call_1", saved)
         engine = _engine(server, outbox)
 
         async def must_not_execute(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -506,6 +527,7 @@ def test_restart_does_not_repeat_ambiguous_side_effect(tmp_path: Path) -> None:
     async def seed_and_run() -> None:
         assert await outbox.enqueue(server.pending[0])
         assert await outbox.mark_executing("call_1")
+        outbox.entries["call_1"]["lease_expires_at"] = 0.0
         engine = _engine(server, outbox)
 
         async def must_not_execute(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -544,6 +566,20 @@ def test_restart_executes_work_that_never_left_the_queue(tmp_path: Path) -> None
 
     asyncio.run(seed_and_run())
     assert executions == 1
+    assert outbox.entries == {}
+
+
+def test_orphaned_never_executed_queue_entry_is_discarded(tmp_path: Path) -> None:
+    server = FakeServer()
+    call = _pending_call(tmp_path)
+    outbox = MemoryDelegationOutbox()
+
+    async def seed_and_run() -> None:
+        assert await outbox.enqueue(call)
+        engine = _engine(server, outbox)
+        assert await _sweep_and_settle(engine) == 0
+
+    asyncio.run(seed_and_run())
     assert outbox.entries == {}
 
 
@@ -592,6 +628,27 @@ def test_malformed_200_ack_keeps_durable_result(tmp_path: Path) -> None:
     assert outbox.entries["call_1"]["state"] == "result_pending"
 
 
+def test_blank_continuation_id_keeps_durable_result(tmp_path: Path) -> None:
+    server = FakeServer()
+    server.pending = [_pending_call(tmp_path)]
+    outbox = MemoryDelegationOutbox()
+    engine = _engine(server, outbox)
+    server.tool_results_responder = lambda request: httpx.Response(
+        200,
+        json={
+            "resolved": ["call_1"],
+            "already_resolved": [],
+            "not_found": [],
+            "continuation_needed": True,
+            "user_request_id": "   ",
+            "conversation_id": "conv_1",
+        },
+    )
+    asyncio.run(_sweep_and_settle(engine))
+    assert "call_1" in engine._undelivered
+    assert outbox.entries["call_1"]["state"] == "result_pending"
+
+
 # ---------------------------------------------------------------------------
 # Resume 409 handling (§2.5) + single-flight (§2.6)
 # ---------------------------------------------------------------------------
@@ -619,7 +676,9 @@ def test_resume_conflict_is_retried_bounded(tmp_path: Path) -> None:
         attempts["n"] += 1
         if attempts["n"] <= 2:
             return _conflict_response("resume_conflict", retryable=True)
-        return httpx.Response(200, content=b'{"event":"end"}\n')
+        return httpx.Response(
+            200, content=b'{"event":"end","data":{"reason":"complete"}}\n'
+        )
 
     server.resume_responder = responder
     asyncio.run(_sweep_and_settle(engine))

@@ -270,7 +270,7 @@ class DelegationApiClient:
                         )
                     if _is_tool_delegated(evt):
                         delegated += 1
-                    if _is_end_event(evt):
+                    if _is_successful_end_event(evt):
                         ended = True
                 if not ended:
                     raise DelegationApiError(
@@ -325,11 +325,16 @@ def _is_tool_delegated(evt: dict[str, Any]) -> bool:
     return False
 
 
-def _is_end_event(evt: dict[str, Any]) -> bool:
+def _is_successful_end_event(evt: dict[str, Any]) -> bool:
+    payload: Any
     if evt.get("event") == "end":
-        return True
+        payload = evt.get("data")
+        return isinstance(payload, dict) and payload.get("reason") == "complete"
     data = evt.get("data")
-    return isinstance(data, dict) and data.get("event") == "end"
+    if isinstance(data, dict) and data.get("event") == "end":
+        payload = data.get("data")
+        return isinstance(payload, dict) and payload.get("reason") == "complete"
+    return False
 
 
 def _validate_tool_results_response(
@@ -355,7 +360,10 @@ def _validate_tool_results_response(
             200,
             "[delegation] tool_results acknowledgement has no boolean continuation_needed",
         )
-    if body["continuation_needed"] and not isinstance(body.get("user_request_id"), str):
+    continuation_id = body.get("user_request_id")
+    if body["continuation_needed"] and (
+        not isinstance(continuation_id, str) or not continuation_id.strip()
+    ):
         raise DelegationApiError(
             200,
             "[delegation] tool_results requested continuation without user_request_id",

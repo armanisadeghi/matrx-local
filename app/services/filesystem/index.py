@@ -77,6 +77,11 @@ CREATE TABLE IF NOT EXISTS filesystem_scanned_dirs (
     path TEXT PRIMARY KEY,
     scanned_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS filesystem_path_mutations (
+    path_key TEXT PRIMARY KEY,
+    parent_key TEXT NOT NULL,
+    observed_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS filesystem_index_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -177,6 +182,22 @@ class FilesystemIndex:
             root_columns = {row["name"] for row in db.execute("PRAGMA table_info(filesystem_roots)")}
             if "last_claimed_at" not in root_columns:
                 db.execute("ALTER TABLE filesystem_roots ADD COLUMN last_claimed_at REAL")
+            mutation_columns = {
+                row["name"]
+                for row in db.execute("PRAGMA table_info(filesystem_path_mutations)")
+            }
+            if "parent_key" not in mutation_columns:
+                # This table is derived watcher coordination state. Rows from
+                # the short-lived pre-parent schema cannot be scoped safely,
+                # and startup runs before any new scan can own a lease.
+                db.execute("DELETE FROM filesystem_path_mutations")
+                db.execute(
+                    "ALTER TABLE filesystem_path_mutations ADD COLUMN parent_key TEXT"
+                )
+            db.execute(
+                """CREATE INDEX IF NOT EXISTS idx_filesystem_path_mutations_parent
+                   ON filesystem_path_mutations(parent_key,observed_at)"""
+            )
             entry_columns = {row["name"] for row in db.execute("PRAGMA table_info(filesystem_entries)")}
             if "path_key" not in entry_columns:
                 db.execute("ALTER TABLE filesystem_entries ADD COLUMN path_key TEXT")
@@ -461,6 +482,21 @@ class FilesystemIndex:
             ).fetchone()
             if owned_claim is None:
                 return 0
+            newer_mutations = {
+                str(row["path_key"])
+                for row in db.execute(
+                    """SELECT path_key FROM filesystem_path_mutations
+                       WHERE parent_key=? AND observed_at>=?""",
+                    (_path_key(path), scan_started),
+                )
+            }
+            if newer_mutations:
+                rows = [row for row in rows if str(row[1]) not in newer_mutations]
+                children = [
+                    child
+                    for child in children
+                    if _path_key(child[0]) not in newer_mutations
+                ]
             root_active = db.execute(
                 "SELECT priority,available FROM filesystem_roots WHERE id=?",
                 (root_id,),
@@ -527,6 +563,11 @@ class FilesystemIndex:
             db.execute(
                 "INSERT OR REPLACE INTO filesystem_index_state(key,value) VALUES('last_scan_at',?)",
                 (str(scan_started),),
+            )
+            db.execute(
+                """DELETE FROM filesystem_path_mutations
+                   WHERE parent_key=? AND observed_at<?""",
+                (_path_key(path), scan_started),
             )
         return len(rows)
 
@@ -683,6 +724,17 @@ class FilesystemIndex:
 
     def delete_path(self, path: str) -> None:
         with self._connect() as db:
+            db.execute(
+                """INSERT INTO filesystem_path_mutations(path_key,parent_key,observed_at)
+                   VALUES(?,?,?) ON CONFLICT(path_key) DO UPDATE SET
+                   parent_key=excluded.parent_key,
+                   observed_at=MAX(observed_at,excluded.observed_at)""",
+                (
+                    _path_key(path),
+                    _path_key(os.path.dirname(os.path.abspath(path))),
+                    time.time(),
+                ),
+            )
             self._delete_path(db, path)
 
     def _delete_path(
@@ -799,6 +851,124 @@ class FilesystemIndex:
         with self._connect() as db:
             row = db.execute("SELECT COUNT(*) AS count FROM filesystem_scan_queue").fetchone()
             return int(row["count"])
+
+    def clear_derived(self) -> None:
+        """Delete the fully rebuildable local index without touching user files."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if self.fts_available:
+                db.execute("DELETE FROM filesystem_content_fts")
+            db.execute("DELETE FROM filesystem_content")
+            db.execute("DELETE FROM filesystem_embeddings")
+            db.execute("DELETE FROM filesystem_entries")
+            db.execute("DELETE FROM filesystem_scan_queue")
+            db.execute("DELETE FROM filesystem_scanned_dirs")
+            db.execute("DELETE FROM filesystem_path_mutations")
+            db.execute("DELETE FROM filesystem_roots")
+            db.execute("DELETE FROM filesystem_index_state")
+        try:
+            with self._connect() as db:
+                db.execute("VACUUM")
+        except sqlite3.OperationalError:
+            # The data deletion is authoritative; a concurrent reader may
+            # temporarily prevent optional file compaction.
+            pass
+
+    def apply_enrichment_limits(
+        self,
+        max_content_bytes: int,
+        max_embedding_entries: int,
+        embedding_model: str,
+        *,
+        reset_content_quota: bool = False,
+    ) -> None:
+        """Enforce reduced quotas and keep only the active embedding model."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if reset_content_quota:
+                db.execute(
+                    "UPDATE filesystem_entries SET content_state='not_indexed' "
+                    "WHERE content_state='quota'"
+                )
+
+            content_rows = db.execute(
+                """SELECT path,path_key,length(CAST(content AS BLOB)) AS bytes
+                   FROM filesystem_content ORDER BY indexed_at ASC"""
+            ).fetchall()
+            used = sum(int(row["bytes"] or 0) for row in content_rows)
+            for row in content_rows:
+                if used <= max(0, max_content_bytes):
+                    break
+                if self.fts_available:
+                    db.execute(
+                        "DELETE FROM filesystem_content_fts WHERE path=?",
+                        (row["path"],),
+                    )
+                db.execute(
+                    "DELETE FROM filesystem_content WHERE path_key=?",
+                    (row["path_key"],),
+                )
+                db.execute(
+                    "DELETE FROM filesystem_embeddings WHERE path_key=?",
+                    (row["path_key"],),
+                )
+                db.execute(
+                    """UPDATE filesystem_entries
+                       SET content_state='quota',embedding_state='not_indexed'
+                       WHERE path_key=?""",
+                    (row["path_key"],),
+                )
+                used -= int(row["bytes"] or 0)
+
+            db.execute(
+                "DELETE FROM filesystem_embeddings WHERE model<>?",
+                (embedding_model,),
+            )
+            db.execute(
+                """UPDATE filesystem_entries SET embedding_state='not_indexed'
+                   WHERE embedding_state='indexed' AND NOT EXISTS (
+                     SELECT 1 FROM filesystem_embeddings v
+                     WHERE v.path_key=filesystem_entries.path_key AND v.model=?
+                   )""",
+                (embedding_model,),
+            )
+            embedding_rows = db.execute(
+                """SELECT path_key FROM filesystem_embeddings WHERE model=?
+                   ORDER BY indexed_at DESC""",
+                (embedding_model,),
+            ).fetchall()
+            for row in embedding_rows[max(0, max_embedding_entries):]:
+                db.execute(
+                    "DELETE FROM filesystem_embeddings WHERE path_key=? AND model=?",
+                    (row["path_key"], embedding_model),
+                )
+                db.execute(
+                    "UPDATE filesystem_entries SET embedding_state='not_indexed' WHERE path_key=?",
+                    (row["path_key"],),
+                )
+
+    def last_scan_at(self) -> float | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT value FROM filesystem_index_state WHERE key='last_scan_at'"
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            return float(row["value"])
+        except (TypeError, ValueError):
+            return None
+
+    def storage_bytes(self) -> int:
+        return sum(
+            candidate.stat().st_size
+            for candidate in (
+                self.path,
+                Path(f"{self.path}-wal"),
+                Path(f"{self.path}-shm"),
+            )
+            if candidate.exists()
+        )
 
     def scan_status(self, *, failure_limit: int = 25) -> dict[str, object]:
         """Return queue progress without hiding inaccessible/failed locations."""

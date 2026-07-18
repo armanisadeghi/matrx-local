@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from array import array
 from pathlib import Path
 from types import SimpleNamespace
@@ -579,6 +580,17 @@ class _FailingDirEntry:
         raise self._error
 
 
+class _StaticDirEntry:
+    def __init__(self, path: Path, info: os.stat_result) -> None:
+        self.path = str(path)
+        self.name = path.name
+        self._info = info
+
+    def stat(self, *, follow_symlinks: bool = False) -> os.stat_result:
+        del follow_symlinks
+        return self._info
+
+
 def test_entry_stat_permission_error_preserves_index_and_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -685,6 +697,89 @@ def test_directory_snapshot_does_not_delete_newer_watcher_entry(
     assert [entry.path for entry in index.search("raced", limit=10, offset=0)] == [
         str(target)
     ]
+
+
+def test_directory_snapshot_does_not_resurrect_newer_watcher_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    target = root / "deleted.txt"
+    target.write_text("deleted", encoding="utf-8")
+    stale_info = target.stat()
+    place = Place("root", "Root", str(root), "configured", 100)
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    index.sync_roots([place])
+    initial = index.pop_next_directory()
+    assert initial is not None
+    index.index_directory(*initial)
+    index.sync_roots([place])
+    retry = index.pop_next_directory()
+    assert retry is not None
+    target.unlink()
+    monkeypatch.setattr(filesystem_index_module.time, "time", lambda: 200.0)
+    index.delete_path(str(target))
+    monkeypatch.setattr(filesystem_index_module.time, "time", lambda: 100.0)
+    monkeypatch.setattr(
+        filesystem_index_module.os,
+        "scandir",
+        lambda _path: _FakeScandir([_StaticDirEntry(target, stale_info)]),
+    )
+
+    assert index.index_directory(*retry) == 0
+    assert index.search("deleted", limit=10, offset=0) == []
+    with index._connect() as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM filesystem_path_mutations"
+        ).fetchone()[0] == 1
+
+    monkeypatch.setattr(filesystem_index_module.time, "time", lambda: 300.0)
+    monkeypatch.setattr(
+        filesystem_index_module.os, "scandir", lambda _path: _FakeScandir([])
+    )
+    index.sync_roots([place])
+    after_deletion = index.pop_next_directory()
+    assert after_deletion is not None
+    assert index.index_directory(*after_deletion) == 0
+    with index._connect() as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM filesystem_path_mutations"
+        ).fetchone()[0] == 0
+
+
+def test_initialize_migrates_pre_parent_mutation_table_safely(tmp_path: Path) -> None:
+    db_path = tmp_path / "index.sqlite3"
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """CREATE TABLE filesystem_path_mutations (
+                   path_key TEXT PRIMARY KEY,
+                   observed_at REAL NOT NULL
+               )"""
+        )
+        db.execute(
+            "INSERT INTO filesystem_path_mutations(path_key,observed_at) VALUES(?,?)",
+            ("obsolete", 1.0),
+        )
+
+    index = FilesystemIndex(db_path)
+    index.initialize()
+
+    with index._connect() as db:
+        columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(filesystem_path_mutations)")
+        }
+        indexes = {
+            row["name"]
+            for row in db.execute("PRAGMA index_list(filesystem_path_mutations)")
+        }
+        count = db.execute(
+            "SELECT COUNT(*) FROM filesystem_path_mutations"
+        ).fetchone()[0]
+    assert "parent_key" in columns
+    assert "idx_filesystem_path_mutations_parent" in indexes
+    assert count == 0
 
 
 @pytest.mark.anyio

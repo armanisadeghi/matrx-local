@@ -99,6 +99,8 @@ export interface MediaActions {
   restoreFromVault: (item: MediaDescriptor) => Promise<void>;
   /** Put this image into the img2img input slot. */
   useAsInput: (item: MediaDescriptor) => Promise<void>;
+  /** Start a durable Z-Image/FLUX revision branch from this image. */
+  iterate: (item: MediaDescriptor) => Promise<void>;
   /**
    * Reproduce EXACTLY what generated this: model, prompt, negative prompt,
    * seed, size, steps, guidance, strength, LoRAs, every advanced pipeline
@@ -194,6 +196,7 @@ export function MediaActionsProvider({
     setImageForm,
     setVideoForm,
     useImageAsInput,
+    beginImageRevision,
     prepareImageGenerate,
     remixImageForm,
     refreshImage,
@@ -651,6 +654,74 @@ export function MediaActionsProvider({
     [pickFromUrl, useImageAsInput, notify],
   );
 
+  const iterate = useCallback(
+    async (item: MediaDescriptor) => {
+      if (item.kind !== "image" || !item.itemId || !item.modelId) {
+        notify("This image has no persisted generation record to iterate", "error");
+        return;
+      }
+      const modelId = item.modelId;
+      let model = getImageModels().find((m) => m.model_id === modelId);
+      if (!model) {
+        await refreshImage();
+        model = getImageModels().find((m) => m.model_id === modelId);
+      }
+      if (!model) {
+        notify(`The source model (${modelId}) is not in the local catalog.`, "error");
+        return;
+      }
+      if (
+        !model.supports_img2img ||
+        !["z-image", "flux", "flux2-klein"].includes(model.pipeline_type)
+      ) {
+        notify("Iterative revision is currently available for Z-Image and FLUX models.", "error");
+        return;
+      }
+      const image = await pickFromUrl(
+        item.url,
+        item.fileName || `${item.itemId}.png`,
+      );
+      if (!image) return;
+
+      await prepareImageGenerate(model);
+      remixImageForm({
+        prompt: item.prompt ?? "",
+        negativePrompt: item.negativePrompt ?? "",
+        seed: null,
+        ...(item.width ? { width: item.width } : {}),
+        ...(item.height ? { height: item.height } : {}),
+        ...(item.params ? { params: item.params } : {}),
+      });
+      const recordedRoot = item.params?.["revision_root_item_id"];
+      beginImageRevision(
+        image,
+        item.itemId,
+        typeof recordedRoot === "string" ? recordedRoot : item.itemId,
+      );
+      if (model.pipeline_type === "flux2-klein") {
+        setImageForm({ prompt: "" });
+      }
+      setLightbox(null);
+      setInfoItem(null);
+      notify(
+        model.pipeline_type === "flux2-klein"
+          ? "Revision ready — describe the change, then Apply"
+          : "Revision ready — adjust the prompt, then Apply",
+      );
+      window.location.hash = "#/media-generation";
+    },
+    [
+      beginImageRevision,
+      getImageModels,
+      notify,
+      pickFromUrl,
+      prepareImageGenerate,
+      refreshImage,
+      remixImageForm,
+      setImageForm,
+    ],
+  );
+
   const reuseSeed = useCallback(
     (item: MediaDescriptor) => {
       if (typeof item.seed !== "number") {
@@ -837,6 +908,7 @@ export function MediaActionsProvider({
       moveToVault,
       restoreFromVault,
       useAsInput,
+      iterate,
       remix,
       reuseSeed,
       showInFolder,
@@ -855,6 +927,7 @@ export function MediaActionsProvider({
       moveToVault,
       restoreFromVault,
       useAsInput,
+      iterate,
       remix,
       reuseSeed,
       showInFolder,

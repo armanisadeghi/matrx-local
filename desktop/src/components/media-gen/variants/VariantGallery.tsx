@@ -64,6 +64,7 @@ import {
   ImageParamsErrorNotice,
   InputImageControl,
   ImageGenerateForm,
+  ImageRevisionBanner,
   LoraStylesSection,
   useImageGenMode,
 } from "../core/ImageGenerateForm";
@@ -314,6 +315,9 @@ export function VariantGallery() {
             />
           ) : !engineDown ? (
             <>
+              {isImage && imageCtl.isRevision && (
+                <ImageRevisionBanner ctl={imageCtl} />
+              )}
               {/* Row 1: mode toggle · prompt · actions */}
               <div className="flex items-start gap-2.5">
                 <div className="flex shrink-0 rounded-lg border bg-muted/30 p-0.5">
@@ -349,7 +353,10 @@ export function VariantGallery() {
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder={
                     isImage
-                      ? "Describe the image you want to create…"
+                      ? imageCtl.isRevision &&
+                        imageCtl.model?.pipeline_type === "flux2-klein"
+                        ? "Describe what to change…"
+                        : "Describe the image you want to create…"
                       : "Describe the video you want to create…"
                   }
                   rows={1}
@@ -400,7 +407,9 @@ export function VariantGallery() {
                     idleContent={
                       <>
                         <Sparkles className="mr-1.5 h-4 w-4" />
-                        Generate
+                        {isImage && imageCtl.isRevision
+                          ? "Apply change"
+                          : "Generate"}
                       </>
                     }
                   />
@@ -414,21 +423,23 @@ export function VariantGallery() {
                         title="Queue this generation and keep editing"
                       >
                         <ListPlus className="mr-1.5 h-4 w-4" />
-                        Queue
+                        {imageCtl.isRevision ? "Queue revision" : "Queue"}
                       </Button>
-                      <Button
-                        variant="outline"
-                        disabled={!imageCtl.defaults}
-                        onClick={() => {
-                          setImageGenMode("batch");
-                          setBatchBuilderOpen(true);
-                        }}
-                        className="h-[38px]"
-                        title="Build a randomized image batch"
-                      >
-                        <Layers className="mr-1.5 h-4 w-4" />
-                        Batch
-                      </Button>
+                      {!imageCtl.isRevision && (
+                        <Button
+                          variant="outline"
+                          disabled={!imageCtl.defaults}
+                          onClick={() => {
+                            setImageGenMode("batch");
+                            setBatchBuilderOpen(true);
+                          }}
+                          className="h-[38px]"
+                          title="Build a randomized image batch"
+                        >
+                          <Layers className="mr-1.5 h-4 w-4" />
+                          Batch
+                        </Button>
+                      )}
                     </>
                   )}
                 </div>

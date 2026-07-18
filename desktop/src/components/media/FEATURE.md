@@ -45,7 +45,7 @@ lost. `chrome="none"` hides the hover chrome; right-click still works.
 
 ## The action set
 
-open · info · remix · use-as-input · reuse-seed · copy image · copy prompt ·
+open · info · remix · iterate · use-as-input · reuse-seed · copy image · copy prompt ·
 download · show in folder · move to Private · restore from Private · delete.
 
 **Remix** reproduces *exactly* what made an image: model, prompt, negative
@@ -55,6 +55,15 @@ is why the engine stores the source image beside the result
 (`<item_id>.init.png`; encrypted into the vault as `<item_id>.init.bin` when the
 item is vaulted, so vaulting never destroys it). See `app/services/media_gen/
 library.py` and `app/services/media_vault/service.py`.
+
+**Iterate** is intentionally narrower than Remix. Persisted Z-Image and FLUX
+images expose it from the same canonical menu on every surface. It restores the
+source model/settings, pins the selected image as the revision parent, and sends
+Apply through the normal image queue. FLUX.2 prompts are edit instructions;
+Z-Image/FLUX.1 prompts remain full revised-image descriptions. Each result
+advances the parent while preserving the branch root. Normal **Use as input**
+and a model switch exit revision mode so lineage can never leak into an
+unrelated generation.
 
 ## State: the rules that keep it coherent
 

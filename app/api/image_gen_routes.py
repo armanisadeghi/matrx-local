@@ -226,6 +226,15 @@ class LoraSpec(BaseModel):
     """Adapter weight (typical 0.5–1.0; 1.0 = full effect)."""
 
 
+class ImageRevisionRequest(BaseModel):
+    """Durable lineage for an explicit user-applied image revision."""
+
+    parent_item_id: str = Field(..., min_length=1, max_length=128)
+    """Media-library item whose pixels are supplied as init_image_b64."""
+    root_item_id: str | None = Field(None, min_length=1, max_length=128)
+    """First item in the branch; defaults to parent_item_id for revision one."""
+
+
 class GenerateRequest(BaseModel):
     # 10k chars is an API sanity bound, NOT a model limit. Real limits are per
     # model family and enforced by the model itself (SD/SDXL CLIP truncates at
@@ -249,6 +258,9 @@ class GenerateRequest(BaseModel):
     """img2img denoising strength (0=keep the input, 1=ignore it). Default
     0.6 when init_image_b64 is present. Requires init_image_b64 — set without
     an input image → 400."""
+    revision: ImageRevisionRequest | None = None
+    """Optional explicit revision lineage. Requires an init image and is
+    accepted only by the first-class Z-Image and FLUX img2img families."""
     loras: list[LoraSpec] = Field(default_factory=list)
     """INSTALLED LoRA ids (+ per-LoRA scale) to apply for THIS generation
     only — always unloaded afterwards. Unknown id or base-family mismatch
@@ -341,9 +353,13 @@ class ImageJobResponse(BaseModel):
     back — init_image_sha256 identifies it)."""
     init_image_sha256: str | None = None
     strength: float | None = None
+    revision_parent_item_id: str | None = None
+    revision_root_item_id: str | None = None
     loras: list[dict[str, Any]] = []
     """The requested LoRAs: [{"id", "scale"}]."""
     extra_params: dict[str, Any] = {}
+    params: dict[str, Any] = {}
+    """Replayable generation snapshot, including revision lineage."""
     progress: float = 0.0
     """0..1 per denoising step."""
     current_step: int = 0
@@ -390,6 +406,26 @@ class ImageJobResponse(BaseModel):
 
 def _image_job_response(job) -> ImageJobResponse:
     d = job.to_dict()
+    params: dict[str, Any] = {
+        "prompt": d["prompt"],
+        "negative_prompt": d["negative_prompt"],
+        "has_init_image": d.get("has_init_image", False),
+        **dict(d.get("extra_params") or {}),
+    }
+    for target, source in (
+        ("num_inference_steps", "steps"),
+        ("guidance_scale", "guidance"),
+        ("width", "width"),
+        ("height", "height"),
+        ("strength", "strength"),
+        ("init_image_sha256", "init_image_sha256"),
+        ("revision_parent_item_id", "revision_parent_item_id"),
+        ("revision_root_item_id", "revision_root_item_id"),
+    ):
+        if d.get(source) is not None:
+            params[target] = d[source]
+    if d.get("loras"):
+        params["loras"] = d["loras"]
     return ImageJobResponse(
         job_id=d["job_id"],
         status=d["status"],
@@ -404,8 +440,11 @@ def _image_job_response(job) -> ImageJobResponse:
         has_init_image=d.get("has_init_image", False),
         init_image_sha256=d.get("init_image_sha256"),
         strength=d.get("strength"),
+        revision_parent_item_id=d.get("revision_parent_item_id"),
+        revision_root_item_id=d.get("revision_root_item_id"),
         loras=d.get("loras", []),
         extra_params=d["extra_params"],
+        params=params,
         progress=d["progress"],
         current_step=d["current_step"],
         total_steps=d["total_steps"],
@@ -463,6 +502,18 @@ def _validate_generation_inputs(
             detail="strength only applies to image-to-image — provide "
             "init_image_b64 (the input image) or omit strength.",
         )
+    if req.revision is not None:
+        if not req.init_image_b64:
+            raise HTTPException(
+                status_code=400,
+                detail="revision requires init_image_b64 containing the parent image.",
+            )
+        if model.pipeline_type not in {"z-image", "flux", "flux2-klein"}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{model.name} is not enabled for iterative revision — "
+                "use Z-Image or FLUX.",
+            )
 
     init_bytes: bytes | None = None
     init_sha: str | None = None
@@ -712,13 +763,27 @@ async def _legacy_generation_response(
         extra_params=req.extra_params,
         init_image_bytes=init_bytes,
         strength=req.strength,
+        revision_parent_item_id=(
+            req.revision.parent_item_id if req.revision is not None else None
+        ),
+        revision_root_item_id=(
+            (req.revision.root_item_id or req.revision.parent_item_id)
+            if req.revision is not None
+            else None
+        ),
         loras=[{"id": s.id, "scale": s.scale} for s in req.loras],
     )
     return GenerateResponse(
-        success=result.success, image_b64=result.image_b64, width=result.width,
-        height=result.height, model_id=result.model_id,
-        elapsed_seconds=result.elapsed_seconds, error=result.error,
-        item_id=result.item_id, file_path=result.file_path, seed=result.seed,
+        success=result.success,
+        image_b64=result.image_b64,
+        width=result.width,
+        height=result.height,
+        model_id=result.model_id,
+        elapsed_seconds=result.elapsed_seconds,
+        error=result.error,
+        item_id=result.item_id,
+        file_path=result.file_path,
+        seed=result.seed,
         cancelled=result.cancelled,
     )
 
@@ -751,6 +816,7 @@ async def _enqueue_generation(
             content={"detail": "model not downloaded", "needs_download": True},
         )
     from app.services.media_gen.params import PROTECTED_PARAMS  # noqa: PLC0415
+
     blocked = PROTECTED_PARAMS & set(req.extra_params)
     if blocked:
         raise HTTPException(
@@ -762,6 +828,7 @@ async def _enqueue_generation(
         get_image_job_runner,
         get_image_job_store,
     )
+
     store = get_image_job_store()
     if reject_if_paused and store.paused:
         # A synchronous Generate response cannot honestly wait forever behind
@@ -774,12 +841,28 @@ async def _enqueue_generation(
     if init_bytes is not None:
         init_sha = store.put_init_image(init_bytes)
     job = store.create(
-        prompt=req.prompt, model_id=req.model_id, negative_prompt=req.negative_prompt,
-        steps=req.steps, guidance=req.guidance, width=req.width, height=req.height,
-        seed=req.seed, has_init_image=init_bytes is not None,
-        init_image_sha256=init_sha, strength=req.strength,
+        prompt=req.prompt,
+        model_id=req.model_id,
+        negative_prompt=req.negative_prompt,
+        steps=req.steps,
+        guidance=req.guidance,
+        width=req.width,
+        height=req.height,
+        seed=req.seed,
+        has_init_image=init_bytes is not None,
+        init_image_sha256=init_sha,
+        strength=req.strength,
+        revision_parent_item_id=(
+            req.revision.parent_item_id if req.revision is not None else None
+        ),
+        revision_root_item_id=(
+            (req.revision.root_item_id or req.revision.parent_item_id)
+            if req.revision is not None
+            else None
+        ),
         loras=[{"id": s.id, "scale": s.scale} for s in req.loras],
-        extra_params=dict(req.extra_params), priority=getattr(req, "priority", "normal"),
+        extra_params=dict(req.extra_params),
+        priority=getattr(req, "priority", "normal"),
     )
     get_image_job_runner().ensure_running()
     return job.job_id
@@ -788,6 +871,7 @@ async def _enqueue_generation(
 async def _await_generation(job_id: str) -> GenerateResponse:
     """Preserve the synchronous API while execution remains a durable job."""
     from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
+
     store = get_image_job_store()
     while True:
         job = store.get(job_id)
@@ -795,22 +879,34 @@ async def _await_generation(job_id: str) -> GenerateResponse:
             raise HTTPException(status_code=404, detail="Generation job was removed")
         if job.status == "completed":
             if not job.file_path:
-                raise HTTPException(status_code=500, detail="Completed generation has no file")
+                raise HTTPException(
+                    status_code=500, detail="Completed generation has no file"
+                )
             image_b64 = base64.b64encode(
                 await asyncio.to_thread(Path(job.file_path).read_bytes)
             ).decode("ascii")
             return GenerateResponse(
-                success=True, image_b64=image_b64, width=job.width or 0,
-                height=job.height or 0, model_id=job.model_id,
-                elapsed_seconds=job.elapsed_seconds, item_id=job.item_id,
-                file_path=job.file_path, seed=job.seed,
+                success=True,
+                image_b64=image_b64,
+                width=job.width or 0,
+                height=job.height or 0,
+                model_id=job.model_id,
+                elapsed_seconds=job.elapsed_seconds,
+                item_id=job.item_id,
+                file_path=job.file_path,
+                seed=job.seed,
             )
         if job.status in {"failed", "cancelled"}:
             return GenerateResponse(
-                success=False, width=job.width or 0, height=job.height or 0,
-                model_id=job.model_id, elapsed_seconds=job.elapsed_seconds,
-                error=job.error or ("Cancelled" if job.status == "cancelled" else "Generation failed"),
-                seed=job.seed, cancelled=job.status == "cancelled",
+                success=False,
+                width=job.width or 0,
+                height=job.height or 0,
+                model_id=job.model_id,
+                elapsed_seconds=job.elapsed_seconds,
+                error=job.error
+                or ("Cancelled" if job.status == "cancelled" else "Generation failed"),
+                seed=job.seed,
+                cancelled=job.status == "cancelled",
             )
         await asyncio.sleep(0.05)
 
@@ -885,7 +981,9 @@ async def enqueue_image_job(req: EnqueueImageJobRequest) -> ImageJobEnqueuedResp
 
 
 @router.get("/jobs", response_model=list[ImageJobResponse])
-async def list_image_jobs(limit: int = Query(50, ge=1, le=1000)) -> list[ImageJobResponse]:
+async def list_image_jobs(
+    limit: int = Query(50, ge=1, le=1000),
+) -> list[ImageJobResponse]:
     """Pending queue then terminal history in exact completion order."""
     from app.services.image_gen.jobs import get_image_job_store  # noqa: PLC0415
 
@@ -1066,6 +1164,14 @@ async def enqueue_image_batch(req: EnqueueBatchRequest) -> EnqueueBatchResponse:
                 "has_init_image": init_bytes is not None,
                 "init_image_sha256": init_sha,
                 "strength": spec.strength,
+                "revision_parent_item_id": (
+                    spec.revision.parent_item_id if spec.revision is not None else None
+                ),
+                "revision_root_item_id": (
+                    (spec.revision.root_item_id or spec.revision.parent_item_id)
+                    if spec.revision is not None
+                    else None
+                ),
                 "loras": [{"id": s.id, "scale": s.scale} for s in spec.loras],
                 "extra_params": dict(spec.extra_params),
                 "variables": dict(spec.variables),
@@ -1827,16 +1933,18 @@ async def generate_from_workflow(req: WorkflowGenerateRequest) -> GenerateRespon
     prompt = preset.prompt_template.replace("{subject}", req.subject)
     model_id = req.model_id or preset.suggested_model_id
 
-    return await generate_image(GenerateRequest(
-        prompt=prompt,
-        model_id=model_id,
-        negative_prompt=preset.negative_prompt,
-        steps=preset.steps,
-        guidance=preset.guidance,
-        width=preset.width,
-        height=preset.height,
-        seed=req.seed,
-    ))
+    return await generate_image(
+        GenerateRequest(
+            prompt=prompt,
+            model_id=model_id,
+            negative_prompt=preset.negative_prompt,
+            steps=preset.steps,
+            guidance=preset.guidance,
+            width=preset.width,
+            height=preset.height,
+            seed=req.seed,
+        )
+    )
 
 
 # ── On-demand package installer ────────────────────────────────────────────────

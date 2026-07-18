@@ -4349,6 +4349,8 @@ export async function generateImage(
     init_image_b64?: string;
     /** img2img denoise strength (0..1) — how much to change the input. */
     strength?: number;
+    /** Durable parent/root lineage for an explicit image revision. */
+    revision?: { parent_item_id: string; root_item_id?: string };
     /** LoRA adapters to apply, each with its scale. */
     loras?: { id: string; scale: number }[];
     /** Extra pipeline kwargs merged into the diffusers call (user wins). */
@@ -4448,6 +4450,8 @@ export interface ImageGenJob {
   seed?: number | null;
   /** The full generation parameters the job was enqueued with. */
   params?: Record<string, unknown>;
+  revision_parent_item_id?: string | null;
+  revision_root_item_id?: string | null;
   /** Media-library item id, set on completion. */
   item_id?: string | null;
   file_path?: string | null;

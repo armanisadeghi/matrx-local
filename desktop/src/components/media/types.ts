@@ -207,6 +207,28 @@ export function descriptorFromResult(
     params?: Record<string, unknown>;
   } = {},
 ): MediaDescriptor {
+  const request = result.request;
+  const requestParams: Record<string, unknown> = {
+    ...(request.steps !== undefined
+      ? { num_inference_steps: request.steps }
+      : {}),
+    ...(request.guidance !== undefined
+      ? { guidance_scale: request.guidance }
+      : {}),
+    ...(request.width !== undefined ? { width: request.width } : {}),
+    ...(request.height !== undefined ? { height: request.height } : {}),
+    ...(request.strength !== undefined ? { strength: request.strength } : {}),
+    ...(request.loras !== undefined ? { loras: request.loras } : {}),
+    ...(request.extra_params ?? {}),
+    ...(request.revision
+      ? {
+          revision_parent_item_id: request.revision.parent_item_id,
+          revision_root_item_id:
+            request.revision.root_item_id ?? request.revision.parent_item_id,
+        }
+      : {}),
+    has_init_image: request.has_init_image,
+  };
   return {
     id: result.itemId ?? "generated-result",
     kind: "image",
@@ -218,13 +240,15 @@ export function descriptorFromResult(
     height: result.height,
     elapsedSeconds: result.elapsed,
     ...(result.filePath ? { filePath: result.filePath } : {}),
-    ...(opts.prompt !== undefined ? { prompt: opts.prompt } : {}),
-    ...(opts.negativePrompt !== undefined
-      ? { negativePrompt: opts.negativePrompt }
+    prompt: opts.prompt ?? request.prompt,
+    ...(opts.negativePrompt !== undefined || request.negative_prompt !== undefined
+      ? { negativePrompt: opts.negativePrompt ?? request.negative_prompt }
       : {}),
-    ...(opts.modelId !== undefined ? { modelId: opts.modelId } : {}),
-    ...(opts.params !== undefined ? { params: opts.params } : {}),
-    ...(opts.params?.["has_init_image"] === true ? { hasInitImage: true } : {}),
+    modelId: opts.modelId ?? request.model_id,
+    params: opts.params ?? requestParams,
+    ...((opts.params?.["has_init_image"] === true || request.has_init_image)
+      ? { hasInitImage: true }
+      : {}),
   };
 }
 
@@ -314,8 +338,24 @@ export interface MediaCapabilities {
   canRestore: boolean;
   canUseAsInput: boolean;
   canRemix: boolean;
+  canIterate: boolean;
   canShowInFolder: boolean;
   canReuseSeed: boolean;
+}
+
+/** Z-Image and FLUX are the intentionally supported local revision families. */
+export function descriptorSupportsRevision(d: MediaDescriptor): boolean {
+  if (d.kind !== "image" || !d.itemId || !d.modelId) return false;
+  const pipeline = d.params?.["pipeline_type"];
+  if (
+    pipeline === "z-image" ||
+    pipeline === "flux" ||
+    pipeline === "flux2-klein"
+  ) {
+    return true;
+  }
+  const modelId = d.modelId.toLowerCase();
+  return modelId.includes("z-image") || modelId.includes("flux");
 }
 
 export function capabilitiesOf(d: MediaDescriptor): MediaCapabilities {
@@ -329,6 +369,7 @@ export function capabilitiesOf(d: MediaDescriptor): MediaCapabilities {
     canRestore: d.source === "vault",
     canUseAsInput: d.kind === "image",
     canRemix: persisted && !!d.modelId,
+    canIterate: descriptorSupportsRevision(d),
     // Vaulted items have no plaintext file on disk.
     canShowInFolder: !!d.filePath && d.source !== "vault",
     canReuseSeed: typeof d.seed === "number",

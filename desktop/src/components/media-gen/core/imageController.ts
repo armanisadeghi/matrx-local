@@ -61,6 +61,8 @@ export interface ImageGenController {
   setLocalError: (message: string | null) => void;
   /** Number of queued/running image jobs. */
   activeJobCount: number;
+  /** True while Apply creates children in a durable revision branch. */
+  isRevision: boolean;
   /** Build the request body (null when the form is not submittable). */
   buildInput: () => ImageGenerateInput | null;
   handleGenerate: () => Promise<void>;
@@ -161,6 +163,7 @@ export function useImageGenController(options?: {
   const dimError = dimensionError(imageForm.width, imageForm.height);
   const formInvalid =
     !imageForm.prompt.trim() || !defaults || !advanced.ok || dimError !== null;
+  const isRevision = imageForm.revision !== null;
 
   const buildInput = useCallback((): ImageGenerateInput | null => {
     const d = imageForm.defaults;
@@ -198,6 +201,14 @@ export function useImageGenController(options?: {
       ...(negativePrompt !== undefined ? { negative_prompt: negativePrompt } : {}),
       ...(initImageB64 !== undefined ? { init_image_b64: initImageB64 } : {}),
       ...(strength !== undefined ? { strength } : {}),
+      ...(imageForm.revision !== null
+        ? {
+            revision: {
+              parent_item_id: imageForm.revision.parentItemId,
+              root_item_id: imageForm.revision.rootItemId,
+            },
+          }
+        : {}),
       ...(loras !== undefined ? { loras } : {}),
       ...(extraParams !== undefined ? { extra_params: extraParams } : {}),
     };
@@ -226,6 +237,12 @@ export function useImageGenController(options?: {
   const handleLoadModel = useCallback(
     async (m: ImageGenModelInfo): Promise<boolean> => {
       setLocalError(null);
+      if (
+        imageForm.revision &&
+        imageForm.defaults?.modelId !== m.model_id
+      ) {
+        setImageForm({ revision: null, initImage: null });
+      }
       const result = await loadImageModel(m.model_id);
       if (result.success) {
         await prepareImageGenerate(m);
@@ -241,7 +258,14 @@ export function useImageGenController(options?: {
       }
       return false;
     },
-    [loadImageModel, prepareImageGenerate, onAfterSelect],
+    [
+      imageForm.revision,
+      imageForm.defaults?.modelId,
+      setImageForm,
+      loadImageModel,
+      prepareImageGenerate,
+      onAfterSelect,
+    ],
   );
 
   const handleOpenGenerate = useCallback(
@@ -250,12 +274,16 @@ export function useImageGenController(options?: {
         // Same model — keep the user's tweaked settings, just switch views.
         setImageForm({ view: "generate" });
       } else {
+        if (imageForm.revision) {
+          setImageForm({ revision: null, initImage: null });
+        }
         void prepareImageGenerate(m);
       }
       onAfterSelect?.();
     },
     [
       imageForm.defaults?.modelId,
+      imageForm.revision,
       setImageForm,
       prepareImageGenerate,
       onAfterSelect,
@@ -286,7 +314,7 @@ export function useImageGenController(options?: {
     [setImageForm],
   );
   const clearInitImage = useCallback(
-    () => setImageForm({ initImage: null }),
+    () => setImageForm({ initImage: null, revision: null }),
     [setImageForm],
   );
 
@@ -345,6 +373,7 @@ export function useImageGenController(options?: {
       dismissGenError,
       setLocalError,
       activeJobCount,
+      isRevision,
       buildInput,
       handleGenerate,
       handleEnqueue,
@@ -367,6 +396,7 @@ export function useImageGenController(options?: {
       genError,
       dismissGenError,
       activeJobCount,
+      isRevision,
       buildInput,
       handleGenerate,
       handleEnqueue,

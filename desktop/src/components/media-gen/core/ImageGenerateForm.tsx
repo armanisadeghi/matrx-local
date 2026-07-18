@@ -25,6 +25,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  GitBranch,
   Image as ImageIcon,
   ImagePlus,
   KeyRound,
@@ -81,6 +82,37 @@ import type { ImageGenController } from "./imageController";
 
 // ── Prompt ───────────────────────────────────────────────────────────────────
 
+export function ImageRevisionBanner({ ctl }: { ctl: ImageGenController }) {
+  const [, actions] = useMediaGenApp();
+  if (!ctl.form.revision) return null;
+  const isInstructionEdit = ctl.model?.pipeline_type === "flux2-klein";
+  return (
+    <div className="flex items-start gap-3 rounded-lg border border-violet-500/40 bg-violet-500/5 px-3 py-2.5">
+      <GitBranch className="mt-0.5 h-4 w-4 shrink-0 text-violet-500" />
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-medium">Revision branch</p>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          {isInstructionEdit
+            ? "Describe the change. Apply keeps this result as the next parent."
+            : "Adjust the image description. Apply keeps this result as the next parent."}
+        </p>
+        <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground/70">
+          Parent {ctl.form.revision.parentItemId}
+        </p>
+      </div>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="h-7 shrink-0 px-2 text-xs"
+        onClick={actions.endImageRevision}
+      >
+        Exit
+      </Button>
+    </div>
+  );
+}
+
 export function ImagePromptField({
   ctl,
   placeholder = "Describe the image you want to generate…",
@@ -95,11 +127,22 @@ export function ImagePromptField({
   const [, actions] = useMediaGenApp();
   return (
     <div className="space-y-1.5">
-      {showLabel && <Label className="text-xs">Prompt</Label>}
+      <ImageRevisionBanner ctl={ctl} />
+      {showLabel && (
+        <Label className="text-xs">
+          {ctl.isRevision && ctl.model?.pipeline_type === "flux2-klein"
+            ? "Change"
+            : "Prompt"}
+        </Label>
+      )}
       <Textarea
         value={ctl.form.prompt}
         onChange={(e) => actions.setImageForm({ prompt: e.target.value })}
-        placeholder={placeholder}
+        placeholder={
+          ctl.isRevision && ctl.model?.pipeline_type === "flux2-klein"
+            ? "Describe what to change while preserving everything else…"
+            : placeholder
+        }
         className={textareaClassName}
       />
       <PromptCapacityHint pipelineType={ctl.model?.pipeline_type} />
@@ -785,7 +828,7 @@ export function ImageGenerateActions({
         idleContent={
           <>
             <ImageIcon className="h-4 w-4 mr-2" />
-            Generate
+            {ctl.isRevision ? "Apply change" : "Generate"}
           </>
         }
       />
@@ -797,7 +840,7 @@ export function ImageGenerateActions({
         title="Queue this generation and keep editing — write the next prompt right away"
       >
         <ListPlus className="h-4 w-4 mr-2" />
-        {queueLabel}
+        {ctl.isRevision ? "Queue revision" : queueLabel}
       </Button>
     </div>
   );
@@ -954,7 +997,7 @@ export function ImageGenerateForm({
   onSwitchModel?: () => void;
 }) {
   const [mode, setMode] = useImageGenMode();
-  const batch = mode === "batch";
+  const batch = !ctl.isRevision && mode === "batch";
 
   return (
     <div className="space-y-4">
@@ -966,11 +1009,13 @@ export function ImageGenerateForm({
       )}
       {!hideNotices && <ImageParamsErrorNotice ctl={ctl} />}
 
-      <ImageGenModeToggle
-        mode={mode}
-        onChange={setMode}
-        queuedCount={ctl.activeJobCount}
-      />
+      {!ctl.isRevision && (
+        <ImageGenModeToggle
+          mode={mode}
+          onChange={setMode}
+          queuedCount={ctl.activeJobCount}
+        />
+      )}
 
       {/* In batch mode the matrix REPLACES the single prompt field: the
           template, its variables and the strategy all live above the base

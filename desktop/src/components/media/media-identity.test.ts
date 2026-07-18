@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   findMediaIndexById,
+  descriptorFromResult,
+  descriptorSupportsRevision,
   mediaFocusId,
   mediaMatchesId,
   type MediaDescriptor,
@@ -45,5 +47,47 @@ describe("media identity", () => {
 
     expect(mediaFocusId(result)).toBe("generated-result");
     expect(findMediaIndexById([result], "generated-result")).toBe(0);
+  });
+
+  it("offers Iterate only for persisted Z-Image and FLUX images", () => {
+    const flux = {
+      ...descriptor("flux-item", "flux-item"),
+      modelId: "black-forest-labs/FLUX.2-klein-4B",
+    };
+    const sdxl = {
+      ...descriptor("sdxl-item", "sdxl-item"),
+      modelId: "stabilityai/sdxl-turbo",
+    };
+
+    expect(descriptorSupportsRevision(flux)).toBe(true);
+    expect(descriptorSupportsRevision(sdxl)).toBe(false);
+  });
+
+  it("builds fresh-result metadata from its immutable request snapshot", () => {
+    const result = descriptorFromResult({
+      b64: "png",
+      elapsed: 1,
+      width: 1024,
+      height: 1024,
+      seed: 7,
+      itemId: "child-1",
+      filePath: "/tmp/child-1.png",
+      request: {
+        prompt: "make the jacket red",
+        model_id: "black-forest-labs/FLUX.1-schnell",
+        has_init_image: true,
+        steps: 4,
+        revision: {
+          parent_item_id: "parent-1",
+          root_item_id: "root-1",
+        },
+      },
+    });
+
+    expect(result.prompt).toBe("make the jacket red");
+    expect(result.modelId).toBe("black-forest-labs/FLUX.1-schnell");
+    expect(result.params?.["revision_parent_item_id"]).toBe("parent-1");
+    expect(result.params?.["revision_root_item_id"]).toBe("root-1");
+    expect(result.hasInitImage).toBe(true);
   });
 });

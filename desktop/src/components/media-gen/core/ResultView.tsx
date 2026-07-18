@@ -30,8 +30,6 @@ export function ImageResultPane({
     imageResult,
     imageGenerating,
     imageGenStartedAt,
-    imageForm,
-    selectedImageModelId,
   } = state;
   const { clearImageResult, setImageForm, useImageAsInput } = actions;
 
@@ -41,8 +39,6 @@ export function ImageResultPane({
         result={imageResult}
         onClear={clearImageResult}
         onReuseSeed={(seed) => setImageForm({ seedText: String(seed) })}
-        {...(imageForm.prompt.trim() ? { prompt: imageForm.prompt.trim() } : {})}
-        {...(selectedImageModelId ? { modelId: selectedImageModelId } : {})}
         {...(onOpenLightbox !== undefined ? { onOpenLightbox } : {})}
         onUseAsInput={() =>
           useImageAsInput({

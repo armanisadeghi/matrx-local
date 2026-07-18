@@ -238,7 +238,50 @@ async def apply_request_tools(
     """
     from matrx_ai.tools.merge import merge_request_tools
 
-    specs = tools_replace if tools_replace is not None else tools
+    specs = list(tools_replace if tools_replace is not None else tools)
+    if client is not None and getattr(client, "capabilities", None):
+        from matrx_ai.capabilities import (
+            CapabilityResolutionError,
+            resolve_client_capabilities,
+        )
+
+        try:
+            default_specs, optional_specs, capability_payloads = (
+                resolve_client_capabilities(
+                    client,
+                    is_authenticated=ctx.is_authenticated,
+                )
+            )
+        except CapabilityResolutionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "client_capability_resolution_failed",
+                    "message": f"Client capability resolution failed: {exc}",
+                },
+            ) from exc
+
+        requested = {
+            str(getattr(spec, "tool_id", None) or getattr(spec, "name", ""))
+            for spec in specs
+        } | {str(name) for name in (config.tools or [])}
+        selected_optional = [
+            spec
+            for spec in optional_specs
+            if str(getattr(spec, "tool_id", None) or getattr(spec, "name", ""))
+            in requested
+        ]
+        specs = [*default_specs, *selected_optional, *specs]
+
+        if capability_payloads:
+            metadata = dict(ctx.metadata)
+            canonical = dict(metadata.get("client_capabilities_payloads") or {})
+            for name, payload in capability_payloads.items():
+                canonical[name] = payload.model_dump(exclude_none=True)
+            metadata["client_capabilities_payloads"] = canonical
+            ctx = ctx.with_overrides(metadata=metadata)
+            set_app_context(ctx)
+
     agent_specs = [spec for spec in specs if getattr(spec, "kind", None) == "agent"]
     if agent_specs:
         raise HTTPException(

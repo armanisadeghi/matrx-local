@@ -35,6 +35,14 @@ PY_SETTINGS_FILE = (
     PROJECT_ROOT / "app" / "services" / "cloud_sync" / "settings_sync.py"
 )
 
+# Engine-owned settings keys: synced through the app_settings blob like
+# everything else, but with a SINGLE WRITER — the Python engine. The React
+# app reads/writes them only via dedicated engine endpoints (e.g.
+# `cloud_tools` via GET/PUT /chat/local-tools*), never through the
+# AppSettings merge in settings.ts, so a stale local copy can never clobber
+# the cloud value. These are intentionally absent from the TS interface.
+ENGINE_OWNED_PY_KEYS = {"cloud_tools"}
+
 
 # ---------------------------------------------------------------------------
 # Parsers
@@ -108,17 +116,36 @@ def parse_py_default_settings_keys() -> set[str]:
     """
     source = PY_SETTINGS_FILE.read_text(encoding="utf-8")
 
-    # Find the DEFAULT_SETTINGS dict block
+    # Find the start of the DEFAULT_SETTINGS dict, then walk to the MATCHING
+    # closing brace. A naive `\{([^}]+)\}` capture stops at the first `}`,
+    # which silently truncates the block as soon as any value is a nested
+    # dict (e.g. "cloud_tools": {"disabled_tools": []}) — every key after it
+    # would vanish from the parity check.
     match = re.search(
-        r"DEFAULT_SETTINGS\s*(?::\s*[^=]+)?\s*=\s*\{([^}]+)\}",
+        r"DEFAULT_SETTINGS\s*(?::\s*[^=]+)?\s*=\s*\{",
         source,
-        re.DOTALL,
     )
     assert match, (
         f"Could not find 'DEFAULT_SETTINGS = {{...}}' in {PY_SETTINGS_FILE}"
     )
 
-    block = match.group(1)
+    start = match.end()
+    depth = 1
+    end = start
+    for index in range(start, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                end = index
+                break
+    assert depth == 0, (
+        f"Unbalanced braces after DEFAULT_SETTINGS in {PY_SETTINGS_FILE}"
+    )
+
+    block = source[start:end]
 
     # Extract string keys — lines like:  "key": value,
     keys: set[str] = set()
@@ -185,7 +212,7 @@ def test_python_keys_not_in_ts() -> None:
     """No Python DEFAULT_SETTINGS key is missing from AppSettings."""
     ts_keys = parse_ts_app_settings_keys()
     py_keys = parse_py_default_settings_keys()
-    missing_from_ts = py_keys - ts_keys
+    missing_from_ts = py_keys - ts_keys - ENGINE_OWNED_PY_KEYS
     assert not missing_from_ts, (
         f"{len(missing_from_ts)} key(s) in DEFAULT_SETTINGS (Python) but missing from "
         f"AppSettings (TS):\n  "

@@ -329,6 +329,65 @@ def test_local_execution_refuses_cloud_fallback_without_registered_model(
     assert "No cloud provider was called" in exc_info.value.detail["message"]
 
 
+def test_desktop_native_capability_injects_discovery_tool_and_typed_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from matrx_ai.capabilities import ClientContext
+    from matrx_ai.config import UnifiedConfig
+    from matrx_ai.tools.models import ToolType
+    from matrx_connect.context.app_context import AppContext
+    from matrx_connect.emitters.stream_emitter import StreamEmitter
+
+    from app.services.ai import local_ai_task
+
+    captured: dict[str, object] = {}
+
+    def fake_merge(config, ctx, specs, excluded=None, **kwargs):
+        captured["names"] = [getattr(spec, "name", None) for spec in specs]
+        return ctx
+
+    class PermissiveRegistry:
+        def get(self, name: str):
+            return SimpleNamespace(tool_type=ToolType.LOCAL)
+
+    monkeypatch.setattr("matrx_ai.tools.merge.merge_request_tools", fake_merge)
+    monkeypatch.setattr(local_ai_task, "_registry", lambda: PermissiveRegistry())
+
+    ctx = AppContext(
+        emitter=StreamEmitter(),
+        user_id="user-1",
+        is_authenticated=True,
+        metadata={},
+    )
+    client = ClientContext(
+        capabilities=["desktop-native"],
+        state={
+            "desktop-native": {
+                "platform": "darwin",
+                "instance_id": "inst-test",
+                "tunnel_state": "active",
+            }
+        },
+    )
+
+    async def scenario() -> None:
+        updated = await local_ai_task.apply_request_tools(
+            UnifiedConfig(model="local/test", messages=[]),
+            ctx,
+            [],
+            None,
+            client=client,
+        )
+        assert "load_desktop_tools" in captured["names"]
+        assert updated.metadata["client_capabilities_payloads"]["desktop-native"][
+            "instance_id"
+        ] == "inst-test"
+
+    asyncio.run(scenario())
+
+
 def test_chat_stream_with_local_tool_round_trip(ai_app, local_db):
     """POST /chat: mock provider emits a REAL local tool call; the stream
     carries the full aidream vocabulary; SQLite holds the turn + tool log."""

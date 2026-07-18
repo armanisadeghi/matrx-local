@@ -9,7 +9,9 @@ from app.services.local_db.database import get_db
 
 
 class DelegationOutbox(Protocol):
-    async def mark_executing(self, call: dict[str, Any]) -> None: ...
+    async def enqueue(self, call: dict[str, Any]) -> bool: ...
+
+    async def mark_executing(self, call_id: str) -> bool: ...
 
     async def store_result(self, call_id: str, payload: dict[str, Any]) -> None: ...
 
@@ -19,13 +21,13 @@ class DelegationOutbox(Protocol):
 
 
 class SqliteDelegationOutbox:
-    async def mark_executing(self, call: dict[str, Any]) -> None:
+    async def enqueue(self, call: dict[str, Any]) -> bool:
         db = get_db()
         await db.execute(
             """
             INSERT OR IGNORE INTO delegation_outbox
                 (call_id, conversation_id, user_request_id, tool_name, state)
-            VALUES (?, ?, ?, ?, 'executing')
+            VALUES (?, ?, ?, ?, 'queued')
             """,
             (
                 str(call["call_id"]),
@@ -35,6 +37,24 @@ class SqliteDelegationOutbox:
             ),
         )
         await db.commit()
+        row = await db.fetchone(
+            "SELECT state FROM delegation_outbox WHERE call_id = ?",
+            (str(call["call_id"]),),
+        )
+        return bool(row and row["state"] == "queued")
+
+    async def mark_executing(self, call_id: str) -> bool:
+        db = get_db()
+        cursor = await db.execute(
+            """
+            UPDATE delegation_outbox
+            SET state = 'executing', updated_at = datetime('now')
+            WHERE call_id = ? AND state = 'queued'
+            """,
+            (call_id,),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
 
     async def store_result(self, call_id: str, payload: dict[str, Any]) -> None:
         db = get_db()
@@ -85,7 +105,7 @@ class MemoryDelegationOutbox:
     def __init__(self) -> None:
         self.entries: dict[str, dict[str, Any]] = {}
 
-    async def mark_executing(self, call: dict[str, Any]) -> None:
+    async def enqueue(self, call: dict[str, Any]) -> bool:
         call_id = str(call["call_id"])
         self.entries.setdefault(
             call_id,
@@ -94,10 +114,18 @@ class MemoryDelegationOutbox:
                 "conversation_id": str(call["conversation_id"]),
                 "user_request_id": str(call.get("user_request_id") or ""),
                 "tool_name": str(call["tool_name"]),
-                "state": "executing",
+                "state": "queued",
                 "result": None,
             },
         )
+        return self.entries[call_id]["state"] == "queued"
+
+    async def mark_executing(self, call_id: str) -> bool:
+        entry = self.entries.get(call_id)
+        if entry is None or entry["state"] != "queued":
+            return False
+        entry["state"] = "executing"
+        return True
 
     async def store_result(self, call_id: str, payload: dict[str, Any]) -> None:
         entry = self.entries[call_id]

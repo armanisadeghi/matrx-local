@@ -210,6 +210,7 @@ class DelegationApiClient:
             raise DelegationApiError(
                 200, "[delegation] tool_results returned 200 but body is not an object"
             )
+        _validate_tool_results_response(body, results, conversation_id)
         return body
 
     # ------------------------------------------------------------------
@@ -258,6 +259,7 @@ class DelegationApiClient:
                     )
                 events = 0
                 delegated = 0
+                ended = False
                 async for evt in _iter_stream_events(resp):
                     events += 1
                     error_message = _stream_error_message(evt)
@@ -268,6 +270,13 @@ class DelegationApiClient:
                         )
                     if _is_tool_delegated(evt):
                         delegated += 1
+                    if _is_end_event(evt):
+                        ended = True
+                if not ended:
+                    raise DelegationApiError(
+                        200,
+                        "[delegation] resume stream ended before a terminal end event",
+                    )
                 return ResumeOutcome(
                     status="streamed", events_seen=events, tool_delegated_seen=delegated
                 )
@@ -314,6 +323,55 @@ def _is_tool_delegated(evt: dict[str, Any]) -> bool:
     if isinstance(data, dict) and data.get("event") == "tool_delegated":
         return True
     return False
+
+
+def _is_end_event(evt: dict[str, Any]) -> bool:
+    if evt.get("event") == "end":
+        return True
+    data = evt.get("data")
+    return isinstance(data, dict) and data.get("event") == "end"
+
+
+def _validate_tool_results_response(
+    body: dict[str, Any],
+    results: list[dict[str, Any]],
+    conversation_id: str,
+) -> None:
+    required_lists = ("resolved", "already_resolved", "not_found")
+    for key in required_lists:
+        value = body.get(key)
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise DelegationApiError(
+                200,
+                f"[delegation] tool_results returned an invalid '{key}' acknowledgement",
+            )
+    if body.get("conversation_id") != conversation_id:
+        raise DelegationApiError(
+            200,
+            "[delegation] tool_results acknowledgement conversation does not match",
+        )
+    if not isinstance(body.get("continuation_needed"), bool):
+        raise DelegationApiError(
+            200,
+            "[delegation] tool_results acknowledgement has no boolean continuation_needed",
+        )
+    if body["continuation_needed"] and not isinstance(body.get("user_request_id"), str):
+        raise DelegationApiError(
+            200,
+            "[delegation] tool_results requested continuation without user_request_id",
+        )
+    requested = {
+        str(item.get("call_id"))
+        for item in results
+        if isinstance(item.get("call_id"), str)
+    }
+    accounted = set(body["resolved"]) | set(body["already_resolved"]) | set(body["not_found"])
+    missing = requested - accounted
+    if missing:
+        raise DelegationApiError(
+            200,
+            f"[delegation] tool_results did not acknowledge call_ids: {sorted(missing)}",
+        )
 
 
 def _stream_error_message(evt: dict[str, Any]) -> str | None:

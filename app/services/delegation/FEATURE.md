@@ -99,7 +99,9 @@ execution path. Do not add one.
   the boundary before dispatch (mutating tools!). `_undelivered` retries the
   POST each sweep. After a restart, saved results are redelivered; an
   interrupted/ambiguous execution becomes an explicit error instead of being
-  run twice. A hard 4xx (server doesn't know the call) is dropped loudly.
+  run twice. Authentication, permission, and malformed-acknowledgement failures
+  retain the durable result for retry; only a validated server acknowledgement
+  clears it.
 - **Ownership by tool name.** `chat.tool_call` has NO executor column; a
   pending call is ours iff `get_by_cloud_name(tool_name)` resolves. Foreign
   calls (browser/ui-first tools) are silently left for their owner — never

@@ -317,6 +317,23 @@ class DelegationEngine:
                     conversation_id=conversation_id,
                 )
                 continue
+            try:
+                queued = await self._outbox.enqueue(call)
+            except Exception as exc:
+                self._last_error = f"delegation outbox enqueue failed: {exc}"
+                logger.error(
+                    "[delegation] refusing execution because outbox enqueue failed "
+                    "(call_id=%s)",
+                    call_id,
+                    exc_info=True,
+                )
+                continue
+            if not queued:
+                logger.info(
+                    "[delegation] call_id=%s already owned by an outbox execution",
+                    call_id,
+                )
+                continue
             self._inflight[call_id] = time.monotonic()
             self._event(
                 "dispatching",
@@ -383,11 +400,16 @@ class DelegationEngine:
             args = {}
 
         try:
-            # Persist the at-most-once boundary before invoking a potentially
-            # mutating desktop tool. A restart can then report an ambiguous
-            # outcome instead of executing the same call again.
-            await self._outbox.mark_executing(call)
             async with self._sem:
+                # Queued work is safe to retry after a restart. Cross the
+                # at-most-once boundary only after an executor slot is held;
+                # the queued->executing CAS also prevents a second process
+                # sharing this SQLite home from running the same mutating call.
+                if not await self._outbox.mark_executing(call_id):
+                    logger.info(
+                        "[delegation] execution claim lost for call_id=%s", call_id
+                    )
+                    return
                 result_payload = await self._execute(entry, tool_name, call_id, args)
             await self._outbox.store_result(call_id, result_payload)
             self._mark_handled(call_id)
@@ -539,22 +561,6 @@ class DelegationEngine:
                 jwt, conversation_id, [result_payload]
             )
         except DelegationApiError as exc:
-            if 400 <= exc.status < 500 and exc.status not in (408, 429):
-                # Hard 4xx — the server doesn't know this call. Not replayable.
-                logger.error(
-                    "[delegation] tool_results rejected permanently for call_id=%s: %s",
-                    call_id,
-                    exc,
-                )
-                self._last_error = str(exc)
-                self._event(
-                    "delivery_rejected",
-                    call_id=call_id,
-                    status=exc.status,
-                    error=str(exc),
-                )
-                await self._clear_outbox(call_id)
-                return
             logger.warning(
                 "[delegation] tool_results delivery failed for call_id=%s (%s) — "
                 "queued for retry",
@@ -652,7 +658,15 @@ class DelegationEngine:
             if not call_id or not conversation_id:
                 logger.error("[delegation] malformed outbox entry skipped: %r", entry)
                 continue
-            if call_id in self._undelivered or call_id in self._inflight:
+            if (
+                call_id in self._undelivered
+                or call_id in self._inflight
+                or call_id in self._handled
+            ):
+                continue
+            if entry.get("state") == "queued":
+                # It never crossed the execution boundary. Leave it queued;
+                # the durable cloud row will schedule it below.
                 continue
             payload = entry.get("result")
             if not isinstance(payload, dict):

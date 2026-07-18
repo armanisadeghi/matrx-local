@@ -112,6 +112,7 @@ class FakeServer:
                 'data: {"eventName":"tool_event","data":{"event":"tool_delegated","call_id":"call_2"}}\n'
                 "\n"
                 '{"phase":"complete"}\n'
+                '{"event":"end","data":{"reason":"complete"}}\n'
             )
             return httpx.Response(200, content=stream.encode())
         raise AssertionError(f"unexpected request path: {path}")
@@ -446,6 +447,25 @@ def test_fatal_resume_stream_keeps_retry_obligation(
     assert "fatal error" in (engine._last_error or "")
 
 
+def test_truncated_resume_stream_keeps_retry_obligation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.delegation import engine as engine_module
+
+    monkeypatch.setattr(engine_module, "_BROWSER_RESUME_GRACE_SECONDS", 0.0)
+    server = FakeServer()
+    server.pending = [_pending_call(tmp_path)]
+    server.resume_responder = lambda request: httpx.Response(
+        200, content=b'{"event":"text","data":{"text":"partial"}}\n'
+    )
+    engine = _engine(server)
+
+    asyncio.run(_sweep_and_settle(engine))
+
+    assert "call_1" in engine._undelivered
+    assert "terminal end event" in (engine._last_error or "")
+
+
 def test_restart_redelivers_saved_result_without_reexecution(tmp_path: Path) -> None:
     server = FakeServer()
     server.continuation_needed = False
@@ -461,7 +481,8 @@ def test_restart_redelivers_saved_result_without_reexecution(tmp_path: Path) -> 
     }
 
     async def seed_and_run() -> None:
-        await outbox.mark_executing(server.pending[0])
+        assert await outbox.enqueue(server.pending[0])
+        assert await outbox.mark_executing("call_1")
         await outbox.store_result("call_1", saved)
         engine = _engine(server, outbox)
 
@@ -483,7 +504,8 @@ def test_restart_does_not_repeat_ambiguous_side_effect(tmp_path: Path) -> None:
     outbox = MemoryDelegationOutbox()
 
     async def seed_and_run() -> None:
-        await outbox.mark_executing(server.pending[0])
+        assert await outbox.enqueue(server.pending[0])
+        assert await outbox.mark_executing("call_1")
         engine = _engine(server, outbox)
 
         async def must_not_execute(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -499,14 +521,75 @@ def test_restart_does_not_repeat_ambiguous_side_effect(tmp_path: Path) -> None:
     assert outbox.entries == {}
 
 
-def test_hard_4xx_delivery_is_dropped_loudly(tmp_path: Path) -> None:
+def test_restart_executes_work_that_never_left_the_queue(tmp_path: Path) -> None:
+    server = FakeServer()
+    server.continuation_needed = False
+    server.pending = [_pending_call(tmp_path)]
+    outbox = MemoryDelegationOutbox()
+    executions = 0
+
+    async def seed_and_run() -> None:
+        nonlocal executions
+        assert await outbox.enqueue(server.pending[0])
+        engine = _engine(server, outbox)
+        original_execute = engine._execute
+
+        async def counting_execute(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            nonlocal executions
+            executions += 1
+            return await original_execute(*args, **kwargs)
+
+        engine._execute = counting_execute  # type: ignore[method-assign]
+        assert await _sweep_and_settle(engine) == 1
+
+    asyncio.run(seed_and_run())
+    assert executions == 1
+    assert outbox.entries == {}
+
+
+def test_cleanup_failure_does_not_repost_every_sweep(tmp_path: Path) -> None:
+    class DeleteFailingOutbox(MemoryDelegationOutbox):
+        async def delete(self, call_id: str) -> None:
+            raise OSError("synthetic cleanup failure")
+
+    server = FakeServer()
+    server.continuation_needed = False
+    server.pending = [_pending_call(tmp_path)]
+    outbox = DeleteFailingOutbox()
+    engine = _engine(server, outbox)
+
+    async def run() -> None:
+        await _sweep_and_settle(engine)
+        server.pending = []
+        await _sweep_and_settle(engine)
+
+    asyncio.run(run())
+    assert len(server.tool_results_bodies) == 1
+
+
+def test_auth_rejection_keeps_durable_result_for_refreshed_credentials(
+    tmp_path: Path,
+) -> None:
     server = FakeServer()
     server.pending = [_pending_call(tmp_path)]
-    engine = _engine(server)
-    server.tool_results_responder = lambda request: httpx.Response(404, text="nope")
+    outbox = MemoryDelegationOutbox()
+    engine = _engine(server, outbox)
+    server.tool_results_responder = lambda request: httpx.Response(401, text="expired")
     asyncio.run(_sweep_and_settle(engine))
-    assert engine._undelivered == {}  # not replayable
+    assert "call_1" in engine._undelivered
+    assert outbox.entries["call_1"]["state"] == "result_pending"
     assert server.resume_bodies == []
+
+
+def test_malformed_200_ack_keeps_durable_result(tmp_path: Path) -> None:
+    server = FakeServer()
+    server.pending = [_pending_call(tmp_path)]
+    outbox = MemoryDelegationOutbox()
+    engine = _engine(server, outbox)
+    server.tool_results_responder = lambda request: httpx.Response(200, json={})
+    asyncio.run(_sweep_and_settle(engine))
+    assert "call_1" in engine._undelivered
+    assert outbox.entries["call_1"]["state"] == "result_pending"
 
 
 # ---------------------------------------------------------------------------
@@ -536,7 +619,7 @@ def test_resume_conflict_is_retried_bounded(tmp_path: Path) -> None:
         attempts["n"] += 1
         if attempts["n"] <= 2:
             return _conflict_response("resume_conflict", retryable=True)
-        return httpx.Response(200, content=b'{"phase":"complete"}\n')
+        return httpx.Response(200, content=b'{"event":"end"}\n')
 
     server.resume_responder = responder
     asyncio.run(_sweep_and_settle(engine))

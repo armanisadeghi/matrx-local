@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { engine } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { invoke } from "@tauri-apps/api/core";
 import type {
   FilesystemDirectoryPage,
   FilesystemEntry,
@@ -28,46 +29,41 @@ import { useFilesystemPlaces } from "./use-filesystem-places";
 
 export interface FilesystemResultViewProps {
   result: FilesystemResult;
+  layout?: "embedded" | "page";
   onReference?: (paths: string[]) => void;
   onNavigate?: (path: string) => void;
-  onLoadChildren?: (entry: FilesystemEntry) => Promise<FilesystemEntry[]>;
+  onLoadChildren?: (entry: FilesystemEntry, cursor?: string) => Promise<FilesystemDirectoryPage>;
   onLoadMore?: (cursor: string) => void;
   loadingMore?: boolean;
   pagingError?: string | null;
 }
 
-function parentPath(path: string): string {
-  const withoutTrailing = path.replace(/[\\/]+$/, "");
-  const index = Math.max(withoutTrailing.lastIndexOf("/"), withoutTrailing.lastIndexOf("\\"));
-  if (index < 0) return path;
-  if (index === 0) return withoutTrailing.slice(0, 1);
-  if (/^[A-Za-z]:$/.test(withoutTrailing.slice(0, index))) return `${withoutTrailing.slice(0, index)}\\`;
-  return withoutTrailing.slice(0, index);
-}
-
-async function openPath(path: string): Promise<void> {
-  const prepared = await engine.prepareFilesystemOpen(path);
-  if (!prepared.ready) throw new Error(prepared.error ?? "This file is not ready to open.");
-  const { open } = await import("@tauri-apps/plugin-shell");
-  await open(prepared.path);
+async function openPath(path: string, reveal = false): Promise<void> {
+  let target = path;
+  if (!reveal) {
+    const prepared = await engine.prepareFilesystemOpen(path);
+    if (!prepared.ready) throw new Error(prepared.error ?? "This file is not ready to open.");
+    target = prepared.path;
+  }
+  await invoke("open_filesystem_path", { path: target, reveal });
 }
 
 function PathActions({ path, onReference }: { path: string; onReference: () => void }) {
   const [opening, setOpening] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const runOpen = useCallback(async (target: string) => {
+  const runOpen = useCallback(async (reveal: boolean) => {
     setOpening(true);
     setActionError(null);
     try {
-      await openPath(target);
+      await openPath(path, reveal);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
       setActionError(message);
-      console.error("Unable to open filesystem path", { path: target, reason });
+      console.error("Unable to open filesystem path", { path, reveal, reason });
     } finally {
       setOpening(false);
     }
-  }, []);
+  }, [path]);
   return (
     <div className="flex shrink-0 items-center gap-1">
       {actionError && (
@@ -95,7 +91,7 @@ function PathActions({ path, onReference }: { path: string; onReference: () => v
         disabled={opening}
         onClick={(event) => {
           event.stopPropagation();
-          void runOpen(path);
+          void runOpen(false);
         }}
       >
         <FolderOpen className="h-3.5 w-3.5" />
@@ -108,7 +104,7 @@ function PathActions({ path, onReference }: { path: string; onReference: () => v
         disabled={opening}
         onClick={(event) => {
           event.stopPropagation();
-          void runOpen(parentPath(path));
+          void runOpen(true);
         }}
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
@@ -130,6 +126,15 @@ function formatSize(bytes?: number | null): string | null {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
 }
 
+export function mergeFilesystemEntries(
+  current: readonly FilesystemEntry[],
+  next: readonly FilesystemEntry[],
+): FilesystemEntry[] {
+  const byPath = new Map(current.map((entry) => [entry.path, entry]));
+  for (const entry of next) byPath.set(entry.path, entry);
+  return [...byPath.values()];
+}
+
 function EntryRow({
   entry,
   depth,
@@ -144,13 +149,15 @@ function EntryRow({
   selectedPaths: ReadonlySet<string>;
   onToggleSelected: (path: string) => void;
   onReference: (paths: string[]) => void;
-  onLoadChildren?: (entry: FilesystemEntry) => Promise<FilesystemEntry[]>;
+  onLoadChildren?: (entry: FilesystemEntry, cursor?: string) => Promise<FilesystemDirectoryPage>;
   onNavigate?: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [childError, setChildError] = useState<string | null>(null);
   const [loadedChildren, setLoadedChildren] = useState<FilesystemEntry[] | null>(null);
+  const [childCursor, setChildCursor] = useState<string | null>(null);
+  const [rowActionError, setRowActionError] = useState<string | null>(null);
   const directory = entry.kind === "directory";
   const selected = selectedPaths.has(entry.path);
   const children = loadedChildren ?? entry.children ?? [];
@@ -164,7 +171,9 @@ function EntryRow({
       setLoading(true);
       setChildError(null);
       try {
-        setLoadedChildren(await onLoadChildren(entry));
+        const page = await onLoadChildren(entry);
+        setLoadedChildren(page.entries);
+        setChildCursor(page.nextCursor ?? null);
       } catch (reason) {
         setChildError(reason instanceof Error ? reason.message : String(reason));
       } finally {
@@ -172,6 +181,32 @@ function EntryRow({
       }
     }
   }, [entry, expandable, expanded, loadedChildren, onLoadChildren]);
+
+  const loadMoreChildren = useCallback(async () => {
+    if (!onLoadChildren || !childCursor || loading) return;
+    setLoading(true);
+    setChildError(null);
+    try {
+      const page = await onLoadChildren(entry, childCursor);
+      setLoadedChildren((current) => {
+        return mergeFilesystemEntries(current ?? [], page.entries);
+      });
+      setChildCursor(page.nextCursor ?? null);
+    } catch (reason) {
+      setChildError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setLoading(false);
+    }
+  }, [childCursor, entry, loading, onLoadChildren]);
+
+  const openEntry = useCallback(async () => {
+    setRowActionError(null);
+    try {
+      await openPath(entry.path);
+    } catch (reason) {
+      setRowActionError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [entry.path]);
 
   const icon = entry.kind === "directory"
     ? <Folder className="h-4 w-4 text-amber-500" />
@@ -212,12 +247,19 @@ function EntryRow({
           className="min-w-0 flex-1 truncate text-left"
           title={entry.path}
           onDoubleClick={() => {
-            if (directory && onNavigate) onNavigate(entry.path);
-            else void openPath(entry.path).catch((reason: unknown) => {
-              setChildError(reason instanceof Error ? reason.message : String(reason));
-            });
+            if (!directory) void openEntry();
           }}
-          onClick={() => directory && void toggleExpanded()}
+          onClick={() => {
+            if (!directory) return;
+            if (onNavigate) onNavigate(entry.path);
+            else void toggleExpanded();
+          }}
+          onKeyDown={(event) => {
+            if (!directory && event.key === "Enter") {
+              event.preventDefault();
+              void openEntry();
+            }
+          }}
         >
           {entry.name}
         </button>
@@ -242,9 +284,26 @@ function EntryRow({
           {...(onNavigate ? { onNavigate } : {})}
         />
       ))}
+      {expanded && loadedChildren?.length === 0 && !loading && !childError && (
+        <div className="py-1 pr-2 text-[11px] text-muted-foreground" style={{ paddingLeft: `${44 + depth * 18}px` }}>
+          Folder is empty.
+        </div>
+      )}
+      {expanded && childCursor && (
+        <div className="py-1 pr-2" style={{ paddingLeft: `${44 + depth * 18}px` }}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 text-[11px]" disabled={loading} onClick={() => void loadMoreChildren()}>
+            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Load more children
+          </Button>
+        </div>
+      )}
       {expanded && childError && (
         <div className="py-1 pr-2 text-[11px] text-destructive" style={{ paddingLeft: `${44 + depth * 18}px` }}>
           {childError}
+        </div>
+      )}
+      {rowActionError && (
+        <div className="py-1 pr-2 text-[11px] text-destructive" role="alert" style={{ paddingLeft: `${44 + depth * 18}px` }}>
+          {rowActionError}
         </div>
       )}
     </>
@@ -272,23 +331,27 @@ function Places({ places, onReference, onNavigate }: { places: FilesystemPlace[]
   return (
     <div className="grid gap-1 p-2 sm:grid-cols-2">
       {places.map((place) => (
-        <div key={place.id} className="group flex min-w-0 items-center gap-2 rounded-md border bg-background px-2 py-1.5">
+        <div key={place.id} className={cn("group flex min-w-0 items-center gap-2 rounded-md border bg-background px-2 py-1.5", place.available === false && "opacity-60")}>
           <Folder className="h-4 w-4 shrink-0 text-amber-500" />
           <button
             type="button"
             className="min-w-0 flex-1 text-left"
             title={place.path}
-            onDoubleClick={() => {
+            disabled={place.available === false}
+            onClick={() => {
               if (onNavigate) onNavigate(place.path);
-              else void openPath(place.path).catch((reason: unknown) => {
+            }}
+            onDoubleClick={() => {
+              if (!onNavigate) void openPath(place.path).catch((reason: unknown) => {
                 console.error("Unable to open filesystem place", { path: place.path, reason });
               });
             }}
           >
             <span className="block truncate text-xs font-medium">{place.label}</span>
             <span className="block truncate text-[10px] text-muted-foreground">{place.path}</span>
+            {place.available === false && <span className="block text-[10px] text-destructive">Unavailable</span>}
           </button>
-          <PathActions path={place.path} onReference={() => onReference([place.path])} />
+          {place.available !== false && <PathActions path={place.path} onReference={() => onReference([place.path])} />}
         </div>
       ))}
     </div>
@@ -317,15 +380,19 @@ export function EnginePlaces({ onReference }: { onReference?: (paths: string[]) 
 
 function DirectoryPage({
   result,
+  layout,
   onReference,
+  onNavigate,
   onLoadChildren,
   onLoadMore,
   loadingMore,
   pagingError,
 }: {
   result: FilesystemDirectoryPage | FilesystemSearchPage;
+  layout: "embedded" | "page";
   onReference: (paths: string[]) => void;
-  onLoadChildren?: (entry: FilesystemEntry) => Promise<FilesystemEntry[]>;
+  onNavigate?: (path: string) => void;
+  onLoadChildren?: (entry: FilesystemEntry, cursor?: string) => Promise<FilesystemDirectoryPage>;
   onLoadMore?: (cursor: string) => void;
   loadingMore?: boolean;
   pagingError?: string | null;
@@ -342,14 +409,16 @@ function DirectoryPage({
   const selectedPaths = useMemo(() => [...selected], [selected]);
   const directoryPath = result.kind === "filesystem.directory-page" ? result.path : "";
   return (
-    <div>
+    <div className={cn(layout === "page" && "flex h-full min-h-[24rem] flex-col")}>
       <div className="flex items-center justify-between gap-2 border-b bg-muted/20 pr-2">
         {result.kind === "filesystem.directory-page" ? (
           <Breadcrumbs path={directoryPath} />
         ) : (
           <div className="min-w-0 truncate px-2 py-1.5 text-[11px] text-muted-foreground">
             Results for <span className="font-medium text-foreground">{result.query}</span>
-            {result.source && <span> · {result.source === "index" ? "indexed" : "disk"}</span>}
+            {result.source && (
+              <span> · {result.source === "index" ? "indexed" : result.source === "hybrid" ? "index + disk" : "disk"}</span>
+            )}
             {result.indexComplete === false && <span> · index still improving</span>}
           </div>
         )}
@@ -359,9 +428,11 @@ function DirectoryPage({
           </Button>
         )}
       </div>
-      <div className="max-h-80 overflow-y-auto p-1">
+      <div className={cn("overflow-y-auto p-1", layout === "page" ? "min-h-0 flex-1" : "max-h-80")}>
         {result.entries.length === 0 ? (
-          <div className="p-4 text-center text-xs text-muted-foreground">This directory is empty.</div>
+          <div className="p-4 text-center text-xs text-muted-foreground">
+            {result.kind === "filesystem.search-page" ? "No matching files or folders." : "This directory is empty."}
+          </div>
         ) : result.entries.map((entry) => (
           <EntryRow
             key={entry.path}
@@ -371,6 +442,7 @@ function DirectoryPage({
             onToggleSelected={toggleSelected}
             onReference={onReference}
             {...(onLoadChildren ? { onLoadChildren } : {})}
+            {...(onNavigate ? { onNavigate } : {})}
           />
         ))}
       </div>
@@ -456,7 +528,13 @@ function SemanticSearchView({
   );
 }
 
-export function FilesystemResultView({ result, onReference, onNavigate, onLoadChildren, onLoadMore, loadingMore, pagingError }: FilesystemResultViewProps) {
+function resultIdentity(result: FilesystemDirectoryPage | FilesystemSearchPage): string {
+  return result.kind === "filesystem.directory-page"
+    ? `${result.kind}:${result.namespace}:${result.path}`
+    : `${result.kind}:${result.namespace}:${result.root ?? ""}:${result.query}`;
+}
+
+export function FilesystemResultView({ result, layout = "embedded", onReference, onNavigate, onLoadChildren, onLoadMore, loadingMore, pagingError }: FilesystemResultViewProps) {
   const reference = useCallback((paths: string[]) => {
     if (onReference) onReference(paths);
     else void navigator.clipboard.writeText(paths.join("\n"));
@@ -472,7 +550,9 @@ export function FilesystemResultView({ result, onReference, onNavigate, onLoadCh
     case "filesystem.search-page":
       return (
         <DirectoryPage
+          key={resultIdentity(result)}
           result={result}
+          layout={layout}
           onReference={reference}
           {...(onLoadChildren ? { onLoadChildren } : {})}
           {...(onNavigate ? { onNavigate } : {})}

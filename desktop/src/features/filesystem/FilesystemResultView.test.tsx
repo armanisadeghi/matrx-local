@@ -1,9 +1,37 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { FilesystemResultView } from "./FilesystemResultView";
+import { FilesystemResultView, mergeFilesystemEntries } from "./FilesystemResultView";
 import type { FilesystemResult } from "./types";
 
 describe("FilesystemResultView", () => {
+  it("merges lazy child pages without losing or duplicating entries", () => {
+    expect(mergeFilesystemEntries(
+      [{ name: "a", path: "/repo/a", kind: "file" }],
+      [
+        { name: "a updated", path: "/repo/a", kind: "file" },
+        { name: "b", path: "/repo/b", kind: "file" },
+      ],
+    )).toEqual([
+      { name: "a updated", path: "/repo/a", kind: "file" },
+      { name: "b", path: "/repo/b", kind: "file" },
+    ]);
+  });
+
+  it("uses search-specific empty copy and a page-sized results host", () => {
+    const html = renderToStaticMarkup(<FilesystemResultView
+      layout="page"
+      result={{
+        kind: "filesystem.search-page",
+        namespace: "host",
+        query: "missing",
+        entries: [],
+      }}
+    />);
+    expect(html).toContain("No matching files or folders.");
+    expect(html).toContain("min-h-[24rem]");
+    expect(html).not.toContain("This directory is empty.");
+  });
+
   it.each<{ result: FilesystemResult; expected: string }>([
     {
       result: {

@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { appendFilesystemPage } from "./FilesystemResultController";
+import { appendFilesystemPage, pageIdentity } from "./FilesystemResultController";
 import type { FilesystemDirectoryPage, FilesystemSearchPage } from "./types";
 
 describe("appendFilesystemPage", () => {
+  it("keys selection and request state by directory or scoped-search identity", () => {
+    expect(pageIdentity({
+      kind: "filesystem.directory-page",
+      namespace: "host",
+      path: "/repo",
+      entries: [],
+    })).toBe("filesystem.directory-page:host:/repo");
+    expect(pageIdentity({
+      kind: "filesystem.search-page",
+      namespace: "host",
+      root: "/repo",
+      query: "report",
+      entries: [],
+    })).toBe("filesystem.search-page:host:/repo:report");
+  });
+
   it("appends cursor pages without duplicating paths", () => {
     const current: FilesystemDirectoryPage = {
       kind: "filesystem.directory-page",

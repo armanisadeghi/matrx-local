@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { engine } from "@/lib/api";
-import { FilesystemResultView } from "./FilesystemResultView";
+import { FilesystemResultView, mergeFilesystemEntries } from "./FilesystemResultView";
 import { normalizeFilesystemPayload } from "./tool-results";
 import type {
   FilesystemDirectoryPage,
@@ -11,13 +11,14 @@ import type {
 
 export interface FilesystemResultControllerProps {
   result: FilesystemResult;
+  layout?: "embedded" | "page";
   onReference?: (paths: string[]) => void;
   onNavigate?: (path: string) => void;
 }
 
 type PageableResult = FilesystemDirectoryPage | FilesystemSearchPage;
 
-function pageIdentity(page: PageableResult): string {
+export function pageIdentity(page: PageableResult): string {
   return page.kind === "filesystem.directory-page"
     ? `${page.kind}:${page.namespace}:${page.path}`
     : `${page.kind}:${page.namespace}:${page.root ?? ""}:${page.query}`;
@@ -25,12 +26,10 @@ function pageIdentity(page: PageableResult): string {
 
 export function appendFilesystemPage(current: PageableResult, next: PageableResult): PageableResult {
   if (pageIdentity(current) !== pageIdentity(next)) return current;
-  const byPath = new Map(current.entries.map((entry) => [entry.path, entry]));
-  for (const entry of next.entries) byPath.set(entry.path, entry);
   return {
     ...current,
     ...next,
-    entries: [...byPath.values()],
+    entries: mergeFilesystemEntries(current.entries, next.entries),
   };
 }
 
@@ -51,24 +50,44 @@ function requirePageableResult(payload: unknown): PageableResult {
 }
 
 /** Connect the canonical renderer to direct engine paging and lazy child loading. */
-export function FilesystemResultController({ result, onReference, onNavigate }: FilesystemResultControllerProps) {
+export function FilesystemResultController({ result, layout = "embedded", onReference, onNavigate }: FilesystemResultControllerProps) {
   const [current, setCurrent] = useState(result);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pagingError, setPagingError] = useState<string | null>(null);
+  const requestId = useRef(0);
+  const loadingMoreRef = useRef(false);
+  const resultIdentityRef = useRef(
+    result.kind === "filesystem.directory-page" || result.kind === "filesystem.search-page"
+      ? pageIdentity(result)
+      : result.kind,
+  );
+
+  resultIdentityRef.current =
+    result.kind === "filesystem.directory-page" || result.kind === "filesystem.search-page"
+      ? pageIdentity(result)
+      : result.kind;
 
   useEffect(() => {
+    requestId.current += 1;
+    loadingMoreRef.current = false;
     setCurrent(result);
+    setLoadingMore(false);
     setPagingError(null);
   }, [result]);
 
-  const loadChildren = useCallback(async (entry: FilesystemEntry): Promise<FilesystemEntry[]> => {
-    const page = requireDirectoryPage(await engine.listFilesystem(entry.path, { limit: 100 }));
-    return page.entries;
+  const loadChildren = useCallback(async (entry: FilesystemEntry, cursor?: string): Promise<FilesystemDirectoryPage> => {
+    return requireDirectoryPage(await engine.listFilesystem(entry.path, {
+      ...(cursor ? { cursor } : {}),
+      limit: 100,
+    }));
   }, []);
 
   const loadMore = useCallback(async (cursor: string): Promise<void> => {
     if (current.kind !== "filesystem.directory-page" && current.kind !== "filesystem.search-page") return;
-    if (loadingMore) return;
+    if (loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    const id = ++requestId.current;
+    const identity = pageIdentity(current);
     setLoadingMore(true);
     setPagingError(null);
     try {
@@ -80,6 +99,7 @@ export function FilesystemResultController({ result, onReference, onNavigate }: 
             limit: 100,
           });
       const next = requirePageableResult(payload);
+      if (id !== requestId.current || identity !== resultIdentityRef.current) return;
       setCurrent((value) => {
         if (value.kind !== "filesystem.directory-page" && value.kind !== "filesystem.search-page") {
           return value;
@@ -87,15 +107,26 @@ export function FilesystemResultController({ result, onReference, onNavigate }: 
         return appendFilesystemPage(value, next);
       });
     } catch (reason) {
-      setPagingError(reason instanceof Error ? reason.message : String(reason));
+      if (id === requestId.current && identity === resultIdentityRef.current) {
+        setPagingError(reason instanceof Error ? reason.message : String(reason));
+      }
     } finally {
-      setLoadingMore(false);
+      if (id === requestId.current) {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
     }
-  }, [current, loadingMore]);
+  }, [current]);
+
+  const currentIdentity = current.kind === "filesystem.directory-page" || current.kind === "filesystem.search-page"
+    ? pageIdentity(current)
+    : current.kind;
+  const visibleResult = currentIdentity === resultIdentityRef.current ? current : result;
 
   return (
     <FilesystemResultView
-      result={current}
+      result={visibleResult}
+      layout={layout}
       {...(onReference ? { onReference } : {})}
       {...(onNavigate ? { onNavigate } : {})}
       onLoadChildren={loadChildren}

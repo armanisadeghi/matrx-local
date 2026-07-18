@@ -45,7 +45,7 @@ import os
 import sys
 import time
 from collections.abc import Iterable
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from app.common.system_logger import get_logger
 from app.services.app_config import get_aidream_server_url
@@ -54,6 +54,7 @@ from app.services.delegation.client import (
     DelegationApiError,
     ResumeOutcome,
 )
+from app.services.delegation.outbox import DelegationOutbox, SqliteDelegationOutbox
 
 logger = get_logger()
 
@@ -67,11 +68,11 @@ DEFAULT_POLL_INTERVAL = float(os.environ.get("MATRX_DELEGATION_POLL_INTERVAL", "
 # so slow desktop ops are safe; this bound exists so a hung handler can't
 # pin an executor slot forever. Anything not listed gets the default.
 EXECUTION_TIMEOUTS: dict[str, float] = {
-    "Shell": 900.0,       # long builds / installs
-    "Web": 600.0,         # downloads, research
-    "Browser": 300.0,     # playwright flows
-    "Media": 600.0,       # OCR / PDF / archives
-    "Audio": 600.0,       # record / transcribe
+    "Shell": 900.0,  # long builds / installs
+    "Web": 600.0,  # downloads, research
+    "Browser": 300.0,  # playwright flows
+    "Media": 600.0,  # OCR / PDF / archives
+    "Audio": 600.0,  # record / transcribe
 }
 DEFAULT_EXECUTION_TIMEOUT = 120.0
 
@@ -81,8 +82,12 @@ DEFAULT_EXECUTION_TIMEOUT = 120.0
 MAX_INLINE_IMAGE_BASE64_CHARS = int(
     os.environ.get("MATRX_DELEGATION_MAX_INLINE_IMAGE_BASE64_CHARS", "900000")
 )
-DELEGATED_IMAGE_LONG_EDGE = int(os.environ.get("MATRX_DELEGATION_IMAGE_LONG_EDGE", "1600"))
-DELEGATED_IMAGE_JPEG_QUALITY = int(os.environ.get("MATRX_DELEGATION_IMAGE_JPEG_QUALITY", "75"))
+DELEGATED_IMAGE_LONG_EDGE = int(
+    os.environ.get("MATRX_DELEGATION_IMAGE_LONG_EDGE", "1600")
+)
+DELEGATED_IMAGE_JPEG_QUALITY = int(
+    os.environ.get("MATRX_DELEGATION_IMAGE_JPEG_QUALITY", "75")
+)
 
 # At most this many delegated calls execute concurrently.
 _MAX_CONCURRENT_CALLS = 4
@@ -93,6 +98,13 @@ _RESUME_SUPPRESS_TTL = 10.0
 # Bounded retry for 409 resume_conflict: 700ms × attempt, max 4 attempts.
 _RESUME_CONFLICT_BASE_DELAY = 0.7
 _RESUME_CONFLICT_MAX_ATTEMPTS = 4
+
+# Give an open web tab's durable-ledger watcher first claim on /resume so the
+# continuation flows through its normal Redux stream processor. The desktop
+# remains the correctness fallback when no browser is watching.
+_BROWSER_RESUME_GRACE_SECONDS = float(
+    os.environ.get("MATRX_DELEGATION_FRONTEND_RESUME_GRACE_SECONDS", "2.5")
+)
 
 # Bounded memory for the executed-call guard.
 _HANDLED_CALLS_MAX = 500
@@ -106,12 +118,16 @@ class DelegationEngine:
         self,
         client: DelegationApiClient | None = None,
         poll_interval: float | None = None,
+        outbox: DelegationOutbox | None = None,
     ) -> None:
         # URL captured at engine construction from the app-config accessor
         # (env override > remote > cache > compiled default). A mid-session
         # config change applies on the next engine start.
         self._client = client or DelegationApiClient(get_aidream_server_url())
-        self._interval = poll_interval if poll_interval is not None else DEFAULT_POLL_INTERVAL
+        self._interval = (
+            poll_interval if poll_interval is not None else DEFAULT_POLL_INTERVAL
+        )
+        self._outbox = outbox or SqliteDelegationOutbox()
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
@@ -243,7 +259,9 @@ class DelegationEngine:
             except Exception:
                 # The loop must survive anything; individual failures are
                 # already logged with attribution inside sweep_once.
-                logger.error("[delegation] sweep crashed (loop continues)", exc_info=True)
+                logger.error(
+                    "[delegation] sweep crashed (loop continues)", exc_info=True
+                )
             # Wait for the interval OR an explicit wake, whichever first.
             self._wake.clear()
             try:
@@ -260,6 +278,8 @@ class DelegationEngine:
             return 0
         jwt = creds
 
+        if not await self._restore_outbox():
+            return 0
         await self._retry_undelivered(jwt)
 
         try:
@@ -363,8 +383,13 @@ class DelegationEngine:
             args = {}
 
         try:
+            # Persist the at-most-once boundary before invoking a potentially
+            # mutating desktop tool. A restart can then report an ambiguous
+            # outcome instead of executing the same call again.
+            await self._outbox.mark_executing(call)
             async with self._sem:
                 result_payload = await self._execute(entry, tool_name, call_id, args)
+            await self._outbox.store_result(call_id, result_payload)
             self._mark_handled(call_id)
             await self._deliver(conversation_id, call_id, result_payload)
         except asyncio.CancelledError:
@@ -389,7 +414,9 @@ class DelegationEngine:
         from app.tools.session import ToolSession
         from app.tools.types import ToolResultType
 
-        timeout = EXECUTION_TIMEOUTS.get(entry.dispatcher_name, DEFAULT_EXECUTION_TIMEOUT)
+        timeout = EXECUTION_TIMEOUTS.get(
+            entry.dispatcher_name, DEFAULT_EXECUTION_TIMEOUT
+        )
         logger.info(
             "[delegation] executing %s (dispatcher=%s call_id=%s timeout=%.0fs)",
             tool_name,
@@ -431,7 +458,9 @@ class DelegationEngine:
         except Exception as exc:
             duration_ms = int((time.monotonic() - started) * 1000)
             logger.error(
-                "[delegation] dispatch raised for %s (call_id=%s)", tool_name, call_id,
+                "[delegation] dispatch raised for %s (call_id=%s)",
+                tool_name,
+                call_id,
                 exc_info=True,
             )
             return {
@@ -447,7 +476,9 @@ class DelegationEngine:
                 await session.cleanup()
             except Exception:
                 logger.warning(
-                    "[delegation] session cleanup failed (call_id=%s)", call_id, exc_info=True
+                    "[delegation] session cleanup failed (call_id=%s)",
+                    call_id,
+                    exc_info=True,
                 )
 
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -458,7 +489,8 @@ class DelegationEngine:
                 "tool_name": tool_name,
                 "output": None,
                 "is_error": True,
-                "error_message": result.output or "Tool returned an error with no message.",
+                "error_message": result.output
+                or "Tool returned an error with no message.",
                 "duration_ms": duration_ms,
             }
         output: dict[str, Any] = {"output": result.output}
@@ -521,6 +553,7 @@ class DelegationEngine:
                     status=exc.status,
                     error=str(exc),
                 )
+                await self._clear_outbox(call_id)
                 return
             logger.warning(
                 "[delegation] tool_results delivery failed for call_id=%s (%s) — "
@@ -544,7 +577,6 @@ class DelegationEngine:
             self._event("delivery_retry_queued", call_id=call_id, error=str(exc))
             return
 
-        self._undelivered.pop(call_id, None)
         self._last_delivered_at = time.time()
         not_found = response.get("not_found")
         if isinstance(not_found, list) and call_id in not_found:
@@ -565,8 +597,104 @@ class DelegationEngine:
             user_request_id=response.get("user_request_id"),
         )
         if response.get("continuation_needed") and response.get("user_request_id"):
-            await self._maybe_resume(
-                conversation_id, str(response["user_request_id"]), jwt
+            user_request_id = str(response["user_request_id"])
+            # Keep the executed result until continuation is either streamed or
+            # proven terminal. Re-posting it is idempotent and lets a later
+            # sweep recover from a lost acknowledgement or failed /resume.
+            self._undelivered[call_id] = (conversation_id, result_payload)
+            if (
+                user_request_id not in self._recent_resumes
+                and _BROWSER_RESUME_GRACE_SECONDS > 0
+            ):
+                self._event(
+                    "browser_resume_grace",
+                    conversation_id=conversation_id,
+                    user_request_id=user_request_id,
+                    seconds=_BROWSER_RESUME_GRACE_SECONDS,
+                )
+                await asyncio.sleep(_BROWSER_RESUME_GRACE_SECONDS)
+
+            disposition = await self._maybe_resume(
+                conversation_id, user_request_id, jwt
+            )
+            if disposition in ("streamed", "terminal"):
+                self._undelivered.pop(call_id, None)
+                await self._clear_outbox(call_id)
+            else:
+                self._event(
+                    "resume_retry_queued",
+                    conversation_id=conversation_id,
+                    user_request_id=user_request_id,
+                    call_id=call_id,
+                    disposition=disposition,
+                )
+            return
+
+        self._undelivered.pop(call_id, None)
+        await self._clear_outbox(call_id)
+
+    async def _restore_outbox(self) -> bool:
+        """Restore executed results before reading the cloud pending ledger."""
+        try:
+            entries = await self._outbox.list_entries()
+        except Exception as exc:
+            self._last_error = f"delegation outbox unavailable: {exc}"
+            logger.error(
+                "[delegation] local outbox unavailable — refusing new execution",
+                exc_info=True,
+            )
+            return False
+
+        for entry in entries:
+            call_id = str(entry.get("call_id") or "")
+            conversation_id = str(entry.get("conversation_id") or "")
+            tool_name = str(entry.get("tool_name") or "")
+            if not call_id or not conversation_id:
+                logger.error("[delegation] malformed outbox entry skipped: %r", entry)
+                continue
+            if call_id in self._undelivered or call_id in self._inflight:
+                continue
+            payload = entry.get("result")
+            if not isinstance(payload, dict):
+                payload = {
+                    "call_id": call_id,
+                    "tool_name": tool_name,
+                    "output": None,
+                    "is_error": True,
+                    "error_message": (
+                        "The desktop restarted while this tool was executing. Its outcome "
+                        "is unknown, so it was not executed again to avoid duplicate side effects."
+                    ),
+                    "duration_ms": 0,
+                }
+                try:
+                    await self._outbox.store_result(call_id, payload)
+                except Exception:
+                    logger.error(
+                        "[delegation] failed to persist ambiguous restart result call_id=%s",
+                        call_id,
+                        exc_info=True,
+                    )
+                    return False
+            self._mark_handled(call_id)
+            self._undelivered[call_id] = (conversation_id, payload)
+            self._event(
+                "outbox_restored",
+                call_id=call_id,
+                conversation_id=conversation_id,
+                state=entry.get("state"),
+            )
+        return True
+
+    async def _clear_outbox(self, call_id: str) -> None:
+        try:
+            await self._outbox.delete(call_id)
+        except Exception as exc:
+            # A stale completed row is safe: the next boot re-posts the same
+            # idempotent result and aidream answers not_resumable.
+            self._last_error = f"delegation outbox cleanup failed: {exc}"
+            logger.warning(
+                "[delegation] outbox cleanup failed call_id=%s: %s", call_id, exc
             )
 
     async def _retry_undelivered(self, jwt: str) -> None:
@@ -581,15 +709,16 @@ class DelegationEngine:
 
     async def _maybe_resume(
         self, conversation_id: str, user_request_id: str, jwt: str
-    ) -> None:
+    ) -> Literal["streamed", "retry", "terminal"]:
         """Single-flight resume per user_request_id, with bounded 409 retry."""
         now = time.monotonic()
         last = self._recent_resumes.get(user_request_id)
         if last is not None and (now - last) < _RESUME_SUPPRESS_TTL:
             logger.info(
-                "[delegation] duplicate resume suppressed for request=%s", user_request_id
+                "[delegation] duplicate resume suppressed for request=%s",
+                user_request_id,
             )
-            return
+            return "retry"
         self._recent_resumes[user_request_id] = now
         # Bound the map.
         while len(self._recent_resumes) > _HANDLED_CALLS_MAX:
@@ -612,7 +741,7 @@ class DelegationEngine:
                     user_request_id,
                     exc,
                 )
-                return
+                return "retry"
             if outcome.status == "streamed":
                 self._last_resume_at = time.time()
                 logger.info(
@@ -632,7 +761,7 @@ class DelegationEngine:
                 # Re-entrancy (§2.4): a re-delegated call is a durable row by
                 # now — sweep immediately instead of waiting an interval.
                 self.request_sweep("post-resume re-entrancy check")
-                return
+                return "streamed"
             conflict = outcome.conflict
             assert conflict is not None
             if conflict.code == "resume_conflict" and conflict.retryable:
@@ -642,7 +771,7 @@ class DelegationEngine:
                         "(benign — another runner owns it)",
                         user_request_id,
                     )
-                    return
+                    return "retry"
                 delay = _RESUME_CONFLICT_BASE_DELAY * attempt
                 logger.info(
                     "[delegation] resume_conflict (attempt %d/%d) — retrying in %.1fs",
@@ -652,9 +781,16 @@ class DelegationEngine:
                 )
                 await asyncio.sleep(delay)
                 continue
-            # outstanding_delegated_calls / not_resumable / unknown → benign, no retry.
+            if conflict.code == "not_resumable":
+                logger.info(
+                    "[delegation] request=%s is terminal — resume obligation cleared",
+                    user_request_id,
+                )
+                return "terminal"
+            # Outstanding siblings and unknown transient conflict shapes retain
+            # the idempotent result so a later sweep re-evaluates readiness.
             logger.info(
-                "[delegation] resume declined (%s) for request=%s — no retry",
+                "[delegation] resume deferred (%s) for request=%s — retry queued",
                 conflict.code,
                 user_request_id,
             )
@@ -665,7 +801,9 @@ class DelegationEngine:
                 code=conflict.code,
                 retryable=conflict.retryable,
             )
-            return
+            return "retry"
+
+        return "retry"
 
     # ------------------------------------------------------------------
     # Client context for /resume
@@ -718,7 +856,9 @@ class DelegationEngine:
             self._record_pending_snapshot("visible", [])
             return
         try:
-            visible = await self._client.list_pending_calls(jwt, claim_for_instance=False)
+            visible = await self._client.list_pending_calls(
+                jwt, claim_for_instance=False
+            )
         except Exception as exc:
             self._last_error = str(exc)
             self._event("visible_pending_probe_failed", error=str(exc))
@@ -856,7 +996,9 @@ def _prepare_delegated_image(image: Any) -> tuple[dict[str, str] | None, str | N
                     Image.Resampling.LANCZOS,
                 )
             out = io.BytesIO()
-            img.save(out, format="JPEG", quality=DELEGATED_IMAGE_JPEG_QUALITY, optimize=True)
+            img.save(
+                out, format="JPEG", quality=DELEGATED_IMAGE_JPEG_QUALITY, optimize=True
+            )
         compact = base64.b64encode(out.getvalue()).decode()
         if len(compact) <= MAX_INLINE_IMAGE_BASE64_CHARS:
             return {

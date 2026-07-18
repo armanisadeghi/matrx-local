@@ -708,6 +708,22 @@ CREATE INDEX IF NOT EXISTS idx_file_sync_state_pending ON file_sync_state(pendin
     WHERE pending_op IS NOT NULL
 """
 
+_V15_DELEGATION_OUTBOX = """
+CREATE TABLE IF NOT EXISTS delegation_outbox (
+    call_id          TEXT PRIMARY KEY,
+    conversation_id  TEXT NOT NULL,
+    user_request_id  TEXT NOT NULL DEFAULT '',
+    tool_name        TEXT NOT NULL,
+    state            TEXT NOT NULL DEFAULT 'executing',
+    result_payload   TEXT,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_delegation_outbox_state
+    ON delegation_outbox(state, created_at);
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -723,4 +739,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (12, _V12_CHAT_BESPOKE_DROP),
     (13, _V13_MESSAGE_SOURCE_REPAIR),
     (14, _V14_AGENT_EXECUTION_DEFINITIONS),
+    (15, _V15_DELEGATION_OUTBOX),
 ]

@@ -79,8 +79,12 @@ def _parse_conflict_code(body: dict[str, Any]) -> str:
     """
     for candidate in (
         body.get("error"),
-        (body.get("details") or {}).get("code") if isinstance(body.get("details"), dict) else None,
-        (body.get("detail") or {}).get("code") if isinstance(body.get("detail"), dict) else None,
+        (body.get("details") or {}).get("code")
+        if isinstance(body.get("details"), dict)
+        else None,
+        (body.get("detail") or {}).get("code")
+        if isinstance(body.get("detail"), dict)
+        else None,
     ):
         if isinstance(candidate, str) and candidate:
             return candidate
@@ -110,7 +114,9 @@ class DelegationApiClient:
     def base_url(self) -> str:
         return self._base_url
 
-    def _client(self, timeout: httpx.Timeout | float = _REQUEST_TIMEOUT) -> httpx.AsyncClient:
+    def _client(
+        self, timeout: httpx.Timeout | float = _REQUEST_TIMEOUT
+    ) -> httpx.AsyncClient:
         return httpx.AsyncClient(timeout=timeout, transport=self._transport)
 
     def _headers(self, jwt: str) -> dict[str, str]:
@@ -145,15 +151,22 @@ class DelegationApiClient:
         params: dict[str, str] = {}
         if claim_for_instance:
             try:
-                from app.services.cloud_sync.instance_manager import get_instance_manager
+                from app.services.cloud_sync.instance_manager import (
+                    get_instance_manager,
+                )
 
                 iid = get_instance_manager().instance_id
                 if iid:
                     params["instance_id"] = iid
             except Exception:
-                logger.debug("[delegation] could not resolve instance_id for pending_calls", exc_info=True)
+                logger.debug(
+                    "[delegation] could not resolve instance_id for pending_calls",
+                    exc_info=True,
+                )
         async with self._client() as http:
-            resp = await http.get(url, headers=self._headers(jwt), params=params or None)
+            resp = await http.get(
+                url, headers=self._headers(jwt), params=params or None
+            )
         if resp.status_code != 200:
             raise DelegationApiError(
                 resp.status_code,
@@ -162,7 +175,8 @@ class DelegationApiClient:
         data = resp.json()
         if not isinstance(data, list):
             raise DelegationApiError(
-                200, f"[delegation] pending_calls returned non-list payload: {type(data).__name__}"
+                200,
+                f"[delegation] pending_calls returned non-list payload: {type(data).__name__}",
             )
         return data
 
@@ -183,7 +197,9 @@ class DelegationApiClient:
         """
         url = f"{self._base_url}/ai/conversations/{conversation_id}/tool_results"
         async with self._client() as http:
-            resp = await http.post(url, headers=self._headers(jwt), json={"results": results})
+            resp = await http.post(
+                url, headers=self._headers(jwt), json={"results": results}
+            )
         if resp.status_code != 200:
             raise DelegationApiError(
                 resp.status_code,
@@ -223,11 +239,16 @@ class DelegationApiClient:
                     raw = await _read_json_body(resp)
                     code = _parse_conflict_code(raw)
                     retryable = bool(raw.get("retryable")) or code == "resume_conflict"
-                    if isinstance(raw.get("details"), dict) and "retryable" in raw["details"]:
+                    if (
+                        isinstance(raw.get("details"), dict)
+                        and "retryable" in raw["details"]
+                    ):
                         retryable = bool(raw["details"]["retryable"])
                     return ResumeOutcome(
                         status="conflict",
-                        conflict=ResumeConflict(code=code, retryable=retryable, raw=raw),
+                        conflict=ResumeConflict(
+                            code=code, retryable=retryable, raw=raw
+                        ),
                     )
                 if resp.status_code != 200:
                     text = (await resp.aread()).decode("utf-8", errors="replace")
@@ -239,6 +260,12 @@ class DelegationApiClient:
                 delegated = 0
                 async for evt in _iter_stream_events(resp):
                     events += 1
+                    error_message = _stream_error_message(evt)
+                    if error_message is not None:
+                        raise DelegationApiError(
+                            200,
+                            f"[delegation] resume stream reported a fatal error: {error_message}",
+                        )
                     if _is_tool_delegated(evt):
                         delegated += 1
                 return ResumeOutcome(
@@ -287,3 +314,16 @@ def _is_tool_delegated(evt: dict[str, Any]) -> bool:
     if isinstance(data, dict) and data.get("event") == "tool_delegated":
         return True
     return False
+
+
+def _stream_error_message(evt: dict[str, Any]) -> str | None:
+    """Return a diagnostic when the continuation emitted a fatal error."""
+    if evt.get("event") != "error":
+        return None
+    data = evt.get("data")
+    if isinstance(data, dict):
+        for key in ("message", "user_message", "error_type"):
+            value = data.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return "unknown stream error"

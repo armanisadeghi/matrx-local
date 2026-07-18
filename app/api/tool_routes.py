@@ -30,6 +30,7 @@ class ToolResponse(BaseModel):
     type: str
     output: str
     image: dict[str, Any] | None = None
+    artifact: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
 
 
@@ -74,5 +75,10 @@ async def invoke_tool(req: ToolRequest, request: Request) -> ToolResponse:
         type=result.type.value,
         output=result.output,
         image=result.image.model_dump() if result.image else None,
+        artifact=(
+            result.artifact.model_dump(mode="json", exclude_none=True)
+            if result.artifact
+            else None
+        ),
         metadata=result.metadata,
     )

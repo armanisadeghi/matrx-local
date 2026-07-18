@@ -18,6 +18,7 @@ import {
   Lock,
   Maximize2,
   Repeat2,
+  Sparkles,
   Sprout,
   Trash2,
   Undo2,
@@ -74,6 +75,12 @@ export function buildMediaMenu(
       icon: <Repeat2 className={ICON} />,
       separatorBefore: true,
       run: wrap(() => actions.remix(item)),
+    },
+    {
+      id: "iterate",
+      label: "Iterate from this image",
+      icon: <Sparkles className={ICON} />,
+      run: wrap(() => actions.iterate(item)),
     },
     {
       id: "use-as-input",
@@ -141,6 +148,7 @@ export function buildMediaMenu(
     open: true,
     info: true,
     remix: caps.canRemix,
+    iterate: caps.canIterate,
     "use-as-input": caps.canUseAsInput,
     "reuse-seed": caps.canReuseSeed,
     "copy-image": caps.canCopyImage,

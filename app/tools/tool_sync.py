@@ -36,10 +36,10 @@ hard-gate on it).
 
 Classification:
     NEW      — in catalog, no active matrx-local binding in the cloud
-    CHANGED  — bound, but the parameters JSON Schema differs (descriptions
-               and category are NOT diffed: descriptions are DB-canonical by
-               house rule, and the cloud intentionally flattens category to
-               'local')
+    CHANGED  — bound, but the parameters or output JSON Schema differs
+               (descriptions and category are NOT diffed: descriptions are
+               DB-canonical by house rule, and the cloud intentionally
+               flattens category to 'local')
     REMOVED  — bound in the cloud, absent from the catalog (never deleted
                automatically; the changeset only suggests deactivation)
     OK       — bound and structurally identical
@@ -191,10 +191,14 @@ def _fetch_cloud_state(baseline: Path | None) -> CloudState:
 # Diff
 # ---------------------------------------------------------------------------
 
+def _norm_json(value: Any) -> str:
+    if isinstance(value, str):
+        value = json.loads(value)
+    return json.dumps(value or {}, sort_keys=True)
+
+
 def _norm_params(params: Any) -> str:
-    if isinstance(params, str):
-        params = json.loads(params)
-    return json.dumps(params or {}, sort_keys=True)
+    return _norm_json(params)
 
 
 def _catalog_params(entry: CatalogEntry) -> dict[str, Any]:
@@ -253,7 +257,10 @@ def compute_diff(cloud: CloudState) -> ToolDiff:
                 diff.new.append(entry)
         elif cloud.names_only:
             diff.unverified.append(entry.cloud_name)
-        elif _norm_params(row.get("parameters")) != _norm_params(_catalog_params(entry)):
+        elif (
+            _norm_params(row.get("parameters")) != _norm_params(_catalog_params(entry))
+            or _norm_json(row.get("output_schema")) != _norm_json(entry.output_schema)
+        ):
             diff.changed.append((entry, row))
         else:
             diff.ok.append(entry.cloud_name)
@@ -325,6 +332,10 @@ def print_field_diff(diff: ToolDiff) -> None:
         print("    " + _norm_params(row.get("parameters")))
         print("  catalog parameters:")
         print("    " + _norm_params(_catalog_params(entry)))
+        print("  cloud output_schema:")
+        print("    " + _norm_json(row.get("output_schema")))
+        print("  catalog output_schema:")
+        print("    " + _norm_json(entry.output_schema))
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +358,7 @@ def _sql_text_array(values: tuple[str, ...]) -> str:
 
 def _new_tool_sql(entry: CatalogEntry) -> str:
     cols = (
-        "name, description, parameters, category, tags, "
+        "name, description, parameters, output_schema, category, tags, "
         "source_kind, tool_group, organization_id, visibility, is_active"
     )
     vals = ", ".join(
@@ -355,6 +366,7 @@ def _new_tool_sql(entry: CatalogEntry) -> str:
             _sql_str(entry.cloud_name),
             _sql_str(entry.description),
             _sql_jsonb(_catalog_params(entry)),
+            _sql_jsonb(entry.output_schema) if entry.output_schema else "NULL",
             _sql_str(entry.category),
             _sql_text_array(entry.tags),
             _sql_str(DEFINITION_DEFAULTS["source_kind"]),
@@ -379,9 +391,11 @@ def _new_tool_sql(entry: CatalogEntry) -> str:
 
 def _changed_tool_sql(entry: CatalogEntry) -> str:
     return (
-        f"-- CHANGED: {entry.cloud_name} — parameters updated to match the code catalog\n"
+        f"-- CHANGED: {entry.cloud_name} — I/O schemas updated to match the code catalog\n"
         f"UPDATE tool.definition\n"
         f"   SET parameters = {_sql_jsonb(_catalog_params(entry))},\n"
+        f"       output_schema = "
+        f"{_sql_jsonb(entry.output_schema) if entry.output_schema else 'NULL'},\n"
         f"       updated_at = now()\n"
         f" WHERE name = {_sql_str(entry.cloud_name)};\n"
     )
@@ -518,6 +532,7 @@ def cmd_show(name: str) -> None:
     print(f"  tags:         {list(entry.tags)}")
     print(f"  platforms:    {list(entry.platforms) if entry.platforms else 'all'}")
     print(f"  timeout:      {entry.timeout_seconds}s")
+    print(f"  output schema:{json.dumps(entry.output_schema, indent=2, sort_keys=True)}")
     print(f"  arg_model:    {entry.arg_model.__name__ if entry.arg_model else '(introspected)'}")
     print(f"\n  description:\n    {entry.description}")
     print(f"\n  input_schema:\n{json.dumps(entry.input_schema, indent=4)}")

@@ -102,7 +102,15 @@ class ToolSession:
     across sequential tool invocations.
     """
 
-    def __init__(self, working_dir: str | None = None) -> None:
+    def __init__(
+        self,
+        working_dir: str | None = None,
+        *,
+        execution_origin: str = "local",
+        cloud_call_id: str | None = None,
+        cloud_tool_name: str | None = None,
+        cloud_access_token: str | None = None,
+    ) -> None:
         raw = working_dir or str(Path.home())
         # Always fully expand ~ so cwd is always an absolute path.
         # On Windows, Path.home() returns the correct drive (e.g. D:\app_dev\...)
@@ -112,6 +120,13 @@ class ToolSession:
         self.files_read: set[str] = set()
         self.background_shells: dict[str, BackgroundShell] = {}
         self._shell_counter: int = 0
+        # Artifact-producing tools use this context to select the execution
+        # lane. Local is offline-first; cloud_delegated publishes inline for
+        # the fastest possible suspended-turn continuation.
+        self.execution_origin = execution_origin
+        self.cloud_call_id = cloud_call_id
+        self.cloud_tool_name = cloud_tool_name
+        self.cloud_access_token = cloud_access_token
 
     def mark_file_read(self, path: str) -> None:
         self.files_read.add(os.path.realpath(path))

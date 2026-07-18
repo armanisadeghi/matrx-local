@@ -25,6 +25,27 @@ queue order; terminal work follows `finished_sequence` (with `finished_at` as
 the human-readable timestamp), never enqueue order. Do not reintroduce a
 direct `service.generate()` route call or sort completed results by `created_at`.
 
+### Iterative revision is lineage on the same job, not a second engine
+
+The desktop's **Iterate from this image** action is a button-driven img2img
+workflow for Z-Image and FLUX (`z-image`, `flux`, `flux2-klein`). It reuses the
+normal model, generation gate, durable queue, cancellation, and media library.
+There is deliberately no live keystroke generation, latent cache, parallel
+pipeline, or alternate worker.
+
+`GenerateRequest.revision` carries `parent_item_id` and `root_item_id` and is
+valid only with `init_image_b64`. The job persists those ids as
+`revision_parent_item_id` / `revision_root_item_id`; the service copies them
+into the generated media sidecar's `params`. Every successful Apply is therefore
+a normal durable media item and the next Apply uses it as the parent. Starting
+from an older item creates a branch naturally. Never hide lineage inside
+`extra_params` or accept revision metadata without parent image bytes.
+
+FLUX.2 Klein uses its native reference-edit call and receives no `strength`.
+Z-Image and FLUX.1 use their existing img2img pipeline and strength control.
+Changing to another model exits revision mode rather than silently changing
+the editing semantics.
+
 ### 1. A restart RESUMES. It never destroys pending work.
 
 `ImageJobStore.load()`:
@@ -213,3 +234,4 @@ variables; it just runs the jobs the matrix expands into.
 | `tests/smoke/test_media_gen_batch.py` | The HTTP batch surface + **a real batch drained by the real runner**, retrying a transient failure on the way |
 | `tests/smoke/test_media_gen_batch_live.py` | Opt-in (`MATRX_LIVE_GEN=1`): a real 4-run matrix generating real images on a real engine |
 | `tests/smoke/test_media_gen_queue.py`, `test_media_gen_cancel.py` | The generation gate, priority-`next`, mid-flight cancel |
+| `tests/smoke/test_media_gen_img2img_lora.py` | Img2img/LoRA plus revision validation, durable job lineage, and sidecar lineage |

@@ -206,11 +206,8 @@ export function VariantStudio() {
   // has exactly the same abilities as one opened from the Library tab.
   const resultDescriptor = useMemo<MediaDescriptor | null>(() => {
     if (!imageResult) return null;
-    return descriptorFromResult(imageResult, {
-      ...(imageForm.prompt.trim() ? { prompt: imageForm.prompt.trim() } : {}),
-      ...(imageCtl.model ? { modelId: imageCtl.model.model_id } : {}),
-    });
-  }, [imageResult, imageForm.prompt, imageCtl.model]);
+    return descriptorFromResult(imageResult);
+  }, [imageResult]);
 
   const viewingSet = useMemo<MediaDescriptor[]>(() => {
     const strip = viewingSetOf(filmstripItems, libState.fileUrls, "library");

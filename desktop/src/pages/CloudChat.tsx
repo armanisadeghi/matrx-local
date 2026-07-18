@@ -71,6 +71,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   const [activeVariables, setActiveVariables] = useState<PromptVariable[]>([]);
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [draftInsertion, setDraftInsertion] = useState<{ id: number; text: string } | null>(null);
   const cloudChat = useCloudChat({ engineUrl });
   const cloudAgents = useCloudAgents();
   const {
@@ -113,6 +114,13 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   const currentActiveAgent = selectedAgentId
     ? (agents.find((agent) => agent.id === selectedAgentId) ?? activeAgent)
     : null;
+
+  const handleReferencePaths = useCallback((paths: string[]) => {
+    const text = paths.length === 1
+      ? `Use this local path: ${paths[0]}`
+      : `Use these local paths:\n${paths.map((path) => `- ${path}`).join("\n")}`;
+    setDraftInsertion({ id: Date.now(), text });
+  }, []);
 
   useEffect(() => {
     if (defaultAgentApplied || activeAgent || activeConversationId || agents.length === 0) return;
@@ -344,7 +352,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
           {messages.length === 0 ? (
             <CloudEmptyState activeAgent={activeAgentWithVariables} />
           ) : (
-            <ChatMessages messages={messages} isStreaming={isStreaming} />
+            <ChatMessages messages={messages} isStreaming={isStreaming} onReferencePaths={handleReferencePaths} />
           )}
         </div>
 
@@ -390,6 +398,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
             showModeSelector={false}
             attachments={attachments}
             onRemoveAttachment={handleRemoveAttachment}
+            draftInsertion={draftInsertion}
             plusMenuSlot={
               <CloudChatPlusMenu
                 engineUrl={engineUrl}

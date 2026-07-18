@@ -45,6 +45,7 @@ export function ChatPanel({
   const navigate = useNavigate();
   const [aiWarning, setAiWarning] = useState<AiStatusWarning | null>(null);
   const [aiWarningDismissed, setAiWarningDismissed] = useState(false);
+  const [draftInsertion, setDraftInsertion] = useState<{ id: number; text: string } | null>(null);
   // Read this engine's own instance_id (the matrx-local app_instances row this
   // desktop registered as) so the SandboxPicker can label the matching target
   // as "This computer".
@@ -210,6 +211,13 @@ export function ChatPanel({
     [sendMessage],
   );
 
+  const handleReferencePaths = useCallback((paths: string[]) => {
+    const text = paths.length === 1
+      ? `Use this local path: ${paths[0]}`
+      : `Use these local paths:\n${paths.map((path) => `- ${path}`).join("\n")}`;
+    setDraftInsertion({ id: Date.now(), text });
+  }, []);
+
   const handleSend = useCallback(
     async (content: string) => {
       if (forceLocalModel) {
@@ -313,6 +321,7 @@ export function ChatPanel({
             readingMessageId={readingMessageId}
             onReadAloud={handleReadAloud}
             onStopReadAloud={handleStopReadAloud}
+            onReferencePaths={handleReferencePaths}
           />
         )}
       </div>
@@ -367,6 +376,7 @@ export function ChatPanel({
           onModeChange={setMode}
           engineReady={engineStatus === "connected"}
           autoFocus={compact}
+          draftInsertion={draftInsertion}
           agents={[...builtins, ...userAgents, ...sharedAgents]}
           selectedAgentId={activeAgent?.id ?? null}
           onAgentChange={(agentId) => {

@@ -427,7 +427,7 @@ function ImageFocusFlow() {
               idleContent={
                 <>
                   <Sparkles className="mr-2 h-4 w-4" />
-                  Generate
+                  {ctl.isRevision ? "Apply change" : "Generate"}
                 </>
               }
             />
@@ -440,22 +440,24 @@ function ImageFocusFlow() {
               title="Queue this generation and keep writing the next prompt"
             >
               <ListPlus className="mr-2 h-4 w-4" />
-              Queue
+              {ctl.isRevision ? "Queue revision" : "Queue"}
             </Button>
-            <Button
-              size="lg"
-              variant="outline"
-              className="h-12 rounded-xl"
-              disabled={!ctl.defaults}
-              onClick={() => {
-                setImageGenMode("batch");
-                setBatchBuilderOpen(true);
-              }}
-              title="Build a randomized image batch"
-            >
-              <Layers className="mr-2 h-4 w-4" />
-              Batch
-            </Button>
+            {!ctl.isRevision && (
+              <Button
+                size="lg"
+                variant="outline"
+                className="h-12 rounded-xl"
+                disabled={!ctl.defaults}
+                onClick={() => {
+                  setImageGenMode("batch");
+                  setBatchBuilderOpen(true);
+                }}
+                title="Build a randomized image batch"
+              >
+                <Layers className="mr-2 h-4 w-4" />
+                Batch
+              </Button>
+            )}
           </div>
         </section>
 

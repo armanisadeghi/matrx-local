@@ -115,6 +115,10 @@ class ImageJob:
     init_image_sha256: str | None = None
     strength: float | None = None
     """img2img denoising strength (0..1); None for text-to-image jobs."""
+    revision_parent_item_id: str | None = None
+    """Media-library item used as the immediate revision source."""
+    revision_root_item_id: str | None = None
+    """First media-library item in this revision branch."""
     loras: list[dict[str, Any]] = field(default_factory=list)
     """Requested LoRAs: [{"id": <installed-lora-id>, "scale": float}]."""
     extra_params: dict[str, Any] = field(default_factory=dict)
@@ -321,7 +325,11 @@ class ImageJobStore:
             # all new transitions receive a sequence at the exact moment they
             # finish.
             for job in sorted(
-                (j for j in self._jobs.values() if j.status in TERMINAL_STATUSES and j.finished_sequence == 0),
+                (
+                    j
+                    for j in self._jobs.values()
+                    if j.status in TERMINAL_STATUSES and j.finished_sequence == 0
+                ),
                 key=lambda j: (j.finished_at or 0.0, j.created_at, j.job_id),
             ):
                 self._next_finished_sequence += 1
@@ -368,9 +376,7 @@ class ImageJobStore:
                     if b in live_batches
                 },
                 "batch_created": {
-                    b: ts
-                    for b, ts in self._batch_created.items()
-                    if b in live_batches
+                    b: ts for b, ts in self._batch_created.items() if b in live_batches
                 },
                 "jobs": [self._jobs[j].to_dict() for j in keep],
             }
@@ -538,9 +544,7 @@ class ImageJobStore:
                 j for j in self._order if self._jobs[j].status not in TERMINAL_STATUSES
             ]
             terminal = sorted(
-                (
-                    j for j in self._order if self._jobs[j].status in TERMINAL_STATUSES
-                ),
+                (j for j in self._order if self._jobs[j].status in TERMINAL_STATUSES),
                 key=self._history_sort_key,
                 reverse=True,
             )
@@ -629,9 +633,7 @@ class ImageJobStore:
             self._paused = paused
             if changed:
                 self._persist_locked()
-                logger.info(
-                    "[image_gen] Queue %s", "PAUSED" if paused else "RESUMED"
-                )
+                logger.info("[image_gen] Queue %s", "PAUSED" if paused else "RESUMED")
             return changed
 
     def reorder(self, job_ids: list[str]) -> list[str]:
@@ -684,9 +686,10 @@ class ImageJobStore:
                     job = self._jobs[job_id]
                     if job.status != "queued":
                         continue
-                    is_retry = job.attempts > 0 and "restart" not in (
-                        job.last_error or ""
-                    ).lower()
+                    is_retry = (
+                        job.attempts > 0
+                        and "restart" not in (job.last_error or "").lower()
+                    )
                     if is_retry != retry_pass:
                         continue
                     if job.next_attempt_at is not None and job.next_attempt_at > now:
@@ -797,7 +800,11 @@ class ImageJobStore:
                 self._persist_locked()
                 logger.warning(
                     "[image_gen] Job %s attempt %d/%d failed (%s) — retrying in %.0fs",
-                    job_id[:8], job.attempts, job.max_attempts, error, delay,
+                    job_id[:8],
+                    job.attempts,
+                    job.max_attempts,
+                    error,
+                    delay,
                 )
                 return True
 
@@ -810,7 +817,9 @@ class ImageJobStore:
             self._persist_locked()
             logger.error(
                 "[image_gen] Job %s FAILED permanently after %d attempt(s): %s",
-                job_id[:8], job.attempts, error,
+                job_id[:8],
+                job.attempts,
+                error,
             )
             return False
 
@@ -974,7 +983,8 @@ class ImageJobRunner:
             logger.error(
                 "[image_gen] Job worker task DIED unexpectedly — queued jobs "
                 "will not run until the next enqueue restarts it: %s",
-                exc, exc_info=exc,
+                exc,
+                exc_info=exc,
             )
             if not self._stopping and self._store.queued_count() > 0:
                 # Supervise the worker: durable queued jobs must not wait for
@@ -1024,7 +1034,8 @@ class ImageJobRunner:
             job_id = job.job_id
             model = svc.get_model(job.model_id)
             total_steps = (
-                job.steps if job.steps is not None
+                job.steps
+                if job.steps is not None
                 else (model.recommended_steps if model else 0)
             )
             # Concrete seed decided HERE (not inside generate()) so the job
@@ -1039,7 +1050,10 @@ class ImageJobRunner:
 
             logger.info(
                 "[image_gen] Job %s: starting (%s, attempt %d/%d, %d queued behind it)",
-                job_id[:8], job.model_id, job.attempts, job.max_attempts,
+                job_id[:8],
+                job.model_id,
+                job.attempts,
+                job.max_attempts,
                 self._store.queued_count(),
             )
             try:
@@ -1055,6 +1069,8 @@ class ImageJobRunner:
                     extra_params=job.extra_params,
                     init_image_bytes=self._store.get_init_image(job_id),
                     strength=job.strength,
+                    revision_parent_item_id=job.revision_parent_item_id,
+                    revision_root_item_id=job.revision_root_item_id,
                     loras=job.loras,
                     progress_callback=lambda step, total: self._store.update_progress(
                         job_id, step, total
@@ -1065,7 +1081,9 @@ class ImageJobRunner:
                     self._store.mark_cancelled(job_id)
                     logger.info(
                         "[image_gen] Job %s: cancelled mid-flight at step %d/%d",
-                        job_id[:8], job.current_step, job.total_steps,
+                        job_id[:8],
+                        job.current_step,
+                        job.total_steps,
                     )
                 elif result.success:
                     assert result.item_id is not None and result.file_path is not None
@@ -1079,14 +1097,17 @@ class ImageJobRunner:
                     )
                     logger.info(
                         "[image_gen] Job %s: completed → item %s",
-                        job_id[:8], result.item_id,
+                        job_id[:8],
+                        result.item_id,
                     )
                 else:
                     self._store.mark_failed(job_id, result.error or "Generation failed")
             except Exception as exc:  # noqa: BLE001 — one bad job must not kill the queue
                 logger.error(
                     "[image_gen] Job %s crashed the worker step: %s",
-                    job_id[:8], exc, exc_info=True,
+                    job_id[:8],
+                    exc,
+                    exc_info=True,
                 )
                 self._store.mark_failed(job_id, str(exc))
 

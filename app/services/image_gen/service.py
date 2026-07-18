@@ -455,7 +455,9 @@ class ImageGenService:
             gens = [dict(g) for g in self._active_gens.values()]
         return {
             "available": self.available,
-            "unavailable_reason": self.unavailable_reason if not self.available else None,
+            "unavailable_reason": self.unavailable_reason
+            if not self.available
+            else None,
             "loaded_model_id": self._loaded_model_id,
             "is_loading": self._is_loading,
             "load_progress": self._load_progress,
@@ -679,6 +681,8 @@ class ImageGenService:
         job_id: str | None = None,
         init_image_bytes: bytes | None = None,
         strength: float | None = None,
+        revision_parent_item_id: str | None = None,
+        revision_root_item_id: str | None = None,
         loras: list[dict[str, Any]] | None = None,
     ) -> GenerationResult:
         """Generate an image. Loads the model if not already loaded.
@@ -742,6 +746,26 @@ class ImageGenService:
                 success=False,
                 error=f"{model.name} performs reference-image editing without "
                 "a strength control — omit strength for this model.",
+            )
+        if revision_root_item_id is not None and revision_parent_item_id is None:
+            return GenerationResult(
+                success=False,
+                error="revision_root_item_id requires revision_parent_item_id.",
+            )
+        if revision_parent_item_id is not None and init_image_bytes is None:
+            return GenerationResult(
+                success=False,
+                error="revision requires an input image containing the parent result.",
+            )
+        if revision_parent_item_id is not None and model.pipeline_type not in {
+            "z-image",
+            "flux",
+            "flux2-klein",
+        }:
+            return GenerationResult(
+                success=False,
+                error=f"{model.name} is not enabled for iterative revision — "
+                "use Z-Image or FLUX.",
             )
 
         if self._gen_gate.locked():
@@ -808,6 +832,8 @@ class ImageGenService:
                         token,
                         init_image_bytes=init_image_bytes,
                         strength=strength,
+                        revision_parent_item_id=revision_parent_item_id,
+                        revision_root_item_id=revision_root_item_id,
                         loras=list(loras or []),
                     ),
                 )
@@ -1058,6 +1084,8 @@ class ImageGenService:
         *,
         init_image_bytes: bytes | None = None,
         strength: float | None = None,
+        revision_parent_item_id: str | None = None,
+        revision_root_item_id: str | None = None,
         loras: list[dict[str, Any]] | None = None,
     ) -> GenerationResult:
         with self._lock:
@@ -1264,8 +1292,14 @@ class ImageGenService:
                 )
             }
             record_params["has_init_image"] = init_image_bytes is not None
+            record_params["pipeline_type"] = model.pipeline_type
             if init_image_sha256 is not None:
                 record_params["init_image_sha256"] = init_image_sha256
+            if revision_parent_item_id is not None:
+                record_params["revision_parent_item_id"] = revision_parent_item_id
+                record_params["revision_root_item_id"] = (
+                    revision_root_item_id or revision_parent_item_id
+                )
             if applied_loras:
                 record_params["loras"] = applied_loras
             item = save_generated_image(

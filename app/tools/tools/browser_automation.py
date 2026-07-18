@@ -8,16 +8,15 @@ Falls back gracefully if Playwright is not installed.
 from __future__ import annotations
 
 import asyncio
-import base64
+import io
 import logging
 import os
-import uuid
 from typing import Literal
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
-from app.config import TEMP_DIR
+from app.services.artifacts import get_artifact_service
 from app.tools.session import ToolSession
-from app.tools.types import ImageData, ToolResult, ToolResultType
+from app.tools.types import ToolResult, ToolResultType
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +37,6 @@ def _browser_lock(browser_type: str) -> asyncio.Lock:
         lk = asyncio.Lock()
         _browser_locks[browser_type] = lk
     return lk
-
-SCREENSHOTS_DIR = TEMP_DIR / "browser_screenshots"
 
 BrowserType = Literal["chromium", "firefox", "webkit"]
 _DEFAULT_BROWSER: BrowserType = "chromium"
@@ -424,10 +421,6 @@ async def tool_browser_screenshot(
     try:
         page = await _get_page(context)
 
-        SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
-        filename = f"browser_{uuid.uuid4().hex[:8]}.png"
-        filepath = SCREENSHOTS_DIR / filename
-
         if selector:
             element = await page.query_selector(selector)
             if not element:
@@ -438,13 +431,34 @@ async def tool_browser_screenshot(
         else:
             screenshot_bytes = await page.screenshot(full_page=full_page)
 
-        filepath.write_bytes(screenshot_bytes)
-        b64 = base64.b64encode(screenshot_bytes).decode()
+        from PIL import Image
+
+        with Image.open(io.BytesIO(screenshot_bytes)) as image:
+            width, height = image.size
+        capture = {
+            "url": page.url,
+            "browser": browser,
+            "full_page": full_page,
+            "selector": selector,
+        }
+        artifact, provider_path = await get_artifact_service().create_screenshot(
+            content=screenshot_bytes,
+            width=width,
+            height=height,
+            capture_source="browser",
+            capture=capture,
+            session=session,
+        )
 
         return ToolResult(
-            output=f"Browser screenshot: {filepath} ({len(screenshot_bytes)} bytes)\nURL: {page.url}\nBrowser: {browser}",
-            image=ImageData(media_type="image/png", base64_data=b64),
-            metadata={"path": str(filepath), "url": page.url, "browser": browser},
+            output=(
+                f"Browser screenshot captured ({width}x{height}, "
+                f"{len(screenshot_bytes)} bytes); artifact_id={artifact.artifact_id}\n"
+                f"URL: {page.url}\nBrowser: {browser}"
+            ),
+            artifact=artifact,
+            provider_image_path=provider_path,
+            metadata={**capture, "artifact_id": artifact.artifact_id},
         )
 
     except Exception as e:

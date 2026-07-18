@@ -132,6 +132,7 @@ export function ToolDetailPanel({
               result={error ? { type: "error", output: error } : result}
               outputType={schema.outputType}
               elapsedMs={elapsedMs}
+              toolName={schema.toolName}
             />
           )}
         </div>

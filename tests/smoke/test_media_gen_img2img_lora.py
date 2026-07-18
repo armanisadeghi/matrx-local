@@ -30,7 +30,6 @@ import base64
 import hashlib
 import io
 import json
-import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -382,6 +381,41 @@ def test_img2img_routes_to_img2img_pipe_with_strength(
     assert "image" not in meta["params"], "the init image must never be persisted"
 
 
+def test_flux_revision_lineage_is_persisted_with_the_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pytest.importorskip("torch")
+    from app.services.image_gen import service as service_module
+
+    media_dir = _isolate_library(monkeypatch, tmp_path)
+    calls: list = []
+    i2i = RecordingImg2ImgPipe(calls)
+    monkeypatch.setattr(service_module, "_to_img2img", lambda pipe, model: i2i)
+    svc = _make_stub_service(RecordingPipe(calls), model=FLUX_MODEL)
+
+    _, raw = _png_b64()
+    result = asyncio.run(
+        svc.generate(
+            prompt="keep the scene, make the jacket red",
+            model_id=FLUX_MODEL.model_id,
+            steps=4,
+            width=32,
+            height=32,
+            init_image_bytes=raw,
+            strength=0.6,
+            revision_parent_item_id="parent-1",
+            revision_root_item_id="root-1",
+        )
+    )
+    assert result.success is True, result.error
+    meta = json.loads(
+        next((media_dir / "images").glob("*.json")).read_text(encoding="utf-8")
+    )
+    assert meta["params"]["pipeline_type"] == "flux"
+    assert meta["params"]["revision_parent_item_id"] == "parent-1"
+    assert meta["params"]["revision_root_item_id"] == "root-1"
+
+
 def test_img2img_default_strength_applied(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -682,6 +716,108 @@ def test_jobs_api_echoes_new_fields(
     assert d["strength"] == 0.55
     assert d["loras"] == [{"id": lora_id, "scale": 0.7}]
     assert store.get_init_image(job_id) == raw, "bytes must be available to the runner"
+
+
+def test_revision_job_contract_is_durable_and_replayable(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.api import image_gen_routes
+    from app.services.image_gen import jobs as jobs_module
+
+    _isolate_image_history(monkeypatch, tmp_path)
+    store = ImageJobStore()
+    monkeypatch.setattr(jobs_module, "_store", store)
+
+    class NoRunRunner:
+        def ensure_running(self) -> None:
+            pass
+
+    monkeypatch.setattr(jobs_module, "get_image_job_runner", lambda: NoRunRunner())
+    monkeypatch.setattr(
+        image_gen_routes,
+        "get_image_gen_service",
+        lambda: SimpleNamespace(
+            available=True,
+            unavailable_reason="",
+            get_model=lambda mid: FLUX_MODEL if mid == FLUX_MODEL.model_id else None,
+            is_downloaded=lambda mid: True,
+        ),
+    )
+
+    b64, _ = _png_b64()
+    response = client.post(
+        "/image-gen/jobs",
+        json={
+            "prompt": "make the jacket red",
+            "model_id": FLUX_MODEL.model_id,
+            "init_image_b64": b64,
+            "strength": 0.55,
+            "revision": {
+                "parent_item_id": "parent-1",
+                "root_item_id": "root-1",
+            },
+        },
+    )
+    assert response.status_code == 202, response.text
+    job_id = response.json()["job_id"]
+
+    body = client.get(f"/image-gen/jobs/{job_id}").json()
+    assert body["revision_parent_item_id"] == "parent-1"
+    assert body["revision_root_item_id"] == "root-1"
+    assert body["params"]["revision_parent_item_id"] == "parent-1"
+    assert body["params"]["revision_root_item_id"] == "root-1"
+    assert body["params"]["has_init_image"] is True
+
+    store2 = ImageJobStore()
+    store2.load()
+    restored = store2.get(job_id)
+    assert restored is not None
+    assert restored.revision_parent_item_id == "parent-1"
+    assert restored.revision_root_item_id == "root-1"
+
+
+def test_revision_requires_an_input_and_a_z_image_or_flux_model(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import image_gen_routes
+
+    model_by_id = {m.model_id: m for m in (FLUX_MODEL, SDXL_MODEL)}
+    monkeypatch.setattr(
+        image_gen_routes,
+        "get_image_gen_service",
+        lambda: SimpleNamespace(
+            available=True,
+            unavailable_reason="",
+            get_model=model_by_id.get,
+            is_downloaded=lambda mid: True,
+        ),
+    )
+    missing_input = client.post(
+        "/image-gen/jobs",
+        json={
+            "prompt": "edit",
+            "model_id": FLUX_MODEL.model_id,
+            "revision": {"parent_item_id": "parent-1"},
+        },
+    )
+    assert missing_input.status_code == 400
+    assert "init_image_b64" in missing_input.text
+
+    b64, _ = _png_b64()
+    unsupported = client.post(
+        "/image-gen/jobs",
+        json={
+            "prompt": "edit",
+            "model_id": SDXL_MODEL.model_id,
+            "init_image_b64": b64,
+            "revision": {"parent_item_id": "parent-1"},
+        },
+    )
+    assert unsupported.status_code == 400
+    assert "Z-Image or FLUX" in unsupported.text
 
 
 # ── /loras HTTP contract ──────────────────────────────────────────────────────

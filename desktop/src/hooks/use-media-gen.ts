@@ -126,18 +126,9 @@ function customModelUnsupported(e: unknown): Error {
   return e instanceof Error ? e : new Error(String(e));
 }
 
-export interface GeneratedImageResult {
-  /** Base64-encoded PNG (no data: prefix). */
-  b64: string;
-  elapsed: number;
-  width: number;
-  height: number;
-  /** The concrete seed used (engine-reported; falls back to the sent seed). */
-  seed: number | null;
-  /** Media-library item id, when the engine persisted the result. */
-  itemId: string | null;
-  /** On-disk path of the saved image, when the engine persisted the result. */
-  filePath: string | null;
+export interface ImageRevisionRequest {
+  parent_item_id: string;
+  root_item_id?: string;
 }
 
 export interface ImageGenerateInput {
@@ -153,6 +144,8 @@ export interface ImageGenerateInput {
   init_image_b64?: string;
   /** img2img denoise strength (0..1) — how much to change the input. */
   strength?: number;
+  /** Durable lineage for a user-applied revision. */
+  revision?: ImageRevisionRequest;
   /** Enabled LoRA adapters with their scales. */
   loras?: { id: string; scale: number }[];
   /**
@@ -161,6 +154,27 @@ export interface ImageGenerateInput {
    * the params endpoint before building this object.
    */
   extra_params?: Record<string, unknown>;
+}
+
+/** Immutable request metadata kept with a result (without duplicate image bytes). */
+export type GeneratedImageRequest = Omit<ImageGenerateInput, "init_image_b64"> & {
+  has_init_image: boolean;
+};
+
+export interface GeneratedImageResult {
+  /** Base64-encoded PNG (no data: prefix). */
+  b64: string;
+  elapsed: number;
+  width: number;
+  height: number;
+  /** The concrete seed used (engine-reported; falls back to the sent seed). */
+  seed: number | null;
+  /** Media-library item id, when the engine persisted the result. */
+  itemId: string | null;
+  /** On-disk path of the saved image, when the engine persisted the result. */
+  filePath: string | null;
+  /** Exact request metadata that produced this result, immune to later form edits. */
+  request: GeneratedImageRequest;
 }
 
 export interface ImageWorkflowInput {
@@ -241,6 +255,11 @@ export interface ImageFormState {
   strength: number;
   /** LoRA selections (persist across model switches; mismatches are warned). */
   loras: SelectedLora[];
+  /** Active button-driven revision branch, or null for normal generation. */
+  revision: {
+    parentItemId: string;
+    rootItemId: string;
+  } | null;
 }
 
 export interface VideoFormDefaults extends Omit<
@@ -253,7 +272,7 @@ export interface VideoFormDefaults extends Omit<
 
 export interface VideoFormState extends Omit<
   ImageFormState,
-  "defaults" | "initImage" | "strength" | "loras"
+  "defaults" | "initImage" | "strength" | "loras" | "revision"
 > {
   numFrames: number;
   fps: number;
@@ -277,6 +296,7 @@ const INITIAL_IMAGE_FORM: ImageFormState = {
   initImage: null,
   strength: IMG2IMG_DEFAULT_STRENGTH,
   loras: [],
+  revision: null,
 };
 
 const INITIAL_VIDEO_FORM: VideoFormState = {
@@ -595,6 +615,14 @@ export interface MediaGenActions {
    * lightbox items, library cards and result views).
    */
   useImageAsInput: (image: PickedImage) => void;
+  /** Start a durable, button-driven revision branch from a persisted image. */
+  beginImageRevision: (
+    image: PickedImage,
+    parentItemId: string,
+    rootItemId?: string,
+  ) => void;
+  /** Leave revision mode and remove its pinned parent image. */
+  endImageRevision: () => void;
   // Video
   refreshVideo: () => Promise<void>;
   loadVideoModel: (modelId: string) => Promise<MediaLoadResult>;
@@ -1150,7 +1178,12 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         const result = await apiGenerateImage(base, input);
         if (imageRunRef.current !== runId) return false; // resolved by cancel
         if (result.success && result.image_b64) {
-          setImageResult({
+          const { init_image_b64: initImageBytes, ...requestFields } = input;
+          const request: GeneratedImageRequest = {
+            ...requestFields,
+            has_init_image: initImageBytes !== undefined,
+          };
+          const nextResult: GeneratedImageResult = {
             b64: result.image_b64,
             elapsed: result.elapsed_seconds,
             width: result.width,
@@ -1158,7 +1191,36 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
             seed: result.seed ?? input.seed ?? null,
             itemId: result.item_id ?? null,
             filePath: result.file_path ?? null,
-          });
+            request,
+          };
+          setImageResult(nextResult);
+          // Applying a revision advances the branch in one atomic state update:
+          // the fresh result becomes the next parent, while the root remains
+          // fixed. A stale response cannot advance a newer branch.
+          const revision = input.revision;
+          const nextItemId = nextResult.itemId;
+          if (revision && nextItemId) {
+            setImageFormState((prev) => {
+              if (
+                prev.revision?.parentItemId !== revision.parent_item_id
+              ) {
+                return prev;
+              }
+              return {
+                ...prev,
+                initImage: {
+                  name: `${nextItemId}.png`,
+                  base64: nextResult.b64,
+                  previewUrl: `data:image/png;base64,${nextResult.b64}`,
+                },
+                revision: {
+                  parentItemId: nextItemId,
+                  rootItemId:
+                    revision.root_item_id ?? revision.parent_item_id,
+                },
+              };
+            });
+          }
           return true;
         }
         setImageGenError(
@@ -1234,6 +1296,27 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         const result = await apiGenerateImageWorkflow(base, input);
         if (imageRunRef.current !== runId) return false; // resolved by cancel
         if (result.success && result.image_b64) {
+          const preset = imagePresetsRef.current.find(
+            (p) => p.preset_id === input.preset_id,
+          );
+          const request: GeneratedImageRequest = {
+            prompt: preset
+              ? preset.prompt_template.replace("{subject}", input.subject)
+              : input.subject,
+            model_id:
+              result.model_id ||
+              input.model_id ||
+              preset?.suggested_model_id ||
+              "",
+            has_init_image: false,
+            ...(preset?.negative_prompt
+              ? { negative_prompt: preset.negative_prompt }
+              : {}),
+            ...(preset ? { steps: preset.steps } : {}),
+            ...(preset ? { guidance: preset.guidance } : {}),
+            ...(preset ? { width: preset.width, height: preset.height } : {}),
+            ...(input.seed !== undefined ? { seed: input.seed } : {}),
+          };
           setImageResult({
             b64: result.image_b64,
             elapsed: result.elapsed_seconds,
@@ -1242,6 +1325,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
             seed: result.seed ?? input.seed ?? null,
             itemId: result.item_id ?? null,
             filePath: result.file_path ?? null,
+            request,
           });
           return true;
         }
@@ -1640,7 +1724,35 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   );
 
   const useImageAsInput = useCallback((image: PickedImage) => {
-    setImageFormState((prev) => ({ ...prev, initImage: image }));
+    setImageFormState((prev) => ({
+      ...prev,
+      initImage: image,
+      revision: null,
+    }));
+  }, []);
+
+  const beginImageRevision = useCallback(
+    (image: PickedImage, parentItemId: string, rootItemId?: string) => {
+      setImageFormState((prev) => ({
+        ...prev,
+        view: "generate",
+        initImage: image,
+        seedText: "",
+        revision: {
+          parentItemId,
+          rootItemId: rootItemId ?? parentItemId,
+        },
+      }));
+    },
+    [],
+  );
+
+  const endImageRevision = useCallback(() => {
+    setImageFormState((prev) => ({
+      ...prev,
+      initImage: null,
+      revision: null,
+    }));
   }, []);
 
   // ── Custom models (Hugging Face / Civitai checkpoints) ────────────────────
@@ -2584,6 +2696,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       registerCustomModel,
       deleteCustomModel,
       useImageAsInput,
+      beginImageRevision,
+      endImageRevision,
       refreshVideo,
       loadVideoModel,
       unloadVideoModel,
@@ -2638,6 +2752,8 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       registerCustomModel,
       deleteCustomModel,
       useImageAsInput,
+      beginImageRevision,
+      endImageRevision,
       refreshVideo,
       loadVideoModel,
       unloadVideoModel,

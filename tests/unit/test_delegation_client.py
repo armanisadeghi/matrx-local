@@ -300,13 +300,8 @@ def test_tool_error_becomes_is_error_result(tmp_path: Path) -> None:
     assert "definitely_not_an_action" in result["error_message"]
 
 
-def test_large_screen_result_is_compacted_for_delivery() -> None:
-    """Screenshot tools can return multi-megabyte base64 PNGs. The delegation
-    client must compact them before POSTing /tool_results so the conversation
-    does not wedge while text/file tools continue to work."""
-    from app.services.delegation import engine as engine_mod
-    from app.tools.types import ImageData
-
+def test_screen_result_delivery_contains_cloud_ref_and_no_base64() -> None:
+    """Delegated screenshots cross the durable boundary as Content IR refs."""
     server = FakeServer()
     server.continuation_needed = False
     server.pending = [
@@ -320,19 +315,14 @@ def test_large_screen_result_is_compacted_for_delivery() -> None:
     async def fake_execute(
         entry: Any, tool_name: str, call_id: str, args: dict[str, Any]
     ) -> dict[str, Any]:
-        image = ImageData(
-            media_type="image/png",
-            base64_data="x" * (engine_mod.MAX_INLINE_IMAGE_BASE64_CHARS + 100),
-        )
-        image_payload, image_note = engine_mod._prepare_delegated_image(image)
         output: dict[str, Any] = {
-            "output": "Screenshot captured: /tmp/screenshot.png",
-            "metadata": {"path": "/tmp/screenshot.png"},
+            "kind": "image_ref",
+            "artifact_id": "artifact-1",
+            "availability": "cloud_ready",
+            "media_type": "image/png",
+            "file_id": "file-1",
+            "media_ref": {"file_id": "file-1"},
         }
-        if image_note:
-            output["metadata"]["delegation_image_note"] = image_note
-        if image_payload is not None:
-            output["image"] = image_payload
         return {
             "call_id": call_id,
             "tool_name": tool_name,
@@ -348,9 +338,9 @@ def test_large_screen_result_is_compacted_for_delivery() -> None:
     result = server.tool_results_bodies[0]["results"][0]
     assert result["tool_name"] == "local_screen"
     assert result["is_error"] is False
-    assert result["output"]["metadata"]["path"] == "/tmp/screenshot.png"
-    assert "delegation_image_note" in result["output"]["metadata"]
-    assert "image" not in result["output"]
+    assert result["output"]["file_id"] == "file-1"
+    assert "base64" not in json.dumps(result).lower()
+    assert "/tmp/" not in json.dumps(result)
 
 
 def test_malformed_pending_rows_are_skipped() -> None:

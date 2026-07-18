@@ -41,7 +41,6 @@ from app.services.local_db.repositories import (
     ConversationsRepo,
     MessagesRepo,
     ToolsRepo,
-    SyncMetaRepo,
 )
 from app.services.local_db.sync_engine import get_sync_engine
 
@@ -196,6 +195,23 @@ async def get_conversation(conv_id: str) -> dict[str, Any]:
 
     messages = await msg_repo.list_by_conversation(conv_id)
     return {**conv, "messages": messages}
+
+
+@router.get("/conversations/{conv_id}/activity")
+async def get_conversation_activity(conv_id: str) -> dict[str, Any]:
+    """Return the canonical local conversation execution timeline.
+
+    This keeps tool calls, executor traces, messages, media, and request rows
+    correlated by their durable conversation/call identifiers. Consumers must
+    not reconstruct tool activity by parsing display text from messages.
+    """
+    from app.services.ai.conversation_handler import get_conversation_store
+
+    try:
+        data = await get_conversation_store().get_conversation_data(conv_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    return {**data, "source": "local_db"}
 
 
 @router.post("/conversations", status_code=201)

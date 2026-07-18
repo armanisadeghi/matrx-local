@@ -726,6 +726,50 @@ CREATE INDEX IF NOT EXISTS idx_delegation_outbox_state
     ON delegation_outbox(state, created_at);
 """
 
+# ------------------------------------------------------------------
+# Migration 16: local-first media artifacts
+#
+# Screenshot bytes are committed here before a local tool call succeeds.
+# Cloud publication is an independent, always-on outbox and deliberately does
+# not inherit the optional Files replica mode: these records are required to
+# make a locally-produced tool result portable when its conversation later
+# resumes in the cloud.
+# ------------------------------------------------------------------
+
+_V16_LOCAL_ARTIFACTS = """
+CREATE TABLE IF NOT EXISTS local_artifacts (
+    artifact_id      TEXT PRIMARY KEY,
+    kind             TEXT NOT NULL DEFAULT 'image_ref',
+    local_path       TEXT,
+    media_type       TEXT NOT NULL,
+    file_name        TEXT NOT NULL,
+    size_bytes       INTEGER NOT NULL,
+    checksum         TEXT NOT NULL,
+    source_width     INTEGER NOT NULL,
+    source_height    INTEGER NOT NULL,
+    capture_source   TEXT NOT NULL,
+    capture_json     TEXT NOT NULL DEFAULT '{}',
+    sync_state       TEXT NOT NULL DEFAULT 'sync_pending',
+    cloud_file_id    TEXT,
+    url              TEXT,
+    cdn_url          TEXT,
+    signed_url       TEXT,
+    download_url     TEXT,
+    visibility       TEXT NOT NULL DEFAULT 'private',
+    sync_attempts    INTEGER NOT NULL DEFAULT 0,
+    sync_error       TEXT,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    published_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_local_artifacts_sync
+    ON local_artifacts(sync_state, created_at);
+CREATE INDEX IF NOT EXISTS idx_local_artifacts_cloud_file
+    ON local_artifacts(cloud_file_id)
+    WHERE cloud_file_id IS NOT NULL;
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -742,4 +786,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (13, _V13_MESSAGE_SOURCE_REPAIR),
     (14, _V14_AGENT_EXECUTION_DEFINITIONS),
     (15, _V15_DELEGATION_OUTBOX),
+    (16, _V16_LOCAL_ARTIFACTS),
 ]

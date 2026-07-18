@@ -45,9 +45,7 @@ dropped call. An undeliverable result is retried on subsequent sweeps
 from __future__ import annotations
 
 import asyncio
-import base64
 from collections import deque
-import io
 import os
 import sys
 import time
@@ -83,19 +81,6 @@ EXECUTION_TIMEOUTS: dict[str, float] = {
     "Audio": 600.0,  # record / transcribe
 }
 DEFAULT_EXECUTION_TIMEOUT = 120.0
-
-# Keep delegated result bodies below common proxy/server body limits. Full
-# multi-monitor screenshots can be several MB once base64 encoded; text/file
-# tools can succeed while screenshot delivery fails and strands the turn.
-MAX_INLINE_IMAGE_BASE64_CHARS = int(
-    os.environ.get("MATRX_DELEGATION_MAX_INLINE_IMAGE_BASE64_CHARS", "900000")
-)
-DELEGATED_IMAGE_LONG_EDGE = int(
-    os.environ.get("MATRX_DELEGATION_IMAGE_LONG_EDGE", "1600")
-)
-DELEGATED_IMAGE_JPEG_QUALITY = int(
-    os.environ.get("MATRX_DELEGATION_IMAGE_JPEG_QUALITY", "75")
-)
 
 # At most this many delegated calls execute concurrently.
 _MAX_CONCURRENT_CALLS = 4
@@ -686,7 +671,12 @@ class DelegationEngine:
             args_keys=sorted(args.keys()),
         )
         started = time.monotonic()
-        session = ToolSession()
+        session = ToolSession(
+            execution_origin="cloud_delegated",
+            cloud_call_id=call_id,
+            cloud_tool_name=tool_name,
+            cloud_access_token=await self._get_credentials(),
+        )
         try:
             result = await asyncio.wait_for(
                 dispatch(entry.dispatcher_name, args, session), timeout=timeout
@@ -747,17 +737,49 @@ class DelegationEngine:
                 or "Tool returned an error with no message.",
                 "duration_ms": duration_ms,
             }
+        if result.artifact is not None:
+            if not result.artifact.file_id:
+                return {
+                    "call_id": call_id,
+                    "tool_name": tool_name,
+                    "output": None,
+                    "is_error": True,
+                    "error_message": (
+                        "Screenshot capture completed, but its required cloud "
+                        "publication failed. The recovery copy was retained on "
+                        "the desktop and will be retried automatically."
+                    ),
+                    "duration_ms": duration_ms,
+                }
+            return {
+                "call_id": call_id,
+                "tool_name": tool_name,
+                "output": result.artifact.model_dump(
+                    mode="json", exclude_none=True
+                ),
+                "is_error": False,
+                "error_message": None,
+                "duration_ms": duration_ms,
+            }
+
         output: dict[str, Any] = {"output": result.output}
         if result.metadata:
             output["metadata"] = result.metadata
         if result.image is not None:
-            image_payload, image_note = _prepare_delegated_image(result.image)
-            if image_note:
-                metadata = dict(output.get("metadata") or {})
-                metadata["delegation_image_note"] = image_note
-                output["metadata"] = metadata
-            if image_payload is not None:
-                output["image"] = image_payload
+            # Inline images are a deprecated local/provider-only carrier. A
+            # cloud result must be a published Content IR media reference;
+            # never put base64 back into the durable delegation outbox.
+            return {
+                "call_id": call_id,
+                "tool_name": tool_name,
+                "output": None,
+                "is_error": True,
+                "error_message": (
+                    "This tool returned a legacy inline image that cannot be "
+                    "persisted to a cloud conversation."
+                ),
+                "duration_ms": duration_ms,
+            }
         return {
             "call_id": call_id,
             "tool_name": tool_name,
@@ -1279,55 +1301,3 @@ def _safe_diag_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(k): _safe_diag_value(v) for k, v in list(value.items())[:30]}
     return str(value)[:500]
-
-
-def _prepare_delegated_image(image: Any) -> tuple[dict[str, str] | None, str | None]:
-    """Return a compact image payload for cloud tool-results delivery.
-
-    The agent should still be able to see screenshots, but the delegation
-    engine must never strand a turn because a multi-monitor PNG is too large
-    for the cloud handoff. The tool metadata keeps the saved full-fidelity
-    local path for desktop inspection.
-    """
-    payload = image.model_dump()
-    b64 = str(payload.get("base64_data") or "")
-    media_type = str(payload.get("media_type") or "application/octet-stream")
-    if len(b64) <= MAX_INLINE_IMAGE_BASE64_CHARS:
-        return payload, None
-
-    try:
-        from PIL import Image
-
-        raw = base64.b64decode(b64)
-        with Image.open(io.BytesIO(raw)) as img:
-            img = img.convert("RGB")
-            width, height = img.size
-            long_edge = max(width, height)
-            if long_edge > DELEGATED_IMAGE_LONG_EDGE:
-                scale = DELEGATED_IMAGE_LONG_EDGE / float(long_edge)
-                img = img.resize(
-                    (max(1, int(width * scale)), max(1, int(height * scale))),
-                    Image.Resampling.LANCZOS,
-                )
-            out = io.BytesIO()
-            img.save(
-                out, format="JPEG", quality=DELEGATED_IMAGE_JPEG_QUALITY, optimize=True
-            )
-        compact = base64.b64encode(out.getvalue()).decode()
-        if len(compact) <= MAX_INLINE_IMAGE_BASE64_CHARS:
-            return {
-                "media_type": "image/jpeg",
-                "base64_data": compact,
-            }, (
-                f"original {media_type} image was {len(b64)} base64 chars; "
-                f"sent re-encoded JPEG ({len(compact)} chars)"
-            )
-        return None, (
-            f"original {media_type} image was {len(b64)} base64 chars and compact "
-            f"JPEG was still {len(compact)} chars; omitted inline image, metadata/path retained"
-        )
-    except Exception as exc:
-        return None, (
-            f"image payload was {len(b64)} base64 chars and could not be compacted "
-            f"({type(exc).__name__}: {exc}); omitted inline image, metadata/path retained"
-        )

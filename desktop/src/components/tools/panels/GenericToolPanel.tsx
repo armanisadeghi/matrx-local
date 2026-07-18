@@ -106,6 +106,7 @@ export function GenericToolPanel({
               result={error ? { type: "error", output: error } : result}
               outputType={schema.outputType}
               elapsedMs={elapsedMs}
+              toolName={schema.toolName}
             />
           )}
 

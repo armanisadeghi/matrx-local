@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppLayout, type PageEntry } from "@/components/layout/AppLayout";
 import { Dashboard } from "@/pages/Dashboard";
 import { Documents } from "@/pages/Documents";
+import { Files } from "@/pages/Files";
 import { Scraping } from "@/pages/Scraping";
 import { Tools } from "@/pages/Tools";
 import { Activity } from "@/pages/Activity";
@@ -401,6 +402,7 @@ function AppInner() {
           <Documents engineStatus={status} userId={auth.user?.id ?? null} />
         ),
       },
+      { path: "/files", element: <Files engineStatus={status} /> },
       {
         path: "/scraping",
         element: <Scraping engineStatus={status} engineUrl={url} />,

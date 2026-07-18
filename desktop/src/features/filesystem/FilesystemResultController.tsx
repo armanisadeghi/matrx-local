@@ -12,6 +12,7 @@ import type {
 export interface FilesystemResultControllerProps {
   result: FilesystemResult;
   onReference?: (paths: string[]) => void;
+  onNavigate?: (path: string) => void;
 }
 
 type PageableResult = FilesystemDirectoryPage | FilesystemSearchPage;
@@ -50,7 +51,7 @@ function requirePageableResult(payload: unknown): PageableResult {
 }
 
 /** Connect the canonical renderer to direct engine paging and lazy child loading. */
-export function FilesystemResultController({ result, onReference }: FilesystemResultControllerProps) {
+export function FilesystemResultController({ result, onReference, onNavigate }: FilesystemResultControllerProps) {
   const [current, setCurrent] = useState(result);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pagingError, setPagingError] = useState<string | null>(null);
@@ -96,6 +97,7 @@ export function FilesystemResultController({ result, onReference }: FilesystemRe
     <FilesystemResultView
       result={current}
       {...(onReference ? { onReference } : {})}
+      {...(onNavigate ? { onNavigate } : {})}
       onLoadChildren={loadChildren}
       onLoadMore={(cursor) => void loadMore(cursor)}
       loadingMore={loadingMore}

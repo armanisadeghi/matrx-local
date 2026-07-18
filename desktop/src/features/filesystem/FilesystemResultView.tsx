@@ -29,6 +29,7 @@ import { useFilesystemPlaces } from "./use-filesystem-places";
 export interface FilesystemResultViewProps {
   result: FilesystemResult;
   onReference?: (paths: string[]) => void;
+  onNavigate?: (path: string) => void;
   onLoadChildren?: (entry: FilesystemEntry) => Promise<FilesystemEntry[]>;
   onLoadMore?: (cursor: string) => void;
   loadingMore?: boolean;
@@ -136,6 +137,7 @@ function EntryRow({
   onToggleSelected,
   onReference,
   onLoadChildren,
+  onNavigate,
 }: {
   entry: FilesystemEntry;
   depth: number;
@@ -143,6 +145,7 @@ function EntryRow({
   onToggleSelected: (path: string) => void;
   onReference: (paths: string[]) => void;
   onLoadChildren?: (entry: FilesystemEntry) => Promise<FilesystemEntry[]>;
+  onNavigate?: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -208,7 +211,12 @@ function EntryRow({
           type="button"
           className="min-w-0 flex-1 truncate text-left"
           title={entry.path}
-          onDoubleClick={() => void openPath(entry.path)}
+          onDoubleClick={() => {
+            if (directory && onNavigate) onNavigate(entry.path);
+            else void openPath(entry.path).catch((reason: unknown) => {
+              setChildError(reason instanceof Error ? reason.message : String(reason));
+            });
+          }}
           onClick={() => directory && void toggleExpanded()}
         >
           {entry.name}
@@ -231,6 +239,7 @@ function EntryRow({
           onToggleSelected={onToggleSelected}
           onReference={onReference}
           {...(onLoadChildren ? { onLoadChildren } : {})}
+          {...(onNavigate ? { onNavigate } : {})}
         />
       ))}
       {expanded && childError && (
@@ -259,7 +268,7 @@ function Breadcrumbs({ path }: { path: string }) {
   );
 }
 
-function Places({ places, onReference }: { places: FilesystemPlace[]; onReference: (paths: string[]) => void }) {
+function Places({ places, onReference, onNavigate }: { places: FilesystemPlace[]; onReference: (paths: string[]) => void; onNavigate?: (path: string) => void }) {
   return (
     <div className="grid gap-1 p-2 sm:grid-cols-2">
       {places.map((place) => (
@@ -269,7 +278,12 @@ function Places({ places, onReference }: { places: FilesystemPlace[]; onReferenc
             type="button"
             className="min-w-0 flex-1 text-left"
             title={place.path}
-            onDoubleClick={() => void openPath(place.path)}
+            onDoubleClick={() => {
+              if (onNavigate) onNavigate(place.path);
+              else void openPath(place.path).catch((reason: unknown) => {
+                console.error("Unable to open filesystem place", { path: place.path, reason });
+              });
+            }}
           >
             <span className="block truncate text-xs font-medium">{place.label}</span>
             <span className="block truncate text-[10px] text-muted-foreground">{place.path}</span>
@@ -442,14 +456,14 @@ function SemanticSearchView({
   );
 }
 
-export function FilesystemResultView({ result, onReference, onLoadChildren, onLoadMore, loadingMore, pagingError }: FilesystemResultViewProps) {
+export function FilesystemResultView({ result, onReference, onNavigate, onLoadChildren, onLoadMore, loadingMore, pagingError }: FilesystemResultViewProps) {
   const reference = useCallback((paths: string[]) => {
     if (onReference) onReference(paths);
     else void navigator.clipboard.writeText(paths.join("\n"));
   }, [onReference]);
   switch (result.kind) {
     case "filesystem.places":
-      return <Places places={result.places} onReference={reference} />;
+      return <Places places={result.places} onReference={reference} {...(onNavigate ? { onNavigate } : {})} />;
     case "filesystem.content-search":
       return <ContentSearchView result={result} onReference={reference} />;
     case "filesystem.semantic-search":
@@ -461,6 +475,7 @@ export function FilesystemResultView({ result, onReference, onLoadChildren, onLo
           result={result}
           onReference={reference}
           {...(onLoadChildren ? { onLoadChildren } : {})}
+          {...(onNavigate ? { onNavigate } : {})}
           {...(onLoadMore ? { onLoadMore } : {})}
           {...(loadingMore != null ? { loadingMore } : {})}
           {...(pagingError != null ? { pagingError } : {})}

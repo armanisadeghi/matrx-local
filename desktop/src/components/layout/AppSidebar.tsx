@@ -25,6 +25,7 @@ import {
   AudioLines,
   RefreshCw,
   Plug,
+  FolderClosed,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -57,6 +58,7 @@ const navItems = [
   { to: "/chat", icon: MessageSquare, label: "Chat" },
   { to: "/cloud-chat", icon: Cloud, label: "Cloud Chat" },
   { to: "/notes", icon: FileText, label: "Notes" },
+  { to: "/files", icon: FolderClosed, label: "Files" },
   { to: "/scraping", icon: Globe, label: "Scraping" },
   { to: "/tools", icon: Wrench, label: "Tools" },
   { to: "/activity", icon: Radio, label: "Activity" },

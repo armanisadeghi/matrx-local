@@ -4,6 +4,7 @@ import { authoredPriorityRoots, indexStateLabel, setContentPolicy } from "./File
 
 const settings: FilesystemIndexingSettings = {
   priority_roots: [{ path: "/Users/ada", label: "Authored overlap" }],
+  paused: false,
   content_enabled: true,
   semantic_enabled: false,
   embedding_model: "test-model",
@@ -28,7 +29,7 @@ describe("FilesystemIndexSettings contracts", () => {
   });
 
   it("turning off content indexing also disables dependent semantic indexing", () => {
-    const { priority_roots: _priorityRoots, ...policy } = settings;
+    const { priority_roots: _priorityRoots, paused: _paused, ...policy } = settings;
     expect(setContentPolicy({ ...policy, semantic_enabled: true }, false)).toMatchObject({
       content_enabled: false,
       semantic_enabled: false,

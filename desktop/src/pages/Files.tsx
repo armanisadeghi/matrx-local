@@ -25,7 +25,7 @@ export function Files({ engineStatus }: { engineStatus: EngineStatus }) {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [indexState, setIndexState] = useState<"complete" | "indexing" | "partial" | null>(null);
+  const [indexState, setIndexState] = useState<"complete" | "indexing" | "partial" | "paused" | null>(null);
 
   const browse = useCallback(async (path: string) => {
     if (!connected) return;
@@ -90,6 +90,7 @@ export function Files({ engineStatus }: { engineStatus: EngineStatus }) {
         {indexState && indexState !== "complete" && (
           <div className="mt-3 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-900 dark:text-sky-100">
             Files work immediately while Matrx privately improves its local index in the background.
+            {indexState === "paused" && " Background indexing is paused."}
             {indexState === "partial" && " Some protected or unavailable folders need attention in Settings → Storage."}
           </div>
         )}

@@ -54,6 +54,7 @@ class FilesystemService:
         self._last_reconcile = 0.0
         self._crawl_iterations = 0
         self._watch_signature: tuple[str, ...] = ()
+        self._maintenance_lock = asyncio.Lock()
 
     async def start(self) -> None:
         if self._started:
@@ -94,7 +95,8 @@ class FilesystemService:
 
     async def refresh_roots(self) -> list[Place]:
         places = await asyncio.to_thread(discover_places)
-        await asyncio.to_thread(self.index.sync_roots, places)
+        async with self._maintenance_lock:
+            await asyncio.to_thread(self.index.sync_roots, places)
         self._places = places
         self._last_reconcile = time.time()
         signature = tuple(self._watch_roots())
@@ -150,6 +152,7 @@ class FilesystemService:
     ) -> dict[str, object]:
         from app.services.cloud_sync.settings_sync import get_settings_sync
 
+        old_settings = _indexing_settings()
         sync = get_settings_sync()
         current = sync.get("filesystem_index", {}) or {}
         sync.set(
@@ -163,8 +166,44 @@ class FilesystemService:
                 "max_embedding_entries": max_embedding_entries,
             },
         )
-        await asyncio.to_thread(self.index.reset_quota_candidates)
+        await asyncio.to_thread(
+            self.index.apply_enrichment_limits,
+            max_content_bytes,
+            max_embedding_entries,
+            embedding_model,
+            reset_content_quota=max_content_bytes > int(old_settings["max_content_bytes"]),
+        )
         return await self.status()
+
+    async def control_index(self, action: str) -> dict[str, object]:
+        """Apply a user-authored lifecycle action without disabling direct browsing."""
+        if action not in {"pause", "resume", "rebuild", "clear"}:
+            raise ValueError(f"unsupported filesystem index action: {action}")
+        self._set_paused(action in {"pause", "clear"})
+        if action == "pause":
+            return await self.status()
+
+        places = await asyncio.to_thread(discover_places)
+        async with self._maintenance_lock:
+            if action in {"rebuild", "clear"}:
+                await asyncio.to_thread(self.index.clear_derived)
+                self._indexed_this_run = 0
+            if action in {"resume", "rebuild"}:
+                await asyncio.to_thread(self.index.sync_roots, places)
+                self._places = places
+                self._last_reconcile = time.time()
+        if action in {"resume", "rebuild"}:
+            signature = tuple(self._watch_roots())
+            if self._started and signature != self._watch_signature:
+                await self._restart_watcher(signature)
+        return await self.status()
+
+    def _set_paused(self, paused: bool) -> None:
+        from app.services.cloud_sync.settings_sync import get_settings_sync
+
+        sync = get_settings_sync()
+        current = sync.get("filesystem_index", {}) or {}
+        sync.set("filesystem_index", {**current, "paused": paused})
 
     async def list_directory(
         self,
@@ -314,10 +353,13 @@ class FilesystemService:
             asyncio.to_thread(self.index.enrichment_counts),
         )
         settings = _indexing_settings()
+        paused = bool(settings["paused"])
         fastembed_available = importlib.util.find_spec("fastembed") is not None
         queued = int(scan["total"])
         failed = int(scan["failed"])
-        metadata_state = "partial" if failed else "indexing" if queued else "complete"
+        metadata_state = (
+            "partial" if failed else "paused" if paused else "indexing" if queued else "complete"
+        )
         return {
             "started": self._started,
             "database": str(self.index.path),
@@ -330,9 +372,12 @@ class FilesystemService:
             "scan_failures": scan["failures"],
             "metadata_state": metadata_state,
             "index_complete": metadata_state == "complete",
+            "paused": paused,
             "indexed_this_run": self._indexed_this_run,
             "places": len(self._places),
             "last_reconcile_at": self._last_reconcile or None,
+            "last_scan_at": await asyncio.to_thread(self.index.last_scan_at),
+            "storage_bytes": await asyncio.to_thread(self.index.storage_bytes),
             **enrichment,
             "content_indexing": "enabled" if settings["content_enabled"] else "disabled",
             "embedding_indexing": (
@@ -351,29 +396,36 @@ class FilesystemService:
         while not self._stop.is_set():
             item: tuple[str, str, int, int, str] | None = None
             try:
+                if bool(_indexing_settings()["paused"]):
+                    await asyncio.sleep(2.0)
+                    continue
                 if time.time() - self._last_reconcile >= _RECONCILE_SECONDS:
                     await self.refresh_roots()
                 if not _background_capacity(self.index.path, cpu_limit=70):
                     await asyncio.sleep(2.0)
                     continue
                 self._crawl_iterations += 1
-                item = await asyncio.to_thread(
-                    self.index.pop_next_directory,
-                    fair=self._crawl_iterations % 5 == 0,
-                )
+                async with self._maintenance_lock:
+                    item = await asyncio.to_thread(
+                        self.index.pop_next_directory,
+                        fair=self._crawl_iterations % 5 == 0,
+                    )
+                    if item is None:
+                        count = 0
+                    else:
+                        path, root_id, depth, priority, claim_token = item
+                        count = await asyncio.to_thread(
+                            self.index.index_directory,
+                            path,
+                            root_id,
+                            depth,
+                            priority,
+                            claim_token,
+                            self._thread_stop,
+                        )
                 if item is None:
                     await asyncio.sleep(5.0)
                     continue
-                path, root_id, depth, priority, claim_token = item
-                count = await asyncio.to_thread(
-                    self.index.index_directory,
-                    path,
-                    root_id,
-                    depth,
-                    priority,
-                    claim_token,
-                    self._thread_stop,
-                )
                 self._indexed_this_run += count
                 await asyncio.sleep(0.01 if priority >= 80_000 else 0.1)
             except asyncio.CancelledError:
@@ -416,12 +468,15 @@ class FilesystemService:
             import watchfiles
 
             async for changes in watchfiles.awatch(*roots, debounce=1000, step=250):
+                if bool(_indexing_settings()["paused"]):
+                    continue
                 for change, path in changes:
-                    if change == watchfiles.Change.deleted:
-                        await asyncio.to_thread(self.index.delete_path, path)
-                    else:
-                        root_id = self._root_id_for_path(path)
-                        await asyncio.to_thread(self.index.upsert_path, path, root_id)
+                    async with self._maintenance_lock:
+                        if change == watchfiles.Change.deleted:
+                            await asyncio.to_thread(self.index.delete_path, path)
+                        else:
+                            root_id = self._root_id_for_path(path)
+                            await asyncio.to_thread(self.index.upsert_path, path, root_id)
                 if self._stop.is_set():
                     return
         except asyncio.CancelledError:
@@ -457,6 +512,9 @@ class FilesystemService:
     async def _enrichment_loop(self) -> None:
         while not self._stop.is_set():
             settings = _indexing_settings()
+            if bool(settings["paused"]):
+                await asyncio.sleep(2.0)
+                continue
             if not _background_capacity(self.index.path, cpu_limit=45):
                 await asyncio.sleep(5.0)
                 continue
@@ -555,6 +613,7 @@ def _indexing_settings() -> dict[str, object]:
     except Exception:
         stored = {}
     return {
+        "paused": bool(stored.get("paused", False)),
         "content_enabled": bool(stored.get("content_enabled", True)),
         "semantic_enabled": bool(stored.get("semantic_enabled", False)),
         "embedding_model": str(stored.get("embedding_model") or _DEFAULT_EMBEDDING_MODEL),

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FolderOpen, Gauge, Loader2, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { CirclePause, CirclePlay, Eraser, FolderOpen, Gauge, Loader2, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,10 +37,11 @@ export function indexStateLabel(status: FilesystemIndexStatus | null): string {
   if (!status?.started) return "Waiting";
   if (status.metadata_state === "partial") return "Needs attention";
   if (status.metadata_state === "complete") return "Current";
+  if (status.metadata_state === "paused") return "Paused";
   return "Indexing";
 }
 
-type IndexingPolicy = Omit<FilesystemIndexingSettings, "priority_roots">;
+type IndexingPolicy = Omit<FilesystemIndexingSettings, "priority_roots" | "paused">;
 
 export function setContentPolicy(policy: IndexingPolicy, enabled: boolean): IndexingPolicy {
   return { ...policy, content_enabled: enabled, semantic_enabled: enabled && policy.semantic_enabled };
@@ -56,6 +57,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
   const [dirty, setDirty] = useState(false);
   const [policyDirty, setPolicyDirty] = useState(false);
   const [savingPolicy, setSavingPolicy] = useState(false);
+  const [indexAction, setIndexAction] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
 
   const load = useCallback(async () => {
@@ -70,7 +72,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
       ]);
       setPlaces(placeResult.places);
       setRoots(authoredPriorityRoots(indexSettings));
-      const { priority_roots: _priorityRoots, ...authoredPolicy } = indexSettings;
+      const { priority_roots: _priorityRoots, paused: _paused, ...authoredPolicy } = indexSettings;
       setPolicy(authoredPolicy);
       setStatus(indexStatus);
       setDirty(false);
@@ -139,6 +141,30 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
       setSavingPolicy(false);
     }
   }, [policy]);
+
+  const controlIndex = useCallback(async (action: "pause" | "resume" | "rebuild" | "clear") => {
+    if (action === "rebuild" && !window.confirm("Rebuild the local filesystem index from scratch? Direct file browsing will keep working.")) return;
+    if (action === "clear" && !window.confirm("Clear the local filesystem index and pause background indexing? Downloaded model files are not removed.")) return;
+    setIndexAction(action);
+    setMessage(null);
+    try {
+      setStatus(await engine.controlFilesystemIndex(action));
+      setMessage({
+        text: action === "clear"
+          ? "Local index data cleared. Background indexing is paused; direct browsing still works."
+          : action === "rebuild"
+            ? "Local index cleared and rebuild started."
+            : action === "pause"
+              ? "Background indexing paused after the current folder."
+              : "Background indexing resumed.",
+        error: false,
+      });
+    } catch (reason) {
+      setMessage({ text: reason instanceof Error ? reason.message : String(reason), error: true });
+    } finally {
+      setIndexAction(null);
+    }
+  }, []);
 
   const discoveredCount = useMemo(() => places.filter((place) => place.available).length, [places]);
 
@@ -242,6 +268,33 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
               </div>
             )}
 
+            <div className="space-y-3 rounded-md border p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">Index maintenance</h3>
+                  <p className="text-xs text-muted-foreground">Direct browsing remains available while background indexing is paused or rebuilding.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" size="sm" disabled={indexAction !== null} onClick={() => void controlIndex(status?.paused ? "resume" : "pause")}>
+                    {indexAction === "pause" || indexAction === "resume" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : status?.paused ? <CirclePlay className="h-3.5 w-3.5" /> : <CirclePause className="h-3.5 w-3.5" />}
+                    {status?.paused ? "Resume" : "Pause"}
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" disabled={indexAction !== null} onClick={() => void controlIndex("rebuild")}>
+                    {indexAction === "rebuild" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Rebuild
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" className="text-destructive hover:text-destructive" disabled={indexAction !== null} onClick={() => void controlIndex("clear")}>
+                    {indexAction === "clear" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eraser className="h-3.5 w-3.5" />} Clear index
+                  </Button>
+                </div>
+              </div>
+              <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+                <div><span className="font-medium text-foreground">Local storage:</span> {formatBytes(status?.storage_bytes)}</div>
+                <div><span className="font-medium text-foreground">Last folder scan:</span> {formatTimestamp(status?.last_scan_at)}</div>
+                <div><span className="font-medium text-foreground">Last location refresh:</span> {formatTimestamp(status?.last_reconcile_at)}</div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">Clearing removes derived metadata, extracted text, and embeddings. It does not delete user files or downloaded model artifacts.</p>
+            </div>
+
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <div>
@@ -307,4 +360,15 @@ function Metric({ value, label }: { value: string | number; label: string }) {
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
     </div>
   );
+}
+
+function formatBytes(value: number | null | undefined): string {
+  if (value == null) return "—";
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
+
+function formatTimestamp(value: number | null | undefined): string {
+  return value ? new Date(value * 1000).toLocaleString() : "Never";
 }

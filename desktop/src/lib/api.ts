@@ -2583,7 +2583,7 @@ class EngineAPI {
   }
 
   async setFilesystemIndexingSettings(
-    settings: Omit<FilesystemIndexingSettings, "priority_roots">,
+    settings: Omit<FilesystemIndexingSettings, "priority_roots" | "paused">,
   ): Promise<FilesystemIndexStatus> {
     return this.request<FilesystemIndexStatus>("/filesystem/indexing-settings", {
       method: "PUT",
@@ -2604,6 +2604,16 @@ class EngineAPI {
 
   async getFilesystemIndexStatus(): Promise<FilesystemIndexStatus> {
     return this.request<FilesystemIndexStatus>("/filesystem/status");
+  }
+
+  async controlFilesystemIndex(
+    action: "pause" | "resume" | "rebuild" | "clear",
+  ): Promise<FilesystemIndexStatus> {
+    return this.request<FilesystemIndexStatus>("/filesystem/index/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
   }
 
   async prepareFilesystemOpen(path: string): Promise<FilesystemPrepareOpenResponse> {
@@ -3803,6 +3813,7 @@ export interface FilesystemPriorityRoot {
 
 export interface FilesystemIndexingSettings {
   priority_roots: FilesystemPriorityRoot[];
+  paused: boolean;
   content_enabled: boolean;
   semantic_enabled: boolean;
   embedding_model: string;
@@ -3831,11 +3842,14 @@ export interface FilesystemIndexStatus {
   directories_claimed: number;
   directories_ready: number;
   scan_failures: FilesystemScanFailure[];
-  metadata_state: "complete" | "indexing" | "partial";
+  metadata_state: "complete" | "indexing" | "partial" | "paused";
   index_complete: boolean;
+  paused: boolean;
   indexed_this_run: number;
   places: number;
   last_reconcile_at: number | null;
+  last_scan_at: number | null;
+  storage_bytes: number;
   content_entries: number;
   embedding_entries: number;
   content_bytes: number;

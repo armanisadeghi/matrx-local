@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -36,6 +36,11 @@ class IndexingSettingsRequest(BaseModel):
 class PrepareOpenRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1, max_length=32_768)
+
+
+class IndexActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["pause", "resume", "rebuild", "clear"]
 
 
 @router.get("/places")
@@ -105,6 +110,11 @@ async def find_paths(
 @router.get("/status")
 async def filesystem_status() -> dict[str, object]:
     return await get_filesystem_service().status()
+
+
+@router.post("/index/action")
+async def filesystem_index_action(request: IndexActionRequest) -> dict[str, object]:
+    return await get_filesystem_service().control_index(request.action)
 
 
 @router.get("/search-content")

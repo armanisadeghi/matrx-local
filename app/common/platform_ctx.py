@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import importlib
 import importlib.util
 import os
 import platform
@@ -30,9 +31,9 @@ from typing import Any
 # OS / architecture — computed once, truly immutable
 # ---------------------------------------------------------------------------
 
-_sys_platform: str = sys.platform          # 'darwin', 'win32', 'linux'
-_machine: str = platform.machine()         # 'arm64', 'x86_64', 'AMD64'
-_system: str = platform.system()           # 'Darwin', 'Windows', 'Linux'
+_sys_platform: str = sys.platform  # 'darwin', 'win32', 'linux'
+_machine: str = platform.machine()  # 'arm64', 'x86_64', 'AMD64'
+_system: str = platform.system()  # 'Darwin', 'Windows', 'Linux'
 _release: str = platform.release()
 _python_version: str = platform.python_version()
 _hostname: str = platform.node()
@@ -91,8 +92,10 @@ PLATFORM: dict[str, Any] = {
 # Package / binary availability — checked at import (fast, no subprocess)
 # ---------------------------------------------------------------------------
 
+
 def _pkg_available(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
+
 
 def _binary_available(name: str) -> bool:
     return shutil.which(name) is not None
@@ -115,26 +118,31 @@ def _default_shell() -> str | None:
     return _zsh_path or _bash_path
 
 
+_PACKAGE_CAPABILITIES: dict[str, str] = {
+    "has_playwright": "playwright",
+    "has_psutil": "psutil",
+    "has_sounddevice": "sounddevice",
+    "has_cv2": "cv2",
+    "has_numpy": "numpy",
+    "has_pytesseract": "pytesseract",
+    "has_mss": "mss",
+    "has_pil": "PIL",
+    "has_fitz": "fitz",
+    "has_zeroconf": "zeroconf",
+    "has_screeninfo": "screeninfo",
+    "has_tkinter": "tkinter",
+    "has_pyperclip": "pyperclip",
+    "has_watchfiles": "watchfiles",
+    "has_quartz": "Quartz",
+    "has_speech_framework": "Speech",
+    "has_wmi": "wmi",
+    "has_plistlib": "plistlib",
+}
+
+
 CAPABILITIES: dict[str, Any] = {
     # ---- Package presence ----
-    "has_playwright": _pkg_available("playwright"),
-    "has_psutil": _pkg_available("psutil"),
-    "has_sounddevice": _pkg_available("sounddevice"),
-    "has_cv2": _pkg_available("cv2"),
-    "has_numpy": _pkg_available("numpy"),
-    "has_pytesseract": _pkg_available("pytesseract"),
-    "has_mss": _pkg_available("mss"),
-    "has_pil": _pkg_available("PIL"),
-    "has_fitz": _pkg_available("fitz"),           # PyMuPDF
-    "has_zeroconf": _pkg_available("zeroconf"),
-    "has_screeninfo": _pkg_available("screeninfo"),
-    "has_tkinter": _pkg_available("tkinter"),
-    "has_pyperclip": _pkg_available("pyperclip"),
-    "has_watchfiles": _pkg_available("watchfiles"),
-    "has_quartz": _pkg_available("Quartz"),
-    "has_speech_framework": _pkg_available("Speech"),
-    "has_wmi": _pkg_available("wmi"),
-    "has_plistlib": _pkg_available("plistlib"),
+    **{flag: _pkg_available(module) for flag, module in _PACKAGE_CAPABILITIES.items()},
     # ---- Binary presence ----
     "has_ffmpeg": _binary_available("ffmpeg"),
     "has_cloudflared": _cf_path is not None,
@@ -195,31 +203,47 @@ CAPABILITIES: dict[str, Any] = {
         or (_sys_platform.startswith("linux") and not _is_wsl and _display)
     ),
     "permission_model": (
-        "tcc" if _sys_platform == "darwin"
-        else "uac" if _sys_platform == "win32"
-        else "polkit" if _sys_platform.startswith("linux")
+        "tcc"
+        if _sys_platform == "darwin"
+        else "uac"
+        if _sys_platform == "win32"
+        else "polkit"
+        if _sys_platform.startswith("linux")
         else None
     ),
     # ---- Hardware / permission flags (populated by refresh_capabilities) ----
-    "mic_available": None,       # None = not yet probed
+    "mic_available": None,  # None = not yet probed
     "speakers_available": None,
     "camera_available": None,
     "screen_capture_available": None,
     "gpu_available": None,
     "gpu_name": None,
-    "gpu_type": None,            # 'apple_silicon' | 'nvidia' | 'amd' | 'integrated' | None
+    "gpu_type": None,  # 'apple_silicon' | 'nvidia' | 'amd' | 'integrated' | None
 }
 
 # ---------------------------------------------------------------------------
 # Async capability refresh — run once at app startup via lifespan
 # ---------------------------------------------------------------------------
 
+
+def refresh_package_capabilities() -> None:
+    """Refresh import availability after optional package path activation."""
+    importlib.invalidate_caches()
+    CAPABILITIES.update(
+        {flag: _pkg_available(module) for flag, module in _PACKAGE_CAPABILITIES.items()}
+    )
+
+
 async def refresh_capabilities() -> None:
-    """Probe hardware/permission capabilities that need subprocess calls.
+    """Refresh package, hardware, and permission capabilities.
 
     Safe to call multiple times; later calls update CAPABILITIES in-place.
     Designed to run in the FastAPI lifespan so it doesn't block startup.
     """
+    # Optional capability targets are injected during lifespan, after this
+    # module's initial import-time snapshot. Re-probe them before consumers
+    # such as SystemInfo branch on the canonical CAPABILITIES dictionary.
+    refresh_package_capabilities()
     loop = asyncio.get_event_loop()
 
     gpu_available, gpu_name, gpu_type = await loop.run_in_executor(None, _probe_gpu)
@@ -241,6 +265,7 @@ async def refresh_capabilities() -> None:
 # Internal probers — run in thread-pool, no async I/O
 # ---------------------------------------------------------------------------
 
+
 def _probe_gpu() -> tuple[bool, str | None, str | None]:
     """Return (available, name, type).
 
@@ -254,7 +279,9 @@ def _probe_gpu() -> tuple[bool, str | None, str | None]:
         try:
             result = subprocess.run(
                 ["system_profiler", "SPDisplaysDataType"],
-                capture_output=True, text=True, timeout=8,
+                capture_output=True,
+                text=True,
+                timeout=8,
             )
             if result.returncode == 0 and result.stdout.strip():
                 return True, "Intel/AMD (Metal)", "integrated"
@@ -265,6 +292,7 @@ def _probe_gpu() -> tuple[bool, str | None, str | None]:
     # Windows / Linux / WSL — use the hardware detector which handles all cases
     try:
         from app.services.hardware.detector import _detect_gpus
+
         gpus = _detect_gpus()
         for gpu in gpus:
             name = gpu.get("name", "")
@@ -280,7 +308,9 @@ def _probe_gpu() -> tuple[bool, str | None, str | None]:
             if backend in ("vulkan", "cuda+vulkan"):
                 # Distinguish NVIDIA Vulkan from AMD Vulkan by name
                 name_lc = name.lower()
-                if any(x in name_lc for x in ("nvidia", "geforce", "quadro", "rtx", "gtx")):
+                if any(
+                    x in name_lc for x in ("nvidia", "geforce", "quadro", "rtx", "gtx")
+                ):
                     return True, name, "nvidia"
                 if any(x in name_lc for x in ("amd", "radeon", "rx ")):
                     return True, name, "amd"
@@ -307,11 +337,12 @@ def _probe_audio_devices() -> tuple[bool, bool, bool]:
 
     try:
         import sounddevice as sd  # type: ignore[import]
+
         # DeviceList is a tuple subclass, NOT a list — the old isinstance(list)
         # check wrapped the whole list and .get() raised, so mic/speakers were
         # reported unavailable on every platform.
         devices = sd.query_devices()
-        for d in (devices if not isinstance(devices, dict) else [devices]):
+        for d in devices if not isinstance(devices, dict) else [devices]:
             if d.get("max_input_channels", 0) > 0:
                 mic_available = True
             if d.get("max_output_channels", 0) > 0:
@@ -326,19 +357,23 @@ def _probe_audio_devices() -> tuple[bool, bool, bool]:
         try:
             result = subprocess.run(
                 ["system_profiler", "SPCameraDataType"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             camera_available = "Camera" in result.stdout or "FaceTime" in result.stdout
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
     elif PLATFORM["is_linux"]:
         import os
+
         camera_available = any(
             f.startswith("video") for f in os.listdir("/dev") if os.path.exists("/dev")
         )
     elif PLATFORM["is_windows"]:
         try:
             import cv2  # type: ignore[import]
+
             cap = cv2.VideoCapture(0)
             camera_available = cap.isOpened()
             cap.release()
@@ -362,6 +397,7 @@ def _probe_screen_capture() -> bool:
 # ---------------------------------------------------------------------------
 # Cross-platform convenience helpers
 # ---------------------------------------------------------------------------
+
 
 def open_path_cross_platform(path_str: str) -> tuple[bool, str]:
     """Open a file or folder in the OS file manager.
@@ -400,6 +436,7 @@ def open_path_cross_platform(path_str: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Serialisation helper — called by the /platform/context route
 # ---------------------------------------------------------------------------
+
 
 def get_platform_context() -> dict[str, Any]:
     """Return a JSON-serialisable snapshot of PLATFORM + CAPABILITIES."""

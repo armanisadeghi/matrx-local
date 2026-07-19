@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -83,9 +85,7 @@ def test_every_non_managed_api_capability_has_a_startup_target() -> None:
     )
 
     lightweight_specs = {
-        cap_id
-        for cap_id in CAPABILITY_SPECS
-        if not uses_managed_installer(cap_id)
+        cap_id for cap_id in CAPABILITY_SPECS if not uses_managed_installer(cap_id)
     }
     assert lightweight_specs == set(LIGHTWEIGHT_CAPABILITY_IDS)
 
@@ -99,3 +99,64 @@ def test_capability_injectors_never_prepend_optional_targets() -> None:
 
     assert "sys.path.insert(0" not in service
     assert "sys.path.insert(0" not in routes
+
+
+def test_package_capability_snapshot_refreshes_after_path_activation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.common import platform_ctx
+
+    available = {"playwright"}
+    monkeypatch.setattr(
+        platform_ctx, "_pkg_available", lambda module: module in available
+    )
+    monkeypatch.setitem(platform_ctx.CAPABILITIES, "has_playwright", False)
+    monkeypatch.setitem(platform_ctx.CAPABILITIES, "has_sounddevice", True)
+
+    platform_ctx.refresh_package_capabilities()
+
+    assert platform_ctx.CAPABILITIES["has_playwright"] is True
+    assert platform_ctx.CAPABILITIES["has_sounddevice"] is False
+
+
+def test_browser_install_subprocess_can_import_from_managed_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import asyncio
+
+    from app.api import capabilities_routes as routes
+
+    target = tmp_path / "capability-browser_automation"
+    calls: list[SimpleNamespace] = []
+
+    async def fake_run(cmd, timeout, *, env=None):
+        calls.append(SimpleNamespace(cmd=cmd, timeout=timeout, env=env))
+        return 0, "", ""
+
+    monkeypatch.setattr(routes, "find_python", lambda: "/external/python")
+    monkeypatch.setattr(
+        routes, "get_lightweight_capability_packages_dir", lambda _cap_id: target
+    )
+    monkeypatch.setattr(routes, "_run_isolated", fake_run)
+    monkeypatch.setattr(
+        routes, "inject_lightweight_capability_path", lambda _cap_id: True
+    )
+    refreshed: list[bool] = []
+    monkeypatch.setattr(
+        routes, "refresh_package_capabilities", lambda: refreshed.append(True)
+    )
+
+    result = asyncio.run(
+        routes.install_capability(
+            routes.InstallRequest(capability_id="browser_automation")
+        )
+    )
+
+    assert result.status == "complete"
+    assert len(calls) == 2
+    browser_call = calls[1]
+    assert browser_call.cmd[:3] == ["/external/python", "-m", "playwright"]
+    assert browser_call.env is not None
+    assert browser_call.env["PYTHONPATH"].split(os.pathsep)[0] == str(target)
+    assert (target / ".install-complete").exists()
+    assert refreshed == [True]

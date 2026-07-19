@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.common.platform_ctx import refresh_package_capabilities
 from app.common.system_logger import get_logger
 from app.services.capabilities.installer import (
     get_active_progress,
@@ -248,11 +249,15 @@ def _status_payload(
     )
 
 
-async def _run_isolated(cmd: list[str], timeout: int) -> tuple[int, str, str]:
+async def _run_isolated(
+    cmd: list[str], timeout: int, *, env: dict[str, str] | None = None
+) -> tuple[int, str, str]:
     kwargs: dict = {
         "stdout": asyncio.subprocess.PIPE,
         "stderr": asyncio.subprocess.PIPE,
     }
+    if env is not None:
+        kwargs["env"] = env
     if os.name == "posix":
         kwargs["start_new_session"] = True
     else:
@@ -381,6 +386,12 @@ async def install_capability(req: InstallRequest) -> InstallStartResponse:
             )
 
         if cap_id == "browser_automation":
+            browser_env = os.environ.copy()
+            browser_env["PYTHONPATH"] = os.pathsep.join(
+                part
+                for part in (str(target), browser_env.get("PYTHONPATH", ""))
+                if part
+            )
             rc2, _, err2 = await _run_isolated(
                 [
                     python,
@@ -392,6 +403,7 @@ async def install_capability(req: InstallRequest) -> InstallStartResponse:
                     "webkit",
                 ],
                 timeout=600,
+                env=browser_env,
             )
             if rc2 != 0:
                 return _status_payload(
@@ -406,6 +418,7 @@ async def install_capability(req: InstallRequest) -> InstallStartResponse:
 
         marker.write_text(json.dumps({"capability_id": cap_id, "packages": packages}))
         inject_lightweight_capability_path(cap_id)
+        refresh_package_capabilities()
 
         logger.info("Capability '%s' installed successfully", cap_id)
         return _status_payload(

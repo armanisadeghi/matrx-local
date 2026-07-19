@@ -1255,6 +1255,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as exc:
             logger.warning("[app/main.py] Video generation stop did not complete: %s", exc)
 
+    # Package installation and automatic runtime migration spawn pip/helper
+    # processes owned by this engine. Cancel and reap them before continuing
+    # teardown so an app quit can never orphan an installer.
+    try:
+        from app.services.image_gen.installer import shutdown_background_installers
+
+        installers_stopped = await shutdown_background_installers(timeout=10.0)
+        if not installers_stopped:
+            logger.error(
+                "[app/main.py] Background image-runtime installer did not stop cleanly"
+            )
+    except Exception as exc:
+        logger.warning(
+            "[app/main.py] Background image-runtime installer cleanup failed: %s", exc
+        )
+
     # ── Phase S00: Stop matrx-scheduler host (mirrors Phase 8) ────────────
     # Stop the scanner BEFORE tearing down the broadcast / Supabase clients
     # so an in-flight tick doesn't try to write to a closed connection.

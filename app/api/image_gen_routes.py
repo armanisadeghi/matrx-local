@@ -2253,10 +2253,22 @@ async def get_install_status() -> InstallStatusResponse:
 
     Call this when reconnecting after a tab switch to restore the full log.
     """
-    # Prefer a live run over the marker — during an in-place UPGRADE the
-    # marker briefly disappears/reappears; the running progress is the truth.
+    # Any progress object belongs to this engine process and is newer than the
+    # disk marker. In particular, a failed activation may leave/recreate marker
+    # state while preserving a terminal error that the UI and smoke gate must
+    # never mask as "complete".
     active = get_active_progress()
-    if is_image_gen_installed() and not (active and active.status == "running"):
+    if active is not None:
+        return _make_status(
+            status=active.status,
+            stage=active.stage,
+            percent=active.percent,
+            message=active.message,
+            error=active.error,
+            progress=active,
+        )
+
+    if is_image_gen_installed():
         return _make_status(
             status="complete",
             stage="done",
@@ -2265,22 +2277,11 @@ async def get_install_status() -> InstallStatusResponse:
             already_installed=True,
         )
 
-    progress = get_active_progress()
-    if progress is None:
-        return _make_status(
-            status="idle",
-            stage="",
-            percent=0.0,
-            message="No installation in progress.",
-        )
-
     return _make_status(
-        status=progress.status,
-        stage=progress.stage,
-        percent=progress.percent,
-        message=progress.message,
-        error=progress.error,
-        progress=progress,
+        status="idle",
+        stage="",
+        percent=0.0,
+        message="No installation in progress.",
     )
 
 

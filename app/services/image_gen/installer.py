@@ -20,18 +20,21 @@ import asyncio
 import importlib.metadata
 import json
 import os
+import platform
 import re
-import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from app.common.system_logger import get_logger
 from app.services.optional_packages.core import (
+    InstallCancelledError,
     TORCH_CPU_INDEX_URL as _TORCH_CPU_INDEX_URL,
     InstallProgress,
     find_python as _find_python,
     packages_dir,
     run_pip_streaming as _run_pip_streaming,
+    run_subprocess_cancellable as _run_subprocess_cancellable,
 )
 
 logger = get_logger()
@@ -95,6 +98,12 @@ def is_image_gen_installed() -> bool:
 def _compatibility_migration_pending() -> bool:
     """Whether an interrupted mandatory runtime migration must be resumed."""
     return (get_image_gen_packages_dir() / _COMPATIBILITY_MIGRATION_MARKER).exists()
+
+
+def _use_torch_cpu_index() -> bool:
+    """Match the full installer's Torch wheel policy on every migration."""
+    arch = platform.machine().lower()
+    return not (sys.platform == "darwin" and arch in ("arm64", "aarch64"))
 
 
 def get_installed_package_versions() -> dict[str, str]:
@@ -181,7 +190,10 @@ def needs_upgrade() -> bool:
     return False
 
 
-def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> bool:
+def migrate_incompatible_runtime(
+    progress: InstallProgress | None = None,
+    cancel_event: threading.Event | None = None,
+) -> bool:
     """Synchronously upgrade a previously installed incompatible runtime.
 
     This is deliberately a startup migration, not UI advice: shipped app
@@ -228,12 +240,14 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
             ],
             pkg_dir,
             progress,
+            extra_index=_TORCH_CPU_INDEX_URL if _use_torch_cpu_index() else None,
+            cancel_event=cancel_event,
         )
         progress.update("verifying", 80.0, "Verifying image runtime support…")
         python = _find_python()
         env = os.environ.copy()
         env["PYTHONPATH"] = str(pkg_dir) + os.pathsep + env.get("PYTHONPATH", "")
-        check = subprocess.run(
+        check = _run_subprocess_cancellable(
             [
                 python,
                 "-c",
@@ -243,8 +257,7 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
                 "assert tuple(map(int, transformers.__version__.split('.')[:2])) >= (5, 3); "
                 "print('ok')",
             ],
-            capture_output=True,
-            text=True,
+            cancel_event=cancel_event,
             env=env,
             timeout=60,
         )
@@ -252,6 +265,10 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
             raise RuntimeError(
                 f"Runtime migration verification failed: {check.stderr[-2000:]}"
             )
+        # inject_image_gen_path() intentionally requires the complete marker.
+        # Publish it provisionally, then remove it again if in-process/frozen
+        # activation fails. The durable pending marker remains until every
+        # runtime check below succeeds.
         marker.write_text(
             json.dumps(
                 {
@@ -271,6 +288,19 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
 
             _svc_mod.DEPS_AVAILABLE, _svc_mod.DEPS_REASON = _svc_mod._check_deps()
             _vid_mod.DEPS_AVAILABLE, _vid_mod.DEPS_REASON = _vid_mod._check_deps()
+            if not _svc_mod.DEPS_AVAILABLE or not _vid_mod.DEPS_AVAILABLE:
+                reasons = "; ".join(
+                    reason
+                    for available, reason in (
+                        (_svc_mod.DEPS_AVAILABLE, _svc_mod.DEPS_REASON),
+                        (_vid_mod.DEPS_AVAILABLE, _vid_mod.DEPS_REASON),
+                    )
+                    if not available
+                )
+                raise RuntimeError(
+                    "managed packages installed but failed in-process activation: "
+                    f"{reasons or 'dependency check returned unavailable'}"
+                )
         except Exception as exc:
             raise RuntimeError(
                 f"Runtime migration installed but could not activate packages: {exc}"
@@ -279,9 +309,18 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
         progress.finish("Required AI runtime update complete")
         logger.info("[image_gen_installer] Required image runtime migration complete")
         return True
+    except InstallCancelledError as exc:
+        marker.unlink(missing_ok=True)
+        progress.fail(f"Required AI runtime update interrupted: {exc}")
+        logger.info(
+            "[image_gen_installer] Required image runtime migration interrupted; "
+            "the pending marker will resume it on next startup"
+        )
+        raise
     except Exception as exc:
         # Keep the pending marker as durable retry state. The service gates
         # generation while it remains, so a partial pip target cannot load.
+        marker.unlink(missing_ok=True)
         progress.fail(f"Required AI runtime update failed: {exc}")
         logger.exception(
             "[image_gen_installer] Required image runtime migration failed"
@@ -389,6 +428,7 @@ def inject_image_gen_path() -> bool:
 
 _active_progress: InstallProgress | None = None
 _background_futures: set[asyncio.Future[object]] = set()
+_installer_cancel = threading.Event()
 
 
 def get_active_progress() -> InstallProgress | None:
@@ -488,20 +528,16 @@ def _patch_transformers_filecmp(pkg_dir: Path) -> None:
 # ── Main installer (runs in a thread) ────────────────────────────────────────
 
 
-def _do_install(progress: InstallProgress) -> None:
+def _do_install(
+    progress: InstallProgress,
+    cancel_event: threading.Event | None = None,
+) -> None:
     """Blocking installer — called from a thread pool executor."""
-    import platform as _platform
-
     pkg_dir = get_image_gen_packages_dir()
     pkg_dir.mkdir(parents=True, exist_ok=True)
 
     marker = pkg_dir / ".install-complete"
     marker.unlink(missing_ok=True)
-
-    arch = _platform.machine().lower()
-    use_torch_cpu_index = not (
-        sys.platform == "darwin" and arch in ("arm64", "aarch64")
-    )
 
     try:
         progress.update("preparing", 2.0, "Preparing installation directory…")
@@ -522,7 +558,8 @@ def _do_install(progress: InstallProgress) -> None:
             torch_packages,
             pkg_dir,
             progress,
-            extra_index=_TORCH_CPU_INDEX_URL if use_torch_cpu_index else None,
+            extra_index=_TORCH_CPU_INDEX_URL if _use_torch_cpu_index() else None,
+            cancel_event=cancel_event,
         )
         progress.update("downloading", 45.0, "PyTorch installed ✓")
 
@@ -535,7 +572,12 @@ def _do_install(progress: InstallProgress) -> None:
         progress.update(
             "downloading", 47.0, "Downloading diffusers, transformers, accelerate…"
         )
-        _run_pip_streaming(rest_packages, pkg_dir, progress)
+        _run_pip_streaming(
+            rest_packages,
+            pkg_dir,
+            progress,
+            cancel_event=cancel_event,
+        )
         progress.update("installing", 90.0, "All packages downloaded and installed ✓")
 
         # ── Step 3: verify imports in a clean subprocess ──────────────────────
@@ -543,14 +585,13 @@ def _do_install(progress: InstallProgress) -> None:
         python = _find_python()
         env = os.environ.copy()
         env["PYTHONPATH"] = str(pkg_dir) + os.pathsep + env.get("PYTHONPATH", "")
-        check = subprocess.run(
+        check = _run_subprocess_cancellable(
             [
                 python,
                 "-c",
                 "import torch, diffusers, transformers, accelerate, peft; print('ok')",
             ],
-            capture_output=True,
-            text=True,
+            cancel_event=cancel_event,
             env=env,
             timeout=60,
         )
@@ -626,8 +667,9 @@ async def start_install() -> InstallProgress:
     progress.status = "running"
     progress._loop = asyncio.get_running_loop()
     _active_progress = progress
+    _installer_cancel.clear()
 
-    _submit_background(_do_install, progress)
+    _submit_background(_do_install, progress, _installer_cancel)
     return progress
 
 
@@ -649,5 +691,32 @@ async def start_compatibility_migration() -> InstallProgress | None:
     progress.status = "running"
     progress._loop = asyncio.get_running_loop()
     _active_progress = progress
-    _submit_background(migrate_incompatible_runtime, progress)
+    _installer_cancel.clear()
+    _submit_background(migrate_incompatible_runtime, progress, _installer_cancel)
     return progress
+
+
+async def shutdown_background_installers(timeout: float = 10.0) -> bool:
+    """Cancel and await every package subprocess owned by this engine."""
+    _installer_cancel.set()
+    futures = set(_background_futures)
+    if not futures:
+        return True
+    done, pending = await asyncio.wait(futures, timeout=timeout)
+    for future in done:
+        try:
+            future.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+    if pending:
+        logger.error(
+            "[image_gen_installer] %d background installer task(s) did not stop "
+            "within %.1fs",
+            len(pending),
+            timeout,
+        )
+        return False
+    logger.info("[image_gen_installer] Background package tasks stopped")
+    return True

@@ -359,6 +359,53 @@ run_packaged() {
     warn "could not read /admin/status — per-service health unverified"
   fi
 
+  # Existing image-generation installs may need a mandatory compatibility
+  # migration after an app update. It runs in the background so engine startup
+  # stays responsive, but quitting here would deliberately interrupt pip and
+  # leave a partial managed runtime. If this boot started that migration, wait
+  # for its terminal state and make any repair failure a release blocker.
+  if [ -n "$engine_url" ] && curl -sf --max-time 5 "$engine_url/image-gen/install/status" > "$RUN_DIR/image-install-status.json" 2>/dev/null; then
+    local image_install_status image_install_error image_waited=0
+    image_install_status="$(node -p "require('$RUN_DIR/image-install-status.json').status || ''" 2>/dev/null)"
+    if [ "$image_install_status" = "running" ]; then
+      info "Waiting for the mandatory image-runtime migration to finish…"
+      while [ "$image_install_status" = "running" ] && [ $image_waited -lt 900 ]; do
+        if ! pid_alive "$pid"; then
+          image_install_status="app-exited"
+          break
+        fi
+        sleep 2
+        image_waited=$((image_waited + 2))
+        if curl -sf --max-time 5 "$engine_url/image-gen/install/status" > "$RUN_DIR/image-install-status.json" 2>/dev/null; then
+          image_install_status="$(node -p "require('$RUN_DIR/image-install-status.json').status || ''" 2>/dev/null)"
+        else
+          image_install_status="unreadable"
+        fi
+      done
+
+      case "$image_install_status" in
+        complete)
+          record_ok "packaged: mandatory image-runtime migration completed in ${image_waited}s"
+          ;;
+        error)
+          image_install_error="$(node -p "require('$RUN_DIR/image-install-status.json').error || require('$RUN_DIR/image-install-status.json').message || 'no error recorded'" 2>/dev/null)"
+          record_fail "packaged: mandatory image-runtime migration FAILED" "$image_install_error"
+          ;;
+        running)
+          record_fail "packaged: mandatory image-runtime migration did not finish within ${image_waited}s" "$(node -p "require('$RUN_DIR/image-install-status.json').message || 'still running'" 2>/dev/null)"
+          ;;
+        *)
+          record_fail "packaged: lost the mandatory image-runtime migration while waiting (status=${image_install_status:-missing})"
+          ;;
+      esac
+    elif [ "$image_install_status" = "error" ]; then
+      image_install_error="$(node -p "require('$RUN_DIR/image-install-status.json').error || require('$RUN_DIR/image-install-status.json').message || 'no error recorded'" 2>/dev/null)"
+      record_fail "packaged: image-runtime installer is in an error state" "$image_install_error"
+    fi
+  else
+    record_fail "packaged: could not read /image-gen/install/status — background runtime migration unverified"
+  fi
+
   # Let it settle so late-startup errors land in the log, then quit it the way
   # a user would — the app's own graceful shutdown chain is what we're testing.
   sleep 8

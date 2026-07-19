@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -171,6 +172,8 @@ def test_startup_migrates_old_image_runtime_before_it_can_load(
 ) -> None:
     """An existing 0.37 install is upgraded automatically, without a UI click."""
     from app.services.image_gen import installer
+    from app.services.image_gen import service as image_service
+    from app.services.video_gen import service as video_service
 
     marker = tmp_path / ".install-complete"
     marker.write_text("old", encoding="utf-8")
@@ -191,18 +194,21 @@ def test_startup_migrates_old_image_runtime_before_it_can_load(
 
     installed: list[list[str]] = []
 
-    def fake_pip(packages, target, progress, extra_index=None):
+    def fake_pip(packages, target, progress, extra_index=None, cancel_event=None):
         installed.append(packages)
-        assert target == tmp_path and extra_index is None
+        assert target == tmp_path and extra_index is None and cancel_event is None
         versions["diffusers"] = "0.39.0"
         versions["transformers"] = "5.3.0"
 
     monkeypatch.setattr(installer, "_run_pip_streaming", fake_pip)
     monkeypatch.setattr(
-        installer.subprocess,
-        "run",
+        installer,
+        "_run_subprocess_cancellable",
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="ok\n", stderr=""),
     )
+    monkeypatch.setattr(installer, "_use_torch_cpu_index", lambda: False)
+    monkeypatch.setattr(image_service, "_check_deps", lambda: (True, ""))
+    monkeypatch.setattr(video_service, "_check_deps", lambda: (True, ""))
 
     assert installer.migrate_incompatible_runtime() is True
     assert installed == [
@@ -217,6 +223,121 @@ def test_startup_migrates_old_image_runtime_before_it_can_load(
     assert marker.exists()
     assert not (tmp_path / ".compatibility-upgrade-pending").exists()
     assert installer.needs_upgrade() is False
+
+
+def test_runtime_migration_uses_cpu_torch_index_off_apple_silicon(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Automatic repairs must never replace a CPU runtime with CUDA wheels."""
+    from app.services.image_gen import installer
+    from app.services.image_gen import service as image_service
+    from app.services.video_gen import service as video_service
+
+    (tmp_path / ".install-complete").write_text("old", encoding="utf-8")
+    versions = {
+        "diffusers": "0.37.1",
+        "transformers": "5.2.0",
+        "peft": "0.19.1",
+        "gguf": "0.17.1",
+        "torch": "2.11.0",
+        "torchvision": "0.26.0",
+    }
+    monkeypatch.setattr(installer, "get_image_gen_packages_dir", lambda: tmp_path)
+    monkeypatch.setattr(installer, "get_installed_package_versions", lambda: versions)
+    monkeypatch.setattr(installer, "_find_python", lambda: "python")
+    monkeypatch.setattr(installer, "_use_torch_cpu_index", lambda: True)
+    monkeypatch.setattr(image_service, "_check_deps", lambda: (True, ""))
+    monkeypatch.setattr(video_service, "_check_deps", lambda: (True, ""))
+
+    indexes: list[str | None] = []
+
+    def fake_pip(packages, target, progress, extra_index=None, cancel_event=None):
+        indexes.append(extra_index)
+        versions["diffusers"] = "0.39.0"
+        versions["transformers"] = "5.3.0"
+
+    monkeypatch.setattr(installer, "_run_pip_streaming", fake_pip)
+    monkeypatch.setattr(
+        installer,
+        "_run_subprocess_cancellable",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="ok\n", stderr=""),
+    )
+
+    assert installer.migrate_incompatible_runtime() is True
+    assert indexes == [installer._TORCH_CPU_INDEX_URL]
+
+
+def test_runtime_migration_keeps_pending_state_when_activation_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Frozen-only import failures must not be certified as a completed repair."""
+    from app.services.image_gen import installer
+    from app.services.image_gen import service as image_service
+    from app.services.video_gen import service as video_service
+
+    marker = tmp_path / ".install-complete"
+    marker.write_text("old", encoding="utf-8")
+    versions = {
+        "diffusers": "0.37.1",
+        "transformers": "5.2.0",
+        "peft": "0.19.1",
+        "gguf": "0.17.1",
+        "torch": "2.11.0",
+        "torchvision": "0.26.0",
+    }
+    monkeypatch.setattr(installer, "get_image_gen_packages_dir", lambda: tmp_path)
+    monkeypatch.setattr(installer, "get_installed_package_versions", lambda: versions)
+    monkeypatch.setattr(installer, "_find_python", lambda: "python")
+    monkeypatch.setattr(installer, "_use_torch_cpu_index", lambda: False)
+    monkeypatch.setattr(installer, "inject_image_gen_path", lambda: True)
+
+    def fake_pip(*args, **kwargs):
+        versions["diffusers"] = "0.39.0"
+        versions["transformers"] = "5.3.0"
+
+    monkeypatch.setattr(installer, "_run_pip_streaming", fake_pip)
+    monkeypatch.setattr(
+        installer,
+        "_run_subprocess_cancellable",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="ok\n", stderr=""),
+    )
+    monkeypatch.setattr(image_service, "DEPS_AVAILABLE", True)
+    monkeypatch.setattr(image_service, "DEPS_REASON", "")
+    monkeypatch.setattr(video_service, "DEPS_AVAILABLE", True)
+    monkeypatch.setattr(video_service, "DEPS_REASON", "")
+    monkeypatch.setattr(
+        image_service,
+        "_check_deps",
+        lambda: (False, "torchvision native extension failed"),
+    )
+    monkeypatch.setattr(video_service, "_check_deps", lambda: (True, ""))
+
+    progress = installer.InstallProgress()
+    with pytest.raises(RuntimeError, match="in-process activation"):
+        installer.migrate_incompatible_runtime(progress)
+
+    assert progress.status == "error"
+    assert not marker.exists()
+    assert (tmp_path / ".compatibility-upgrade-pending").exists()
+
+
+def test_install_status_prefers_terminal_error_over_complete_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import image_gen_routes
+    from app.services.image_gen.installer import InstallProgress
+
+    progress = InstallProgress()
+    progress.status = "error"
+    progress.stage = "error"
+    progress.fail("frozen activation failed")
+    monkeypatch.setattr(image_gen_routes, "get_active_progress", lambda: progress)
+    monkeypatch.setattr(image_gen_routes, "is_image_gen_installed", lambda: True)
+
+    response = asyncio.run(image_gen_routes.get_install_status())
+
+    assert response.status == "error"
+    assert response.error == "frozen activation failed"
 
 
 def test_interrupted_runtime_migration_is_durable_and_retried(
@@ -257,7 +378,10 @@ def test_background_runtime_migration_failure_is_observed(
 ) -> None:
     from app.services.image_gen import installer
 
-    def fail_migration(progress: installer.InstallProgress) -> None:
+    def fail_migration(
+        progress: installer.InstallProgress,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
         progress.fail("migration exploded")
         raise RuntimeError("migration exploded")
 

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import sys
+import threading
+import time
 from pathlib import Path
+
+import pytest
 
 from app.services.optional_packages import core
 
@@ -94,3 +99,35 @@ def test_install_command_uses_uv_for_pipless_uv_environment(
     assert command[:3] == ["/tools/uv", "pip", "install"]
     assert command[command.index("--python") + 1] == "/uv-venv/python"
     assert command[command.index("--target") + 1] == str(tmp_path)
+
+
+def test_pip_process_is_reaped_when_engine_shutdown_is_requested(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cancel = threading.Event()
+    progress = core.InstallProgress()
+    monkeypatch.setattr(core, "find_python", lambda: sys.executable)
+    monkeypatch.setattr(
+        core,
+        "_install_command",
+        lambda _python, _target: [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(30)",
+        ],
+    )
+    timer = threading.Timer(0.2, cancel.set)
+    timer.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(core.InstallCancelledError, match="cancelled"):
+            core.run_pip_streaming(
+                ["ignored-argument"],
+                tmp_path,
+                progress,
+                cancel_event=cancel,
+            )
+    finally:
+        timer.cancel()
+
+    assert time.monotonic() - started < 5.0

@@ -30,6 +30,10 @@ _reported_path_escapes: set[tuple[Path, Path]] = set()
 _reported_path_escapes_lock = threading.Lock()
 
 
+class InstallCancelledError(RuntimeError):
+    """A managed package subprocess was stopped during engine shutdown."""
+
+
 def _is_within(path: Path, parent: Path) -> bool:
     return path == parent or parent in path.parents
 
@@ -263,6 +267,7 @@ def run_pip_streaming(
     target: Path,
     progress: InstallProgress,
     extra_index: str | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     """Run ``pip install --target``, forwarding each output line to progress.
 
@@ -290,14 +295,22 @@ def run_pip_streaming(
     INACTIVITY_TIMEOUT_S = 600.0
     last_output = time.monotonic()
     watchdog_fired = threading.Event()
+    cancelled = threading.Event()
 
     def _watchdog() -> None:
         while proc.poll() is None:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled.set()
+                _terminate_process_tree(proc)
+                return
             if time.monotonic() - last_output > INACTIVITY_TIMEOUT_S:
                 watchdog_fired.set()
-                proc.kill()
+                _terminate_process_tree(proc)
                 return
-            time.sleep(5.0)
+            # A shutdown request must not wait behind the ordinary inactivity
+            # watchdog cadence. Poll it promptly; keep the old low-wake cadence
+            # for installs that have no lifecycle cancellation event.
+            time.sleep(0.25 if cancel_event is not None else 5.0)
 
     watchdog = threading.Thread(target=_watchdog, daemon=True, name="pip-watchdog")
     watchdog.start()
@@ -309,6 +322,8 @@ def run_pip_streaming(
             progress.log(line)
 
     proc.wait()
+    if cancelled.is_set():
+        raise InstallCancelledError("package installation cancelled during shutdown")
     if watchdog_fired.is_set():
         raise RuntimeError(
             f"pip produced no output for {int(INACTIVITY_TIMEOUT_S)}s and was "
@@ -319,6 +334,68 @@ def run_pip_streaming(
             f"package installer exited with code {proc.returncode} while "
             f"installing {packages}"
         )
+
+
+def _terminate_process_tree(proc: subprocess.Popen[str]) -> None:
+    """Terminate an installer and every child it spawned, then escalate."""
+    try:
+        import psutil  # noqa: PLC0415 — core dependency; only used on cancellation
+
+        parent = psutil.Process(proc.pid)
+        processes = [*parent.children(recursive=True), parent]
+        for process in processes:
+            try:
+                process.terminate()
+            except psutil.NoSuchProcess:
+                pass
+        _, alive = psutil.wait_procs(processes, timeout=3.0)
+        for process in alive:
+            try:
+                process.kill()
+            except psutil.NoSuchProcess:
+                pass
+        psutil.wait_procs(alive, timeout=2.0)
+    except Exception:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3.0)
+            except (OSError, subprocess.TimeoutExpired):
+                if proc.poll() is None:
+                    proc.kill()
+
+
+def run_subprocess_cancellable(
+    command: list[str],
+    *,
+    cancel_event: threading.Event | None,
+    timeout: float,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a captured helper process with the same shutdown ownership as pip."""
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=0.25)
+            return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            if cancel_event is not None and cancel_event.is_set():
+                _terminate_process_tree(proc)
+                proc.communicate()
+                raise InstallCancelledError(
+                    "package verification cancelled during shutdown"
+                )
+            if time.monotonic() >= deadline:
+                _terminate_process_tree(proc)
+                stdout, stderr = proc.communicate()
+                raise subprocess.TimeoutExpired(command, timeout, stdout, stderr)
 
 
 def _python_has_pip(python: str) -> bool:

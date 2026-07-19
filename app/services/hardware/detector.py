@@ -32,8 +32,10 @@ import platform
 import re
 import shutil
 import subprocess
-import sys
+import time
 from typing import Any
+
+from app.common.process_shutdown import process_shutdown_requested
 
 logger = logging.getLogger(__name__)
 
@@ -97,16 +99,44 @@ def _nvidia_smi_candidates() -> list[list[str]]:
 
 
 def _run(cmd: list[str], timeout: int = 5) -> str:
-    """Run a command and return its stdout, '' on any failure."""
+    """Run a probe command, aborting promptly during process shutdown."""
+    if process_shutdown_requested():
+        return ""
+
+    process: subprocess.Popen[str] | None = None
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
         )
-        return result.stdout.strip() if result.returncode == 0 else ""
+        deadline = time.monotonic() + timeout
+        while True:
+            if process_shutdown_requested():
+                process.terminate()
+                try:
+                    process.communicate(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate()
+                return ""
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                process.communicate()
+                return ""
+
+            try:
+                stdout, _stderr = process.communicate(timeout=min(0.1, remaining))
+                return stdout.strip() if process.returncode == 0 else ""
+            except subprocess.TimeoutExpired:
+                continue
     except Exception:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.communicate()
         return ""
 
 
@@ -913,6 +943,9 @@ def detect_all_sync() -> dict[str, Any]:
         logger.debug("[hardware] CPUs: %d detected", len(profile["cpus"]))
     except Exception as exc:
         logger.warning("[hardware] CPU detection error: %s", exc)
+    if process_shutdown_requested():
+        logger.info("[hardware] Detection stopped for process shutdown")
+        return profile
 
     try:
         profile["gpus"] = _detect_gpus()
@@ -924,12 +957,18 @@ def detect_all_sync() -> dict[str, Any]:
             )
     except Exception as exc:
         logger.warning("[hardware] GPU detection error: %s", exc)
+    if process_shutdown_requested():
+        logger.info("[hardware] Detection stopped for process shutdown")
+        return profile
 
     try:
         profile["ram"] = _detect_ram()
         logger.debug("[hardware] RAM: %s MB total", profile["ram"].get("total_mb"))
     except Exception as exc:
         logger.warning("[hardware] RAM detection error: %s", exc)
+    if process_shutdown_requested():
+        logger.info("[hardware] Detection stopped for process shutdown")
+        return profile
 
     try:
         audio = _detect_audio_devices()
@@ -942,24 +981,36 @@ def detect_all_sync() -> dict[str, Any]:
         )
     except Exception as exc:
         logger.warning("[hardware] Audio detection error: %s", exc)
+    if process_shutdown_requested():
+        logger.info("[hardware] Detection stopped for process shutdown")
+        return profile
 
     try:
         profile["video_devices"] = _detect_video_devices()
         logger.debug("[hardware] Cameras: %d detected", len(profile["video_devices"]))
     except Exception as exc:
         logger.warning("[hardware] Video device detection error: %s", exc)
+    if process_shutdown_requested():
+        logger.info("[hardware] Detection stopped for process shutdown")
+        return profile
 
     try:
         profile["monitors"] = _detect_monitors()
         logger.debug("[hardware] Monitors: %d detected", len(profile["monitors"]))
     except Exception as exc:
         logger.warning("[hardware] Monitor detection error: %s", exc)
+    if process_shutdown_requested():
+        logger.info("[hardware] Detection stopped for process shutdown")
+        return profile
 
     try:
         profile["network_adapters"] = _detect_network_adapters()
         logger.debug("[hardware] Network adapters: %d detected", len(profile["network_adapters"]))
     except Exception as exc:
         logger.warning("[hardware] Network adapter detection error: %s", exc)
+    if process_shutdown_requested():
+        logger.info("[hardware] Detection stopped for process shutdown")
+        return profile
 
     try:
         profile["storage"] = _detect_storage()

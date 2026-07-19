@@ -33,6 +33,11 @@ export function appendFilesystemPage(current: PageableResult, next: PageableResu
   };
 }
 
+/** Reset local paging only when the canonical input data actually changes. */
+export function filesystemResultRevision(result: FilesystemResult): string {
+  return JSON.stringify(result);
+}
+
 function requireDirectoryPage(payload: unknown): FilesystemDirectoryPage {
   const result = normalizeFilesystemPayload(payload);
   if (result?.kind !== "filesystem.directory-page") {
@@ -56,6 +61,7 @@ export function FilesystemResultController({ result, layout = "embedded", onRefe
   const [pagingError, setPagingError] = useState<string | null>(null);
   const requestId = useRef(0);
   const loadingMoreRef = useRef(false);
+  const resultRevision = filesystemResultRevision(result);
   const resultIdentityRef = useRef(
     result.kind === "filesystem.directory-page" || result.kind === "filesystem.search-page"
       ? pageIdentity(result)
@@ -73,7 +79,7 @@ export function FilesystemResultController({ result, layout = "embedded", onRefe
     setCurrent(result);
     setLoadingMore(false);
     setPagingError(null);
-  }, [result]);
+  }, [resultRevision]);
 
   const loadChildren = useCallback(async (entry: FilesystemEntry, cursor?: string): Promise<FilesystemDirectoryPage> => {
     return requireDirectoryPage(await engine.listFilesystem(entry.path, {

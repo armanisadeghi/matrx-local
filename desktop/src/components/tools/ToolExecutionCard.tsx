@@ -68,7 +68,10 @@ export function ToolExecutionCard({
   const isSuccess = result?.type === "success";
   const isError = result?.type === "error";
   const filesystemTool = isFilesystemTool(toolCall.name);
-  const filesystem = result ? normalizeFilesystemResult(result, toolCall.name) : null;
+  const filesystem = useMemo(
+    () => result ? normalizeFilesystemResult(result, toolCall.name) : null,
+    [result, toolCall.name],
+  );
   const artifact = result?.artifact ?? (result ? artifactFromOutput(result.output) : null);
   const media = useMemo(() => {
     if (artifact && engine.engineUrl) {

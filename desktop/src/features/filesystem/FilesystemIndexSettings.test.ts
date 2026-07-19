@@ -80,4 +80,17 @@ describe("FilesystemIndexSettings contracts", () => {
     expect(fence.finishLoad(disconnectedLoad!)).toBe(false);
     expect(fence.finishLoad(reconnectedLoad!)).toBe(true);
   });
+
+  it("releases a disconnected mutation so reconnect can load", () => {
+    const fence = new FilesystemIndexRequestFence();
+    const disconnectedSave = fence.beginMutation();
+    expect(disconnectedSave).not.toBeNull();
+
+    fence.invalidate();
+    const reconnectLoad = fence.beginLoad();
+    expect(reconnectLoad).not.toBeNull();
+    fence.finishMutation(disconnectedSave!);
+    expect(fence.isCurrent(reconnectLoad!)).toBe(true);
+    expect(fence.finishLoad(reconnectLoad!)).toBe(true);
+  });
 });

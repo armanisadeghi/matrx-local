@@ -93,6 +93,7 @@ export class FilesystemIndexRequestFence {
   invalidate(): void {
     this.generation += 1;
     this.activeLoad = null;
+    this.activeMutation = null;
   }
 }
 
@@ -197,10 +198,15 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
       if (!requestFence.isCurrent(operation)) return;
       setMessage({ text: reason instanceof Error ? reason.message : String(reason), error: true });
     } finally {
+      const stale = !requestFence.isCurrent(operation);
       requestFence.finishMutation(operation);
       setSaving(false);
+      if (stale) {
+        requestFence.invalidate();
+        void load();
+      }
     }
-  }, [requestFence, roots]);
+  }, [load, requestFence, roots]);
 
   const savePolicy = useCallback(async () => {
     if (!policy) return;
@@ -218,10 +224,15 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
       if (!requestFence.isCurrent(operation)) return;
       setMessage({ text: reason instanceof Error ? reason.message : String(reason), error: true });
     } finally {
+      const stale = !requestFence.isCurrent(operation);
       requestFence.finishMutation(operation);
       setSavingPolicy(false);
+      if (stale) {
+        requestFence.invalidate();
+        void load();
+      }
     }
-  }, [policy, requestFence]);
+  }, [load, policy, requestFence]);
 
   const controlIndex = useCallback(async (action: "pause" | "resume" | "rebuild" | "clear") => {
     if (action === "rebuild" && !window.confirm("Rebuild the local filesystem index from scratch? Direct file browsing will keep working.")) return;
@@ -248,10 +259,15 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
       if (!requestFence.isCurrent(operation)) return;
       setMessage({ text: reason instanceof Error ? reason.message : String(reason), error: true });
     } finally {
+      const stale = !requestFence.isCurrent(operation);
       requestFence.finishMutation(operation);
       setIndexAction(null);
+      if (stale) {
+        requestFence.invalidate();
+        void load();
+      }
     }
-  }, [requestFence]);
+  }, [load, requestFence]);
 
   const discoveredCount = useMemo(() => places.filter((place) => place.available).length, [places]);
 

@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.common.platform_ctx import refresh_package_capabilities
+from app.common.process_shutdown import process_shutdown_requested
 from app.common.system_logger import get_logger
 from app.services.capabilities.installer import (
     get_active_progress,
@@ -517,6 +518,8 @@ async def stream_install_progress(capability_id: str) -> StreamingResponse:
 
         deadline = loop.time() + 15.0
         while get_active_progress(capability_id) is None:
+            if process_shutdown_requested():
+                return
             if loop.time() > deadline:
                 yield (
                     f"data: {json.dumps({'status': 'error', 'message': 'No install started. Call POST /capabilities/install first.', 'capability_id': capability_id})}\n\n"
@@ -539,11 +542,14 @@ async def stream_install_progress(capability_id: str) -> StreamingResponse:
 
         pump_task = asyncio.create_task(_pump())
         try:
-            while True:
+            next_keepalive = loop.time() + 20.0
+            while not process_shutdown_requested():
                 try:
-                    item = await asyncio.wait_for(queue.get(), timeout=20.0)
+                    item = await asyncio.wait_for(queue.get(), timeout=0.25)
                 except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
+                    if loop.time() >= next_keepalive:
+                        yield ": keepalive\n\n"
+                        next_keepalive = loop.time() + 20.0
                     continue
                 if item is _SENTINEL:
                     break
@@ -554,10 +560,7 @@ async def stream_install_progress(capability_id: str) -> StreamingResponse:
                     break
         finally:
             pump_task.cancel()
-            try:
-                await pump_task
-            except asyncio.CancelledError:
-                pass
+            await asyncio.gather(pump_task, return_exceptions=True)
 
     return StreamingResponse(
         event_stream(),

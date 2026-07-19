@@ -264,6 +264,7 @@ async def download_model_with_progress(req: DownloadRequest) -> StreamingRespons
     """
 
     async def _gen():
+        download_task: asyncio.Task | None = None
         try:
             progress_events: list[tuple[int, int]] = []
 
@@ -276,13 +277,16 @@ async def download_model_with_progress(req: DownloadRequest) -> StreamingRespons
                 download_model(req.model_name, on_progress=on_progress)
             )
 
-            while not download_task.done():
+            while not download_task.done() and not process_shutdown_requested():
                 await asyncio.sleep(0.1)
                 for done, total in progress_events:
                     pct = round(done / total * 100, 1) if total > 0 else 0.0
                     payload = json.dumps({"bytes_done": done, "total_bytes": total, "percent": pct})
                     yield f"event: progress\ndata: {payload}\n\n"
                 progress_events.clear()
+
+            if process_shutdown_requested():
+                return
 
             info = await download_task
             yield f"event: complete\ndata: {json.dumps({'name': info.name, 'size_mb': info.size_mb})}\n\n"
@@ -292,6 +296,10 @@ async def download_model_with_progress(req: DownloadRequest) -> StreamingRespons
         except Exception as exc:
             logger.exception(f"Download stream error: {exc}")
             yield f"event: error\ndata: {json.dumps(str(exc))}\n\n"
+        finally:
+            if download_task is not None and not download_task.done():
+                download_task.cancel()
+                await asyncio.gather(download_task, return_exceptions=True)
 
     return StreamingResponse(
         _gen(),

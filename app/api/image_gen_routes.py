@@ -91,6 +91,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.common.process_shutdown import process_shutdown_requested
 from app.services.image_gen.service import get_image_gen_service
 from app.services.image_gen.models import (
     get_image_gen_models,
@@ -2307,6 +2308,8 @@ async def stream_install_progress() -> StreamingResponse:
         # Wait up to 15 s for the caller to kick off POST /install
         deadline = loop.time() + 15.0
         while get_active_progress() is None:
+            if process_shutdown_requested():
+                return
             if loop.time() > deadline:
                 yield f"data: {json.dumps({'status': 'error', 'message': 'No install started. Call POST /image-gen/install first.'})}\n\n"
                 return
@@ -2338,17 +2341,21 @@ async def stream_install_progress() -> StreamingResponse:
 
         pump_task = asyncio.create_task(_pump())
         try:
-            while True:
+            next_keepalive = loop.time() + 5.0
+            while not process_shutdown_requested():
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=5.0)
+                    event = await asyncio.wait_for(queue.get(), timeout=0.25)
                 except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
+                    if loop.time() >= next_keepalive:
+                        yield ": keepalive\n\n"
+                        next_keepalive = loop.time() + 5.0
                     continue
                 if event is _SENTINEL:
                     break
                 yield f"data: {json.dumps(event)}\n\n"
         finally:
             pump_task.cancel()
+            await asyncio.gather(pump_task, return_exceptions=True)
 
     return StreamingResponse(
         event_stream(),

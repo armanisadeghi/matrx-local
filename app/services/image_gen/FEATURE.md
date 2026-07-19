@@ -233,8 +233,12 @@ Windows, and Linux. On startup, before that directory is injected into
 `sys.path`, an existing runtime below the required Diffusers/Transformers
 versions or missing PEFT/GGUF support is upgraded automatically in the
 background. This migration changes only managed Python packages—not model
-weights, encoders, LoRAs, or Torch—and records a durable pending marker before
-it starts. An interrupted migration retries at the next engine start. Image
+weights, encoders, LoRAs, or other user assets—and records a durable pending
+marker before it starts. Torch and Torchvision are resolved as a pair:
+pip target installs can otherwise upgrade Torch transitively while retaining an
+ABI-incompatible Torchvision native extension. An interrupted migration retries
+at the next engine start, and its retained executor future converts failures to
+a terminal installer state without emitting an unobserved-future warning. Image
 generation is hard-gated until the required runtime is verified, so an old
 known-broken loader is never used as a fallback.
 

@@ -365,6 +365,56 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Cross-repo
 
+### MXL-D-059 — 🔴 chat_sync BLIND-UPSERTS server-owned cloud rows (already corrupted production data)
+- **Area:** chat_sync / cross-repo (shared Supabase `chat.*`)
+- **Symptom:** `_push_table` publishes locally-rebuilt rows to the shared cloud DB with an
+  **unconditional** PostgREST upsert — no compare-and-swap, no predicate — so the desktop
+  overwrites server-authored truth with whatever its local rebuild lost or never had.
+  **This is not theoretical: it corrupted live data on 2026-07-18.** A desktop push wrote a
+  `chat.message.content` whose `tool_call` block had lost its `call_id` (matrx-ai ≤0.4.18
+  `parse_content` dropped it), producing `tool_use.id=""` → Anthropic 400 on **every**
+  subsequent turn of that cloud conversation. Repaired server-side via aidream migrations
+  0207 (table-level tool-graph trigger) + 0208 (data repair); 3 rows across 3 conversations.
+- **Evidence:**
+  - `app/services/chat_sync/client.py:150-166` — `Prefer: resolution=merge-duplicates`, no predicate.
+  - `app/services/chat_sync/engine.py:53` — `_STRIP_COLUMNS` discards `version`, so the
+    optimistic-concurrency column that would make a guarded write possible is deliberately
+    removed before the request goes out.
+  - `app/services/ai/conversation_handler.py:1127` — `{k: v for k, v in raw.items() if v not in (None, [], {})}`
+    drops `arguments:{}` / `content:[]`; `:1120-1124` `__dict__` fallback loses private attrs.
+  - `:490-508` — the pulled cloud row is matched and its content REPLACED by the twice-normalized
+    local rebuild, then enqueued for push (the closed lossy loop).
+  - Contrast `app/services/documents/sync_engine.py:329-366`, which does this CORRECTLY
+    (`expected_content_hash` CAS + conflict preservation) and whose own comment calls the
+    unconditional upsert a "SYNC_CONTRACT violation."
+- **Highest-severity columns still clobbered today (beyond the fixed content case):**
+  1. `conversation.cache_state` / `metadata` / `config` — hardcoded `'{}'` at
+     `conversation_handler.py:137-140` + `repositories.py:376-378`; destroys server prompt-cache state.
+  2. `user_request` usage/cost — hardcoded zeros at `conversation_handler.py:196-199`, never
+     repaired (`:605-618`); silently zeroes server-side token/cost aggregates.
+  3. `message.metadata` — replaced wholesale with `{}` at `:492`.
+  4. `conversation.message_count` — recomputed at `:622-628` from a locally PARTIAL replica
+     (pull caps at 20 pages × 500).
+  5. `PUT /messages/{id}` (`data_routes.py:268-276` → `repositories.py:473-474`) flattens a
+     structured message to ONE text block, destroying all tool_call blocks, then pushes it.
+  6. `_PUSH_ORDER` is an ordering hint, **not an allowlist** (`engine.py:236,249-251`) — any
+     `chat.*` table enqueued anywhere starts unconditionally upserting with zero review.
+  7. LWW guard compares timestamps **lexicographically as TEXT** (`engine.py:571-574`) — breaks on
+     fractional-second width (Postgres trims trailing zeros, local `_now()` never does — this one
+     fires constantly), mixed UTC offsets, and the space-form `datetime('now')` stamps written by
+     `artifacts/service.py:370,403,470,483`. `_parse_ts` (`engine.py:73-83`) exists and is unused.
+- **Status:** open. Analyzed 2026-07-18 — verified in code (upsert predicate, `_STRIP_COLUMNS`,
+  hardcoded zeros, `cache_state='{}'` all read directly); server-side damage confirmed in the DB
+  and repaired.
+- **Immediate mitigation already live (server side):** aidream migration 0207 installs
+  `chat.message_tool_graph_write_guard`, which REJECTS any UPDATE changing a message's `tool_call`
+  id multiset. Desktop pushes that would corrupt the tool graph now fail loudly with
+  `tool_call_graph_change_forbidden`, retry, then dead-letter — cloud truth is protected, but the
+  desktop mirror stays lossy and the other columns above are still unguarded.
+- **Owner hint:** chat_sync. Fix direction: adopt the `documents/sync_engine.py` CAS pattern —
+  stop stripping `version`, push only columns the desktop actually authors, and make the push an
+  allowlist rather than an ordering hint.
+
 ### MXL-D-027 — Voice E2E unconfirmed on physical hardware
 - **Area:** desktop / voice
 - **Symptom:** full setup → record → transcript with the current Rust pipeline never

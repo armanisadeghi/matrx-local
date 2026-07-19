@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -89,9 +90,60 @@ def test_needs_upgrade_when_peft_missing(
             "transformers": "5.3.0",
             "peft": "0.19.1",
             "gguf": "0.17.1",
+            "torch": "2.11.0",
+            "torchvision": "0.26.0",
         },
     )
+    monkeypatch.setattr(
+        installer, "_get_torchvision_torch_requirement", lambda: "2.11.0"
+    )
     assert installer.needs_upgrade() is False
+
+
+def test_needs_upgrade_when_torchvision_requires_another_torch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native Torchvision extensions must match the managed Torch ABI."""
+    from app.services.image_gen import installer
+
+    monkeypatch.setattr(installer, "_compatibility_migration_pending", lambda: False)
+    monkeypatch.setattr(installer, "is_image_gen_installed", lambda: True)
+    monkeypatch.setattr(
+        installer,
+        "get_installed_package_versions",
+        lambda: {
+            "diffusers": "0.39.0",
+            "transformers": "5.3.0",
+            "peft": "0.19.1",
+            "gguf": "0.17.1",
+            "torch": "2.13.0",
+            "torchvision": "0.26.0",
+        },
+    )
+    monkeypatch.setattr(
+        installer, "_get_torchvision_torch_requirement", lambda: "2.11.0"
+    )
+
+    assert installer.needs_upgrade() is True
+
+
+def test_torchvision_torch_requirement_is_read_without_importing_native_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from app.services.image_gen import installer
+
+    metadata_dir = tmp_path / "torchvision-0.26.0.dist-info"
+    metadata_dir.mkdir()
+    (metadata_dir / "METADATA").write_text(
+        "Metadata-Version: 2.4\n"
+        "Name: torchvision\n"
+        "Version: 0.26.0\n"
+        "Requires-Dist: torch (==2.11.0)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(installer, "get_image_gen_packages_dir", lambda: tmp_path)
+
+    assert installer._get_torchvision_torch_requirement() == "2.11.0"
 
 
 def test_needs_upgrade_when_diffusers_predates_z_image_lora_fix(
@@ -127,10 +179,15 @@ def test_startup_migrates_old_image_runtime_before_it_can_load(
         "transformers": "5.2.0",
         "peft": "0.19.1",
         "gguf": "0.17.1",
+        "torch": "2.11.0",
+        "torchvision": "0.26.0",
     }
     monkeypatch.setattr(installer, "get_image_gen_packages_dir", lambda: tmp_path)
     monkeypatch.setattr(installer, "get_installed_package_versions", lambda: versions)
     monkeypatch.setattr(installer, "_find_python", lambda: "python")
+    monkeypatch.setattr(
+        installer, "_get_torchvision_torch_requirement", lambda: "2.11.0"
+    )
 
     installed: list[list[str]] = []
 
@@ -150,6 +207,7 @@ def test_startup_migrates_old_image_runtime_before_it_can_load(
     assert installer.migrate_incompatible_runtime() is True
     assert installed == [
         [
+            "torchvision",
             "diffusers==0.39.0",
             "transformers>=5.3.0",
             "peft>=0.13.1",
@@ -184,11 +242,48 @@ def test_interrupted_runtime_migration_is_durable_and_retried(
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("offline")),
     )
 
+    progress = installer.InstallProgress()
     with pytest.raises(RuntimeError, match="offline"):
-        installer.migrate_incompatible_runtime()
+        installer.migrate_incompatible_runtime(progress)
     assert not (tmp_path / ".install-complete").exists()
     assert (tmp_path / ".compatibility-upgrade-pending").exists()
     assert installer.needs_upgrade() is True
+    assert progress.status == "error"
+    assert progress.error is not None and "offline" in progress.error
+
+
+def test_background_runtime_migration_failure_is_observed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.image_gen import installer
+
+    def fail_migration(progress: installer.InstallProgress) -> None:
+        progress.fail("migration exploded")
+        raise RuntimeError("migration exploded")
+
+    async def exercise() -> None:
+        loop = asyncio.get_running_loop()
+        unhandled: list[dict] = []
+        loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+        monkeypatch.setattr(installer, "needs_upgrade", lambda: True)
+        monkeypatch.setattr(installer, "migrate_incompatible_runtime", fail_migration)
+        installer._active_progress = None
+        installer._background_futures.clear()
+
+        progress = await installer.start_compatibility_migration()
+        assert progress is not None
+        for _ in range(100):
+            if not installer._background_futures:
+                break
+            await asyncio.sleep(0.001)
+        gc.collect()
+        await asyncio.sleep(0)
+
+        assert progress.status == "error"
+        assert not installer._background_futures
+        assert unhandled == []
+
+    asyncio.run(exercise())
 
 
 def test_outdated_runtime_is_hard_gated(monkeypatch: pytest.MonkeyPatch) -> None:

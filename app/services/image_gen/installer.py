@@ -17,8 +17,10 @@ once the install is complete, so the frozen binary can import them.
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -72,6 +74,9 @@ IMAGE_GEN_PACKAGES = [
 
 _TORCH_PACKAGES = {"torch", "torchvision", "torchaudio"}
 _COMPATIBILITY_MIGRATION_MARKER = ".compatibility-upgrade-pending"
+_TORCH_REQUIREMENT_RE = re.compile(
+    r"^torch\s*(?:\(\s*)?==\s*([^);\s]+)", re.IGNORECASE
+)
 
 
 # ── Install directory ─────────────────────────────────────────────────────────
@@ -113,6 +118,32 @@ def get_installed_package_versions() -> dict[str, str]:
     return versions
 
 
+def _get_torchvision_torch_requirement() -> str | None:
+    """Return Torchvision's exact managed-Torch requirement without importing it.
+
+    Importing a mismatched Torchvision is precisely what raises the opaque
+    ``operator torchvision::nms does not exist`` startup error. Wheel metadata
+    is safe to inspect and Torchvision publishes an exact Torch requirement.
+    """
+    try:
+        distributions = importlib.metadata.distributions(
+            path=[str(get_image_gen_packages_dir())]
+        )
+        for distribution in distributions:
+            if distribution.metadata.get("Name", "").lower() != "torchvision":
+                continue
+            for requirement in distribution.requires or ():
+                match = _TORCH_REQUIREMENT_RE.match(requirement)
+                if match:
+                    return match.group(1)
+    except (OSError, ValueError):
+        logger.debug(
+            "[image_gen_installer] Could not inspect Torchvision metadata",
+            exc_info=True,
+        )
+    return None
+
+
 def needs_upgrade() -> bool:
     """True when the install marker exists but diffusers is older than the
     catalog's minimum (service.py MIN_DIFFUSERS_VERSION). POST /image-gen/install
@@ -127,18 +158,26 @@ def needs_upgrade() -> bool:
         _parse_version,
     )
 
-    installed = get_installed_package_versions().get("diffusers")
+    versions = get_installed_package_versions()
+    installed = versions.get("diffusers")
     if installed is None:
         return True  # marker without diffusers on disk — reinstall
     if _parse_version(installed) < MIN_DIFFUSERS_VERSION:
         return True
-    transformers_version = get_installed_package_versions().get("transformers")
+    transformers_version = versions.get("transformers")
     if transformers_version is None or _parse_version(transformers_version) < (5, 3, 0):
         return True
-    if get_installed_package_versions().get("peft") is None:
+    if versions.get("peft") is None:
         return True  # LoRA apply needs peft — older installs predate this dep
-    if get_installed_package_versions().get("gguf") is None:
+    if versions.get("gguf") is None:
         return True  # selectable GGUF text encoders need Transformers' parser
+    torch_version = versions.get("torch")
+    torchvision_version = versions.get("torchvision")
+    if torch_version is None or torchvision_version is None:
+        return True
+    required_torch = _get_torchvision_torch_requirement()
+    if required_torch is not None and torch_version.split("+", 1)[0] != required_torch:
+        return True
     return False
 
 
@@ -148,8 +187,11 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
     This is deliberately a startup migration, not UI advice: shipped app
     updates must repair every existing image-gen install before importing its
     optional packages. Only diffusers and its resolved lightweight Python
-    dependencies are touched; models, encoders, LoRAs, torch, and user data
-    stay put.
+    dependencies are touched; models, encoders, LoRAs, and user data stay put.
+    Torch and Torchvision are resolved together because pip target installs do
+    not consider packages already present in the target as satisfying new
+    dependencies. Leaving Torchvision behind can produce an ABI-incompatible
+    pair even when both distributions are individually valid.
     The pending marker makes a power/network interruption retry on the next
     engine start rather than allowing the known-broken loader to run.
     """
@@ -172,12 +214,13 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
     progress.status = "running"
     try:
         progress.update("upgrading", 10.0, "Updating required AI runtime…")
-        # Do NOT invoke the full installer: re-installing/altering torch during
-        # an app update is unnecessary and is especially failure-prone on Windows
-        # where native wheel files may be in use. These loader dependencies do
-        # not replace the existing Torch runtime.
+        # Do NOT invoke the full installer: this migration only repairs the
+        # managed runtime and does not alter models or other user assets. Include
+        # Torchvision explicitly so pip resolves it against the Torch version
+        # pulled by PEFT instead of leaving a stale native extension behind.
         _run_pip_streaming(
             [
+                "torchvision",
                 "diffusers==0.39.0",
                 "transformers>=5.3.0",
                 "peft>=0.13.1",
@@ -236,9 +279,10 @@ def migrate_incompatible_runtime(progress: InstallProgress | None = None) -> boo
         progress.finish("Required AI runtime update complete")
         logger.info("[image_gen_installer] Required image runtime migration complete")
         return True
-    except Exception:
+    except Exception as exc:
         # Keep the pending marker as durable retry state. The service gates
         # generation while it remains, so a partial pip target cannot load.
+        progress.fail(f"Required AI runtime update failed: {exc}")
         logger.exception(
             "[image_gen_installer] Required image runtime migration failed"
         )
@@ -344,10 +388,30 @@ def inject_image_gen_path() -> bool:
 # ── Global singleton ──────────────────────────────────────────────────────────
 
 _active_progress: InstallProgress | None = None
+_background_futures: set[asyncio.Future[object]] = set()
 
 
 def get_active_progress() -> InstallProgress | None:
     return _active_progress
+
+
+def _submit_background(function, *args) -> None:
+    """Run installer work while retaining and observing its executor future."""
+    future = asyncio.get_running_loop().run_in_executor(None, function, *args)
+    _background_futures.add(future)
+
+    def _finished(done: asyncio.Future[object]) -> None:
+        _background_futures.discard(done)
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            logger.warning("[image_gen_installer] Background package task cancelled")
+        except Exception:
+            # The worker owns the detailed log and progress failure. Retrieving
+            # the exception here prevents asyncio's misleading orphan warning.
+            pass
+
+    future.add_done_callback(_finished)
 
 
 # ── Compatibility patches ─────────────────────────────────────────────────────
@@ -563,7 +627,7 @@ async def start_install() -> InstallProgress:
     progress._loop = asyncio.get_running_loop()
     _active_progress = progress
 
-    asyncio.get_running_loop().run_in_executor(None, _do_install, progress)
+    _submit_background(_do_install, progress)
     return progress
 
 
@@ -585,7 +649,5 @@ async def start_compatibility_migration() -> InstallProgress | None:
     progress.status = "running"
     progress._loop = asyncio.get_running_loop()
     _active_progress = progress
-    asyncio.get_running_loop().run_in_executor(
-        None, migrate_incompatible_runtime, progress
-    )
+    _submit_background(migrate_incompatible_runtime, progress)
     return progress

@@ -77,7 +77,7 @@ record_ok()   { echo "## ✅ $1" >> "$SUMMARY"; echo >> "$SUMMARY"; ok "$1"; }
 # Lines that mean "this build is broken". Kept deliberately tight: a smoke
 # signal nobody trusts is a smoke signal nobody reads. Add a pattern here the
 # moment a real startup failure slips through with a distinctive line.
-FATAL_PATTERNS='panicked at|Traceback \(most recent call last\)|Something went wrong|may be used only in the context of|ended unexpectedly|Uncaught (TypeError|ReferenceError|Error)|ModuleNotFoundError|ImportError|PackageNotFoundError|No package metadata was found|Address already in use|\[launcher\] [a-z-]+ → failed|\[sigterm_then_kill\].*did NOT exit.*SIGKILL'
+FATAL_PATTERNS='panicked at|Traceback \(most recent call last\)|Something went wrong|may be used only in the context of|ended unexpectedly|Uncaught (TypeError|ReferenceError|Error)|ModuleNotFoundError|ImportError|PackageNotFoundError|No package metadata was found|Address already in use|\[launcher\] [a-z-]+ → failed|\[sigterm_then_kill\].*did NOT exit.*SIGKILL|\[shutdown\].*did NOT complete.*force-killing'
 # Noise that is expected on a dev machine and is NOT a build defect.
 BENIGN_PATTERNS='DeprecationWarning|urllib3|NotOpenSSLWarning|ExperimentalWarning'
 

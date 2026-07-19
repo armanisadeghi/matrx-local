@@ -604,6 +604,56 @@ async def post_boot_check_run(
 # ---------------------------------------------------------------------------
 
 
+async def _wait_for_bridge_events_disconnect(websocket: WebSocket) -> None:
+    """Observe a peer disconnect while authentication is still in flight.
+
+    A WebSocket route can spend long enough verifying a JWT for Uvicorn to
+    begin shutdown (or for the browser to close the panel) before the route
+    reaches ``accept()``.  Consuming the initial ``websocket.connect`` event
+    and then watching for ``websocket.disconnect`` prevents a late accept from
+    being sent to a transport that already entered its close-only state.
+    """
+    while True:
+        try:
+            message = await websocket.receive()
+        except WebSocketDisconnect:
+            return
+        if message.get("type") == "websocket.disconnect":
+            return
+
+
+async def _validate_bridge_events_connection(
+    websocket: WebSocket,
+) -> ExtensionPrincipal | None:
+    """Authenticate only while the peer remains connected."""
+    auth_task = asyncio.create_task(validate_extension_principal_ws(websocket))
+    disconnect_task = asyncio.create_task(
+        _wait_for_bridge_events_disconnect(websocket)
+    )
+    try:
+        done, _pending = await asyncio.wait(
+            {auth_task, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        # Disconnect wins a same-tick race.  Accepting after Uvicorn has moved
+        # the transport into close-only state produces an unhandled ASGI
+        # RuntimeError and a packaged-shutdown traceback.
+        if disconnect_task in done:
+            auth_task.cancel()
+            await asyncio.gather(auth_task, return_exceptions=True)
+            return None
+        return auth_task.result()
+    finally:
+        if not auth_task.done():
+            auth_task.cancel()
+        disconnect_task.cancel()
+        await asyncio.gather(
+            auth_task,
+            disconnect_task,
+            return_exceptions=True,
+        )
+
+
 @router.websocket("/bridge-events")
 async def bridge_events_websocket(websocket: WebSocket) -> None:
     """Stream every bridge primitive event to subscribers.
@@ -619,12 +669,29 @@ async def bridge_events_websocket(websocket: WebSocket) -> None:
     entry is dropped (see `publish_event`). This is a diagnostic
     channel — losing events is preferable to back-pressuring the bridge.
     """
-    principal = await validate_extension_principal_ws(websocket)
+    try:
+        principal = await _validate_bridge_events_connection(websocket)
+    except asyncio.CancelledError:
+        # Cancellation during JWT verification is a normal bounded-shutdown
+        # path.  The helper has already drained both child tasks.
+        return
     if principal is None:
-        # Already closed by the validator with code 1008.
+        # Already closed by the validator with code 1008, or disconnected
+        # while authentication was still in flight.
         return
 
-    await websocket.accept()
+    try:
+        await websocket.accept()
+    except (RuntimeError, WebSocketDisconnect) as exc:
+        # A final transport-close race can occur between cancelling the
+        # disconnect watcher and sending the ASGI accept message.  The client
+        # is already gone; containing the protocol error is the only useful
+        # outcome and prevents Uvicorn from emitting a shutdown traceback.
+        logger.debug(
+            "[extension_bridge_routes] bridge-events disconnected before accept: %s",
+            exc,
+        )
+        return
     queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue(maxsize=1024)
     _EVENT_SUBSCRIBERS.append(queue)
 

@@ -67,8 +67,8 @@ IMAGE_GEN_PACKAGES = [
     "gguf>=0.10.0",
     # protobuf intentionally NOT installed here. The engine bundles its own
     # (core dep via matrx-ai → xai-sdk, which hard-rejects protobuf 7). This
-    # dir is PREPENDED to sys.path, so a protobuf copy here shadowed the
-    # engine's and killed matrx-ai init on every packaged boot ("Unsupported
+    # Older releases PREPENDED this dir to sys.path, so a protobuf copy here
+    # shadowed the engine's and killed matrx-ai init on every packaged boot ("Unsupported
     # protobuf version: 7.34.1", 2026-07-12). transformers' slow-tokenizer
     # paths import the engine's bundled protobuf just fine.
     # inject_image_gen_path() purges any copy left by older installs.
@@ -343,9 +343,8 @@ def _purge_shadowing_protobuf(pkg_dir: Path) -> bool:
     Returns True when the dir is clean (nothing found, or everything removed).
 
     Older installs pip-installed protobuf into this dir (it was in
-    IMAGE_GEN_PACKAGES until 2026-07-13). Because the dir is PREPENDED to
-    sys.path — and Python resolves 'google' (a namespace package) in path
-    order, bundled/venv copies included — that copy shadowed the engine's own
+    IMAGE_GEN_PACKAGES until 2026-07-13). Older app releases prepended the dir
+    to sys.path, so that copy shadowed the engine's own
     protobuf: xai-sdk aborted with "Unsupported protobuf version: 7.34.1" and
     matrx-ai init failed on every packaged boot. The engine's protobuf serves
     every consumer (xai-sdk AND transformers), so a copy here is never
@@ -410,9 +409,8 @@ def inject_image_gen_path() -> bool:
         purged_clean = False
         logger.exception("[image_gen_installer] protobuf purge failed")
     if not purged_clean:
-        # A surviving protobuf copy in this PREPENDED dir shadows the engine's
-        # own (namespace-package resolution is path-ordered — bundling does not
-        # protect us). One session without image-gen beats a dead AI stack.
+        # Keep the managed runtime internally coherent even though it now sits
+        # behind the engine's bundled dependencies in import precedence.
         logger.error(
             "[image_gen_installer] NOT injecting %s into sys.path — a protobuf "
             "copy survived the purge and would break matrx-ai init. Image/video "
@@ -422,8 +420,16 @@ def inject_image_gen_path() -> bool:
         return False
     pkg_dir = str(pkg_dir_path)
     if pkg_dir not in sys.path:
-        sys.path.insert(0, pkg_dir)
-        logger.debug("[image_gen_installer] Injected %s into sys.path", pkg_dir)
+        # Optional runtimes are fallbacks, never replacements for the frozen
+        # engine's FastAPI/Starlette/anyio/httpx stack. A pip --target install
+        # includes transitive copies of those core packages; prepending this dir
+        # made them load-bearing and produced shutdown/runtime incompatibilities.
+        # Heavy packages absent from the bundle (torch/diffusers/transformers)
+        # still resolve normally from the appended directory.
+        sys.path.append(pkg_dir)
+        logger.debug(
+            "[image_gen_installer] Appended optional runtime %s to sys.path", pkg_dir
+        )
     # Apply compatibility patch every startup — idempotent, fast (skips if already done)
     try:
         _patch_transformers_filecmp(pkg_dir_path)

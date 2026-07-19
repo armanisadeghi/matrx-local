@@ -133,20 +133,15 @@ try:
         _required_diffusers = (_ig_dir / "diffusers-0.39.0.dist-info").exists()
         if _complete and not _migration_pending and _required_diffusers:
             # Purge any protobuf copy older installs left here BEFORE the dir
-            # enters sys.path. The engine bundles its own protobuf (xai-sdk
-            # rejects protobuf 7 outright); a copy in this PREPENDED dir
-            # shadows it and killed matrx-ai init on every packaged boot
+            # enters sys.path. Older releases prepended this directory, so its
+            # protobuf shadowed the engine's copy (xai-sdk rejects protobuf 7)
+            # and killed matrx-ai init on every packaged boot
             # ("Unsupported protobuf version: 7.34.1", 2026-07-12). Mirrors
             # installer.py _purge_shadowing_protobuf — kept inline here
             # because this hook must not import app code.
             #
-            # THE PURGE IS THE DEFENSE, NOT A NICETY: PyInstaller 6 resolves
-            # frozen imports through a sys.path hook IN PATH ORDER, and
-            # 'google' is a namespace package — a protobuf copy in this
-            # prepended dir WINS over the bundled one. So if the purge cannot
-            # complete (e.g. a running old engine still holds a _upb DLL on
-            # Windows), we must NOT inject the dir at all: booting without
-            # image-gen for one session beats booting with a dead AI stack.
+            # Keep purging during the transition so previously corrupted
+            # runtimes are repaired on disk as well as isolated by precedence.
             _purge_failed = False
             try:
                 import shutil as _shutil
@@ -195,7 +190,10 @@ try:
 
             _ig_str = str(_ig_dir)
             if _ig_str not in sys.path:
-                sys.path.insert(0, _ig_str)
+                # Managed packages are fallbacks. pip --target also installs
+                # transitive copies of core packages such as anyio/httpx; those
+                # must never replace the versions frozen with FastAPI/Starlette.
+                sys.path.append(_ig_str)
 
             # Patch transformers/dynamic_module_utils.py to guard against `import filecmp`.
             # filecmp is a stdlib module that PyInstaller may not bundle when it doesn't
@@ -264,7 +262,9 @@ try:
         if (_cap_dir / ".install-complete").exists():
             _cap_str = str(_cap_dir)
             if _cap_str not in sys.path:
-                sys.path.insert(0, _cap_str)
+                # Same isolation contract as image generation: optional heavy
+                # packages fill gaps without shadowing the frozen core runtime.
+                sys.path.append(_cap_str)
             break
 except Exception:
     pass  # Never crash on path injection failure

@@ -19,6 +19,7 @@ import asyncio
 import gc
 import sys
 import threading
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
@@ -146,6 +147,34 @@ def test_torchvision_torch_requirement_is_read_without_importing_native_code(
     monkeypatch.setattr(installer, "get_image_gen_packages_dir", lambda: tmp_path)
 
     assert installer._get_torchvision_torch_requirement() == "2.11.0"
+
+
+def test_managed_image_runtime_cannot_shadow_engine_core_packages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The optional target fills missing imports but stays behind bundled core."""
+    from app.services.image_gen import installer
+
+    (tmp_path / ".install-complete").write_text("ok", encoding="utf-8")
+    monkeypatch.setattr(installer, "get_image_gen_packages_dir", lambda: tmp_path)
+    monkeypatch.setattr(installer, "_purge_shadowing_protobuf", lambda _path: True)
+    monkeypatch.setattr(installer, "_patch_transformers_filecmp", lambda _path: None)
+    monkeypatch.setattr(installer.sys, "path", ["/frozen-engine"])
+
+    assert installer.inject_image_gen_path() is True
+    assert installer.sys.path == ["/frozen-engine", str(tmp_path)]
+
+
+def test_frozen_runtime_hook_appends_optional_package_directories() -> None:
+    """The pre-import hook must enforce the same fallback-only precedence."""
+    hook = (
+        Path(__file__).resolve().parents[2] / "hooks" / "runtime_hook.py"
+    ).read_text(encoding="utf-8")
+
+    assert "sys.path.append(_ig_str)" in hook
+    assert "sys.path.append(_cap_str)" in hook
+    assert "sys.path.insert(0, _ig_str)" not in hook
+    assert "sys.path.insert(0, _cap_str)" not in hook
 
 
 def test_needs_upgrade_when_diffusers_predates_z_image_lora_fix(

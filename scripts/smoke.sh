@@ -370,7 +370,7 @@ run_packaged() {
   # stays responsive, but quitting here would deliberately interrupt pip and
   # leave a partial managed runtime. If this boot started that migration, wait
   # for its terminal state and make any repair failure a release blocker.
-  if [ -n "$engine_url" ] && curl -sf --max-time 5 "$engine_url/image-gen/install/status" > "$RUN_DIR/image-install-status.json" 2>/dev/null; then
+  if [ -n "$engine_url" ] && curl -sf --max-time 5 -H "Authorization: Bearer smoke-local" "$engine_url/image-gen/install/status" > "$RUN_DIR/image-install-status.json" 2>/dev/null; then
     local image_install_status image_install_error image_waited=0
     image_install_status="$(node -p "require('$RUN_DIR/image-install-status.json').status || ''" 2>/dev/null)"
     if [ "$image_install_status" = "running" ]; then
@@ -382,7 +382,7 @@ run_packaged() {
         fi
         sleep 2
         image_waited=$((image_waited + 2))
-        if curl -sf --max-time 5 "$engine_url/image-gen/install/status" > "$RUN_DIR/image-install-status.json" 2>/dev/null; then
+        if curl -sf --max-time 5 -H "Authorization: Bearer smoke-local" "$engine_url/image-gen/install/status" > "$RUN_DIR/image-install-status.json" 2>/dev/null; then
           image_install_status="$(node -p "require('$RUN_DIR/image-install-status.json').status || ''" 2>/dev/null)"
         else
           image_install_status="unreadable"

@@ -108,6 +108,7 @@ a = Analysis(
         (os.path.join(_ROOT, 'app'), 'app'),
         (os.path.join(_ROOT, 'scraper-service/app'), 'scraper-service/app'),
         (os.path.join(_ROOT, 'pyproject.toml'), '.'),
+        (os.path.join(_ROOT, 'config/runtime-manifests'), 'config/runtime-manifests'),
     ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data + _pkg_metadata + _office_datas,
     hiddenimports=_matrx_ai_mods + _protobuf_mods + _shared_runtime_mods + _office_hidden + [
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
@@ -169,7 +170,10 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[os.path.join(_ROOT, 'hooks/runtime_hook.py')],
+    runtime_hooks=[
+        os.path.join(_ROOT, 'hooks/runtime_hook.py'),
+        os.path.join(_ROOT, 'scripts/frozen_runtime_verifier_hook.py'),
+    ],
     excludes=[
         'torch', 'torchvision', 'torchaudio', 'tensorflow', 'tensorboard',
         'triton', 'scipy', 'nipype', 'nibabel', 'pyxnat', 'openai_whisper',

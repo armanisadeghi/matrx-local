@@ -20,7 +20,6 @@ import ast
 import hashlib
 import importlib.metadata as metadata
 import json
-import re
 import sys
 import tomllib
 from pathlib import Path
@@ -33,12 +32,6 @@ from packaging.utils import canonicalize_name
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_DIR = ROOT / "config" / "runtime-manifests"
-TARGETS = (
-    "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
-    "x86_64-pc-windows-msvc",
-    "x86_64-unknown-linux-gnu",
-)
 FROZEN_EXCLUDED_DISTRIBUTIONS = {
     "torch",
     "torchvision",
@@ -64,7 +57,15 @@ RUNTIME_IMPORTS = (
 )
 RUNTIME_ATTRIBUTES = {
     "diffusers": (
+        "FluxPipeline",
         "Flux2KleinPipeline",
+        "LTX2Pipeline",
+        "LTXImageToVideoPipeline",
+        "LTXPipeline",
+        "QwenImagePipeline",
+        "StableDiffusionPipeline",
+        "StableDiffusionXLPipeline",
+        "WanPipeline",
         "ZImagePipeline",
     ),
     "transformers": (
@@ -100,6 +101,20 @@ def _read_project_contract() -> tuple[list[str], list[str]]:
     for extra in ("transcription", "scheduler"):
         core.extend(optional.get(extra, ()))
     return core, list(optional["image-gen"])
+
+
+def _read_runtime_input() -> list[str]:
+    path = MANIFEST_DIR / "image-gen.in"
+    requirements = [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    for raw in requirements:
+        requirement = Requirement(raw)
+        if str(requirement.specifier).count("==") != 1 or "," in str(requirement.specifier):
+            raise RuntimeError(f"runtime input must use one exact == pin: {raw}")
+    return requirements
 
 
 def _requirement_names(requirements: Iterable[str]) -> set[str]:
@@ -183,6 +198,7 @@ def _lock_payload() -> tuple[str, dict[str, str]]:
 def _contract_payload() -> dict:
     core_requirements, project_image_requirements = _read_project_contract()
     installer_requirements = _read_image_requirements()
+    runtime_requirements = _read_runtime_input()
     project_names = _requirement_names(project_image_requirements)
     installer_names = _requirement_names(installer_requirements)
     if project_names != installer_names:
@@ -191,9 +207,16 @@ def _contract_payload() -> dict:
             f"only_project={sorted(project_names - installer_names)}, "
             f"only_installer={sorted(installer_names - project_names)}"
         )
+    runtime_names = _requirement_names(runtime_requirements)
+    if runtime_names != installer_names:
+        raise RuntimeError(
+            "image-gen.in and installer.py IMAGE_GEN_PACKAGES differ: "
+            f"only_runtime={sorted(runtime_names - installer_names)}, "
+            f"only_installer={sorted(installer_names - runtime_names)}"
+        )
 
     core_closure = _distribution_closure(core_requirements)
-    managed_closure = _distribution_closure(installer_requirements)
+    managed_closure = _distribution_closure(runtime_requirements)
     shared_distributions = sorted(
         (core_closure & managed_closure) - FROZEN_EXCLUDED_DISTRIBUTIONS
     )
@@ -201,22 +224,16 @@ def _contract_payload() -> dict:
     shared_imports = sorted(
         {package for packages in shared_import_map.values() for package in packages}
     )
-    lock_sha256, locked_versions = _lock_payload()
+    lock_sha256, _locked_versions = _lock_payload()
     direct_versions = {
-        name: locked_versions[name]
-        for name in sorted(installer_names)
-        if name in locked_versions
+        _normalize(Requirement(raw).name): str(Requirement(raw).specifier).removeprefix("==")
+        for raw in runtime_requirements
     }
-    missing_versions = installer_names - direct_versions.keys()
-    if missing_versions:
-        raise RuntimeError(
-            "uv.lock has no exact version for managed requirements: "
-            + ", ".join(sorted(missing_versions))
-        )
 
     source_contract = {
         "core_requirements": sorted(core_requirements),
         "installer_requirements": installer_requirements,
+        "runtime_requirements": runtime_requirements,
         "lock_graph_sha256": lock_sha256,
     }
     contract_sha256 = hashlib.sha256(
@@ -228,7 +245,7 @@ def _contract_payload() -> dict:
         "contract_sha256": contract_sha256,
         "lock_graph_sha256": lock_sha256,
         "lock_source": "uv.lock",
-        "managed_requirements": installer_requirements,
+        "managed_requirements": runtime_requirements,
         "managed_direct_versions": direct_versions,
         "shared_distributions": shared_distributions,
         "shared_import_map": shared_import_map,
@@ -239,18 +256,6 @@ def _contract_payload() -> dict:
             module: list(attributes)
             for module, attributes in RUNTIME_ATTRIBUTES.items()
         },
-    }
-
-
-def _target_manifest(target: str, contract: dict) -> dict:
-    return {
-        "schema_version": contract["schema_version"],
-        "target": target,
-        "python_minor": contract["python_minor"],
-        "contract_sha256": contract["contract_sha256"],
-        "lock_graph_sha256": contract["lock_graph_sha256"],
-        "lock_source": contract["lock_source"],
-        "managed_direct_versions": contract["managed_direct_versions"],
     }
 
 
@@ -265,12 +270,6 @@ def main() -> int:
 
     contract = _contract_payload()
     expected = {"image-gen-contract.json": contract}
-    expected.update(
-        {
-            f"image-gen-{target}.json": _target_manifest(target, contract)
-            for target in TARGETS
-        }
-    )
 
     stale: list[str] = []
     MANIFEST_DIR.mkdir(parents=True, exist_ok=True)

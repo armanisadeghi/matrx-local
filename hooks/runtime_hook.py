@@ -105,6 +105,97 @@ if hasattr(sys, "_MEIPASS"):
 # outright in frozen builds.  Respect an explicit user override if already set.
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
+# A new managed media runtime is an immutable, versioned slot. Activate it only
+# when the durable state and slot manifest match the exact contract embedded in
+# this application. This executes before app imports, so it intentionally stays
+# self-contained instead of importing installer.py.
+try:
+    import json as _runtime_json
+    import platform as _runtime_platform
+
+    if os.getenv("MATRX_HOME_DIR"):
+        _runtime_home = Path(os.environ["MATRX_HOME_DIR"]).expanduser().resolve(
+            strict=False
+        )
+    elif sys.platform == "win32":
+        _runtime_local_app = os.getenv(
+            "LOCALAPPDATA", str(Path.home() / "AppData" / "Local")
+        )
+        _runtime_home = Path(_runtime_local_app) / "AI Matrx"
+    else:
+        _runtime_home = Path.home() / ".matrx"
+
+    _runtime_control = _runtime_home / "image-gen-runtime"
+    _runtime_state_path = _runtime_control / "state.json"
+    if _runtime_state_path.is_file():
+        _runtime_state = _runtime_json.loads(
+            _runtime_state_path.read_text(encoding="utf-8")
+        )
+        _runtime_base = Path(
+            getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])
+        )
+        _runtime_contract = _runtime_json.loads(
+            (
+                _runtime_base
+                / "config"
+                / "runtime-manifests"
+                / "image-gen-contract.json"
+            ).read_text(encoding="utf-8")
+        )
+        _runtime_required = _runtime_contract["contract_sha256"]
+        _runtime_slot_name = _runtime_state.get("active_slot")
+        if (
+            _runtime_state.get("state") != "ready"
+            or _runtime_state.get("runtime_revision") != _runtime_required
+            or not isinstance(_runtime_slot_name, str)
+            or Path(_runtime_slot_name).name != _runtime_slot_name
+        ):
+            raise RuntimeError(
+                "state is not READY for this app contract "
+                f"({_runtime_state.get('state')!r}, "
+                f"{_runtime_state.get('runtime_revision')!r})"
+            )
+
+        _runtime_slots = (_runtime_control / "slots").resolve(strict=False)
+        _runtime_slot = (_runtime_slots / _runtime_slot_name).resolve(strict=False)
+        if _runtime_slot.parent != _runtime_slots:
+            raise RuntimeError("active slot escapes the managed runtime root")
+        _runtime_slot_manifest = _runtime_json.loads(
+            (_runtime_slot / ".runtime-manifest.json").read_text(encoding="utf-8")
+        )
+        _runtime_expected = {
+            "runtime_revision": _runtime_required,
+            "python_abi": sys.implementation.cache_tag or "unknown",
+            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+            "platform": sys.platform,
+            "machine": _runtime_platform.machine().lower(),
+        }
+        _runtime_mismatches = [
+            f"{_key}={_runtime_slot_manifest.get(_key)!r} (expected {_value!r})"
+            for _key, _value in _runtime_expected.items()
+            if _runtime_slot_manifest.get(_key) != _value
+        ]
+        if _runtime_mismatches:
+            raise RuntimeError("; ".join(_runtime_mismatches))
+        if not (_runtime_slot / ".install-complete").is_file():
+            raise RuntimeError("active runtime slot has no install evidence")
+        _runtime_slot_text = str(_runtime_slot)
+        while _runtime_slot_text in sys.path:
+            sys.path.remove(_runtime_slot_text)
+        # Production precedence: frozen/core packages win; managed heavy
+        # packages deliberately absent from the bundle resolve from this slot.
+        sys.path.append(_runtime_slot_text)
+        print(
+            f"[runtime_hook] Activated verified media runtime "
+            f"{_runtime_slot_name} ({_runtime_required[:12]})",
+            file=sys.stderr,
+        )
+except Exception as _runtime_exc:
+    print(
+        f"[runtime_hook] Managed media runtime withheld: {_runtime_exc!r}",
+        file=sys.stderr,
+    )
+
 # ── Image generation packages (user-installed on demand) ──────────────────────
 #
 # torch + diffusers are NOT bundled in the frozen binary (they are ~1 GB+).
@@ -131,7 +222,7 @@ try:
         _complete = (_ig_dir / ".install-complete").exists()
         _migration_pending = (_ig_dir / ".compatibility-upgrade-pending").exists()
         _required_diffusers = (_ig_dir / "diffusers-0.39.0.dist-info").exists()
-        if _complete and not _migration_pending and _required_diffusers:
+        if False and _complete and not _migration_pending and _required_diffusers:
             # Purge any protobuf copy older installs left here BEFORE the dir
             # enters sys.path. Older releases prepended this directory, so its
             # protobuf shadowed the engine's copy (xai-sdk rejects protobuf 7)

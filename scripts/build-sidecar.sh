@@ -161,6 +161,33 @@ if [[ -z "$PYTHON" ]]; then
     fi
 fi
 
+# A PyInstaller build is only reproducible when its analysis environment is an
+# exact lockfile sync. Reusing whatever happens to be in an existing .venv made
+# local smoke artifacts differ from clean release CI and allowed optional
+# packages/submodules to appear or disappear silently.
+command -v uv &>/dev/null || {
+    echo "ERROR: uv is required for an exact frozen-sidecar build environment."
+    exit 1
+}
+echo "  → Exact-syncing the release build environment (including image runtime metadata)..."
+uv sync \
+    --frozen \
+    --extra transcription \
+    --extra scheduler \
+    --extra image-gen \
+    --no-cache
+PYTHON="$(detect_venv_python)"
+[[ -n "$PYTHON" ]] || { echo "ERROR: .venv Python missing after exact uv sync."; exit 1; }
+
+"$PYTHON" scripts/generate-runtime-manifests.py --check || {
+    echo "ERROR: managed-runtime contract is stale; regenerate and commit it."
+    exit 1
+}
+"$PYTHON" scripts/generate-runtime-locks.py --check --target "$TARGET" || {
+    echo "ERROR: target runtime lock is missing/stale/unsupported for $TARGET."
+    exit 1
+}
+
 # Remove the obsolete 'pathlib' backport that matrx-utils pulls in via fitz →
 # nipype → pyxnat. Python 3.13 ships pathlib as stdlib; the backport breaks
 # PyInstaller. Safe to remove: nothing in this project actually imports it.
@@ -259,6 +286,7 @@ args = [
     "--clean",
     "--noconfirm",
     "--runtime-hook", "hooks/runtime_hook.py",
+    "--runtime-hook", "scripts/frozen_runtime_verifier_hook.py",
     "--exclude-module", "torch",
     "--exclude-module", "torchvision",
     "--exclude-module", "torchaudio",
@@ -438,6 +466,7 @@ args = [
     "--hidden-import", "faulthandler",
     "--add-data", "app:app",
     "--add-data", "scraper-service/app:scraper-service/app",
+    "--add-data", "config/runtime-manifests:config/runtime-manifests",
 ]
 
 tessdata = os.environ.get("TESSDATA_PATH_ARG", "")
@@ -609,6 +638,26 @@ else
     echo "  → No spec file found at $SPEC_FILE — using inline flags"
     build_with_flags
 fi
+
+# Prove the actual archive contains every shared/critical module, then execute
+# lazy image-runtime imports inside the exact frozen CPython process with
+# production path precedence. A source-python import check cannot prove this.
+if $IS_MACOS; then
+    FROZEN_VERIFY_BINARY="dist/$HELPER_APP_NAME/Contents/MacOS/Matrx Engine"
+else
+    FROZEN_VERIFY_BINARY="dist/$BINARY_NAME"
+fi
+if [[ ! -f "$FROZEN_VERIFY_BINARY" ]]; then
+    echo "ERROR: frozen verifier could not find sidecar: $FROZEN_VERIFY_BINARY"
+    exit 1
+fi
+echo "=== Verifying frozen sidecar + managed image runtime contract ==="
+"$PYTHON" scripts/verify-frozen-runtime.py \
+    --binary "$FROZEN_VERIFY_BINARY" \
+    --python "$PYTHON" || {
+    echo "ERROR: frozen sidecar runtime verification failed."
+    exit 1
+}
 
 # ── Post-build: align the Helper app's TCC identity with AI Matrx (macOS) ──
 #

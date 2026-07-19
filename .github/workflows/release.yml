@@ -39,7 +39,12 @@ jobs:
         run: uv python install 3.13
 
       - name: Install Python dependencies
-        run: uv sync --extra transcription --no-cache
+        run: uv sync --frozen --extra transcription --extra scheduler --extra image-gen --no-cache
+
+      - name: Verify deterministic image-runtime contracts
+        run: |
+          uv run --frozen --no-sync python scripts/generate-runtime-manifests.py --check
+          uv run --frozen --no-sync python scripts/generate-runtime-locks.py --check
 
       - name: Byte-compile Python
         run: uv run python -m compileall -q app run.py
@@ -115,10 +120,10 @@ jobs:
           # --no-cache forces a fresh PyPI index fetch (avoids stale CDN edge cache
           # when a matrx-* package was published moments before this workflow ran).
           # Retry once after 30s if resolution fails — gives CDN time to propagate.
-          uv sync --extra transcription --extra scheduler --no-cache || {
+          uv sync --frozen --extra transcription --extra scheduler --extra image-gen --no-cache || {
             echo "⚠ uv sync failed — retrying in 30s (PyPI CDN propagation delay)..."
             sleep 30
-            uv sync --extra transcription --extra scheduler --no-cache
+            uv sync --frozen --extra transcription --extra scheduler --extra image-gen --no-cache
           }
         shell: bash
 
@@ -171,6 +176,23 @@ jobs:
           else
             ./scripts/build-sidecar.sh
           fi
+        shell: bash
+
+      - name: Verify frozen sidecar managed-runtime contract
+        run: |
+          if [[ -x ".venv/bin/python" ]]; then
+            PYTHON=".venv/bin/python"
+          else
+            PYTHON=".venv/Scripts/python.exe"
+          fi
+          if [[ "${{ matrix.args }}" == *"x86_64-apple-darwin"* ]] || [[ "${{ matrix.args }}" == *"aarch64-apple-darwin"* ]]; then
+            BINARY="desktop/src-tauri/sidecar/Matrx Engine.app/Contents/MacOS/Matrx Engine"
+          elif [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
+            BINARY="desktop/src-tauri/sidecar/matrx-engine-x86_64-pc-windows-msvc.exe"
+          else
+            BINARY="desktop/src-tauri/sidecar/matrx-engine-x86_64-unknown-linux-gnu"
+          fi
+          "$PYTHON" scripts/verify-frozen-runtime.py --binary "$BINARY" --python "$PYTHON"
         shell: bash
 
       - name: Download cloudflared sidecar binary

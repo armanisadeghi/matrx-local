@@ -99,9 +99,6 @@ function ModelsView({
   onGoToImage: () => void;
   onGoToVideo: () => void;
 }) {
-  const [state, actions] = useMediaGenApp();
-  void state;
-  void actions;
   const imageCtl = useImageGenController({ onAfterSelect: onGoToImage });
   const videoCtl = useVideoGenController({ onAfterSelect: onGoToVideo });
 
@@ -122,7 +119,7 @@ function ModelsView({
           <Film className="h-4 w-4 text-violet-500" />
           Video models
         </h3>
-        <VideoGenGate>
+        <VideoGenGate showRuntimePanel={false}>
           <VideoModelPicker ctl={videoCtl} layout="grid" showHeading={false} />
         </VideoGenGate>
       </section>

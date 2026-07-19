@@ -17,11 +17,11 @@ once the install is complete, so the frozen binary can import them.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import importlib.metadata
 import json
 import os
-import platform
 import re
 import shutil
 import sys
@@ -33,8 +33,6 @@ from typing import Any, Callable, Literal
 
 from app.common.system_logger import get_logger
 from app.services.optional_packages.core import (
-    InstallCancelledError,
-    TORCH_CPU_INDEX_URL as _TORCH_CPU_INDEX_URL,
     InstallProgress,
     find_python as _find_python,
     packages_dir,
@@ -44,7 +42,6 @@ from app.services.optional_packages.core import (
 from app.services.image_gen.runtime_state import (
     INSTALL_EVIDENCE,
     RUNTIME_MANIFEST_REVISION,
-    RUNTIME_REVISION,
     RuntimeFileLock,
     RuntimePhase,
     RuntimeSnapshot,
@@ -63,43 +60,8 @@ from app.services.image_gen.runtime_state import (
 
 logger = get_logger()
 
-# ── Package list ──────────────────────────────────────────────────────────────
-
-# All packages to install (order matters — torch first so its deps land before
-# the diffusers wheel asks for them).
-# diffusers 0.39.0 is REQUIRED by the current model catalogs (Flux2Klein /
-# ZImage / QwenImage / Wan / LTX pipelines) and fixes valid Civitai Z-Image
-# LoRAs which omit per-layer alpha tensors. Keep these pins in sync with
-# pyproject.toml [image-gen] and service.py MIN_DIFFUSERS_VERSION.
-IMAGE_GEN_PACKAGES = [
-    "torch>=2.6",
-    "torchvision",
-    "diffusers==0.39.0",
-    # 5.3 adds the Qwen3 GGUF metadata path used by selectable FLUX.2 Klein
-    # encoders. Older managed runtimes must migrate before those assets load.
-    "transformers>=5.3.0",
-    "accelerate>=1.0",
-    "peft>=0.13.1",
-    # Required by diffusers' load_lora_weights / set_adapters / unload_lora_weights
-    # (USE_PEFT_BACKEND gate — without peft every LoRA apply fails with
-    # "PEFT backend is required for this method").
-    "sentencepiece>=0.2.0",
-    # Transformers' GGUF loader dequantizes alternative Klein text encoders
-    # into PyTorch tensors. Required only by that selectable encoder format,
-    # but installed with the managed runtime so choosing it never asks users
-    # to open a terminal.
-    "gguf>=0.10.0",
-    # protobuf intentionally NOT installed here. The engine bundles its own
-    # (core dep via matrx-ai → xai-sdk, which hard-rejects protobuf 7). This
-    # Older releases PREPENDED this dir to sys.path, so a protobuf copy here
-    # shadowed the engine's and killed matrx-ai init on every packaged boot ("Unsupported
-    # protobuf version: 7.34.1", 2026-07-12). transformers' slow-tokenizer
-    # paths import the engine's bundled protobuf just fine.
-    # inject_image_gen_path() purges any copy left by older installs.
-    "huggingface_hub>=0.22.0",
-]
-
-_TORCH_PACKAGES = {"torch", "torchvision", "torchaudio"}
+# Package selection is release-owned by a target-specific, hash-locked contract.
+# This module intentionally contains no floating fallback requirement list.
 _COMPATIBILITY_MIGRATION_MARKER = ".compatibility-upgrade-pending"
 _TORCH_REQUIREMENT_RE = re.compile(
     r"^torch\s*(?:\(\s*)?==\s*([^);\s]+)", re.IGNORECASE
@@ -146,6 +108,106 @@ class RuntimeVerification:
     failure_detail: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeInstallContract:
+    contract_sha256: str
+    target: str
+    requirements_file: Path
+    packages: dict[str, str]
+    record_hashes: dict[str, str]
+
+    @property
+    def runtime_revision(self) -> str:
+        return self.contract_sha256
+
+
+def runtime_target_id() -> str:
+    contract = current_runtime_contract()
+    abi = str(contract["python_abi"]).replace("-", "")
+    return f"{contract['platform']}-{contract['machine']}-{abi}"
+
+
+def _contract_manifest_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    explicit = os.getenv("MATRX_MEDIA_RUNTIME_MANIFEST")
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[3]))
+    candidates.append(bundle_root / "runtime-manifests" / f"{runtime_target_id()}.json")
+    return candidates
+
+
+def load_runtime_install_contract() -> RuntimeInstallContract:
+    """Load and authenticate the release-owned target lock manifest.
+
+    There is intentionally no floating-package fallback. A release without a
+    current hash-locked artifact cannot mutate a user's runtime.
+    """
+    manifest_path = next((path for path in _contract_manifest_candidates() if path.is_file()), None)
+    if manifest_path is None:
+        raise RuntimeError(
+            f"No locked media-runtime manifest is available for {runtime_target_id()}"
+        )
+    try:
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Runtime contract cannot be read: {exc}") from exc
+    if raw.get("manifest_revision") != RUNTIME_MANIFEST_REVISION:
+        raise RuntimeError("Runtime contract manifest revision is unsupported")
+    if raw.get("target") != runtime_target_id():
+        raise RuntimeError(
+            f"Runtime contract target {raw.get('target')!r} does not match "
+            f"{runtime_target_id()!r}"
+        )
+    requirements_value = raw.get("requirements_file")
+    if not isinstance(requirements_value, str) or Path(requirements_value).name != requirements_value:
+        raise RuntimeError("Runtime contract requirements_file must be a basename")
+    requirements = manifest_path.parent / requirements_value
+    if not requirements.is_file():
+        raise RuntimeError(f"Locked requirements artifact is missing: {requirements}")
+    requirements_bytes = requirements.read_bytes()
+    requirements_text = requirements_bytes.decode("utf-8")
+    effective_lines = [
+        line.strip()
+        for line in requirements_text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not effective_lines or any(
+        "==" not in line or "--hash=sha256:" not in line for line in effective_lines
+    ):
+        raise RuntimeError(
+            "Runtime requirements must contain only exact, sha256-hash-locked entries"
+        )
+    claimed = raw.get("contract_sha256")
+    unsigned = dict(raw)
+    unsigned.pop("contract_sha256", None)
+    digest = hashlib.sha256(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        + b"\0"
+        + requirements_bytes
+    ).hexdigest()
+    if claimed != digest:
+        raise RuntimeError(
+            f"Runtime contract digest mismatch: claimed {claimed!r}, calculated {digest}"
+        )
+    packages = raw.get("packages")
+    if not isinstance(packages, dict) or not packages or any(
+        not isinstance(name, str) or not isinstance(version, str)
+        for name, version in packages.items()
+    ):
+        raise RuntimeError("Runtime contract has no exact package-version map")
+    return RuntimeInstallContract(
+        contract_sha256=digest,
+        target=runtime_target_id(),
+        requirements_file=requirements,
+        packages=dict(packages),
+        record_hashes={
+            str(key): str(value)
+            for key, value in raw.get("record_hashes", {}).items()
+        },
+    )
+
+
 # ── Install directory ─────────────────────────────────────────────────────────
 
 
@@ -164,7 +226,24 @@ def get_image_gen_packages_dir() -> Path:
 
 def is_image_gen_installed() -> bool:
     """True only for an authoritative, exact-manifest, activated runtime."""
-    return authoritative_snapshot().ready
+    if not getattr(sys, "frozen", False):
+        return _source_runtime_verification().valid
+    snapshot = authoritative_snapshot()
+    if not snapshot.ready or snapshot.active_slot is None:
+        return False
+    try:
+        contract = load_runtime_install_contract()
+    except Exception:
+        return False
+    return (
+        snapshot.runtime_revision == contract.runtime_revision
+        and validate_slot(
+            snapshot.active_slot,
+            expected_revision=contract.runtime_revision,
+            expected_packages=contract.packages,
+            expected_target=contract.target,
+        )[0]
+    )
 
 
 def _compatibility_migration_pending() -> bool:
@@ -183,12 +262,6 @@ def _compatibility_migration_pending() -> bool:
     return (
         packages_dir("image-gen-packages") / _COMPATIBILITY_MIGRATION_MARKER
     ).exists()
-
-
-def _use_torch_cpu_index() -> bool:
-    """Match the full installer's Torch wheel policy on every migration."""
-    arch = platform.machine().lower()
-    return not (sys.platform == "darwin" and arch in ("arm64", "aarch64"))
 
 
 def _package_versions_at(pkg_dir: Path) -> dict[str, str]:
@@ -246,6 +319,8 @@ def needs_upgrade() -> bool:
     catalog's minimum (service.py MIN_DIFFUSERS_VERSION). POST /image-gen/install
     re-runs pip with the upgraded pins in that case instead of short-circuiting.
     """
+    if not getattr(sys, "frozen", False):
+        return False
     if _compatibility_migration_pending():
         return True
     if not is_image_gen_installed():
@@ -253,6 +328,22 @@ def needs_upgrade() -> bool:
         # runtime, but is never authority. Convert it through a full staged
         # reinstall instead of trusting or mutating it in place.
         return (packages_dir("image-gen-packages") / INSTALL_EVIDENCE).exists()
+    snapshot = authoritative_snapshot()
+    try:
+        contract = load_runtime_install_contract()
+    except Exception:
+        return True
+    if (
+        snapshot.runtime_revision != contract.runtime_revision
+        or snapshot.active_slot is None
+        or not validate_slot(
+            snapshot.active_slot,
+            expected_revision=contract.runtime_revision,
+            expected_packages=contract.packages,
+            expected_target=contract.target,
+        )[0]
+    ):
+        return True
     from app.services.image_gen.service import (  # noqa: PLC0415 — avoid cycle at import time
         MIN_DIFFUSERS_VERSION,
         _parse_version,
@@ -304,6 +395,12 @@ def critical_runtime_import_check(
             "Diffusers is missing required pipeline classes: "
             + ", ".join(missing_classes)
         )
+    if importer is importlib.import_module:
+        torch = modules["torch"]
+        torchvision = modules["torchvision"]
+        boxes = torch.empty((0, 4), dtype=torch.float32)
+        scores = torch.empty((0,), dtype=torch.float32)
+        torchvision.ops.nms(boxes, scores, 0.5)
 
     if expected_root is not None:
         expected = expected_root.resolve(strict=False)
@@ -383,8 +480,9 @@ def _verify_runtime_subprocess(
     imports = json.dumps(CRITICAL_RUNTIME_IMPORTS)
     classes = json.dumps(CRITICAL_PIPELINE_CLASSES)
     script = (
-        "import importlib,json,pathlib; "
+        "import importlib,json,pathlib,sys; "
         f"root=pathlib.Path({str(pkg_dir)!r}).resolve(); "
+        "sys.path.append(str(root)); "
         f"mods={{n:importlib.import_module(n) for n in {imports}}}; "
         f"missing=[n for n in {classes} if not hasattr(mods['diffusers'],n)]; "
         "assert not missing, missing; "
@@ -394,10 +492,11 @@ def _verify_runtime_subprocess(
         "assert not bad, bad; "
         "assert mods['diffusers'].__version__=='0.39.0'; "
         "assert tuple(map(int,mods['transformers'].__version__.split('.')[:2])) >= (5,3); "
+        "t=mods['torch']; tv=mods['torchvision']; "
+        "tv.ops.nms(t.empty((0,4),dtype=t.float32),t.empty((0,),dtype=t.float32),0.5); "
         "print(json.dumps({n:str(getattr(mods[n],'__version__','unknown')) for n in managed}))"
     )
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(pkg_dir)
     env["PYTHONNOUSERSITE"] = "1"
     check = _run_subprocess_cancellable(
         [python, "-I", "-c", script],
@@ -405,7 +504,6 @@ def _verify_runtime_subprocess(
         env=env,
         timeout=180,
     )
-    # -I intentionally ignores PYTHONPATH. Pass the slot in the script instead.
     if check.returncode != 0:
         # Retry is never appropriate: a verifier failure means the candidate is
         # not publishable. Include the captured traceback for diagnostics.
@@ -436,140 +534,24 @@ def migrate_incompatible_runtime(
     if not needs_upgrade():
         return False
 
-    pkg_dir = get_image_gen_packages_dir()
-    marker = pkg_dir / ".install-complete"
-    pending = pkg_dir / _COMPATIBILITY_MIGRATION_MARKER
-    # A missing marker with no pending migration means image generation was
-    # never installed; optional capabilities must never auto-install themselves.
-    if not marker.exists() and not pending.exists():
-        return False
-
-    pkg_dir.mkdir(parents=True, exist_ok=True)
-    if marker.exists():
-        marker.replace(pending)
-
     progress = progress or InstallProgress(log_prefix="image_gen_runtime_migration")
     progress.status = "running"
-    try:
-        progress.update("upgrading", 10.0, "Updating required AI runtime…")
-        # Do NOT invoke the full installer: this migration only repairs the
-        # managed runtime and does not alter models or other user assets. Include
-        # Torchvision explicitly so pip resolves it against the Torch version
-        # pulled by PEFT instead of leaving a stale native extension behind.
-        _run_pip_streaming(
-            [
-                "torchvision",
-                "diffusers==0.39.0",
-                "transformers>=5.3.0",
-                "peft>=0.13.1",
-                "gguf>=0.10.0",
-            ],
-            pkg_dir,
-            progress,
-            extra_index=_TORCH_CPU_INDEX_URL if _use_torch_cpu_index() else None,
-            cancel_event=cancel_event,
-        )
-        progress.update("verifying", 80.0, "Verifying image runtime support…")
-        python = _find_python()
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(pkg_dir) + os.pathsep + env.get("PYTHONPATH", "")
-        check = _run_subprocess_cancellable(
-            [
-                python,
-                "-c",
-                "import diffusers, gguf, peft, transformers; "
-                "from diffusers import ZImagePipeline; "
-                "assert diffusers.__version__ == '0.39.0'; "
-                "assert tuple(map(int, transformers.__version__.split('.')[:2])) >= (5, 3); "
-                "print('ok')",
-            ],
-            cancel_event=cancel_event,
-            env=env,
-            timeout=60,
-        )
-        if check.returncode != 0 or "ok" not in check.stdout:
-            raise RuntimeError(
-                f"Runtime migration verification failed: {check.stderr[-2000:]}"
-            )
-        # inject_image_gen_path() intentionally requires the complete marker.
-        # Publish it provisionally, then remove it again if in-process/frozen
-        # activation fails. The durable pending marker remains until every
-        # runtime check below succeeds.
-        marker.write_text(
-            json.dumps(
-                {
-                    "packages": IMAGE_GEN_PACKAGES,
-                    "versions": get_installed_package_versions(),
-                    "migration": "diffusers-0.39.0-peft-gguf-text-encoders",
-                }
-            ),
-            encoding="utf-8",
-        )
-        # The old runtime was deliberately withheld by the frozen runtime hook,
-        # so this is the first point this process may import image packages.
-        # Capture process state so a frozen-only activation failure can be
-        # rolled back instead of leaving a rejected path/modules load-bearing.
-        modules_before_activation = set(sys.modules)
-        path_was_present = str(pkg_dir) in sys.path
-        try:
-            if not inject_image_gen_path():
-                raise RuntimeError("managed package directory could not be activated")
-            from app.services.image_gen import service as _svc_mod  # noqa: PLC0415
-            from app.services.video_gen import service as _vid_mod  # noqa: PLC0415
-
-            _svc_mod.DEPS_AVAILABLE, _svc_mod.DEPS_REASON = _svc_mod._check_deps()
-            _vid_mod.DEPS_AVAILABLE, _vid_mod.DEPS_REASON = _vid_mod._check_deps()
-            if not _svc_mod.DEPS_AVAILABLE or not _vid_mod.DEPS_AVAILABLE:
-                reasons = "; ".join(
-                    reason
-                    for available, reason in (
-                        (_svc_mod.DEPS_AVAILABLE, _svc_mod.DEPS_REASON),
-                        (_vid_mod.DEPS_AVAILABLE, _vid_mod.DEPS_REASON),
-                    )
-                    if not available
-                )
-                raise RuntimeError(
-                    "managed packages installed but failed in-process activation: "
-                    f"{reasons or 'dependency check returned unavailable'}"
-                )
-        except Exception as exc:
-            _rollback_runtime_activation(
-                pkg_dir,
-                modules_before_activation,
-                path_was_present,
-            )
-            raise RuntimeError(
-                f"Runtime migration installed but could not activate packages: {exc}"
-            ) from exc
-        pending.unlink(missing_ok=True)
-        progress.finish("Required AI runtime update complete")
-        logger.info("[image_gen_installer] Required image runtime migration complete")
-        return True
-    except InstallCancelledError as exc:
-        marker.unlink(missing_ok=True)
-        progress.fail(f"Required AI runtime update interrupted: {exc}")
-        logger.info(
-            "[image_gen_installer] Required image runtime migration interrupted; "
-            "the pending marker will resume it on next startup"
-        )
-        raise
-    except Exception as exc:
-        # Keep the pending marker as durable retry state. The service gates
-        # generation while it remains, so a partial pip target cannot load.
-        marker.unlink(missing_ok=True)
-        progress.fail(f"Required AI runtime update failed: {exc}")
-        logger.exception(
-            "[image_gen_installer] Required image runtime migration failed"
-        )
-        raise
+    _install_runtime_sync(
+        progress,
+        cancel_event,
+        "update",
+        uuid.uuid4().hex,
+    )
+    if progress.status == "error":
+        raise RuntimeError(progress.error or "Managed runtime migration failed")
+    return True
 
 
 def _purge_shadowing_protobuf(pkg_dir: Path) -> bool:
     """Delete any protobuf copy from the managed image-gen dir — LOUDLY.
     Returns True when the dir is clean (nothing found, or everything removed).
 
-    Older installs pip-installed protobuf into this dir (it was in
-    IMAGE_GEN_PACKAGES until 2026-07-13). Older app releases prepended the dir
+    Older installs pip-installed protobuf into this dir. Older app releases prepended the dir
     to sys.path, so that copy shadowed the engine's own
     protobuf: xai-sdk aborted with "Unsupported protobuf version: 7.34.1" and
     matrx-ai init failed on every packaged boot. The engine's protobuf serves
@@ -595,7 +577,7 @@ def _purge_shadowing_protobuf(pkg_dir: Path) -> bool:
             logger.warning(
                 "[image_gen_installer] PURGED stale protobuf artifact %s from the "
                 "managed image-gen dir — it shadowed the engine's bundled protobuf "
-                "and broke matrx-ai init (see IMAGE_GEN_PACKAGES comment)",
+                "and broke matrx-ai init",
                 v,
             )
         except OSError as exc:
@@ -617,7 +599,7 @@ def _purge_shadowing_protobuf(pkg_dir: Path) -> bool:
     return clean
 
 
-def inject_image_gen_path() -> bool:
+def inject_image_gen_path(pkg_dir_path: Path | None = None) -> bool:
     """Add the managed packages dir to sys.path if the install is complete.
 
     Called from runtime_hook.py and at engine startup.
@@ -626,9 +608,27 @@ def inject_image_gen_path() -> bool:
     so that users who installed before the patch was introduced are fixed
     automatically without needing to reinstall.
     """
-    pkg_dir_path = get_image_gen_packages_dir()
-    if not is_image_gen_installed():
-        return False
+    pending_activation = False
+    if pkg_dir_path is None:
+        snapshot = authoritative_snapshot()
+        if snapshot.ready and snapshot.active_slot:
+            pkg_dir_path = slot_path(snapshot.active_slot)
+        elif snapshot.state is RuntimePhase.RESTART_REQUIRED and snapshot.candidate_slot:
+            valid, _, _ = validate_slot(snapshot.candidate_slot)
+            if not valid:
+                return False
+            pkg_dir_path = slot_path(snapshot.candidate_slot)
+            pending_activation = True
+        elif not getattr(sys, "frozen", False):
+            # Source development uses its uv environment directly. It never
+            # writes or borrows the installed app's managed-runtime state.
+            try:
+                critical_runtime_import_check()
+                return True
+            except Exception:
+                return False
+        else:
+            return False
     try:
         purged_clean = _purge_shadowing_protobuf(pkg_dir_path)
     except Exception:
@@ -663,6 +663,30 @@ def inject_image_gen_path() -> bool:
         logger.warning(
             "[image_gen_installer] filecmp patch attempt failed: %s", patch_err
         )
+    if pending_activation:
+        verification = verify_runtime_path(pkg_dir_path)
+        if not verification.valid:
+            return False
+        with RuntimeFileLock():
+            snapshot = read_snapshot()
+            if (
+                snapshot.state is RuntimePhase.RESTART_REQUIRED
+                and snapshot.candidate_slot == pkg_dir_path.name
+            ):
+                write_snapshot(
+                    RuntimeSnapshot(
+                        state=RuntimePhase.READY,
+                        runtime_revision=snapshot.runtime_revision,
+                        operation=snapshot.operation,
+                        attempt_id=snapshot.attempt_id,
+                        stage="ready",
+                        percent=100.0,
+                        message="Managed media runtime activated after restart.",
+                        active_slot=snapshot.candidate_slot,
+                        last_known_good_slot=snapshot.active_slot,
+                        packages=verification.packages,
+                    )
+                )
     return True
 
 
@@ -710,6 +734,62 @@ def _rollback_runtime_activation(
     )
 
 
+def verify_runtime_path(path: Path) -> RuntimeVerification:
+    """Validate one immutable candidate using production import precedence."""
+    path = path.resolve(strict=False)
+    try:
+        contract = load_runtime_install_contract()
+    except Exception as exc:
+        return RuntimeVerification(False, {}, "contract_unavailable", str(exc))
+    valid, reason, manifest = validate_slot(
+        path.name,
+        expected_revision=contract.runtime_revision,
+        expected_packages=contract.packages,
+        expected_target=contract.target,
+    )
+    if not valid or slot_path(path.name) != path:
+        return RuntimeVerification(False, {}, "manifest_invalid", reason or "invalid slot path")
+
+    modules_before = set(sys.modules)
+    path_was_present = str(path) in sys.path
+    if not path_was_present:
+        # Production precedence: frozen/core packages remain ahead of the
+        # optional runtime. This is the only ordering the verifier may certify.
+        sys.path.append(str(path))
+    try:
+        packages = critical_runtime_import_check(expected_root=path)
+    except Exception as exc:
+        _rollback_runtime_activation(path, modules_before, path_was_present)
+        return RuntimeVerification(False, {}, "critical_import_failed", str(exc))
+    expected = contract.packages
+    mismatches = {
+        name: (packages.get(name), version)
+        for name, version in expected.items()
+        if name in packages and packages.get(name) != version
+    }
+    if mismatches:
+        _rollback_runtime_activation(path, modules_before, path_was_present)
+        return RuntimeVerification(
+            False,
+            packages,
+            "package_version_mismatch",
+            repr(mismatches),
+        )
+    return RuntimeVerification(True, packages or dict(manifest["packages"]))
+
+
+def validate_active_runtime() -> RuntimeVerification:
+    snapshot = authoritative_snapshot()
+    if not snapshot.ready or snapshot.active_slot is None:
+        return RuntimeVerification(
+            False,
+            {},
+            "runtime_not_ready",
+            snapshot.failure_detail or snapshot.message,
+        )
+    return verify_runtime_path(slot_path(snapshot.active_slot))
+
+
 # ── Global singleton ──────────────────────────────────────────────────────────
 
 _active_progress: InstallProgress | None = None
@@ -719,6 +799,110 @@ _installer_cancel = threading.Event()
 
 def get_active_progress() -> InstallProgress | None:
     return _active_progress
+
+
+_source_verification_cache: RuntimeVerification | None = None
+
+
+def _source_runtime_verification() -> RuntimeVerification:
+    global _source_verification_cache
+    if _source_verification_cache is not None:
+        return _source_verification_cache
+    try:
+        packages = critical_runtime_import_check()
+        _source_verification_cache = RuntimeVerification(True, packages)
+    except Exception as exc:
+        _source_verification_cache = RuntimeVerification(
+            False, {}, "source_runtime_invalid", str(exc)
+        )
+    return _source_verification_cache
+
+
+def get_runtime_status() -> dict[str, Any]:
+    """Canonical backend/UI snapshot for the managed image/video runtime."""
+    progress = get_active_progress()
+    if not getattr(sys, "frozen", False):
+        source = _source_runtime_verification()
+        if source.valid:
+            return {
+                "state": "ready",
+                "operation": None,
+                "attempt_id": None,
+                "runtime_revision": "source-development",
+                "required_revision": "source-development",
+                "stage": "ready",
+                "percent": 100.0,
+                "message": "Source-development media runtime verified.",
+                "failure_code": None,
+                "failure_detail": None,
+                "repairable": False,
+                "image_available": True,
+                "video_packages_available": True,
+                "package_checks": [
+                    {"name": name, "version": version, "ok": True}
+                    for name, version in sorted(source.packages.items())
+                ],
+                "log_lines": list(progress.log_lines) if progress else [],
+                "active_slot": None,
+                "last_known_good_slot": None,
+                "candidate_slot": None,
+                "packages": source.packages,
+                "manifest_revision": RUNTIME_MANIFEST_REVISION,
+            }
+
+    snapshot = authoritative_snapshot()
+    try:
+        contract = load_runtime_install_contract()
+        required_revision: str | None = contract.runtime_revision
+        contract_error: str | None = None
+    except Exception as exc:
+        contract = None
+        required_revision = None
+        contract_error = str(exc)
+
+    state = snapshot.state.value
+    failure_code = snapshot.failure_code
+    failure_detail = snapshot.failure_detail
+    ready = snapshot.ready
+    if ready and (
+        contract is None or snapshot.runtime_revision != contract.runtime_revision
+    ):
+        state = RuntimePhase.FAILED.value
+        ready = False
+        failure_code = "contract_unavailable" if contract is None else "revision_mismatch"
+        failure_detail = contract_error or (
+            f"active={snapshot.runtime_revision!r} required={required_revision!r}"
+        )
+
+    logs: list[str] = []
+    if progress is not None:
+        with progress._lock:
+            logs = list(progress.log_lines)
+    return {
+        "state": state,
+        "operation": snapshot.operation,
+        "attempt_id": snapshot.attempt_id,
+        "runtime_revision": snapshot.runtime_revision,
+        "required_revision": required_revision,
+        "stage": snapshot.stage,
+        "percent": snapshot.percent,
+        "message": snapshot.message,
+        "failure_code": failure_code,
+        "failure_detail": failure_detail,
+        "repairable": state in {"failed", "rolled_back"},
+        "image_available": ready,
+        "video_packages_available": ready,
+        "package_checks": [
+            {"name": name, "version": version, "ok": ready}
+            for name, version in sorted(snapshot.packages.items())
+        ],
+        "log_lines": logs,
+        "active_slot": snapshot.active_slot,
+        "last_known_good_slot": snapshot.last_known_good_slot,
+        "candidate_slot": snapshot.candidate_slot,
+        "packages": snapshot.packages,
+        "manifest_revision": snapshot.manifest_revision,
+    }
 
 
 def _submit_background(function, *args) -> None:
@@ -814,127 +998,197 @@ def _patch_transformers_filecmp(pkg_dir: Path) -> None:
 # ── Main installer (runs in a thread) ────────────────────────────────────────
 
 
-def _do_install(
+
+def _persist_progress(
+    *,
+    phase: RuntimePhase,
+    operation: str,
+    attempt_id: str,
     progress: InstallProgress,
-    cancel_event: threading.Event | None = None,
+    active_slot: str | None,
+    last_known_good_slot: str | None,
+    candidate_slot: str | None = None,
+    runtime_revision: str | None = None,
+    failure_code: str | None = None,
+    failure_detail: str | None = None,
+    packages: dict[str, str] | None = None,
 ) -> None:
-    """Blocking installer — called from a thread pool executor."""
-    pkg_dir = get_image_gen_packages_dir()
-    pkg_dir.mkdir(parents=True, exist_ok=True)
+    write_snapshot(
+        RuntimeSnapshot(
+            state=phase,
+            runtime_revision=runtime_revision,
+            operation=operation,
+            attempt_id=attempt_id,
+            stage=progress.stage,
+            percent=progress.percent,
+            message=progress.message,
+            failure_code=failure_code,
+            failure_detail=failure_detail,
+            active_slot=active_slot,
+            last_known_good_slot=last_known_good_slot,
+            candidate_slot=candidate_slot,
+            packages=packages or {},
+        )
+    )
 
-    marker = pkg_dir / ".install-complete"
-    marker.unlink(missing_ok=True)
 
+def _install_runtime_sync(
+    progress: InstallProgress,
+    cancel_event: threading.Event | None,
+    operation: Literal["install", "update", "repair"],
+    attempt_id: str,
+) -> None:
+    """Build, validate, and atomically publish one immutable runtime slot."""
+    staging: Path | None = None
+    candidate: Path | None = None
+    previous = authoritative_snapshot()
+    previous_active = previous.active_slot if previous.ready else None
+    last_known_good = previous_active or previous.last_known_good_slot
+    phase = {
+        "install": RuntimePhase.INSTALLING,
+        "update": RuntimePhase.UPDATING,
+        "repair": RuntimePhase.REPAIRING,
+    }[operation]
     try:
-        progress.update("preparing", 2.0, "Preparing installation directory…")
-
-        # ── Step 1: PyTorch ───────────────────────────────────────────────────
-        torch_packages = [
-            p
-            for p in IMAGE_GEN_PACKAGES
-            if any(p.lower().startswith(t) for t in _TORCH_PACKAGES)
-        ]
-        progress.update(
-            "downloading",
-            5.0,
-            "Downloading PyTorch… this is the big one (~400–800 MB). "
-            "You'll see download lines appear below as it progresses.",
-        )
-        _run_pip_streaming(
-            torch_packages,
-            pkg_dir,
-            progress,
-            extra_index=_TORCH_CPU_INDEX_URL if _use_torch_cpu_index() else None,
-            cancel_event=cancel_event,
-        )
-        progress.update("downloading", 45.0, "PyTorch installed ✓")
-
-        # ── Step 2: diffusers + supporting packages ───────────────────────────
-        rest_packages = [
-            p
-            for p in IMAGE_GEN_PACKAGES
-            if not any(p.lower().startswith(t) for t in _TORCH_PACKAGES)
-        ]
-        progress.update(
-            "downloading", 47.0, "Downloading diffusers, transformers, accelerate…"
-        )
-        _run_pip_streaming(
-            rest_packages,
-            pkg_dir,
-            progress,
-            cancel_event=cancel_event,
-        )
-        progress.update("installing", 90.0, "All packages downloaded and installed ✓")
-
-        # ── Step 3: verify imports in a clean subprocess ──────────────────────
-        progress.update("verifying", 92.0, "Verifying installation…")
-        python = _find_python()
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(pkg_dir) + os.pathsep + env.get("PYTHONPATH", "")
-        check = _run_subprocess_cancellable(
-            [
-                python,
-                "-c",
-                "import torch, diffusers, transformers, accelerate, peft; print('ok')",
-            ],
-            cancel_event=cancel_event,
-            env=env,
-            timeout=60,
-        )
-        if check.returncode != 0 or "ok" not in check.stdout:
-            raise RuntimeError(
-                f"Post-install import check failed:\n{check.stderr[-2000:]}"
+        with RuntimeFileLock(timeout=60.0):
+            contract = load_runtime_install_contract()
+            progress.update("preparing", 2.0, "Preparing immutable media runtime…")
+            _persist_progress(
+                phase=phase,
+                operation=operation,
+                attempt_id=attempt_id,
+                progress=progress,
+                active_slot=previous_active,
+                last_known_good_slot=last_known_good,
+                runtime_revision=contract.runtime_revision,
             )
-        progress.update("verifying", 95.0, "All imports verified ✓")
+            _, staging = create_staging_slot()
 
-        # ── Step 3.5: patch transformers for frozen-binary compatibility ─────────
-        # transformers/dynamic_module_utils.py imports `filecmp` at the top level.
-        # filecmp is a stdlib module that PyInstaller may not auto-collect when it
-        # doesn't appear in the engine's own import graph.  We patch the installed
-        # copy to guard the import so it degrades gracefully inside the frozen binary
-        # (always-copy fallback is safe and correct).
-        progress.update("verifying", 96.0, "Applying compatibility patches…")
-        _patch_transformers_filecmp(pkg_dir)
-        progress.update("verifying", 97.0, "Compatibility patches applied ✓")
-
-        # ── Step 4: write versioned marker + inject path ─────────────────────
-        # The marker records exactly what was installed so the upgrade path
-        # (needs_upgrade()) and diagnostics can reason about the install
-        # without importing the packages.
-        marker.write_text(
-            json.dumps(
-                {
-                    "packages": IMAGE_GEN_PACKAGES,
-                    "versions": get_installed_package_versions(),
-                }
-            )
-        )
-        (pkg_dir / _COMPATIBILITY_MIGRATION_MARKER).unlink(missing_ok=True)
-        inject_image_gen_path()
-
-        # Reload availability in the running service
-        try:
-            from app.services.image_gen import service as _svc_mod
-
-            _svc_mod.DEPS_AVAILABLE, _svc_mod.DEPS_REASON = _svc_mod._check_deps()
-            # video_gen shares this install — refresh its snapshot too.
-            from app.services.video_gen import service as _vid_mod
-
-            _vid_mod.DEPS_AVAILABLE, _vid_mod.DEPS_REASON = _vid_mod._check_deps()
-            logger.info(
-                "[image_gen_installer] Service deps reloaded: image=%s video=%s",
-                _svc_mod.DEPS_AVAILABLE,
-                _vid_mod.DEPS_AVAILABLE,
-            )
-        except Exception as reload_err:
-            logger.warning(
-                "[image_gen_installer] Could not reload service deps: %s", reload_err
+            python = _find_python()
+            _validate_selected_python(python, cancel_event=cancel_event)
+            progress.update("installing", 10.0, "Installing locked media runtime…")
+            _run_pip_streaming(
+                [],
+                staging,
+                progress,
+                cancel_event=cancel_event,
+                requirements_file=contract.requirements_file,
+                require_hashes=True,
             )
 
-        progress.finish("Installation complete — Image generation is ready!")
+            progress.update("validating", 72.0, "Validating every critical runtime import…")
+            _persist_progress(
+                phase=RuntimePhase.VALIDATING,
+                operation=operation,
+                attempt_id=attempt_id,
+                progress=progress,
+                active_slot=previous_active,
+                last_known_good_slot=last_known_good,
+                runtime_revision=contract.runtime_revision,
+            )
+            installed_versions = _package_versions_at(staging)
+            if installed_versions != contract.packages:
+                raise RuntimeError(
+                    "Installed package versions do not exactly match the release contract: "
+                    f"expected={contract.packages!r} actual={installed_versions!r}"
+                )
+            _verify_runtime_subprocess(staging, cancel_event=cancel_event)
+            _patch_transformers_filecmp(staging)
+            (staging / INSTALL_EVIDENCE).write_text(
+                contract.runtime_revision, encoding="utf-8"
+            )
+            write_slot_manifest(
+                staging,
+                runtime_revision=contract.runtime_revision,
+                packages=installed_versions,
+                target=contract.target,
+                record_hashes=contract.record_hashes,
+            )
+            candidate_name, candidate = finalize_staging_slot(
+                staging, contract.runtime_revision
+            )
+            staging = None
 
+            progress.update("activating", 90.0, "Activating verified media runtime…")
+            _persist_progress(
+                phase=RuntimePhase.ACTIVATING,
+                operation=operation,
+                attempt_id=attempt_id,
+                progress=progress,
+                active_slot=previous_active,
+                last_known_good_slot=last_known_good,
+                candidate_slot=candidate_name,
+                runtime_revision=contract.runtime_revision,
+                packages=installed_versions,
+            )
+            verification = verify_runtime_path(candidate)
+            if not verification.valid:
+                if (
+                    verification.failure_code == "critical_import_failed"
+                    and verification.failure_detail
+                    and "outside candidate runtime" in verification.failure_detail
+                ):
+                    progress.finish("Runtime verified; engine restart required for activation.")
+                    _persist_progress(
+                        phase=RuntimePhase.RESTART_REQUIRED,
+                        operation=operation,
+                        attempt_id=attempt_id,
+                        progress=progress,
+                        active_slot=previous_active,
+                        last_known_good_slot=last_known_good,
+                        candidate_slot=candidate_name,
+                        runtime_revision=contract.runtime_revision,
+                        packages=installed_versions,
+                    )
+                    return
+                raise RuntimeError(
+                    verification.failure_detail or "Production runtime activation failed"
+                )
+
+            from app.services.image_gen import service as image_service
+            from app.services.video_gen import service as video_service
+
+            image_service.DEPS_AVAILABLE, image_service.DEPS_REASON = image_service._check_deps()
+            video_service.DEPS_AVAILABLE, video_service.DEPS_REASON = video_service._check_deps()
+            if not image_service.DEPS_AVAILABLE or not video_service.DEPS_AVAILABLE:
+                raise RuntimeError(
+                    "Runtime imports passed but service activation failed: "
+                    f"image={image_service.DEPS_REASON!r}; video={video_service.DEPS_REASON!r}"
+                )
+
+            progress.finish("Managed media runtime is verified and ready.")
+            _persist_progress(
+                phase=RuntimePhase.READY,
+                operation=operation,
+                attempt_id=attempt_id,
+                progress=progress,
+                active_slot=candidate_name,
+                last_known_good_slot=previous_active,
+                runtime_revision=contract.runtime_revision,
+                packages=installed_versions,
+            )
     except Exception as exc:
+        if staging is not None:
+            remove_slot(staging)
+        if candidate is not None:
+            remove_slot(candidate)
         progress.fail(str(exc))
+        rolled_back = False
+        if previous_active:
+            valid, _, _ = validate_slot(previous_active)
+            rolled_back = valid
+        _persist_progress(
+            phase=RuntimePhase.ROLLED_BACK if rolled_back else RuntimePhase.FAILED,
+            operation=operation,
+            attempt_id=attempt_id,
+            progress=progress,
+            active_slot=previous_active if rolled_back else None,
+            last_known_good_slot=last_known_good,
+            runtime_revision=previous.runtime_revision if rolled_back else None,
+            failure_code=("activation_rolled_back" if rolled_back else "install_failed"),
+            failure_detail=str(exc),
+            packages=previous.packages if rolled_back else {},
+        )
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -945,17 +1199,121 @@ async def start_install() -> InstallProgress:
 
     Raises RuntimeError if an install is already running.
     """
+    return await ensure_runtime("install")
+
+
+async def ensure_runtime(
+    operation: Literal["install", "update"] = "install",
+) -> InstallProgress:
+    """Ensure the exact release runtime exists; never accept a floating install."""
     global _active_progress
     if _active_progress is not None and _active_progress.status == "running":
-        raise RuntimeError("Installation already in progress")
+        return _active_progress
+
+    # Source runs intentionally consume `uv sync --extra image-gen` without
+    # touching the installed application's durable state.
+    if not getattr(sys, "frozen", False):
+        try:
+            packages = critical_runtime_import_check()
+        except Exception:
+            pass
+        else:
+            progress = InstallProgress(log_prefix="image_gen_source_runtime")
+            progress._loop = asyncio.get_running_loop()
+            progress.finish(
+                "Source-development media runtime verified from the active uv environment."
+            )
+            _active_progress = progress
+            return progress
+
+    snapshot = authoritative_snapshot()
+    try:
+        contract = load_runtime_install_contract()
+    except Exception:
+        contract = None
+    if (
+        snapshot.ready
+        and contract is not None
+        and snapshot.runtime_revision == contract.runtime_revision
+        and snapshot.active_slot is not None
+        and validate_slot(
+            snapshot.active_slot,
+            expected_revision=contract.runtime_revision,
+            expected_packages=contract.packages,
+            expected_target=contract.target,
+        )[0]
+    ):
+        progress = InstallProgress(log_prefix="image_gen_installer")
+        progress._loop = asyncio.get_running_loop()
+        progress.finish("Managed media runtime already verified.")
+        _active_progress = progress
+        return progress
 
     progress = InstallProgress(log_prefix="image_gen_installer")
     progress.status = "running"
     progress._loop = asyncio.get_running_loop()
     _active_progress = progress
     _installer_cancel.clear()
+    attempt_id = uuid.uuid4().hex
+    effective: Literal["install", "update", "repair"] = operation
+    progress.update("preparing", 1.0, f"Preparing media-runtime {operation}…")
+    phase = RuntimePhase.INSTALLING if operation == "install" else RuntimePhase.UPDATING
+    _persist_progress(
+        phase=phase,
+        operation=operation,
+        attempt_id=attempt_id,
+        progress=progress,
+        active_slot=snapshot.active_slot if snapshot.ready else None,
+        last_known_good_slot=(
+            snapshot.active_slot if snapshot.ready else snapshot.last_known_good_slot
+        ),
+        runtime_revision=contract.runtime_revision if contract is not None else None,
+    )
+    _submit_background(
+        _install_runtime_sync,
+        progress,
+        _installer_cancel,
+        effective,
+        attempt_id,
+    )
+    return progress
 
-    _submit_background(_do_install, progress, _installer_cancel)
+
+async def repair_runtime() -> InstallProgress:
+    """Always build a clean slot; never repair a package tree in place."""
+    global _active_progress
+    if _active_progress is not None and _active_progress.status == "running":
+        return _active_progress
+    progress = InstallProgress(log_prefix="image_gen_runtime_repair")
+    progress.status = "running"
+    progress._loop = asyncio.get_running_loop()
+    _active_progress = progress
+    _installer_cancel.clear()
+    attempt_id = uuid.uuid4().hex
+    previous = authoritative_snapshot()
+    progress.update("preparing", 1.0, "Preparing clean media-runtime repair…")
+    try:
+        required_revision = load_runtime_install_contract().runtime_revision
+    except Exception:
+        required_revision = None
+    _persist_progress(
+        phase=RuntimePhase.REPAIRING,
+        operation="repair",
+        attempt_id=attempt_id,
+        progress=progress,
+        active_slot=previous.active_slot if previous.ready else None,
+        last_known_good_slot=(
+            previous.active_slot if previous.ready else previous.last_known_good_slot
+        ),
+        runtime_revision=required_revision,
+    )
+    _submit_background(
+        _install_runtime_sync,
+        progress,
+        _installer_cancel,
+        "repair",
+        attempt_id,
+    )
     return progress
 
 
@@ -968,6 +1326,8 @@ async def start_compatibility_migration() -> InstallProgress | None:
     progress and makes duplicate startup calls harmless.
     """
     global _active_progress
+    if authoritative_snapshot().state is RuntimePhase.RESTART_REQUIRED:
+        return None
     if not needs_upgrade():
         return None
     if _active_progress is not None and _active_progress.status == "running":
@@ -978,7 +1338,31 @@ async def start_compatibility_migration() -> InstallProgress | None:
     progress._loop = asyncio.get_running_loop()
     _active_progress = progress
     _installer_cancel.clear()
-    _submit_background(migrate_incompatible_runtime, progress, _installer_cancel)
+    attempt_id = uuid.uuid4().hex
+    previous = authoritative_snapshot()
+    try:
+        required_revision = load_runtime_install_contract().runtime_revision
+    except Exception:
+        required_revision = None
+    progress.update("preparing", 1.0, "Preparing required media-runtime update…")
+    _persist_progress(
+        phase=RuntimePhase.UPDATING,
+        operation="update",
+        attempt_id=attempt_id,
+        progress=progress,
+        active_slot=previous.active_slot if previous.ready else None,
+        last_known_good_slot=(
+            previous.active_slot if previous.ready else previous.last_known_good_slot
+        ),
+        runtime_revision=required_revision,
+    )
+    _submit_background(
+        _install_runtime_sync,
+        progress,
+        _installer_cancel,
+        "update",
+        attempt_id,
+    )
     return progress
 
 

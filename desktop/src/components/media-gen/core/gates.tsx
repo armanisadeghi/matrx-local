@@ -180,6 +180,16 @@ export function ImageGenGate({ children }: { children: ReactNode }) {
   } = state;
   const { refreshImage } = actions;
 
+  if (mediaRuntime?.state !== "ready" || !mediaRuntime.image_available) {
+    return (
+      <div className="space-y-4">
+        <ImageGenInstaller models={imageModels} />
+        <div aria-disabled="true" className="opacity-60">
+          {children}
+        </div>
+      </div>
+    );
+  }
   if (imageStatusLoading && !imageStatus) {
     return <CenteredSpinner text="Checking image generation status…" />;
   }
@@ -191,16 +201,6 @@ export function ImageGenGate({ children }: { children: ReactNode }) {
       />
     );
   }
-  if (mediaRuntime?.state !== "ready" || !mediaRuntime.image_available) {
-    return (
-      <div className="space-y-4">
-        <ImageGenInstaller models={imageModels} />
-        <div aria-disabled="true" className="opacity-60">
-          {children}
-        </div>
-      </div>
-    );
-  }
   return <>{children}</>;
 }
 
@@ -208,7 +208,13 @@ export function ImageGenGate({ children }: { children: ReactNode }) {
  * Video readiness gate: spinner → error card → hardware gate → shared-package
  * installer → children.
  */
-export function VideoGenGate({ children }: { children: ReactNode }) {
+export function VideoGenGate({
+  children,
+  showRuntimePanel = true,
+}: {
+  children: ReactNode;
+  showRuntimePanel?: boolean;
+}) {
   const [state, actions] = useMediaGenApp();
   const {
     mediaRuntime,
@@ -219,6 +225,25 @@ export function VideoGenGate({ children }: { children: ReactNode }) {
   } = state;
   const { refreshVideo } = actions;
 
+  if (
+    mediaRuntime?.state !== "ready" ||
+    !mediaRuntime.video_packages_available
+  ) {
+    return (
+      <div className="space-y-4">
+        {showRuntimePanel && (
+          <ImageGenInstaller
+            models={videoModels}
+            headline="Set up Video Generation"
+            intro="Video uses the same fully validated on-device AI runtime as image generation."
+          />
+        )}
+        <div aria-disabled="true" className="opacity-60">
+          {children}
+        </div>
+      </div>
+    );
+  }
   if (videoStatusLoading && !videoStatus) {
     return <CenteredSpinner text="Checking video generation status…" />;
   }
@@ -248,23 +273,6 @@ export function VideoGenGate({ children }: { children: ReactNode }) {
         <p className="text-[11px] text-muted-foreground">
           Image generation may still work — check the Images tab.
         </p>
-      </div>
-    );
-  }
-  if (
-    mediaRuntime?.state !== "ready" ||
-    !mediaRuntime.video_packages_available
-  ) {
-    return (
-      <div className="space-y-4">
-        <ImageGenInstaller
-          models={videoModels}
-          headline="Set up Video Generation"
-          intro="Video uses the same fully validated on-device AI runtime as image generation."
-        />
-        <div aria-disabled="true" className="opacity-60">
-          {children}
-        </div>
       </div>
     );
   }

@@ -268,6 +268,9 @@ def run_pip_streaming(
     progress: InstallProgress,
     extra_index: str | None = None,
     cancel_event: threading.Event | None = None,
+    *,
+    requirements_file: Path | None = None,
+    require_hashes: bool = False,
 ) -> None:
     """Run ``pip install --target``, forwarding each output line to progress.
 
@@ -277,7 +280,16 @@ def run_pip_streaming(
     cmd = _install_command(python, target)
     if extra_index:
         cmd += ["--extra-index-url", extra_index]
-    cmd += packages
+    if requirements_file is not None:
+        if packages:
+            raise ValueError("packages and requirements_file are mutually exclusive")
+        if require_hashes:
+            cmd.append("--require-hashes")
+        cmd += ["--requirement", str(requirements_file)]
+    else:
+        if require_hashes:
+            raise ValueError("require_hashes requires a requirements_file")
+        cmd += packages
 
     logger.info("[optional_packages] Installing packages for Python: %s", python)
     logger.info("[optional_packages] Command: %s", " ".join(cmd))

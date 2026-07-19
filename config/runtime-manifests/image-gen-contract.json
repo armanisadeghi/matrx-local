@@ -1,5 +1,5 @@
 {
-  "contract_sha256": "1601ae19e360b23ff5dc640d03bd45fd8acfab081a9eb96905911afb48f23624",
+  "contract_sha256": "dc09897a76af3fd9c63a6c31205157349d15162c1f3d53ead23e7a152f2ec152",
   "critical_frozen_modules": [
     "huggingface_hub.dataclasses",
     "jinja2.meta",
@@ -19,20 +19,28 @@
     "transformers": "5.3.0"
   },
   "managed_requirements": [
-    "torch>=2.6",
-    "torchvision",
+    "torch==2.10.0",
+    "torchvision==0.25.0",
     "diffusers==0.39.0",
-    "transformers>=5.3.0",
-    "accelerate>=1.0",
-    "peft>=0.13.1",
-    "sentencepiece>=0.2.0",
-    "gguf>=0.10.0",
-    "huggingface_hub>=0.22.0"
+    "transformers==5.3.0",
+    "accelerate==1.13.0",
+    "peft==0.19.1",
+    "sentencepiece==0.2.1",
+    "gguf==0.19.0",
+    "huggingface-hub==1.8.0"
   ],
   "python_minor": "3.13",
   "runtime_attributes": {
     "diffusers": [
+      "FluxPipeline",
       "Flux2KleinPipeline",
+      "LTX2Pipeline",
+      "LTXImageToVideoPipeline",
+      "LTXPipeline",
+      "QwenImagePipeline",
+      "StableDiffusionPipeline",
+      "StableDiffusionXLPipeline",
+      "WanPipeline",
       "ZImagePipeline"
     ],
     "transformers": [

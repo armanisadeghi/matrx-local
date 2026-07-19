@@ -8,6 +8,7 @@ and the slot carries an exact, platform-matching manifest.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import platform
 import shutil
@@ -25,7 +26,6 @@ from app.services.optional_packages.core import packages_dir
 
 
 RUNTIME_MANIFEST_REVISION = 1
-RUNTIME_REVISION = "media-runtime-2026-07-19.1"
 SLOT_MANIFEST = ".runtime-manifest.json"
 INSTALL_EVIDENCE = ".install-complete"
 
@@ -46,7 +46,7 @@ class RuntimePhase(StrEnum):
 @dataclass(slots=True)
 class RuntimeSnapshot:
     state: RuntimePhase = RuntimePhase.ABSENT
-    runtime_revision: str = RUNTIME_REVISION
+    runtime_revision: str | None = None
     manifest_revision: int = RUNTIME_MANIFEST_REVISION
     operation: str | None = None
     attempt_id: str | None = None
@@ -97,7 +97,6 @@ def runtime_lock_path() -> Path:
 def current_runtime_contract() -> dict[str, str | int]:
     return {
         "manifest_revision": RUNTIME_MANIFEST_REVISION,
-        "runtime_revision": RUNTIME_REVISION,
         "python_abi": sys.implementation.cache_tag or "unknown",
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
         "platform": sys.platform,
@@ -147,7 +146,11 @@ def read_snapshot() -> RuntimeSnapshot:
         raw = json.loads(path.read_text(encoding="utf-8"))
         snapshot = RuntimeSnapshot(
             state=RuntimePhase(raw["state"]),
-            runtime_revision=str(raw["runtime_revision"]),
+            runtime_revision=(
+                str(raw["runtime_revision"])
+                if raw.get("runtime_revision") is not None
+                else None
+            ),
             manifest_revision=int(raw["manifest_revision"]),
             operation=raw.get("operation"),
             attempt_id=raw.get("attempt_id"),
@@ -171,14 +174,13 @@ def read_snapshot() -> RuntimeSnapshot:
         )
     if (
         snapshot.manifest_revision != RUNTIME_MANIFEST_REVISION
-        or snapshot.runtime_revision != RUNTIME_REVISION
     ):
         snapshot.state = RuntimePhase.FAILED
-        snapshot.message = "Managed media runtime revision does not match this app."
+        snapshot.message = "Managed media runtime manifest revision is unsupported."
         snapshot.failure_code = "revision_mismatch"
         snapshot.failure_detail = (
-            f"expected revision {RUNTIME_REVISION}/{RUNTIME_MANIFEST_REVISION}, got "
-            f"{snapshot.runtime_revision}/{snapshot.manifest_revision}"
+            f"expected manifest revision {RUNTIME_MANIFEST_REVISION}, got "
+            f"{snapshot.manifest_revision}"
         )
     return snapshot
 
@@ -188,16 +190,32 @@ def write_snapshot(snapshot: RuntimeSnapshot) -> None:
     _atomic_json_write(runtime_state_path(), snapshot.to_dict())
 
 
-def write_slot_manifest(slot_dir: Path, packages: dict[str, str]) -> None:
+def write_slot_manifest(
+    slot_dir: Path,
+    *,
+    runtime_revision: str,
+    packages: dict[str, str],
+    target: str,
+    record_hashes: dict[str, str] | None = None,
+) -> None:
     payload: dict[str, Any] = {
         **current_runtime_contract(),
+        "runtime_revision": runtime_revision,
+        "target": target,
         "packages": packages,
+        "record_hashes": record_hashes or {},
         "verified_at": time.time(),
     }
     _atomic_json_write(slot_dir / SLOT_MANIFEST, payload)
 
 
-def validate_slot(slot: str) -> tuple[bool, str, dict[str, Any]]:
+def validate_slot(
+    slot: str,
+    *,
+    expected_revision: str | None = None,
+    expected_packages: dict[str, str] | None = None,
+    expected_target: str | None = None,
+) -> tuple[bool, str, dict[str, Any]]:
     try:
         path = _slot_path(slot)
     except ValueError as exc:
@@ -218,9 +236,33 @@ def validate_slot(slot: str) -> tuple[bool, str, dict[str, Any]]:
     ]
     if mismatches:
         return False, "; ".join(mismatches), manifest
+    if expected_revision is not None and manifest.get("runtime_revision") != expected_revision:
+        return False, (
+            f"runtime_revision={manifest.get('runtime_revision')!r} "
+            f"(expected {expected_revision!r})"
+        ), manifest
+    if expected_target is not None and manifest.get("target") != expected_target:
+        return False, (
+            f"target={manifest.get('target')!r} (expected {expected_target!r})"
+        ), manifest
     packages = manifest.get("packages")
     if not isinstance(packages, dict) or not packages:
         return False, f"slot {slot} manifest has no resolved packages", manifest
+    if expected_packages is not None and packages != expected_packages:
+        return False, "slot package versions do not match the release contract", manifest
+    record_hashes = manifest.get("record_hashes", {})
+    if not isinstance(record_hashes, dict):
+        return False, "slot record_hashes is not an object", manifest
+    for relative, expected_hash in record_hashes.items():
+        if not isinstance(relative, str) or not isinstance(expected_hash, str):
+            return False, "slot record hash entry is malformed", manifest
+        candidate = (path / relative).resolve(strict=False)
+        if not candidate.is_relative_to(path) or not candidate.is_file():
+            return False, f"slot record is missing or escapes slot: {relative}", manifest
+        actual_hash = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        normalized = expected_hash.removeprefix("sha256:")
+        if actual_hash != normalized:
+            return False, f"slot record hash mismatch: {relative}", manifest
     return True, "", manifest
 
 
@@ -235,7 +277,9 @@ def authoritative_snapshot() -> RuntimeSnapshot:
     )
     if selected is None:
         return snapshot
-    valid, reason, manifest = validate_slot(selected)
+    valid, reason, manifest = validate_slot(
+        selected, expected_revision=snapshot.runtime_revision
+    )
     if not valid:
         snapshot.state = RuntimePhase.FAILED
         snapshot.message = "Managed media runtime evidence failed validation."
@@ -265,12 +309,16 @@ def create_staging_slot() -> tuple[str, Path]:
     return name, path
 
 
-def finalize_staging_slot(staging: Path) -> tuple[str, Path]:
+def finalize_staging_slot(staging: Path, runtime_revision: str) -> tuple[str, Path]:
     root = runtime_slots_dir().resolve(strict=False)
     resolved = staging.resolve(strict=False)
     if resolved.parent != root or not resolved.name.startswith(".staging-"):
         raise ValueError(f"Not a managed staging slot: {staging}")
-    name = f"{RUNTIME_REVISION}-{uuid.uuid4().hex[:12]}"
+    safe_revision = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "-"
+        for char in runtime_revision[:48]
+    )
+    name = f"{safe_revision}-{uuid.uuid4().hex[:12]}"
     final = root / name
     os.replace(staging, final)
     return name, final

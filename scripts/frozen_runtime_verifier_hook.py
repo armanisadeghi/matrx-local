@@ -59,9 +59,10 @@ if os.environ.get("MATRX_FROZEN_RUNTIME_VERIFY") == "1":
         tensor = torch.tensor([1.0, 2.0]) + 1
         if tensor.tolist() != [2.0, 3.0]:
             raise RuntimeError("PyTorch CPU operation returned an unexpected result")
-        # Import the native extension explicitly. Some mismatched Torchvision
-        # installs import the Python package but fail only when _C is loaded.
-        importlib.import_module("torchvision._C")
+        # Torchvision loads its `_C` library through torch.ops rather than as a
+        # normal PyInit extension. `_has_ops()` proves that native activation.
+        if not torchvision.extension._has_ops():
+            raise RuntimeError("Torchvision native operators failed to load")
 
         result["imports"] = imported
         result["torch"] = str(torch.__version__)

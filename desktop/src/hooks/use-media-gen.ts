@@ -1108,6 +1108,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
 
   const loadImageModel = useCallback(
     async (modelId: string): Promise<MediaLoadResult> => {
+      if (!isRuntimeReady(mediaRuntimeRef.current)) {
+        setImageGenError(MEDIA_RUNTIME_NOT_READY);
+        return { success: false, error: MEDIA_RUNTIME_NOT_READY };
+      }
       const base = engine.engineUrl;
       if (!base) {
         logEngineNotConnected("load image model");
@@ -2454,6 +2458,14 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
 
   const loadVideoModel = useCallback(
     async (modelId: string): Promise<MediaLoadResult> => {
+      const runtime = mediaRuntimeRef.current;
+      if (
+        runtime?.state !== "ready" ||
+        !runtime.video_packages_available
+      ) {
+        setVideoGenError(MEDIA_RUNTIME_NOT_READY);
+        return { success: false, error: MEDIA_RUNTIME_NOT_READY };
+      }
       const base = engine.engineUrl;
       if (!base) {
         logEngineNotConnected("load video model");

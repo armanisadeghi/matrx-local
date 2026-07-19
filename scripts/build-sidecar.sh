@@ -531,8 +531,11 @@ PYINSTALLER_EOF
     return $rc
 }
 
-# Set env vars for the Python script
-export BINARY_NAME="matrx-engine-$TARGET"
+# Export the already-normalized platform filename for the fallback builder.
+# Do not reconstruct it here: Windows' normalization above adds the required
+# .exe suffix, and resetting the value caused the post-build verifier to look
+# for a nonexistent extensionless file after PyInstaller succeeded.
+export BINARY_NAME
 if [[ -n "${TESSDATA_PATH:-}" && -d "$TESSDATA_PATH" ]]; then
     export TESSDATA_PATH_ARG="$TESSDATA_PATH:tessdata"
 fi
@@ -563,8 +566,9 @@ fi
 echo ""
 echo "=== Writing bundled config ==="
 "$PYTHON_CMD" "$PROJECT_ROOT/scripts/write_bundled_config.py" || {
-    echo "WARNING: write_bundled_config.py failed — Supabase bootstrap config may not be available in the binary."
-    echo "         Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in your environment."
+    echo "ERROR: bundled bootstrap config generation failed; refusing to build an incomplete sidecar." >&2
+    echo "       Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY, then rebuild." >&2
+    exit 1
 }
 
 # ── macOS code signing: re-sign Python dylibs AT SOURCE before PyInstaller ──

@@ -79,7 +79,11 @@ def main() -> int:
         render_bundled_config(supabase_url=supabase_url, supabase_key=supabase_key),
         encoding="utf-8",
     )
-    print(f"✅  Wrote bundled config to {TARGET}")
+    # Keep build-script output ASCII-safe. GitHub's Windows runners can expose
+    # a CP1252 console even when the generated file itself is UTF-8; emitting
+    # an emoji there used to turn a successful write into a non-zero build
+    # warning.
+    print(f"OK: Wrote bundled config to {TARGET}")
     print(f"   SUPABASE_URL             = {supabase_url}")
     print(f"   SUPABASE_PUBLISHABLE_KEY = {'*' * 8}{supabase_key[-6:]}")
     return 0

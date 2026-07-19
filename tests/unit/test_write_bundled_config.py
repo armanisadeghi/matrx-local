@@ -29,7 +29,9 @@ def test_bundled_config_contains_only_supabase_bootstrap_values() -> None:
     compile(rendered, "bundled_config.py", "exec")
 
 
-def test_generator_does_not_require_aidream_url(tmp_path, monkeypatch) -> None:
+def test_generator_does_not_require_aidream_url(
+    tmp_path, monkeypatch, capsys
+) -> None:
     generator = _load_generator_module()
     target = tmp_path / "bundled_config.py"
     monkeypatch.setattr(generator, "TARGET", target)
@@ -39,3 +41,6 @@ def test_generator_does_not_require_aidream_url(tmp_path, monkeypatch) -> None:
 
     assert generator.main() == 0
     assert "AIDREAM_SERVER_URL" not in target.read_text(encoding="utf-8")
+    # Windows release runners may expose a CP1252 console. Build status output
+    # must remain encodable there after the UTF-8 config has been written.
+    capsys.readouterr().out.encode("cp1252")

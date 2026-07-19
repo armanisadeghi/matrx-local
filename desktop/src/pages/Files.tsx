@@ -9,8 +9,9 @@ import { useFilesystemPlaces } from "@/features/filesystem/use-filesystem-places
 import type { EngineStatus } from "@/hooks/use-engine";
 import { engine } from "@/lib/api";
 
-function parentPath(path: string): string | null {
+export function parentPath(path: string): string | null {
   const clean = path.replace(/[\\/]+$/, "");
+  if (/^\\\\[^\\]+\\[^\\]+$/.test(clean)) return null;
   const split = Math.max(clean.lastIndexOf("/"), clean.lastIndexOf("\\"));
   if (split < 0) return null;
   if (split === 0) return clean.slice(0, 1);

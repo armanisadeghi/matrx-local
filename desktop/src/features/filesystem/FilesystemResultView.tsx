@@ -310,17 +310,27 @@ function EntryRow({
   );
 }
 
+export function filesystemBreadcrumbParts(path: string): string[] {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  if (path.startsWith("\\\\") && parts.length >= 2) {
+    return [`\\\\${parts[0]}\\${parts[1]}\\`, ...parts.slice(2)];
+  }
+  if (/^[A-Za-z]:[\\/]/.test(path) && parts.length > 0) {
+    return [`${parts[0]}\\`, ...parts.slice(1)];
+  }
+  return parts;
+}
+
 function Breadcrumbs({ path }: { path: string }) {
   if (!path) return null;
-  const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
-  const parts = path.split(/[\\/]/).filter(Boolean);
+  const parts = filesystemBreadcrumbParts(path);
   return (
     <div className="flex min-w-0 items-center gap-1 overflow-x-auto px-2 py-1.5 text-[11px] text-muted-foreground">
       <HardDrive className="h-3.5 w-3.5 shrink-0" />
       {parts.map((part, index) => (
         <span key={`${part}-${index}`} className="flex shrink-0 items-center gap-1">
           {index > 0 && <ChevronRight className="h-3 w-3" />}
-          <span>{index === 0 && separator === "\\" ? `${part}\\` : part}</span>
+          <span>{part}</span>
         </span>
       ))}
     </div>

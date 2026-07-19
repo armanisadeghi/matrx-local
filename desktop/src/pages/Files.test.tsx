@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { Files } from "./Files";
+import { Files, parentPath } from "./Files";
 
 describe("Files page", () => {
   it("is a nonblocking host-files surface while the engine is disconnected", () => {
@@ -11,5 +11,12 @@ describe("Files page", () => {
     expect(html).toContain("Search file names and paths");
     expect(html).toContain("Search scope");
     expect(html).toContain("aria-label=\"Refresh filesystem locations\"");
+  });
+
+  it("stops upward navigation at drive and UNC share roots", () => {
+    expect(parentPath("C:\\")).toBeNull();
+    expect(parentPath("C:\\Users")).toBe("C:\\");
+    expect(parentPath("\\\\server\\share")).toBeNull();
+    expect(parentPath("\\\\server\\share\\folder")).toBe("\\\\server\\share");
   });
 });

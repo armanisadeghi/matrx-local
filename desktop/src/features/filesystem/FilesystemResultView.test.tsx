@@ -1,9 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { FilesystemResultView, mergeFilesystemEntries } from "./FilesystemResultView";
+import { filesystemBreadcrumbParts, FilesystemResultView, mergeFilesystemEntries } from "./FilesystemResultView";
 import type { FilesystemResult } from "./types";
 
 describe("FilesystemResultView", () => {
+  it("preserves Windows drive and UNC share roots in breadcrumbs", () => {
+    expect(filesystemBreadcrumbParts("C:\\Users\\ada")).toEqual(["C:\\", "Users", "ada"]);
+    expect(filesystemBreadcrumbParts("\\\\server\\share\\folder")).toEqual(["\\\\server\\share\\", "folder"]);
+  });
+
   it("merges lazy child pages without losing or duplicating entries", () => {
     expect(mergeFilesystemEntries(
       [{ name: "a", path: "/repo/a", kind: "file" }],

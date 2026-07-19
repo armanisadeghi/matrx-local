@@ -163,6 +163,8 @@ def test_locked_target_environment_is_app_owned_and_sanitized(
     target = tmp_path / "image-gen-runtime" / "slots" / ".staging-test"
     monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", "/customer/uv/python")
     monkeypatch.setenv("UV_OFFLINE", "1")
+    monkeypatch.setenv("VIRTUAL_ENV", "/customer/project/.venv")
+    monkeypatch.setenv("PYTHONPATH", "/customer/site-packages")
 
     environment = runtime_installer.locked_target_install_environment(target)
 
@@ -172,4 +174,8 @@ def test_locked_target_environment_is_app_owned_and_sanitized(
     assert environment["UV_PYTHON_DOWNLOADS"] == "automatic"
     assert environment["UV_MANAGED_PYTHON"] == "1"
     assert environment["UV_LINK_MODE"] == "copy"
+    assert environment["PATH"] == str(control / "empty-path")
+    assert (control / "empty-path").is_dir()
     assert "UV_OFFLINE" not in environment
+    assert "VIRTUAL_ENV" not in environment
+    assert "PYTHONPATH" not in environment

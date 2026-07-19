@@ -226,8 +226,14 @@ def locked_target_install_environment(target_dir: Path) -> dict[str, str]:
     slots_dir = target_dir.resolve(strict=False).parent
     runtime_root = slots_dir.parent
     control_root = runtime_root / "installer-control"
+    empty_path = control_root / "empty-path"
+    empty_path.mkdir(parents=True, exist_ok=True)
     environment = {
-        key: value for key, value in os.environ.items() if not key.startswith("UV_")
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("UV_", "PIP_"))
+        and key
+        not in {"VIRTUAL_ENV", "CONDA_PREFIX", "CONDA_DEFAULT_ENV", "PYTHONHOME", "PYTHONPATH"}
     }
     environment.update(
         {
@@ -238,6 +244,10 @@ def locked_target_install_environment(target_dir: Path) -> dict[str, str]:
             "UV_LINK_MODE": "copy",
             "UV_NATIVE_TLS": "1",
             "UV_NO_CONFIG": "1",
+            # The executable path is absolute and wheel-only installation does
+            # not need shell tools. Hiding customer PATH prevents uv from
+            # borrowing a uv-managed Python installed for an unrelated project.
+            "PATH": str(empty_path),
         }
     )
     return environment

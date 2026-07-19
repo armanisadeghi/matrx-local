@@ -197,6 +197,11 @@ fi
 # exact target-native, checksum-pinned runtime installer that Tauri bundles.
 "$PYTHON" scripts/stage_bundled_uv.py --target "$TARGET"
 "$PYTHON" scripts/stage_bundled_uv.py --target "$TARGET" --check
+STAGED_UV="desktop/src-tauri/binaries/uv-$TARGET"
+if [[ "$TARGET" == *"windows"* ]]; then
+    STAGED_UV="${STAGED_UV}.exe"
+fi
+"$PYTHON" scripts/verify_bundled_uv.py --uv "$STAGED_UV" --target "$TARGET"
 
 # Remove the obsolete 'pathlib' backport that matrx-utils pulls in via fitz →
 # nipype → pyxnat. Python 3.13 ships pathlib as stdlib; the backport breaks

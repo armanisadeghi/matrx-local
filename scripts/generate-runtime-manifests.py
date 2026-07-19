@@ -119,7 +119,16 @@ def _requirement_names(requirements: Iterable[str]) -> set[str]:
 def _distribution_closure(requirements: Iterable[str]) -> set[str]:
     environment = default_environment()
     environment["extra"] = ""
-    pending = list(_requirement_names(requirements))
+    # Evaluate markers on the project's direct requirements before resolving
+    # their installed distribution closure. Stripping markers here makes a
+    # Linux release runner demand macOS-only PyObjC packages (and deliberately
+    # disabled compatibility dependencies such as tflite-runtime).
+    pending: list[str] = []
+    for raw_requirement in requirements:
+        requirement = Requirement(raw_requirement)
+        if requirement.marker and not requirement.marker.evaluate(environment):
+            continue
+        pending.append(_normalize(requirement.name))
     result: set[str] = set()
     missing: list[str] = []
 

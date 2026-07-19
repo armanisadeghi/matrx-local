@@ -366,3 +366,40 @@ def test_local_llm_async_status_runs_probe_off_event_loop(monkeypatch):
     result = asyncio.run(reg.get_local_llm_status_async())
 
     assert result["probe_thread"] != main_thread
+
+
+def test_local_llm_status_discards_probe_when_registration_changes(monkeypatch):
+    """A worker probe must not combine an old port with new registry state."""
+    from app.services.ai import local_llm_registry as reg
+
+    monkeypatch.setattr(reg, "_local_llm_port", 22199)
+    monkeypatch.setattr(reg, "_local_llm_model", "old-model")
+    monkeypatch.setattr(reg, "_registry_generation", 10)
+    monkeypatch.setattr(reg, "_unregister_runtime_model", lambda _model: None)
+    monkeypatch.setattr(
+        reg, "_unregister_instance_from_unified_client", lambda _model: None
+    )
+    probe_started = threading.Event()
+    release_probe = threading.Event()
+
+    def blocked_probe(_port: int) -> tuple[bool, None]:
+        probe_started.set()
+        assert release_probe.wait(timeout=2)
+        return True, None
+
+    monkeypatch.setattr(reg, "_probe_llama_server", blocked_probe)
+
+    async def run() -> dict[str, Any]:
+        status_task = asyncio.create_task(reg.get_local_llm_status_async())
+        assert await asyncio.to_thread(probe_started.wait, 1)
+        reg.clear_local_llm()
+        release_probe.set()
+        return await status_task
+
+    status = asyncio.run(run())
+
+    assert status["registered"] is False
+    assert status["port"] is None
+    assert status["model_name"] is None
+    assert status["reachable"] is False
+    assert "changed during" in status["error"]

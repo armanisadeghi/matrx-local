@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -39,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 _local_llm_port: int | None = None
 _local_llm_model: str | None = None
+_registry_generation = 0
+_registry_lock = threading.RLock()
 
 
 # ---------------------------------------------------------------------------
@@ -155,68 +158,69 @@ def set_local_llm(port: int, model_name: str) -> bool:
 
     Returns True on success, False on failure (logged with full traceback).
     """
-    global _local_llm_port, _local_llm_model
+    global _local_llm_port, _local_llm_model, _registry_generation
 
-    try:
-        from matrx_ai.providers.generic_openai import GenericOpenAIChat
+    with _registry_lock:
+        try:
+            from matrx_ai.providers.generic_openai import GenericOpenAIChat
 
-        _local_llm_port = port
-        _local_llm_model = model_name
+            base_url = f"http://127.0.0.1:{port}"
+            instance = GenericOpenAIChat(
+                base_url=base_url,
+                api_key="none",
+                provider_name="local_llama",
+            )
 
-        base_url = f"http://127.0.0.1:{port}"
-        instance = GenericOpenAIChat(
-            base_url=base_url,
-            api_key="none",
-            provider_name="local_llama",
-        )
+            canonical = _local_model_name(model_name)
+            _register_runtime_model(model_name)
+            _register_instance_with_unified_client(model_name, instance)
+            _local_llm_port = port
+            _local_llm_model = model_name
+            _registry_generation += 1
 
-        canonical = _local_model_name(model_name)
-        _register_runtime_model(model_name)
-        _register_instance_with_unified_client(model_name, instance)
+            logger.info(
+                "[local_llm_registry] Local LLM registered: model='%s', port=%d, base_url=%s/v1 ✓",
+                canonical,
+                port,
+                base_url,
+            )
+            return True
 
-        logger.info(
-            "[local_llm_registry] Local LLM registered: model='%s', port=%d, base_url=%s/v1 ✓",
-            canonical,
-            port,
-            base_url,
-        )
-        return True
-
-    except Exception:
-        logger.error(
-            "[local_llm_registry] Failed to register local LLM (port=%d, model=%s)",
-            port,
-            model_name,
-            exc_info=True,
-        )
-        _local_llm_port = None
-        _local_llm_model = None
-        return False
+        except Exception:
+            logger.error(
+                "[local_llm_registry] Failed to register local LLM (port=%d, model=%s)",
+                port,
+                model_name,
+                exc_info=True,
+            )
+            return False
 
 
 def clear_local_llm() -> None:
     """Deregister the local LLM — called when llama-server stops."""
-    global _local_llm_port, _local_llm_model
+    global _local_llm_port, _local_llm_model, _registry_generation
 
-    if _local_llm_model:
-        try:
-            _unregister_runtime_model(_local_llm_model)
-            _unregister_instance_from_unified_client(_local_llm_model)
-        except Exception:
-            logger.error(
-                "[local_llm_registry] Failed to deregister local LLM '%s' — "
-                "a stale routing entry may remain until restart",
+    with _registry_lock:
+        if _local_llm_model:
+            try:
+                _unregister_runtime_model(_local_llm_model)
+                _unregister_instance_from_unified_client(_local_llm_model)
+            except Exception:
+                logger.error(
+                    "[local_llm_registry] Failed to deregister local LLM '%s' — "
+                    "a stale routing entry may remain until restart",
+                    _local_llm_model,
+                    exc_info=True,
+                )
+            logger.info(
+                "[local_llm_registry] Local LLM deregistered (was: model='%s', port=%s)",
                 _local_llm_model,
-                exc_info=True,
+                _local_llm_port,
             )
-        logger.info(
-            "[local_llm_registry] Local LLM deregistered (was: model='%s', port=%s)",
-            _local_llm_model,
-            _local_llm_port,
-        )
 
-    _local_llm_port = None
-    _local_llm_model = None
+        _local_llm_port = None
+        _local_llm_model = None
+        _registry_generation += 1
 
 
 def is_local_llm_available() -> bool:
@@ -226,7 +230,8 @@ def is_local_llm_available() -> bool:
     llama-server can temporarily miss a health deadline while remaining the
     correct routing target.
     """
-    return _local_llm_port is not None and _local_llm_model is not None
+    with _registry_lock:
+        return _local_llm_port is not None and _local_llm_model is not None
 
 
 def get_local_llm_status() -> dict[str, Any]:
@@ -237,27 +242,39 @@ def get_local_llm_status() -> dict[str, Any]:
     short ``/v1/models`` probe even though it is healthy.  Explicit lifecycle
     events remain the only authority for clearing the registration.
     """
-    registered = _local_llm_port is not None and _local_llm_model is not None
+    with _registry_lock:
+        port = _local_llm_port
+        model = _local_llm_model
+        generation = _registry_generation
+    registered = port is not None and model is not None
     reachable = False
     error: str | None = None
 
-    if registered and _local_llm_port is not None:
-        reachable, error = _probe_llama_server(_local_llm_port)
+    if registered and port is not None:
+        reachable, error = _probe_llama_server(port)
         if not reachable:
             logger.warning(
                 "[local_llm_registry] Registered local LLM is unreachable "
                 "right now (port=%s, model=%s): %s; preserving registration",
-                _local_llm_port,
-                _local_llm_model,
+                port,
+                model,
                 error or "unknown error",
             )
+
+    with _registry_lock:
+        if generation != _registry_generation:
+            port = _local_llm_port
+            model = _local_llm_model
+            registered = port is not None and model is not None
+            reachable = False
+            error = "Local model registration changed during the status probe."
 
     return {
         "registered": registered,
         "available": registered and reachable,
-        "port": _local_llm_port,
-        "model_name": _local_llm_model,
-        "canonical_model_name": _local_model_name(_local_llm_model) if _local_llm_model else None,
+        "port": port,
+        "model_name": model,
+        "canonical_model_name": _local_model_name(model) if model else None,
         "reachable": reachable,
         "error": error,
         # matrx-ai >= 0.3.0 always ships GenericOpenAIChat; kept for API
@@ -287,17 +304,20 @@ def resolve_local_llm_model(requested_model: str | None = None) -> dict[str, Any
     its bare model name. Accept both spellings for SDK ergonomics, but return
     the bare name to use in the proxied request body.
     """
-    if _local_llm_port is None or _local_llm_model is None:
+    with _registry_lock:
+        port = _local_llm_port
+        model = _local_llm_model
+    if port is None or model is None:
         return None
 
-    bare = _bare_model_name(_local_llm_model)
+    bare = _bare_model_name(model)
     canonical = _local_model_name(bare)
     if requested_model is not None and requested_model not in {bare, canonical}:
         return None
 
     return {
-        "port": _local_llm_port,
-        "base_url": f"http://127.0.0.1:{_local_llm_port}/v1",
+        "port": port,
+        "base_url": f"http://127.0.0.1:{port}/v1",
         "model_name": bare,
         "canonical_model_name": canonical,
     }

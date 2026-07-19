@@ -1864,7 +1864,7 @@ async def check_all_permissions() -> list[dict[str, Any]]:
         return_exceptions=True,
     )
     try:
-        while not scan.done():
+        while True:
             if process_shutdown_requested():
                 # Permission probes are advisory and may own platform
                 # subprocesses. Cancel the canonical gather during process
@@ -1873,8 +1873,10 @@ async def check_all_permissions() -> list[dict[str, Any]]:
                 scan.cancel()
                 await asyncio.gather(scan, return_exceptions=True)
                 return []
-            await asyncio.sleep(0.1)
-        results = scan.result()
+            done, _pending = await asyncio.wait((scan,), timeout=0.1)
+            if done:
+                results = scan.result()
+                break
     except asyncio.CancelledError:
         scan.cancel()
         await asyncio.gather(scan, return_exceptions=True)

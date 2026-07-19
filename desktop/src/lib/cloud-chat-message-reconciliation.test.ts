@@ -70,4 +70,18 @@ describe("Cloud Chat durable message reconciliation", () => {
       reconcileHydratedChatMessages(existing, hydrated).map((item) => item.id),
     ).toEqual(["server-user", "local-user"]);
   });
+
+  it("uses one durable assistant row to replace only one repeated cached turn", () => {
+    const existing = [
+      message("local-assistant-1", "assistant", "The operation completed."),
+      message("local-assistant-2", "assistant", "The operation completed."),
+    ];
+    const hydrated = [
+      message("server-assistant", "assistant", "The operation completed."),
+    ];
+
+    expect(
+      reconcileHydratedChatMessages(existing, hydrated).map((item) => item.id),
+    ).toEqual(["server-assistant", "local-assistant-2"]);
+  });
 });

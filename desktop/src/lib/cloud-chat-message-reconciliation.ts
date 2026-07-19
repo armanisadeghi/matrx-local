@@ -28,25 +28,31 @@ function isUnsettledAssistant(message: ChatMessage): boolean {
   );
 }
 
-function isDurableReplacement(
+function durableReplacementKind(
   optimistic: ChatMessage,
   durable: ChatMessage,
-): boolean {
-  if (optimistic.role !== durable.role) return false;
+): "exact" | "combined" | "unsettled" | null {
+  if (optimistic.role !== durable.role) return null;
   const timeDelta = Math.abs(
     new Date(optimistic.timestamp).getTime() -
       new Date(durable.timestamp).getTime(),
   );
   if (!Number.isFinite(timeDelta) || timeDelta > OPTIMISTIC_MATCH_WINDOW_MS) {
-    return false;
+    return null;
   }
+  const local = normalized(optimistic.content);
+  const remote = normalized(durable.content);
   if (optimistic.role === "user") {
-    return textRepresentsSameTurn(optimistic.content, durable.content);
+    if (local === remote) return "exact";
+    return textRepresentsSameTurn(optimistic.content, durable.content)
+      ? "combined"
+      : null;
   }
-  return (
-    isUnsettledAssistant(optimistic) ||
-    textRepresentsSameTurn(optimistic.content, durable.content)
-  );
+  if (local === remote) return "exact";
+  if (isUnsettledAssistant(optimistic)) return "unsettled";
+  return textRepresentsSameTurn(optimistic.content, durable.content)
+    ? "combined"
+    : null;
 }
 
 export function reconcileHydratedChatMessages(
@@ -54,11 +60,23 @@ export function reconcileHydratedChatMessages(
   hydrated: ChatMessage[],
 ): ChatMessage[] {
   const hydratedIds = new Set(hydrated.map((message) => message.id));
-  const optimistic = existing.filter(
-    (message) =>
-      !hydratedIds.has(message.id) &&
-      !hydrated.some((durable) => isDurableReplacement(message, durable)),
-  );
+  const consumedDurable = new Set<number>();
+  const optimistic = existing.filter((message) => {
+    if (hydratedIds.has(message.id)) return false;
+    for (let index = 0; index < hydrated.length; index += 1) {
+      const kind = durableReplacementKind(message, hydrated[index]!);
+      if (!kind) continue;
+      // A legacy combined user row legitimately replaces multiple cached
+      // prompts. Every other durable message represents exactly one turn and
+      // must not consume two repeated local messages.
+      const canRepresentMultiplePrompts =
+        kind === "combined" && message.role === "user";
+      if (!canRepresentMultiplePrompts && consumedDurable.has(index)) continue;
+      if (!canRepresentMultiplePrompts) consumedDurable.add(index);
+      return false;
+    }
+    return true;
+  });
   return [...hydrated, ...optimistic].sort(
     (a, b) =>
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),

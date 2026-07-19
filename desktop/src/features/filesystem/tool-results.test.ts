@@ -3,6 +3,7 @@ import type { ChatMessage, ToolCallResult } from "@/hooks/use-chat";
 import {
   extractToolParts,
   enrichHydratedToolResults,
+  hydratedToolCallIdBatches,
   hydratedToolCallIds,
   isFilesystemTool,
   normalizeFilesystemResult,
@@ -403,6 +404,32 @@ describe("tool call persistence", () => {
     });
   });
 
+  it("prefers a tool result call id over its unrelated content-block id", () => {
+    expect(extractToolParts([{
+      type: "tool_result",
+      id: "content-block-id",
+      tool_call_id: "tool-call-id",
+      content: "done",
+    }]).results).toEqual([{
+      tool_call_id: "tool-call-id",
+      type: "success",
+      output: "done",
+    }]);
+  });
+
+  it("bounds durable ledger filter batches", () => {
+    const messages: ChatMessage[] = Array.from({ length: 121 }, (_, index) => ({
+      id: `message-${index}`,
+      role: "assistant",
+      content: "",
+      timestamp: "2026-01-01",
+      tool_calls: [{ id: `call-${index}`, name: "local_file", input: {} }],
+    }));
+
+    expect(hydratedToolCallIdBatches(messages).map((batch) => batch.length))
+      .toEqual([50, 50, 21]);
+  });
+
   it("hydrates V2 null-content tool messages from the durable tool ledger", () => {
     const callParts = extractToolParts([{
       type: "tool_call",
@@ -496,6 +523,48 @@ describe("tool call persistence", () => {
       tool_call_id: "failed-call",
       type: "error",
       output: "Path is not allowed.",
+    }]);
+  });
+
+  it("preserves rich inline result fields while refreshing ledger output", () => {
+    const action = {
+      fingerprint: "permission:camera",
+      code: "camera_required",
+      kind: "os_permission" as const,
+      feature: "Capture",
+      title: "Camera access is needed",
+      message: "Allow camera access.",
+      action: { kind: "request_os_permission" as const, label: "Allow Camera" },
+      source: "tool.camera",
+      status: "active" as const,
+    };
+    const messages: ChatMessage[] = [{
+      id: "assistant",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-01-01",
+      tool_calls: [{ id: "camera-call", name: "CameraCapture", input: {} }],
+      tool_results: [{
+        tool_call_id: "camera-call",
+        type: "success",
+        output: "inline",
+        action_needed: action,
+        metadata: { inline: true },
+      }],
+    }];
+
+    expect(enrichHydratedToolResults(messages, [{
+      call_id: "camera-call",
+      status: "completed",
+      success: true,
+      output: "durable",
+      metadata: { ledger: true },
+    }])[0]?.tool_results).toEqual([{
+      tool_call_id: "camera-call",
+      type: "success",
+      output: "durable",
+      action_needed: action,
+      metadata: { ledger: true, inline: true },
     }]);
   });
 

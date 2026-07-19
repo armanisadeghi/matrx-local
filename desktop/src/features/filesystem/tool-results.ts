@@ -401,12 +401,9 @@ export function extractToolParts(content: unknown): ExtractedToolParts {
     const item = record(value);
     if (!item) continue;
     const type = stringValue(item.type);
-    const callId = stringValue(
-      item.call_id,
-      item.id,
-      item.tool_call_id,
-      item.tool_use_id,
-    );
+    const callId = type === "tool_call"
+      ? stringValue(item.call_id, item.id, item.tool_call_id, item.tool_use_id)
+      : stringValue(item.call_id, item.tool_call_id, item.tool_use_id, item.id);
     if (!callId) continue;
     if (type === "tool_call") {
       calls.push({
@@ -451,6 +448,21 @@ export function hydratedToolCallIds(messages: ChatMessage[]): string[] {
       (message.tool_calls ?? []).map((call) => call.id),
     ),
   )];
+}
+
+export function hydratedToolCallIdBatches(
+  messages: ChatMessage[],
+  batchSize = 50,
+): string[][] {
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new RangeError("tool call batch size must be a positive integer");
+  }
+  const ids = hydratedToolCallIds(messages);
+  const batches: string[][] = [];
+  for (let offset = 0; offset < ids.length; offset += batchSize) {
+    batches.push(ids.slice(offset, offset + batchSize));
+  }
+  return batches;
 }
 
 function resultFromDurableToolCall(
@@ -509,13 +521,31 @@ export function enrichHydratedToolResults(
     );
     if (ledgerResults.length === 0) return message;
     const ledgerIds = new Set(ledgerResults.map((result) => result.tool_call_id));
+    const ledgerById = new Map(
+      ledgerResults.map((result) => [result.tool_call_id, result]),
+    );
+    const mergedExisting = (message.tool_results ?? [])
+      .filter((result) => ledgerIds.has(result.tool_call_id))
+      .map((existing) => {
+        const durable = ledgerById.get(existing.tool_call_id)!;
+        const metadata = existing.metadata || durable.metadata
+          ? { ...(durable.metadata ?? {}), ...(existing.metadata ?? {}) }
+          : undefined;
+        ledgerById.delete(existing.tool_call_id);
+        return {
+          ...existing,
+          ...durable,
+          ...(metadata ? { metadata } : {}),
+        };
+      });
     return {
       ...message,
       tool_results: [
         ...(message.tool_results ?? []).filter(
           (result) => !ledgerIds.has(result.tool_call_id),
         ),
-        ...ledgerResults,
+        ...mergedExisting,
+        ...ledgerById.values(),
       ],
     };
   });

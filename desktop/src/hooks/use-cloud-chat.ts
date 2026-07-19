@@ -41,7 +41,7 @@ import type {
 import {
   enrichHydratedToolResults,
   extractToolParts,
-  hydratedToolCallIds,
+  hydratedToolCallIdBatches,
   reduceLiveToolEvent,
   stitchHydratedToolMessages,
   type DurableToolCallRow,
@@ -1052,22 +1052,35 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       let messages = stitchHydratedToolMessages(
         newestRows.map(messageRowToChatMessage),
       );
-      const toolCallIds = hydratedToolCallIds(messages);
-      if (toolCallIds.length > 0) {
-        const { data: toolRows, error: toolError } = await supabase
-          .schema("chat")
-          .from("tool_call")
-          .select(
-            "call_id, status, success, is_error, output, output_preview, output_type, error_message, metadata",
-          )
-          .eq("conversation_id", serverConversationId)
-          .is("deleted_at", null)
-          .in("call_id", toolCallIds);
-        if (toolError) throw toolError;
+      const toolCallIdBatches = hydratedToolCallIdBatches(messages);
+      if (toolCallIdBatches.length > 0) {
+        const toolRows: DurableToolCallRow[] = [];
+        let toolHydrationFailed = false;
+        for (const batch of toolCallIdBatches) {
+          const { data, error: toolError } = await supabase
+            .schema("chat")
+            .from("tool_call")
+            .select(
+              "call_id, status, success, is_error, output, output_preview, output_type, error_message, metadata",
+            )
+            .eq("conversation_id", serverConversationId)
+            .is("deleted_at", null)
+            .in("call_id", batch);
+          if (toolError) {
+            toolHydrationFailed = true;
+            break;
+          }
+          toolRows.push(...((data ?? []) as DurableToolCallRow[]));
+        }
         messages = enrichHydratedToolResults(
           messages,
-          (toolRows ?? []) as DurableToolCallRow[],
+          toolRows,
         );
+        if (toolHydrationFailed && cacheUserIdRef.current === ownerAtStart) {
+          setHistoryError(
+            "Messages loaded, but some durable tool results could not be refreshed.",
+          );
+        }
       }
       setConversations((prev) =>
         cacheUserIdRef.current === ownerAtStart

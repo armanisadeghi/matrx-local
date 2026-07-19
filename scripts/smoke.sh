@@ -49,7 +49,9 @@ MODE="${1:-web}"
 NO_BUILD=0
 for arg in "$@"; do [[ "$arg" == "--no-build" ]] && NO_BUILD=1; done
 
-RUN_ID="$(date +%Y%m%d-%H%M%S)"
+# Include the shell PID: two agents can start smoke within the same second,
+# and sharing a run directory lets their logs/summaries overwrite each other.
+RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 RUN_DIR="$REPO_ROOT/.smoke/runs/$RUN_ID"
 mkdir -p "$RUN_DIR"
 SUMMARY="$RUN_DIR/summary.md"

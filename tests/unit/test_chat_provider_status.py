@@ -11,11 +11,10 @@ from app.services.ai import key_manager
 def test_provider_status_uses_persisted_user_key_cache(monkeypatch: pytest.MonkeyPatch):
     """A developer shell variable must not masquerade as a user setting."""
     monkeypatch.setenv("OPENAI_API_KEY", "developer-shell-key")
-    monkeypatch.setattr(
-        key_manager,
-        "get_cached_user_keys",
-        lambda: {"anthropic": "user-entered-key", "openai": ""},
-    )
+    async def loaded_keys() -> dict[str, str]:
+        return {"anthropic": "user-entered-key", "openai": ""}
+
+    monkeypatch.setattr(key_manager, "get_user_keys_when_ready", loaded_keys)
 
     result = asyncio.run(ai_provider_status())
 
@@ -24,11 +23,10 @@ def test_provider_status_uses_persisted_user_key_cache(monkeypatch: pytest.Monke
 
 
 def test_provider_readiness_targets_the_selected_provider(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        key_manager,
-        "get_cached_user_keys",
-        lambda: {"anthropic": "configured", "openai": ""},
-    )
+    async def loaded_keys() -> dict[str, str]:
+        return {"anthropic": "configured", "openai": ""}
+
+    monkeypatch.setattr(key_manager, "get_user_keys_when_ready", loaded_keys)
 
     result = asyncio.run(provider_readiness("openai"))
 
@@ -40,11 +38,23 @@ def test_provider_readiness_targets_the_selected_provider(monkeypatch: pytest.Mo
 
 
 def test_provider_readiness_resolves_when_key_exists(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        key_manager,
-        "get_cached_user_keys",
-        lambda: {"openai": "configured"},
-    )
+    async def loaded_keys() -> dict[str, str]:
+        return {"openai": "configured"}
+
+    monkeypatch.setattr(key_manager, "get_user_keys_when_ready", loaded_keys)
+    result = asyncio.run(provider_readiness("openai"))
+    assert result.ready is True
+    assert result.action_needed is None
+
+
+def test_provider_readiness_does_not_reuse_a_historical_invalid_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Actual provider use, not an old test result, decides authentication."""
+    async def loaded_keys() -> dict[str, str]:
+        return {"openai": "configured"}
+
+    monkeypatch.setattr(key_manager, "get_user_keys_when_ready", loaded_keys)
     result = asyncio.run(provider_readiness("openai"))
     assert result.ready is True
     assert result.action_needed is None

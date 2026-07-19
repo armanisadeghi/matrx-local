@@ -35,6 +35,18 @@ describe("needsImageGenPackageInstall", () => {
     ).toBe(false);
   });
 
+  it("does not show install success over an installed runtime that failed activation", () => {
+    expect(
+      needsImageGenPackageInstall(
+        status({
+          packages_version: "0.39.0",
+          unavailable_reason:
+            "Image generation requires optional packages: transformers.",
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("does not install when image generation is ready or still loading", () => {
     expect(needsImageGenPackageInstall(status({ available: true }))).toBe(false);
     expect(needsImageGenPackageInstall(null)).toBe(false);

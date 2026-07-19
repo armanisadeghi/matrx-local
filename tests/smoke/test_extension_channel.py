@@ -1,5 +1,5 @@
 """Channel B round-trip smoke tests — extension ↔ engine, both directions,
-against the REAL test engine on port 22199 (no live browser required).
+against the REAL test engine on port 22399 (no live browser required).
 
 Browser → engine: POST /extension/rpc with the generic `tool` command hits
 the real dispatcher (SystemInfo).

@@ -138,7 +138,7 @@ def test_tool_list_ports(http: httpx.Client) -> None:
     result = invoke(http, "ListPorts", {})
     content = result.get("output", "")
     # Engine's own test port should appear
-    assert "22199" in content or len(content) > 10, (
+    assert "22399" in content or len(content) > 10, (
         f"ListPorts unexpected result: {content[:300]}"
     )
 

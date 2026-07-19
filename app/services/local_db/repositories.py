@@ -8,10 +8,11 @@ JSON fields (lists, dicts) are serialized/deserialized transparently.
 from __future__ import annotations
 
 import asyncio
+import base64
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from app.common.system_logger import get_logger
 from app.services.local_db.database import get_db, LocalDatabase
@@ -1531,13 +1532,7 @@ class AppSettingsRepo:
 # encryption — the local SQLite file (~/.matrx/matrx.db) is user-owned.
 # ==================================================================
 
-import base64 as _base64
-from app.services.ai.provider_grants import VALID_PROVIDERS
-
 _API_KEYS_SETTINGS_KEY = "api_keys"
-
-# Verdicts only — never a key value. Safe to log, safe to sync.
-_API_KEY_VALIDATION_KEY = "api_key_validation"
 
 def _encode_key(value: str) -> str:
     # Prefer real encryption-at-rest via the OS keychain; protect() returns
@@ -1548,7 +1543,7 @@ def _encode_key(value: str) -> str:
     protected = protect(value)
     if protected != value:
         return protected  # already an enc:v1: token
-    return _base64.b64encode(value.encode()).decode()
+    return base64.b64encode(value.encode()).decode()
 
 
 def _decode_key(encoded: str) -> str:
@@ -1559,7 +1554,7 @@ def _decode_key(encoded: str) -> str:
     if encoded.startswith("enc:v1:"):
         return unprotect(encoded) or ""
     try:
-        return _base64.b64decode(encoded.encode()).decode()
+        return base64.b64decode(encoded.encode()).decode()
     except Exception:
         return encoded  # graceful fallback if value was stored plain
 
@@ -1607,38 +1602,3 @@ class ApiKeysRepo:
         """Return True if a non-empty key is stored for this provider."""
         key = await self.get(provider)
         return bool(key and key.strip())
-
-    # ── Last-validation record ────────────────────────────────────────────
-    # Stored alongside the keys (never the key value itself — only the verdict)
-    # so the UI can show "verified 2 days ago" on load instead of an unknown
-    # state, and a key that has gone bad is visible without re-testing by hand.
-
-    async def get_validations(self) -> dict[str, dict[str, Any]]:
-        """Return {provider: {verdict, account, checked_at}} for every checked key."""
-        raw: dict[str, Any] = await self._settings.get(_API_KEY_VALIDATION_KEY, {})
-        return {k: v for k, v in raw.items() if isinstance(v, dict)}
-
-    async def record_validation(
-        self, provider: str, verdict: str, account: str | None
-    ) -> None:
-        """Persist the outcome of a validation check for one provider."""
-        async with _APP_SETTINGS_WRITE_LOCK:
-            all_settings = await self._settings.get_all()
-            raw = dict(all_settings.get(_API_KEY_VALIDATION_KEY) or {})
-            raw[provider] = {
-                "verdict": verdict,
-                "account": account,
-                "checked_at": _now(),
-            }
-            all_settings[_API_KEY_VALIDATION_KEY] = raw
-            await self._settings.save_all(all_settings)
-
-    async def clear_validation(self, provider: str) -> None:
-        """Drop a stale verdict — the key it described no longer exists."""
-        async with _APP_SETTINGS_WRITE_LOCK:
-            all_settings = await self._settings.get_all()
-            raw = dict(all_settings.get(_API_KEY_VALIDATION_KEY) or {})
-            if raw.pop(provider, None) is None:
-                return
-            all_settings[_API_KEY_VALIDATION_KEY] = raw
-            await self._settings.save_all(all_settings)

@@ -118,6 +118,12 @@ def _check_deps() -> tuple[bool, str]:
                 isinstance(exc, ModuleNotFoundError)
                 and exc.name in (pkg, pkg.split(".", 1)[0])
             )
+            if pkg == "torch" and benign_missing:
+                # The remaining AI packages depend on torch. On a clean
+                # first install, importing bundled accelerate/transformers
+                # after this point only creates false frozen-gap tracebacks.
+                missing.append(pkg)
+                break
             if not benign_missing:
                 logger.warning(
                     "[video_gen] optional package %r is present but failed to import "

@@ -372,7 +372,7 @@ def test_local_llm_status_discards_probe_when_registration_changes(monkeypatch):
     """A worker probe must not combine an old port with new registry state."""
     from app.services.ai import local_llm_registry as reg
 
-    monkeypatch.setattr(reg, "_local_llm_port", 22199)
+    monkeypatch.setattr(reg, "_local_llm_port", 22399)
     monkeypatch.setattr(reg, "_local_llm_model", "old-model")
     monkeypatch.setattr(reg, "_registry_generation", 10)
     monkeypatch.setattr(reg, "_unregister_runtime_model", lambda _model: None)

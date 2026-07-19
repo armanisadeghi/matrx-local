@@ -535,13 +535,16 @@ async def ai_provider_status() -> dict[str, Any]:
     This endpoint is public (listed in _PUBLIC_PATHS in auth.py) so it can be
     called before auth is established.
     """
-    from app.services.ai.key_manager import get_cached_user_keys
+    from app.services.ai.key_manager import get_user_keys_when_ready
 
     # User API keys live in the app's local key store. Do not infer a user's
     # configured providers from process environment variables: those are a
     # developer/runtime concern, not persisted user settings.
     providers = sorted(CHAT_PROVIDERS)
-    user_keys = get_cached_user_keys()
+    # This public endpoint may be the desktop's first engine request. Wait for
+    # persisted configuration instead of translating an uninitialised cache
+    # into "every provider is missing".
+    user_keys = await get_user_keys_when_ready()
 
     available: list[str] = []
     missing: list[str] = []
@@ -604,48 +607,18 @@ async def provider_readiness(provider: str) -> ProviderReadiness:
     if provider not in CHAT_PROVIDERS:
         raise HTTPException(status_code=404, detail=f"Unknown chat provider '{provider}'")
 
-    from app.services.ai.key_manager import get_cached_user_keys
+    from app.services.ai.key_manager import get_user_keys_when_ready
 
     operation_key = f"chat.provider-readiness:{provider}"
     action_registry = get_action_needed_registry()
 
-    if get_cached_user_keys().get(provider, "").strip():
-        from app.services.local_db.repositories import ApiKeysRepo
-
-        try:
-            validation = (await ApiKeysRepo().get_validations()).get(provider) or {}
-        except RuntimeError:
-            # The cached key is authoritative for readiness; persisted
-            # validation is advisory and may be unavailable during early boot.
-            validation = {}
-        if validation.get("verdict") != "invalid":
-            await action_registry.reconcile_operation(operation_key, None)
-            return ProviderReadiness(provider=provider, ready=True)
-
-        spec = PROVIDER_GRANTS[provider]
-        response = ProviderReadiness(
-            provider=provider,
-            ready=False,
-            action_needed=ActionNeeded(
-                fingerprint=f"api-key:{provider}",
-                code="api_key_invalid",
-                kind=ActionNeededKind.API_KEY,
-                feature="chat",
-                title=f"Update your {spec.label} API key",
-                message="The provider rejected the saved key. Replace it before sending this message.",
-                action=ActionNeededAction(
-                    kind="settings_api_keys",
-                    label="Update API key",
-                    provider=provider,
-                    route=f"/settings?tab=api-keys&provider={provider}",
-                ),
-                source="chat.provider_readiness",
-            ),
-        )
-        await action_registry.reconcile_operation(
-            operation_key, response.action_needed
-        )
-        return response
+    user_keys = await get_user_keys_when_ready()
+    if user_keys.get(provider, "").strip():
+        # Presence is the only truthful preflight. Authentication is checked by
+        # the actual request that needs this key; a verdict from an older run
+        # must never block a current request.
+        await action_registry.reconcile_operation(operation_key, None)
+        return ProviderReadiness(provider=provider, ready=True)
 
     spec = PROVIDER_GRANTS[provider]
     response = ProviderReadiness(

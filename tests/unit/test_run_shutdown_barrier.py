@@ -43,7 +43,7 @@ def test_server_completion_barriers_publish_before_final_log(monkeypatch) -> Non
     monkeypatch.setattr(run.uvicorn, "Server", FakeServer)
     monkeypatch.setattr(run.logger, "info", blocked_info)
 
-    worker = threading.Thread(target=run.start_server, args=(22199,), daemon=True)
+    worker = threading.Thread(target=run.start_server, args=(22399,), daemon=True)
     worker.start()
     try:
         assert log_entered.wait(timeout=1)

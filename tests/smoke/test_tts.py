@@ -18,19 +18,14 @@ from __future__ import annotations
 import io
 import json
 import struct
-from pathlib import Path
 
 import httpx
 import pytest
 
 from app.services.tts.models import (
-    ONNX_MODEL_FILENAME,
-    ONNX_MODEL_SIZE_BYTES,
     STREAM_TAG_CHUNK,
     STREAM_TAG_END,
     STREAM_TAG_ERROR,
-    VOICES_BIN_FILENAME,
-    VOICES_BIN_SIZE_BYTES,
 )
 from app.services.tts.service import frame_chunk, frame_end, frame_error
 
@@ -88,17 +83,10 @@ def test_frame_large_chunk() -> None:
 # ── Engine-based smoke tests ──────────────────────────────────────────────────
 
 
-def _model_present() -> bool:
-    """Check the local user dir; the test engine shares the same MATRX_HOME."""
-    home = Path.home() / ".matrx" / "tts"
-    onnx = home / ONNX_MODEL_FILENAME
-    voices = home / VOICES_BIN_FILENAME
-    return (
-        onnx.is_file()
-        and onnx.stat().st_size == ONNX_MODEL_SIZE_BYTES
-        and voices.is_file()
-        and voices.stat().st_size == VOICES_BIN_SIZE_BYTES
-    )
+def _model_present(http: httpx.Client) -> bool:
+    """Ask the isolated engine; never inspect the installed app's model path."""
+    response = http.get("/tts/status")
+    return response.status_code == 200 and bool(response.json()["model_downloaded"])
 
 
 def test_tts_status_returns_struct(http: httpx.Client) -> None:
@@ -137,7 +125,7 @@ def test_tts_synthesize_validation_empty(http: httpx.Client) -> None:
 
 def test_tts_stream_protocol_header(http: httpx.Client) -> None:
     """The streaming endpoint advertises protocol v2 in headers."""
-    if not _model_present():
+    if not _model_present(http):
         pytest.skip("Kokoro model not downloaded; skipping live stream test")
 
     with http.stream(
@@ -181,7 +169,7 @@ def _read_all_frames(client: httpx.Client, payload: dict) -> list[tuple[int, byt
 
 
 def test_tts_stream_short_text_emits_chunk_then_end(http: httpx.Client) -> None:
-    if not _model_present():
+    if not _model_present(http):
         pytest.skip("Kokoro model not downloaded; skipping live stream test")
 
     frames = _read_all_frames(
@@ -195,7 +183,7 @@ def test_tts_stream_short_text_emits_chunk_then_end(http: httpx.Client) -> None:
 
 
 def test_tts_stream_long_text_emits_multiple_chunks(http: httpx.Client) -> None:
-    if not _model_present():
+    if not _model_present(http):
         pytest.skip("Kokoro model not downloaded; skipping live stream test")
 
     text = (
@@ -216,7 +204,7 @@ def test_tts_stream_long_text_emits_multiple_chunks(http: httpx.Client) -> None:
 
 
 def test_tts_stream_bad_voice_emits_error_frame(http: httpx.Client) -> None:
-    if not _model_present():
+    if not _model_present(http):
         pytest.skip("Kokoro model not downloaded; skipping live stream test")
 
     frames = _read_all_frames(

@@ -133,9 +133,6 @@ interface ApiKeyProviderStatus {
   configured: boolean;
   /** Provider exposes a free auth-only endpoint we can check the key against. */
   testable: boolean;
-  last_verdict: ApiKeyVerdict | null;
-  last_account: string | null;
-  last_checked_at: string | null;
 }
 
 /** How each verdict renders. `unknown` is deliberately neutral-amber, not red:
@@ -307,8 +304,9 @@ export function Settings({
   const [apiKeyTesting, setApiKeyTesting] = useState<Record<string, boolean>>(
     {},
   );
-  // Live verdict from the current session's test, which supersedes the stored
-  // last_verdict on the provider row.
+  // Live verdicts exist only for explicit tests in this session. Persisting a
+  // point-in-time provider response made later launches present stale results
+  // as current truth.
   const [apiKeyVerdicts, setApiKeyVerdicts] = useState<
     Record<string, ApiKeyValidation>
   >({});
@@ -875,41 +873,21 @@ export function Settings({
             }),
           3000,
         );
-        // Test the key we just saved. Catching a bad paste at the moment of
-        // saving is the whole point — a key that silently doesn't work until a
-        // download fails hours later is the failure mode we're removing.
-        const validation = await handleApiKeyTest(provider);
+        // Saving proves configuration presence, not provider validity. Clear
+        // any verdict for the previous value and let the actual feature test
+        // authentication when it needs the key (or the user click Test).
+        setApiKeyVerdicts((prev) => {
+          const next = { ...prev };
+          delete next[provider];
+          return next;
+        });
         const { actionNeededStore } = await import("@/features/action-needed");
-        if (validation?.verdict === "valid" || validation?.verdict === "unsupported") {
-          actionNeededStore.resolve(`api-key:${provider}`, Date.now());
-          actionNeededStore.resolveMatching(
-            (item) => item.action.provider === provider,
-          );
-        } else if (validation) {
-          actionNeededStore.upsert({
-            fingerprint: `api-key:${provider}`,
-            code:
-              validation.verdict === "invalid"
-                ? "api_key_invalid"
-                : "api_key_unverified",
-            kind: "api_key",
-            feature: "provider-keys",
-            title:
-              validation.verdict === "invalid"
-                ? "This API key was rejected"
-                : "This API key could not be verified",
-            message: validation.message,
-            action: {
-              kind: "navigate",
-              label: "Review API key",
-              provider,
-              route: `/settings?tab=api-keys&provider=${encodeURIComponent(provider)}`,
-            },
-            source: `api-key-validation:${provider}`,
-            status: "active",
-            observed_at: Date.now(),
-          });
-        }
+        actionNeededStore.resolve(`api-key:${provider}`, Date.now());
+        actionNeededStore.resolveMatching(
+          (item) =>
+            item.code === "api_key_missing" &&
+            item.action.provider === provider,
+        );
       } catch (err) {
         setApiKeyMessages((prev) => ({
           ...prev,
@@ -922,7 +900,7 @@ export function Settings({
         setApiKeySaving((prev) => ({ ...prev, [provider]: false }));
       }
     },
-    [apiKeyInputs, handleApiKeyTest],
+    [apiKeyInputs],
   );
 
   const handleApiKeyDelete = useCallback(async (provider: string) => {
@@ -931,15 +909,7 @@ export function Settings({
       await engine.delete(`/settings/api-keys/${provider}`);
       setApiKeyProviders((prev) =>
         prev.map((p) =>
-          p.provider === provider
-            ? {
-                ...p,
-                configured: false,
-                last_verdict: null,
-                last_account: null,
-                last_checked_at: null,
-              }
-            : p,
+          p.provider === provider ? { ...p, configured: false } : p,
         ),
       );
       // The verdict described a key that no longer exists.
@@ -1020,9 +990,7 @@ export function Settings({
       setBulkResult(result);
       if (result.saved.length > 0) {
         await loadApiKeyStatus();
-        // Verify everything that just landed, so a stale key pasted from an old
-        // .env is caught here rather than at the first download.
-        void handleTestAllKeys();
+        setApiKeyVerdicts({});
       }
       // Do NOT clear the form — let the user see what was saved vs errored
     } catch (err) {
@@ -1040,7 +1008,6 @@ export function Settings({
     bulkEditedValues,
     bulkCustomMapping,
     loadApiKeyStatus,
-    handleTestAllKeys,
   ]);
 
   const handleTunnelToggle = async (enable: boolean) => {
@@ -2525,11 +2492,9 @@ export function Settings({
                       (apiKeyTesting[p.provider] ?? false) || testingAllKeys;
                     const msg = apiKeyMessages[p.provider];
                     const canSave = inputVal.trim().length > 0;
-                    // This session's verdict wins over the one persisted from a
-                    // previous run.
                     const live = apiKeyVerdicts[p.provider];
-                    const verdict = live?.verdict ?? p.last_verdict ?? null;
-                    const account = live?.account ?? p.last_account ?? null;
+                    const verdict = live?.verdict ?? null;
+                    const account = live?.account ?? null;
                     const style = verdict ? VERDICT_STYLES[verdict] : null;
                     // Test the typed key if there is one, else the stored key.
                     // Nothing to test only when both are absent.
@@ -2580,12 +2545,18 @@ export function Settings({
                                   <Input
                                     type={visible ? "text" : "password"}
                                     value={inputVal}
-                                    onChange={(e) =>
+                                    onChange={(e) => {
                                       setApiKeyInputs((prev) => ({
                                         ...prev,
                                         [p.provider]: e.target.value,
-                                      }))
-                                    }
+                                      }));
+                                      setApiKeyVerdicts((prev) => {
+                                        if (!prev[p.provider]) return prev;
+                                        const next = { ...prev };
+                                        delete next[p.provider];
+                                        return next;
+                                      });
+                                    }}
                                     onKeyDown={(e) => {
                                       if (e.key === "Enter" && canSave)
                                         void handleApiKeySave(p.provider);

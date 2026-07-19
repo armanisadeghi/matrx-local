@@ -148,6 +148,16 @@ def _check_deps() -> tuple[bool, str]:
                 pkg,
                 pkg.split(".", 1)[0],
             )
+            if pkg == "torch" and benign_missing:
+                # torch is the root runtime dependency. Packages such as
+                # accelerate are deliberately bundled for lightweight shared
+                # utilities but cannot import without torch; probing them now
+                # produces misleading frozen-gap tracebacks on a clean first
+                # install. The managed installer installs/rechecks the entire
+                # stack together, so one root reason is both quieter and more
+                # accurate.
+                missing.append(pkg)
+                break
             if not benign_missing:
                 logger.warning(
                     "[image_gen] optional package %r is present but failed to import "

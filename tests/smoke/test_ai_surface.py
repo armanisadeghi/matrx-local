@@ -17,7 +17,7 @@ Two layers of coverage:
      * aidream error semantics: 404 conversation_not_found,
        409 conversation_already_exists, resume 404/409, envelope shape.
 
-2. ENGINE FIXTURE (port 22199): a mounted-path probe proving the surface is
+2. ENGINE FIXTURE (port 22399): a mounted-path probe proving the surface is
    live at BOTH /ai and /chat/ai on the real engine (the old 503 stub is
    gone) and the outer AuthMiddleware still gates it.
 """
@@ -875,7 +875,7 @@ def test_tool_call_decimal_values_persist(local_db):
 
 
 # ---------------------------------------------------------------------------
-# Real-engine mount probe (22199 fixture)
+# Real-engine mount probe (22399 fixture)
 # ---------------------------------------------------------------------------
 
 

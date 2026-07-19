@@ -24,7 +24,7 @@ import pytest
 from app.services.ai import key_validation
 from app.services.ai.key_manager import PROVIDER_ENV_MAP
 from app.services.ai.key_validation import PROVIDER_SPECS, validate_key
-from app.services.local_db.repositories import VALID_PROVIDERS
+from app.services.ai.provider_grants import VALID_PROVIDERS
 
 
 def _stub_transport(monkeypatch: pytest.MonkeyPatch, handler) -> None:

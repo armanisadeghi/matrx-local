@@ -247,6 +247,11 @@ optional-package installer probes the selected interpreter first and uses
 `uv pip install --python ... --target ...` when necessary; packaged Python
 continues to use pip (with `ensurepip` as its final bootstrap path). Never
 assume `sys.executable -m pip` exists merely because Python does.
+The image/video dependency probe stops when the root `torch` runtime is absent:
+probing bundled dependents such as Accelerate or Transformers after that point
+only creates false frozen-gap tracebacks on a clean first install. Once the
+managed runtime is injected, the installer reruns the complete dependency
+probe before enabling generation.
 `packages_dir()` honors `MATRX_HOME_DIR` before platform defaults, so a dev
 engine can never inspect, withhold, or migrate the installed app's managed
 runtime. It resolves every managed-package path before use; if an old dev-home

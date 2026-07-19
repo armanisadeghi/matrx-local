@@ -26,6 +26,12 @@ it is not the frozen sidecar; debug Rust builds and dev Vite builds
 live app by running `uv run python run.py` anymore. Escape hatch (rare, on
 purpose only): `MATRX_LIVE_ENGINE=1` or `./scripts/dev.sh --live`.
 
+Within the TEST world, the real-engine pytest fixture has its own position: engine
+`22399`, proxy `22439`, and session-private OS, Matrx, user-file, log, cache,
+and database roots. It does not symlink or inherit live model caches. Cloud
+coordination and global orphan scans are disabled, and teardown signals only
+the fixture's recorded process tree.
+
 **Many agents at once:** the shared dev world is fine for most work — extra
 engines bind 22241, 22242, … and the discovery-file clobber guard keeps the
 first live owner in place. If your run must not share `matrx.db`/settings with

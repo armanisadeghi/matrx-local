@@ -529,20 +529,6 @@ class _FakeApiKeysRepo:
     async def is_configured(self, provider: str) -> bool:
         return bool(self.store.get(provider, "").strip())
 
-    # The settings route reports each key's last validation verdict alongside
-    # the masked value; this stub has never validated anything.
-    async def get_validations(self) -> dict[str, dict[str, Any]]:
-        return {}
-
-    async def record_validation(
-        self, provider: str, verdict: str, account: str | None
-    ) -> None:
-        return None
-
-    async def clear_validation(self, provider: str) -> None:
-        return None
-
-
 def test_civitai_key_endpoints_masked(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

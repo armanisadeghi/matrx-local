@@ -770,6 +770,17 @@ CREATE INDEX IF NOT EXISTS idx_local_artifacts_cloud_file
     WHERE cloud_file_id IS NOT NULL;
 """
 
+# Provider validation used to be persisted and rendered on later launches as
+# though it were current truth. Validation is now explicit and session-only;
+# remove the misleading historical blob once when upgrading.
+_V17_DROP_STALE_API_KEY_VALIDATION = """
+UPDATE app_settings
+SET settings = json_remove(settings, '$.api_key_validation'),
+    updated_at = datetime('now')
+WHERE key = 'settings'
+  AND json_type(settings, '$.api_key_validation') IS NOT NULL
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -787,4 +798,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (14, _V14_AGENT_EXECUTION_DEFINITIONS),
     (15, _V15_DELEGATION_OUTBOX),
     (16, _V16_LOCAL_ARTIFACTS),
+    (17, _V17_DROP_STALE_API_KEY_VALIDATION),
 ]

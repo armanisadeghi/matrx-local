@@ -458,7 +458,7 @@ are condensed under Completed. Still open:
 
 ## Completed
 
-- [BUG] MXL-D-060 fixed: web and packaged smoke use private homes, ports, cloud state, and PID-only cleanup — 2026-07-18 (`scripts/smoke.sh`)
+- [BUG] MXL-D-060 fixed: web, packaged, and pytest engines use private homes, ports, cloud state, and PID-only cleanup — 2026-07-19 (`scripts/smoke.sh`, `tests/conftest.py`)
 - [AT-L001] Deferred local-LLM registration until engine discovery — 2026-07-18 (`desktop/src/hooks/use-llm.ts`)
 - [BUG] Fixed Wi-Fi probe deadline and restored-cancellation warning noise — 2026-07-18 (`app/services/permissions/checker.py`, `desktop/src/lib/downloads/logging.ts`)
 - [BUG] Startup model transfers now require Retry, restored failures warn as history, and frozen sidecars bundle Jinja chat-template modules — 2026-07-18 (`app/services/downloads/manager.py`, `desktop/src/lib/downloads/logging.ts`, `specs/`)

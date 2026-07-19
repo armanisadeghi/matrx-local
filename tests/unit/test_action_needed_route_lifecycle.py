@@ -309,14 +309,9 @@ def test_stored_key_validation_resolves_provider_requirements(
             status_code=None,
         )
 
-    class FakeRepo:
-        async def record_validation(self, *_args: object) -> None:
-            return None
-
     monkeypatch.setattr(
         "app.services.ai.key_validation.validate_stored_key", validate_stored
     )
-    monkeypatch.setattr(settings_routes, "ApiKeysRepo", FakeRepo)
 
     async def exercise() -> None:
         registry = get_action_needed_registry()

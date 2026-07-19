@@ -32,6 +32,7 @@ Precedence (highest → lowest), enforced by matrx-ai's resolve_api_key():
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Callable
 
@@ -65,6 +66,8 @@ _ENV_TO_PROVIDER: dict[str, str] = {
 # three async entry points below (warm at startup, update on set/delete).
 
 _user_keys: dict[str, str] = {}
+_user_keys_loaded = False
+_user_keys_load_lock = asyncio.Lock()
 
 
 def _resolve_env_var(env_var_name: str) -> str | None:
@@ -81,7 +84,24 @@ def get_key_resolver() -> Callable[[str], str | None]:
 
 
 def get_cached_user_keys() -> dict[str, str]:
-    """Snapshot of the in-memory user key cache ({provider: key})."""
+    """Snapshot of the in-memory user key cache ({provider: key}).
+
+    Async entry points that can run while the app is connecting must use
+    ``get_user_keys_when_ready()``. Until loading completes, an empty cache is
+    not evidence that the user has no configured keys.
+    """
+    return dict(_user_keys)
+
+
+def user_keys_loaded() -> bool:
+    """Whether SQLite has populated the canonical runtime key snapshot."""
+    return _user_keys_loaded
+
+
+async def get_user_keys_when_ready() -> dict[str, str]:
+    """Return the authoritative key snapshot, loading SQLite first if needed."""
+    if not _user_keys_loaded:
+        await load_user_keys_into_env()
     return dict(_user_keys)
 
 
@@ -116,29 +136,47 @@ async def load_user_keys_into_env() -> int:
 
     User-stored keys take precedence over .env / shell environment.
     """
-    try:
+    global _user_keys_loaded
+
+    async with _user_keys_load_lock:
+        if _user_keys_loaded:
+            return len(_user_keys)
+
         from app.services.local_db.repositories import ApiKeysRepo
-        repo = ApiKeysRepo()
-        keys = await repo.get_all()
-    except Exception as exc:
-        logger.warning("[key_manager] Could not load user API keys from SQLite: %s", exc)
-        return 0
 
-    count = 0
-    for provider, key in keys.items():
-        if key and key.strip():
-            _user_keys[provider] = key.strip()
-            _inject(provider, key.strip())
-            count += 1
+        try:
+            keys = await ApiKeysRepo().get_all()
+        except Exception as exc:
+            # Storage failure is not an authoritative empty snapshot. Leave the
+            # cache unready so need-time callers retry instead of warning that
+            # every provider key is missing.
+            logger.warning(
+                "[key_manager] Could not load user API keys from SQLite: %s", exc
+            )
+            raise
 
-    if count:
-        logger.info(
-            "[key_manager] Loaded %d user-stored API key(s) into resolver cache ✓", count
-        )
-    else:
-        logger.debug("[key_manager] No user-stored API keys found in SQLite")
+        snapshot = {
+            provider: key.strip()
+            for provider, key in keys.items()
+            if key and key.strip()
+        }
+        # Publish the complete snapshot without an await between providers.
+        # Consumers can observe not-ready or fully ready, never partial state.
+        _user_keys.clear()
+        _user_keys.update(snapshot)
+        for provider, key in snapshot.items():
+            _inject(provider, key)
+        _user_keys_loaded = True
 
-    return count
+        if snapshot:
+            logger.info(
+                "[key_manager] Loaded %d user-stored API key(s) into resolver cache ✓",
+                len(snapshot),
+            )
+        else:
+            logger.debug("[key_manager] No user-stored API keys found in SQLite")
+
+        return len(snapshot)
 
 
 async def set_user_key(provider: str, key: str) -> None:
@@ -151,9 +189,6 @@ async def set_user_key(provider: str, key: str) -> None:
     from app.services.local_db.repositories import ApiKeysRepo
     repo = ApiKeysRepo()
     await repo.set(provider, key.strip())
-    # A new key invalidates the old verdict. Leaving it would show a green
-    # "verified" badge against a key nobody has ever checked.
-    await repo.clear_validation(provider)
     _user_keys[provider] = key.strip()
     _inject(provider, key.strip())
     logger.info("[key_manager] User key saved and activated for provider '%s'", provider)
@@ -170,7 +205,6 @@ async def delete_user_key(provider: str) -> None:
     from app.services.local_db.repositories import ApiKeysRepo
     repo = ApiKeysRepo()
     await repo.delete(provider)
-    await repo.clear_validation(provider)
     _user_keys.pop(provider, None)
     _erase(provider)
     logger.info("[key_manager] User key deleted and deactivated for provider '%s'", provider)

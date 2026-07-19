@@ -271,10 +271,6 @@ class ApiKeyStatus(BaseModel):
     # endpoint. False → the UI hides the Test button instead of offering one
     # that can only ever answer "unsupported".
     testable: bool = False
-    # The last verdict we recorded for this key, if it has ever been tested.
-    last_verdict: str | None = None
-    last_account: str | None = None
-    last_checked_at: str | None = None
 
 
 class ApiKeyStatusList(BaseModel):
@@ -294,21 +290,16 @@ async def list_api_key_status() -> ApiKeyStatusList:
     from app.services.ai.key_validation import PROVIDER_SPECS
 
     repo = ApiKeysRepo()
-    validations = await repo.get_validations()
     statuses = []
     for provider in sorted(VALID_PROVIDERS):
         meta = PROVIDER_GRANTS[provider]
         configured = await repo.is_configured(provider)
-        last = validations.get(provider) or {}
         statuses.append(ApiKeyStatus(
             provider=provider,
             label=meta.label,
             description=meta.description,
             configured=configured,
             testable=provider in PROVIDER_SPECS,
-            last_verdict=last.get("verdict"),
-            last_account=last.get("account"),
-            last_checked_at=last.get("checked_at"),
         ))
     return ApiKeyStatusList(providers=statuses)
 
@@ -467,11 +458,9 @@ async def validate_api_key(provider: str, req: ValidateApiKeyRequest | None = No
     else:
         result = await validate_stored_key(provider)
 
-    # Only record a verdict about the key we actually have stored. A verdict on
-    # an unsaved candidate describes a key that may never be saved.
-    repo = ApiKeysRepo()
-    if not candidate and result.verdict != "unsupported":
-        await repo.record_validation(provider, result.verdict, result.account)
+    # This is a live answer to an explicit user action. It is deliberately not
+    # persisted as readiness state: a past response is not proof about the
+    # current provider, network, account grant, or credential status.
     if not candidate and result.verdict in {"valid", "unsupported"}:
         await get_action_needed_registry().resolve_matching(
             lambda item: item.action.provider == provider
@@ -506,7 +495,6 @@ async def validate_all_api_keys() -> ValidateAllResult:
 
     results = await validate_many(testable)
     for result in results:
-        await repo.record_validation(result.provider, result.verdict, result.account)
         if result.verdict in {"valid", "unsupported"}:
             await get_action_needed_registry().resolve_matching(
                 lambda item, provider=result.provider: item.action.provider == provider

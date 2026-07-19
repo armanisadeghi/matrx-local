@@ -7,11 +7,9 @@ from app.services.ai.provider_grants import (
     PROVIDER_GRANTS,
     VALID_PROVIDERS,
 )
-from app.services.local_db.repositories import VALID_PROVIDERS as REPO_PROVIDERS
-
 
 def test_provider_catalog_is_the_single_key_authority() -> None:
-    assert VALID_PROVIDERS == REPO_PROVIDERS == frozenset(PROVIDER_ENV_MAP)
+    assert VALID_PROVIDERS == frozenset(PROVIDER_ENV_MAP)
     assert "brave" in VALID_PROVIDERS
     for key, spec in PROVIDER_GRANTS.items():
         assert spec.key == key

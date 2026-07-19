@@ -9,7 +9,7 @@ strip the reason off on its way to the UI and show the user a status code.
 A rejected key is a SUCCESSFUL check. Only a bad *request* (unknown provider) is
 an error.
 
-Stubs, no network and no SQLite: these assert routing/persistence logic, not the
+Stubs, no network and no SQLite: these assert routing/session logic, not the
 providers (which tests/characterization/test_key_validation.py covers).
 """
 
@@ -26,24 +26,17 @@ from app.services.ai.key_validation import ValidationResult
 
 
 class _FakeRepo:
-    """Stands in for ApiKeysRepo — records what the route persists."""
+    """Stands in for ApiKeysRepo without exposing key values."""
 
     stored: dict[str, str] = {}
-    recorded: list[tuple[str, str, str | None]] = []
 
     async def get_all(self) -> dict[str, str]:
         return dict(self.stored)
-
-    async def record_validation(
-        self, provider: str, verdict: str, account: str | None
-    ) -> None:
-        type(self).recorded.append((provider, verdict, account))
 
 
 @pytest.fixture(autouse=True)
 def _reset() -> Any:
     _FakeRepo.stored = {}
-    _FakeRepo.recorded = []
     yield
 
 
@@ -89,7 +82,7 @@ def test_unknown_provider_is_a_422() -> None:
     assert exc.value.status_code == 422
 
 
-def test_verdict_for_the_stored_key_is_persisted(
+def test_verdict_for_the_stored_key_is_returned_live_without_persistence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch(
@@ -98,11 +91,12 @@ def test_verdict_for_the_stored_key_is_persisted(
             provider="huggingface", verdict="valid", message="ok", account="armani"
         ),
     )
-    asyncio.run(settings_routes.validate_api_key("huggingface", None))
-    assert _FakeRepo.recorded == [("huggingface", "valid", "armani")]
+    result = asyncio.run(settings_routes.validate_api_key("huggingface", None))
+    assert result.verdict == "valid"
+    assert result.account == "armani"
 
 
-def test_verdict_for_an_unsaved_candidate_key_is_not_persisted(
+def test_verdict_for_an_unsaved_candidate_key_is_returned_live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Testing a typed key says nothing about the key that is actually stored."""
@@ -111,8 +105,8 @@ def test_verdict_for_an_unsaved_candidate_key_is_not_persisted(
         ValidationResult(provider="openai", verdict="valid", message="ok"),
     )
     req = settings_routes.ValidateApiKeyRequest(key="sk-typed-but-never-saved")
-    asyncio.run(settings_routes.validate_api_key("openai", req))
-    assert _FakeRepo.recorded == []
+    result = asyncio.run(settings_routes.validate_api_key("openai", req))
+    assert result.verdict == "valid"
 
 
 def test_validate_all_skips_providers_with_no_key_and_no_spec(
@@ -138,4 +132,3 @@ def test_validate_all_skips_providers_with_no_key_and_no_spec(
 
     out = asyncio.run(settings_routes.validate_all_api_keys())
     assert [r.provider for r in out.results] == ["openai"]
-    assert _FakeRepo.recorded == [("openai", "valid", None)]

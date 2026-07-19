@@ -71,6 +71,20 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## API keys / credentials
 
+### MXL-D-060 — Official settings catalog still describes persisted API-key verdicts
+- **Area:** `docs/official/settings-catalog.md` § 3
+- **Symptom:** The catalog says `api_key_validation` verdicts persist and sync,
+  but provider tests are now explicit, session-only observations so a past
+  response cannot masquerade as current startup readiness.
+- **Evidence:** Runtime contract changed 2026-07-19 in
+  `app/api/settings_routes.py`, `app/services/local_db/schema.py`, and
+  `desktop/src/pages/Settings.tsx`; official docs are protected from agent edits.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-07-19 — verified directly against the new
+  route, migration, and UI state ownership.
+- **Owner hint:** With Arman's explicit approval, remove the persisted-verdict
+  paragraph and document configured presence vs explicit Test vs need-time use.
+
 ### MXL-D-051 — Live-position source engine ignores SIGTERM and /admin/shutdown (SIGINT works)
 - **Area:** `run.py` / `app/main.py` signal handling under `MATRX_LIVE_ENGINE=1`
 - **Symptom:** A `./scripts/dev.sh --live` source engine ignored

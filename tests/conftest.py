@@ -2,9 +2,9 @@
 pytest configuration for the Matrx Local test suite.
 
 Engine fixture strategy:
-  - Uses MATRX_PORT=22199 — OUTSIDE the engine auto-scan range 22140-22159 —
-    so the test engine never conflicts with (or is mistaken for) a dev
-    instance running on the default port 22140.
+  - Uses MATRX_PORT=22399 and MATRX_PORT_BASE=22399 — outside both the live
+    (22140-22159) and dev (22240-22259) worlds. The base override also moves
+    the test proxy to 22439 instead of the live proxy's 22180.
   - Sets MATRX_SKIP_ORPHAN_SCAN=1 so the spawned engine NEVER runs
     preflight.clean_orphans() — a test engine must never scan or kill other
     processes on the machine (clean_orphans pattern-matches ALL matrx engines
@@ -90,16 +90,11 @@ def pytest_collection_modifyitems(
 # Engine fixture
 # ---------------------------------------------------------------------------
 
-# MUST stay outside the engine auto-scan range 22140-22159 (see
-# app/preflight.py DEFAULT_ENGINE_PORT / ENGINE_PORT_SCAN). A test engine on
-# a scan-range port could collide with, or be mistaken for, a real dev engine.
-ENGINE_SCAN_RANGE = range(22140, 22160)
-TEST_PORT = 22199
-assert TEST_PORT not in ENGINE_SCAN_RANGE, (
-    f"TEST_PORT {TEST_PORT} is inside the engine auto-scan range "
-    f"{ENGINE_SCAN_RANGE.start}-{ENGINE_SCAN_RANGE.stop - 1} — pick a port "
-    "outside it so tests never touch a real dev engine."
-)
+# The pytest engine has its own fixed TEST position. Keep it outside both
+# renderer scan ranges and below the run-specific packaged-smoke range.
+ENGINE_SCAN_RANGES = (range(22140, 22160), range(22240, 22260))
+TEST_PORT = 22399
+assert all(TEST_PORT not in ports for ports in ENGINE_SCAN_RANGES)
 TEST_BASE_URL = f"http://127.0.0.1:{TEST_PORT}"
 
 # How long we allow the real engine to boot before failing loudly. This is
@@ -138,9 +133,9 @@ def _spawned_descendants(pid: int) -> list[psutil.Process]:
 def _reap_own_tree(proc: subprocess.Popen) -> None:
     """Terminate ONLY the process this fixture spawned plus its descendants.
 
-    Explicitly PID-scoped: no pattern matching, no port sweeps, nothing in
-    the 22140-22159 range. A live dev engine on this machine is invisible to
-    this teardown by construction.
+    Explicitly PID-scoped: no pattern matching and no port sweeps in either
+    the live 22140-22159 or dev 22240-22259 range. Other engines on this
+    machine are invisible to teardown by construction.
     """
     # Snapshot descendants BEFORE killing the parent — children reparent to
     # init once the parent dies, but their PIDs stay valid kill targets.
@@ -175,33 +170,21 @@ def engine_process(
     """Spawn the real Matrx engine on TEST_PORT and yield the Popen object."""
     # Isolated MATRX home: the test engine's discovery file (local.json),
     # local DB, settings, and diagnostics land in a throwaway dir — never in
-    # the real ~/.matrx that a live dev engine owns (previously the test
+    # the real ~/.matrx that the installed app owns (previously the test
     # engine OVERWROTE ~/.matrx/local.json and unlinked it on teardown,
     # breaking discovery for the live engine).
-    matrx_home = tmp_path_factory.mktemp("matrx-home")
-
-    # Share the heavy, read-only model/asset dirs from the real ~/.matrx via
-    # symlink so tests that need downloaded models (TTS, wake word, LLM/image
-    # catalogs) behave exactly as before isolation. Mutable state files
-    # (local.json, matrx.db, settings.json, downloads.db, media outputs) are
-    # deliberately NOT shared.
-    real_home = Path(os.environ.get("MATRX_HOME_DIR", str(Path.home() / ".matrx")))
-    for shared in (
-        "tts",
-        "models",
-        "oww_models",
-        "image-models",
-        "video-models",
-        "image-gen-packages",
-        "playwright-browsers",
-    ):
-        src = real_home / shared
-        if src.exists():
-            (matrx_home / shared).symlink_to(src)
+    test_root = tmp_path_factory.mktemp("matrx-test-world")
+    matrx_home = test_root / "matrx-home"
+    os_home = test_root / "os-home"
+    user_dir = test_root / "user-files"
+    for path in (matrx_home, os_home, user_dir):
+        path.mkdir(parents=True, exist_ok=True)
 
     env = {
         **os.environ,
         "MATRX_PORT": str(TEST_PORT),
+        "MATRX_PORT_BASE": str(TEST_PORT),
+        "MATRX_ISOLATED_TEST": "1",
         "TEST_MODE": "1",
         "DEBUG": "1",
         # NEVER let the test engine scan/kill other processes on the machine
@@ -209,6 +192,28 @@ def engine_process(
         "MATRX_SKIP_ORPHAN_SCAN": "1",
         # Isolate all ~/.matrx state (discovery file, matrx.db, diagnostics).
         "MATRX_HOME_DIR": str(matrx_home),
+        "MATRX_TEMP_DIR": str(test_root / "temp"),
+        "MATRX_DATA_DIR": str(test_root / "platform-data"),
+        "MATRX_CONFIG_DIR": str(test_root / "config"),
+        "MATRX_LOG_DIR": str(test_root / "logs"),
+        "LOG_DIR": str(test_root / "logs"),
+        "MATRX_USER_DIR": str(user_dir),
+        "MATRX_NOTES_DIR": str(user_dir / "Notes"),
+        "MATRX_FILES_DIR": str(user_dir / "Files"),
+        "MATRX_CODE_DIR": str(user_dir / "Code"),
+        "MATRX_WORKSPACES_DIR": str(test_root / "workspaces"),
+        "MATRX_AGENT_DATA_DIR": str(test_root / "agent-data"),
+        "HOME": str(os_home),
+        "USERPROFILE": str(os_home),
+        "APPDATA": str(os_home / "AppData" / "Roaming"),
+        "LOCALAPPDATA": str(os_home / "AppData" / "Local"),
+        "XDG_DATA_HOME": str(os_home / ".local" / "share"),
+        "XDG_CONFIG_HOME": str(os_home / ".config"),
+        "XDG_CACHE_HOME": str(os_home / ".cache"),
+        "XDG_STATE_HOME": str(os_home / ".local" / "state"),
+        "XDG_DOCUMENTS_DIR": str(user_dir),
+        "MATRX_INSTANCE_SALT": "pytest",
+        "MATRX_CLOUD_PARTICIPATION": "0",
         # Disable features that require external services or long startup
         "TUNNEL_ENABLED": "0",
         # Suppress pystray tray icon in test environment

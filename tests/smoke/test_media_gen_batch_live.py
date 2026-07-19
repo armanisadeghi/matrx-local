@@ -1,4 +1,4 @@
-"""LIVE batch generation against the real engine on port 22199.
+"""LIVE batch generation against the real test engine on port 22399.
 
 Everything else about the batch feature is proven with stub pipelines. This
 file proves the only thing a stub cannot: that a prompt-matrix batch, posted to
@@ -179,7 +179,7 @@ def test_queue_control_works_against_the_live_engine(http: httpx.Client) -> None
             if b["batch_id"] == batch_id
         )
         assert summary["cancelled"] == 5 and summary["finished"] is True
-        print(f"\n✓ Live queue control: pause → reorder → cancel-batch all OK")
+        print("\n✓ Live queue control: pause → reorder → cancel-batch all OK")
     finally:
         # Never leave the user's queue paused.
         http.post("/image-gen/queue/resume")

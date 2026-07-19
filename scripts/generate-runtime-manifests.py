@@ -119,6 +119,13 @@ def _requirement_names(requirements: Iterable[str]) -> set[str]:
 def _distribution_closure(requirements: Iterable[str]) -> set[str]:
     environment = default_environment()
     environment["extra"] = ""
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    disabled_overrides = {
+        _normalize(requirement.name)
+        for raw in project.get("tool", {}).get("uv", {}).get("override-dependencies", ())
+        for requirement in (Requirement(raw),)
+        if requirement.marker and not requirement.marker.evaluate(environment)
+    }
     # Evaluate markers on the project's direct requirements before resolving
     # their installed distribution closure. Stripping markers here makes a
     # Linux release runner demand macOS-only PyObjC packages (and deliberately
@@ -134,7 +141,7 @@ def _distribution_closure(requirements: Iterable[str]) -> set[str]:
 
     while pending:
         name = pending.pop()
-        if name in result:
+        if name in result or name in disabled_overrides:
             continue
         try:
             distribution = metadata.distribution(name)

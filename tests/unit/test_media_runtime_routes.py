@@ -114,7 +114,7 @@ def test_runtime_stream_emits_same_snapshot_schema(monkeypatch) -> None:
 
     async def consume() -> dict:
         response = await image_gen_routes.stream_media_runtime()
-        chunk = await anext(response.body_iterator)
+        chunk = await response.body_iterator.__anext__()
         text = chunk.decode() if isinstance(chunk, bytes) else chunk
         assert text.startswith("data: ")
         return json.loads(text.removeprefix("data: ").strip())
@@ -122,4 +122,3 @@ def test_runtime_stream_emits_same_snapshot_schema(monkeypatch) -> None:
     payload = asyncio.run(consume())
     assert payload["state"] == "ready"
     assert payload["required_revision"] == "runtime-1"
-

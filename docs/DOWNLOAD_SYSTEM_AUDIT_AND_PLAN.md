@@ -12,6 +12,19 @@ The download stack is genuinely broken in a way that explains the "always freeze
 
 The fix is a phased consolidation onto one architecture: **one canonical downloader that writes-and-counts in the same loop, one event channel, one queue with elastic bandwidth-aware concurrency, one UI panel that shows the active set + the pending queue + per-download stage.**
 
+### Startup policy (2026-07-18)
+
+Model downloads are user-initiated and never begin or resume automatically
+during app startup. Both managers persist an interrupted model row as a failed
+history item with an explicit Retry path; only non-model background transfers
+(for example file sync) may re-enter the worker queue automatically.
+
+Startup/reconnect hydration is also distinguished from live transfer events.
+A persisted failure replay logs as `Previous failure restored` at warning
+severity, including its original `updated_at`; only a failure emitted by a live
+transfer is logged as an error. This prevents old LLM validation failures from
+looking like new multi-gigabyte downloads were attempted during launch.
+
 ---
 
 ## Audit — every download site

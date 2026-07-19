@@ -514,14 +514,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Phase 0a (post3): Start the universal download manager.
     # Must run after the database is connected (Phase 0a) because it reads
-    # any incomplete downloads from SQLite on startup for crash recovery — and
+    # incomplete downloads from SQLite on startup for crash recovery (model
+    # downloads are surfaced as interrupted and require an explicit Retry) — and
     # after BOTH the API keys are loaded (post2) AND the image-gen/capability
-    # package paths are injected (blocks above), because start() resumes
-    # incomplete downloads the moment it runs. A resumed Hugging Face diffusers
-    # download imports huggingface_hub from the injected packages dir; when the
-    # manager started before the injection it failed with a false
-    # "AI packages are not installed" in the very session whose later log
-    # printed image=True video=True. Do not move this above the injections.
+    # package paths are injected (blocks above), because start() reconciles
+    # persisted rows immediately. Artifact validation can import helpers from
+    # the injected packages dir, so moving this above injection would produce
+    # false "AI packages are not installed" states.
     _registry.starting("downloads")
     try:
         from app.services.downloads.manager import get_download_manager

@@ -407,6 +407,9 @@ args = [
     # the C-ext backend. Keep in sync with specs/*.spec.
     "--collect-submodules", "google.protobuf",
     "--hidden-import", "google._upb._message",
+    # User-installed transformers imports jinja2.meta lazily for chat-template
+    # schemas. Keep in sync with all specs/*.spec frozen-build configs.
+    "--collect-submodules", "jinja2",
     # Cross-component scheduler host (optional extra, lazily imported, gated off
     # by default) — bundle it so flipping MATRX_LOCAL_SCHEDULER_ENABLED works.
     "--hidden-import", "matrx_scheduler",

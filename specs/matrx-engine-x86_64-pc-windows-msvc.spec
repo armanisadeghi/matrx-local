@@ -93,6 +93,11 @@ _matrx_ai_mods = collect_submodules('matrx_ai')
 # static analysis; missing-module hiddenimports are warnings, not errors).
 _protobuf_mods = collect_submodules('google.protobuf') + ['google._upb._message']
 
+# transformers is installed on demand outside this bundle and imports
+# jinja2.meta lazily for chat-template tool schemas. Collect all Jinja modules;
+# a partial transitive bundle passed source tests but failed in the frozen app.
+_jinja2_mods = collect_submodules('jinja2')
+
 # ── Office (docx/pptx/xlsx) codec — matrx_files.specific_handlers.office ──────
 # The canonical Office codec and its renderers (python-docx/pptx/openpyxl/
 # xlsxwriter) are ALL lazily imported inside functions (Read of an Office file
@@ -121,7 +126,7 @@ a = Analysis(
         (os.path.join(_ROOT, 'scraper-service/app'), 'scraper-service/app'),
         (os.path.join(_ROOT, 'pyproject.toml'), '.'),
     ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data + _pkg_metadata + _office_datas,
-    hiddenimports=_matrx_ai_mods + _protobuf_mods + _office_hidden + [
+    hiddenimports=_matrx_ai_mods + _protobuf_mods + _jinja2_mods + _office_hidden + [
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
         'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',
         'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto',

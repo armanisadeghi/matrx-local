@@ -1,7 +1,8 @@
 //! Universal download manager (Rust/Tauri side).
 //!
 //! Provides a concurrent priority-aware download queue that:
-//! - Survives app restarts via SQLite persistence at ~/.matrx/downloads.db
+//! - Persists queue/history across restarts at ~/.matrx/downloads.db; interrupted
+//!   model downloads wait for an explicit user retry and never run during startup
 //! - Continues running when the UI window is hidden/closed (tokio task, not window-bound)
 //! - Runs up to MAX_CONCURRENT downloads in parallel, respecting priority ordering
 //! - Emits fine-grained throttled progress via Tauri events: dm-progress, dm-queued,
@@ -314,9 +315,11 @@ fn restore_manager_state(db_path: &Path) -> ManagerState {
             for mut row in rows {
                 let id = row.id.clone();
                 if matches!(row.status, DownloadStatus::Queued | DownloadStatus::Active) {
-                    if row.category == "llm" || row.category == "whisper" {
-                        let message =
-                            "Interrupted: app was closed mid-download. Please re-download.";
+                    if is_model_download_category(&row.category) {
+                        let message = concat!(
+                            "Interrupted before completion. Retry from Downloads; ",
+                            "model downloads do not start automatically with the app."
+                        );
                         row.status = DownloadStatus::Failed;
                         row.error_msg = Some(message.to_string());
                         row.resolution = None;
@@ -363,6 +366,20 @@ fn restore_manager_state(db_path: &Path) -> ManagerState {
 fn is_huggingface_https(url: &str) -> bool {
     url.starts_with("https://huggingface.co/")
         || url.starts_with("https://www.huggingface.co/")
+}
+
+fn is_model_download_category(category: &str) -> bool {
+    matches!(
+        category,
+        "llm"
+            | "whisper"
+            | "image_gen"
+            | "image_gen_lora"
+            | "image_gen_text_encoder"
+            | "video_gen"
+            | "tts"
+            | "ner"
+    )
 }
 
 impl DownloadManager {
@@ -1929,15 +1946,22 @@ mod action_resolution_tests {
         internal.status = DownloadStatus::Active;
         db_upsert(&db, &internal).unwrap();
 
+        let mut public_model = test_entry(None);
+        public_model.id = "public-model".into();
+        public_model.category = "image_gen".into();
+        public_model.urls = vec!["https://example.com/public-model.bin".into()];
+        public_model.status = DownloadStatus::Active;
+        db_upsert(&db, &public_model).unwrap();
+
         let mut resumable = test_entry(None);
-        resumable.id = "public-asset".into();
-        resumable.category = "image_gen".into();
-        resumable.urls = vec!["https://example.com/public-model.bin".into()];
+        resumable.id = "file-sync".into();
+        resumable.category = "file_sync".into();
+        resumable.urls = vec!["https://example.com/cloud-file.bin".into()];
         resumable.status = DownloadStatus::Active;
         db_upsert(&db, &resumable).unwrap();
 
         let restored = restore_manager_state(&db);
-        assert_eq!(restored.entries.len(), 3);
+        assert_eq!(restored.entries.len(), 4);
         assert!(matches!(
             restored.entries["llm-test"].status,
             DownloadStatus::Failed
@@ -1946,7 +1970,7 @@ mod action_resolution_tests {
             .error_msg
             .as_deref()
             .unwrap_or_default()
-            .contains("Interrupted"));
+            .contains("do not start automatically"));
         assert!(matches!(
             restored.entries["image-model"].status,
             DownloadStatus::Failed
@@ -1955,9 +1979,13 @@ mod action_resolution_tests {
             .error_msg
             .as_deref()
             .unwrap_or_default()
-            .contains("current Hugging Face credentials"));
+            .contains("do not start automatically"));
         assert!(matches!(
-            restored.entries["public-asset"].status,
+            restored.entries["public-model"].status,
+            DownloadStatus::Failed
+        ));
+        assert!(matches!(
+            restored.entries["file-sync"].status,
             DownloadStatus::Queued
         ));
         assert_eq!(restored.pending.len(), 1);

@@ -1,7 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { matchesRegisteredLocalLlm } from "./local-llm-registration";
+import {
+  matchesRegisteredLocalLlm,
+  shouldAttemptLocalLlmRegistration,
+} from "./local-llm-registration";
 
 describe("local LLM registration reconciliation", () => {
+  it("waits silently when llama-server starts before engine discovery", () => {
+    expect(
+      shouldAttemptLocalLlmRegistration(null, {
+        available: true,
+        port: 22199,
+        model_name: "qwen-local",
+      }),
+    ).toBe(false);
+  });
+
+  it("attempts registration once both processes are available", () => {
+    expect(
+      shouldAttemptLocalLlmRegistration("http://127.0.0.1:22240", {
+        available: true,
+        port: 22199,
+        model_name: "qwen-local",
+      }),
+    ).toBe(true);
+  });
+
   it("does not reconnect a matching registration during a transient probe failure", () => {
     expect(
       matchesRegisteredLocalLlm(

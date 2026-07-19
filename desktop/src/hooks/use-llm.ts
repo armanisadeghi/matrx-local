@@ -2,7 +2,10 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invokeTauri as tauriInvoke, isTauri } from "@/lib/sidecar";
 import { engine } from "@/lib/api";
 import { findLlmModelInfo, overlayLlmCatalog } from "@/lib/llm/catalog";
-import { matchesRegisteredLocalLlm } from "@/lib/local-llm-registration";
+import {
+  matchesRegisteredLocalLlm,
+  shouldAttemptLocalLlmRegistration,
+} from "@/lib/local-llm-registration";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
   LlmHardwareResult,
@@ -202,6 +205,19 @@ export function useLlm(): [LlmState, LlmActions] {
           (await tauriInvoke<LlmServerStatus>("get_llm_server_status"));
         if (!status.running || !status.port) return;
         if (mounted) setServerStatus(status);
+
+        // Rust owns llama-server, so it normally becomes ready before the
+        // Python engine is discoverable. The 10s reconciler below will retry;
+        // this expected startup ordering is not a registration failure.
+        if (
+          !shouldAttemptLocalLlmRegistration(engine.engineUrl, {
+            available: status.running,
+            port: status.port,
+            model_name: status.model_name ?? null,
+          })
+        ) {
+          return;
+        }
 
         let engineStatus: Awaited<ReturnType<typeof engine.getLocalLlmStatus>> | null =
           null;

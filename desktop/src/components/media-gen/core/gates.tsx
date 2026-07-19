@@ -22,6 +22,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { engine } from "@/lib/api";
 import { ImageGenInstaller } from "@/components/media-gen/ImageGenInstaller";
+import { needsImageGenPackageInstall } from "./readiness";
 
 /**
  * Classify an image-gen status error into a user-actionable card. Canonical —
@@ -219,7 +220,7 @@ export function ImageGenGate({ children }: { children: ReactNode }) {
       />
     );
   }
-  if (imageStatus && !imageStatus.available) {
+  if (needsImageGenPackageInstall(imageStatus)) {
     return (
       <ImageGenInstaller
         models={imageModels}

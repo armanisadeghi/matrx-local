@@ -47,15 +47,6 @@ _(none)_
 - **Source files:** `matrx-local/app/main.py` (mounts), `matrx-local/app/api/ai_routes.py`, `matrx-frontend/lib/api/ai-api-version.ts`
 - **Deliverable:** document v2 routing behavior when frontend targets `127.0.0.1:22140` (local engine) vs aidream cloud.
 
-#### AT-L001 — `[use-llm] Failed to notify engine of local LLM start: {}`
-- **Status:** filed, not started. `code analysis pending`.
-- **Created:** 2026-07-14
-- **Priority:** P2
-- **Log ID:** L001
-- **Scope:** matrx-local desktop
-- **Source files:** `matrx-local/desktop/src/hooks/use-llm.ts`, `matrx-local/desktop/src/lib/api.ts` (`connectLocalLlm`), `matrx-local/app/api/chat_routes.py`
-- **Deliverable:** determine whether `baseUrl` was unset at `llm-server-ready` time or the POST failed for another reason.
-
 #### AT-L004 — Download FAILED: Tongyi-MAI--Z-Image-Turbo (huggingface_hub not importable)
 - **Status:** filed, not started. `code analysis pending`.
 - **Created:** 2026-07-14
@@ -467,6 +458,10 @@ are condensed under Completed. Still open:
 
 ## Completed
 
+- [BUG] MXL-D-060 fixed: web and packaged smoke use private homes, ports, cloud state, and PID-only cleanup — 2026-07-18 (`scripts/smoke.sh`)
+- [AT-L001] Deferred local-LLM registration until engine discovery — 2026-07-18 (`desktop/src/hooks/use-llm.ts`)
+- [BUG] Fixed Wi-Fi probe deadline and restored-cancellation warning noise — 2026-07-18 (`app/services/permissions/checker.py`, `desktop/src/lib/downloads/logging.ts`)
+- [BUG] Startup model transfers now require Retry, restored failures warn as history, and frozen sidecars bundle Jinja chat-template modules — 2026-07-18 (`app/services/downloads/manager.py`, `desktop/src/lib/downloads/logging.ts`, `specs/`)
 - [BUG] Packaged macOS startup now isolates Keychain reads in an identity-preserving, timeout-bounded private-pipe helper with cross-process DEK locking — 2026-07-18 (`app/common/keychain_helper.py`)
 - [BUG] Managed image-runtime startup now resolves Torch/Torchvision as an ABI-compatible pair, observes background migration failures, and prevents dev-home package symlinks from reading or rewriting the live app runtime by routing them to an in-home fallback without mutating user state — 106 focused media tests + 7 optional-package isolation tests green (2026-07-18)
 

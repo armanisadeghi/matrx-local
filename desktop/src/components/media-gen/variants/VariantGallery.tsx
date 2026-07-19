@@ -57,6 +57,7 @@ import {
 import { useImageGenController } from "../core/imageController";
 import { useVideoGenController } from "../core/videoController";
 import { ImageStatusErrorCard } from "../core/gates";
+import { needsImageGenPackageInstall } from "../core/readiness";
 import { ImageModelPicker, VideoModelPicker } from "../core/ModelPicker";
 import {
   ImageAdvancedSection,
@@ -279,7 +280,7 @@ export function VariantGallery() {
   }, [isImage, imageCtl, videoCtl]);
 
   // ── Not-ready states ─────────────────────────────────────────────────────
-  const packagesMissing = imageStatus !== null && !imageStatus.available;
+  const packagesMissing = needsImageGenPackageInstall(imageStatus);
   const engineDown = imageStatusError !== null;
   const modeStatusError = isImage ? imageStatusError : videoStatusError;
   const modelLoading = isImage ? imageModelLoading : videoModelLoading;

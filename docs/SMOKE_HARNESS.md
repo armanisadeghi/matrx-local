@@ -71,23 +71,24 @@ with the real Rust setup, real sidecar spawn, and real engine boot. What it is
    already built fine. Neither has anything to do with "does the app start".
    Do not "fix" a smoke failure by adding the signing key; remove the bundle.
 
-**Yes — it uses your machine's real state, and that matters.** It reads and
-writes the real `~/.matrx` (discovery file, `settings.json`, the DBs) and binds
-the real engine ports, exactly as the installed app does. It is not sandboxed.
-Two consequences:
+**It never uses live or dev state.** Every run creates a third TEST world:
 
-- **It refuses to run while another AI Matrx is already up** — the installed
-  app, `pnpm tauri:dev`, or a bare `uv run python run.py`. Otherwise our
-  `/health` probe would be answered by *their* engine and a completely broken
-  build would pass. The preflight checks `~/.matrx/local.json` + `/health` and
-  aborts with instructions. **Quit the app before running packaged mode.**
-- **The orphan check diffs against a pre-launch snapshot** of
-  `cloudflared` / `llama-server` PIDs, so processes that were already yours are
-  never mistaken for orphans we leaked.
+- `MATRX_HOME_DIR` and OS application-data roots live under
+  `.smoke/runs/<timestamp>/`; the test application never reads or writes
+  `~/.matrx` or `~/.matrx-dev`. The harness only takes a read-only live PID/
+  health snapshot for its non-interference assertion.
+- The engine receives an exact run-specific port in the 23000–65000 range;
+  the production renderer is compiled to scan only that same test range.
+- Cloud coordination and global orphan sweeps are disabled. Shutdown remains
+  strict but targets only child PIDs owned by the test process.
+- Packaged smoke disables single-instance forwarding so the test binary starts
+  beside the installed app instead of handing control to it.
+- If a live engine existed before packaged smoke, the harness verifies its PID
+  and health are unchanged afterward.
 
-Having the app *installed* is fine and irrelevant — it just must not be
-*running*. The harness never touches the installed copy; it only ever launches
-the freshly built binary out of `desktop/src-tauri/target`.
+The installed app and development engines may remain running throughout both
+web and packaged smoke. Pre-existing `cloudflared`/`llama-server` PIDs are
+snapshotted only for the orphan diff and are never signaled by the test.
 
 ## Reading a failure
 

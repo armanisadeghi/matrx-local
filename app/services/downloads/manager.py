@@ -5,8 +5,9 @@ database.  All large file downloads (LLM models, Whisper models, image-gen
 weights, TTS voices, future file-sync items) funnel through this service so:
 
 - Progress is tracked in one place and streamed to the UI via SSE.
-- The queue survives app restarts / crashes (status 'active' → reset to
-  'queued' on startup so incomplete downloads are automatically retried).
+- Queue/history state survives app restarts and crashes. Incomplete model
+  downloads are left for an explicit user retry so startup never begins a
+  multi-gigabyte transfer; non-model transfers can still resume automatically.
 - Downloads continue even when the Tauri window is closed (the Python engine
   runs as a background sidecar).
 - Each download emits fine-grained byte-level progress events (real percent,
@@ -77,6 +78,22 @@ _BANDWIDTH_UTILISATION_THRESHOLD = 0.8
 
 # Bandwidth probe cooldown — only expand slots this often.
 _SLOT_EXPAND_COOLDOWN_S = 10.0
+
+# Model transfers are intentionally user-initiated. Persist their interrupted
+# state for the Downloads panel, but never put them back on the worker queue
+# during engine startup: doing so competes with startup traffic/CPU and can
+# silently consume many gigabytes. File sync remains resumable because it is a
+# background synchronization primitive, not an optional model installation.
+_MODEL_DOWNLOAD_CATEGORIES = frozenset({
+    "llm",
+    "whisper",
+    "image_gen",
+    "image_gen_lora",
+    "image_gen_text_encoder",
+    "video_gen",
+    "tts",
+    "ner",
+})
 
 # Chunk size for the primary download slot (64 KB), and for secondary slots
 # (32 KB) to reduce buffer competition with the primary download.
@@ -230,6 +247,9 @@ class ProgressEvent:
     The UI renders it as an explain-and-ask dialog; None means a real error."""
     updated_at: str = ""
     bandwidth_bps: float = 0.0
+    # True only for the initial state replay sent to a newly connected SSE
+    # client. The UI must not report a persisted failure as a fresh live error.
+    snapshot: bool = False
 
     def to_sse(self) -> str:
         d = asdict(self)
@@ -465,7 +485,7 @@ class DownloadManager:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Start the background worker and re-queue any incomplete downloads."""
+        """Start the worker and reconcile persisted incomplete downloads."""
         if self._started:
             return
         self._started = True
@@ -684,6 +704,7 @@ class DownloadManager:
                     resolution=entry.resolution,
                     updated_at=entry.updated_at or _now(),
                     bandwidth_bps=self._bandwidth_bps,
+                    snapshot=True,
                 ).to_sse()
 
             # Yield keep-alive pings every 20s to prevent proxy/browser timeouts
@@ -1564,14 +1585,15 @@ class DownloadManager:
           * artifact already on disk  → mark ``completed``, do NOT re-download.
           * malformed (no ``dest_dir``) → mark ``failed`` with a clear reason;
             it can never download and must not resurrect every boot.
-          * genuinely incomplete       → re-queue (restart from scratch).
+          * incomplete model download  → mark interrupted; wait for user Retry.
+          * incomplete non-model item  → re-queue (restart from scratch).
         """
         try:
             db = get_db()
             rows = await db.fetchall(
                 "SELECT * FROM downloads WHERE status IN ('queued', 'active') ORDER BY priority DESC, created_at ASC"
             )
-            resumed = present = broken = 0
+            resumed = present = deferred = broken = 0
             for row in rows:
                 dl_id = row["id"]
                 filename = row["filename"]
@@ -1638,7 +1660,32 @@ class DownloadManager:
                         )
                         continue
 
-                    # ── Genuinely incomplete → re-queue (restart from scratch) ──
+                    # ── Optional model install → never start it during boot ──
+                    if row["category"] in _MODEL_DOWNLOAD_CATEGORIES:
+                        now = _now()
+                        err = (
+                            "Interrupted before completion. Retry from Downloads; "
+                            "model downloads do not start automatically with the app."
+                        )
+                        await db.execute(
+                            "UPDATE downloads SET status='failed', updated_at=?, error_msg=? WHERE id=?",
+                            (now, err, dl_id),
+                        )
+                        entry = self._entry_from_row(row, status="failed")
+                        entry.error_msg = err
+                        entry.updated_at = now
+                        self._entries[dl_id] = entry
+                        deferred += 1
+                        logger.info(
+                            "[downloads] Deferred interrupted model until user Retry: "
+                            "%s (id=%s category=%s)",
+                            filename,
+                            dl_id,
+                            row["category"],
+                        )
+                        continue
+
+                    # ── Genuinely incomplete non-model → re-queue ──────────
                     entry = self._entry_from_row(row, status="queued")
                     await db.execute(
                         "UPDATE downloads SET status='queued', bytes_done=0, part_current=1, updated_at=? WHERE id=?",
@@ -1659,10 +1706,11 @@ class DownloadManager:
                     )
 
             await db.commit()
-            if present or resumed or broken:
+            if present or resumed or deferred or broken:
                 logger.info(
-                    "[downloads] Startup reconcile: %d already-present, %d resumed, %d unresumable",
-                    present, resumed, broken,
+                    "[downloads] Startup reconcile: %d already-present, %d resumed, "
+                    "%d model download(s) deferred, %d unresumable",
+                    present, resumed, deferred, broken,
                 )
         except Exception as exc:
             logger.warning("[downloads] Failed to resume incomplete downloads: %s", exc, exc_info=True)

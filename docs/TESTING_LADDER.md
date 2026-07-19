@@ -9,16 +9,16 @@ whose blind spots don't overlap what you touched.**
 
 ## Dev/live isolation — the ground rule (MXL-D-043)
 
-Dev and live are **two parallel worlds** that never touch:
+Live, dev, and automated smoke tests are **three parallel worlds** that never touch:
 
-| | LIVE world | DEV world |
-|---|---|---|
-| Who lives here | The installed/packaged app only (`sys.frozen`) | Every source-run engine, `pnpm dev`, `pnpm tauri:dev` (debug Rust) |
-| Home / discovery | `~/.matrx` / `~/.matrx/local.json` | `~/.matrx-dev` / `~/.matrx-dev/local.json` |
-| Engine ports | 22140–22159 | 22240–22259 |
-| Local DB / settings | `~/.matrx/matrx.db` | `~/.matrx-dev/matrx.db` |
-| Cloud instance id | hardware hash | hardware hash salted `"dev"` |
-| Orphan sweeps | normal | **off** (a dev engine never kills other processes) |
+| | LIVE world | DEV world | SMOKE world |
+|---|---|---|---|
+| Who lives here | Installed app | Source-run engines and debug desktop | `scripts/smoke.sh` web/packaged runs |
+| Home / discovery | `~/.matrx` | `~/.matrx-dev` | `.smoke/runs/<id>/matrx-home` |
+| Engine ports | 22140–22159 | 22240–22259 | Run-specific range within 23000–65000 |
+| Local DB / settings | Live home | Dev home | Run-private test home |
+| Cloud coordination | enabled | disabled by default | disabled |
+| Global orphan sweeps | normal | off | off; PID-owned shutdown only |
 
 This is enforced in code, not by discipline: `run.py` self-isolates whenever
 it is not the frozen sidecar; debug Rust builds and dev Vite builds
@@ -63,9 +63,10 @@ this is what catches the v1.3.104 class (crash only in the shipped bundle).
 ### 5. `./scripts/smoke.sh packaged` — ~10–20 min (`--no-build` reruns in seconds)
 Real PyInstaller sidecar + real `tauri build`, launched and log-checked.
 Catches the entire "works in dev, dead in the bundle" class: hidden imports,
-sidecar spawn, engine boot, orphaned children. **This replaces the
-push-and-wait-an-hour cycle for almost everything.** Quit the installed app
-first. See [SMOKE_HARNESS.md](SMOKE_HARNESS.md).
+sidecar spawn, engine boot, orphaned children. It runs beside the installed
+app in a private home and port range and verifies any pre-existing live engine
+remains PID-stable and healthy. **This replaces the push-and-wait-an-hour cycle
+for almost everything.** See [SMOKE_HARNESS.md](SMOKE_HARNESS.md).
 
 ### 6. Real release via CI — ~1 hour
 The only rung that proves codesigning/notarization (Gatekeeper), the

@@ -52,3 +52,4 @@ def test_sse_reconnect_snapshot_includes_resolution_and_explicit_null(resolution
     payload = asyncio.run(run())
     assert "resolution" in payload
     assert payload["resolution"] == resolution
+    assert payload["snapshot"] is True

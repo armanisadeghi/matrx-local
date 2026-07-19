@@ -1,11 +1,12 @@
 """The startup-resume RECONCILE contract (MXL "the system isn't checking if I
 have the models").
 
-`_resume_incomplete` must never blind-re-download a model already on disk. Its
-single completion oracle is `artifact_present`, shared with `enqueue`'s
-idempotency check so the two can never disagree. These tests pin that oracle
-against every download shape, and pin the catalog self-validation that keeps one
-bad LoRA entry from blanking the panel.
+`_resume_incomplete` must never blind-re-download a model during app startup.
+Its single completion oracle is `artifact_present`, shared with `enqueue`'s
+idempotency check so the two can never disagree. Completed artifacts settle as
+done; incomplete model installs wait for explicit Retry; non-model transfers
+may resume. These tests also pin the catalog self-validation that keeps one bad
+LoRA entry from blanking the panel.
 
 NETWORK-FREE, no engine, no DB — pure functions against a tmp dir.
 
@@ -14,9 +15,13 @@ NETWORK-FREE, no engine, no DB — pure functions against a tmp dir.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from app.services.downloads.manager import artifact_present
+import pytest
+
+from app.services.downloads import manager as downloads_manager
+from app.services.downloads.manager import DownloadManager, artifact_present
 from app.services.media_gen.paths import DOWNLOAD_COMPLETE_MARKER
 
 
@@ -73,6 +78,64 @@ def test_plain_file_falls_back_to_filename(tmp_path: Path) -> None:
     md = {"dest_dir": str(dest)}  # no dest_filename → use the download filename
     (dest / "cloudflared").write_bytes(b"bin")
     assert artifact_present(md, "cloudflared") is True
+
+
+@pytest.mark.anyio
+async def test_startup_defers_models_but_resumes_non_model_transfers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def row(download_id: str, category: str) -> dict[str, object]:
+        now = "2026-07-18T23:20:00Z"
+        return {
+            "id": download_id,
+            "category": category,
+            "filename": f"{download_id}.bin",
+            "display_name": download_id,
+            "urls": json.dumps([f"https://example.test/{download_id}.bin"]),
+            "total_bytes": 100,
+            "bytes_done": 25,
+            "status": "active",
+            "error_msg": None,
+            "priority": 0,
+            "part_current": 1,
+            "part_total": 1,
+            "created_at": now,
+            "updated_at": now,
+            "completed_at": None,
+            "metadata": json.dumps(
+                {"dest_dir": str(tmp_path / download_id)}
+            ),
+        }
+
+    class FakeDb:
+        def __init__(self) -> None:
+            self.rows = [row("model", "image_gen"), row("cloud-file", "file_sync")]
+            self.updates: list[tuple[str, tuple[object, ...]]] = []
+            self.committed = False
+
+        async def fetchall(self, _query: str):
+            return self.rows
+
+        async def execute(self, query: str, params: tuple[object, ...]) -> None:
+            self.updates.append((query, params))
+
+        async def commit(self) -> None:
+            self.committed = True
+
+    db = FakeDb()
+    monkeypatch.setattr(downloads_manager, "get_db", lambda: db)
+    manager = DownloadManager()
+
+    await manager._resume_incomplete()
+
+    assert manager._entries["model"].status == "failed"
+    assert "do not start automatically" in (
+        manager._entries["model"].error_msg or ""
+    )
+    assert "model" not in manager._pending_ids
+    assert manager._entries["cloud-file"].status == "queued"
+    assert "cloud-file" in manager._pending_ids
+    assert db.committed is True
 
 
 def test_curated_catalog_is_valid() -> None:

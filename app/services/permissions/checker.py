@@ -1839,7 +1839,10 @@ async def _run_permission_check(name: str, checker: PermissionChecker) -> Permis
     # WiFi probes can invoke slow platform tooling; retain the all-scan timeout
     # while keeping the public catalog's checker itself reusable.
     if name == "wifi":
-        return await asyncio.wait_for(checker(), timeout=10)
+        # macOS system_profiler has its own 20s fallback deadline. The outer
+        # deadline must be longer or it deterministically cancels a valid
+        # fallback and surfaces an empty-string TimeoutError in the log.
+        return await asyncio.wait_for(checker(), timeout=25)
     return await checker()
 
 
@@ -1886,15 +1889,16 @@ async def check_all_permissions() -> list[dict[str, Any]]:
     for i, result in enumerate(results):
         name = names[i]
         if isinstance(result, Exception):
+            error_detail = str(result).strip() or type(result).__name__
             logger.warning(
                 "[permissions] %-20s → ERROR: %s",
-                name, result,
+                name, error_detail,
             )
             output.append(
                 {
                     "permission": name,
                     "status": "unknown",
-                    "details": f"Check failed: {result}",
+                    "details": f"Check failed: {error_detail}",
                     "grant_instructions": "",
                 }
             )

@@ -66,7 +66,12 @@ export function ImageGenInstaller({
   // Subscribe to the module singleton — never loses state on re-render
   const [snap, setSnap] = useState<InstallSnapshot>(igGetSnapshot);
   const logEndRef = useRef<HTMLDivElement | null>(null);
+  const onInstallCompleteRef = useRef(onInstallComplete);
   const base = engine.engineUrl;
+
+  useEffect(() => {
+    onInstallCompleteRef.current = onInstallComplete;
+  }, [onInstallComplete]);
 
   // Subscribe to singleton updates
   useEffect(() => {
@@ -78,7 +83,15 @@ export function ImageGenInstaller({
   // or an in-progress install that survived a tab switch.
   useEffect(() => {
     if (!base) return;
-    const current = igGetSnapshot();
+    let current = igGetSnapshot();
+    // A completed first-time install is not a completed upgrade. The parent
+    // only mounts upgrade=true while /image-gen/status still says the managed
+    // runtime is outdated, so discard that stale singleton success state and
+    // expose the Update action.
+    if (upgrade && current.phase === "complete") {
+      igReset();
+      current = igGetSnapshot();
+    }
     if (
       current.phase === "running" ||
       current.phase === "complete" ||
@@ -92,10 +105,15 @@ export function ImageGenInstaller({
       try {
         const { getImageGenInstallStatus } = await import("@/lib/api");
         const resp = await getImageGenInstallStatus(base);
+        // /install/status reports the existing install as complete even when
+        // /status says that install is outdated. Do not turn that expected
+        // combination back into the blocking success panel.
+        if (upgrade && resp.status === "complete") {
+          onInstallCompleteRef.current();
+          return;
+        }
         igRestoreFromPoll(resp);
-        if (resp.status === "complete") {
-          setTimeout(onInstallComplete, 300);
-        } else if (resp.status === "running") {
+        if (resp.status === "running") {
           void reconnectSse(base);
         }
       } catch {
@@ -103,7 +121,7 @@ export function ImageGenInstaller({
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base]);
+  }, [base, upgrade]);
 
   // Auto-scroll log to bottom on new lines
   useEffect(() => {
@@ -112,10 +130,10 @@ export function ImageGenInstaller({
 
   // Notify parent when install completes
   useEffect(() => {
-    if (snap.phase === "complete") {
-      setTimeout(onInstallComplete, 800);
-    }
-  }, [snap.phase, onInstallComplete]);
+    if (snap.phase !== "complete") return;
+    const timer = setTimeout(() => onInstallCompleteRef.current(), 800);
+    return () => clearTimeout(timer);
+  }, [snap.phase]);
 
   const reconnectSse = async (baseUrl: string) => {
     const headers = await engine.getEngineAuthHeaders();

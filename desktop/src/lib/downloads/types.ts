@@ -65,6 +65,9 @@ export interface DownloadEntry {
   eta_seconds?: number | null;
   /** Aggregate available bandwidth estimate (bytes/sec) shared from the manager */
   bandwidth_bps?: number;
+  /** True only when the Python SSE stream is replaying persisted/current state
+   * to a newly connected client, rather than reporting new work. */
+  snapshot?: boolean;
   /** Runtime transport owner. Client-only; never persisted by either manager. */
   backend?: "rust" | "python";
 }

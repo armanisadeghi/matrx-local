@@ -39,6 +39,10 @@ import {
   usesHuggingFaceHttp,
   type DownloadBackend,
 } from "@/lib/downloads/ownership";
+import {
+  getDownloadStatusLog,
+  type DownloadEventOrigin,
+} from "@/lib/downloads/logging";
 
 // Re-export for convenience
 export type { DownloadEntry, EnqueueOptions };
@@ -213,32 +217,17 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
         (payload as DownloadEntry).updated_at ?? new Date().toISOString(),
     };
 
-    // Emit a log line for failures and cancellations. A failure carrying a
-    // `resolution` is a user-actionable STATE (accept a license, add a key) —
-    // it logs as info with the [action-needed] marker, never as a red error.
-    const status = (payload as DownloadEntry).status;
-    const resolution = (payload as DownloadEntry).resolution;
-    if (status === "failed" && resolution != null) {
-      emitClientLog(
-        "info",
-        `[downloads] [action-needed] id=${payload.id} file=${(payload as DownloadEntry).filename ?? "?"} ` +
-          `code=${resolution.code} — ${resolution.title}`,
-        DOWNLOAD_LOG_SOURCE,
-      );
-    } else if (status === "failed") {
-      emitClientLog(
-        "error",
-        `[downloads] FAILED: id=${payload.id} file=${(payload as DownloadEntry).filename ?? "?"} ` +
-          `error=${(payload as DownloadEntry).error_msg ?? "unknown"} ` +
-          `bytes_done=${bytes} total=${(payload as DownloadEntry).total_bytes ?? 0}`,
-        DOWNLOAD_LOG_SOURCE,
-      );
-    } else if (status === "cancelled") {
-      emitClientLog(
-        "warn",
-        `[downloads] CANCELLED: id=${payload.id} file=${(payload as DownloadEntry).filename ?? "?"}`,
-        DOWNLOAD_LOG_SOURCE,
-      );
+    // Hydration/reconnect snapshots describe persisted state; they are not
+    // evidence that this app run attempted a transfer. Preserve real live
+    // failures as errors while logging historical failures as warnings.
+    const origin: DownloadEventOrigin =
+      (payload as DownloadEntry).snapshot === true ? "snapshot" : "live";
+    const statusLog = getDownloadStatusLog(
+      payload as Partial<DownloadEntry> & { id: string },
+      origin,
+    );
+    if (statusLog) {
+      emitClientLog(statusLog.level, statusLog.message, DOWNLOAD_LOG_SOURCE);
     }
 
     setEntriesMap((prev) => mergeEntry(prev, merged));
@@ -274,7 +263,12 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
         try {
           const restored = await tauriInvoke<DownloadEntry[]>("dm_list");
           if (!cancelled) {
-            restored.forEach((entry) => handleEvent(entry, "rust"));
+            // `dm_list` is state hydration, not a replay of live dm-* events.
+            // Mark it explicitly so old failures cannot masquerade as fresh
+            // startup download attempts in the unified log.
+            restored.forEach((entry) =>
+              handleEvent({ ...entry, snapshot: true }, "rust"),
+            );
           }
         } catch (error) {
           emitClientLog(

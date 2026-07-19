@@ -16,6 +16,11 @@ dependencies = [
     "pyyaml",
     "watchfiles",
     "websockets",
+    # Transformers is installed on demand outside the frozen engine, but its
+    # chat-template utilities import Jinja submodules from the engine bundle.
+    # Declare/bundle Jinja directly so PyInstaller cannot ship only a partial
+    # transitive copy (observed live: ModuleNotFoundError: jinja2.meta).
+    "jinja2>=3.1.6",
     # HTTP client (scraping proxy, file transfer)
     "httpx",
     # Clipboard

@@ -46,23 +46,52 @@ mod menu;
 // matching run.py's dev/live isolation guard for source-run engines. Release
 // builds use the live world (~/.matrx, 22140-22159). A debug build must never
 // read the installed app's discovery file or adopt/kill its engine.
-const MATRX_HOME_DIRNAME: &str = if cfg!(debug_assertions) {
+const DEFAULT_MATRX_HOME_DIRNAME: &str = if cfg!(debug_assertions) {
     ".matrx-dev"
 } else {
     ".matrx"
 };
-const ENGINE_PORT_BASE: u16 = if cfg!(debug_assertions) { 22240 } else { 22140 };
+const DEFAULT_ENGINE_PORT_BASE: u16 = if cfg!(debug_assertions) { 22240 } else { 22140 };
 const ENGINE_PORT_SCAN: u16 = 20;
+
+fn isolated_test_run() -> bool {
+    std::env::var("MATRX_ISOLATED_TEST").as_deref() == Ok("1")
+}
+
+fn resolve_engine_port_base(isolated: bool, configured: Option<&str>) -> u16 {
+    if !isolated {
+        return DEFAULT_ENGINE_PORT_BASE;
+    }
+    configured
+        .and_then(|raw| raw.parse::<u16>().ok())
+        .filter(|port| (23000..=65000).contains(port))
+        .unwrap_or(23000)
+}
+
+fn engine_port_base() -> u16 {
+    let configured = std::env::var("MATRX_PORT_BASE").ok();
+    resolve_engine_port_base(isolated_test_run(), configured.as_deref())
+}
+
+fn global_process_sweeps_allowed(isolated: bool) -> bool {
+    !isolated
+}
 
 /// Path to this build's discovery file: <home>/<.matrx|.matrx-dev>/local.json.
 fn matrx_discovery_file() -> Option<std::path::PathBuf> {
+    if !global_process_sweeps_allowed(isolated_test_run()) {
+        return std::env::var("MATRX_HOME_DIR")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .map(|path| path.join("local.json"));
+    }
     #[cfg(unix)]
     let home = std::env::var("HOME").ok();
     #[cfg(windows)]
     let home = std::env::var("USERPROFILE").ok();
     home.map(|h| {
         std::path::PathBuf::from(h)
-            .join(MATRX_HOME_DIRNAME)
+            .join(DEFAULT_MATRX_HOME_DIRNAME)
             .join("local.json")
     })
 }
@@ -109,6 +138,12 @@ struct FetchResponse {
 /// the new engine has already written its own PID — we would otherwise
 /// delete the new engine's discovery record on startup.
 fn kill_orphaned_sidecars() {
+    if !global_process_sweeps_allowed(isolated_test_run()) {
+        lifecycle_log::log(
+            "[orphan-sweep] isolated test — global engine sweep skipped",
+        );
+        return;
+    }
     // Debug builds never sweep (MXL-D-043): the kill patterns below match
     // ONLY packaged engine binary names, and in the dev world a packaged
     // engine is always the INSTALLED app's — never a child of debug Rust.
@@ -240,6 +275,12 @@ fn kill_orphaned_sidecars() {
 /// Called ONLY once at app startup (.setup) to avoid race conditions where the UI
 /// starts the LLM server concurrently with the Python sidecar.
 fn kill_orphaned_llama_server() {
+    if !global_process_sweeps_allowed(isolated_test_run()) {
+        lifecycle_log::log(
+            "[orphan-sweep] isolated test — global llama-server sweep skipped",
+        );
+        return;
+    }
     #[cfg(unix)]
     {
         let _ = std::process::Command::new("pkill")
@@ -425,7 +466,7 @@ async fn start_sidecar(
         }
     };
 
-    let sidecar = sidecar_command
+    let mut sidecar = sidecar_command
         // Signal to run.py that it is running inside Tauri — suppress pystray tray icon.
         .env("TAURI_SIDECAR", "1")
         // Pass the Tauri app's own PID so the Python watchdog can watch the
@@ -434,6 +475,32 @@ async fn start_sidecar(
         // process itself — so os.getppid() in Python points to a short-lived
         // launcher that exits immediately, causing a false "parent gone" kill.
         .env("TAURI_APP_PID", std::process::id().to_string());
+
+    // Tauri's shell abstraction does not guarantee that every parent
+    // environment override is forwarded identically on all platforms. Copy
+    // the isolation contract explicitly so packaged smoke can never fall
+    // back to the live home, ports, cloud coordination, or orphan sweeps.
+    for key in [
+        "MATRX_ISOLATED_TEST",
+        "MATRX_HOME_DIR",
+        "MATRX_PORT",
+        "MATRX_PORT_BASE",
+        "MATRX_SKIP_ORPHAN_SCAN",
+        "MATRX_INSTANCE_SALT",
+        "MATRX_CLOUD_PARTICIPATION",
+        "TEST_MODE",
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "XDG_DATA_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+    ] {
+        if let Ok(value) = std::env::var(key) {
+            sidecar = sidecar.env(key, value);
+        }
+    }
 
     let (mut rx, child) = sidecar
         .spawn()
@@ -701,6 +768,12 @@ fn sigterm_then_kill(child: tauri_plugin_shell::process::CommandChild) {
 /// runs to completion, every pkill below is a no-op (nothing left to match).
 /// It is the parachute, not the primary chute.
 fn spawn_detached_shutdown_safety_net() {
+    if isolated_test_run() {
+        lifecycle_log::log(
+            "[safety-net] isolated test — global process-name safety net skipped; PID-owned shutdown remains active",
+        );
+        return;
+    }
     lifecycle_log::log(
         "[safety-net] detached shutdown safety net spawned — pkill -TERM at T+1s, \
          pkill -KILL at T+26s for any engine/cloudflared/llama-server strays",
@@ -939,17 +1012,19 @@ fn graceful_shutdown_sync(
             }
         }
     }
-    #[cfg(unix)]
-    {
-        let _ = std::process::Command::new("pkill")
-            .args(["-9", "-f", "llama-server"])
-            .output();
-    }
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/T", "/IM", "llama-server.exe"])
-            .output();
+    if global_process_sweeps_allowed(isolated_test_run()) {
+        #[cfg(unix)]
+        {
+            let _ = std::process::Command::new("pkill")
+                .args(["-9", "-f", "llama-server"])
+                .output();
+        }
+        #[cfg(windows)]
+        {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/IM", "llama-server.exe"])
+                .output();
+        }
     }
 
     // 2. Drop the main WhisperContext — this runs GGML cleanup in Rust before
@@ -1218,7 +1293,7 @@ async fn sidecar_status(state: tauri::State<'_, SidecarState>) -> Result<Sidecar
         // the fallback when the file isn't readable yet. The engine
         // auto-scans base..base+20, so hardcoding lied whenever the base
         // port was already taken.
-        port: read_engine_port_from_discovery().unwrap_or(ENGINE_PORT_BASE),
+        port: read_engine_port_from_discovery().unwrap_or_else(engine_port_base),
     })
 }
 
@@ -1253,7 +1328,8 @@ async fn discover_engine_port() -> Result<Option<u16>, String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    for port in ENGINE_PORT_BASE..(ENGINE_PORT_BASE + ENGINE_PORT_SCAN) {
+    let base = engine_port_base();
+    for port in base..(base + ENGINE_PORT_SCAN) {
         let url = format!("http://127.0.0.1:{}/tools/list", port);
         if let Ok(resp) = client.get(&url).send().await {
             if resp.status().is_success() {
@@ -1647,14 +1723,15 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        // Single-instance must be registered before deep-link so that on Windows,
-        // when the OS launches a second instance to deliver an aimatrx:// deep-link
-        // URL, this plugin intercepts it, terminates the new instance, and forwards
-        // the argv (which contains the aimatrx:// URL) to the already-running app.
-        // The callback below handles that forwarded URL the same way on_open_url does.
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            // Find the aimatrx:// URL in the forwarded arguments and process it.
+    let builder = tauri::Builder::default();
+    let builder = if isolated_test_run() {
+        // The packaged smoke binary deliberately runs beside the installed
+        // app. Registering the normal single-instance plugin would forward
+        // the launch into that live process instead of starting the isolated
+        // test instance.
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(url_str) = argv.iter().find(|a| a.starts_with("aimatrx://")) {
                 println!("[single-instance] Received deep-link via argv: {}", url_str);
                 show_main_window(app);
@@ -1663,10 +1740,17 @@ pub fn run() {
                 }
                 let _ = app.emit("oauth-callback", url_str.clone());
             } else {
-                // No deep-link URL — just bring the existing window to front.
                 show_main_window(app);
             }
         }))
+    };
+
+    builder
+        // Single-instance must be registered before deep-link so that on Windows,
+        // when the OS launches a second instance to deliver an aimatrx:// deep-link
+        // URL, this plugin intercepts it, terminates the new instance, and forwards
+        // the argv (which contains the aimatrx:// URL) to the already-running app.
+        // The callback below handles that forwarded URL the same way on_open_url does.
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_macos_permissions::init())
@@ -2320,4 +2404,23 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+#[cfg(test)]
+mod isolation_tests {
+    use super::{global_process_sweeps_allowed, resolve_engine_port_base};
+
+    #[test]
+    fn isolated_smoke_uses_only_the_test_port_range() {
+        assert_eq!(resolve_engine_port_base(true, Some("23740")), 23740);
+        assert_eq!(resolve_engine_port_base(true, Some("22140")), 23000);
+        assert_eq!(resolve_engine_port_base(true, Some("22240")), 23000);
+        assert_eq!(resolve_engine_port_base(true, Some("invalid")), 23000);
+    }
+
+    #[test]
+    fn isolated_smoke_disables_global_process_sweeps() {
+        assert!(!global_process_sweeps_allowed(true));
+        assert!(global_process_sweeps_allowed(false));
+    }
 }

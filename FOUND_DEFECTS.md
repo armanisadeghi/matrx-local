@@ -366,6 +366,8 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   is NOT bundled and must be enabled+synced deliberately. Pick one so doc and
   build agree.
 
+## Testing infrastructure
+
 ## Cross-repo
 
 ### MXL-D-059 — ✅ chat_sync BLIND-UPSERTS server-owned cloud rows (already corrupted production data)

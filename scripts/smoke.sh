@@ -31,9 +31,9 @@
 #   ./scripts/smoke.sh all
 #   Windows: scripts\smoke.ps1 [same args]  (wrapper → this script, via Git Bash)
 #
-# PACKAGED MODE USES YOUR REAL MACHINE STATE (~/.matrx, real ports), so it
-# refuses to run while another AI Matrx / engine is already up — see the
-# preflight in run_packaged().
+# BOTH MODES run in a private TEST world. They never read/write ~/.matrx or
+# ~/.matrx-dev and never probe 22140-22259. Packaged smoke may run safely while
+# the installed app and development engines are active.
 #
 # OUTPUT
 #   .smoke/runs/<timestamp>/  — summary.md (read this first), app.log, web.log
@@ -53,6 +53,43 @@ RUN_ID="$(date +%Y%m%d-%H%M%S)"
 RUN_DIR="$REPO_ROOT/.smoke/runs/$RUN_ID"
 mkdir -p "$RUN_DIR"
 SUMMARY="$RUN_DIR/summary.md"
+SMOKE_OS_HOME="$RUN_DIR/os-home"
+SMOKE_MATRX_HOME="$RUN_DIR/matrx-home"
+mkdir -p "$SMOKE_OS_HOME" "$SMOKE_MATRX_HOME"
+
+# A third, run-specific world: live=22140+, dev=22240+, smoke=23000-65000.
+# Space concurrent smoke runs 20 ports apart. The exact engine port is forced,
+# so it fails closed if another process wins the tiny check→launch race.
+SMOKE_BUILD_PORT_MARKER="$REPO_ROOT/desktop/src-tauri/target/.matrx-isolated-smoke-port"
+if [ "$NO_BUILD" -eq 1 ] && [ "$MODE" != "web" ]; then
+  if [ ! -f "$SMOKE_BUILD_PORT_MARKER" ]; then
+    echo "smoke: --no-build requires a previously built isolated smoke app" >&2
+    exit 2
+  fi
+  SMOKE_ENGINE_PORT_BASE="$(tr -dc '0-9' < "$SMOKE_BUILD_PORT_MARKER")"
+else
+  SMOKE_ENGINE_PORT_BASE="$(node -e '
+const net=require("net");
+const span=2100;
+const start=((process.pid+Date.now())%span);
+const probe=(port)=>new Promise((resolve)=>{
+  const s=net.createServer();
+  s.once("error",()=>resolve(false));
+  s.listen(port,"127.0.0.1",()=>s.close(()=>resolve(true)));
+});
+(async()=>{
+  for(let i=0;i<span;i++){
+    const base=23000+(((start+i)%span)*20);
+    if(base>65000) continue;
+    if(await probe(base)){ console.log(base); return; }
+  }
+  process.exit(1);
+})()' 2>/dev/null)"
+fi
+if [ -z "$SMOKE_ENGINE_PORT_BASE" ]; then
+  echo "smoke: could not allocate an isolated engine port base" >&2
+  exit 2
+fi
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
 info() { echo -e "${CYAN}▸${NC} $*"; }
@@ -67,6 +104,8 @@ FAILURES=0
   echo "- mode: \`$MODE\`"
   echo "- commit: \`$(git rev-parse --short HEAD 2>/dev/null || echo unknown)\`"
   echo "- version: \`$(node -p "require('$REPO_ROOT/desktop/package.json').version" 2>/dev/null || echo unknown)\`"
+  echo "- isolated home: \`$SMOKE_MATRX_HOME\`"
+  echo "- isolated engine ports: \`$SMOKE_ENGINE_PORT_BASE-$((SMOKE_ENGINE_PORT_BASE + 19))\`"
   echo
 } > "$SUMMARY"
 
@@ -187,7 +226,12 @@ run_web() {
   local log="$RUN_DIR/web.log"
   local smoke_port
   smoke_port="$(node -e "const s=require('net').createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")"
-  ( cd desktop && SMOKE_PREVIEW=1 SMOKE_PORT="$smoke_port" pnpm exec playwright test boot.spec.ts --reporter=list ) > "$log" 2>&1
+  ( cd desktop && \
+    SMOKE_PREVIEW=1 \
+    SMOKE_PORT="$smoke_port" \
+    VITE_MATRX_ISOLATED_SMOKE=1 \
+    VITE_MATRX_TEST_ENGINE_PORT_BASE="$SMOKE_ENGINE_PORT_BASE" \
+    pnpm exec playwright test boot.spec.ts --reporter=list ) > "$log" 2>&1
   local rc=$?
   if [ $rc -eq 0 ]; then
     record_ok "web: production bundle boots clean (no crash screen, no uncaught errors)"
@@ -207,18 +251,12 @@ run_packaged() {
 
   local log="$RUN_DIR/app.log" build_log="$RUN_DIR/build.log"
 
-  # ── Preflight: this mode shares the machine's real state ───────────────────
-  # It reads/writes ~/.matrx (discovery file, settings, DBs) and binds the real
-  # engine ports, exactly like the installed app. So if an AI Matrx is ALREADY
-  # running (the installed app, or `pnpm tauri:dev`), two things go wrong:
-  #   1. our /health probe answers from THEIR engine → a broken build passes;
-  #   2. their cloudflared/llama-server look like OUR orphans → a good build fails.
-  # Neither is acceptable in a signal you're supposed to trust. Refuse instead.
-  local existing_url
-  existing_url="$(node -p "try{require(require('os').homedir()+'/.matrx/local.json').url}catch(e){''}" 2>/dev/null)"
-  if [ -n "$existing_url" ] && curl -sf --max-time 2 "$existing_url/health" >/dev/null 2>&1; then
-    record_fail "packaged: an engine is ALREADY running at $existing_url — quit AI Matrx (and any \`uv run python run.py\` / \`pnpm tauri:dev\`) and rerun. Results would be meaningless otherwise."
-    return 1
+  # Snapshot live ownership only to prove it remains untouched. The test never
+  # adopts this URL or reads this file for its own engine discovery.
+  local live_discovery="$HOME/.matrx/local.json" live_url_before="" live_pid_before=""
+  if [ -f "$live_discovery" ]; then
+    live_url_before="$(node -p "try{require('$live_discovery').url||''}catch(e){''}" 2>/dev/null)"
+    live_pid_before="$(node -p "try{require('$live_discovery').pid||''}catch(e){''}" 2>/dev/null)"
   fi
   # Anything of ours already alive is pre-existing, not an orphan we created.
   # Snapshot it so the post-shutdown check can diff instead of blaming.
@@ -260,11 +298,15 @@ run_packaged() {
     local no_updater_cfg='{"bundle":{"createUpdaterArtifacts":false}}'
 
     info "Packaging the desktop app (tauri build — several minutes)…"
-    if ! ( cd desktop && pnpm tauri build $bundle_flag --config "$no_updater_cfg" ) >> "$build_log" 2>&1; then
+    if ! ( cd desktop && \
+      VITE_MATRX_ISOLATED_SMOKE=1 \
+      VITE_MATRX_TEST_ENGINE_PORT_BASE="$SMOKE_ENGINE_PORT_BASE" \
+      pnpm tauri build $bundle_flag --config "$no_updater_cfg" ) >> "$build_log" 2>&1; then
       record_fail "packaged: tauri build failed" "$(tail -30 "$build_log")"
       echo "Full build log: \`$build_log\`" >> "$SUMMARY"
       return 1
     fi
+    printf '%s\n' "$SMOKE_ENGINE_PORT_BASE" > "$SMOKE_BUILD_PORT_MARKER"
     record_ok "packaged: sidecar + app built"
   else
     warn "--no-build: reusing the last packaged build"
@@ -277,22 +319,30 @@ run_packaged() {
     return 1
   fi
 
-  # A packaged build can take several minutes. Repeat the LIVE-world ownership
-  # check immediately before launch so an installed app (or dev.sh --live)
-  # started during the build cannot answer our probes and create a false pass.
-  existing_url="$(node -p "try{require(require('os').homedir()+'/.matrx/local.json').url}catch(e){''}" 2>/dev/null)"
-  if [ -n "$existing_url" ] && curl -sf --max-time 2 "$existing_url/health" >/dev/null 2>&1; then
-    record_fail "packaged: an engine started at $existing_url during the build — quit AI Matrx (and any live-world dev engine) and rerun"
-    return 1
-  fi
-
   # A separate DEV-world engine is allowed and may own cloudflared/LLM
   # children. The launch-time snapshot is authoritative: replacing the earlier
   # baseline avoids both concurrent-dev false positives and stale-PID reuse.
   pre_children="$(child_pids | tr '\n' ' ')"
   info "Launching $(basename "$bin") and capturing everything it logs…"
 
-  "$bin" > "$log" 2>&1 &
+  local -a isolated_env=(
+    "MATRX_ISOLATED_TEST=1"
+    "MATRX_HOME_DIR=$SMOKE_MATRX_HOME"
+    "MATRX_PORT=$SMOKE_ENGINE_PORT_BASE"
+    "MATRX_PORT_BASE=$SMOKE_ENGINE_PORT_BASE"
+    "MATRX_SKIP_ORPHAN_SCAN=1"
+    "MATRX_INSTANCE_SALT=smoke-$RUN_ID"
+    "MATRX_CLOUD_PARTICIPATION=0"
+    "TEST_MODE=1"
+    "HOME=$SMOKE_OS_HOME"
+    "USERPROFILE=$SMOKE_OS_HOME"
+    "APPDATA=$SMOKE_OS_HOME/AppData/Roaming"
+    "LOCALAPPDATA=$SMOKE_OS_HOME/AppData/Local"
+    "XDG_DATA_HOME=$SMOKE_OS_HOME/.local/share"
+    "XDG_CONFIG_HOME=$SMOKE_OS_HOME/.config"
+    "XDG_CACHE_HOME=$SMOKE_OS_HOME/.cache"
+  )
+  env "${isolated_env[@]}" "$bin" > "$log" 2>&1 &
   local pid=$!
 
   # Give it a real startup window: Rust setup + sidecar spawn + engine boot.
@@ -310,7 +360,7 @@ run_packaged() {
       scan_log "$log" "packaged app log"
       return 1
     fi
-    engine_url="$(node -p "try{require(require('os').homedir()+'/.matrx/local.json').url}catch(e){''}" 2>/dev/null)"
+    engine_url="$(node -p "try{require('$SMOKE_MATRX_HOME/local.json').url}catch(e){''}" 2>/dev/null)"
     if [ -n "$engine_url" ] && curl -sf --max-time 2 "$engine_url/health" > "$RUN_DIR/health.json" 2>/dev/null; then
       break
     fi
@@ -450,6 +500,19 @@ run_packaged() {
   fi
 
   scan_log "$log" "packaged app log"
+
+  if [ -n "$live_pid_before" ]; then
+    local live_pid_after live_url_after
+    live_pid_after="$(node -p "try{require('$live_discovery').pid||''}catch(e){''}" 2>/dev/null)"
+    live_url_after="$(node -p "try{require('$live_discovery').url||''}catch(e){''}" 2>/dev/null)"
+    if [ "$live_pid_after" = "$live_pid_before" ] && [ -n "$live_url_after" ] && \
+       curl -sf --max-time 2 "$live_url_after/health" >/dev/null 2>&1; then
+      record_ok "packaged: pre-existing live engine remained healthy and PID-stable ($live_pid_before)"
+    else
+      record_fail "packaged: pre-existing live engine changed during isolated smoke" \
+        "before pid=$live_pid_before url=$live_url_before; after pid=$live_pid_after url=$live_url_after"
+    fi
+  fi
   echo "Full app log: \`$log\`" >> "$SUMMARY"; echo >> "$SUMMARY"
 }
 

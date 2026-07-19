@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import struct
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -30,6 +33,57 @@ def test_runtime_installer_manifest_pins_every_release_target() -> None:
         int(artifact["sha256"], 16)
         assert len(artifact["executable_sha256"]) == 64
         int(artifact["executable_sha256"], 16)
+
+
+def test_staging_script_runs_directly_like_release_build() -> None:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "stage_bundled_uv.py"), "--help"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--target" in result.stdout
+
+
+def _synthetic_signed_macho(*, signature: bytes, linkedit_size: int) -> bytes:
+    header = bytearray(32)
+    header[:4] = b"\xcf\xfa\xed\xfe"
+    struct.pack_into("<I", header, 16, 2)  # ncmds
+    struct.pack_into("<I", header, 20, 88)  # sizeofcmds
+    segment = bytearray(72)
+    struct.pack_into("<II", segment, 0, 0x19, 72)
+    segment[8:18] = b"__LINKEDIT"
+    struct.pack_into("<Q", segment, 32, linkedit_size)
+    struct.pack_into("<Q", segment, 48, linkedit_size)
+    code_signature = bytearray(16)
+    struct.pack_into("<IIII", code_signature, 0, 0x1D, 16, 128, len(signature))
+    return bytes(header + segment + code_signature + b"CODEHERE" + signature)
+
+
+def test_macho_executable_hash_survives_required_resigning(tmp_path: Path) -> None:
+    upstream = tmp_path / "upstream-uv"
+    developer_id = tmp_path / "developer-id-uv"
+    upstream.write_bytes(
+        _synthetic_signed_macho(signature=b"UPSTREAM", linkedit_size=4096)
+    )
+    developer_id.write_bytes(
+        _synthetic_signed_macho(signature=b"A MUCH LONGER DEVELOPER SIGNATURE", linkedit_size=8192)
+    )
+
+    assert runtime_installer.executable_sha256(
+        upstream
+    ) == runtime_installer.executable_sha256(developer_id)
+
+    tampered = bytearray(developer_id.read_bytes())
+    tampered[120] ^= 0x01
+    developer_id.write_bytes(tampered)
+    assert runtime_installer.executable_sha256(
+        upstream
+    ) != runtime_installer.executable_sha256(developer_id)
 
 
 def test_frozen_installer_never_falls_back_to_path(

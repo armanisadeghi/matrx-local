@@ -460,7 +460,10 @@ function resultFromDurableToolCall(
   if (!callId) return null;
   const status = row.status?.toLowerCase() ?? "";
   const isError =
-    row.is_error === true || status === "error" || status === "failed";
+    row.is_error === true ||
+    status === "error" ||
+    status === "failed" ||
+    status === "cancelled";
   const isTerminal =
     isError ||
     row.success === true ||
@@ -469,6 +472,7 @@ function resultFromDurableToolCall(
   if (!isTerminal) return null;
 
   const output =
+    (isError ? row.error_message : null) ??
     row.output ??
     row.output_preview ??
     row.error_message ??

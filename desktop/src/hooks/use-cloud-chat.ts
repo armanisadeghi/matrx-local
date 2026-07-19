@@ -462,7 +462,8 @@ function describeDataEvent(data: TypedDataPayload | UntypedDataPayload): string 
 }
 
 function normalizeRole(role: string | null | undefined): ChatMessage["role"] {
-  return role === "assistant" || role === "system" ? role : "user";
+  if (role === "system") return "system";
+  return role === "assistant" || role === "tool" ? "assistant" : "user";
 }
 
 function mergeText(parts: string[]): string {

@@ -319,10 +319,9 @@ def test_runtime_model_registration(seam_sandbox, monkeypatch):
     assert entry.api_class == "generic_openai_standard"
     assert reg.is_local_llm_available()
 
-    # get_local_llm_status() health-probes the registered port and self-heals a
-    # stale registration (loud recovery — commit 51ce67f0e). No real
-    # llama-server listens on the test port, so simulate a reachable server to
-    # exercise the registration→status wiring this test covers.
+    # get_local_llm_status() health-probes the registered port without taking
+    # lifecycle ownership away from the Rust desktop. No real llama-server
+    # listens on the test port, so simulate a reachable server first.
     monkeypatch.setattr(reg, "_probe_llama_server", lambda port: (True, None))
     status = reg.get_local_llm_status()
     assert status["canonical_model_name"] == "local/qwen-test"
@@ -330,19 +329,21 @@ def test_runtime_model_registration(seam_sandbox, monkeypatch):
     assert status["available"] is True
     assert status["matrx_ai_support"] is True
 
-    # And when the probe fails, status must clear the stale registration.
+    # A transient failed probe must report the truth without destroying the
+    # registration. Cold model load and active inference can both delay the
+    # single-threaded llama-server beyond the health timeout.
     monkeypatch.setattr(
         reg, "_probe_llama_server", lambda port: (False, "connection refused")
     )
     unreachable = reg.get_local_llm_status()
     assert unreachable["reachable"] is False
     assert unreachable["available"] is False
-    assert get_runtime_model("local/qwen-test") is None
-    assert not reg.is_local_llm_available()
-
-    # Re-register, then verify explicit clear_local_llm() also tears down.
-    assert reg.set_local_llm(port=65533, model_name="qwen-test") is True
+    assert unreachable["port"] == 65533
+    assert unreachable["model_name"] == "qwen-test"
     assert get_runtime_model("local/qwen-test") is not None
+    assert reg.is_local_llm_available()
+
+    # Only the explicit desktop lifecycle signal tears the registration down.
     reg.clear_local_llm()
     assert get_runtime_model("local/qwen-test") is None
     assert not reg.is_local_llm_available()

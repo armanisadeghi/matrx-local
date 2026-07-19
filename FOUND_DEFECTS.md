@@ -52,8 +52,11 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   `local_llm_registry.py:61-73`, single-failure clear with no debounce/retry;
   `chat_routes.py:519-521` set→status self-undo. Introduced by commit
   `51ce67f0e` "Add local target routing for cloud chat".
-- **Status:** open — needs-hw-verification (repro needs a real llama-server
-  under cold-load / concurrent inference).
+- **Status:** resolved 2026-07-18 — `get_local_llm_status()` is now a
+  side-effect-free snapshot. A failed probe reports `reachable:false` while
+  preserving the registered port, model, runtime-catalog entry, and unified
+  client; only the explicit desktop lifecycle disconnect clears them. Focused
+  registration/probe regression passes.
 - **Analysis stamp:** Analyzed 2026-07-15 — verified in code via adversarial
   review of the test-fix for `test_runtime_model_registration`. The
   self-healing intent is right ("loud recovery"), but a single 1.0s probe with

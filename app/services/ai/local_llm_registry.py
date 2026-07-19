@@ -219,12 +219,23 @@ def clear_local_llm() -> None:
 
 
 def is_local_llm_available() -> bool:
-    """Return True if a local LLM is currently registered and reachable."""
+    """Return True if a local LLM is currently registered for routing.
+
+    Reachability is intentionally not probed here.  A busy or cold
+    llama-server can temporarily miss a health deadline while remaining the
+    correct routing target.
+    """
     return _local_llm_port is not None and _local_llm_model is not None
 
 
 def get_local_llm_status() -> dict[str, Any]:
-    """Return a status dict suitable for the /chat/local-llm/status API response."""
+    """Return a side-effect-free local-LLM status snapshot.
+
+    A status read must never unregister the desktop-owned llama-server.  The
+    process may be cold-loading a model or serving a long inference and fail a
+    short ``/v1/models`` probe even though it is healthy.  Explicit lifecycle
+    events remain the only authority for clearing the registration.
+    """
     registered = _local_llm_port is not None and _local_llm_model is not None
     reachable = False
     error: str | None = None
@@ -234,12 +245,11 @@ def get_local_llm_status() -> dict[str, Any]:
         if not reachable:
             logger.warning(
                 "[local_llm_registry] Registered local LLM is unreachable "
-                "(port=%s, model=%s): %s",
+                "right now (port=%s, model=%s): %s; preserving registration",
                 _local_llm_port,
                 _local_llm_model,
                 error or "unknown error",
             )
-            clear_local_llm()
 
     return {
         "available": registered and reachable,
@@ -251,7 +261,15 @@ def get_local_llm_status() -> dict[str, Any]:
         # matrx-ai >= 0.3.0 always ships GenericOpenAIChat; kept for API
         # response shape compatibility with the desktop frontend.
         "matrx_ai_support": True,
-        "instructions": None if registered and reachable else "Start a local model first.",
+        "instructions": (
+            None
+            if registered and reachable
+            else (
+                "The local model is registered but not responding yet."
+                if registered
+                else "Start a local model first."
+            )
+        ),
     }
 
 

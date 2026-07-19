@@ -29,6 +29,7 @@ import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import supabase from "@/lib/supabase";
+import { AppVersion } from "@/lib/app-version";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -318,6 +319,10 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
           <p className="mt-2 text-sm text-muted-foreground">
             This only happens once — getting everything ready for you
           </p>
+          <AppVersion
+            prefix="Version "
+            className="mt-3 inline-block rounded-full border border-border bg-muted/50 px-2.5 py-1 text-xs font-medium text-muted-foreground"
+          />
         </div>
 
         {/* Grand progress bar */}

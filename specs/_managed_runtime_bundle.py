@@ -22,11 +22,12 @@ PyInstaller's static analysis never reached raises ModuleNotFoundError — in th
 frozen app ONLY. Source tests and ``uv run`` cannot reproduce it, which is what
 lets it reach users.
 
-This exact bug has now shipped three times:
+This exact bug has now shipped four times:
 
 * ``google.protobuf``   v1.3.107, 2026-07-12
 * ``jinja2``            2026-07-18 (cb17d4eef) — ``jinja2.meta``
 * ``huggingface_hub``   v1.3.145, 2026-07-19 — ``huggingface_hub.dataclasses``
+* ``tqdm``               v1.3.149, 2026-07-19 — ``tqdm.contrib.logging``
 
 The huggingface_hub case is the template for the whole class: the bundle carried
 138 of 181 modules. Nothing in hf 1.8's ``__init__.py`` names ``.dataclasses``,
@@ -53,6 +54,11 @@ MANAGED_RUNTIME_SHARED_PACKAGES = (
     # transformers/diffusers/accelerate all import huggingface_hub submodules
     # that hf's own __init__ never names. See the module docstring.
     "huggingface_hub",
+    # transformers imports tqdm.contrib.logging through AutoImageProcessor.
+    # PyInstaller's static graph included only part of tqdm in v1.3.149, so the
+    # frozen copy shadowed the complete managed-runtime package and every image
+    # and video model load failed.
+    "tqdm",
 )
 
 

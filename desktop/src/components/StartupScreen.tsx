@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { EngineStatus } from "@/hooks/use-engine";
+import { AppVersion } from "@/lib/app-version";
 
 // ---------------------------------------------------------------------------
 // Phase definitions
@@ -366,6 +367,10 @@ export function StartupScreen({
             <p className="mt-1 text-sm text-muted-foreground">
               AI-powered local engine
             </p>
+            <AppVersion
+              prefix="Version "
+              className="mt-2 inline-block rounded-full border border-border bg-muted/50 px-2.5 py-1 text-xs font-medium text-muted-foreground"
+            />
           </div>
         </div>
 

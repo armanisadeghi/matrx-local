@@ -1,7 +1,7 @@
 """The frozen bundle must collect shared packages WHOLE.
 
-Guards the bug class that has now shipped three times (google.protobuf 2026-07-12,
-jinja2 2026-07-18, huggingface_hub 2026-07-19): a package present in BOTH the
+Guards the bug class that has now shipped four times (google.protobuf 2026-07-12,
+jinja2 2026-07-18, huggingface_hub and tqdm 2026-07-19): a package present in BOTH the
 frozen bundle and a managed runtime dir resolves to the BUNDLED copy, because
 hooks/runtime_hook.py APPENDS the managed dir and PyInstaller 6 resolves frozen
 imports through a sys.path hook in path order.
@@ -66,10 +66,11 @@ def test_build_sidecar_fallback_consumes_the_shared_list() -> None:
         )
 
 
-def test_huggingface_hub_is_declared_shared() -> None:
-    """The v1.3.145 outage. Do not remove without reading the module docstring."""
+def test_outage_packages_are_declared_shared() -> None:
+    """Frozen-only outages. Do not remove without reading the module docstring."""
     assert "huggingface_hub" in MANAGED_RUNTIME_SHARED_PACKAGES
     assert "jinja2" in MANAGED_RUNTIME_SHARED_PACKAGES
+    assert "tqdm" in MANAGED_RUNTIME_SHARED_PACKAGES
 
 
 def test_collection_reaches_submodules_static_analysis_misses() -> None:
@@ -79,7 +80,8 @@ def test_collection_reaches_submodules_static_analysis_misses() -> None:
     (`from huggingface_hub.dataclasses import strict`) but is named nowhere in
     huggingface_hub's own __init__, so PyInstaller's static analysis never
     reaches it. Same story for `jinja2.meta`, which transformers imports lazily
-    for chat-template tool schemas.
+    for chat-template tool schemas. Transformers 5.14's AutoImageProcessor
+    reaches `tqdm.contrib.logging`, which the v1.3.149 bundle omitted.
     """
     try:
         from PyInstaller.utils.hooks import collect_submodules
@@ -95,6 +97,10 @@ def test_collection_reaches_submodules_static_analysis_misses() -> None:
         "with ModuleNotFoundError in the frozen app (v1.3.145)"
     )
     assert "jinja2.meta" in modules
+    assert "tqdm.contrib.logging" in modules, (
+        "tqdm.contrib.logging missing -- Transformers AutoImageProcessor and "
+        "therefore every Diffusers image/video model load dies in the frozen app"
+    )
 
 
 def test_absent_package_does_not_break_the_build() -> None:

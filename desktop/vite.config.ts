@@ -4,12 +4,16 @@ import path from "path";
 import { readFileSync } from "fs";
 
 const host = process.env.TAURI_DEV_HOST;
-const pkg = JSON.parse(readFileSync(path.resolve(__dirname, "package.json"), "utf-8"));
+const pyproject = readFileSync(path.resolve(__dirname, "../pyproject.toml"), "utf-8");
+const appVersion = pyproject.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+if (!appVersion) {
+  throw new Error("Unable to read the canonical version from pyproject.toml");
+}
 
 export default defineConfig(async () => ({
   plugins: [react()],
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_VERSION__: JSON.stringify(appVersion),
   },
   resolve: {
     alias: {

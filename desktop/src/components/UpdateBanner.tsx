@@ -10,8 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { ArrowUpCircle, Download, RefreshCw, X, Loader2 } from "lucide-react";
 import type { AutoUpdateState, AutoUpdateActions } from "@/hooks/use-auto-update";
-
-declare const __APP_VERSION__: string;
+import { APP_VERSION } from "@/lib/app-version";
 
 interface UpdateBannerProps {
   state: AutoUpdateState;
@@ -106,7 +105,7 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
                 ? `v${status.version} — restart to apply`
                 : isDownloadingUi
                   ? `v${status.version}`
-                  : `${__APP_VERSION__} → v${status.version}`}
+                  : `${APP_VERSION} → v${status.version}`}
             </p>
           )}
           {showAsAvailable && !isDownloadingUi && !isInstalled && (

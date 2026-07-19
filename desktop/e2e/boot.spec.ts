@@ -78,6 +78,7 @@ test.describe("boot", () => {
       await expect(page.getByRole("heading", { name: "Matrx Local" })).toBeVisible({
         timeout: 45_000,
       });
+      await expect(page.getByTitle(/^Matrx Local version \d+\.\d+\.\d+$/)).toBeVisible();
 
       const state = await page.evaluate(() => ({
         darkClass: document.documentElement.classList.contains("dark"),
@@ -137,6 +138,7 @@ test.describe("boot", () => {
     await page.waitForTimeout(2_000);
     await expectNoCrashScreen(page);
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible();
+    await expect(page.getByTitle(/^Matrx Local version \d+\.\d+\.\d+$/)).toBeVisible();
 
     // Confidential Chat depends on native Rust commands. Browser mode must
     // present that boundary explicitly instead of calling the importable

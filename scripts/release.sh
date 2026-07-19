@@ -12,8 +12,8 @@
 #
 # Dynamic (no update needed):
 #   run.py, app/api/routes.py — read via importlib.metadata
-#   desktop/src/pages/Login.tsx — reads __APP_VERSION__ injected by Vite from package.json
-#   desktop/src/pages/Settings.tsx — reads __APP_VERSION__ injected by Vite from package.json
+#   All renderer surfaces read __APP_VERSION__ injected by Vite from the
+#   canonical pyproject.toml version via desktop/src/lib/app-version.tsx.
 # 
 # Usage:
 #   ./scripts/release.sh              # patch bump  (default)
@@ -762,6 +762,13 @@ LOCKFILE_CHECK=$(cd desktop && pnpm install --frozen-lockfile 2>&1) || {
 }
 ok "pnpm-lock.yaml is up to date."
 
+# pyproject.toml is the one release authority. The other manifests are derived
+# copies required by their respective toolchains; never begin a release from a
+# drifted tree.
+info "Checking release version manifests agree with pyproject.toml..."
+./scripts/check-version-sync.sh || fail "Version manifests have drifted. Sync them before releasing."
+ok "Version manifests are synchronized."
+
 # ── TypeScript type-check ────────────────────────────────────────────────────
 info "Running TypeScript type-check (pnpm tsc -b)..."
 if ! (cd desktop && pnpm tsc -b 2>&1); then
@@ -880,6 +887,11 @@ info "Refreshing desktop/src-tauri/Cargo.lock..."
 command -v cargo &>/dev/null || fail "cargo is required to refresh Cargo.lock."
 (cd desktop/src-tauri && cargo update -p aimatrx-desktop >/dev/null)
 ok "Cargo.lock → $NEW_VERSION"
+
+# Prove every derived manifest received the canonical bump before committing.
+info "Verifying bumped version manifests..."
+./scripts/check-version-sync.sh || fail "Release version synchronization failed after bump."
+ok "All release versions match pyproject.toml."
 
 # ── Commit ───────────────────────────────────────────────────────────────────
 info "Committing..."

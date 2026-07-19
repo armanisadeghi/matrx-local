@@ -30,6 +30,89 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ---
 
+## Updater / packaged runtime
+
+### MXL-D-067 — Background updater replaces the live PyInstaller sidecar and corrupts all later lazy imports
+- **Area:** `desktop/src/hooks/use-auto-update.ts:159-180`,
+  `desktop/src-tauri/src/lib.rs:1470-1512`, packaged `Matrx Engine` one-file
+  executable
+- **Symptom:** The leader window's "silent pre-download" passes `install=true`,
+  so Tauri's `download_and_install()` replaces `/Applications/AI Matrx.app`
+  while its Python sidecar is still running. PyInstaller reopens its own
+  executable for every lazy PYZ import. The running process retains the old
+  archive TOC/offsets but reads those offsets from the newly installed
+  executable, producing repeated `zlib.error: incorrect header check` across
+  AI, chat sync, delegation, scraper, tools, schedulers, and finally Uvicorn
+  lifespan startup. The engine exits and the whole local surface is offline.
+- **Evidence:** 2026-07-19 production timeline: lifecycle log spawned sidecar
+  PID 54982 at 08:34:05; filesystem metadata records the installed app bundle
+  being replaced at 08:34:34-35; first PYZ error at 08:34:41; engine startup
+  exited at 08:34:47. The current on-disk v1.3.148 archive was independently
+  validated: all 12,277 PYZ entries decompress successfully, and the same
+  binary starts after restart. This excludes a bad build or missing hidden
+  import and proves live replacement as the trigger.
+- **Status:** open — production-critical.
+- **Analysis stamp:** Analyzed 2026-07-19 — verified against production logs,
+  installed-file birth/change timestamps, the PyInstaller 6.18 loader source,
+  and a complete archive extraction pass.
+- **Owner hint:** Download may happen in the background, installation may not.
+  Stop/drain the sidecar before replacing the bundle, then install and relaunch
+  as one ownership-safe transaction. Add a packaged test that keeps making
+  lazy imports during update installation and proves no old process can read
+  the replaced executable.
+
+### MXL-D-068 — Documents access is a macOS MAC/TCC denial but diagnostics falsely exonerate privacy controls
+- **Area:** `app/services/access_health/probes.py:183-285`,
+  `app/services/access_health/service.py:445-455`, `desktop/src-tauri/Info.plist`
+- **Symptom:** The signed engine can create/write/read/delete its own probe
+  inside `~/Documents/Matrx`, but `os.scandir()` of existing Notes, Files, and
+  Code content returns EPERM. The access-health code sees an unrelated FDA
+  probe succeed and tells the user this is ownership/volume state, even though
+  EPERM is the macOS sandbox/MAC class and Files & Folders is distinct from
+  Full Disk Access. Notes sync, file replica, direct list calls, and indexing
+  all remain degraded. The shipped main/helper Info.plists omit
+  `NSDocumentsFolderUsageDescription`; the canonical root is also inside the
+  iCloud Drive File Provider Documents domain and no durable user-selected
+  security-scoped grant is used.
+- **Evidence:** POSIX ownership/mode/ACL permit access and the same shell can
+  enumerate all three directories. Live `/access/health` shows only enumerate
+  denied (errno 1), while create/write/read-own/replace/delete all succeed.
+  Installed helper is Developer-ID signed and can read the FDA-protected
+  Messages DB, so the FDA probe is genuinely granted but does not explain the
+  protected Documents read denial.
+- **Status:** open.
+- **Analysis stamp:** Analyzed 2026-07-19 — verified against the installed app,
+  live engine capability probes, codesign/Info.plist output, and filesystem
+  metadata.
+- **Owner hint:** Add the Documents usage description to the responsible app,
+  obtain/persist an explicit user-selected directory grant (security-scoped
+  bookmark), keep helper responsibility/signing identity stable, and stop
+  treating an FDA success as proof that every other MAC privilege is granted.
+
+### MXL-D-069 — Permission recovery can lose the filesystem crawler permanently on SQLite contention
+- **Area:** `app/services/filesystem/service.py:727-798`,
+  `app/services/filesystem/index.py:653-691`
+- **Symptom:** A normal EPERM from `os.scandir()` enters `_crawl_loop`'s error
+  path, but `fail_directory()` runs after `_maintenance_lock` has been
+  released. Another filesystem worker can acquire the lock and write first;
+  after the 10-second SQLite busy timeout, the recovery write raises
+  `sqlite3.OperationalError: database is locked`. That exception escapes the
+  OSError handler and terminates `filesystem-crawl`. `_background_task_done()`
+  logs it but only restarts enrichment, never crawl, so indexing silently stops
+  until the whole engine restarts.
+- **Evidence:** Exact production trace at 2026-07-19 08:55:31: initial EPERM
+  scanning `~/Documents/Matrx/Code`, followed inside `fail_directory()` by
+  `database is locked`, followed by `Filesystem background task
+  filesystem-crawl exited unexpectedly`. Code inspection confirms the recovery
+  write is outside the maintenance lock and crawl has no supervisor restart.
+- **Status:** open.
+- **Analysis stamp:** Analyzed 2026-07-19 — production trace and code path agree.
+- **Owner hint:** Fence claim failure/release under the same maintenance lock,
+  handle SQLite contention inside the crawl loop, and supervise/restart crawl
+  just as enrichment is supervised.
+
+---
+
 ## AI / local LLM runtime
 
 ### MXL-D-055 — `get_local_llm_status()` is a status *getter* with a destructive side-effect; can self-deregister a healthy/cold llama-server

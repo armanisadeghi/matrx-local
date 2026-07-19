@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { LifeBuoy, RefreshCw } from "lucide-react";
 import type { EngineStatus } from "@/hooks/use-engine";
 import { TerminalToggleButton } from "@/components/DevTerminalPanel";
+import { AppVersion } from "@/lib/app-version";
 
 interface StatusBarProps {
   engineStatus: EngineStatus;
@@ -75,11 +76,12 @@ export function StatusBar({ engineStatus, engineUrl, engineVersion, onRefresh, o
 
       {/* Right side — terminal toggle, version, reconnect */}
       <div className="flex items-center gap-2">
+        <AppVersion className="text-[10px] text-muted-foreground" />
         <button onClick={onOpenRecovery} title="Open Recovery Center" className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"><LifeBuoy className="h-3 w-3" /><span>Recovery</span></button>
         <TerminalToggleButton />
         {engineVersion && (
-          <span className="text-[10px] text-muted-foreground">
-            v{engineVersion}
+          <span className="text-[10px] text-muted-foreground" title={`Local engine version ${engineVersion}`}>
+            Engine v{engineVersion}
           </span>
         )}
         {notConnected && onRefresh && (

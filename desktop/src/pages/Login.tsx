@@ -6,8 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Card, CardContent } from "@/components/ui/card";
 import type { useAuth } from "@/hooks/use-auth";
-
-declare const __APP_VERSION__: string;
+import { AppVersion } from "@/lib/app-version";
 
 type AuthActions = ReturnType<typeof useAuth>;
 
@@ -146,7 +145,7 @@ export function Login({ auth }: LoginProps) {
         </Card>
 
         <p className="text-center text-xs text-muted-foreground/50">
-          Matrx Local &middot; v{__APP_VERSION__}
+          Matrx Local &middot; <AppVersion />
         </p>
       </div>
     </div>

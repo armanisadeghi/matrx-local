@@ -18,8 +18,7 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Download, RefreshCw, Loader2, ArrowUpCircle, X, CheckCircle2 } from "lucide-react";
 import type { AutoUpdateState, AutoUpdateActions } from "@/hooks/use-auto-update";
-
-declare const __APP_VERSION__: string;
+import { APP_VERSION } from "@/lib/app-version";
 
 interface UpdateDialogProps {
   state: AutoUpdateState;
@@ -73,7 +72,7 @@ export function UpdateDialog({ state, actions }: UpdateDialogProps) {
               <div className="flex items-center justify-between text-sm">
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">Current</span>
-                  <Badge variant="secondary">{__APP_VERSION__}</Badge>
+                  <Badge variant="secondary">{APP_VERSION}</Badge>
                 </div>
                 <span className="text-muted-foreground">→</span>
                 <div className="flex items-center gap-2">

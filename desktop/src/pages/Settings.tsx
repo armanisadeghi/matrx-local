@@ -61,6 +61,7 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { APP_VERSION } from "@/lib/app-version";
 import {
   Select,
   SelectContent,
@@ -82,7 +83,6 @@ import type {
 import type { useAuth } from "@/hooks/use-auth";
 import type { Theme } from "@/hooks/use-theme";
 
-declare const __APP_VERSION__: string;
 import { isTauri } from "@/lib/sidecar";
 import { systemPrompts, builtinPrompts } from "@/lib/system-prompts";
 import type {
@@ -4133,7 +4133,7 @@ export function Settings({
                     <span className="text-sm text-muted-foreground">
                       Version
                     </span>
-                    <Badge variant="secondary">{__APP_VERSION__}</Badge>
+                    <Badge variant="secondary">{APP_VERSION}</Badge>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">

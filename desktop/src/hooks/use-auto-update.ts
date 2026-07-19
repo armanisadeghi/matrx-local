@@ -18,7 +18,7 @@ import { isTauri, checkForUpdates, restartApp, type UpdateStatus } from "@/lib/s
 import { loadSettings } from "@/lib/settings";
 import { useWindowLeader } from "@/hooks/use-window-leader";
 
-declare const __APP_VERSION__: string;
+import { APP_VERSION } from "@/lib/app-version";
 
 export interface AutoUpdateState {
   /** Current status of the update system */
@@ -102,7 +102,7 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
     if (!isTauri()) return;
     try {
       const p = localStorage.getItem(PREPARED_UPDATE_VERSION_KEY);
-      if (p && p === __APP_VERSION__) {
+      if (p && p === APP_VERSION) {
         localStorage.removeItem(PREPARED_UPDATE_VERSION_KEY);
       }
     } catch {

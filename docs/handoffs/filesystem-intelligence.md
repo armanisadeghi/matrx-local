@@ -97,8 +97,8 @@ indexing, structured results, durable chat state, and UI—not just search.
 ### `matrx-local`
 
 The released foundation landed through merge commit `d7b4c2fd0` in tag
-`v1.3.135`. The completion and adversarial-hardening pass is on local `main`
-through `63fd21bbe` and has not yet been pushed or released.
+`v1.3.135`. The completion and adversarial-hardening pass is released on
+`origin/main` as `v1.3.140` through `a2b26d1b3`.
 
 - Cross-platform Places resolution for standard folders, configured roots,
   user priority roots, and readable real volumes.
@@ -191,7 +191,7 @@ The filesystem and atomic-release completion pass is on local `main` through
 | Priority | Vision area | Current state | Remaining gap / proof |
 |---|---|---|---|
 | P0 | One authoritative filesystem | Policy and tests exist in aidream | Run real cloud-chat drills for desktop, sandbox, continuation, dynamic discovery, bind→detach, and unbound cloud-only control. Inspect the final model-visible tool list in every case. |
-| P0 | Ship the complete chain | All implementation is complete on local `main` in all three repos | Review/push the local commit sets, publish compatible releases, deploy the sandbox image atomically, and verify every running version. Do not describe the chain as shipped before this. |
+| P0 | Ship the complete chain | `matrx-local` is released as `v1.3.140`; aidream and sandbox completion commits remain local | Review/push the remaining aidream/sandbox commit sets, publish compatible releases, deploy the sandbox image atomically, and verify every running version. Do not describe the chain as shipped before this. |
 | P0 | Cross-platform correctness | Code is OS-neutral and unit tested | Exercise packaged installs on actual Windows and Linux as well as macOS: Known Folders/XDG, drive and UNC roots, mounts, hidden attributes, permissions, watchers, removable/offline media, and open/reveal actions. |
 | P0 | Real agent/user experience | Components and contracts exist | Perform signed-in in-app E2E: “find my code projects,” a screenshot follow-up, path selection/reference, reload the conversation, and repeat with a large paged result. Confirm no hosted/cloud filesystem tool appears when desktop is bound. |
 | P1 | User control and transparency | Full controls, quota/state metrics, failure guidance, and nonblocking cold/partial state are implemented | Validate wording, accessibility, and recovery behavior with real users and protected folders; no known implementation gap remains. |
@@ -254,14 +254,15 @@ The feature is ready to close only when all of these are true:
 
 Previously recorded results for this work:
 
-- `matrx-local`: 124 focused filesystem/file-sync tests passed, 1 skipped;
-  prior full backend pass was 517 passed, 1 skipped.
+- `matrx-local`: final backend sweep passed 859 tests, 18 skipped; the focused
+  filesystem/file-sync suite passed 126 tests, 1 skipped.
 - Desktop: 187 unit tests passed; TypeScript and production Vite build passed.
 - Source engine lifecycle drill: clean startup/background indexing/shutdown;
   the contained optional image runtime was verified on a fresh dev home.
-- Production web smoke: clean at `18c5743e5`; repeat packaged smoke from the
-  settled final tree because the previous cold build overlapped concurrent
-  commits and was not valid evidence.
+- Production web smoke: clean at `63fd21bbe`.
+- Full packaged smoke: clean on `v1.3.140` at
+  `.smoke/runs/20260718-185554`—health in 70 seconds, no failed services,
+  graceful exit in 6 seconds, no orphaned children, and no fatal log lines.
 - Existing-index migration drill preserved 18,668 metadata rows and 351 content
   documents (about 7.0 MiB indexed text).
 - `aidream`: 3,081 passed, 13 skipped broadly; independent authority-focused
@@ -293,10 +294,10 @@ or that the cloud request resolved the right tools.
 
 ## Repository state and safety notes
 
-- `matrx-local`: local `main` is fifteen commits ahead of `origin/main` through
-  `63fd21bbe`; the working tree was clean at this update. These commits include
-  adjacent startup/image-runtime/bridge fixes discovered during the same
-  packaged validation loop.
+- `matrx-local`: local and `origin/main` are aligned at released tag
+  `v1.3.140` (`a2b26d1b3`), and the working tree was clean at this update. The
+  release includes adjacent startup/image-runtime/bridge fixes discovered
+  during the same packaged validation loop.
 - `aidream`: local `main` is five commits ahead of `origin/main` through
   `1996eae67`. Its working tree contains unrelated active document, RAG,
   catalog, and generated-declaration work; do not clean, stash, or absorb it.

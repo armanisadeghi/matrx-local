@@ -446,17 +446,9 @@ are condensed under Completed. Still open:
   and uv.lock is intentionally stale (still pins matrx-ai 0.1.26). After
   publishing: `uv lock && uv sync --extra all` and drop the `--no-sync`
   workaround note in tests/conftest.py if desired.
-- [ ] **Image-gen packages dir shadows venv deps — residual audit** — the
-  protobuf instance is FIXED (2026-07-13: google.protobuf bundled in the
-  frozen build via collect_submodules + copy_metadata in all 4 specs and the
-  build-sidecar fallback; protobuf removed from IMAGE_GEN_PACKAGES; stale
-  copies purged loudly at inject time — verified live). Remaining: audit
-  which OTHER shared deps the prepended runtime dir can shadow in dev mode
-  (frozen builds are protected by FrozenImporter precedence for bundled
-  packages; dev venvs are not) — e.g. huggingface_hub is both a core dep and
-  in IMAGE_GEN_PACKAGES.
-
 ## Completed
+
+- [BUG] MXL-D-062/064/065 fixed: deterministic atomic managed image runtime — 2026-07-19 (`85e22c256`, `v1.3.159`)
 
 - [UI] Canonical app version shown on startup, first run, login, and footer — 2026-07-19 (`desktop/src/lib/app-version.tsx`)
 

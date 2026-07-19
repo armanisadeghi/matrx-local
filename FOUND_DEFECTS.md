@@ -154,50 +154,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## API keys / credentials
 
-### MXL-D-064 — Bundled package version can silently outrank a NEWER managed copy (append-order shadowing)
-- **Area:** `hooks/runtime_hook.py`, `app/services/image_gen/installer.py:429`,
-  `app/services/capabilities/installer.py:106`
-- **Symptom:** The managed runtime dirs are APPENDED to `sys.path`, so for any
-  package present in both, the BUNDLED copy wins regardless of version.
-  `specs/_managed_runtime_bundle.py` fixed *completeness* (the v1.3.145
-  outage), but not *staleness*: the bundle carries huggingface_hub **1.8.0**
-  while the managed dir has **1.24.0**, and 5 modules exist only in 1.24.0
-  (`_oidc`, `_sandbox`, `_sandbox_cache`, `_tree_cache`, `_upload_pipeline`)
-  and are permanently unreachable.
-- **Evidence:** Verified against the real build TOC 2026-07-19 — bundled hf is
-  complete at 168/168 for 1.8.0. Grepped transformers 5.14.1, diffusers 0.39.0,
-  accelerate and peft: **none import those 5 modules today**, so this ships
-  safe. But `transformers>=5.3.0` floats with no ceiling while the engine floor
-  is `huggingface_hub>=0.22.0` (pyproject.toml:169,177), so the gap widens on
-  every managed reinstall.
-- **Status:** open — NOT currently user-visible; a latent successor to the
-  v1.3.145 outage.
-- **Analysis stamp:** Analyzed 2026-07-19 — adversarial review with real
-  Analysis-00.toc diffing, not inference.
-- **Owner hint:** Durable fix is **selective path priority** — a `sys.meta_path`
-  finder (or targeted front-insert) preferring the managed dir for an explicit
-  ML-package allowlist, preserving the reason `append` was chosen (keeping pip
-  `--target`'s stray anyio/httpx/fastapi copies from outranking the engine).
-  Second-best: a build-time assertion that the bundled version >= the
-  installer's resolved floor. Note there are THREE appended managed dirs
-  (`image-gen-packages`, `transcription-packages`, `ner-packages`), all with
-  the same exposure. Related: MXL-D-062.
-
-### MXL-D-065 — Nothing ties the shared-bundle list to what the managed installers actually install
-- **Area:** `specs/_managed_runtime_bundle.py` ↔ `app/services/image_gen/installer.py:50`
-  (`IMAGE_GEN_PACKAGES`) and `app/services/capabilities/installer.py`
-- **Symptom:** `MANAGED_RUNTIME_SHARED_PACKAGES` is hand-maintained. Adding a
-  package to a managed installer that the engine also bundles reintroduces the
-  partial-shadow bug class silently — exactly the failure that shipped three
-  times (protobuf, jinja2, huggingface_hub).
-- **Evidence:** Grepped 2026-07-19 — no cross-reference or test links the two
-  lists.
-- **Status:** open
-- **Analysis stamp:** Analyzed 2026-07-19 — verified by adversarial review.
-- **Owner hint:** Add a test asserting every top-level package the managed
-  installers pull that ALSO appears in the frozen bundle is present in
-  `MANAGED_RUNTIME_SHARED_PACKAGES`.
-
 ### MXL-D-066 — `test_api_key_set_and_delete_roundtrip` times out on macOS (pre-existing)
 - **Area:** `tests/smoke/test_api_keys.py::test_api_key_set_and_delete_roundtrip`
 - **Symptom:** `httpx.ReadTimeout` after ~25s on `PUT /settings/api-keys/{provider}`.
@@ -230,29 +186,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 - **Owner hint:** Needs a bounding policy (scope allowlist, size cap, or
   eviction) plus a settings surface showing the index size with a rebuild/clear
   action. Decide the default scope with Arman before implementing.
-
-### MXL-D-062 — Managed image-gen runtime floats its versions; the same click installs a different stack each day
-- **Area:** `app/services/image_gen/installer.py` `IMAGE_GEN_PACKAGES` (~line 50)
-- **Symptom:** `transformers>=5.3.0`, `huggingface_hub>=0.22.0`, `torch>=2.6`,
-  `peft>=0.13.1` all float while `diffusers==0.39.0` is hard-pinned. Two users
-  clicking Install on different days get different runtimes, and `needs_upgrade()`
-  force-migrates EXISTING working installs onto whatever PyPI has that day.
-  This is what detonated the v1.3.145 outage: transformers 5.3.0 did not import
-  `huggingface_hub.dataclasses`, 5.14.1 does — a time-based failure, not a code
-  change. The frozen-bundle side was fixed (`specs/_managed_runtime_bundle.py`),
-  but the floating pins remain.
-- **Evidence:** `installer.py:50-77`; `diffusers==0.39.0` declares no runtime
-  `transformers` requirement at all (only under `extra == "test"`/`"dev"`), so
-  the hard pin constrains nothing.
-- **Status:** open
-- **Analysis stamp:** Analyzed 2026-07-19 — verified against installed
-  dist-info METADATA in `~/.matrx/image-gen-packages` (transformers 5.14.1,
-  hf_hub 1.24.0, torch 2.13.0 — none of which the pins chose deliberately).
-- **Owner hint:** Pin the managed runtime as a lockfile-grade exact set
-  validated together in CI, delivered via remote catalog / app config so it can
-  roll forward without shipping a binary. Related: the bundled hf_hub is 1.8.0
-  and WINS over the managed copy, so a future transformers requiring hf>=1.20
-  breaks again even with complete collection.
 
 ### MXL-D-063 — Stale discovery file when the server thread exits on its own
 - **Area:** `run.py` `_wait_forever()` (~line 675)

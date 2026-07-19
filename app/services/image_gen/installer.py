@@ -17,14 +17,19 @@ once the install is complete, so the frozen binary can import them.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import importlib.metadata
 import json
 import os
 import platform
 import re
+import shutil
 import sys
 import threading
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable, Literal
 
 from app.common.system_logger import get_logger
 from app.services.optional_packages.core import (
@@ -35,6 +40,25 @@ from app.services.optional_packages.core import (
     packages_dir,
     run_pip_streaming as _run_pip_streaming,
     run_subprocess_cancellable as _run_subprocess_cancellable,
+)
+from app.services.image_gen.runtime_state import (
+    INSTALL_EVIDENCE,
+    RUNTIME_MANIFEST_REVISION,
+    RUNTIME_REVISION,
+    RuntimeFileLock,
+    RuntimePhase,
+    RuntimeSnapshot,
+    active_slot_path,
+    authoritative_snapshot,
+    create_staging_slot,
+    current_runtime_contract,
+    finalize_staging_slot,
+    read_snapshot,
+    remove_slot,
+    slot_path,
+    validate_slot,
+    write_slot_manifest,
+    write_snapshot,
 )
 
 logger = get_logger()
@@ -81,23 +105,84 @@ _TORCH_REQUIREMENT_RE = re.compile(
     r"^torch\s*(?:\(\s*)?==\s*([^);\s]+)", re.IGNORECASE
 )
 
+CRITICAL_RUNTIME_IMPORTS = (
+    "torch",
+    "torchvision",
+    "diffusers",
+    "transformers",
+    "accelerate",
+    "peft",
+    "sentencepiece",
+    "gguf",
+    "huggingface_hub.dataclasses",
+    "jinja2.meta",
+    "tqdm.contrib.logging",
+    "diffusers.loaders.single_file_model",
+    "diffusers.models.autoencoders.autoencoder_kl",
+    "diffusers.models.autoencoders.autoencoder_kl_wan",
+    "diffusers.pipelines.pipeline_utils",
+)
+
+CRITICAL_PIPELINE_CLASSES = (
+    "DiffusionPipeline",
+    "FluxPipeline",
+    "Flux2KleinPipeline",
+    "StableDiffusionPipeline",
+    "StableDiffusionXLPipeline",
+    "ZImagePipeline",
+    "QwenImagePipeline",
+    "WanPipeline",
+    "WanImageToVideoPipeline",
+    "LTXPipeline",
+    "LTXImageToVideoPipeline",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeVerification:
+    valid: bool
+    packages: dict[str, str]
+    failure_code: str | None = None
+    failure_detail: str | None = None
+
 
 # ── Install directory ─────────────────────────────────────────────────────────
 
 
 def get_image_gen_packages_dir() -> Path:
-    """Platform-appropriate directory for image-gen packages."""
+    """Authoritative active slot, or the legacy location before first repair."""
+    active = active_slot_path()
+    if active is not None:
+        return active
+    snapshot = authoritative_snapshot()
+    if snapshot.state is RuntimePhase.RESTART_REQUIRED and snapshot.candidate_slot:
+        valid, _, _ = validate_slot(snapshot.candidate_slot)
+        if valid:
+            return slot_path(snapshot.candidate_slot)
     return packages_dir("image-gen-packages")
 
 
 def is_image_gen_installed() -> bool:
-    """True if the managed image-gen packages directory is complete."""
-    return (get_image_gen_packages_dir() / ".install-complete").exists()
+    """True only for an authoritative, exact-manifest, activated runtime."""
+    return authoritative_snapshot().ready
 
 
 def _compatibility_migration_pending() -> bool:
     """Whether an interrupted mandatory runtime migration must be resumed."""
-    return (get_image_gen_packages_dir() / _COMPATIBILITY_MIGRATION_MARKER).exists()
+    snapshot = authoritative_snapshot()
+    if snapshot.state in {
+        RuntimePhase.UPDATING,
+        RuntimePhase.REPAIRING,
+        RuntimePhase.VALIDATING,
+        RuntimePhase.ACTIVATING,
+        RuntimePhase.RESTART_REQUIRED,
+        RuntimePhase.FAILED,
+        RuntimePhase.ROLLED_BACK,
+    }:
+        return True
+    return (
+        packages_dir("image-gen-packages") / _COMPATIBILITY_MIGRATION_MARKER
+    ).exists()
 
 
 def _use_torch_cpu_index() -> bool:
@@ -106,14 +191,13 @@ def _use_torch_cpu_index() -> bool:
     return not (sys.platform == "darwin" and arch in ("arm64", "aarch64"))
 
 
-def get_installed_package_versions() -> dict[str, str]:
+def _package_versions_at(pkg_dir: Path) -> dict[str, str]:
     """Versions of the managed packages, read from *.dist-info dir names.
 
     Works without importing the packages — safe to call at any time.
     Returns e.g. {"diffusers": "0.39.0", "torch": "2.6.0", ...}.
     """
     versions: dict[str, str] = {}
-    pkg_dir = get_image_gen_packages_dir()
     if not pkg_dir.exists():
         return versions
     try:
@@ -125,6 +209,10 @@ def get_installed_package_versions() -> dict[str, str]:
     except OSError:
         pass
     return versions
+
+
+def get_installed_package_versions() -> dict[str, str]:
+    return _package_versions_at(get_image_gen_packages_dir())
 
 
 def _get_torchvision_torch_requirement() -> str | None:
@@ -161,7 +249,10 @@ def needs_upgrade() -> bool:
     if _compatibility_migration_pending():
         return True
     if not is_image_gen_installed():
-        return False
+        # A legacy completion marker is evidence that user opted into the
+        # runtime, but is never authority. Convert it through a full staged
+        # reinstall instead of trusting or mutating it in place.
+        return (packages_dir("image-gen-packages") / INSTALL_EVIDENCE).exists()
     from app.services.image_gen.service import (  # noqa: PLC0415 — avoid cycle at import time
         MIN_DIFFUSERS_VERSION,
         _parse_version,
@@ -188,6 +279,141 @@ def needs_upgrade() -> bool:
     if required_torch is not None and torch_version.split("+", 1)[0] != required_torch:
         return True
     return False
+
+
+def critical_runtime_import_check(
+    *,
+    importer: Callable[[str], Any] = importlib.import_module,
+    expected_root: Path | None = None,
+) -> dict[str, str]:
+    """Exercise the lazy imports that have caused packaged-only outages.
+
+    ``importer`` is an intentional test seam. When ``expected_root`` is given,
+    heavy managed packages must originate from that immutable slot; this stops
+    a system/user-site install from falsely satisfying verification.
+    """
+    modules: dict[str, Any] = {}
+    for name in CRITICAL_RUNTIME_IMPORTS:
+        modules[name] = importer(name)
+    diffusers = modules["diffusers"]
+    missing_classes = [
+        name for name in CRITICAL_PIPELINE_CLASSES if not hasattr(diffusers, name)
+    ]
+    if missing_classes:
+        raise RuntimeError(
+            "Diffusers is missing required pipeline classes: "
+            + ", ".join(missing_classes)
+        )
+
+    if expected_root is not None:
+        expected = expected_root.resolve(strict=False)
+        for name in ("torch", "torchvision", "diffusers", "transformers", "accelerate", "peft"):
+            module_file = getattr(modules[name], "__file__", None)
+            if not module_file:
+                raise RuntimeError(f"{name} has no import origin")
+            try:
+                inside = Path(module_file).resolve(strict=False).is_relative_to(expected)
+            except (OSError, ValueError):
+                inside = False
+            if not inside:
+                raise RuntimeError(
+                    f"{name} resolved outside candidate runtime: {module_file}"
+                )
+
+    versions: dict[str, str] = {}
+    for name in ("torch", "torchvision", "diffusers", "transformers", "accelerate", "peft"):
+        version = getattr(modules[name], "__version__", None)
+        if version is not None:
+            versions[name] = str(version)
+    if versions.get("diffusers") != "0.39.0":
+        raise RuntimeError(
+            f"Diffusers 0.39.0 is required, found {versions.get('diffusers')!r}"
+        )
+    transformers = versions.get("transformers", "0.0")
+    if tuple(int(part) for part in transformers.split(".")[:2]) < (5, 3):
+        raise RuntimeError(f"Transformers >=5.3 is required, found {transformers!r}")
+    return versions
+
+
+def _validate_selected_python(
+    python: str,
+    *,
+    cancel_event: threading.Event | None,
+) -> None:
+    check = _run_subprocess_cancellable(
+        [
+            python,
+            "-c",
+            (
+                "import json,platform,sys; print(json.dumps({"
+                "'python_abi':sys.implementation.cache_tag or 'unknown',"
+                "'python_version':f'{sys.version_info.major}.{sys.version_info.minor}',"
+                "'platform':sys.platform,'machine':platform.machine().lower()}))"
+            ),
+        ],
+        cancel_event=cancel_event,
+        timeout=30,
+    )
+    if check.returncode != 0:
+        raise RuntimeError(f"Could not inspect installer Python: {check.stderr[-2000:]}")
+    try:
+        actual = json.loads(check.stdout.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Installer Python returned no valid runtime contract") from exc
+    expected = current_runtime_contract()
+    mismatches = [
+        f"{key}={actual.get(key)!r} (engine requires {expected[key]!r})"
+        for key in ("python_abi", "python_version", "platform", "machine")
+        if actual.get(key) != expected[key]
+    ]
+    if mismatches:
+        raise RuntimeError(
+            "Installer Python does not match the production engine ABI: "
+            + "; ".join(mismatches)
+        )
+
+
+def _verify_runtime_subprocess(
+    pkg_dir: Path,
+    *,
+    cancel_event: threading.Event | None,
+) -> dict[str, str]:
+    python = _find_python()
+    _validate_selected_python(python, cancel_event=cancel_event)
+    imports = json.dumps(CRITICAL_RUNTIME_IMPORTS)
+    classes = json.dumps(CRITICAL_PIPELINE_CLASSES)
+    script = (
+        "import importlib,json,pathlib; "
+        f"root=pathlib.Path({str(pkg_dir)!r}).resolve(); "
+        f"mods={{n:importlib.import_module(n) for n in {imports}}}; "
+        f"missing=[n for n in {classes} if not hasattr(mods['diffusers'],n)]; "
+        "assert not missing, missing; "
+        "managed=('torch','torchvision','diffusers','transformers','accelerate','peft'); "
+        "bad={n:str(pathlib.Path(mods[n].__file__).resolve()) for n in managed "
+        "if root not in pathlib.Path(mods[n].__file__).resolve().parents}; "
+        "assert not bad, bad; "
+        "assert mods['diffusers'].__version__=='0.39.0'; "
+        "assert tuple(map(int,mods['transformers'].__version__.split('.')[:2])) >= (5,3); "
+        "print(json.dumps({n:str(getattr(mods[n],'__version__','unknown')) for n in managed}))"
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(pkg_dir)
+    env["PYTHONNOUSERSITE"] = "1"
+    check = _run_subprocess_cancellable(
+        [python, "-I", "-c", script],
+        cancel_event=cancel_event,
+        env=env,
+        timeout=180,
+    )
+    # -I intentionally ignores PYTHONPATH. Pass the slot in the script instead.
+    if check.returncode != 0:
+        # Retry is never appropriate: a verifier failure means the candidate is
+        # not publishable. Include the captured traceback for diagnostics.
+        raise RuntimeError(f"Critical runtime verification failed: {check.stderr[-4000:]}")
+    try:
+        return {str(k): str(v) for k, v in json.loads(check.stdout.splitlines()[-1]).items()}
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Critical runtime verifier returned no manifest") from exc
 
 
 def migrate_incompatible_runtime(

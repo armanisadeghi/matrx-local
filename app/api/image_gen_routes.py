@@ -99,11 +99,10 @@ from app.services.image_gen.models import (
     get_workflow_presets,
 )
 from app.services.image_gen.installer import (
-    start_install,
-    get_active_progress,
-    is_image_gen_installed,
+    ensure_runtime,
+    get_runtime_status,
     get_image_gen_packages_dir,
-    needs_upgrade,
+    repair_runtime,
 )
 from app.common.route_errors import safe_route
 from app.common.system_logger import get_logger
@@ -2169,9 +2168,90 @@ class InstallStatusResponse(BaseModel):
     error: str | None = None
     already_installed: bool = False
     install_dir: str = ""
-    log_lines: list[str] = []
+    log_lines: list[str] = Field(default_factory=list)
     """All accumulated pip output lines — returned on every poll so the UI can
     reconstruct the full log after a reconnect or tab switch."""
+
+
+class MediaRuntimeStatusResponse(BaseModel):
+    """Authoritative image/video managed-runtime lifecycle.
+
+    A completion marker is deliberately absent from this contract. ``ready``
+    means the exact runtime revision passed the production-process verifier;
+    every UI surface consumes this snapshot instead of inferring health from a
+    package version or installer progress object.
+    """
+
+    state: Literal[
+        "absent",
+        "installing",
+        "updating",
+        "repairing",
+        "validating",
+        "activating",
+        "restart_required",
+        "ready",
+        "failed",
+        "rolled_back",
+    ]
+    operation: Literal["install", "update", "repair"] | None = None
+    attempt_id: str | None = None
+    runtime_revision: str | None = None
+    required_revision: str
+    stage: str = ""
+    percent: float = 0.0
+    message: str = ""
+    failure_code: str | None = None
+    failure_detail: str | None = None
+    repairable: bool = False
+    image_available: bool = False
+    video_packages_available: bool = False
+    active_slot: str | None = None
+    last_known_good_slot: str | None = None
+    candidate_slot: str | None = None
+    package_checks: list[dict[str, Any]] = Field(default_factory=list)
+    log_lines: list[str] = Field(default_factory=list)
+
+
+def _runtime_response() -> MediaRuntimeStatusResponse:
+    return MediaRuntimeStatusResponse(**get_runtime_status())
+
+
+def _runtime_to_legacy_status() -> InstallStatusResponse:
+    """Keep older clients truthful while they migrate to ``/runtime/*``.
+
+    The old four-state response cannot express validation, activation, repair,
+    or rollback. It may collapse those states for presentation, but it must
+    never turn anything except authoritative ``ready`` into ``complete``.
+    """
+
+    runtime = get_runtime_status()
+    state = runtime["state"]
+    if state == "ready":
+        legacy_state = "complete"
+    elif state in {
+        "installing",
+        "updating",
+        "repairing",
+        "validating",
+        "activating",
+        "restart_required",
+    }:
+        legacy_state = "running"
+    elif state in {"failed", "rolled_back"}:
+        legacy_state = "error"
+    else:
+        legacy_state = "idle"
+    response = _make_status(
+        status=legacy_state,
+        stage=str(runtime.get("stage") or state),
+        percent=float(runtime.get("percent") or 0.0),
+        message=str(runtime.get("message") or ""),
+        error=runtime.get("failure_detail"),
+        already_installed=state == "ready",
+    )
+    response.log_lines = list(runtime.get("log_lines") or [])
+    return response
 
 
 def _make_status(
@@ -2200,52 +2280,74 @@ def _make_status(
     )
 
 
+@router.get("/runtime/status", response_model=MediaRuntimeStatusResponse)
+async def media_runtime_status() -> MediaRuntimeStatusResponse:
+    """Return the one authoritative lifecycle shared by image and video."""
+
+    return _runtime_response()
+
+
+@router.post("/runtime/ensure", response_model=MediaRuntimeStatusResponse)
+async def ensure_media_runtime() -> MediaRuntimeStatusResponse:
+    """Idempotently install/update/validate the required managed runtime."""
+
+    await ensure_runtime()
+    return _runtime_response()
+
+
+@router.post("/runtime/repair", response_model=MediaRuntimeStatusResponse)
+async def repair_media_runtime() -> MediaRuntimeStatusResponse:
+    """Force a clean, staged reinstall without touching models or user assets."""
+
+    await repair_runtime()
+    return _runtime_response()
+
+
+@router.get("/runtime/stream")
+async def stream_media_runtime() -> StreamingResponse:
+    """Broadcast reconnect-safe snapshots without consuming installer events.
+
+    Progress is durable state, not a single-consumer queue. Multiple image,
+    video, workflow, or reconnecting clients therefore observe the same attempt
+    and terminal result without stealing events from one another.
+    """
+
+    async def event_stream():
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 30 * 60
+        previous: str | None = None
+        while not process_shutdown_requested() and loop.time() < deadline:
+            payload = get_runtime_status()
+            encoded = json.dumps(payload, sort_keys=True, default=str)
+            if encoded != previous:
+                yield f"data: {encoded}\n\n"
+                previous = encoded
+            if payload.get("state") in {"ready", "failed", "rolled_back"}:
+                return
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/install", response_model=InstallStatusResponse)
 async def install_image_gen() -> InstallStatusResponse:
     """Start the background installation of torch + diffusers.
 
     Safe to call multiple times — returns current state if already running or done.
 
-    UPGRADE PATH: when packages are installed but diffusers is older than the
-    catalog minimum (needs_upgrade()), this re-runs pip with the upgraded pins
-    instead of short-circuiting — same SSE progress stream as a fresh install.
+    Legacy compatibility facade over the canonical verify-or-reinstall runtime
+    controller. It reports complete only when that controller reports ready.
     """
-    if is_image_gen_installed() and not needs_upgrade():
-        from app.services.image_gen.installer import inject_image_gen_path
-
-        inject_image_gen_path()
-        from app.services.image_gen import service as _svc
-
-        _svc.DEPS_AVAILABLE, _svc.DEPS_REASON = _svc._check_deps()
-        from app.services.video_gen import service as _vsvc
-
-        _vsvc.DEPS_AVAILABLE, _vsvc.DEPS_REASON = _vsvc._check_deps()
-        return _make_status(
-            status="complete",
-            stage="done",
-            percent=100.0,
-            message="Image generation is already installed.",
-            already_installed=True,
-        )
-
-    existing = get_active_progress()
-    if existing and existing.status == "running":
-        return _make_status(
-            status=existing.status,
-            stage=existing.stage,
-            percent=existing.percent,
-            message=existing.message,
-            progress=existing,
-        )
-
-    progress = await start_install()
-    return _make_status(
-        status=progress.status,
-        stage=progress.stage,
-        percent=progress.percent,
-        message="Installation started.",
-        progress=progress,
-    )
+    await ensure_runtime()
+    return _runtime_to_legacy_status()
 
 
 @router.get("/install/status", response_model=InstallStatusResponse)
@@ -2254,36 +2356,7 @@ async def get_install_status() -> InstallStatusResponse:
 
     Call this when reconnecting after a tab switch to restore the full log.
     """
-    # Any progress object belongs to this engine process and is newer than the
-    # disk marker. In particular, a failed activation may leave/recreate marker
-    # state while preserving a terminal error that the UI and smoke gate must
-    # never mask as "complete".
-    active = get_active_progress()
-    if active is not None:
-        return _make_status(
-            status=active.status,
-            stage=active.stage,
-            percent=active.percent,
-            message=active.message,
-            error=active.error,
-            progress=active,
-        )
-
-    if is_image_gen_installed():
-        return _make_status(
-            status="complete",
-            stage="done",
-            percent=100.0,
-            message="Image generation packages are installed.",
-            already_installed=True,
-        )
-
-    return _make_status(
-        status="idle",
-        stage="",
-        percent=0.0,
-        message="No installation in progress.",
-    )
+    return _runtime_to_legacy_status()
 
 
 @router.get("/install/stream")
@@ -2297,65 +2370,27 @@ async def stream_install_progress() -> StreamingResponse:
 
     async def event_stream():
         loop = asyncio.get_running_loop()
-
         yield f"data: {json.dumps({'status': 'connected', 'percent': 0})}\n\n"
-
-        _active = get_active_progress()
-        if is_image_gen_installed() and not (_active and _active.status == "running"):
-            yield f"data: {json.dumps({'status': 'complete', 'percent': 100, 'message': 'Already installed'})}\n\n"
-            return
-
-        # Wait up to 15 s for the caller to kick off POST /install
-        deadline = loop.time() + 15.0
-        while get_active_progress() is None:
-            if process_shutdown_requested():
+        deadline = loop.time() + 30 * 60
+        waiting_deadline = loop.time() + 15.0
+        previous: str | None = None
+        next_keepalive = loop.time() + 5.0
+        while not process_shutdown_requested() and loop.time() < deadline:
+            runtime = get_runtime_status()
+            response = _runtime_to_legacy_status().model_dump(mode="json")
+            encoded = json.dumps(response, sort_keys=True, default=str)
+            if encoded != previous:
+                yield f"data: {encoded}\n\n"
+                previous = encoded
+            state = runtime.get("state")
+            if state in {"ready", "failed", "rolled_back"}:
                 return
-            if loop.time() > deadline:
-                yield f"data: {json.dumps({'status': 'error', 'message': 'No install started. Call POST /image-gen/install first.'})}\n\n"
+            if state == "absent" and loop.time() >= waiting_deadline:
                 return
-            await asyncio.sleep(0.3)
-
-        progress = get_active_progress()
-        assert progress is not None
-
-        # Keep-alive between events: pip's silent dependency-resolution phase
-        # can outlast proxy/browser idle timeouts. (The old "heartbeat task"
-        # here was declared but never started — dead code.) SSE comment lines
-        # (": ...") are ignored by EventSource parsers, so they're safe to
-        # interleave with real events.
-        # Pump events through a local queue so the keepalive timeout never
-        # cancels the generator's __anext__ (which would corrupt it).
-        queue: asyncio.Queue = asyncio.Queue()
-        _SENTINEL = object()
-
-        async def _pump() -> None:
-            try:
-                async for ev in progress.events():
-                    await queue.put(ev)
-                    if ev.get("status") in ("complete", "error"):
-                        break
-            except Exception as pump_exc:
-                await queue.put({"status": "error", "message": str(pump_exc)})
-            finally:
-                await queue.put(_SENTINEL)
-
-        pump_task = asyncio.create_task(_pump())
-        try:
-            next_keepalive = loop.time() + 5.0
-            while not process_shutdown_requested():
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=0.25)
-                except asyncio.TimeoutError:
-                    if loop.time() >= next_keepalive:
-                        yield ": keepalive\n\n"
-                        next_keepalive = loop.time() + 5.0
-                    continue
-                if event is _SENTINEL:
-                    break
-                yield f"data: {json.dumps(event)}\n\n"
-        finally:
-            pump_task.cancel()
-            await asyncio.gather(pump_task, return_exceptions=True)
+            if loop.time() >= next_keepalive:
+                yield ": keepalive\n\n"
+                next_keepalive = loop.time() + 5.0
+            await asyncio.sleep(0.5)
 
     return StreamingResponse(
         event_stream(),

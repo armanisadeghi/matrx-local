@@ -1,0 +1,259 @@
+{
+  "contract_sha256": "1601ae19e360b23ff5dc640d03bd45fd8acfab081a9eb96905911afb48f23624",
+  "critical_frozen_modules": [
+    "huggingface_hub.dataclasses",
+    "jinja2.meta",
+    "tqdm.contrib.logging"
+  ],
+  "lock_graph_sha256": "a36cdb860bcdc973fa1759f65c5c5610e386632ee563f64c2edaf9a8674a9ecf",
+  "lock_source": "uv.lock",
+  "managed_direct_versions": {
+    "accelerate": "1.13.0",
+    "diffusers": "0.39.0",
+    "gguf": "0.19.0",
+    "huggingface-hub": "1.8.0",
+    "peft": "0.19.1",
+    "sentencepiece": "0.2.1",
+    "torch": "2.10.0",
+    "torchvision": "0.25.0",
+    "transformers": "5.3.0"
+  },
+  "managed_requirements": [
+    "torch>=2.6",
+    "torchvision",
+    "diffusers==0.39.0",
+    "transformers>=5.3.0",
+    "accelerate>=1.0",
+    "peft>=0.13.1",
+    "sentencepiece>=0.2.0",
+    "gguf>=0.10.0",
+    "huggingface_hub>=0.22.0"
+  ],
+  "python_minor": "3.13",
+  "runtime_attributes": {
+    "diffusers": [
+      "Flux2KleinPipeline",
+      "ZImagePipeline"
+    ],
+    "transformers": [
+      "AutoImageProcessor",
+      "AutoTokenizer"
+    ]
+  },
+  "runtime_imports": [
+    "accelerate",
+    "diffusers",
+    "gguf",
+    "huggingface_hub.dataclasses",
+    "jinja2.meta",
+    "peft",
+    "sentencepiece",
+    "torch",
+    "torchvision",
+    "tqdm.contrib.logging",
+    "transformers"
+  ],
+  "schema_version": 1,
+  "shared_distributions": [
+    "annotated-doc",
+    "anyio",
+    "certifi",
+    "charset-normalizer",
+    "click",
+    "filelock",
+    "fsspec",
+    "h11",
+    "hf-xet",
+    "httpcore",
+    "httpx",
+    "huggingface-hub",
+    "idna",
+    "importlib-metadata",
+    "jinja2",
+    "markdown-it-py",
+    "markupsafe",
+    "mdurl",
+    "mpmath",
+    "networkx",
+    "numpy",
+    "packaging",
+    "pillow",
+    "psutil",
+    "pygments",
+    "pyyaml",
+    "regex",
+    "requests",
+    "rich",
+    "setuptools",
+    "shellingham",
+    "sympy",
+    "tokenizers",
+    "tqdm",
+    "typer",
+    "typing-extensions",
+    "urllib3",
+    "zipp"
+  ],
+  "shared_import_map": {
+    "annotated-doc": [
+      "annotated_doc"
+    ],
+    "anyio": [
+      "anyio"
+    ],
+    "certifi": [
+      "certifi"
+    ],
+    "charset-normalizer": [
+      "charset_normalizer"
+    ],
+    "click": [
+      "click"
+    ],
+    "filelock": [
+      "filelock"
+    ],
+    "fsspec": [
+      "fsspec"
+    ],
+    "h11": [
+      "h11"
+    ],
+    "hf-xet": [
+      "hf_xet"
+    ],
+    "httpcore": [
+      "httpcore"
+    ],
+    "httpx": [
+      "httpx"
+    ],
+    "huggingface-hub": [
+      "huggingface_hub"
+    ],
+    "idna": [
+      "idna"
+    ],
+    "importlib-metadata": [
+      "importlib_metadata"
+    ],
+    "jinja2": [
+      "jinja2"
+    ],
+    "markdown-it-py": [
+      "markdown_it"
+    ],
+    "markupsafe": [
+      "markupsafe"
+    ],
+    "mdurl": [
+      "mdurl"
+    ],
+    "mpmath": [
+      "mpmath"
+    ],
+    "networkx": [
+      "networkx"
+    ],
+    "numpy": [
+      "numpy"
+    ],
+    "packaging": [
+      "packaging"
+    ],
+    "pillow": [
+      "PIL"
+    ],
+    "psutil": [
+      "psutil"
+    ],
+    "pygments": [
+      "pygments"
+    ],
+    "pyyaml": [
+      "_yaml",
+      "yaml"
+    ],
+    "regex": [
+      "regex"
+    ],
+    "requests": [
+      "requests"
+    ],
+    "rich": [
+      "rich"
+    ],
+    "setuptools": [
+      "_distutils_hack",
+      "setuptools"
+    ],
+    "shellingham": [
+      "shellingham"
+    ],
+    "sympy": [
+      "isympy",
+      "sympy"
+    ],
+    "tokenizers": [
+      "tokenizers"
+    ],
+    "tqdm": [
+      "tqdm"
+    ],
+    "typer": [
+      "typer"
+    ],
+    "typing-extensions": [
+      "typing_extensions"
+    ],
+    "urllib3": [
+      "urllib3"
+    ],
+    "zipp": [
+      "zipp"
+    ]
+  },
+  "shared_import_packages": [
+    "PIL",
+    "_distutils_hack",
+    "_yaml",
+    "annotated_doc",
+    "anyio",
+    "certifi",
+    "charset_normalizer",
+    "click",
+    "filelock",
+    "fsspec",
+    "h11",
+    "hf_xet",
+    "httpcore",
+    "httpx",
+    "huggingface_hub",
+    "idna",
+    "importlib_metadata",
+    "isympy",
+    "jinja2",
+    "markdown_it",
+    "markupsafe",
+    "mdurl",
+    "mpmath",
+    "networkx",
+    "numpy",
+    "packaging",
+    "psutil",
+    "pygments",
+    "regex",
+    "requests",
+    "rich",
+    "setuptools",
+    "shellingham",
+    "sympy",
+    "tokenizers",
+    "tqdm",
+    "typer",
+    "typing_extensions",
+    "urllib3",
+    "yaml",
+    "zipp"
+  ]
+}

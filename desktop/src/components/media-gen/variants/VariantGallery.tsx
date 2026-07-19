@@ -57,7 +57,6 @@ import {
 import { useImageGenController } from "../core/imageController";
 import { useVideoGenController } from "../core/videoController";
 import { ImageStatusErrorCard } from "../core/gates";
-import { needsImageGenPackageInstall } from "../core/readiness";
 import { ImageModelPicker, VideoModelPicker } from "../core/ModelPicker";
 import {
   ImageAdvancedSection,
@@ -134,7 +133,7 @@ const FILTERS: { value: MediaLibraryFilter; label: string }[] = [
 export function VariantGallery() {
   const [mediaGen, mediaGenActions] = useMediaGenApp();
   const {
-    imageStatus,
+    mediaRuntime,
     imageStatusError,
     imageGenerating,
     imageCancelling,
@@ -284,7 +283,8 @@ export function VariantGallery() {
   }, [isImage, imageCtl, videoCtl]);
 
   // ── Not-ready states ─────────────────────────────────────────────────────
-  const packagesMissing = needsImageGenPackageInstall(imageStatus);
+  const runtimeUnavailable =
+    mediaRuntime?.state !== "ready" || !mediaRuntime.image_available;
   const engineDown = imageStatusError !== null;
   const modeStatusError = isImage ? imageStatusError : videoStatusError;
   const modelLoading = isImage ? imageModelLoading : videoModelLoading;
@@ -314,10 +314,9 @@ export function VariantGallery() {
             />
           )}
 
-          {!engineDown && packagesMissing ? (
+          {!engineDown && runtimeUnavailable ? (
             <ImageGenInstaller
               models={mediaGen.imageModels}
-              onInstallComplete={() => void refreshImage()}
             />
           ) : !engineDown ? (
             <>
@@ -628,7 +627,7 @@ export function VariantGallery() {
           ) : null}
 
           {/* ══ Queue strip ══════════════════════════════════════════════ */}
-          {!packagesMissing && !engineDown && showQueueStrip && (
+          {!engineDown && showQueueStrip && (
             <div className="space-y-1">
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {/* Fresh foreground result */}

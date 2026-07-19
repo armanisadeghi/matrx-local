@@ -136,6 +136,7 @@ export function VariantStudio() {
   const [state, actions] = useMediaGenApp();
   const {
     imageStatus,
+    mediaRuntime,
     imageStatusError,
     imageResult,
     imageForm,
@@ -232,9 +233,12 @@ export function VariantStudio() {
   const isImage = mode === "image";
   const videoJobActive =
     activeJob?.status === "queued" || activeJob?.status === "running";
-  const imageReady = !!imageStatus?.available;
+  const imageReady =
+    mediaRuntime?.state === "ready" && mediaRuntime.image_available;
   const videoReady =
-    !!videoStatus?.hardware_supported && !!videoStatus?.packages_installed;
+    mediaRuntime?.state === "ready" &&
+    mediaRuntime.video_packages_available &&
+    !!videoStatus?.hardware_supported;
   const modeReady = isImage ? imageReady : videoReady;
 
   const selectedItem: MediaLibraryItem | null = useMemo(

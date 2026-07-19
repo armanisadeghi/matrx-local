@@ -87,6 +87,7 @@ export function useImageGenController(options?: {
   const onAfterSelect = options?.onAfterSelect;
   const [state, actions] = useMediaGenApp();
   const {
+    mediaRuntime,
     imageStatus,
     imageModels,
     imageGenError,
@@ -172,6 +173,8 @@ export function useImageGenController(options?: {
   const textEncoderInvalid =
     imageForm.textEncoderId !== null && selectedTextEncoder?.installed !== true;
   const formInvalid =
+    mediaRuntime?.state !== "ready" ||
+    mediaRuntime.image_available !== true ||
     !imageForm.prompt.trim() ||
     !defaults ||
     !advanced.ok ||
@@ -180,6 +183,9 @@ export function useImageGenController(options?: {
   const isRevision = imageForm.revision !== null;
 
   const buildInput = useCallback((): ImageGenerateInput | null => {
+    if (mediaRuntime?.state !== "ready" || !mediaRuntime.image_available) {
+      return null;
+    }
     const d = imageForm.defaults;
     if (!d) return null;
     const adv = computeAdvancedOverrides(imageForm.advancedText, d.advanced);
@@ -230,7 +236,7 @@ export function useImageGenController(options?: {
         : {}),
       ...(extraParams !== undefined ? { extra_params: extraParams } : {}),
     };
-  }, [imageForm]);
+  }, [imageForm, mediaRuntime]);
 
   const handleGenerate = useCallback(async () => {
     const input = buildInput();

@@ -30,13 +30,11 @@ import { Button } from "@/components/ui/button";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { WorkflowSection } from "../WorkflowSection";
 import { MediaLibrarySection } from "../MediaLibrarySection";
-import { ImageGenInstaller } from "../ImageGenInstaller";
 import { InlineProgressBar } from "../shared";
 import { useImageGenController } from "../core/imageController";
 import { useVideoGenController } from "../core/videoController";
 import {
   ImageGenGate,
-  OutdatedPackagesBanner,
   VideoGenGate,
 } from "../core/gates";
 import { ImageModelPicker, VideoModelPicker } from "../core/ModelPicker";
@@ -102,8 +100,8 @@ function ModelsView({
   onGoToVideo: () => void;
 }) {
   const [state, actions] = useMediaGenApp();
-  const { imageStatus } = state;
-  const { refreshImage } = actions;
+  void state;
+  void actions;
   const imageCtl = useImageGenController({ onAfterSelect: onGoToImage });
   const videoCtl = useVideoGenController({ onAfterSelect: onGoToVideo });
 
@@ -115,15 +113,7 @@ function ModelsView({
           Image models
         </h3>
         <ImageGenGate>
-          {imageStatus?.packages_outdated ? (
-            <ImageGenInstaller
-              models={[]}
-              upgrade
-              onInstallComplete={() => void refreshImage()}
-            />
-          ) : (
-            <ImageModelPicker ctl={imageCtl} layout="grid" showHeading={false} />
-          )}
+          <ImageModelPicker ctl={imageCtl} layout="grid" showHeading={false} />
         </ImageGenGate>
       </section>
 
@@ -150,13 +140,6 @@ function ImageGenerateView({ onGoToModels }: { onGoToModels: () => void }) {
   return (
     <ImageGenGate>
       <div className="space-y-5 pb-8">
-        <OutdatedPackagesBanner
-          extra={
-            <Button size="sm" variant="outline" onClick={onGoToModels}>
-              Open Models
-            </Button>
-          }
-        />
         {!ctl.model ? (
           <NoModelEmptyState kind="image" onGoToModels={onGoToModels} />
         ) : imageForm.paramsLoading || !ctl.defaults ? (

@@ -1,0 +1,19 @@
+{
+  "contract_sha256": "1601ae19e360b23ff5dc640d03bd45fd8acfab081a9eb96905911afb48f23624",
+  "lock_graph_sha256": "a36cdb860bcdc973fa1759f65c5c5610e386632ee563f64c2edaf9a8674a9ecf",
+  "lock_source": "uv.lock",
+  "managed_direct_versions": {
+    "accelerate": "1.13.0",
+    "diffusers": "0.39.0",
+    "gguf": "0.19.0",
+    "huggingface-hub": "1.8.0",
+    "peft": "0.19.1",
+    "sentencepiece": "0.2.1",
+    "torch": "2.10.0",
+    "torchvision": "0.25.0",
+    "transformers": "5.3.0"
+  },
+  "python_minor": "3.13",
+  "schema_version": 1,
+  "target": "x86_64-pc-windows-msvc"
+}

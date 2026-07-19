@@ -66,6 +66,10 @@ import {
   deleteCustomImageModel as apiDeleteCustomImageModel,
   classifyLoraRef,
   MediaGenHttpError,
+  getMediaRuntimeStatus,
+  ensureMediaRuntime as apiEnsureMediaRuntime,
+  repairMediaRuntime as apiRepairMediaRuntime,
+  streamMediaRuntimeStatus,
 } from "@/lib/api";
 import type {
   ImageGenStatus,
@@ -84,10 +88,16 @@ import type {
   VideoGenRequest,
   CustomImageModelEntry,
   CustomImageModelInspectResult,
+  MediaRuntimeStatus,
 } from "@/lib/api";
 import { emitClientLog } from "@/hooks/use-unified-log";
 import { VAULT_UNLOCKED_EVENT } from "@/hooks/use-media-vault";
 import { onMediaItemsRemoved, onVaultLocked } from "@/lib/media-events";
+import {
+  acceptsRuntimeSnapshot,
+  isRuntimeActive,
+  isRuntimeReady,
+} from "@/lib/image-gen/runtime-state";
 
 const ENGINE_NOT_CONNECTED = "Engine not connected";
 // User-facing message for ACTION paths (download/load/generate/…) that cannot
@@ -96,6 +106,8 @@ const ENGINE_NOT_CONNECTED = "Engine not connected";
 // that here or you would trip the retry loop for a one-shot action failure.
 const ENGINE_NOT_CONNECTED_ACTION =
   "Engine not connected — check the engine status and try again";
+const MEDIA_RUNTIME_NOT_READY =
+  "The managed AI runtime is not ready. Complete installation or repair, then try again.";
 
 // Explicit, visible fallbacks used ONLY when the params endpoint fails for a
 // video model (the video catalog carries no recommended steps/guidance).  The
@@ -424,6 +436,12 @@ function recordedTextEncoder(
 }
 
 export interface MediaGenState {
+  // ── Shared managed runtime ───────────────────────────────────────────────
+  /** Authoritative server-owned lifecycle shared by image and video. */
+  mediaRuntime: MediaRuntimeStatus | null;
+  mediaRuntimeLoading: boolean;
+  mediaRuntimeError: string | null;
+
   // ── Image ──────────────────────────────────────────────────────────────
   imageStatus: ImageGenStatus | null;
   imageModels: ImageGenModelInfo[];
@@ -515,6 +533,10 @@ export interface MediaGenState {
 }
 
 export interface MediaGenActions {
+  // Shared managed runtime
+  refreshMediaRuntime: () => Promise<void>;
+  ensureMediaRuntime: () => Promise<void>;
+  repairMediaRuntime: () => Promise<void>;
   // Image
   refreshImage: () => Promise<void>;
   /** The latest fetched image model catalog (see getImageModels impl). */
@@ -683,6 +705,11 @@ export interface MediaGenActions {
 }
 
 export function useMediaGen(): [MediaGenState, MediaGenActions] {
+  // ── Shared managed runtime state ─────────────────────────────────────────
+  const [mediaRuntime, setMediaRuntime] = useState<MediaRuntimeStatus | null>(null);
+  const [mediaRuntimeLoading, setMediaRuntimeLoading] = useState(true);
+  const [mediaRuntimeError, setMediaRuntimeError] = useState<string | null>(null);
+
   // ── Image state ──────────────────────────────────────────────────────────
   const [imageStatus, setImageStatus] = useState<ImageGenStatus | null>(null);
   const [imageModels, setImageModels] = useState<ImageGenModelInfo[]>([]);
@@ -797,6 +824,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   // Video enqueue run id — guards the brief "Starting…" phase so a cancel
   // issued before the job id exists doesn't get resurrected by a late 202.
   const videoRunRef = useRef(0);
+  const mediaRuntimeRef = useRef<MediaRuntimeStatus | null>(null);
+  const runtimeExpectedAttemptRef = useRef<string | null>(null);
+  const runtimeRequestRef = useRef(0);
+  const runtimeStreamCleanupRef = useRef<(() => void) | null>(null);
+  const runtimePollRef = useRef<number | null>(null);
   useEffect(() => {
     activeJobRef.current = activeJob;
   }, [activeJob]);
@@ -812,6 +844,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   useEffect(() => {
     imagePresetsRef.current = imagePresets;
   }, [imagePresets]);
+  useEffect(() => {
+    mediaRuntimeRef.current = mediaRuntime;
+  }, [mediaRuntime]);
 
   // ── Shared actions ────────────────────────────────────────────────────────
   const fetchParams = useCallback(
@@ -1216,6 +1251,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
 
   const generateImage = useCallback(
     async (input: ImageGenerateInput): Promise<boolean> => {
+      if (!isRuntimeReady(mediaRuntimeRef.current)) {
+        setImageGenError(MEDIA_RUNTIME_NOT_READY);
+        return false;
+      }
       const base = engine.engineUrl;
       if (!base) {
         logEngineNotConnected("generate image");
@@ -1315,6 +1354,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
 
   const generateImageWorkflow = useCallback(
     async (input: ImageWorkflowInput): Promise<boolean> => {
+      if (!isRuntimeReady(mediaRuntimeRef.current)) {
+        setImageGenError(MEDIA_RUNTIME_NOT_READY);
+        return false;
+      }
       const base = engine.engineUrl;
       if (!base) {
         logEngineNotConnected("generate image workflow");
@@ -1462,6 +1505,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       input: ImageGenerateInput,
       priority: "normal" | "next" = "normal",
     ): Promise<boolean> => {
+      if (!isRuntimeReady(mediaRuntimeRef.current)) {
+        setImageGenError(MEDIA_RUNTIME_NOT_READY);
+        return false;
+      }
       const base = engine.engineUrl;
       if (!base) {
         logEngineNotConnected("enqueue image job");
@@ -1545,6 +1592,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       jobs: ImageGenBatchJobSpec[],
       label?: string,
     ): Promise<EnqueueBatchResult> => {
+      if (!isRuntimeReady(mediaRuntimeRef.current)) {
+        setImageGenError(MEDIA_RUNTIME_NOT_READY);
+        return { ok: false, error: MEDIA_RUNTIME_NOT_READY };
+      }
       const base = engine.engineUrl;
       if (!base) {
         logEngineNotConnected("enqueue image batch");
@@ -2466,6 +2517,14 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
 
   const generateVideo = useCallback(
     async (req: VideoGenRequest): Promise<{ ok: boolean; error?: string }> => {
+      const runtime = mediaRuntimeRef.current;
+      if (
+        runtime?.state !== "ready" ||
+        !runtime.video_packages_available
+      ) {
+        setVideoGenError(MEDIA_RUNTIME_NOT_READY);
+        return { ok: false, error: MEDIA_RUNTIME_NOT_READY };
+      }
       const base = engine.engineUrl;
       if (!base) {
         logEngineNotConnected("generate video");
@@ -2612,12 +2671,169 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const clearActiveJob = useCallback(() => setActiveJob(null), []);
   const clearVideoGenError = useCallback(() => setVideoGenError(null), []);
 
+  // ── Shared managed-runtime controller ────────────────────────────────────
+  // One owner for image + video and every layout. Components never open their
+  // own stream or infer health from package versions.
+  const stopRuntimeTransport = useCallback(() => {
+    runtimeStreamCleanupRef.current?.();
+    runtimeStreamCleanupRef.current = null;
+    if (runtimePollRef.current !== null) {
+      window.clearInterval(runtimePollRef.current);
+      runtimePollRef.current = null;
+    }
+  }, []);
+
+  const applyRuntimeSnapshot = useCallback(
+    (status: MediaRuntimeStatus, enforceAttempt = true): boolean => {
+      if (
+        enforceAttempt &&
+        !acceptsRuntimeSnapshot(status, runtimeExpectedAttemptRef.current)
+      ) {
+        emitClientLog(
+          "warn",
+          `[media-gen] ignored stale runtime snapshot for attempt ${status.attempt_id ?? "none"}`,
+          "engine",
+        );
+        return false;
+      }
+      const wasReady = isRuntimeReady(mediaRuntimeRef.current);
+      mediaRuntimeRef.current = status;
+      setMediaRuntime(status);
+      setMediaRuntimeError(null);
+      setMediaRuntimeLoading(false);
+      if (!isRuntimeActive(status)) stopRuntimeTransport();
+      if (!wasReady && isRuntimeReady(status)) {
+        // Runtime activation changes both service snapshots. Refresh them as one
+        // shared transition so one surface can never remain on stale setup UI.
+        void Promise.all([refreshImage(), refreshVideo()]);
+      }
+      return true;
+    },
+    [refreshImage, refreshVideo, stopRuntimeTransport],
+  );
+
+  const startRuntimePolling = useCallback(() => {
+    if (runtimePollRef.current !== null) return;
+    runtimePollRef.current = window.setInterval(() => {
+      const base = engine.engineUrl;
+      if (!base) return;
+      void getMediaRuntimeStatus(base)
+        .then((status) => {
+          applyRuntimeSnapshot(status);
+          if (!isRuntimeActive(status) && runtimePollRef.current !== null) {
+            window.clearInterval(runtimePollRef.current);
+            runtimePollRef.current = null;
+          }
+        })
+        .catch((error) => {
+          setMediaRuntimeError(
+            error instanceof Error
+              ? error.message
+              : "Could not check the AI runtime",
+          );
+        });
+    }, 1500);
+  }, [applyRuntimeSnapshot]);
+
+  const connectRuntimeStream = useCallback(
+    async (base: string) => {
+      runtimeStreamCleanupRef.current?.();
+      const headers = await engine.getEngineAuthHeaders();
+      const auth = (headers as Record<string, string>)["Authorization"];
+      const token = auth ? auth.replace("Bearer ", "") : null;
+      runtimeStreamCleanupRef.current = streamMediaRuntimeStatus(
+        base,
+        async () => token,
+        (status) => void applyRuntimeSnapshot(status),
+        startRuntimePolling,
+      );
+    },
+    [applyRuntimeSnapshot, startRuntimePolling],
+  );
+
+  const refreshMediaRuntime = useCallback(async () => {
+    const base = engine.engineUrl;
+    if (!base) {
+      setMediaRuntimeError(ENGINE_NOT_CONNECTED);
+      setMediaRuntimeLoading(false);
+      return;
+    }
+    const requestId = ++runtimeRequestRef.current;
+    setMediaRuntimeLoading(true);
+    try {
+      const status = await getMediaRuntimeStatus(base);
+      if (requestId !== runtimeRequestRef.current) return;
+      // A direct status read is authoritative for the current engine instance.
+      runtimeExpectedAttemptRef.current = status.attempt_id;
+      applyRuntimeSnapshot(status, false);
+      if (isRuntimeActive(status)) {
+        await connectRuntimeStream(base).catch(() => startRuntimePolling());
+      }
+    } catch (error) {
+      if (requestId !== runtimeRequestRef.current) return;
+      setMediaRuntimeError(
+        error instanceof Error ? error.message : "Could not check the AI runtime",
+      );
+      setMediaRuntimeLoading(false);
+    }
+  }, [applyRuntimeSnapshot, connectRuntimeStream, startRuntimePolling]);
+
+  const runRuntimeOperation = useCallback(
+    async (operation: "ensure" | "repair") => {
+      const base = engine.engineUrl;
+      if (!base) {
+        setMediaRuntimeError(ENGINE_NOT_CONNECTED_ACTION);
+        return;
+      }
+      stopRuntimeTransport();
+      const requestId = ++runtimeRequestRef.current;
+      setMediaRuntimeLoading(true);
+      setMediaRuntimeError(null);
+      try {
+        const status =
+          operation === "repair"
+            ? await apiRepairMediaRuntime(base)
+            : await apiEnsureMediaRuntime(base);
+        if (requestId !== runtimeRequestRef.current) return;
+        runtimeExpectedAttemptRef.current = status.attempt_id;
+        applyRuntimeSnapshot(status, false);
+        if (isRuntimeActive(status)) {
+          await connectRuntimeStream(base).catch(() => startRuntimePolling());
+        }
+      } catch (error) {
+        if (requestId !== runtimeRequestRef.current) return;
+        setMediaRuntimeError(
+          error instanceof Error
+            ? error.message
+            : `Could not ${operation} the AI runtime`,
+        );
+        setMediaRuntimeLoading(false);
+      }
+    },
+    [
+      applyRuntimeSnapshot,
+      connectRuntimeStream,
+      startRuntimePolling,
+      stopRuntimeTransport,
+    ],
+  );
+
+  const ensureMediaRuntime = useCallback(
+    () => runRuntimeOperation("ensure"),
+    [runRuntimeOperation],
+  );
+  const repairMediaRuntime = useCallback(
+    () => runRuntimeOperation("repair"),
+    [runRuntimeOperation],
+  );
+
   // ── Init fetches (in the hook, [] deps) ────────────────────────────────────
   useEffect(() => {
+    void refreshMediaRuntime();
     void refreshImage();
     void refreshVideo();
     void refreshLoras();
-  }, [refreshImage, refreshVideo, refreshLoras]);
+  }, [refreshMediaRuntime, refreshImage, refreshVideo, refreshLoras]);
 
   // Reload whenever the engine (re)connects — recovery keyed on CONNECTIVITY,
   // not on an exact error string. Without this, a transient HTTP error during
@@ -2626,11 +2842,12 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   useEffect(
     () =>
       engine.on("connected", () => {
+        void refreshMediaRuntime();
         void refreshImage();
         void refreshVideo();
         void refreshLoras();
       }),
-    [refreshImage, refreshVideo, refreshLoras],
+    [refreshMediaRuntime, refreshImage, refreshVideo, refreshLoras],
   );
 
   // While the engine URL is not yet available, retry — engine.engineUrl is set
@@ -2661,6 +2878,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   // Revoke any object URLs on final unmount to avoid leaks.
   useEffect(() => {
     return () => {
+      stopRuntimeTransport();
       for (const url of Object.values(videoResultsRef.current)) {
         URL.revokeObjectURL(url);
       }
@@ -2668,9 +2886,12 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         URL.revokeObjectURL(url);
       }
     };
-  }, []);
+  }, [stopRuntimeTransport]);
 
   const state: MediaGenState = {
+    mediaRuntime,
+    mediaRuntimeLoading,
+    mediaRuntimeError,
     imageStatus,
     imageModels,
     imagePresets,
@@ -2722,6 +2943,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
 
   const actions = useMemo<MediaGenActions>(
     () => ({
+      refreshMediaRuntime,
+      ensureMediaRuntime,
+      repairMediaRuntime,
       refreshImage,
       getImageModels,
       loadImageModel,
@@ -2779,6 +3003,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       fetchParams,
     }),
     [
+      refreshMediaRuntime,
+      ensureMediaRuntime,
+      repairMediaRuntime,
       refreshImage,
       getImageModels,
       loadImageModel,

@@ -5344,72 +5344,107 @@ export async function deleteCustomImageModel(
   );
 }
 
-export interface ImageGenInstallStatus {
-  status: "idle" | "running" | "complete" | "error" | "connected" | "waiting";
+/** Authoritative lifecycle for the shared image/video managed AI runtime. */
+export type RuntimeState =
+  | "absent"
+  | "installing"
+  | "updating"
+  | "repairing"
+  | "validating"
+  | "activating"
+  | "restart_required"
+  | "ready"
+  | "failed"
+  | "rolled_back";
+
+export type RuntimeOperation = "install" | "update" | "repair" | null;
+
+/**
+ * One server-owned state shared by image generation, video generation and all
+ * UI layouts. The UI never infers runtime health from package versions or a
+ * completion marker.
+ */
+export interface MediaRuntimeStatus {
+  state: RuntimeState;
+  operation: RuntimeOperation;
+  attempt_id: string | null;
+  runtime_revision: string | null;
+  required_revision: string;
   stage: string;
   percent: number;
   message: string;
-  error?: string;
-  already_installed?: boolean;
-  install_dir?: string;
-  log_lines?: string[];
-  /** True when this event is a raw pip log line, not a stage update */
-  log?: boolean;
+  failure_code: string | null;
+  failure_detail: string | null;
+  repairable: boolean;
+  image_available: boolean;
+  video_packages_available: boolean;
 }
 
-export async function startImageGenInstall(
+export async function getMediaRuntimeStatus(
   baseUrl: string,
-): Promise<ImageGenInstallStatus> {
-  return imageGenFetch<ImageGenInstallStatus>(
-    imageGenUrl(baseUrl, "/install"),
+): Promise<MediaRuntimeStatus> {
+  return imageGenFetch<MediaRuntimeStatus>(
+    imageGenUrl(baseUrl, "/runtime/status"),
+  );
+}
+
+export async function ensureMediaRuntime(
+  baseUrl: string,
+): Promise<MediaRuntimeStatus> {
+  return imageGenFetch<MediaRuntimeStatus>(
+    imageGenUrl(baseUrl, "/runtime/ensure"),
     { method: "POST" },
   );
 }
 
-export async function getImageGenInstallStatus(
+export async function repairMediaRuntime(
   baseUrl: string,
-): Promise<ImageGenInstallStatus> {
-  return imageGenFetch<ImageGenInstallStatus>(
-    imageGenUrl(baseUrl, "/install/status"),
+): Promise<MediaRuntimeStatus> {
+  return imageGenFetch<MediaRuntimeStatus>(
+    imageGenUrl(baseUrl, "/runtime/repair"),
+    { method: "POST" },
   );
 }
 
 /**
- * Open an SSE stream for image-gen install progress.
- * Returns a cleanup function.  Calls `onEvent` for each progress update.
+ * Stream authoritative runtime snapshots. A disconnect is reported to the
+ * owner so it can switch to polling; reconnect policy intentionally lives in
+ * the single app-level controller, never in individual layouts.
  */
-export function streamImageGenInstall(
+export function streamMediaRuntimeStatus(
   baseUrl: string,
   getToken: () => Promise<string | null>,
-  onEvent: (e: ImageGenInstallStatus) => void,
+  onEvent: (status: MediaRuntimeStatus) => void,
+  onDisconnect: () => void,
 ): () => void {
   let closed = false;
   let es: EventSource | null = null;
 
-  const connect = async () => {
+  void (async () => {
     const token = await getToken();
+    if (closed) return;
     const url = token
-      ? `${imageGenUrl(baseUrl, "/install/stream")}?token=${encodeURIComponent(token)}`
-      : imageGenUrl(baseUrl, "/install/stream");
+      ? `${imageGenUrl(baseUrl, "/runtime/stream")}?token=${encodeURIComponent(token)}`
+      : imageGenUrl(baseUrl, "/runtime/stream");
     es = new EventSource(url);
-    es.onmessage = (ev) => {
+    es.onmessage = (event) => {
       if (closed) return;
       try {
-        const data = JSON.parse(ev.data) as ImageGenInstallStatus;
-        onEvent(data);
-        if (data.status === "complete" || data.status === "error") {
-          es?.close();
-        }
+        onEvent(JSON.parse(event.data) as MediaRuntimeStatus);
       } catch {
-        // ignore parse errors
+        // A malformed event cannot mutate runtime state. The next event or the
+        // polling fallback remains authoritative.
       }
     };
     es.onerror = () => {
-      if (!closed) es?.close();
+      if (closed) return;
+      es?.close();
+      onDisconnect();
     };
-  };
+  })().catch(() => {
+    if (!closed) onDisconnect();
+  });
 
-  void connect();
   return () => {
     closed = true;
     es?.close();

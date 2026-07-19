@@ -37,7 +37,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
-import { ImageGenInstaller } from "@/components/media-gen/ImageGenInstaller";
 import { WorkflowSection } from "@/components/media-gen/WorkflowSection";
 import { MediaLibrarySection } from "@/components/media-gen/MediaLibrarySection";
 import {
@@ -50,7 +49,6 @@ import { useImageGenController } from "@/components/media-gen/core/imageControll
 import { useVideoGenController } from "@/components/media-gen/core/videoController";
 import {
   ImageGenGate,
-  OutdatedPackagesBanner,
   VideoGenGate,
 } from "@/components/media-gen/core/gates";
 import {
@@ -296,7 +294,6 @@ function AllSettings({
 function ImageFocusFlow() {
   const [state, actions] = useMediaGenApp();
   const {
-    imageStatus,
     imageGenerating,
     imageCancelling,
     imageGenStartedAt,
@@ -304,31 +301,13 @@ function ImageFocusFlow() {
     imageForm,
     imageJobs,
   } = state;
-  const { setImageForm, resetImageAll, cancelImageGeneration, refreshImage } =
-    actions;
+  const { setImageForm, resetImageAll, cancelImageGeneration } = actions;
   const ctl = useImageGenController();
   const [batchBuilderOpen, setBatchBuilderOpen] = useState(false);
   const [, setImageGenMode] = useImageGenMode();
 
   const feedHasContent =
     !!imageResult || imageGenerating || imageJobs.length > 0;
-
-  // Packages installed but outdated → the calm flow makes no sense until the
-  // one-time update runs; show the upgrade installer instead.
-  if (imageStatus?.packages_outdated) {
-    return (
-      <ImageGenGate>
-        <div className="space-y-4">
-          <OutdatedPackagesBanner />
-          <ImageGenInstaller
-            models={[]}
-            upgrade
-            onInstallComplete={() => void refreshImage()}
-          />
-        </div>
-      </ImageGenGate>
-    );
-  }
 
   return (
     <ImageGenGate>

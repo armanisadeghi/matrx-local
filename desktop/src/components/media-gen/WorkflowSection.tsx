@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
+import { ImageGenInstaller } from "./ImageGenInstaller";
 import type { ImageGenWorkflowPreset } from "@/lib/api";
 import {
   CancelableGenerateButton,
@@ -80,6 +81,7 @@ export function WorkflowSection() {
   const [state, actions] = useMediaGenApp();
   const {
     imageStatus,
+    mediaRuntime,
     imageModels,
     imagePresets,
     imageStatusLoading,
@@ -115,7 +117,13 @@ export function WorkflowSection() {
     : "";
 
   const handleGenerate = useCallback(async () => {
-    if (!presetId || !subject.trim()) return;
+    if (
+      mediaRuntime?.state !== "ready" ||
+      !mediaRuntime.image_available ||
+      !presetId ||
+      !subject.trim()
+    )
+      return;
     // Resolve a concrete seed client-side even for "random" so every result
     // is reproducible (the used seed is shown on the result).
     const seed = parseSeedText(seedText) ?? randomSeed();
@@ -125,7 +133,14 @@ export function WorkflowSection() {
       ...(modelOverride === SUGGESTED ? {} : { model_id: modelOverride }),
       seed,
     });
-  }, [presetId, subject, modelOverride, seedText, generateImageWorkflow]);
+  }, [
+    mediaRuntime,
+    presetId,
+    subject,
+    modelOverride,
+    seedText,
+    generateImageWorkflow,
+  ]);
 
   // ── Gates ────────────────────────────────────────────────────────────────
   if (imageStatusLoading && !imageStatus) {
@@ -159,26 +174,11 @@ export function WorkflowSection() {
     );
   }
 
-  if (imageStatus && !imageStatus.available) {
-    return (
-      <div className="rounded-xl border px-5 py-8 flex flex-col items-center text-center gap-3">
-        <div className="rounded-lg bg-muted p-3">
-          <Wand2 className="h-6 w-6 text-muted-foreground" />
-        </div>
-        <p className="font-semibold text-sm">
-          Workflows need image generation set up first
-        </p>
-        <p className="text-xs text-muted-foreground leading-relaxed max-w-md">
-          {imageStatus.unavailable_reason ??
-            "The on-device AI packages are not installed yet."}{" "}
-          Open the Images tab to run the one-time setup, then come back here.
-        </p>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6 pb-8">
+      {(mediaRuntime?.state !== "ready" || !mediaRuntime.image_available) && (
+        <ImageGenInstaller />
+      )}
       <div className="space-y-1">
         <h3 className="text-sm font-semibold flex items-center gap-2">
           <Wand2 className="h-4 w-4 text-violet-500" />
@@ -296,7 +296,12 @@ export function WorkflowSection() {
             generating={imageGenerating}
             cancelling={imageCancelling}
             startedAt={imageGenStartedAt}
-            disabled={!presetId || !subject.trim()}
+            disabled={
+              mediaRuntime?.state !== "ready" ||
+              !mediaRuntime.image_available ||
+              !presetId ||
+              !subject.trim()
+            }
             onGenerate={() => void handleGenerate()}
             onCancel={() => void cancelImageGeneration()}
             idleContent={

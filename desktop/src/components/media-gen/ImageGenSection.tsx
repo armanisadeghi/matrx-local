@@ -12,11 +12,7 @@ import { Button } from "@/components/ui/button";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { SubTabBar } from "./shared";
 import { useImageGenController } from "./core/imageController";
-import {
-  ImageGenGate,
-  OutdatedPackagesBanner,
-} from "./core/gates";
-import { ImageGenInstaller } from "./ImageGenInstaller";
+import { ImageGenGate } from "./core/gates";
 import { ImageModelPicker } from "./core/ModelPicker";
 import {
   ImageGenerateForm,
@@ -27,29 +23,13 @@ import { ImageQueuePanel } from "./core/ImageQueuePanel";
 
 export function ImageGenSection() {
   const [state, actions] = useMediaGenApp();
-  const { imageStatus, imageForm } = state;
-  const { setImageForm, refreshImage } = actions;
+  const { imageForm } = state;
+  const { setImageForm } = actions;
   const ctl = useImageGenController();
-
-  // Packages installed but outdated + on the Models tab → full upgrade flow.
-  const outdatedModelsView =
-    imageStatus?.packages_outdated === true && imageForm.view === "models";
 
   return (
     <ImageGenGate>
-      {outdatedModelsView ? (
-        <div className="space-y-4 pb-8">
-          <OutdatedPackagesBanner />
-          <ImageGenInstaller
-            models={[]}
-            upgrade
-            onInstallComplete={() => void refreshImage()}
-          />
-        </div>
-      ) : (
-        <div className="space-y-5 pb-8">
-          <OutdatedPackagesBanner />
-
+      <div className="space-y-5 pb-8">
           <SubTabBar
             tabs={[
               {
@@ -93,8 +73,7 @@ export function ImageGenSection() {
               <ImageQueuePanel layout="list" />
             </div>
           )}
-        </div>
-      )}
+      </div>
     </ImageGenGate>
   );
 }

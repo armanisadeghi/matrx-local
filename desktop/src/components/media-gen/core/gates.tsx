@@ -13,7 +13,6 @@ import {
   KeyRound,
   Loader2,
   MonitorX,
-  PackagePlus,
   RefreshCw,
   UserPlus,
 } from "lucide-react";
@@ -22,7 +21,6 @@ import { useAuth } from "@/hooks/use-auth";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { engine } from "@/lib/api";
 import { ImageGenInstaller } from "@/components/media-gen/ImageGenInstaller";
-import { needsImageGenPackageInstall } from "./readiness";
 
 /**
  * Classify an image-gen status error into a user-actionable card. Canonical —
@@ -167,46 +165,19 @@ export function StatusErrorCard({
   );
 }
 
-/** Amber "update AI packages" banner shown while packages are outdated. */
-export function OutdatedPackagesBanner({
-  extra,
-}: {
-  /** Optional trailing content (e.g. an "Open Models" button). */
-  extra?: ReactNode;
-}) {
-  const [state] = useMediaGenApp();
-  const { imageStatus } = state;
-  if (imageStatus?.packages_outdated !== true) return null;
-  return (
-    <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-4 py-3 flex items-start gap-3">
-      <PackagePlus className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
-      <div className="min-w-0 flex-1 space-y-2">
-        <div>
-          <p className="text-sm font-medium">Update AI packages</p>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Your on-device AI packages
-            {imageStatus.packages_version
-              ? ` (diffusers ${imageStatus.packages_version})`
-              : ""}{" "}
-            are older than required for the latest image and video models.
-            The app automatically updates them before generation resumes.
-          </p>
-        </div>
-        {extra}
-      </div>
-    </div>
-  );
-}
-
 /**
- * Image readiness gate: spinner → classified error card → installer →
- * children. Does NOT handle packages_outdated (that is a banner + Models-view
- * installer, composed by the caller via OutdatedPackagesBanner).
+ * Image readiness gate: service status errors remain visible, while the shared
+ * managed-runtime lifecycle is a bounded panel above still-visible content.
  */
 export function ImageGenGate({ children }: { children: ReactNode }) {
   const [state, actions] = useMediaGenApp();
-  const { imageStatus, imageModels, imageStatusLoading, imageStatusError } =
-    state;
+  const {
+    mediaRuntime,
+    imageModels,
+    imageStatus,
+    imageStatusLoading,
+    imageStatusError,
+  } = state;
   const { refreshImage } = actions;
 
   if (imageStatusLoading && !imageStatus) {
@@ -220,12 +191,14 @@ export function ImageGenGate({ children }: { children: ReactNode }) {
       />
     );
   }
-  if (needsImageGenPackageInstall(imageStatus)) {
+  if (mediaRuntime?.state !== "ready" || !mediaRuntime.image_available) {
     return (
-      <ImageGenInstaller
-        models={imageModels}
-        onInstallComplete={() => void refreshImage()}
-      />
+      <div className="space-y-4">
+        <ImageGenInstaller models={imageModels} />
+        <div aria-disabled="true" className="opacity-60">
+          {children}
+        </div>
+      </div>
     );
   }
   return <>{children}</>;
@@ -237,8 +210,13 @@ export function ImageGenGate({ children }: { children: ReactNode }) {
  */
 export function VideoGenGate({ children }: { children: ReactNode }) {
   const [state, actions] = useMediaGenApp();
-  const { videoStatus, videoModels, videoStatusLoading, videoStatusError } =
-    state;
+  const {
+    mediaRuntime,
+    videoStatus,
+    videoModels,
+    videoStatusLoading,
+    videoStatusError,
+  } = state;
   const { refreshVideo } = actions;
 
   if (videoStatusLoading && !videoStatus) {
@@ -273,14 +251,21 @@ export function VideoGenGate({ children }: { children: ReactNode }) {
       </div>
     );
   }
-  if (videoStatus && !videoStatus.packages_installed) {
+  if (
+    mediaRuntime?.state !== "ready" ||
+    !mediaRuntime.video_packages_available
+  ) {
     return (
-      <ImageGenInstaller
-        models={videoModels}
-        headline="Set up Video Generation"
-        intro="AI Matrx can generate short videos directly on your computer. Video uses the same on-device AI packages as image generation — click Install now for the one-time setup, then download a video model."
-        onInstallComplete={() => void refreshVideo()}
-      />
+      <div className="space-y-4">
+        <ImageGenInstaller
+          models={videoModels}
+          headline="Set up Video Generation"
+          intro="Video uses the same fully validated on-device AI runtime as image generation."
+        />
+        <div aria-disabled="true" className="opacity-60">
+          {children}
+        </div>
+      </div>
     );
   }
   return <>{children}</>;

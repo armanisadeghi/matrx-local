@@ -39,27 +39,38 @@ even though a complete huggingface_hub 1.24.0 sat on disk, unreachable.
 Collecting these packages WHOLE guarantees that if the bundle copy shadows the
 managed one, it is at least complete.
 
-Adding to this list
--------------------
-Add a top-level package here as soon as ANY managed runtime installs it and the
-engine also bundles it (directly or transitively). Being conservative is cheap;
-each entry costs bundle size, but a missing entry ships a frozen-only crash.
-``tests/unit/test_managed_runtime_bundle.py`` pins the invariant.
+Maintaining the contract
+------------------------
+The shared-package set is generated from the exact frozen-build and managed
+runtime dependency closures. Run ``scripts/generate-runtime-manifests.py`` after
+any dependency change and commit its target manifests. The release gate runs it
+with ``--check`` and refuses stale or incomplete contracts.
 """
 
-# Top-level import names, not pip names.
-MANAGED_RUNTIME_SHARED_PACKAGES = (
-    # transformers imports jinja2.meta lazily for chat-template tool schemas.
-    "jinja2",
-    # transformers/diffusers/accelerate all import huggingface_hub submodules
-    # that hf's own __init__ never names. See the module docstring.
-    "huggingface_hub",
-    # transformers imports tqdm.contrib.logging through AutoImageProcessor.
-    # PyInstaller's static graph included only part of tqdm in v1.3.149, so the
-    # frozen copy shadowed the complete managed-runtime package and every image
-    # and video model load failed.
-    "tqdm",
+import json
+from pathlib import Path
+
+
+_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "config"
+    / "runtime-manifests"
+    / "image-gen-contract.json"
 )
+if not _CONTRACT_PATH.is_file():
+    raise RuntimeError(
+        f"managed-runtime contract missing: {_CONTRACT_PATH}; run "
+        "scripts/generate-runtime-manifests.py"
+    )
+_CONTRACT = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
+if _CONTRACT.get("schema_version") != 1:
+    raise RuntimeError(
+        f"unsupported managed-runtime contract schema in {_CONTRACT_PATH}"
+    )
+
+# Derived from the exact release dependency graph by
+# scripts/generate-runtime-manifests.py -- never hand-maintain this tuple.
+MANAGED_RUNTIME_SHARED_PACKAGES = tuple(_CONTRACT["shared_import_packages"])
 
 
 def collect_managed_runtime_modules(collect_submodules):
@@ -67,14 +78,22 @@ def collect_managed_runtime_modules(collect_submodules):
 
     ``collect_submodules`` is injected rather than imported so this module stays
     importable outside a PyInstaller build (the unit test imports it directly).
-    A package absent from the build host is skipped: an optional extra that is
-    not installed cannot be shadowing anything in that build.
+    Every package in the generated contract is required on the release build
+    host. Missing packages and collection failures are fatal: silently skipping
+    one is how frozen-only outages reached production.
     """
     modules: list[str] = []
     for package in MANAGED_RUNTIME_SHARED_PACKAGES:
         try:
-            modules += collect_submodules(package)
-        except Exception:
-            # Absent on this build host — nothing to collect, nothing to shadow.
-            pass
+            collected = collect_submodules(package)
+        except Exception as exc:
+            raise RuntimeError(
+                f"failed to collect required shared package {package!r}"
+            ) from exc
+        if not collected:
+            raise RuntimeError(
+                f"required shared package {package!r} is absent or has no modules; "
+                "run the exact release uv sync before PyInstaller"
+            )
+        modules += collected
     return modules

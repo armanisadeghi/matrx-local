@@ -60,8 +60,15 @@ export function useVideoGenController(options?: {
 }): VideoGenController {
   const onAfterSelect = options?.onAfterSelect;
   const [state, actions] = useMediaGenApp();
-  const { videoStatus, videoModels, videoGenError, activeJob, videoResults, videoForm } =
-    state;
+  const {
+    mediaRuntime,
+    videoStatus,
+    videoModels,
+    videoGenError,
+    activeJob,
+    videoResults,
+    videoForm,
+  } = state;
   const {
     refreshVideo,
     loadVideoModel,
@@ -130,11 +137,22 @@ export function useVideoGenController(options?: {
   );
   const dimError = dimensionError(videoForm.width, videoForm.height);
   const formInvalid =
-    !videoForm.prompt.trim() || !defaults || !advanced.ok || dimError !== null;
+    mediaRuntime?.state !== "ready" ||
+    mediaRuntime.video_packages_available !== true ||
+    !videoForm.prompt.trim() ||
+    !defaults ||
+    !advanced.ok ||
+    dimError !== null;
   const jobIsActive =
     activeJob?.status === "queued" || activeJob?.status === "running";
 
   const buildRequest = useCallback((): VideoGenRequest | null => {
+    if (
+      mediaRuntime?.state !== "ready" ||
+      !mediaRuntime.video_packages_available
+    ) {
+      return null;
+    }
     const d = videoForm.defaults;
     if (!d || !videoForm.prompt.trim()) return null;
     const adv = computeAdvancedOverrides(videoForm.advancedText, d.advanced);
@@ -159,7 +177,7 @@ export function useVideoGenController(options?: {
       ...(imageBase64 !== undefined ? { image_base64: imageBase64 } : {}),
       ...(extraParams !== undefined ? { extra_params: extraParams } : {}),
     };
-  }, [videoForm]);
+  }, [videoForm, mediaRuntime]);
 
   const handleGenerate = useCallback(async () => {
     const req = buildRequest();

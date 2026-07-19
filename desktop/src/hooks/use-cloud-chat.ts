@@ -9,6 +9,11 @@ import {
   parseAIDreamStream,
   stringifyStreamDetail,
 } from "@/lib/aidream-stream";
+import {
+  claimDelegationUi,
+  releaseDelegationUi,
+  waitForDelegatedContinuation,
+} from "@/lib/cloud-chat-delegation";
 import supabase from "@/lib/supabase";
 import {
   buildDesktopClientContext,
@@ -311,85 +316,6 @@ function buildRequest(
 // matrx-frontend/features/agents/docs/CLIENT_TOOL_SUSPEND_RESUME.md; engine
 // half: app/services/delegation/engine.py (ui claims).
 // ---------------------------------------------------------------------------
-
-const DELEGATION_POLL_MS = 1000;
-const DELEGATION_CLAIM_TTL_SECONDS = 20;
-// Longest mega-tool execution timeout is Shell at 900s; add headroom.
-const DELEGATION_WAIT_CAP_MS = 16 * 60 * 1000;
-
-interface EngineDelegationState {
-  claimed?: boolean;
-  calls?: Array<{ call_id: string; tool_name: string; state: string }>;
-  continuation?: { user_request_id?: string | null; needed?: boolean } | null;
-}
-
-async function claimDelegationUi(
-  engineUrl: string,
-  conversationId: string,
-): Promise<EngineDelegationState | null> {
-  try {
-    const response = await fetch(`${engineUrl}/chat/delegation/ui-claim`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        conversation_id: conversationId,
-        ttl_seconds: DELEGATION_CLAIM_TTL_SECONDS,
-      }),
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!response.ok) return null;
-    return (await response.json()) as EngineDelegationState;
-  } catch {
-    return null;
-  }
-}
-
-function releaseDelegationUi(engineUrl: string, conversationId: string): void {
-  void fetch(`${engineUrl}/chat/delegation/ui-release`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversation_id: conversationId }),
-    signal: AbortSignal.timeout(4000),
-  }).catch(() => {
-    // Claim TTL expiry makes the engine self-heal; release is best-effort.
-  });
-}
-
-/**
- * Poll the local engine until the delegated calls resolve and a continuation
- * (`user_request_id`) is available, re-claiming UI ownership on every poll.
- * Returns null when the wait is abandoned — the engine's headless resume
- * then finishes the conversation once the claim expires.
- */
-async function waitForDelegatedContinuation(
-  engineUrl: string,
-  conversationId: string,
-  signal: AbortSignal,
-  onStatus: (status: string) => void,
-): Promise<string | null> {
-  const startedAt = Date.now();
-  while (!signal.aborted && Date.now() - startedAt < DELEGATION_WAIT_CAP_MS) {
-    const state = await claimDelegationUi(engineUrl, conversationId);
-    if (state) {
-      const continuation = state.continuation;
-      if (continuation?.needed && continuation.user_request_id) {
-        return continuation.user_request_id;
-      }
-      const executing = state.calls?.filter((c) => c.state === "executing") ?? [];
-      if (executing.length > 0) {
-        onStatus(
-          `Running on this computer: ${executing.map((c) => c.tool_name).join(", ")}...`,
-        );
-      } else {
-        onStatus("Waiting for local tool results...");
-      }
-    } else {
-      onStatus("Waiting for the local engine...");
-    }
-    await new Promise((resolve) => setTimeout(resolve, DELEGATION_POLL_MS));
-  }
-  return null;
-}
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -1455,11 +1381,13 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       };
 
       let claimedDelegationConversation: string | null = null;
+      let delegationAccessToken = "";
       try {
         const {
           data: { session },
         } = await supabase.auth.getSession();
         const token = session?.access_token ?? "";
+        delegationAccessToken = token;
         const allMessages = userMessage ? [...existingMessages, userMessage] : existingMessages;
         const cloudServerUrl = executionTarget === "cloud"
           ? await getAIDreamServerUrl()
@@ -1673,7 +1601,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                 setStatus(`${toolName}: running on this computer...`);
                 if (executionTarget === "cloud" && engineUrl && cloudConversationId) {
                   claimedDelegationConversation = cloudConversationId;
-                  void claimDelegationUi(engineUrl, cloudConversationId);
+                  void claimDelegationUi(engineUrl, cloudConversationId, token);
                 }
                 break;
               }
@@ -1882,6 +1810,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           const userRequestId = await waitForDelegatedContinuation(
             engineUrl,
             cloudConversationId,
+            token,
             abort.signal,
             setStatus,
           );
@@ -1945,8 +1874,12 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           });
         }
       } finally {
-        if (claimedDelegationConversation && engineUrl) {
-          releaseDelegationUi(engineUrl, claimedDelegationConversation);
+        if (claimedDelegationConversation && engineUrl && delegationAccessToken) {
+          void releaseDelegationUi(
+            engineUrl,
+            claimedDelegationConversation,
+            delegationAccessToken,
+          );
         }
         setIsStreaming(false);
         void refreshConversations();

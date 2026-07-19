@@ -634,6 +634,8 @@ async def bridge_events_websocket(websocket: WebSocket) -> None:
         {"subscribers": len(_EVENT_SUBSCRIBERS)},
     )
 
+    receive_task: asyncio.Task[dict[str, Any]] | None = None
+    event_task: asyncio.Task[Dict[str, Any]] | None = None
     try:
         # Fire a hello so the client can confirm subscription.
         await websocket.send_text(
@@ -647,15 +649,43 @@ async def bridge_events_websocket(websocket: WebSocket) -> None:
             )
         )
 
+        receive_task = asyncio.create_task(websocket.receive())
         while True:
-            event = await queue.get()
+            event_task = asyncio.create_task(queue.get())
+            done, _pending = await asyncio.wait(
+                {event_task, receive_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if receive_task in done:
+                event_task.cancel()
+                await asyncio.gather(event_task, return_exceptions=True)
+                event_task = None
+                message = receive_task.result()
+                if message.get("type") == "websocket.disconnect":
+                    break
+                # This diagnostic channel is server-to-client only. Ignore any
+                # client frame, then resume listening for the real disconnect.
+                receive_task = asyncio.create_task(websocket.receive())
+                continue
+            event = event_task.result()
+            event_task = None
             await websocket.send_text(json.dumps(event))
     except WebSocketDisconnect:
         # Normal — page navigation or panel close.
         pass
+    except asyncio.CancelledError:
+        # Uvicorn may cancel an in-flight socket at the end of its bounded
+        # connection drain. Cancellation is normal shutdown, not an ASGI crash.
+        pass
     except Exception as exc:
         logger.warning("[extension_bridge_routes] bridge-events socket crashed: %s", exc)
     finally:
+        if event_task is not None:
+            event_task.cancel()
+            await asyncio.gather(event_task, return_exceptions=True)
+        if receive_task is not None:
+            receive_task.cancel()
+            await asyncio.gather(receive_task, return_exceptions=True)
         try:
             _EVENT_SUBSCRIBERS.remove(queue)
         except ValueError:

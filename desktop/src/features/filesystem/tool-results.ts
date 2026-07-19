@@ -183,7 +183,7 @@ function normalizeDirectory(source: UnknownRecord): FilesystemDirectoryPage | nu
   const path = stringValue(source.path, source.directory, source.root);
   if (!path) return null;
   const rawSource = stringValue(source.source);
-  const pageSource = rawSource === "index" || rawSource === "disk" ? rawSource : null;
+  const pageSource = rawSource === "index" || rawSource === "disk" || rawSource === "hybrid" ? rawSource : null;
   return {
     kind: "filesystem.directory-page",
     namespace: normalizeNamespace(source.namespace),
@@ -208,7 +208,7 @@ function normalizeSearch(source: UnknownRecord): FilesystemSearchPage | null {
     .map(normalizeEntry)
     .filter((entry): entry is FilesystemEntry => entry !== null);
   const rawSource = stringValue(source.source);
-  const pageSource = rawSource === "index" || rawSource === "disk" ? rawSource : null;
+  const pageSource = rawSource === "index" || rawSource === "disk" || rawSource === "hybrid" ? rawSource : null;
   return {
     kind: "filesystem.search-page",
     namespace: normalizeNamespace(source.namespace),

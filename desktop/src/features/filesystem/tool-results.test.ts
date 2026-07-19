@@ -63,7 +63,7 @@ describe("filesystem tool results", () => {
         namespace: "host",
         query: "quarterly report",
         root: "/Users/ada/Documents",
-        source: "disk",
+        source: "hybrid",
         index_complete: false,
         next_cursor: "100",
         entries: [
@@ -83,7 +83,7 @@ describe("filesystem tool results", () => {
       namespace: "host",
       query: "quarterly report",
       root: "/Users/ada/Documents",
-      source: "disk",
+      source: "hybrid",
       indexComplete: false,
       nextCursor: "100",
       entries: [

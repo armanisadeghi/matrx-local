@@ -290,6 +290,15 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
               </div>
             )}
 
+            {status && status.unavailable_priority_roots.length > 0 && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+                <div className="font-medium text-amber-800 dark:text-amber-200">Priority locations are unavailable. Reconnect removable drives or update the saved locations.</div>
+                <ul className="mt-2 space-y-1 text-muted-foreground">
+                  {status.unavailable_priority_roots.map((root) => <li key={root.path}><code>{root.path}</code></li>)}
+                </ul>
+              </div>
+            )}
+
             {policy && (
               <div className="space-y-3 rounded-md border p-3">
                 <div>
@@ -395,6 +404,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                         }}
                       />
                       <code className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={root.path}>{root.path}</code>
+                      {status?.unavailable_priority_roots.some((item) => item.path === root.path) && <Badge variant="destructive">Unavailable</Badge>}
                       <Button
                         type="button"
                         variant="ghost"

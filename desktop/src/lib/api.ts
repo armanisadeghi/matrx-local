@@ -3842,6 +3842,7 @@ export interface FilesystemIndexStatus {
   directories_claimed: number;
   directories_ready: number;
   scan_failures: FilesystemScanFailure[];
+  unavailable_priority_roots: FilesystemPriorityRoot[];
   metadata_state: "complete" | "indexing" | "partial" | "paused";
   index_complete: boolean;
   paused: boolean;
@@ -3888,7 +3889,7 @@ export interface FilesystemPageResponse {
   query?: string;
   root?: string | null;
   total?: number;
-  source?: "index" | "disk";
+  source?: "index" | "disk" | "hybrid";
   index_complete?: boolean;
 }
 

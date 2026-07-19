@@ -23,7 +23,7 @@ export interface FilesystemDirectoryPage {
   summary?: string;
   nextCursor?: string | null;
   total?: number | null;
-  source?: "index" | "disk";
+  source?: "index" | "disk" | "hybrid";
 }
 
 export interface FilesystemSearchPage {
@@ -34,7 +34,7 @@ export interface FilesystemSearchPage {
   entries: FilesystemEntry[];
   summary?: string;
   nextCursor?: string | null;
-  source?: "index" | "disk";
+  source?: "index" | "disk" | "hybrid";
   indexComplete?: boolean;
 }
 

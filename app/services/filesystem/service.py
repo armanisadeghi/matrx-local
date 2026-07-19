@@ -712,8 +712,51 @@ class FilesystemService:
         self._watch_signature = signature
         self._spawn(self._watch_loop(), "filesystem-watch")
 
+    def _queue_active_enrichment_reset(self) -> None:
+        claim = self._active_enrichment_claim
+        self._active_enrichment_claim = None
+        if claim is not None and claim not in self._pending_enrichment_resets:
+            self._pending_enrichment_resets.append(claim)
+
+    async def _flush_pending_enrichment_resets(self) -> None:
+        """Release claims left behind by a contended commit, retrying until safe."""
+        while self._pending_enrichment_resets:
+            path, kind, modified_at, source_size = self._pending_enrichment_resets[0]
+            async with self._maintenance_lock:
+                await asyncio.to_thread(
+                    self.index.reset_enrichment_candidate,
+                    path,
+                    kind,
+                    modified_at,
+                    source_size,
+                )
+            self._pending_enrichment_resets.popleft()
+
     async def _enrichment_loop(self) -> None:
+        """Supervise enrichment so transient SQLite contention cannot kill it."""
         while not self._stop.is_set():
+            try:
+                await self._enrichment_worker_loop()
+            except asyncio.CancelledError:
+                raise
+            except sqlite3.OperationalError as exc:
+                self._queue_active_enrichment_reset()
+                logger.warning(
+                    "Filesystem enrichment deferred after SQLite contention; retrying: %s",
+                    exc,
+                    exc_info=True,
+                )
+                await asyncio.sleep(_ENRICHMENT_CONTENTION_BACKOFF_SECONDS)
+            except Exception:
+                self._queue_active_enrichment_reset()
+                logger.exception(
+                    "Filesystem enrichment worker exited unexpectedly; restarting"
+                )
+                await asyncio.sleep(_ENRICHMENT_UNEXPECTED_BACKOFF_SECONDS)
+
+    async def _enrichment_worker_loop(self) -> None:
+        while not self._stop.is_set():
+            await self._flush_pending_enrichment_resets()
             settings = _indexing_settings()
             if bool(settings["paused"]):
                 await asyncio.sleep(2.0)
@@ -745,6 +788,12 @@ class FilesystemService:
                     continue
                 if candidate:
                     path, modified_at, source_size = candidate
+                    self._active_enrichment_claim = (
+                        path,
+                        "content",
+                        modified_at,
+                        source_size,
+                    )
                     try:
                         content = await asyncio.to_thread(
                             Path(path).read_text, encoding="utf-8", errors="replace"
@@ -788,6 +837,7 @@ class FilesystemService:
                                     modified_at,
                                     source_size,
                                 )
+                    self._active_enrichment_claim = None
                     worked = True
 
             if settings["semantic_enabled"] and importlib.util.find_spec("fastembed") is not None:
@@ -815,6 +865,12 @@ class FilesystemService:
                     continue
                 if candidate:
                     path, content, modified_at, source_size = candidate
+                    self._active_enrichment_claim = (
+                        path,
+                        "embedding",
+                        modified_at,
+                        source_size,
+                    )
                     try:
                         from app.api.openai_compat_routes import _embed_texts
 
@@ -848,6 +904,8 @@ class FilesystemService:
                                     modified_at,
                                     source_size,
                                 )
+                    except sqlite3.OperationalError:
+                        raise
                     except Exception as exc:
                         logger.warning("Background embedding failed for %s", path, exc_info=True)
                         async with self._maintenance_lock:
@@ -875,6 +933,7 @@ class FilesystemService:
                                     modified_at,
                                     source_size,
                                 )
+                    self._active_enrichment_claim = None
                     worked = True
             await asyncio.sleep(0.1 if worked else 10.0)
 

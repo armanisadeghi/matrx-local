@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,186 @@ def _scan_root(index: FilesystemIndex, root: Path) -> Path:
     assert claim is not None
     assert index.index_directory(*claim) == 1
     return source
+
+
+def _enrichment_settings(*, content: bool, semantic: bool) -> dict[str, object]:
+    return {
+        "paused": False,
+        "content_enabled": content,
+        "semantic_enabled": semantic,
+        "embedding_model": "test-model",
+        "max_content_bytes": 16 * 1024 * 1024,
+        "max_embedding_entries": 100,
+    }
+
+
+def _make_enrichment_service(tmp_path: Path) -> tuple[FilesystemService, Path]:
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    root = tmp_path / "root"
+    root.mkdir()
+    source = _scan_root(service.index, root)
+    return service, source
+
+
+@pytest.mark.anyio
+async def test_enrichment_retries_contended_content_commit_and_claim_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, source = _make_enrichment_service(tmp_path)
+    settings = _enrichment_settings(content=True, semantic=False)
+    monkeypatch.setattr(
+        filesystem_service_module, "_indexing_settings", lambda: dict(settings)
+    )
+    monkeypatch.setattr(filesystem_service_module, "_background_capacity", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        filesystem_service_module, "_ENRICHMENT_CONTENTION_BACKOFF_SECONDS", 0.0
+    )
+    original_store = service.index.store_content
+    original_reset = service.index.reset_enrichment_candidate
+    store_attempts = 0
+    reset_attempts = 0
+
+    def flaky_store(*args: object, **kwargs: object) -> bool:
+        nonlocal store_attempts
+        store_attempts += 1
+        if store_attempts == 1:
+            raise sqlite3.OperationalError("database is locked")
+        stored = original_store(*args, **kwargs)
+        service._stop.set()
+        return stored
+
+    def flaky_reset(*args: object, **kwargs: object) -> bool:
+        nonlocal reset_attempts
+        reset_attempts += 1
+        if reset_attempts == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return original_reset(*args, **kwargs)
+
+    monkeypatch.setattr(service.index, "store_content", flaky_store)
+    monkeypatch.setattr(service.index, "reset_enrichment_candidate", flaky_reset)
+
+    await asyncio.wait_for(service._enrichment_loop(), timeout=2.0)
+
+    assert store_attempts == 2
+    assert reset_attempts == 2
+    assert service.index.search_content("private", limit=10)[0]["path"] == str(source)
+
+
+@pytest.mark.anyio
+async def test_enrichment_retries_contended_failure_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, source = _make_enrichment_service(tmp_path)
+    source.unlink()
+    settings = _enrichment_settings(content=True, semantic=False)
+    monkeypatch.setattr(
+        filesystem_service_module, "_indexing_settings", lambda: dict(settings)
+    )
+    monkeypatch.setattr(filesystem_service_module, "_background_capacity", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        filesystem_service_module, "_ENRICHMENT_CONTENTION_BACKOFF_SECONDS", 0.0
+    )
+    original_finish = service.index.finish_enrichment_failure
+    original_reset = service.index.reset_enrichment_candidate
+    finish_attempts = 0
+    reset_attempts = 0
+
+    def flaky_finish(*args: object, **kwargs: object) -> bool:
+        nonlocal finish_attempts
+        finish_attempts += 1
+        if finish_attempts == 1:
+            raise sqlite3.OperationalError("database is locked")
+        finished = original_finish(*args, **kwargs)
+        service._stop.set()
+        return finished
+
+    def counting_reset(*args: object, **kwargs: object) -> bool:
+        nonlocal reset_attempts
+        reset_attempts += 1
+        return original_reset(*args, **kwargs)
+
+    monkeypatch.setattr(service.index, "finish_enrichment_failure", flaky_finish)
+    monkeypatch.setattr(service.index, "reset_enrichment_candidate", counting_reset)
+
+    await asyncio.wait_for(service._enrichment_loop(), timeout=2.0)
+
+    assert finish_attempts == 2
+    assert reset_attempts == 1
+
+
+@pytest.mark.anyio
+async def test_enrichment_retries_contended_embedding_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, source = _make_enrichment_service(tmp_path)
+    source_stat = source.stat()
+    assert service.index.store_content(
+        str(source),
+        source.read_text(encoding="utf-8"),
+        source_stat.st_mtime,
+        source_stat.st_size,
+        16 * 1024 * 1024,
+    )
+    settings = _enrichment_settings(content=False, semantic=True)
+    monkeypatch.setattr(
+        filesystem_service_module, "_indexing_settings", lambda: dict(settings)
+    )
+    monkeypatch.setattr(filesystem_service_module, "_background_capacity", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(filesystem_service_module.importlib.util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(
+        filesystem_service_module, "_ENRICHMENT_CONTENTION_BACKOFF_SECONDS", 0.0
+    )
+    from app.api import openai_compat_routes
+
+    async def embed(_texts: tuple[str, ...], _model: str) -> list[list[float]]:
+        return [[1.0, 0.0]]
+
+    monkeypatch.setattr(openai_compat_routes, "_embed_texts", embed)
+    original_store = service.index.store_embedding
+    store_attempts = 0
+
+    def flaky_store(*args: object, **kwargs: object) -> bool:
+        nonlocal store_attempts
+        store_attempts += 1
+        if store_attempts == 1:
+            raise sqlite3.OperationalError("database is locked")
+        stored = original_store(*args, **kwargs)
+        service._stop.set()
+        return stored
+
+    monkeypatch.setattr(service.index, "store_embedding", flaky_store)
+
+    await asyncio.wait_for(service._enrichment_loop(), timeout=2.0)
+
+    assert store_attempts == 2
+    assert (
+        service.index.semantic_search([1.0, 0.0], "test-model", limit=10)[0][
+            "entry"
+        ]["path"]
+        == str(source)
+    )
+
+
+@pytest.mark.anyio
+async def test_background_task_failure_is_logged_and_removed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service._started = True
+
+    async def fail() -> None:
+        raise RuntimeError("background boom")
+
+    with caplog.at_level(logging.ERROR, logger=filesystem_service_module.__name__):
+        service._spawn(fail(), "filesystem-test-failure")
+        task = next(iter(service._tasks))
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0)
+
+    assert not service._tasks
+    assert "filesystem-test-failure exited unexpectedly" in caplog.text
+    assert "background boom" in caplog.text
 
 
 def test_enrichment_limits_prune_content_vectors_and_old_models(tmp_path: Path) -> None:

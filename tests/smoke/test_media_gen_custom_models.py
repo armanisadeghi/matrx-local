@@ -383,8 +383,9 @@ def test_inspect_civitai_401_friendly_key_message(
     _mock_http(monkeypatch, {_CIV_VER: _http_401(_CIV_VER)})
     r = client.post("/image-gen/custom-models/inspect", json={"ref": "civitai:123@999"})
     assert r.status_code == 401, r.text
-    detail = r.json()["detail"]
-    assert "API key" in detail and "Settings" in detail
+    payload = r.json()
+    assert "API key" in payload["message"] and "Settings" in payload["message"]
+    assert payload["action_needed"]["action"]["provider"] == "civitai"
 
 
 # ── registry round-trip ───────────────────────────────────────────────────────
@@ -682,8 +683,9 @@ def test_lora_download_civitai_401_friendly(
     _mock_http(monkeypatch, {_CIV_LORA_VER: _http_401(_CIV_LORA_VER)})
     r = client.post("/image-gen/loras/download", json={"civitai": "civitai:321@555"})
     assert r.status_code == 401, r.text
-    detail = r.json()["detail"]
-    assert "API key" in detail and "Settings" in detail
+    payload = r.json()
+    assert "API key" in payload["message"] and "Settings" in payload["message"]
+    assert payload["action_needed"]["action"]["provider"] == "civitai"
     assert fake_download_manager == []
 
 

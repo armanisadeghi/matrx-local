@@ -220,12 +220,18 @@ def engine_process(
     # built from aidream main are installed by hand — see the pyproject
     # matrx-* pin comment); a plain `uv run --frozen` would silently re-sync
     # the venv back to the stale lock and boot the OLD matrx-ai.
+    # A full smoke run emits far more than an OS pipe buffer. Leaving stdout
+    # and stderr as undrained PIPEs eventually blocks the engine inside a log
+    # write, after which every remaining HTTP test times out. A seekable temp
+    # file keeps output bounded by disk rather than pipe capacity and still
+    # lets startup failures include their tail.
+    engine_log = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
     proc = subprocess.Popen(
         ["uv", "run", "--frozen", "--no-sync", "python", "run.py"],
         cwd=str(PROJECT_ROOT),
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=engine_log,
+        stderr=subprocess.STDOUT,
         text=True,
     )
 
@@ -233,21 +239,25 @@ def engine_process(
 
     if not ready:
         _reap_own_tree(proc)
-        stdout, stderr = "", ""
         try:
-            stdout, stderr = proc.communicate(timeout=5)
-        except (subprocess.TimeoutExpired, ValueError):
-            pass
+            engine_log.flush()
+            engine_log.seek(0)
+            output = engine_log.read()
+        except (OSError, ValueError):
+            output = ""
+        engine_log.close()
         pytest.fail(
             f"Engine did not start within {ENGINE_BOOT_TIMEOUT:.0f} seconds "
             f"on port {TEST_PORT}.\n"
-            f"STDOUT:\n{stdout[-2000:]}\nSTDERR:\n{stderr[-2000:]}"
+            f"ENGINE LOG:\n{output[-4000:]}"
         )
 
-    yield proc
-
-    # Teardown — graceful first, then force-kill; scoped to OUR tree only.
-    _reap_own_tree(proc)
+    try:
+        yield proc
+    finally:
+        # Teardown — graceful first, then force-kill; scoped to OUR tree only.
+        _reap_own_tree(proc)
+        engine_log.close()
 
 
 @pytest.fixture(scope="session")

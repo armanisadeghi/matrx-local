@@ -46,6 +46,7 @@ _TEXT_EXTENSIONS = (
 _DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 _DEFAULT_CONTENT_QUOTA_BYTES = 512 * 1024 * 1024
 _DEFAULT_EMBEDDING_QUOTA_ENTRIES = 10_000
+_MAX_CONCURRENT_SEARCH_BUILDS = 2
 _ENRICHMENT_CONTENTION_BACKOFF_SECONDS = 1.0
 _ENRICHMENT_UNEXPECTED_BACKOFF_SECONDS = 2.0
 
@@ -67,6 +68,9 @@ class FilesystemService:
         self._maintenance_lock = asyncio.Lock()
         self._directory_lists = DirectoryListSessionRegistry()
         self._searches = SearchSessionRegistry()
+        self._search_build_slots = asyncio.BoundedSemaphore(
+            _MAX_CONCURRENT_SEARCH_BUILDS
+        )
         self._active_enrichment_claim: tuple[str, str, float | None, int] | None = None
         self._pending_enrichment_resets: deque[tuple[str, str, float | None, int]] = deque()
 
@@ -330,6 +334,72 @@ class FilesystemService:
                 root=resolved_root,
                 truncated=truncated,
             )
+
+        return await self._run_first_page_search(
+            clean,
+            resolved_root=resolved_root,
+            scope=scope,
+            safe_limit=safe_limit,
+            timeout_seconds=timeout_seconds,
+        )
+
+    async def _run_first_page_search(
+        self,
+        clean: str,
+        *,
+        resolved_root: str | None,
+        scope: tuple[str, str],
+        safe_limit: int,
+        timeout_seconds: float,
+    ) -> SearchPage:
+        """Admit a bounded search build without leaking capacity on cancellation."""
+        await self._search_build_slots.acquire()
+        release_on_exit = True
+        try:
+            build = asyncio.create_task(
+                self._materialize_first_search_page(
+                    clean,
+                    resolved_root=resolved_root,
+                    scope=scope,
+                    safe_limit=safe_limit,
+                    timeout_seconds=timeout_seconds,
+                ),
+                name="filesystem-search-build",
+            )
+            try:
+                return await asyncio.shield(build)
+            except asyncio.CancelledError:
+                # asyncio.to_thread work cannot be stopped once dispatched. Keep
+                # this permit until the materialization really finishes so a
+                # disconnected caller cannot defeat the concurrency bound.
+                release_on_exit = False
+                build.add_done_callback(self._abandoned_search_build_done)
+                raise
+        finally:
+            if release_on_exit:
+                self._search_build_slots.release()
+
+    def _abandoned_search_build_done(self, task: asyncio.Task[SearchPage]) -> None:
+        self._search_build_slots.release()
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.warning(
+                "Filesystem search build failed after its caller disconnected",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    async def _materialize_first_search_page(
+        self,
+        clean: str,
+        *,
+        resolved_root: str | None,
+        scope: tuple[str, str],
+        safe_limit: int,
+        timeout_seconds: float,
+    ) -> SearchPage:
+        """Build and register one bounded, mutation-stable first-page snapshot."""
 
         queued = await asyncio.to_thread(self.index.queue_count)
         paused = bool(_indexing_settings()["paused"])

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.services.filesystem.index import FilesystemIndex
-from app.services.filesystem.models import Place
+from app.services.filesystem.models import Place, SearchPage
 from app.services.filesystem import service as filesystem_service_module
 from app.services.filesystem.service import FilesystemService
 
@@ -618,6 +618,68 @@ async def test_hybrid_search_cursor_pages_one_immutable_snapshot(
     assert {entry.path for entry in (*first.entries, *second.entries)} == {
         str(path) for path in paths
     }
+
+
+@pytest.mark.anyio
+async def test_search_build_admission_is_bounded_and_cancellation_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    entered: asyncio.Queue[str] = asyncio.Queue()
+    blockers = {
+        query: asyncio.Event()
+        for query in ("one", "two", "waiting", "three", "four", "five")
+    }
+    active = 0
+    peak_active = 0
+
+    async def controlled_build(
+        clean: str, **_kwargs: object
+    ) -> SearchPage:
+        nonlocal active, peak_active
+        active += 1
+        peak_active = max(peak_active, active)
+        await entered.put(clean)
+        try:
+            await blockers[clean].wait()
+        finally:
+            active -= 1
+        return SearchPage(clean, (), None)
+
+    monkeypatch.setattr(service, "_materialize_first_search_page", controlled_build)
+    first = asyncio.create_task(service.find("one"))
+    second = asyncio.create_task(service.find("two"))
+    assert {await entered.get(), await entered.get()} == {"one", "two"}
+
+    cancelled_waiter = asyncio.create_task(service.find("waiting"))
+    await asyncio.sleep(0)
+    assert entered.empty()
+    cancelled_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_waiter
+
+    replacement = asyncio.create_task(service.find("three"))
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    await asyncio.sleep(0)
+    assert entered.empty()
+
+    blockers["one"].set()
+    assert await asyncio.wait_for(entered.get(), timeout=1.0) == "three"
+    blockers["two"].set()
+    blockers["three"].set()
+    await asyncio.gather(second, replacement)
+
+    fourth = asyncio.create_task(service.find("four"))
+    fifth = asyncio.create_task(service.find("five"))
+    assert {await entered.get(), await entered.get()} == {"four", "five"}
+    blockers["four"].set()
+    blockers["five"].set()
+    await asyncio.gather(fourth, fifth)
+
+    assert peak_active == filesystem_service_module._MAX_CONCURRENT_SEARCH_BUILDS
+    assert active == 0
 
 
 @pytest.mark.anyio

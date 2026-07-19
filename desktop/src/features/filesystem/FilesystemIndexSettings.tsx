@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CirclePause, CirclePlay, Eraser, FolderOpen, Gauge, Loader2, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,44 @@ export function indexStateLabel(status: FilesystemIndexStatus | null): string {
 
 type IndexingPolicy = Omit<FilesystemIndexingSettings, "priority_roots" | "paused">;
 
+/**
+ * Orders status/data writes and serializes index mutations. A mutation advances
+ * the generation before it starts, so a poll already in flight cannot replace
+ * the mutation's authoritative response when it eventually resolves.
+ */
+export class FilesystemIndexRequestFence {
+  private generation = 0;
+  private activeMutation: number | null = null;
+
+  beginRequest(): number {
+    this.generation += 1;
+    return this.generation;
+  }
+
+  beginMutation(): number | null {
+    if (this.activeMutation !== null) return null;
+    const generation = this.beginRequest();
+    this.activeMutation = generation;
+    return generation;
+  }
+
+  isCurrent(generation: number): boolean {
+    return generation === this.generation;
+  }
+
+  hasActiveMutation(): boolean {
+    return this.activeMutation !== null;
+  }
+
+  finishMutation(generation: number): void {
+    if (this.activeMutation === generation) this.activeMutation = null;
+  }
+
+  invalidate(): void {
+    this.generation += 1;
+  }
+}
+
 export function setContentPolicy(policy: IndexingPolicy, enabled: boolean): IndexingPolicy {
   return { ...policy, content_enabled: enabled, semantic_enabled: enabled && policy.semantic_enabled };
 }
@@ -59,9 +97,12 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
   const [savingPolicy, setSavingPolicy] = useState(false);
   const [indexAction, setIndexAction] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const requestFence = useRef(new FilesystemIndexRequestFence()).current;
+  const mutationBusy = saving || savingPolicy || indexAction !== null;
 
   const load = useCallback(async () => {
-    if (!connected) return;
+    if (!connected || requestFence.hasActiveMutation()) return;
+    const request = requestFence.beginRequest();
     setLoading(true);
     setMessage(null);
     try {
@@ -70,6 +111,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
         engine.getFilesystemIndexingSettings(),
         engine.getFilesystemIndexStatus(),
       ]);
+      if (!requestFence.isCurrent(request)) return;
       setPlaces(placeResult.places);
       setRoots(authoredPriorityRoots(indexSettings));
       const { priority_roots: _priorityRoots, paused: _paused, ...authoredPolicy } = indexSettings;
@@ -78,77 +120,104 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
       setDirty(false);
       setPolicyDirty(false);
     } catch (reason) {
+      if (!requestFence.isCurrent(request)) return;
       setMessage({ text: reason instanceof Error ? reason.message : String(reason), error: true });
     } finally {
-      setLoading(false);
+      if (requestFence.isCurrent(request)) setLoading(false);
     }
-  }, [connected]);
+  }, [connected, requestFence]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
+    if (!connected) {
+      requestFence.invalidate();
+      setLoading(false);
+    }
+  }, [connected, requestFence]);
+
+  useEffect(() => {
     if (!connected || status?.index_complete !== false) return;
     const active = (status.directories_ready ?? 0) > 0 || (status.directories_claimed ?? 0) > 0;
     const delay = active ? 5_000 : 30_000;
     const interval = window.setInterval(() => {
-      void engine.getFilesystemIndexStatus().then(setStatus).catch(() => undefined);
+      if (loading || requestFence.hasActiveMutation()) return;
+      const request = requestFence.beginRequest();
+      void engine.getFilesystemIndexStatus().then((nextStatus) => {
+        if (requestFence.isCurrent(request)) setStatus(nextStatus);
+      }).catch(() => undefined);
     }, delay);
     return () => window.clearInterval(interval);
-  }, [connected, status?.index_complete, status?.directories_claimed, status?.directories_ready]);
+  }, [connected, loading, requestFence, status?.index_complete, status?.directories_claimed, status?.directories_ready]);
 
   const addRoot = useCallback(async () => {
     const path = await pickDirectory();
-    if (!path) return;
+    if (!path || requestFence.hasActiveMutation()) return;
     setRoots((current) => current.some((root) => root.path === path) ? current : [...current, { path, label: pathLabel(path) }]);
     setDirty(true);
-  }, []);
+  }, [requestFence]);
 
   const save = useCallback(async () => {
+    const operation = requestFence.beginMutation();
+    if (operation === null) return;
     setSaving(true);
     setMessage(null);
     try {
       const result = await engine.setFilesystemPriorityRoots(roots);
-      setPlaces(result.places);
       const [indexSettings, indexStatus] = await Promise.all([
         engine.getFilesystemIndexingSettings(),
         engine.getFilesystemIndexStatus(),
       ]);
+      if (!requestFence.isCurrent(operation)) return;
+      setPlaces(result.places);
       setRoots(authoredPriorityRoots(indexSettings));
       setStatus(indexStatus);
       setDirty(false);
       window.dispatchEvent(new Event("matrx-filesystem-roots-changed"));
       setMessage({ text: "Priority locations saved. Background indexing has been reprioritized.", error: false });
     } catch (reason) {
+      if (!requestFence.isCurrent(operation)) return;
       setMessage({ text: reason instanceof Error ? reason.message : String(reason), error: true });
     } finally {
+      requestFence.finishMutation(operation);
       setSaving(false);
     }
-  }, [roots]);
+  }, [requestFence, roots]);
 
   const savePolicy = useCallback(async () => {
     if (!policy) return;
+    const operation = requestFence.beginMutation();
+    if (operation === null) return;
     setSavingPolicy(true);
     setMessage(null);
     try {
-      setStatus(await engine.setFilesystemIndexingSettings(policy));
+      const nextStatus = await engine.setFilesystemIndexingSettings(policy);
+      if (!requestFence.isCurrent(operation)) return;
+      setStatus(nextStatus);
       setPolicyDirty(false);
       setMessage({ text: "Local content and semantic indexing settings saved.", error: false });
     } catch (reason) {
+      if (!requestFence.isCurrent(operation)) return;
       setMessage({ text: reason instanceof Error ? reason.message : String(reason), error: true });
     } finally {
+      requestFence.finishMutation(operation);
       setSavingPolicy(false);
     }
-  }, [policy]);
+  }, [policy, requestFence]);
 
   const controlIndex = useCallback(async (action: "pause" | "resume" | "rebuild" | "clear") => {
     if (action === "rebuild" && !window.confirm("Rebuild the local filesystem index from scratch? Direct file browsing will keep working.")) return;
     if (action === "clear" && !window.confirm("Clear the local filesystem index and pause background indexing? Downloaded model files are not removed.")) return;
+    const operation = requestFence.beginMutation();
+    if (operation === null) return;
     setIndexAction(action);
     setMessage(null);
     try {
-      setStatus(await engine.controlFilesystemIndex(action));
+      const nextStatus = await engine.controlFilesystemIndex(action);
+      if (!requestFence.isCurrent(operation)) return;
+      setStatus(nextStatus);
       setMessage({
         text: action === "clear"
           ? "Local index data cleared. Background indexing is paused; direct browsing still works."
@@ -160,11 +229,13 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
         error: false,
       });
     } catch (reason) {
+      if (!requestFence.isCurrent(operation)) return;
       setMessage({ text: reason instanceof Error ? reason.message : String(reason), error: true });
     } finally {
+      requestFence.finishMutation(operation);
       setIndexAction(null);
     }
-  }, []);
+  }, [requestFence]);
 
   const discoveredCount = useMemo(() => places.filter((place) => place.available).length, [places]);
 
@@ -178,7 +249,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
               Matrx indexes every accessible discovered location in the background. Add priority locations to scan important work sooner and in greater detail; this never excludes other folders or drives.
             </p>
           </div>
-          <Button type="button" variant="outline" size="sm" disabled={!connected || loading} onClick={() => void load()}>
+          <Button type="button" variant="outline" size="sm" disabled={!connected || loading || mutationBusy} onClick={() => void load()}>
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
           </Button>
         </div>
@@ -231,7 +302,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                       <span className="block text-sm font-medium">Content search</span>
                       <span className="block text-xs text-muted-foreground">Index text from supported files for private full-text search.</span>
                     </span>
-                    <Switch checked={policy.content_enabled} onCheckedChange={(enabled) => { setPolicy((current) => current ? setContentPolicy(current, enabled) : current); setPolicyDirty(true); }} />
+                    <Switch disabled={mutationBusy} checked={policy.content_enabled} onCheckedChange={(enabled) => { setPolicy((current) => current ? setContentPolicy(current, enabled) : current); setPolicyDirty(true); }} />
                   </label>
                   <label className="flex items-start justify-between gap-3 rounded-md bg-muted/20 p-3">
                     <span>
@@ -240,28 +311,28 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                         {status?.fastembed_available ? "Create local embeddings for meaning-based search." : "Requires the optional local FastEmbed capability."}
                       </span>
                     </span>
-                    <Switch disabled={!policy.content_enabled || status?.fastembed_available === false} checked={policy.semantic_enabled} onCheckedChange={(enabled) => { setPolicy((current) => current ? { ...current, semantic_enabled: enabled } : current); setPolicyDirty(true); }} />
+                    <Switch disabled={mutationBusy || !policy.content_enabled || status?.fastembed_available === false} checked={policy.semantic_enabled} onCheckedChange={(enabled) => { setPolicy((current) => current ? { ...current, semantic_enabled: enabled } : current); setPolicyDirty(true); }} />
                   </label>
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">
                   <label className="space-y-1 text-xs">
                     <span className="font-medium">Text storage limit (MiB)</span>
-                    <Input type="number" min={16} max={20 * 1024} value={Math.round(policy.max_content_bytes / (1024 * 1024))} onChange={(event) => { const mib = Number(event.target.value); if (Number.isFinite(mib)) { setPolicy((current) => current ? { ...current, max_content_bytes: Math.round(mib * 1024 * 1024) } : current); setPolicyDirty(true); } }} />
+                    <Input disabled={mutationBusy} type="number" min={16} max={20 * 1024} value={Math.round(policy.max_content_bytes / (1024 * 1024))} onChange={(event) => { const mib = Number(event.target.value); if (Number.isFinite(mib)) { setPolicy((current) => current ? { ...current, max_content_bytes: Math.round(mib * 1024 * 1024) } : current); setPolicyDirty(true); } }} />
                     <span className="text-muted-foreground">{status?.content_entries.toLocaleString() ?? "0"} files · {((status?.content_bytes ?? 0) / (1024 * 1024)).toFixed(1)} MiB used</span>
                   </label>
                   <label className="space-y-1 text-xs">
                     <span className="font-medium">Embedding file limit</span>
-                    <Input type="number" min={100} max={50_000} step={100} value={policy.max_embedding_entries} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value)) { setPolicy((current) => current ? { ...current, max_embedding_entries: Math.round(value) } : current); setPolicyDirty(true); } }} />
+                    <Input disabled={mutationBusy} type="number" min={100} max={50_000} step={100} value={policy.max_embedding_entries} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value)) { setPolicy((current) => current ? { ...current, max_embedding_entries: Math.round(value) } : current); setPolicyDirty(true); } }} />
                     <span className="text-muted-foreground">{status?.embedding_entries.toLocaleString() ?? "0"} files embedded</span>
                   </label>
                   <label className="space-y-1 text-xs">
                     <span className="font-medium">Embedding model</span>
-                    <Input value={policy.embedding_model} disabled={!policy.semantic_enabled} onChange={(event) => { setPolicy((current) => current ? { ...current, embedding_model: event.target.value } : current); setPolicyDirty(true); }} />
+                    <Input value={policy.embedding_model} disabled={mutationBusy || !policy.semantic_enabled} onChange={(event) => { setPolicy((current) => current ? { ...current, embedding_model: event.target.value } : current); setPolicyDirty(true); }} />
                     <span className="text-muted-foreground">Model changes rebuild embeddings progressively.</span>
                   </label>
                 </div>
                 <div className="flex justify-end">
-                  <Button type="button" size="sm" disabled={!policyDirty || savingPolicy} onClick={() => void savePolicy()}>
+                  <Button type="button" size="sm" disabled={!policyDirty || mutationBusy} onClick={() => void savePolicy()}>
                     {savingPolicy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save index settings
                   </Button>
                 </div>
@@ -275,14 +346,14 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                   <p className="text-xs text-muted-foreground">Direct browsing remains available while background indexing is paused or rebuilding.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" size="sm" disabled={indexAction !== null} onClick={() => void controlIndex(status?.paused ? "resume" : "pause")}>
+                  <Button type="button" variant="outline" size="sm" disabled={mutationBusy} onClick={() => void controlIndex(status?.paused ? "resume" : "pause")}>
                     {indexAction === "pause" || indexAction === "resume" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : status?.paused ? <CirclePlay className="h-3.5 w-3.5" /> : <CirclePause className="h-3.5 w-3.5" />}
                     {status?.paused ? "Resume" : "Pause"}
                   </Button>
-                  <Button type="button" variant="outline" size="sm" disabled={indexAction !== null} onClick={() => void controlIndex("rebuild")}>
+                  <Button type="button" variant="outline" size="sm" disabled={mutationBusy} onClick={() => void controlIndex("rebuild")}>
                     {indexAction === "rebuild" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Rebuild
                   </Button>
-                  <Button type="button" variant="outline" size="sm" className="text-destructive hover:text-destructive" disabled={indexAction !== null} onClick={() => void controlIndex("clear")}>
+                  <Button type="button" variant="outline" size="sm" className="text-destructive hover:text-destructive" disabled={mutationBusy} onClick={() => void controlIndex("clear")}>
                     {indexAction === "clear" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eraser className="h-3.5 w-3.5" />} Clear index
                   </Button>
                 </div>
@@ -301,7 +372,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                   <h3 className="text-sm font-medium">Priority locations</h3>
                   <p className="text-xs text-muted-foreground">Useful for source trees, project archives, or other folders you search often.</p>
                 </div>
-                <Button type="button" variant="outline" size="sm" onClick={() => void addRoot()}><Plus className="h-3.5 w-3.5" /> Add folder</Button>
+                <Button type="button" variant="outline" size="sm" disabled={mutationBusy} onClick={() => void addRoot()}><Plus className="h-3.5 w-3.5" /> Add folder</Button>
               </div>
               {roots.length === 0 ? (
                 <div className="rounded-md border border-dashed p-4 text-center text-xs text-muted-foreground">
@@ -313,6 +384,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                     <div key={root.path} className="flex items-center gap-2 rounded-md border p-2">
                       <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
                       <Input
+                        disabled={mutationBusy}
                         value={root.label ?? ""}
                         aria-label={`Label for ${root.path}`}
                         className="h-8 w-36"
@@ -329,6 +401,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                         size="icon"
                         className="h-8 w-8 text-muted-foreground hover:text-destructive"
                         title="Remove priority"
+                        disabled={mutationBusy}
                         onClick={() => {
                           setRoots((current) => current.filter((_, itemIndex) => itemIndex !== index));
                           setDirty(true);
@@ -342,7 +415,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
 
             <div className="flex items-center justify-between gap-3 border-t pt-3">
               <div className={message?.error ? "text-xs text-destructive" : "text-xs text-emerald-600 dark:text-emerald-400"}>{message?.text ?? status?.policy ?? ""}</div>
-              <Button type="button" size="sm" disabled={!dirty || saving} onClick={() => void save()}>
+              <Button type="button" size="sm" disabled={!dirty || mutationBusy} onClick={() => void save()}>
                 {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save priorities
               </Button>
             </div>

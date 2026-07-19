@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { FilesystemIndexStatus, FilesystemIndexingSettings } from "@/lib/api";
-import { authoredPriorityRoots, indexStateLabel, setContentPolicy } from "./FilesystemIndexSettings";
+import {
+  authoredPriorityRoots,
+  FilesystemIndexRequestFence,
+  indexStateLabel,
+  setContentPolicy,
+} from "./FilesystemIndexSettings";
 
 const settings: FilesystemIndexingSettings = {
   priority_roots: [{ path: "/Users/ada", label: "Authored overlap" }],
@@ -34,5 +39,19 @@ describe("FilesystemIndexSettings contracts", () => {
       content_enabled: false,
       semantic_enabled: false,
     });
+  });
+
+  it("rejects an old poll after a mutation starts and serializes mutations", () => {
+    const fence = new FilesystemIndexRequestFence();
+    const oldPoll = fence.beginRequest();
+    const save = fence.beginMutation();
+
+    expect(save).not.toBeNull();
+    expect(fence.isCurrent(oldPoll)).toBe(false);
+    expect(fence.isCurrent(save!)).toBe(true);
+    expect(fence.beginMutation()).toBeNull();
+
+    fence.finishMutation(save!);
+    expect(fence.beginMutation()).not.toBeNull();
   });
 });

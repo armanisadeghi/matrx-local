@@ -20,7 +20,14 @@ HELPER_ARGUMENT = "--matrx-keychain-helper-v1"
 HELPER_FD_ENV = "MATRX_KEYCHAIN_HELPER_FD"
 KEYRING_SERVICE = "matrx-local"
 KEYRING_USERNAME = "db-encryption-key"
-KEYCHAIN_TIMEOUT_SECONDS = 5
+# A frozen one-file helper spends roughly 3-4 seconds in the PyInstaller
+# bootstrap before ``run.py`` can dispatch the helper argument.  Five seconds
+# therefore left less than two seconds for the actual Keychain call and caused
+# healthy packaged installs to fall back to plaintext on a cold launch.  Keep
+# the boundary finite (the backend can still wait forever in
+# SecItemCopyMatching), but allow enough time for both bootstrap and a normal
+# Keychain round trip.
+KEYCHAIN_TIMEOUT_SECONDS = 15
 
 
 @contextmanager

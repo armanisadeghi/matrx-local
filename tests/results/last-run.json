@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-07-19T00:16:37Z",
-  "elapsed_seconds": 159,
-  "status": "fail",
+  "timestamp": "2026-07-19T00:21:10Z",
+  "elapsed_seconds": 80,
+  "status": "pass",
   "mode": "full",
-  "passed": 12,
-  "failed": 1,
+  "passed": 13,
+  "failed": 0,
   "skipped": 0,
-  "steps": {"uv available":"pass","python import check":"pass","python tool files syntax":"pass","parity: settings keys (TS vs Python)":"pass","parity: section coverage":"pass","parity: route manifest":"pass","parity: tool count >= 79":"pass","parity: api-key providers (TS vs Python)":"pass","parity: background tasks integrity":"pass","parity: app config live row":"pass","tsc -b":"pass","vite build":"pass","engine smoke tests":"fail"}
+  "steps": {"uv available":"pass","python import check":"pass","python tool files syntax":"pass","parity: settings keys (TS vs Python)":"pass","parity: section coverage":"pass","parity: route manifest":"pass","parity: tool count >= 79":"pass","parity: api-key providers (TS vs Python)":"pass","parity: background tasks integrity":"pass","parity: app config live row":"pass","tsc -b":"pass","vite build":"pass","engine smoke tests":"pass"}
 }

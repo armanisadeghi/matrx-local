@@ -215,6 +215,8 @@ def locked_target_install_command(target_dir: Path) -> list[str]:
         "--no-progress",
         "--no-config",
         "--native-tls",
+        "--index-strategy",
+        "unsafe-best-match",
     ]
 
 

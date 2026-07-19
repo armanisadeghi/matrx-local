@@ -129,6 +129,7 @@ def test_locked_target_command_needs_no_python_interpreter(
     assert "--no-config" in command
     assert command[command.index("--python") + 1] == "3.13"
     assert "--managed-python" in command
+    assert command[command.index("--index-strategy") + 1] == "unsafe-best-match"
     assert all("python" not in part.lower() for part in command[:1])
 
 

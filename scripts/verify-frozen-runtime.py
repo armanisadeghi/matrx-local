@@ -218,6 +218,8 @@ def install_exact_target_runtime(
             "--no-progress",
             "--no-config",
             "--native-tls",
+            "--index-strategy",
+            "unsafe-best-match",
         ],
         cwd=ROOT,
         env=locked_target_install_environment(destination),

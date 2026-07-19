@@ -60,6 +60,7 @@ from app.config import (
     MATRX_HOME_DIR,
 )
 from app.common.system_logger import get_logger
+from app.common.process_shutdown import ShutdownCancellationMiddleware
 import app.common.access_log as access_log
 from app.common.platform_ctx import refresh_capabilities
 from app.services.scraper.engine import get_scraper_engine
@@ -1762,11 +1763,13 @@ app.include_router(downloads_router)
 # @app.middleware("http") also calls add_middleware() internally.
 #
 # Required order (outermost → innermost):
-#   1. CORSMiddleware  — must be first to handle OPTIONS preflights before auth
-#   2. AuthMiddleware  — validates Bearer tokens for protected routes
-#   3. log_requests    — logs all requests/responses (innermost, sees final status codes)
+#   1. ShutdownCancellationMiddleware — completes announced shutdown cancellation
+#   2. CORSMiddleware  — must handle OPTIONS preflights before auth
+#   3. AuthMiddleware  — validates Bearer tokens for protected routes
+#   4. log_requests    — logs all requests/responses (innermost, sees final status codes)
 #
-# To achieve this, we register in REVERSE: log_requests first, then Auth, then CORS.
+# To achieve this, we register in REVERSE: log_requests first, then Auth, CORS,
+# and finally the shutdown-cancellation boundary.
 # We define log_requests as a regular function and register it via add_middleware so
 # we control placement explicitly (unlike @app.middleware which always inserts at [0]).
 
@@ -1917,6 +1920,10 @@ app.add_middleware(
     expose_headers=["X-Conversation-ID", "X-Request-ID"],
     max_age=600,
 )
+#   Step 4: process-shutdown cancellation boundary (outermost). This is a
+#   pure ASGI middleware so it can complete cancellation escaping Starlette's
+#   BaseHTTPMiddleware task bridge without affecting normal request errors.
+app.add_middleware(ShutdownCancellationMiddleware)
 
 
 @app.websocket("/ws")

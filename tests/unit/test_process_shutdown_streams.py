@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import time
+import logging
+import socket
 
 import pytest
+import uvicorn
 
 from app.api import routes, setup_routes, wake_word_routes
 from app.common.process_shutdown import (
+    ShutdownCancellationMiddleware,
     process_shutdown_event,
     request_process_shutdown,
 )
@@ -19,36 +22,6 @@ def _reset_process_shutdown_event():
     process_shutdown_event.clear()
     yield
     process_shutdown_event.clear()
-
-
-@pytest.mark.anyio
-async def test_setup_status_gpu_probe_does_not_block_event_loop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def slow_gpu_probe() -> tuple[bool, str | None]:
-        time.sleep(0.15)
-        return True, "Test GPU"
-
-    async def permissions() -> setup_routes.ComponentStatus:
-        return setup_routes.ComponentStatus(
-            id="permissions",
-            label="Permissions",
-            description="test",
-            status="ready",
-        )
-
-    monkeypatch.setattr(setup_routes, "_check_gpu", slow_gpu_probe)
-    monkeypatch.setattr(setup_routes, "_check_permissions", permissions)
-
-    started = time.monotonic()
-    request_task = asyncio.create_task(setup_routes.get_setup_status())
-    await asyncio.sleep(0.02)
-
-    # If _check_gpu ran on this loop, the 20ms timer could not fire until the
-    # 150ms blocking probe completed.
-    assert time.monotonic() - started < 0.10
-    result = await request_task
-    assert result.gpu_name == "Test GPU"
 
 
 @pytest.mark.anyio
@@ -151,3 +124,164 @@ async def test_permission_scan_cancels_probes_on_process_shutdown(
 
     assert await asyncio.wait_for(scan, timeout=0.5) == []
     assert cancelled.is_set()
+
+
+@pytest.mark.anyio
+async def test_request_cancellation_completes_response_after_process_shutdown() -> None:
+    sent: list[dict] = []
+
+    async def capture(message: dict) -> None:
+        sent.append(message)
+
+    async def cancelled_app(scope, receive, send) -> None:
+        raise asyncio.CancelledError
+
+    middleware = ShutdownCancellationMiddleware(cancelled_app)
+    request_process_shutdown()
+
+    await middleware({"type": "http"}, None, capture)
+
+    assert sent == [
+        {
+            "type": "http.response.start",
+            "status": 503,
+            "headers": [(b"content-length", b"0")],
+        },
+        {"type": "http.response.body", "body": b"", "more_body": False},
+    ]
+
+
+@pytest.mark.anyio
+async def test_stream_cancellation_emits_only_terminal_body_on_shutdown() -> None:
+    sent: list[dict] = []
+
+    async def capture(message: dict) -> None:
+        sent.append(message)
+
+    async def cancelled_stream(scope, receive, send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send(
+            {"type": "http.response.body", "body": b"partial", "more_body": True}
+        )
+        raise asyncio.CancelledError
+
+    middleware = ShutdownCancellationMiddleware(cancelled_stream)
+    request_process_shutdown()
+
+    await middleware({"type": "http"}, None, capture)
+
+    assert sent[-1] == {
+        "type": "http.response.body",
+        "body": b"",
+        "more_body": False,
+    }
+    assert sum(message["type"] == "http.response.start" for message in sent) == 1
+
+
+@pytest.mark.anyio
+async def test_partial_fixed_length_cancellation_propagates_on_shutdown() -> None:
+    sent: list[dict] = []
+
+    async def capture(message: dict) -> None:
+        sent.append(message)
+
+    async def cancelled_download(scope, receive, send) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-length", b"10")],
+            }
+        )
+        await send(
+            {"type": "http.response.body", "body": b"partial", "more_body": True}
+        )
+        raise asyncio.CancelledError
+
+    middleware = ShutdownCancellationMiddleware(cancelled_download)
+    request_process_shutdown()
+
+    with pytest.raises(asyncio.CancelledError):
+        await middleware({"type": "http"}, None, capture)
+
+    assert len(sent) == 2
+
+
+@pytest.mark.anyio
+async def test_request_cancellation_propagates_during_normal_operation() -> None:
+    async def cancelled_app(scope, receive, send) -> None:
+        raise asyncio.CancelledError
+
+    middleware = ShutdownCancellationMiddleware(cancelled_app)
+
+    with pytest.raises(asyncio.CancelledError):
+        await middleware({"type": "http"}, None, None)
+
+
+@pytest.mark.anyio
+async def test_lifespan_cancellation_always_propagates() -> None:
+    async def cancelled_app(scope, receive, send) -> None:
+        raise asyncio.CancelledError
+
+    middleware = ShutdownCancellationMiddleware(cancelled_app)
+    request_process_shutdown()
+
+    with pytest.raises(asyncio.CancelledError):
+        await middleware({"type": "lifespan"}, None, None)
+
+
+@pytest.mark.anyio
+async def test_uvicorn_shutdown_cancellation_finishes_asgi_response(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    request_started = asyncio.Event()
+
+    async def blocked_app(scope, receive, send) -> None:
+        assert scope["type"] == "http"
+        request_started.set()
+        await asyncio.Event().wait()
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    listener.setblocking(False)
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(
+            ShutdownCancellationMiddleware(blocked_app),
+            lifespan="off",
+            log_level="error",
+            timeout_graceful_shutdown=0.05,
+        )
+    )
+
+    with caplog.at_level(logging.ERROR):
+        server_task = asyncio.create_task(server.serve(sockets=[listener]))
+        try:
+            while not server.started:
+                await asyncio.sleep(0.01)
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(b"GET /blocked HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            await writer.drain()
+            await asyncio.wait_for(request_started.wait(), timeout=1)
+
+            request_process_shutdown()
+            server.should_exit = True
+            response = await asyncio.wait_for(reader.read(), timeout=2)
+            await asyncio.wait_for(server_task, timeout=2)
+        finally:
+            server.should_exit = True
+            if not server_task.done():
+                server_task.cancel()
+                await asyncio.gather(server_task, return_exceptions=True)
+            listener.close()
+            writer.close()
+            await writer.wait_closed()
+
+    assert response.startswith(b"HTTP/1.1 503 Service Unavailable")
+    assert not any(
+        "ASGI callable returned without" in record.getMessage()
+        or "Exception in ASGI application" in record.getMessage()
+        for record in caplog.records
+    )

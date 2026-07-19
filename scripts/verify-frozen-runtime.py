@@ -79,7 +79,29 @@ def check_archive(binary: Path, contract: dict, *, target: str) -> None:
     from PyInstaller.utils.hooks import collect_submodules
 
     sys.path.insert(0, str(ROOT / "specs"))
-    from _managed_runtime_bundle import managed_runtime_shared_packages
+    from _managed_runtime_bundle import (
+        managed_runtime_excluded_packages,
+        managed_runtime_shared_packages,
+    )
+
+    leaked_managed = {
+        package: sorted(
+            module
+            for module in modules
+            if module == package or module.startswith(package + ".")
+        )[:20]
+        for package in managed_runtime_excluded_packages(target)
+    }
+    leaked_managed = {
+        package: found for package, found in leaked_managed.items() if found
+    }
+    if leaked_managed:
+        raise RuntimeError(
+            "managed-only packages leaked into frozen archive: "
+            + "; ".join(
+                f"{package}: {found}" for package, found in leaked_managed.items()
+            )
+        )
 
     missing_shared: dict[str, list[str]] = {}
     for package in managed_runtime_shared_packages(target):

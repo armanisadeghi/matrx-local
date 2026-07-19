@@ -78,9 +78,15 @@ _protobuf_mods = collect_submodules('google.protobuf') + ['google._upb._message'
 # three times: google.protobuf, jinja2, huggingface_hub. One list, four specs —
 # see specs/_managed_runtime_bundle.py before adding anything here.
 sys.path.insert(0, SPECPATH)
-from _managed_runtime_bundle import collect_managed_runtime_modules
+from _managed_runtime_bundle import (
+    collect_managed_runtime_modules,
+    managed_runtime_excluded_packages,
+)
 _shared_runtime_mods = collect_managed_runtime_modules(
     collect_submodules, target='x86_64-apple-darwin'
+)
+_managed_runtime_excludes = managed_runtime_excluded_packages(
+    'x86_64-apple-darwin'
 )
 
 # ── Office (docx/pptx/xlsx) codec — matrx_files.specific_handlers.office ──────
@@ -176,7 +182,7 @@ a = Analysis(
         os.path.join(_ROOT, 'hooks/runtime_hook.py'),
         os.path.join(_ROOT, 'scripts/frozen_runtime_verifier_hook.py'),
     ],
-    excludes=['torch', 'torchvision', 'torchaudio', 'tensorflow', 'tensorboard', 'triton', 'scipy', 'nipype', 'nibabel', 'pyxnat', 'openai_whisper', 'whisper', 'matplotlib', 'sklearn', 'skimage', 'IPython', 'ipykernel', 'jupyter', 'ipywidgets'],
+    excludes=[*_managed_runtime_excludes, 'torchaudio', 'tensorflow', 'tensorboard', 'triton', 'scipy', 'nipype', 'nibabel', 'pyxnat', 'openai_whisper', 'whisper', 'matplotlib', 'sklearn', 'skimage', 'IPython', 'ipykernel', 'jupyter', 'ipywidgets'],
     noarchive=False,
     optimize=0,
 )

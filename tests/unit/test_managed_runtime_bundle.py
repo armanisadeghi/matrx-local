@@ -27,6 +27,7 @@ sys.path.insert(0, str(_SPECS_DIR))
 from _managed_runtime_bundle import (  # noqa: E402
     MANAGED_RUNTIME_SHARED_PACKAGES_BY_TARGET,
     collect_managed_runtime_modules,
+    managed_runtime_excluded_packages,
 )
 
 _SPEC_FILES = sorted(_SPECS_DIR.glob("*.spec"))
@@ -61,6 +62,9 @@ def test_every_spec_consumes_the_shared_list() -> None:
         target = _TARGET_BY_SPEC[spec.name]
         assert "_managed_runtime_bundle" in text, f"{spec.name} bypasses the shared list"
         assert "_shared_runtime_mods" in text, f"{spec.name} never uses the collected mods"
+        assert "_managed_runtime_excludes" in text, (
+            f"{spec.name} does not exclude managed-only packages"
+        )
         assert f"target='{target}'" in text
         for package in MANAGED_RUNTIME_SHARED_PACKAGES_BY_TARGET[target]:
             # Both quote styles — a double-quoted hand-add is the same drift.
@@ -78,6 +82,7 @@ def test_build_sidecar_fallback_consumes_the_shared_list() -> None:
     text = build_script.read_text()
     assert "_managed_runtime_bundle" in text
     assert "managed_runtime_shared_packages" in text
+    assert "managed_runtime_excluded_packages" in text
     for package in _ALL_SHARED_PACKAGES:
         assert f'"--collect-submodules", "{package}"' not in text, (
             f"build-sidecar.sh hand-collects {package}; it must read the shared list"
@@ -89,6 +94,21 @@ def test_outage_packages_are_declared_shared() -> None:
     assert "huggingface_hub" in _ALL_SHARED_PACKAGES
     assert "jinja2" in _ALL_SHARED_PACKAGES
     assert "tqdm" in _ALL_SHARED_PACKAGES
+
+
+def test_heavy_managed_packages_are_excluded_from_every_frozen_target() -> None:
+    expected = {
+        "accelerate",
+        "diffusers",
+        "gguf",
+        "peft",
+        "sentencepiece",
+        "torch",
+        "torchvision",
+        "transformers",
+    }
+    for target in MANAGED_RUNTIME_SHARED_PACKAGES_BY_TARGET:
+        assert set(managed_runtime_excluded_packages(target)) == expected
 
 
 def test_collection_reaches_submodules_static_analysis_misses() -> None:

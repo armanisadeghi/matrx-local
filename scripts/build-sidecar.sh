@@ -302,8 +302,6 @@ args = [
     "--noconfirm",
     "--runtime-hook", "hooks/runtime_hook.py",
     "--runtime-hook", "scripts/frozen_runtime_verifier_hook.py",
-    "--exclude-module", "torch",
-    "--exclude-module", "torchvision",
     "--exclude-module", "torchaudio",
     "--exclude-module", "tensorflow",
     "--exclude-module", "tensorboard",
@@ -511,8 +509,14 @@ for _pkg in ("replicate", "protobuf", "matrx-ai", "matrx-utils",
 # (google.protobuf, jinja2, huggingface_hub). This fallback path and specs/*.spec
 # read ONE list so they cannot drift: specs/_managed_runtime_bundle.py.
 sys.path.insert(0, "specs")
-from _managed_runtime_bundle import managed_runtime_shared_packages
-for _pkg in managed_runtime_shared_packages(os.environ["MATRX_BUILD_TARGET"]):
+from _managed_runtime_bundle import (
+    managed_runtime_excluded_packages,
+    managed_runtime_shared_packages,
+)
+target = os.environ["MATRX_BUILD_TARGET"]
+for _pkg in managed_runtime_excluded_packages(target):
+    args += ["--exclude-module", _pkg]
+for _pkg in managed_runtime_shared_packages(target):
     args += ["--collect-submodules", _pkg]
 
 args.append("run.py")

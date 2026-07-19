@@ -184,19 +184,27 @@ force_kill_pid() {
 find_app_binary() {
   case "$OS" in
     macos)
-      local app_dir
+      local app_dir app_executable app_binary
       app_dir="$(find desktop/src-tauri/target -type d -name "*.app" -path "*bundle/macos*" 2>/dev/null | head -1)"
       [ -z "$app_dir" ] && return 1
       # Run the Mach-O directly, NOT `open -a`: `open` hands the process to
       # launchd and its stdout/stderr — the whole point — is lost.
       #
-      # Contents/MacOS holds the SIDECARS too (cloudflared, llama-server), not
-      # just the app binary. A bare `head -1` can pick cloudflared, which exits
-      # in seconds printing "unable to find config file" — a phantom "app died
-      # on startup" that has nothing to do with the app. Exclude the known
-      # sidecars so we launch the actual Tauri binary (aimatrx-desktop).
-      find "$app_dir/Contents/MacOS" -type f -perm +111 2>/dev/null \
-        | grep -vE '/(cloudflared|llama-server|matrx-engine)[^/]*$' | head -1
+      # Contents/MacOS also holds every external binary. Filtering known names
+      # is not a contract: adding bundled uv made the harness launch uv and
+      # report a phantom app crash. Info.plist is the authoritative executable.
+      app_executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
+        "$app_dir/Contents/Info.plist" 2>/dev/null || true)"
+      if [ -z "$app_executable" ]; then
+        app_executable="$(plutil -extract CFBundleExecutable raw \
+          "$app_dir/Contents/Info.plist" 2>/dev/null || true)"
+      fi
+      case "$app_executable" in
+        ""|*/*) return 1 ;;
+      esac
+      app_binary="$app_dir/Contents/MacOS/$app_executable"
+      [ -f "$app_binary" ] && [ -x "$app_binary" ] || return 1
+      printf '%s\n' "$app_binary"
       ;;
     windows)
       # tauri build leaves the runnable .exe in target/release; the NSIS/MSI

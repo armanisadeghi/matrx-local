@@ -77,6 +77,17 @@ MANAGED_RUNTIME_SHARED_PACKAGES_BY_TARGET = {
     target: tuple(packages)
     for target, packages in _CONTRACT["shared_import_packages_by_target"].items()
 }
+_DIRECT_IMPORT_BY_DISTRIBUTION = {
+    "accelerate": "accelerate",
+    "diffusers": "diffusers",
+    "gguf": "gguf",
+    "huggingface-hub": "huggingface_hub",
+    "peft": "peft",
+    "sentencepiece": "sentencepiece",
+    "torch": "torch",
+    "torchvision": "torchvision",
+    "transformers": "transformers",
+}
 
 
 def managed_runtime_shared_packages(target: str) -> tuple[str, ...]:
@@ -100,6 +111,27 @@ def managed_runtime_shared_packages(target: str) -> tuple[str, ...]:
                 f"contract requires {expected_versions[distribution]!r}"
             )
     return tuple(import_roots)
+
+
+def managed_runtime_excluded_packages(target: str) -> tuple[str, ...]:
+    """Return managed direct imports that must not exist in the frozen app."""
+    try:
+        shared = set(MANAGED_RUNTIME_SHARED_DISTRIBUTIONS_BY_TARGET[target])
+    except KeyError as exc:
+        raise RuntimeError(f"no managed-runtime shared contract for {target}") from exc
+    direct = set(_CONTRACT["managed_direct_versions"])
+    missing_mappings = direct - set(_DIRECT_IMPORT_BY_DISTRIBUTION)
+    if missing_mappings:
+        raise RuntimeError(
+            "managed runtime direct imports need bundle mappings: "
+            + ", ".join(sorted(missing_mappings))
+        )
+    return tuple(
+        sorted(
+            _DIRECT_IMPORT_BY_DISTRIBUTION[distribution]
+            for distribution in direct - shared
+        )
+    )
 
 
 def collect_managed_runtime_modules(collect_submodules, *, target: str):

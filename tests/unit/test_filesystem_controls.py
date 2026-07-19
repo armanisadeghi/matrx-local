@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -202,6 +203,45 @@ async def test_background_task_failure_is_logged_and_removed(
     assert not service._tasks
     assert "filesystem-test-failure exited unexpectedly" in caplog.text
     assert "background boom" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_unexpected_enrichment_cancellation_queues_claim_and_restarts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service._started = True
+    first_worker_started = asyncio.Event()
+    replacement_started = asyncio.Event()
+    calls = 0
+    claim = (str(tmp_path / "claimed.txt"), "content", 10.0, 20)
+
+    async def controlled_worker() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            service._active_enrichment_claim = claim
+            first_worker_started.set()
+            await asyncio.Event().wait()
+        replacement_started.set()
+        service._stop.set()
+
+    monkeypatch.setattr(service, "_enrichment_worker_loop", controlled_worker)
+    with caplog.at_level(logging.ERROR, logger=filesystem_service_module.__name__):
+        service._spawn(service._enrichment_loop(), "filesystem-enrichment")
+        await first_worker_started.wait()
+        original = next(iter(service._tasks))
+        original.cancel()
+        await asyncio.gather(original, return_exceptions=True)
+        await asyncio.wait_for(replacement_started.wait(), timeout=1.0)
+        await asyncio.sleep(0)
+
+    assert service._active_enrichment_claim is None
+    assert list(service._pending_enrichment_resets) == [claim]
+    assert calls == 2
+    assert "filesystem-enrichment was cancelled unexpectedly" in caplog.text
 
 
 def test_enrichment_limits_prune_content_vectors_and_old_models(tmp_path: Path) -> None:
@@ -680,6 +720,69 @@ async def test_search_build_admission_is_bounded_and_cancellation_safe(
 
     assert peak_active == filesystem_service_module._MAX_CONCURRENT_SEARCH_BUILDS
     assert active == 0
+
+
+@pytest.mark.anyio
+async def test_search_admission_owns_timed_out_threads_until_stop_drains_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service._started = True
+    started = {query: threading.Event() for query in ("one", "two", "three")}
+    release = {query: threading.Event() for query in ("one", "two", "three")}
+    active = 0
+    peak_active = 0
+    counter_lock = threading.Lock()
+
+    def blocking_worker(query: str) -> None:
+        nonlocal active, peak_active
+        with counter_lock:
+            active += 1
+            peak_active = max(peak_active, active)
+        started[query].set()
+        release[query].wait(timeout=2.0)
+        with counter_lock:
+            active -= 1
+
+    async def timed_out_build(
+        clean: str,
+        *,
+        workers: set[asyncio.Task[object]],
+        **_kwargs: object,
+    ) -> SearchPage:
+        await service._run_search_worker(
+            workers, blocking_worker, clean, timeout=0.01
+        )
+        raise AssertionError("blocking worker should have timed out")
+
+    monkeypatch.setattr(service, "_materialize_first_search_page", timed_out_build)
+    first = asyncio.create_task(service.find("one"))
+    second = asyncio.create_task(service.find("two"))
+    while not (started["one"].is_set() and started["two"].is_set()):
+        await asyncio.sleep(0)
+    assert isinstance((await asyncio.gather(first, return_exceptions=True))[0], TimeoutError)
+    assert isinstance((await asyncio.gather(second, return_exceptions=True))[0], TimeoutError)
+
+    third = asyncio.create_task(service.find("three"))
+    await asyncio.sleep(0.02)
+    assert not started["three"].is_set()
+    assert peak_active == filesystem_service_module._MAX_CONCURRENT_SEARCH_BUILDS
+
+    stop = asyncio.create_task(service.stop())
+    await asyncio.sleep(0)
+    assert not stop.done()
+    release["one"].set()
+    third_result = await asyncio.gather(third, return_exceptions=True)
+    assert isinstance(third_result[0], ValueError)
+    assert not started["three"].is_set()
+    assert not stop.done()
+
+    release["two"].set()
+    await asyncio.wait_for(stop, timeout=1.0)
+
+    assert peak_active == filesystem_service_module._MAX_CONCURRENT_SEARCH_BUILDS
+    assert active == 0
+    assert not service._search_cleanup_tasks
 
 
 @pytest.mark.anyio

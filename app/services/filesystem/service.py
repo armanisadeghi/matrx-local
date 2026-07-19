@@ -11,6 +11,7 @@ import sqlite3
 import time
 import threading
 from array import array
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,7 @@ class FilesystemService:
         self.index = FilesystemIndex(db_path or _MATRX_HOME_DIR / "filesystem-index.sqlite3")
         self._places: list[Place] = []
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._expected_task_cancellations: set[asyncio.Task[Any]] = set()
         self._stop = asyncio.Event()
         self._thread_stop = threading.Event()
         self._started = False
@@ -71,6 +73,7 @@ class FilesystemService:
         self._search_build_slots = asyncio.BoundedSemaphore(
             _MAX_CONCURRENT_SEARCH_BUILDS
         )
+        self._search_cleanup_tasks: set[asyncio.Task[None]] = set()
         self._active_enrichment_claim: tuple[str, str, float | None, int] | None = None
         self._pending_enrichment_resets: deque[tuple[str, str, float | None, int]] = deque()
 
@@ -107,6 +110,13 @@ class FilesystemService:
                     task.cancel()
                 await asyncio.gather(*crawl, return_exceptions=True)
         self._tasks.clear()
+        # Search workers wrap non-cancellable OS calls. Drain them without a
+        # timeout so this service never reports stopped while its owned work is
+        # still mutating or retaining a snapshot in the executor.
+        while self._search_cleanup_tasks:
+            await asyncio.gather(
+                *tuple(self._search_cleanup_tasks), return_exceptions=True
+            )
         await asyncio.to_thread(self._directory_lists.close)
         await asyncio.to_thread(self._searches.close)
         self._started = False
@@ -119,7 +129,17 @@ class FilesystemService:
     def _background_task_done(self, task: asyncio.Task[Any]) -> None:
         """Make every unexpected background-task exit operator-visible."""
         self._tasks.discard(task)
+        expected_cancellation = task in self._expected_task_cancellations
+        self._expected_task_cancellations.discard(task)
         if task.cancelled():
+            if expected_cancellation or self._stop.is_set():
+                return
+            logger.error(
+                "Filesystem background task %s was cancelled unexpectedly",
+                task.get_name(),
+            )
+            if task.get_name() == "filesystem-enrichment" and self._started:
+                self._spawn(self._enrichment_loop(), "filesystem-enrichment")
             return
         try:
             error = task.exception()
@@ -354,7 +374,10 @@ class FilesystemService:
     ) -> SearchPage:
         """Admit a bounded search build without leaking capacity on cancellation."""
         await self._search_build_slots.acquire()
-        release_on_exit = True
+        if self._stop.is_set():
+            self._search_build_slots.release()
+            raise ValueError("Filesystem service is stopping")
+        workers: set[asyncio.Task[Any]] = set()
         try:
             build = asyncio.create_task(
                 self._materialize_first_search_page(
@@ -363,24 +386,39 @@ class FilesystemService:
                     scope=scope,
                     safe_limit=safe_limit,
                     timeout_seconds=timeout_seconds,
+                    workers=workers,
                 ),
                 name="filesystem-search-build",
             )
-            try:
-                return await asyncio.shield(build)
-            except asyncio.CancelledError:
-                # asyncio.to_thread work cannot be stopped once dispatched. Keep
-                # this permit until the materialization really finishes so a
-                # disconnected caller cannot defeat the concurrency bound.
-                release_on_exit = False
-                build.add_done_callback(self._abandoned_search_build_done)
-                raise
+        except BaseException:
+            self._search_build_slots.release()
+            raise
+        cleanup = asyncio.create_task(
+            self._release_search_build_when_finished(build, workers),
+            name="filesystem-search-cleanup",
+        )
+        self._search_cleanup_tasks.add(cleanup)
+        cleanup.add_done_callback(self._search_cleanup_tasks.discard)
+        try:
+            return await asyncio.shield(build)
+        except asyncio.CancelledError:
+            build.add_done_callback(self._abandoned_search_build_done)
+            raise
+
+    async def _release_search_build_when_finished(
+        self,
+        build: asyncio.Task[SearchPage],
+        workers: set[asyncio.Task[Any]],
+    ) -> None:
+        """Own the permit until the build and every dispatched worker finish."""
+        try:
+            await asyncio.gather(build, return_exceptions=True)
+            if workers:
+                await asyncio.gather(*tuple(workers), return_exceptions=True)
         finally:
-            if release_on_exit:
-                self._search_build_slots.release()
+            self._search_build_slots.release()
 
     def _abandoned_search_build_done(self, task: asyncio.Task[SearchPage]) -> None:
-        self._search_build_slots.release()
         if task.cancelled():
             return
         error = task.exception()
@@ -390,6 +428,27 @@ class FilesystemService:
                 exc_info=(type(error), error, error.__traceback__),
             )
 
+    async def _run_search_worker(
+        self,
+        workers: set[asyncio.Task[Any]],
+        function: Callable[..., Any],
+        /,
+        *args: object,
+        timeout: float,
+        **kwargs: object,
+    ) -> Any:
+        """Run one bounded worker without losing ownership when it times out."""
+        worker = asyncio.create_task(
+            asyncio.to_thread(function, *args, **kwargs),
+            name="filesystem-search-worker",
+        )
+        workers.add(worker)
+        try:
+            return await asyncio.wait_for(asyncio.shield(worker), timeout=timeout)
+        finally:
+            if worker.done():
+                workers.discard(worker)
+
     async def _materialize_first_search_page(
         self,
         clean: str,
@@ -398,13 +457,13 @@ class FilesystemService:
         scope: tuple[str, str],
         safe_limit: int,
         timeout_seconds: float,
+        workers: set[asyncio.Task[Any]],
     ) -> SearchPage:
         """Build and register one bounded, mutation-stable first-page snapshot.
 
-        Admission covers this coroutine and caller cancellation. Python cannot
-        stop an OS or network-filesystem call already dispatched by an inner
-        ``wait_for(to_thread(...))``, so that thread may briefly outlive its
-        timeout even though its result is discarded.
+        Python cannot stop an OS or network-filesystem call already dispatched
+        to a thread. Timed-out workers therefore remain attached to this build,
+        and its admission permit remains held, until those workers really exit.
         """
 
         queued = await asyncio.to_thread(self.index.queue_count)
@@ -413,33 +472,44 @@ class FilesystemService:
         partial = queued > 0 or paused or bool(unavailable)
         snapshot_limit = MAX_SEARCH_SNAPSHOT_ENTRIES + 1
         if partial:
-            index_search = asyncio.wait_for(
-                asyncio.to_thread(
+            index_search = asyncio.create_task(
+                self._run_search_worker(
+                    workers,
                     self.index.search,
                     clean,
                     limit=snapshot_limit,
                     offset=0,
                     root=resolved_root,
+                    timeout=min(max(timeout_seconds, 0.1), 10.0),
                 ),
-                timeout=min(max(timeout_seconds, 0.1), 10.0),
+                name="filesystem-index-search",
             )
             disk_roots = [resolved_root] if resolved_root else None
             if disk_roots is None and queued > 0 and not paused:
                 disk_roots = await asyncio.to_thread(self.index.pending_root_paths)
-            disk_search = asyncio.wait_for(
-                asyncio.to_thread(
+            disk_search = asyncio.create_task(
+                self._run_search_worker(
+                    workers,
                     self._bounded_disk_find_snapshot,
                     clean,
                     resolved_root,
                     snapshot_limit,
                     timeout_seconds,
                     disk_roots,
+                    timeout=min(max(timeout_seconds + 0.25, 0.25), 10.25),
                 ),
-                timeout=min(max(timeout_seconds + 0.25, 0.25), 10.25),
+                name="filesystem-disk-search",
             )
-            indexed_entries, (disk_entries, disk_truncated) = await asyncio.gather(
-                index_search, disk_search
-            )
+            try:
+                indexed_entries, (disk_entries, disk_truncated) = await asyncio.gather(
+                    index_search, disk_search
+                )
+            finally:
+                index_search.cancel()
+                disk_search.cancel()
+                await asyncio.gather(
+                    index_search, disk_search, return_exceptions=True
+                )
             by_path = {entry.path: entry for entry in indexed_entries}
             for entry in disk_entries:
                 by_path.setdefault(entry.path, entry)
@@ -447,27 +517,25 @@ class FilesystemService:
             source = "hybrid"
             index_complete = False
         else:
-            candidates = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self.index.search,
-                    clean,
-                    limit=snapshot_limit,
-                    offset=0,
-                    root=resolved_root,
-                ),
+            candidates = await self._run_search_worker(
+                workers,
+                self.index.search,
+                clean,
+                limit=snapshot_limit,
+                offset=0,
+                root=resolved_root,
                 timeout=min(max(timeout_seconds, 0.1), 10.0),
             )
             source = "index"
             index_complete = True
             if not candidates:
-                candidates, disk_truncated = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        self._bounded_disk_find_snapshot,
-                        clean,
-                        resolved_root,
-                        snapshot_limit,
-                        timeout_seconds,
-                    ),
+                candidates, disk_truncated = await self._run_search_worker(
+                    workers,
+                    self._bounded_disk_find_snapshot,
+                    clean,
+                    resolved_root,
+                    snapshot_limit,
+                    timeout_seconds,
                     timeout=min(max(timeout_seconds + 0.25, 0.25), 10.25),
                 )
                 source = "disk"
@@ -782,6 +850,7 @@ class FilesystemService:
     async def _restart_watcher(self, signature: tuple[str, ...]) -> None:
         watchers = [task for task in self._tasks if task.get_name() == "filesystem-watch"]
         for task in watchers:
+            self._expected_task_cancellations.add(task)
             task.cancel()
         if watchers:
             await asyncio.gather(*watchers, return_exceptions=True)
@@ -814,6 +883,7 @@ class FilesystemService:
             try:
                 await self._enrichment_worker_loop()
             except asyncio.CancelledError:
+                self._queue_active_enrichment_reset()
                 raise
             except sqlite3.OperationalError as exc:
                 self._queue_active_enrichment_reset()

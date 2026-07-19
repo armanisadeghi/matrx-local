@@ -39,9 +39,12 @@ import type {
   ToolCallResult,
 } from "@/hooks/use-chat";
 import {
+  enrichHydratedToolResults,
   extractToolParts,
+  hydratedToolCallIds,
   reduceLiveToolEvent,
   stitchHydratedToolMessages,
+  type DurableToolCallRow,
   type ExtractedToolParts,
 } from "@/features/filesystem/tool-results";
 import {
@@ -1045,9 +1048,26 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
 
       if (error) throw error;
       const newestRows = [...((data ?? []) as CloudMessageRow[])].reverse();
-      const messages = stitchHydratedToolMessages(
+      let messages = stitchHydratedToolMessages(
         newestRows.map(messageRowToChatMessage),
       );
+      const toolCallIds = hydratedToolCallIds(messages);
+      if (toolCallIds.length > 0) {
+        const { data: toolRows, error: toolError } = await supabase
+          .schema("chat")
+          .from("tool_call")
+          .select(
+            "call_id, status, success, is_error, output, output_preview, output_type, error_message, metadata",
+          )
+          .eq("conversation_id", serverConversationId)
+          .is("deleted_at", null)
+          .in("call_id", toolCallIds);
+        if (toolError) throw toolError;
+        messages = enrichHydratedToolResults(
+          messages,
+          (toolRows ?? []) as DurableToolCallRow[],
+        );
+      }
       setConversations((prev) =>
         cacheUserIdRef.current === ownerAtStart
           ? prev.map((conversation) =>

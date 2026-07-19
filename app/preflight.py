@@ -76,11 +76,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import signal
 import socket
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
@@ -104,6 +106,7 @@ ENGINE_PORT_SCAN = 20
 _MATRX_HOME = Path(os.environ.get("MATRX_HOME_DIR", str(Path.home() / ".matrx")))
 
 DISCOVERY_FILE = _MATRX_HOME / "local.json"
+_DISCOVERY_WRITE_LOCK = threading.RLock()
 
 
 def _playwright_browsers_path() -> str:
@@ -210,6 +213,12 @@ class ManagedService:
     # intentional instances (e.g. the packaged app + a dev engine) coexist
     # instead of one killing the other at startup.
     protect_live_owner: bool = False
+    # When True, a cmdline match is not enough: the discovery service record
+    # must positively identify the candidate by PID, process creation time,
+    # and executable path. This is required for commands such as
+    # ``cloudflared tunnel`` that may legitimately belong to another app or
+    # to the source-run DEV world after their parent engine has died.
+    require_discovery_identity: bool = False
 
 
 SERVICES: tuple[ManagedService, ...] = (
@@ -297,12 +306,14 @@ SERVICES: tuple[ManagedService, ...] = (
     # thing in its own ownership scope.
     ManagedService(
         name="cloudflared",
-        cmdline_patterns=(r"cloudflared\s+tunnel",),
+        cmdline_patterns=(r"cloudflared(?:\.exe)?\s+tunnel",),
         windows_images=("cloudflared.exe",),
         port=None,
         port_scan_count=0,
         discovery_key="tunnel",
         spawned_by="python",
+        orphan_only=True,
+        require_discovery_identity=True,
     ),
 )
 
@@ -373,6 +384,12 @@ def _current_user() -> str | None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class ProcessIdentity:
+    process_started_at: float
+    executable: str
+
+
 @dataclass
 class FoundProcess:
     pid: int
@@ -388,6 +405,7 @@ class FoundProcess:
     # explicit live opt-in. Frozen engine binaries are always eligible for the
     # current live preflight sweep.
     source_run_dev: bool = False
+    expected_identity: ProcessIdentity | None = None
 
 
 def _compile_patterns(svc: ManagedService) -> list[re.Pattern[str]]:
@@ -482,6 +500,99 @@ def _ancestor_pids(pid: int) -> set[int]:
     except psutil.Error:
         pass
     return out
+
+
+def _normalized_executable(value: str) -> str:
+    """Normalize an executable identity without requiring the path to exist."""
+    return os.path.normcase(os.path.realpath(value))
+
+
+def _matches_discovery_identity(
+    proc: psutil.Process,
+    *,
+    pid: int,
+    service: ManagedService,
+    discovery: dict,
+) -> ProcessIdentity | None:
+    """Return expected identity only when discovery owns this exact process.
+
+    PID alone is unsafe because operating systems reuse PIDs. Creation time
+    closes that race, while the executable path prevents an unrelated process
+    with the same PID metadata from satisfying an overly broad command match.
+    Any missing or unreadable evidence fails closed: leaving an unknown orphan
+    behind is safer than terminating a user's unrelated tunnel.
+    """
+    if not service.discovery_key:
+        return None
+    services_map = discovery.get("services")
+    if not isinstance(services_map, dict):
+        return None
+    identity = services_map.get(service.discovery_key)
+    if not isinstance(identity, dict):
+        return None
+
+    recorded_pid = identity.get("pid")
+    recorded_started_at = identity.get("process_started_at")
+    recorded_executable = identity.get("executable")
+    if (
+        not isinstance(recorded_pid, int)
+        or isinstance(recorded_pid, bool)
+        or recorded_pid != pid
+        or not isinstance(recorded_started_at, (int, float))
+        or isinstance(recorded_started_at, bool)
+        or not math.isfinite(recorded_started_at)
+        or not isinstance(recorded_executable, str)
+        or not recorded_executable
+    ):
+        return None
+
+    try:
+        actual_started_at = proc.create_time()
+    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+        return None
+    except Exception:
+        return None
+    actual_executable = _safe_proc_attr(proc, "exe")
+    if not actual_executable:
+        return False
+
+    if not (
+        math.isclose(
+            actual_started_at,
+            float(recorded_started_at),
+            rel_tol=0.0,
+            abs_tol=0.01,
+        )
+        and _normalized_executable(actual_executable)
+        == _normalized_executable(recorded_executable)
+    ):
+        return None
+    return ProcessIdentity(
+        process_started_at=float(recorded_started_at),
+        executable=recorded_executable,
+    )
+
+
+def _process_matches_identity(
+    proc: psutil.Process,
+    identity: ProcessIdentity,
+) -> bool:
+    """Revalidate a process handle immediately before a destructive signal."""
+    try:
+        started_at = proc.create_time()
+    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+    except Exception:
+        return False
+    executable = _safe_proc_attr(proc, "exe")
+    return bool(executable) and math.isclose(
+        started_at,
+        identity.process_started_at,
+        rel_tol=0.0,
+        abs_tol=0.01,
+    ) and _normalized_executable(executable) == _normalized_executable(
+        identity.executable
+    )
 
 
 def _descendant_pids(pid: int) -> list[int]:
@@ -600,6 +711,7 @@ def _scan_processes(
     filename.
     """
     compiled = [(svc, _compile_patterns(svc)) for svc in services]
+    discovery = read_discovery_file() or {}
     found: list[FoundProcess] = []
 
     for proc in psutil.process_iter(["pid", "name", "cmdline", "username"]):
@@ -649,6 +761,21 @@ def _scan_processes(
             if svc.env_markers and not _env_markers_ok(proc, svc.env_markers):
                 break
 
+            # Commands such as ``cloudflared tunnel`` are not uniquely ours.
+            # Only a process identity persisted by this world's discovery
+            # owner is eligible for cleanup. This remains valid after the
+            # engine dies and the child is reparented, unlike ancestry checks.
+            expected_identity = None
+            if svc.require_discovery_identity:
+                expected_identity = _matches_discovery_identity(
+                    proc,
+                    pid=pid,
+                    service=svc,
+                    discovery=discovery,
+                )
+                if expected_identity is None:
+                    break
+
             # Orphan gate (only when defined). Reap solely trees whose owning
             # parent is dead — a live engine's browsers/driver are left alone.
             if svc.orphan_only and not _is_orphaned(proc):
@@ -663,6 +790,7 @@ def _scan_processes(
                     source_run_dev=(
                         svc.name == "engine" and _is_dev_source_engine(proc, cmdline)
                     ),
+                    expected_identity=expected_identity,
                 )
             )
             break
@@ -715,7 +843,13 @@ def _resolve_listening_ports(found: list[FoundProcess]) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _terminate_pid(pid: int, *, label: str, kill_tree: bool = False) -> bool:
+def _terminate_pid(
+    pid: int,
+    *,
+    label: str,
+    kill_tree: bool = False,
+    expected_identity: ProcessIdentity | None = None,
+) -> bool:
     """Try graceful termination. Returns True if the process is gone after.
 
     On Unix: SIGTERM, wait up to GRACE_SECONDS, SIGKILL if needed.
@@ -734,7 +868,11 @@ def _terminate_pid(pid: int, *, label: str, kill_tree: bool = False) -> bool:
     if kill_tree and sys.platform != "win32":
         tree_pids = _descendant_pids(pid)
 
-    result = _terminate_single_pid(pid, label=label)
+    result = _terminate_single_pid(
+        pid,
+        label=label,
+        expected_identity=expected_identity,
+    )
 
     # Reap the (Unix) descendant tree after the parent, whatever its outcome.
     if tree_pids:
@@ -749,7 +887,12 @@ def _terminate_tree_pids(pids: list[int], *, label: str) -> None:
         _terminate_single_pid(child_pid, label=f"{label}-child")
 
 
-def _terminate_single_pid(pid: int, *, label: str) -> bool:
+def _terminate_single_pid(
+    pid: int,
+    *,
+    label: str,
+    expected_identity: ProcessIdentity | None = None,
+) -> bool:
     """Graceful TERM→KILL of a SINGLE pid (no tree handling)."""
     try:
         proc = psutil.Process(pid)
@@ -758,6 +901,15 @@ def _terminate_single_pid(pid: int, *, label: str) -> bool:
     except psutil.Error as exc:
         _warn(label, f"could not access pid {pid}: {exc}")
         return False
+
+    if expected_identity is not None and not _process_matches_identity(
+        proc, expected_identity
+    ):
+        _warn(
+            label,
+            f"pid {pid} identity changed after scan — refusing to signal reused PID",
+        )
+        return True
 
     try:
         proc.terminate()  # SIGTERM on Unix, TerminateProcess on Windows
@@ -779,6 +931,15 @@ def _terminate_single_pid(pid: int, *, label: str) -> bool:
         return True
     except psutil.Error as exc:
         _warn(label, f"wait(pid={pid}) error: {exc}; escalating")
+
+    if expected_identity is not None and not _process_matches_identity(
+        proc, expected_identity
+    ):
+        _warn(
+            label,
+            f"pid {pid} identity changed before SIGKILL — refusing to signal reused PID",
+        )
+        return True
 
     # Windows: kill the whole tree so children don't keep ports/files locked.
     if sys.platform == "win32":
@@ -985,7 +1146,12 @@ def clean_orphans(*, services: Iterable[ManagedService] | None = None) -> CleanR
             # _terminate_pid waits up to GRACE_SECONDS, then escalates to
             # SIGKILL (with its own _warn line so the escalation is visible).
             # kill_tree reaps the Playwright driver's browser children too.
-            killed = _terminate_pid(fp.pid, label=label, kill_tree=fp.service.kill_tree)
+            killed = _terminate_pid(
+                fp.pid,
+                label=label,
+                kill_tree=fp.service.kill_tree,
+                expected_identity=fp.expected_identity,
+            )
             if killed:
                 report.orphans_killed += 1
                 _ok(label, f"pid {fp.pid} terminated")
@@ -1249,6 +1415,15 @@ def update_discovery_service(
     service_key: str,
     info: dict | None,
 ) -> None:
+    """Serialize discovery read-modify-write operations within this engine."""
+    with _DISCOVERY_WRITE_LOCK:
+        _update_discovery_service_unlocked(service_key, info)
+
+
+def _update_discovery_service_unlocked(
+    service_key: str,
+    info: dict | None,
+) -> None:
     """Update one entry in the `services` map without rewriting the rest.
 
     Use for late-binding services (e.g. tunnel comes up after the engine).
@@ -1288,9 +1463,21 @@ def update_discovery_service(
                 data["tunnel_url"] = url
                 data["tunnel_ws"] = url.replace("https://", "wss://") + "/ws"
 
-    tmp = DISCOVERY_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    tmp.replace(DISCOVERY_FILE)
+    # Recheck ownership immediately before replace. A different engine may
+    # have reclaimed discovery after our initial read; stale RMW data must not
+    # overwrite its file.
+    current = read_discovery_file()
+    if current is None or current.get("pid") != owner_pid:
+        return
+
+    tmp = DISCOVERY_FILE.with_name(
+        f".{DISCOVERY_FILE.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+    )
+    try:
+        tmp.write_text(json.dumps(data, indent=2))
+        tmp.replace(DISCOVERY_FILE)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def read_discovery_file() -> dict | None:

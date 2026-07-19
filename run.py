@@ -32,6 +32,19 @@ from __future__ import annotations
 import multiprocessing as _mp
 _mp.freeze_support()
 
+# macOS keychain requests run in a short-lived copy of this signed executable.
+# Handle the helper protocol before dev/live isolation or any application
+# imports so a blocked Keychain prompt can be terminated by the parent without
+# booting a rogue engine or touching runtime state.
+import sys as _bootstrap_sys  # noqa: E402
+from app.common.keychain_helper import (  # noqa: E402
+    HELPER_ARGUMENT as _KEYCHAIN_HELPER_ARGUMENT,
+    run_keychain_helper as _run_keychain_helper,
+)
+
+if _KEYCHAIN_HELPER_ARGUMENT in _bootstrap_sys.argv[1:]:
+    raise SystemExit(_run_keychain_helper())
+
 # ── Windows UTF-8 fix — before every other import ────────────────────────────
 # Windows defaults to CP1252 for stdout/stderr. Our log messages contain
 # Unicode symbols (✓ → ← ─ ⚠) that CP1252 cannot encode, causing
@@ -275,6 +288,10 @@ from app.config import MATRX_HOME_DIR
 # "forever loader" freezes): SIGTERM arrived, nothing was logged, the process
 # vanished. Lifecycle events MUST land in system.log.
 from app.common.system_logger import get_logger
+from app.common.process_shutdown import (  # noqa: E402
+    process_shutdown_event as _shutdown_event,
+    request_process_shutdown as _request_process_shutdown,
+)
 
 logger = get_logger()
 
@@ -325,7 +342,11 @@ def write_discovery_file(port: int, tunnel_url: str | None = None) -> None:
         logger.warning("Failed to write discovery file", exc_info=True)
 
 
-def update_discovery_tunnel(tunnel_url: str | None) -> None:
+def update_discovery_tunnel(
+    tunnel_url: str | None,
+    *,
+    process_identity: dict[str, int | float | str] | None = None,
+) -> None:
     """Update only the tunnel fields in the discovery file (called after tunnel starts).
 
     Also keeps the in-memory tunnel-state singleton in sync so
@@ -337,12 +358,15 @@ def update_discovery_tunnel(tunnel_url: str | None) -> None:
     try:
         from app.preflight import update_discovery_service
         if tunnel_url:
+            info: dict[str, int | float | str] = {
+                "url": tunnel_url,
+                "ws": tunnel_url.replace("https://", "wss://") + "/ws",
+            }
+            if process_identity:
+                info.update(process_identity)
             update_discovery_service(
                 "tunnel",
-                {
-                    "url": tunnel_url,
-                    "ws": tunnel_url.replace("https://", "wss://") + "/ws",
-                },
+                info,
             )
         else:
             update_discovery_service("tunnel", None)
@@ -451,9 +475,6 @@ class _UvicornLogForwarder(logging.Handler):
 
 _uvicorn_server: uvicorn.Server | None = None
 _server_thread: threading.Thread | None = None
-_shutdown_event = threading.Event()
-
-
 def start_server(port: int) -> None:
     global _uvicorn_server
     config = uvicorn.Config(
@@ -491,8 +512,8 @@ def on_quit(icon: Icon, item: MenuItem) -> None:
     remove_discovery_file()
     icon.stop()
     if _uvicorn_server is not None:
+        _request_process_shutdown()
         _uvicorn_server.should_exit = True
-        _shutdown_event.set()
     else:
         os._exit(0)
 
@@ -569,9 +590,9 @@ def _start_parent_watchdog() -> None:
                     parent_pid,
                 )
                 remove_discovery_file()
+                _request_process_shutdown()
                 if _uvicorn_server is not None:
                     _uvicorn_server.should_exit = True
-                _shutdown_event.set()
                 # 20s = the 15s sidecar teardown join in _wait_forever + 5s
                 # margin, so the join and child-kill actually get to run. The
                 # old 10s force-exit preempted the join mid-teardown — the
@@ -748,9 +769,9 @@ def _handle_exit(signum: int, frame: object) -> None:  # noqa: ARG001
     already = _exit_signal_logged.is_set()
     _exit_signal_logged.set()
     if not already:
+        _request_process_shutdown()
         if _uvicorn_server is not None:
             _uvicorn_server.should_exit = True
-        _shutdown_event.set()
         _schedule_force_exit(30)
 
     try:

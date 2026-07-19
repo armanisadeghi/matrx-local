@@ -53,6 +53,7 @@ from starlette.responses import StreamingResponse
 from app.api.browser_events import handle_browser_event
 from app.api.system_control import get_system_info
 from app.common.system_logger import get_logger
+from app.common.process_shutdown import process_shutdown_requested
 import app.common.access_log as access_log
 from app.config import (
     BASE_DIR, LOG_DIR, TEMP_DIR, DATA_DIR, CONFIG_DIR,
@@ -378,7 +379,7 @@ async def stream_system_log():
         try:
             with open(log_file, "r", encoding="utf-8") as fh:
                 fh.seek(0, 2)  # jump to end
-                while True:
+                while not process_shutdown_requested():
                     line = fh.readline()
                     if line:
                         yield f"data: {line.rstrip()}\n\n"
@@ -408,12 +409,16 @@ async def stream_access_log():
         import json
 
         try:
-            while True:
+            loop = asyncio.get_running_loop()
+            next_keepalive = loop.time() + 15.0
+            while not process_shutdown_requested():
                 try:
-                    entry = await asyncio.wait_for(q.get(), timeout=15.0)
+                    entry = await asyncio.wait_for(q.get(), timeout=0.25)
                     yield f"data: {json.dumps(entry)}\n\n"
                 except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"  # prevent proxy timeouts
+                    if loop.time() >= next_keepalive:
+                        yield ": keepalive\n\n"  # prevent proxy timeouts
+                        next_keepalive = loop.time() + 15.0
         except asyncio.CancelledError:
             pass
         finally:

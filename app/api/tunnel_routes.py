@@ -102,7 +102,10 @@ async def tunnel_start(body: TunnelStartRequest | None = None) -> TunnelStatus:
         import sys as _sys
         _run_mod = _sys.modules.get("run") or _sys.modules.get("__main__")
         if _run_mod is not None and hasattr(_run_mod, "update_discovery_tunnel"):
-            _run_mod.update_discovery_tunnel(url)
+            _run_mod.update_discovery_tunnel(
+                url,
+                process_identity=tm.process_identity,
+            )
     except Exception:
         logger.warning("[tunnel] Could not update discovery file", exc_info=True)
 
@@ -129,10 +132,32 @@ async def tunnel_stop() -> TunnelStatus:
     """Stop the Cloudflare tunnel."""
     tm = get_tunnel_manager()
 
-    if not tm.running:
-        return TunnelStatus(**tm.get_status())
+    try:
+        await tm.stop()
+    finally:
+        # Local truth must converge even if cloudflared already died or stop
+        # was cancelled. Clear discovery and runtime state before any network
+        # write so a slow Supabase request cannot leave a dead tunnel visible.
+        try:
+            import sys as _sys
 
-    await tm.stop()
+            _run_mod = _sys.modules.get("run") or _sys.modules.get("__main__")
+            if _run_mod is not None and hasattr(
+                _run_mod, "update_discovery_tunnel"
+            ):
+                _run_mod.update_discovery_tunnel(None)
+        except Exception:
+            logger.warning("[tunnel] Could not update discovery file", exc_info=True)
+
+        try:
+            from app.api.tunnel_state import mark_tunnel_inactive
+
+            mark_tunnel_inactive()
+        except Exception:
+            logger.warning(
+                "[tunnel] Could not update tunnel state singleton",
+                exc_info=True,
+            )
 
     # Persist the user's preference so it stays off on next engine boot.
     try:
@@ -148,21 +173,5 @@ async def tunnel_stop() -> TunnelStatus:
         await mgr.update_tunnel_url(None, active=False)
     except Exception:
         logger.warning("[tunnel] Could not clear tunnel URL in Supabase", exc_info=True)
-
-    # Clear from discovery file (atomic, schema-2 aware)
-    try:
-        import sys as _sys
-        _run_mod = _sys.modules.get("run") or _sys.modules.get("__main__")
-        if _run_mod is not None and hasattr(_run_mod, "update_discovery_tunnel"):
-            _run_mod.update_discovery_tunnel(None)
-    except Exception:
-        logger.warning("[tunnel] Could not update discovery file", exc_info=True)
-
-    # Mirror the inactive state into the runtime singleton.
-    try:
-        from app.api.tunnel_state import mark_tunnel_inactive
-        mark_tunnel_inactive()
-    except Exception:
-        logger.warning("[tunnel] Could not update tunnel state singleton", exc_info=True)
 
     return TunnelStatus(**tm.get_status())

@@ -968,7 +968,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     if _run_mod is not None and hasattr(
                         _run_mod, "update_discovery_tunnel"
                     ):
-                        _run_mod.update_discovery_tunnel(_tunnel_url)
+                        _run_mod.update_discovery_tunnel(
+                            _tunnel_url,
+                            process_identity=_tm.process_identity,
+                        )
                 except Exception:
                     logger.debug(
                         "[app/main.py] Phase 5: discovery tunnel write failed",

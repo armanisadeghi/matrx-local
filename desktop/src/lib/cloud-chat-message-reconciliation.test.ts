@@ -41,4 +41,33 @@ describe("Cloud Chat durable message reconciliation", () => {
       reconcileHydratedChatMessages(existing, hydrated).map((item) => item.id),
     ).toEqual(["server-user", "local-user"]);
   });
+
+  it("replaces a cached turn when legacy persistence combines its prompts", () => {
+    const existing = [
+      message("local-user-1", "user", "Please inspect the project handoff."),
+      message("local-assistant", "assistant", "I inspected the handoff."),
+      message("local-user-2", "user", "Now implement the first phase."),
+    ];
+    const hydrated = [
+      message(
+        "server-user",
+        "user",
+        "Please inspect the project handoff.\n\nNow implement the first phase.",
+      ),
+      message("server-assistant", "assistant", "I inspected the handoff."),
+    ];
+
+    expect(reconcileHydratedChatMessages(existing, hydrated)).toEqual(hydrated);
+  });
+
+  it("does not match short replies merely because durable prose contains them", () => {
+    const existing = [message("local-user", "user", "yes")];
+    const hydrated = [
+      message("server-user", "user", "Yesterday the answer was yes, but not today."),
+    ];
+
+    expect(
+      reconcileHydratedChatMessages(existing, hydrated).map((item) => item.id),
+    ).toEqual(["server-user", "local-user"]);
+  });
 });

@@ -37,6 +37,7 @@ import httpx
 from pathlib import Path
 
 from app.common.system_logger import get_logger
+from app.common.process_shutdown import process_shutdown_requested
 from app.services.downloads import failures
 from app.services.downloads.errors import NonRetryableDownloadError
 from app.services.downloads.failures import ActionableDownloadError
@@ -686,12 +687,16 @@ class DownloadManager:
                 ).to_sse()
 
             # Yield keep-alive pings every 20s to prevent proxy/browser timeouts
-            while True:
+            loop = asyncio.get_running_loop()
+            next_keepalive = loop.time() + 20.0
+            while not process_shutdown_requested():
                 try:
-                    msg = await asyncio.wait_for(q.get(), timeout=20.0)
+                    msg = await asyncio.wait_for(q.get(), timeout=0.25)
                     yield msg
                 except asyncio.TimeoutError:
-                    yield ": keep-alive\n\n"
+                    if loop.time() >= next_keepalive:
+                        yield ": keep-alive\n\n"
+                        next_keepalive = loop.time() + 20.0
         except asyncio.CancelledError:
             pass
         finally:

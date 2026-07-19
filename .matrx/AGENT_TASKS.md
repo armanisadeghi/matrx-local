@@ -467,6 +467,7 @@ are condensed under Completed. Still open:
 
 ## Completed
 
+- [BUG] Packaged macOS startup now isolates Keychain reads in an identity-preserving, timeout-bounded private-pipe helper with cross-process DEK locking — 2026-07-18 (`app/common/keychain_helper.py`)
 - [BUG] Managed image-runtime startup now resolves Torch/Torchvision as an ABI-compatible pair, observes background migration failures, and prevents dev-home package symlinks from reading or rewriting the live app runtime by routing them to an in-home fallback without mutating user state — 106 focused media tests + 7 optional-package isolation tests green (2026-07-18)
 
 _(one line each, newest first; full detail in git history)_

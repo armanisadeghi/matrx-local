@@ -372,6 +372,26 @@ export interface ExtractedToolParts {
   results: ToolCallResult[];
 }
 
+/**
+ * Durable V2 tool ledger row from chat.tool_call.
+ *
+ * Current server persistence intentionally stores role=tool message blocks
+ * with a null `content`; the completed output lives here instead.  Keep this
+ * projection small so transcript hydration never fetches claim/ownership
+ * bookkeeping that the renderer does not consume.
+ */
+export interface DurableToolCallRow {
+  call_id?: string | null;
+  status?: string | null;
+  success?: boolean | null;
+  is_error?: boolean | null;
+  output?: unknown;
+  output_preview?: unknown;
+  output_type?: string | null;
+  error_message?: string | null;
+  metadata?: unknown;
+}
+
 /** Recover durable tool blocks from cx_message.content. */
 export function extractToolParts(content: unknown): ExtractedToolParts {
   const parts = Array.isArray(content) ? content : [content];
@@ -381,7 +401,12 @@ export function extractToolParts(content: unknown): ExtractedToolParts {
     const item = record(value);
     if (!item) continue;
     const type = stringValue(item.type);
-    const callId = stringValue(item.call_id, item.tool_use_id);
+    const callId = stringValue(
+      item.call_id,
+      item.id,
+      item.tool_call_id,
+      item.tool_use_id,
+    );
     if (!callId) continue;
     if (type === "tool_call") {
       calls.push({
@@ -390,6 +415,14 @@ export function extractToolParts(content: unknown): ExtractedToolParts {
         input: record(item.arguments) ?? {},
       });
     } else if (type === "tool_result") {
+      const hasInlineOutput =
+        item.content != null ||
+        item.output != null ||
+        item.result != null ||
+        item.output_preview != null;
+      // V2 persists a role=tool adjacency placeholder whose result content is
+      // deliberately null. Its real output is joined from chat.tool_call.
+      if (!hasInlineOutput && item.is_error !== true) continue;
       const output = item.content ?? item.output ?? item.result ?? item.output_preview ?? "";
       const resultRecord = record(item.result) ?? record(output);
       results.push({
@@ -409,6 +442,79 @@ export function extractToolParts(content: unknown): ExtractedToolParts {
     }
   }
   return { calls, results };
+}
+
+/** Call ids needed to enrich a hydrated transcript from chat.tool_call. */
+export function hydratedToolCallIds(messages: ChatMessage[]): string[] {
+  return [...new Set(
+    messages.flatMap((message) =>
+      (message.tool_calls ?? []).map((call) => call.id),
+    ),
+  )];
+}
+
+function resultFromDurableToolCall(
+  row: DurableToolCallRow,
+): ToolCallResult | null {
+  const callId = stringValue(row.call_id);
+  if (!callId) return null;
+  const status = row.status?.toLowerCase() ?? "";
+  const isError =
+    row.is_error === true || status === "error" || status === "failed";
+  const isTerminal =
+    isError ||
+    row.success === true ||
+    status === "completed" ||
+    status === "cancelled";
+  if (!isTerminal) return null;
+
+  const output =
+    row.output ??
+    row.output_preview ??
+    row.error_message ??
+    (isError ? "Tool execution failed." : "Tool completed.");
+  const metadata = record(row.metadata);
+  return {
+    tool_call_id: callId,
+    type: isError ? "error" : "success",
+    output: safeToolOutput(output),
+    ...(metadata ? { metadata } : {}),
+  };
+}
+
+/**
+ * Patch V2 ledger outputs onto their durable assistant tool-call blocks.
+ * V1 inline tool_result blocks remain supported by stitchHydratedToolMessages.
+ */
+export function enrichHydratedToolResults(
+  messages: ChatMessage[],
+  rows: DurableToolCallRow[],
+): ChatMessage[] {
+  const resultByCallId = new Map<string, ToolCallResult>();
+  for (const row of rows) {
+    const result = resultFromDurableToolCall(row);
+    if (result) resultByCallId.set(result.tool_call_id, result);
+  }
+  if (resultByCallId.size === 0) return messages;
+
+  return messages.map((message) => {
+    const ownedIds = new Set((message.tool_calls ?? []).map((call) => call.id));
+    if (ownedIds.size === 0) return message;
+    const ledgerResults = [...resultByCallId.values()].filter((result) =>
+      ownedIds.has(result.tool_call_id),
+    );
+    if (ledgerResults.length === 0) return message;
+    const ledgerIds = new Set(ledgerResults.map((result) => result.tool_call_id));
+    return {
+      ...message,
+      tool_results: [
+        ...(message.tool_results ?? []).filter(
+          (result) => !ledgerIds.has(result.tool_call_id),
+        ),
+        ...ledgerResults,
+      ],
+    };
+  });
 }
 
 /** Attach durable role=tool rows to the assistant message that owns the call. */

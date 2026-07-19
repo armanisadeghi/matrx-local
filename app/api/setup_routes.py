@@ -26,6 +26,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.common.system_logger import get_logger
+from app.common.process_shutdown import process_shutdown_requested
 from app.config import MATRX_HOME_DIR, LOG_DIR
 from app.services.permissions.checker import check_all_permissions
 
@@ -373,7 +374,10 @@ async def _check_permissions() -> ComponentStatus:
 @router.get("/status", response_model=SetupStatus)
 async def get_setup_status() -> SetupStatus:
     """Return comprehensive installation/setup status."""
-    gpu_available, gpu_name = _check_gpu()
+    # GPU detection invokes platform tools (system_profiler/nvidia-smi) with
+    # multi-second timeouts. Running it on Uvicorn's event loop starves every
+    # request and prevents shutdown signals from being observed.
+    gpu_available, gpu_name = await asyncio.to_thread(_check_gpu)
 
     components = [
         _check_core_packages(),
@@ -1270,6 +1274,8 @@ async def stream_logs(request: Request, lines: int = 200):
         return "info"
 
     async def _generate():
+        if process_shutdown_requested():
+            return
         # ── Emit a "connected" handshake so the browser knows the stream is live ──
         yield f"event: connected\ndata: {json.dumps({'log_path': log_path, 'timestamp': time.time()})}\n\n"
 
@@ -1329,7 +1335,7 @@ async def stream_logs(request: Request, lines: int = 200):
             try:
                 with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
                     fh.seek(seek_pos)
-                    while True:
+                    while not process_shutdown_requested():
                         if await request.is_disconnected():
                             return
                         chunk = fh.read(65536)

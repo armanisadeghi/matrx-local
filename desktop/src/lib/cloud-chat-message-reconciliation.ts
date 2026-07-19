@@ -6,6 +6,18 @@ function normalized(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
+function textRepresentsSameTurn(optimistic: string, durable: string): boolean {
+  const local = normalized(optimistic);
+  const remote = normalized(durable);
+  if (local === remote) return true;
+
+  // The legacy /chat persistence path can collapse the client-managed
+  // transcript into one durable user row.  Treat that row as authoritative
+  // when it contains the optimistic prompt verbatim, but avoid matching tiny
+  // replies such as "yes" against unrelated prose.
+  return local.length >= 12 && remote.includes(local);
+}
+
 function isUnsettledAssistant(message: ChatMessage): boolean {
   return (
     message.role === "assistant" &&
@@ -29,9 +41,12 @@ function isDurableReplacement(
     return false;
   }
   if (optimistic.role === "user") {
-    return normalized(optimistic.content) === normalized(durable.content);
+    return textRepresentsSameTurn(optimistic.content, durable.content);
   }
-  return isUnsettledAssistant(optimistic);
+  return (
+    isUnsettledAssistant(optimistic) ||
+    textRepresentsSameTurn(optimistic.content, durable.content)
+  );
 }
 
 export function reconcileHydratedChatMessages(

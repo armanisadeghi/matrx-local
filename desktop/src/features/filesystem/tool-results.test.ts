@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ChatMessage, ToolCallResult } from "@/hooks/use-chat";
 import {
   extractToolParts,
+  enrichHydratedToolResults,
+  hydratedToolCallIds,
   isFilesystemTool,
   normalizeFilesystemResult,
   reduceLiveToolEvent,
@@ -389,6 +391,112 @@ describe("tool call persistence", () => {
     const stitched = stitchHydratedToolMessages(messages);
     expect(stitched).toHaveLength(1);
     expect(stitched[0]?.tool_results?.[0]?.output).toBe("done");
+  });
+
+  it("accepts canonical id and legacy tool_call_id call identifiers", () => {
+    expect(extractToolParts([
+      { type: "tool_call", id: "canonical", name: "local_file", arguments: {} },
+      { type: "tool_result", tool_call_id: "legacy", content: "done" },
+    ])).toMatchObject({
+      calls: [{ id: "canonical" }],
+      results: [{ tool_call_id: "legacy", output: "done" }],
+    });
+  });
+
+  it("hydrates V2 null-content tool messages from the durable tool ledger", () => {
+    const callParts = extractToolParts([{
+      type: "tool_call",
+      call_id: "persisted-search",
+      name: "local_file",
+      arguments: { action: "search", query: "roadmap" },
+    }]);
+    const nullResultParts = extractToolParts([{
+      type: "tool_result",
+      call_id: "persisted-search",
+      name: "local_file",
+      content: null,
+      is_error: false,
+    }]);
+    const messages: ChatMessage[] = stitchHydratedToolMessages([
+      {
+        id: "assistant",
+        role: "assistant",
+        content: "Searching.",
+        timestamp: "2026-01-01",
+        tool_calls: callParts.calls,
+      },
+      {
+        id: "tool-placeholder",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-01-02",
+        tool_results: nullResultParts.results,
+      },
+    ]);
+
+    expect(hydratedToolCallIds(messages)).toEqual(["persisted-search"]);
+    const enriched = enrichHydratedToolResults(messages, [{
+      call_id: "persisted-search",
+      status: "completed",
+      success: true,
+      is_error: false,
+      output_type: "json",
+      output: {
+        output: "Found one file.",
+        metadata: {
+          kind: "filesystem.search-page",
+          namespace: "host",
+          query: "roadmap",
+          entries: [],
+        },
+      },
+      metadata: { content_ir: { version: 1 } },
+    }]);
+
+    expect(enriched).toHaveLength(1);
+    expect(enriched[0]?.tool_results).toEqual([{
+      tool_call_id: "persisted-search",
+      type: "success",
+      output: JSON.stringify({
+        output: "Found one file.",
+        metadata: {
+          kind: "filesystem.search-page",
+          namespace: "host",
+          query: "roadmap",
+          entries: [],
+        },
+      }, null, 2),
+      metadata: { content_ir: { version: 1 } },
+    }]);
+    expect(normalizeFilesystemResult(
+      enriched[0]!.tool_results![0]!,
+      "local_file",
+    )).toMatchObject({
+      kind: "filesystem.search-page",
+      query: "roadmap",
+    });
+  });
+
+  it("renders durable tool errors even when the output column is null", () => {
+    const messages: ChatMessage[] = [{
+      id: "assistant",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-01-01",
+      tool_calls: [{ id: "failed-call", name: "local_file", input: {} }],
+    }];
+
+    expect(enrichHydratedToolResults(messages, [{
+      call_id: "failed-call",
+      status: "error",
+      is_error: true,
+      output: null,
+      error_message: "Path is not allowed.",
+    }])[0]?.tool_results).toEqual([{
+      tool_call_id: "failed-call",
+      type: "error",
+      output: "Path is not allowed.",
+    }]);
   });
 
   it("updates one live execution instead of duplicating cards", () => {

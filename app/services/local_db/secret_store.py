@@ -25,27 +25,36 @@ Fail-safe contract (this is load-bearing — it sits on the auth path):
 
 from __future__ import annotations
 
+import sys
+import threading
+
+from app.common.keychain_helper import (
+    KEYRING_SERVICE as _KEYRING_SERVICE,
+    KEYRING_USERNAME as _KEYRING_USERNAME,
+    read_key_from_helper,
+)
 from app.common.system_logger import get_logger
 
 logger = get_logger()
 
 _ENC_PREFIX = "enc:v1:"
-_KEYRING_SERVICE = "matrx-local"
-_KEYRING_USERNAME = "db-encryption-key"
-
 # Cache the resolved Fernet instance (or False once we know it's unavailable)
 # so we hit the keychain at most once per process.
 _fernet: object | None = None
 _fernet_unavailable = False
 _warned_once = False
+_fernet_lock = threading.Lock()
 
 
 def _warn_once(msg: str) -> None:
     global _warned_once
     if not _warned_once:
         _warned_once = True
-        logger.warning("[secret_store] %s — secrets stored UNENCRYPTED at rest "
-                       "(file permissions still apply).", msg)
+        logger.warning(
+            "[secret_store] %s — secrets stored UNENCRYPTED at rest "
+            "(file permissions still apply).",
+            msg,
+        )
 
 
 def _get_fernet():
@@ -59,28 +68,36 @@ def _get_fernet():
     if _fernet_unavailable:
         return None
 
-    try:
-        import keyring
-        from cryptography.fernet import Fernet
-    except Exception as exc:  # ImportError or backend import failure
-        _fernet_unavailable = True
-        _warn_once(f"keychain/crypto libraries unavailable ({exc})")
-        return None
+    with _fernet_lock:
+        if _fernet is not None:
+            return _fernet
+        if _fernet_unavailable:
+            return None
 
-    try:
-        key = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
-        if not key:
-            key = Fernet.generate_key().decode("ascii")
-            keyring.set_password(_KEYRING_SERVICE, _KEYRING_USERNAME, key)
-            logger.info("[secret_store] generated new DB encryption key in OS keychain")
-        _fernet = Fernet(key.encode("ascii"))
-        return _fernet
-    except Exception as exc:
-        # Keychain locked, no backend (headless Linux without Secret Service),
-        # corrupt key, etc. Fall back to plaintext rather than blocking auth.
-        _fernet_unavailable = True
-        _warn_once(f"OS keychain unavailable ({exc})")
-        return None
+        try:
+            from cryptography.fernet import Fernet
+
+            if sys.platform == "darwin":
+                key = read_key_from_helper()
+            else:
+                import keyring
+
+                key = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
+                if not key:
+                    key = Fernet.generate_key().decode("ascii")
+                    keyring.set_password(_KEYRING_SERVICE, _KEYRING_USERNAME, key)
+                    logger.info(
+                        "[secret_store] generated new DB encryption key in OS keychain"
+                    )
+            _fernet = Fernet(key.encode("ascii"))
+            return _fernet
+        except Exception as exc:
+            # Keychain locked, timed out, no backend (headless Linux without
+            # Secret Service), corrupt key, etc. Fall back to plaintext rather
+            # than blocking auth or startup.
+            _fernet_unavailable = True
+            _warn_once(f"OS keychain unavailable ({exc})")
+            return None
 
 
 def protect(plaintext: str | None) -> str | None:
@@ -110,13 +127,17 @@ def unprotect(stored: str | None) -> str | None:
         return stored
     f = _get_fernet()
     if f is None:
-        logger.warning("[secret_store] have an encrypted secret but no key to "
-                       "decrypt it (keychain unavailable) — treating as absent")
+        logger.warning(
+            "[secret_store] have an encrypted secret but no key to "
+            "decrypt it (keychain unavailable) — treating as absent"
+        )
         return None
     try:
-        ct = stored[len(_ENC_PREFIX):]
+        ct = stored[len(_ENC_PREFIX) :]
         return f.decrypt(ct.encode("ascii")).decode("utf-8")
     except Exception:
-        logger.warning("[secret_store] failed to decrypt stored secret — "
-                       "treating as absent (re-auth required)")
+        logger.warning(
+            "[secret_store] failed to decrypt stored secret — "
+            "treating as absent (re-auth required)"
+        )
         return None

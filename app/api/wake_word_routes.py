@@ -27,6 +27,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.common.system_logger import get_logger
+from app.common.process_shutdown import process_shutdown_requested
 from app.services.wake_word.service import get_wake_word_service
 from app.services.wake_word.models import (
     list_available_models,
@@ -191,11 +192,15 @@ async def event_stream() -> StreamingResponse:
         # Send an initial heartbeat so the browser EventSource knows it's alive
         yield "event: ping\ndata: {}\n\n"
         try:
-            while True:
-                evt = await svc.next_event(timeout=15.0)
+            loop = asyncio.get_running_loop()
+            next_keepalive = loop.time() + 15.0
+            while not process_shutdown_requested():
+                evt = await svc.next_event(timeout=0.25)
                 if evt is None:
-                    # Send a keepalive comment to prevent proxy timeouts
-                    yield ": keepalive\n\n"
+                    if loop.time() >= next_keepalive:
+                        # Send a keepalive comment to prevent proxy timeouts
+                        yield ": keepalive\n\n"
+                        next_keepalive = loop.time() + 15.0
                     continue
                 event_name = evt["event"]
                 data = evt["data"]

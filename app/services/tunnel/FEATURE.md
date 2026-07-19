@@ -11,8 +11,15 @@ pkills it, never "cleans it up" — Rust signals the engine
 during lifespan teardown (`app/main.py` shutdown → `TunnelManager.stop()` with
 a timeout cap → `instance_manager.update_tunnel_url(None, active=False)`).
 Orphan cloudflared processes from a dead engine are reclaimed by
-`app/preflight.py` (cmdline pattern `cloudflared tunnel`, discovery key
-`tunnel`) — that is the ONLY out-of-band kill path.
+`app/preflight.py` — that is the ONLY out-of-band kill path. A cmdline match
+alone is never sufficient: `TunnelManager` persists the child's PID, OS
+creation time, and executable path under discovery key `tunnel` immediately
+after spawn. Preflight requires all three plus the `cloudflared tunnel`
+command pattern to match. Missing or unreadable identity fails closed, so a
+reparented DEV tunnel or an unrelated same-user cloudflared process cannot be
+terminated by LIVE preflight. Even an exact identity is eligible only after
+its parent is dead, and identity is revalidated immediately before TERM/KILL
+to close PID-reuse races.
 
 Every state change goes through `app/launcher.py` registry (`"tunnel"`:
 starting/ready/degraded/failed/stopping/stopped; DEGRADED = process running
@@ -41,6 +48,12 @@ Binary resolution: bundled → preinstalled discovery
 (`_CLOUDFLARED_VERSION = 2025.1.0`) cached at `~/.matrx/bin/cloudflared`
 (atomic `.tmp` → rename; Windows spawn uses
 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`).
+
+Start/stop are single-flight under one lifecycle lock. Cancellation during
+startup terminates and reaps the spawned child, and both normal stop and
+spontaneous process exit clear local discovery/runtime state immediately.
+Named-tunnel tokens are argv-only secrets and are never included in logs or
+discovery metadata.
 
 ## Who writes `app_instances` (cloud)
 

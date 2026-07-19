@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.request import urlretrieve
 
+import psutil
+
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
 from app.config import MATRX_HOME_DIR
 
@@ -231,6 +233,8 @@ class TunnelManager:
         self._url: Optional[str] = None
         self._ws_url: Optional[str] = None
         self._started_at: Optional[float] = None
+        self._process_started_at: Optional[float] = None
+        self._process_executable: Optional[str] = None
         self._reader_task: Optional[asyncio.Task] = None
         self._url_ready: asyncio.Event = asyncio.Event()
         self._token: str = os.getenv("CLOUDFLARE_TUNNEL_TOKEN", "")
@@ -243,6 +247,10 @@ class TunnelManager:
         # block" cloudflared emits on failure.
         self._recent_output: deque[str] = deque(maxlen=200)
         self._last_exit_code: Optional[int] = None
+        # Start/stop mutate one subprocess handle and one discovery identity.
+        # Serialize them so concurrent API calls cannot spawn an untracked
+        # second child or clear the identity for the wrong process.
+        self._lifecycle_lock = asyncio.Lock()
 
     # ── public API ──────────────────────────────────────────────────────────
 
@@ -279,7 +287,32 @@ class TunnelManager:
         """Return cloudflared's exit code from the most recent run, or None."""
         return self._last_exit_code
 
+    @property
+    def process_identity(self) -> dict[str, int | float | str] | None:
+        """Stable identity used to prove ownership during orphan cleanup.
+
+        PID is insufficient because it can be reused. Pair it with the OS
+        process creation time and executable path, neither of which includes
+        the named-tunnel token carried in argv.
+        """
+        if (
+            self._process is None
+            or self._process_started_at is None
+            or not self._process_executable
+        ):
+            return None
+        return {
+            "pid": self._process.pid,
+            "process_started_at": self._process_started_at,
+            "executable": self._process_executable,
+        }
+
     async def start(self, port: int) -> Optional[str]:
+        """Serialize tunnel starts; concurrent callers share one child."""
+        async with self._lifecycle_lock:
+            return await self._start_locked(port)
+
+    async def _start_locked(self, port: int) -> Optional[str]:
         """Start the tunnel subprocess. Returns the public URL when ready.
 
         Retries once on transient trycloudflare.com server flakes (the 1101 /
@@ -355,6 +388,8 @@ class TunnelManager:
         self._recent_output.clear()
         self._last_exit_code = None
         self._process = None
+        self._process_started_at = None
+        self._process_executable = None
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
             try:
@@ -365,9 +400,11 @@ class TunnelManager:
 
         cmd = self._build_command(bin_path, port)
         logger.info(
-            "Starting cloudflared (attempt %d): %s",
+            "Starting cloudflared (attempt %d, mode=%s, executable=%s, port=%d)",
             attempt,
-            " ".join(str(c) for c in cmd),
+            "named" if self._token else "quick",
+            bin_path,
+            port,
         )
 
         kwargs: dict = dict(
@@ -387,8 +424,43 @@ class TunnelManager:
             return None
 
         self._started_at = time.time()
+        try:
+            spawned = psutil.Process(self._process.pid)
+            self._process_started_at = spawned.create_time()
+            self._process_executable = spawned.exe()
+        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess) as exc:
+            logger.warning(
+                "Could not capture cloudflared process identity; orphan cleanup "
+                "will fail closed for pid %s: %s",
+                self._process.pid,
+                exc,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not capture cloudflared process identity; orphan cleanup "
+                "will fail closed for pid %s: %s",
+                self._process.pid,
+                exc,
+            )
+
+        # Persist immediately after spawn, not after URL discovery. If the
+        # engine dies during cloudflared's startup window, the next same-world
+        # preflight can still prove ownership and reclaim the exact orphan.
+        identity = self.process_identity
+        if identity:
+            try:
+                from app.preflight import update_discovery_service
+
+                update_discovery_service("tunnel", identity)
+            except Exception:
+                logger.debug(
+                    "Could not persist cloudflared process identity",
+                    exc_info=True,
+                )
         self._reader_task = asyncio.create_task(self._read_output())
 
+        exit_task: asyncio.Task | None = None
+        url_task: asyncio.Task | None = None
         try:
             exit_task = asyncio.create_task(self._process.wait())
             url_task = asyncio.create_task(self._url_ready.wait())
@@ -397,9 +469,6 @@ class TunnelManager:
                 timeout=30.0,
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            for t in pending:
-                t.cancel()
-
             if url_task in done:
                 return self._url  # URL captured
             if exit_task in done:
@@ -422,11 +491,29 @@ class TunnelManager:
                 "\n".join(f"  | {line}" for line in list(self._recent_output)[-10:]) or "  | <no output captured>",
             )
             return None
+        except asyncio.CancelledError:
+            # Startup cancellation otherwise abandons the child before the
+            # lifespan reaches its normal teardown block. Reap it while the
+            # start lock still proves this handle is ours.
+            await self._stop_locked()
+            raise
         except Exception as exc:
             logger.error("Error waiting for cloudflared URL (attempt %d): %s", attempt, exc)
             return None
+        finally:
+            wait_tasks = [task for task in (exit_task, url_task) if task is not None]
+            for task in wait_tasks:
+                if not task.done():
+                    task.cancel()
+            if wait_tasks:
+                await asyncio.gather(*wait_tasks, return_exceptions=True)
 
     async def stop(self) -> None:
+        """Serialize stop against any start already in progress."""
+        async with self._lifecycle_lock:
+            await self._stop_locked()
+
+    async def _stop_locked(self) -> None:
         """Stop the tunnel subprocess.
 
         Order matters: terminate the process FIRST while the stdout reader is
@@ -472,6 +559,9 @@ class TunnelManager:
         self._url = None
         self._ws_url = None
         self._started_at = None
+        self._process_started_at = None
+        self._process_executable = None
+        self._clear_local_tunnel_state()
         logger.info(
             "Tunnel stopped (cloudflared exit code: %s)",
             self._last_exit_code if self._last_exit_code is not None else "n/a",
@@ -486,6 +576,21 @@ class TunnelManager:
             "port": self._port,
             "mode": "named" if self._token else "quick",
         }
+
+    def _clear_local_tunnel_state(self) -> None:
+        """Clear disk/runtime tunnel truth without waiting on cloud I/O."""
+        try:
+            from app.preflight import update_discovery_service
+
+            update_discovery_service("tunnel", None)
+        except Exception:
+            logger.debug("Could not clear tunnel discovery state", exc_info=True)
+        try:
+            from app.api.tunnel_state import mark_tunnel_inactive
+
+            mark_tunnel_inactive()
+        except Exception:
+            logger.debug("Could not clear tunnel runtime state", exc_info=True)
 
     # ── internal helpers ────────────────────────────────────────────────────
 
@@ -537,6 +642,10 @@ class TunnelManager:
             logger.error("cloudflared output reader error: %s", exc)
 
         rc = self._process.returncode if self._process else "N/A"
+        if self._process is not None and self._process.returncode is not None:
+            # A spontaneous child exit has no API stop route to repair state.
+            # Clear local truth as soon as the output pipe reaches EOF.
+            self._clear_local_tunnel_state()
         logger.info(
             "[cloudflared] output reader finished — %d lines read, exit code: %s, url found: %s",
             line_count, rc, bool(self._url),

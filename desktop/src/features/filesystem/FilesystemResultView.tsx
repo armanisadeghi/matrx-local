@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   ChevronDown,
   ChevronRight,
@@ -25,6 +26,7 @@ import type {
   FilesystemPlace,
   FilesystemResult,
 } from "./types";
+import { normalizeFilesystemPayload } from "./tool-results";
 import { useFilesystemPlaces } from "./use-filesystem-places";
 
 export interface FilesystemResultViewProps {
@@ -36,6 +38,11 @@ export interface FilesystemResultViewProps {
   onLoadMore?: (cursor: string) => void;
   loadingMore?: boolean;
   pagingError?: string | null;
+}
+
+interface FilesystemBreadcrumb {
+  label: string;
+  path: string;
 }
 
 async function openPath(path: string, reveal = false): Promise<void> {
@@ -321,16 +328,105 @@ export function filesystemBreadcrumbParts(path: string): string[] {
   return parts;
 }
 
-function Breadcrumbs({ path }: { path: string }) {
-  if (!path) return null;
+export function filesystemBreadcrumbs(path: string): FilesystemBreadcrumb[] {
   const parts = filesystemBreadcrumbParts(path);
+  if (parts.length === 0) return path.startsWith("/") ? [{ label: "/", path: "/" }] : [];
+  const separator = path.includes("\\") ? "\\" : "/";
+  const root = parts[0]!;
+  const breadcrumbs: FilesystemBreadcrumb[] = [{ label: root, path: path.startsWith("/") ? `/${root}` : root }];
+  for (const part of parts.slice(1)) {
+    const previous = breadcrumbs[breadcrumbs.length - 1]!.path;
+    const prefix = previous.endsWith("/") || previous.endsWith("\\") ? previous : `${previous}${separator}`;
+    breadcrumbs.push({ label: part, path: `${prefix}${part}` });
+  }
+  return breadcrumbs;
+}
+
+function BreadcrumbSegment({
+  breadcrumb,
+  onNavigate,
+}: {
+  breadcrumb: FilesystemBreadcrumb;
+  onNavigate: (path: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [children, setChildren] = useState<FilesystemEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadMenu = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const payload = normalizeFilesystemPayload(await engine.listFilesystem(breadcrumb.path, { limit: 100 }));
+      if (payload?.kind !== "filesystem.directory-page") throw new Error("Unable to list folders.");
+      setChildren(payload.entries.filter((entry) => entry.kind === "directory"));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setLoading(false);
+    }
+  }, [breadcrumb.path]);
+
+  return (
+    <span className="flex shrink-0 items-center rounded border border-transparent hover:border-border hover:bg-background">
+      <button
+        type="button"
+        className="px-1.5 py-0.5 text-foreground hover:underline"
+        title={`Go to ${breadcrumb.path}`}
+        onClick={() => onNavigate(breadcrumb.path)}
+      >
+        {breadcrumb.label}
+      </button>
+      <DropdownMenu.Root open={open} onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) void loadMenu();
+      }}>
+        <DropdownMenu.Trigger asChild>
+          <button
+            type="button"
+            className="flex h-5 w-5 items-center justify-center border-l border-border/60 text-muted-foreground hover:text-foreground"
+            aria-label={`Show folders in ${breadcrumb.path}`}
+          >
+            <ChevronDown className="h-3 w-3" />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content sideOffset={4} align="start" className="z-50 max-h-64 min-w-48 overflow-y-auto rounded-md border bg-popover p-1 text-[11px] text-popover-foreground shadow-md">
+          {loading ? (
+            <span className="flex items-center gap-2 px-2 py-1.5"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading folders…</span>
+          ) : error ? (
+            <span role="alert" className="block px-2 py-1.5 text-destructive">{error}</span>
+          ) : children.length === 0 ? (
+            <span className="block px-2 py-1.5 text-muted-foreground">No folders</span>
+          ) : children.map((entry) => (
+            <DropdownMenu.Item
+              key={entry.path}
+              className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 outline-none hover:bg-muted focus:bg-muted"
+              title={entry.path}
+              onSelect={() => onNavigate(entry.path)}
+            >
+              <Folder className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <span className="truncate">{entry.name}</span>
+            </DropdownMenu.Item>
+          ))}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </span>
+  );
+}
+
+function Breadcrumbs({ path, onNavigate }: { path: string; onNavigate?: (path: string) => void }) {
+  if (!path) return null;
+  const breadcrumbs = filesystemBreadcrumbs(path);
   return (
     <div className="flex min-w-0 items-center gap-1 overflow-x-auto px-2 py-1.5 text-[11px] text-muted-foreground">
       <HardDrive className="h-3.5 w-3.5 shrink-0" />
-      {parts.map((part, index) => (
-        <span key={`${part}-${index}`} className="flex shrink-0 items-center gap-1">
+      {breadcrumbs.map((breadcrumb, index) => (
+        <span key={breadcrumb.path} className="flex shrink-0 items-center gap-1">
           {index > 0 && <ChevronRight className="h-3 w-3" />}
-          <span>{part}</span>
+          {onNavigate ? <BreadcrumbSegment breadcrumb={breadcrumb} onNavigate={onNavigate} /> : <span>{breadcrumb.label}</span>}
         </span>
       ))}
     </div>
@@ -422,7 +518,7 @@ function DirectoryPage({
     <div className={cn(layout === "page" && "flex h-full min-h-[24rem] flex-col")}>
       <div className="flex items-center justify-between gap-2 border-b bg-muted/20 pr-2">
         {result.kind === "filesystem.directory-page" ? (
-          <Breadcrumbs path={directoryPath} />
+          <Breadcrumbs path={directoryPath} {...(onNavigate ? { onNavigate } : {})} />
         ) : (
           <div className="min-w-0 truncate px-2 py-1.5 text-[11px] text-muted-foreground">
             Results for <span className="font-medium text-foreground">{result.query}</span>

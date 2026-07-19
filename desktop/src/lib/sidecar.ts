@@ -173,6 +173,77 @@ export async function getOwnedEngineUrl(): Promise<string | null> {
   return null;
 }
 
+export const ENGINE_STARTUP_TIMEOUT_SECONDS = 300;
+
+export type OwnedEngineStartupResult =
+  | { outcome: "ready"; url: string }
+  | { outcome: "exited" | "timed_out" | "unavailable"; url: null };
+
+type OwnedEngineStartupProbe = () => Promise<
+  | { outcome: "ready"; url: string }
+  | { outcome: "running" | "exited"; url: null }
+>;
+
+/**
+ * Poll an owned process until it is ready, exits, or reaches its deadline.
+ * Exported separately so the timing and liveness contract can be tested
+ * without a Tauri runtime.
+ */
+export async function waitForOwnedEngineProbe(
+  probe: OwnedEngineStartupProbe,
+  maxRetries: number,
+  intervalMs: number,
+): Promise<OwnedEngineStartupResult> {
+  for (let attempt = 0; attempt < maxRetries; attempt += 1) {
+    const result = await probe();
+    if (result.outcome === "ready") return result;
+    if (result.outcome === "exited") return { outcome: "exited", url: null };
+    if (attempt + 1 < maxRetries) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  return { outcome: "timed_out", url: null };
+}
+
+/**
+ * Wait for this app's Rust-owned engine child to become reachable.
+ *
+ * Cold packaged starts can legitimately take more than a minute while large
+ * Python modules initialize. Read the child status and current owned port on
+ * every poll so a live, progressing process is not mislabeled as crashed and
+ * an automatically selected alternate port is followed immediately.
+ */
+export async function waitForOwnedEngine(
+  maxRetries = ENGINE_STARTUP_TIMEOUT_SECONDS,
+  intervalMs = 1000,
+): Promise<OwnedEngineStartupResult> {
+  const inv = await loadTauriInvoke();
+  if (!inv) return { outcome: "unavailable", url: null };
+
+  return waitForOwnedEngineProbe(async () => {
+    try {
+      const status = (await inv("sidecar_status")) as {
+        running: boolean;
+        port: number;
+      };
+      if (!status.running) return { outcome: "exited" as const, url: null };
+
+      const healthy = (await inv("check_engine_health", {
+        port: status.port,
+      })) as boolean;
+      if (healthy) {
+        return {
+          outcome: "ready" as const,
+          url: `http://127.0.0.1:${status.port}`,
+        };
+      }
+    } catch {
+      // A transient IPC/probe failure does not prove that the child exited.
+    }
+    return { outcome: "running" as const, url: null };
+  }, maxRetries, intervalMs);
+}
+
 /** Get buffered sidecar stdout/stderr lines from Rust (Tauri only). */
 export async function getSidecarLogs(): Promise<string[]> {
   const inv = await loadTauriInvoke();
@@ -236,7 +307,7 @@ export async function waitForEngine(
         // Rust HTTP request — not subject to Windows WebView2 loopback isolation
         healthy = (await inv("check_engine_health", { port })) as boolean;
       } else {
-        const resp = await fetch(`${baseUrl}/tools/list`, {
+        const resp = await fetch(`${baseUrl}/health`, {
           signal: AbortSignal.timeout(2000),
         });
         healthy = resp.ok;
@@ -277,7 +348,7 @@ export async function discoverEnginePort(): Promise<string | null> {
   const ports = enginePortList();
   for (const port of ports) {
     try {
-      const resp = await fetch(`http://127.0.0.1:${port}/tools/list`, {
+      const resp = await fetch(`http://127.0.0.1:${port}/health`, {
         signal: AbortSignal.timeout(1000),
       });
       if (resp.ok) return `http://127.0.0.1:${port}`;

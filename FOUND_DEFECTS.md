@@ -171,18 +171,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   fix by gating the transcription auto-init path on the flag.
 - **Owner hint:** transcription
 
-### MXL-D-018 — Health check false-positives on slow engine start
-- **Area:** desktop ↔ engine
-- **Symptom:** heavy first load flips UI to "disconnected".
-- **Evidence:** `desktop/src/lib/api.ts:276-289` (`isHealthy()` → `/tools/list`,
-  2s abort); `desktop/src-tauri/src/lib.rs:997-1008` (`check_engine_health`,
-  2s client timeout, `Ok(false)` on any error); `discover_engine_port` 1s at
-  `:1021-1022`. A cheap static `GET /health` already exists
-  (`app/api/routes.py:85-88`, already in `_SILENT_PATHS`).
-- **Status:** open. Analyzed 2026-07-12 — verified in code: point both probes
-  at `/health` and/or add a cold-start grace timeout.
-- **Owner hint:** desktop core
-
 ### MXL-D-029 — `tools` service degraded in packaged v1.3.105: "0 tools registered"
 - **Area:** engine / packaged sidecar
 - **Symptom:** live `/admin/status` on the shipped v1.3.105 build reports

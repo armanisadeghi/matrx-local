@@ -458,6 +458,7 @@ are condensed under Completed. Still open:
 
 ## Completed
 
+- [BUG] MXL-D-018 fixed: packaged startup follows the Rust-owned child and its actual port for a 300s cold-start window, exits early only when the child really dies, and uses the same contract for Settings/recovery restarts — 2026-07-19 (`desktop/src/lib/sidecar.ts`, `desktop/src/hooks/use-engine.ts`)
 - [BUG] MXL-D-060 fixed: web, packaged, and pytest engines use private homes, ports, cloud state, and PID-only cleanup — 2026-07-19 (`scripts/smoke.sh`, `tests/conftest.py`)
 - [AT-L001] Deferred local-LLM registration until engine discovery — 2026-07-18 (`desktop/src/hooks/use-llm.ts`)
 - [BUG] Fixed Wi-Fi probe deadline and restored-cancellation warning noise — 2026-07-18 (`app/services/permissions/checker.py`, `desktop/src/lib/downloads/logging.ts`)

@@ -5,8 +5,8 @@ Regenerate with: python scripts/generate_mirror_schema.py
 Source snapshot: schema_mirror/snapshot.json (cloud DB is the spec).
 """
 
-SNAPSHOT_HASH = "4e25f12045cdb91f275122874aab449a9d4e4f23bf7b93b11e776ba50752117e"
-SNAPSHOT_GENERATED_AT = "2026-07-17"
+SNAPSHOT_HASH = "8c7f9f6d21dd7f9ebe8582ff18a9245a2edf633a0da7da1025e9328147ed7a6b"
+SNAPSHOT_GENERATED_AT = "2026-07-19"
 
 # schema -> table -> {columns, pk, cursor_col, has_deleted_at, create_sql, index_sql}
 MIRROR_TABLES = {
@@ -894,6 +894,8 @@ MIRROR_TABLES = {
                 "created_at": "TEXT",
                 "deleted_at": "TEXT",
                 "error": "TEXT",
+                "execution_id": "TEXT",
+                "execution_kind": "TEXT",
                 "finish_reason": "TEXT",
                 "id": "TEXT",
                 "input_tokens": "INTEGER",
@@ -913,7 +915,7 @@ MIRROR_TABLES = {
                 "updated_at": "TEXT",
                 "user_request_id": "TEXT"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"request\" (\n    \"id\" TEXT NOT NULL,\n    \"user_request_id\" TEXT,\n    \"conversation_id\" TEXT,\n    \"provider\" TEXT,\n    \"iteration\" INTEGER,\n    \"input_tokens\" INTEGER,\n    \"output_tokens\" INTEGER,\n    \"cached_tokens\" INTEGER,\n    \"total_tokens\" INTEGER,\n    \"cost\" REAL,\n    \"api_duration_ms\" INTEGER,\n    \"tool_duration_ms\" INTEGER,\n    \"total_duration_ms\" INTEGER,\n    \"tool_calls_count\" INTEGER,\n    \"tool_calls_details\" TEXT,\n    \"finish_reason\" TEXT,\n    \"response_id\" TEXT,\n    \"created_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"metadata\" TEXT,\n    \"ai_model_id\" TEXT,\n    \"raw_usage\" TEXT,\n    \"trim_summary\" TEXT,\n    \"status\" TEXT,\n    \"error\" TEXT,\n    \"updated_at\" TEXT, PRIMARY KEY (\"id\")\n)",
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"request\" (\n    \"id\" TEXT NOT NULL,\n    \"user_request_id\" TEXT,\n    \"conversation_id\" TEXT,\n    \"provider\" TEXT,\n    \"iteration\" INTEGER,\n    \"input_tokens\" INTEGER,\n    \"output_tokens\" INTEGER,\n    \"cached_tokens\" INTEGER,\n    \"total_tokens\" INTEGER,\n    \"cost\" REAL,\n    \"api_duration_ms\" INTEGER,\n    \"tool_duration_ms\" INTEGER,\n    \"total_duration_ms\" INTEGER,\n    \"tool_calls_count\" INTEGER,\n    \"tool_calls_details\" TEXT,\n    \"finish_reason\" TEXT,\n    \"response_id\" TEXT,\n    \"created_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"metadata\" TEXT,\n    \"ai_model_id\" TEXT,\n    \"raw_usage\" TEXT,\n    \"trim_summary\" TEXT,\n    \"status\" TEXT,\n    \"error\" TEXT,\n    \"updated_at\" TEXT,\n    \"execution_kind\" TEXT,\n    \"execution_id\" TEXT, PRIMARY KEY (\"id\")\n)",
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
@@ -930,6 +932,8 @@ MIRROR_TABLES = {
                 "created_at": "timestamptz",
                 "deleted_at": "timestamptz",
                 "error": "jsonb",
+                "execution_id": "uuid",
+                "execution_kind": "text",
                 "finish_reason": "text",
                 "id": "uuid",
                 "input_tokens": "int4",

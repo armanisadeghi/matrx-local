@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { engine, type SystemInfo, type BrowserStatus } from "@/lib/api";
-import { isTauri, startSidecar, stopSidecar, waitForEngine, discoverEnginePort } from "@/lib/sidecar";
-import { ENGINE_DEFAULT_URL, ENGINE_PORT_BASE, ENGINE_PORT_RANGE_LABEL } from "@/lib/engine-ports";
+import {
+  ENGINE_STARTUP_TIMEOUT_SECONDS,
+  isTauri,
+  startSidecar,
+  stopSidecar,
+  waitForOwnedEngine,
+} from "@/lib/sidecar";
+import { ENGINE_PORT_RANGE_LABEL } from "@/lib/engine-ports";
 import { initPlatformCtx } from "@/lib/platformCtx";
 import { startBackgroundTasks, stopBackgroundTasks } from "@/lib/background-tasks";
 import supabase from "@/lib/supabase";
@@ -88,8 +94,8 @@ export function useEngine() {
    * Key changes from the previous implementation:
    * 1. Uses a "currently running" mutex instead of a one-shot flag —
    *    subsequent calls are allowed once the prior one finishes.
-   * 2. After startSidecar(), waits up to 60s for the engine health
-   *    endpoint before running port discovery.
+   * 2. After startSidecar(), follows the Rust-owned process and its actual
+   *    port through the full packaged cold-start window.
    * 3. On failure, sets status to "error" (not "disconnected") so the
    *    recovery modal activates.
    */
@@ -135,13 +141,17 @@ export function useEngine() {
 
         // ── Wait for the sidecar to become reachable ─────────────────
         // startSidecar() returns as soon as the process is spawned.
-        // The PyInstaller binary takes 5-30s to boot and bind a port.
+        // A packaged cold start can take over a minute to boot and bind a port.
         // We poll via Rust IPC (check_engine_health) which bypasses
         // Windows WebView2 loopback isolation that blocks JS fetch().
         //
         // Every 5 seconds we emit a heartbeat log so the UI shows progress
-        // instead of 60 seconds of silence.
-        emitClientLog("info", "Waiting for engine to become reachable (up to 60s)...", "engine");
+        // instead of leaving a long silent startup window.
+        emitClientLog(
+          "info",
+          `Waiting for engine to become reachable (up to ${ENGINE_STARTUP_TIMEOUT_SECONDS}s)...`,
+          "engine",
+        );
 
         // Heartbeat ticker — fires every 5s while we wait
         let heartbeatSeconds = 0;
@@ -150,41 +160,40 @@ export function useEngine() {
           emitClientLog("info", `Still starting up... (${heartbeatSeconds}s elapsed)`, "engine");
         }, 5000);
 
-        let ready = false;
+        let startupResult;
         try {
-          ready = await waitForEngine(ENGINE_DEFAULT_URL, 60, 1000);
+          startupResult = await waitForOwnedEngine();
         } finally {
           clearInterval(heartbeatInterval);
         }
 
-        let confirmedUrl: string | null = ready ? ENGINE_DEFAULT_URL : null;
-        if (!ready) {
-          emitClientLog("warn", "Default port not responding — scanning port range...", "engine");
-          confirmedUrl = await discoverEnginePort();
-          if (!confirmedUrl) {
-            // ── Full diagnostic dump on failure ──────────────────────────────
-            emitClientLog("error", "Engine never became reachable — sidecar may have crashed", "engine");
-            try {
-              // Fetch buffered sidecar logs to include in the error report
-              const { getSidecarLogs: getLogs } = await import("@/lib/sidecar");
-              const recentLogs = await getLogs();
-              const tail = recentLogs.slice(-30);
-              if (tail.length > 0) {
-                emitClientLog("error", "=== Last 30 engine output lines ===", "engine");
-                tail.forEach((line) => emitClientLog("error", `  ${line}`, "engine"));
-                emitClientLog("error", "=== End of engine output ===", "engine");
-              }
-            } catch { /* ignore — best effort */ }
-            update({
-              status: "error",
-              error: "Engine process started but never became reachable. The sidecar may have crashed during startup. Open the Engine Monitor for detailed logs.",
-            });
-            return;
-          }
-          emitClientLog("success", `Engine found at alternate port: ${confirmedUrl}`, "engine");
-        } else {
-          emitClientLog("success", `Engine is responding on port ${ENGINE_PORT_BASE}`, "engine");
+        const confirmedUrl = startupResult.url;
+        if (!confirmedUrl) {
+          // ── Full diagnostic dump on failure ──────────────────────────────
+          const failureSummary = startupResult.outcome === "exited"
+            ? "Engine process exited before it became reachable"
+            : `Engine process remained unreachable for ${ENGINE_STARTUP_TIMEOUT_SECONDS}s`;
+          emitClientLog("error", failureSummary, "engine");
+          try {
+            // Fetch buffered sidecar logs to include in the error report
+            const { getSidecarLogs: getLogs } = await import("@/lib/sidecar");
+            const recentLogs = await getLogs();
+            const tail = recentLogs.slice(-30);
+            if (tail.length > 0) {
+              emitClientLog("error", "=== Last 30 engine output lines ===", "engine");
+              tail.forEach((line) => emitClientLog("error", `  ${line}`, "engine"));
+              emitClientLog("error", "=== End of engine output ===", "engine");
+            }
+          } catch { /* ignore — best effort */ }
+          update({
+            status: "error",
+            error: startupResult.outcome === "exited"
+              ? "Engine process exited during startup. Open the Engine Monitor for detailed logs."
+              : `Engine process did not become reachable within ${ENGINE_STARTUP_TIMEOUT_SECONDS} seconds. Open the Engine Monitor for detailed logs.`,
+          });
+          return;
         }
+        emitClientLog("success", `Engine is responding at ${confirmedUrl}`, "engine");
 
         // Pass the confirmed URL directly so engine.discover() doesn't do another
         // round of JS fetch() scans (which are blocked on Windows by WebView2).

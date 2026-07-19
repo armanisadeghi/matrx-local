@@ -772,7 +772,12 @@ class FilesystemService:
                         self.index.fail_directory, item[0], exc, item[4]
                     )
                     if retry_delay is not None:
-                        logger.warning(
+                        # Permission-denied subtrees are normal when indexing
+                        # an entire host volume (for example protected macOS
+                        # system directories). They remain visible in status
+                        # and retry with backoff, but are not an app warning.
+                        log = logger.info if isinstance(exc, PermissionError) else logger.warning
+                        log(
                             "Filesystem directory unavailable; retrying in %.0fs path=%s error=%s",
                             retry_delay,
                             item[0],

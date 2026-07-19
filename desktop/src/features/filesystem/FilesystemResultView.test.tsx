@@ -1,12 +1,30 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { filesystemBreadcrumbParts, FilesystemResultView, mergeFilesystemEntries } from "./FilesystemResultView";
+import { filesystemBreadcrumbParts, filesystemBreadcrumbs, FilesystemResultView, mergeFilesystemEntries } from "./FilesystemResultView";
 import type { FilesystemResult } from "./types";
 
 describe("FilesystemResultView", () => {
   it("preserves Windows drive and UNC share roots in breadcrumbs", () => {
     expect(filesystemBreadcrumbParts("C:\\Users\\ada")).toEqual(["C:\\", "Users", "ada"]);
     expect(filesystemBreadcrumbParts("\\\\server\\share\\folder")).toEqual(["\\\\server\\share\\", "folder"]);
+  });
+
+  it("builds navigable breadcrumb paths across supported path styles", () => {
+    expect(filesystemBreadcrumbs("/")).toEqual([{ label: "/", path: "/" }]);
+    expect(filesystemBreadcrumbs("/Users/ada/project")).toEqual([
+      { label: "Users", path: "/Users" },
+      { label: "ada", path: "/Users/ada" },
+      { label: "project", path: "/Users/ada/project" },
+    ]);
+    expect(filesystemBreadcrumbs("C:\\Users\\ada")).toEqual([
+      { label: "C:\\", path: "C:\\" },
+      { label: "Users", path: "C:\\Users" },
+      { label: "ada", path: "C:\\Users\\ada" },
+    ]);
+    expect(filesystemBreadcrumbs("\\\\server\\share\\folder")).toEqual([
+      { label: "\\\\server\\share\\", path: "\\\\server\\share\\" },
+      { label: "folder", path: "\\\\server\\share\\folder" },
+    ]);
   });
 
   it("merges lazy child pages without losing or duplicating entries", () => {

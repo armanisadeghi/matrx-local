@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Folder, Loader2, RefreshCw, Search } from "lucide-react";
+import { ArrowUp, Folder, Loader2, RefreshCw, Search, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FilesystemResultController } from "@/features/filesystem/FilesystemResultController";
@@ -29,6 +30,7 @@ export function Files({ engineStatus }: { engineStatus: EngineStatus }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [indexState, setIndexState] = useState<"complete" | "indexing" | "partial" | "paused" | null>(null);
+  const [indexNoticeDismissed, setIndexNoticeDismissed] = useState(false);
   const requestId = useRef(0);
 
   const browse = useCallback(async (path: string) => {
@@ -129,11 +131,16 @@ export function Files({ engineStatus }: { engineStatus: EngineStatus }) {
             </Button>
           </form>
         </div>
-        {indexState && indexState !== "complete" && (
-          <div className="mt-3 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-900 dark:text-sky-100">
-            Files work immediately while Matrx privately improves its local index in the background.
+        {indexState && indexState !== "complete" && !indexNoticeDismissed && (
+          <div className="mt-3 flex items-start gap-2 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-900 dark:text-sky-100">
+            <span className="min-w-0 flex-1">
+              Files work immediately while Matrx privately improves its local index in the background.
             {indexState === "paused" && " Background indexing is paused."}
-            {indexState === "partial" && " Some protected or unavailable folders need attention in Settings → Storage."}
+              {indexState === "partial" && <> Some protected or unavailable folders need attention in <Link to="/settings?tab=storage" className="font-medium underline underline-offset-2 hover:text-foreground">Settings → Storage</Link>.</>}
+            </span>
+            <button type="button" className="rounded p-0.5 hover:bg-sky-500/15" aria-label="Dismiss filesystem index notice" onClick={() => setIndexNoticeDismissed(true)}>
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         )}
       </header>

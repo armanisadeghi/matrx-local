@@ -46,15 +46,11 @@ import {
   stopSidecar,
   getSidecarStatus,
   getSidecarLogs,
-  waitForEngine,
+  waitForOwnedEngine,
   discoverEnginePort,
 } from "@/lib/sidecar";
 import { getPlatformSnapshot } from "@/lib/platformCtx";
-import {
-  ENGINE_DEFAULT_URL,
-  ENGINE_PORT_RANGE_LABEL,
-  enginePortList,
-} from "@/lib/engine-ports";
+import { ENGINE_PORT_RANGE_LABEL, enginePortList } from "@/lib/engine-ports";
 import type { EngineStatus } from "@/hooks/use-engine";
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -348,18 +344,14 @@ export function EngineMonitor({
     handleAction("Start Engine", async () => {
       await startSidecar();
       addLog("Sidecar spawned. Waiting for engine...");
-      const ready = await waitForEngine(ENGINE_DEFAULT_URL, 60, 1000);
-      if (ready) {
-        addLog("Engine ready. Connecting...");
+      const result = await waitForOwnedEngine();
+      if (result.outcome === "ready") {
+        addLog(`Engine ready at ${result.url}. Connecting...`);
         await onRefresh();
+      } else if (result.outcome === "exited") {
+        addLog("Engine process exited during startup.");
       } else {
-        const alt = await discoverEnginePort();
-        if (alt) {
-          addLog(`Found at ${alt}. Connecting...`);
-          await onRefresh();
-        } else {
-          addLog("Engine never became reachable after 60s.");
-        }
+        addLog("Engine remained unreachable through the startup deadline.");
       }
     });
 

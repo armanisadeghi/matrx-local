@@ -1309,7 +1309,7 @@ async fn check_engine_health(port: u16) -> Result<bool, String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    let url = format!("http://127.0.0.1:{}/tools/list", port);
+    let url = format!("http://127.0.0.1:{}/health", port);
     match client.get(&url).send().await {
         Ok(resp) => Ok(resp.status().is_success()),
         Err(_) => Ok(false),
@@ -1330,7 +1330,7 @@ async fn discover_engine_port() -> Result<Option<u16>, String> {
 
     let base = engine_port_base();
     for port in base..(base + ENGINE_PORT_SCAN) {
-        let url = format!("http://127.0.0.1:{}/tools/list", port);
+        let url = format!("http://127.0.0.1:{}/health", port);
         if let Ok(resp) = client.get(&url).send().await {
             if resp.status().is_success() {
                 return Ok(Some(port));

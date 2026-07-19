@@ -106,7 +106,6 @@ import {
 } from "@/lib/api-key-patterns";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  ENGINE_DEFAULT_URL,
   ENGINE_PORT_BASE,
   ENGINE_PORT_RANGE_LABEL,
 } from "@/lib/engine-ports";
@@ -602,24 +601,21 @@ export function Settings({
     setRestartError(null);
     try {
       if (isTauri()) {
-        const { stopSidecar, startSidecar, waitForEngine, discoverEnginePort } =
+        const { stopSidecar, startSidecar, waitForOwnedEngine } =
           await import("@/lib/sidecar");
         await stopSidecar();
         // Small delay for port release
         await new Promise((r) => setTimeout(r, 500));
         await startSidecar();
-        // Wait for engine to actually be ready before refreshing. The engine
-        // auto-scans its port range, so prefer the last-known URL and fall
-        // back to a port scan if the engine came back on a different port.
-        const baseUrl = engineUrl ?? ENGINE_DEFAULT_URL;
-        const ready = await waitForEngine(baseUrl, 60, 1000);
-        if (!ready) {
-          const alt = await discoverEnginePort();
-          if (!alt) {
-            setRestartError(
-              "Engine did not become reachable after restart. Try Reconnect, or check Engine Monitor for logs.",
-            );
-          }
+        // Follow the Rust-owned child and its actual port through the same
+        // cold-start window used by initial application startup.
+        const result = await waitForOwnedEngine();
+        if (result.outcome !== "ready") {
+          setRestartError(
+            result.outcome === "exited"
+              ? "Engine exited during restart. Check Engine Monitor for logs."
+              : "Engine did not become reachable after restart. Try Reconnect, or check Engine Monitor for logs.",
+          );
         }
       }
       await onRefresh();

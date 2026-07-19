@@ -323,7 +323,7 @@ class EngineAPI {
 
     for (const port of DISCOVERY_PORTS) {
       try {
-        const resp = await fetch(`http://127.0.0.1:${port}/tools/list`, {
+        const resp = await fetch(`http://127.0.0.1:${port}/health`, {
           signal: AbortSignal.timeout(500),
         });
         if (resp.ok) {
@@ -411,7 +411,7 @@ class EngineAPI {
   async isHealthy(): Promise<boolean> {
     if (this.baseUrl) {
       try {
-        const resp = await fetch(`${this.baseUrl}/tools/list`, {
+        const resp = await fetch(`${this.baseUrl}/health`, {
           signal: AbortSignal.timeout(2000),
         });
         if (resp.ok) return true;

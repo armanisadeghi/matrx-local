@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-07-17",
+ "generated_at": "2026-07-19",
  "schemas": {
   "ai": {
    "api": {
@@ -4607,6 +4607,20 @@
       "name": "updated_at",
       "nullable": false,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "execution_kind",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "execution_id",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",

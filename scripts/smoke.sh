@@ -297,11 +297,13 @@ run_packaged() {
 
   # Give it a real startup window: Rust setup + sidecar spawn + engine boot.
   # A cold machine may load the Whisper model and a large local LLM before the
-  # sidecar reaches FastAPI. Sixty seconds proved too tight (a healthy build
-  # reached /health at 58s and a later cold run was killed mid-startup), so keep
-  # enough headroom to distinguish slow hardware from a real startup hang.
+  # sidecar reaches FastAPI, then initialize the remote-backed AI/tool registry.
+  # Sixty seconds proved too tight (a healthy build reached /health at 58s), and
+  # a 120s run was still making forward progress through Phase 2 when the harness
+  # interrupted it. Five minutes distinguishes that legitimate cold path from a
+  # real startup hang while remaining a finite release gate.
   local waited=0 engine_url=""
-  while [ $waited -lt 120 ]; do
+  while [ $waited -lt 300 ]; do
     if ! pid_alive "$pid"; then
       record_fail "packaged: the app DIED during startup after ${waited}s" "$(tail -40 "$log")"
       echo "Full app log: \`$log\`" >> "$SUMMARY"; echo >> "$SUMMARY"

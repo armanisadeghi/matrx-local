@@ -9,11 +9,12 @@ owner-context: local filesystem intelligence, authoritative tool routing, and us
 
 ## Start here
 
-The foundation is implemented and released in `matrx-local` and `aidream`.
-The next owner should validate the complete product flow, finish the user-facing
-controls, prove the behavior on Windows and Linux, and publish the pending
-`matrx-sandbox` commit. Do not start a competing index, path model, tree
-component, or tool-routing policy.
+The end-to-end implementation is complete on the three local `main` branches,
+including the host Files page, full indexing controls, hardened routing
+authority, and bounded sandbox APIs. The remaining work is release/deployment
+authority, real signed-in cloud drills, packaged Windows/Linux proof, and
+measured scale/failure validation. Do not start a competing index, path model,
+tree component, or tool-routing policy.
 
 Read these contracts before changing code:
 
@@ -95,8 +96,9 @@ indexing, structured results, durable chat state, and UI—not just search.
 
 ### `matrx-local`
 
-Canonical implementation landed through merge commit `d7b4c2fd0`, is contained
-in tag `v1.3.135`, and is on `origin/main`.
+The released foundation landed through merge commit `d7b4c2fd0` in tag
+`v1.3.135`. The completion and adversarial-hardening pass is on local `main`
+through `63fd21bbe` and has not yet been pushed or released.
 
 - Cross-platform Places resolution for standard folders, configured roots,
   user priority roots, and readable real volumes.
@@ -119,7 +121,23 @@ in tag `v1.3.135`, and is on `origin/main`.
   portable open/reveal actions.
 - Live and stored tool execution cards share one renderer; structured results
   are preserved by call ID and rehydrated from conversation messages.
-- Storage Settings exposes index status and priority roots.
+- Storage Settings exposes index state, failures, unavailable roots, priority
+  roots, content/semantic controls and quotas, pause/resume, rebuild, clear,
+  storage use, and refresh/scan timestamps. Request fencing prevents poll,
+  refresh, mutation, disconnect, and reconnect races.
+- A dedicated **This Device** Files page composes the canonical models and
+  renderer for immediate browsing and scoped/all-location search. It exposes
+  cold/partial/paused background-index state without blocking file use.
+- Windows drive and UNC share roots are pinned in navigation and breadcrumbs;
+  Up never enters an invalid UNC server-only namespace.
+- Hydration and the actual file operation now share one per-tree guard for
+  reads, copies, and moves, including destination-only writes into managed
+  Files. Cancellation drains synchronous workers before releasing ownership.
+- Reads reject special files and enforce scan/materialization/output bounds;
+  copy/move rejects a directory destination inside its source before mutation.
+- Startup schema migration only backfills legacy/null path keys. Enrichment
+  survives SQLite contention, and first-page search materialization has a
+  cancellation-safe concurrency admission cap.
 - Tool catalog changes were applied to the canonical database and reported
   drift-free at verification time.
 - An adjacent conversation-position defect that could drop continuation
@@ -127,8 +145,9 @@ in tag `v1.3.135`, and is on `origin/main`.
 
 ### `aidream`
 
-Commit `c6cb9a8cf` is on `origin/main`, contained in release tag `v0.1.560`;
-the associated `matrx-ai` changes are contained in `matrx-ai/v0.4.19`.
+The released foundation is in `v0.1.560`/`matrx-ai/v0.4.19`. A further routing
+authority and declaration-lifecycle hardening pass is complete on local `main`
+through `1996eae67`, five commits ahead of `origin/main`, and is not released.
 
 - A bound sandbox drops `cloud_file` and keeps `fs_*` rebound to that sandbox.
 - A desktop-native request drops `cloud_file` plus hosted workspace
@@ -144,35 +163,45 @@ the associated `matrx-ai` changes are contained in `matrx-ai/v0.4.19`.
 - The proxy now forwards bounded read ranges and recursive/patterned/paged list
   options.
 - `fetch_tool_result` uses owner-scoped truncation entitlement.
+- Authored registered/inline/MCP declarations survive executor filtering and
+  reload; request-only MCP additions remain ephemeral.
+- Effective authority is rehydrated after detach/reattach and registry changes;
+  hidden, reference, handoff, silent, and system children cannot inherit an
+  executor, and incomplete child reference results fail closed.
+- Inline tool identity now requires semantically equal schemas rather than a
+  name-only match.
 
 ### `matrx-sandbox`
 
-Commit `e527e6e` is complete but, at handoff time, remains one commit ahead of
-`origin/main` and therefore is **not yet deployed**.
+The filesystem and atomic-release completion pass is on local `main` through
+`e6786a9`, sixteen commits ahead of `origin/main`, and is **not yet deployed**.
 
 - `/fs/list` supports bounded recursion, depth, pattern filtering,
   deterministic paging, truncation state, and no symlink-directory following.
 - `/fs/read` supports bounded offset/limit and Range semantics with exact byte
   and UTF-8-safe responses.
 - Structured errors and compatibility behavior are documented and tested.
+- Bounded listing sessions run off the event loop and retain cleanup ownership
+  through cancellation.
+- Deployment now promotes tested immutable releases atomically, revalidates
+  authority at the migration boundary, and rejects stale or mixed releases.
 
 ## Gap analysis
 
 | Priority | Vision area | Current state | Remaining gap / proof |
 |---|---|---|---|
 | P0 | One authoritative filesystem | Policy and tests exist in aidream | Run real cloud-chat drills for desktop, sandbox, continuation, dynamic discovery, bind→detach, and unbound cloud-only control. Inspect the final model-visible tool list in every case. |
-| P0 | Ship the complete chain | Local and cloud-routing releases contain the work | Push `matrx-sandbox` `e527e6e`, rebuild/deploy its image, and verify the running image version. Do not call sandbox paging complete before this. |
+| P0 | Ship the complete chain | All implementation is complete on local `main` in all three repos | Review/push the local commit sets, publish compatible releases, deploy the sandbox image atomically, and verify every running version. Do not describe the chain as shipped before this. |
 | P0 | Cross-platform correctness | Code is OS-neutral and unit tested | Exercise packaged installs on actual Windows and Linux as well as macOS: Known Folders/XDG, drive and UNC roots, mounts, hidden attributes, permissions, watchers, removable/offline media, and open/reveal actions. |
 | P0 | Real agent/user experience | Components and contracts exist | Perform signed-in in-app E2E: “find my code projects,” a screenshot follow-up, path selection/reference, reload the conversation, and repeat with a large paged result. Confirm no hosted/cloud filesystem tool appears when desktop is bound. |
-| P1 | User control and transparency | Priority-root editor and basic status metrics exist | Surface content/semantic toggles, quotas/model state, pause/resume, rebuild, clear-index, indexed size, last refresh, failures, and inaccessible-root guidance. APIs exist for some settings; UI does not expose them all. |
-| P1 | First-run progressive UX | Index starts in the background and direct browsing works cold | Add a nonblocking first-run state explaining that filesystem knowledge is improving, what is indexed locally, and how to grant protected-folder access. Never block chat on completion. |
-| P1 | Full filesystem surface | Reusable renderer exists in tool results | There is no dedicated host Files page yet. Build it by composing the canonical filesystem models/components; do not confuse it with the managed cloud Files UI or fork another tree. |
+| P1 | User control and transparency | Full controls, quota/state metrics, failure guidance, and nonblocking cold/partial state are implemented | Validate wording, accessibility, and recovery behavior with real users and protected folders; no known implementation gap remains. |
+| P1 | Full filesystem surface | Dedicated host Files page composes the canonical renderer and APIs | Complete the signed-in packaged UX drill, including reference insertion and conversation reload; do not fork a second tree or confuse it with managed cloud Files. |
 | P1 | Performance evidence | Fast paths, bounds, throttles, and crash-safe queues exist | Benchmark cold/warm behavior at 100k, 500k, and 1M entries on all OSes. Pin regressions and observe source selection, queue progress, failures, staleness, CPU, memory, disk, battery, and cancellation. |
 | P1 | Sync invariant under failure | Pointer hydration is implemented | Drill full and pointer sync, offline state, unhydrated pointers, sync disabled, and remote-only files. `cloud_file` must remain excluded while bound; local tools must hydrate or return a clear sync action—not silently fall back. |
 | P1 | Maintenance correctness | Watchers plus reconciliation exist | Stress rapid rename/move/delete, permission loss/recovery, drive detach/reattach, huge directories, restarts, and overlapping priority roots. A very large single directory currently restarts from its beginning after lease expiry rather than resuming at an internal cursor. |
 | P2 | Rich local understanding | Plain-text files up to 1 MiB feed content FTS | Add canonical extraction for PDF/Office and selected image/audio formats (including OCR/transcription where appropriate), with provenance, quotas, invalidation, and privacy controls. Reuse existing document/media pipelines. |
 | P2 | Semantic quality and scale | Optional one-vector-per-text-file FastEmbed search, bounded to 10k vectors | Unify runtime/model install UX with the existing capability/download system. Measure usefulness before adding chunking, hybrid ranking, or ANN storage; then add only what the evidence justifies. |
-| P2 | Kernel/network edge cases | Cooperative work stops between entries | A blocking OS/network filesystem call cannot be cancelled mid-syscall. Add isolation/timeouts only where real drills show it is needed; preserve correct results over aggressive “completion.” |
+| P2 | Kernel/network edge cases | Cooperative operations and admitted search builds retain ownership through outer cancellation | An inner `wait_for(to_thread(...))` timeout cannot kill the underlying OS/SQLite thread, and a blocking OS/network filesystem syscall cannot be cancelled mid-syscall. Add process isolation only where real drills justify it; preserve correct results over aggressive “completion.” |
 
 ## Acceptance bar for the next owner
 
@@ -204,38 +233,40 @@ The feature is ready to close only when all of these are true:
 ## Recommended pickup order
 
 1. **Protect the worktrees.** Re-read every repo's `AGENTS.md`, inspect status,
-   and do not reset or sweep unrelated changes. At handoff creation,
-   `matrx-local` has unrelated active image-generation edits; `aidream` has
-   unrelated catalog edits.
-2. **Publish the sandbox commit** `e527e6e`, rebuild/deploy the sandbox image,
-   and run its filesystem API contract tests against the deployed image.
-3. **Run the authority E2E matrix** with a signed-in cloud turn. Capture the
+   and do not reset or sweep unrelated changes. `aidream` has substantial
+   unrelated active document/RAG/catalog work; preserve it exactly.
+2. **Review and publish the three local commit sets**, then build/deploy the
+   sandbox image through its atomic approved-ref flow and verify the running
+   release contract.
+3. **Run the authority E2E matrix** with signed-in cloud turns. Capture the
    resolved tool names and actual execution target, not just the final answer.
 4. **Run the desktop UX drill** from cold index through warm index, tree
    interaction, path reference, screenshot follow-up, and conversation reload.
 5. **Add Windows and Linux packaged drills** and record real measurements.
-6. **Finish Settings/first-run transparency** using the existing
-   `/filesystem/status` and `/filesystem/indexing-settings` contracts; extend
-   the backend only for genuinely missing actions such as pause/rebuild/clear.
-7. **Add the dedicated host Files surface** by composing
-   `FilesystemResultView` and the canonical types/hooks.
-8. **Build performance and mutation stress fixtures**, fix measured failures,
+6. **Build performance and mutation stress fixtures**, fix measured failures,
    and pin the acceptance baselines.
-9. **Then deepen enrichment**: canonical document extraction first, semantic
+7. **Drill pointer/full sync failure modes** online/offline and verify local
+   hydration or explicit recovery without restoring `cloud_file`.
+8. **Then deepen enrichment**: canonical document extraction first, semantic
    install/model UX second, chunking/ANN only after measured need.
 
 ## Verification references
 
 Previously recorded results for this work:
 
-- `matrx-local`: 85 focused Python tests passed, 1 skipped.
-- Desktop: 105 unit tests passed.
-- Source engine lifecycle drill: clean startup/background indexing/shutdown.
-- Production web smoke: clean at merge `d7b4c2fd0`.
+- `matrx-local`: 124 focused filesystem/file-sync tests passed, 1 skipped;
+  prior full backend pass was 517 passed, 1 skipped.
+- Desktop: 187 unit tests passed; TypeScript and production Vite build passed.
+- Source engine lifecycle drill: clean startup/background indexing/shutdown;
+  the contained optional image runtime was verified on a fresh dev home.
+- Production web smoke: clean at `18c5743e5`; repeat packaged smoke from the
+  settled final tree because the previous cold build overlapped concurrent
+  commits and was not valid evidence.
 - Existing-index migration drill preserved 18,668 metadata rows and 351 content
   documents (about 7.0 MiB indexed text).
-- `aidream`: 145 routing/proxy tests passed.
-- `matrx-sandbox`: 53 filesystem API tests passed.
+- `aidream`: 3,081 passed, 13 skipped broadly; independent authority-focused
+  adversarial runs passed 129 tests plus 43 schema tests.
+- `matrx-sandbox`: 86 orchestrator tests passed, 7 skipped; 58 SDK tests passed.
 
 Minimum local regression commands:
 
@@ -262,14 +293,15 @@ or that the cloud request resolved the right tools.
 
 ## Repository state and safety notes
 
-- `matrx-local`: filesystem merge `d7b4c2fd0` is in `v1.3.135` and
-  `origin/main`. The original feature branch `codex/image-revision-studio` was
-  retained. Current image-generation work is unrelated; do not include it in a
-  filesystem commit.
-- `aidream`: authority commit `c6cb9a8cf` is in `v0.1.560` and `origin/main`.
-  The working tree has unrelated catalog edits; do not clean or commit them.
-- `matrx-sandbox`: `e527e6e` is the pending clean commit one ahead of
-  `origin/main`. Coordinate its push and deployment.
+- `matrx-local`: local `main` is fifteen commits ahead of `origin/main` through
+  `63fd21bbe`; the working tree was clean at this update. These commits include
+  adjacent startup/image-runtime/bridge fixes discovered during the same
+  packaged validation loop.
+- `aidream`: local `main` is five commits ahead of `origin/main` through
+  `1996eae67`. Its working tree contains unrelated active document, RAG,
+  catalog, and generated-declaration work; do not clean, stash, or absorb it.
+- `matrx-sandbox`: local `main` is sixteen commits ahead of `origin/main`
+  through `e6786a9`. Coordinate review, push, and atomic deployment.
 - The cloud tool-registry change was already applied. Before editing registry
   definitions, run the existing drift/status command and follow the Supabase
   migration/tool-registry rules; do not create a second definition source.

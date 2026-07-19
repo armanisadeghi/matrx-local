@@ -14,6 +14,11 @@ import {
   releaseDelegationUi,
   waitForDelegatedContinuation,
 } from "@/lib/cloud-chat-delegation";
+import {
+  discardLegacyCloudChatCache,
+  loadCloudChatCache,
+  saveCloudChatCache,
+} from "@/lib/cloud-chat-cache";
 import supabase from "@/lib/supabase";
 import {
   buildDesktopClientContext,
@@ -39,7 +44,6 @@ import {
   type UntypedDataPayload,
 } from "@/types/python-generated/stream-events";
 
-const STORAGE_KEY = "matrx-cloud-chat-conversations";
 const MAX_CONVERSATIONS = 100;
 const CLOUD_SOURCE_APP = "matrx-desktop";
 const CLOUD_SOURCE_FEATURE = "chat-route";
@@ -134,28 +138,6 @@ function generateId(): string {
 function generateTitle(content: string): string {
   const cleaned = content.replace(/\n/g, " ").trim();
   return cleaned.length <= 50 ? cleaned : `${cleaned.slice(0, 47)}...`;
-}
-
-function loadConversations(): Conversation[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as Conversation[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveConversations(conversations: Conversation[]) {
-  try {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(conversations.slice(0, MAX_CONVERSATIONS)),
-    );
-  } catch {
-    // Storage full: keep the in-memory chat usable.
-  }
 }
 
 function groupByDate(conversations: Conversation[]): Record<string, Conversation[]> {
@@ -809,11 +791,10 @@ async function fetchLocalLlmStatus(
 
 export function useCloudChat(options: UseCloudChatOptions = {}) {
   const { engineUrl = null } = options;
-  const [conversations, setConversations] = useState<Conversation[]>(() =>
-    loadConversations().sort(
-      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
-    ),
-  );
+  // Never hydrate chat text before the authenticated owner is known. The old
+  // machine-global cache leaked account A's messages when account B signed in.
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [cacheUserId, setCacheUserId] = useState<string | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [mode, setMode] = useState<ChatMode>("chat");
@@ -831,11 +812,53 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
   );
   const abortRef = useRef<AbortController | null>(null);
   const conversationsRef = useRef(conversations);
+  const cacheUserIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    discardLegacyCloudChatCache();
+
+    const applyUser = (userId: string | null) => {
+      if (!active || cacheUserIdRef.current === userId) return;
+      abortRef.current?.abort();
+      abortRef.current = null;
+      cacheUserIdRef.current = userId;
+      setCacheUserId(userId);
+      setIsStreaming(false);
+      setActiveConversationId(null);
+      setRequestError(null);
+      setHistoryError(null);
+      setConversations(
+        userId
+          ? sortConversations(loadCloudChatCache(userId)).slice(
+              0,
+              MAX_CONVERSATIONS,
+            )
+          : [],
+      );
+    };
+
+    void supabase.auth.getSession().then(({ data }) => {
+      applyUser(data.session?.user.id ?? null);
+    });
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      applyUser(session?.user.id ?? null);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     conversationsRef.current = conversations;
-    saveConversations(conversations);
-  }, [conversations]);
+    if (cacheUserId) {
+      saveCloudChatCache(cacheUserId, conversations, MAX_CONVERSATIONS);
+    }
+  }, [cacheUserId, conversations]);
 
   useEffect(() => {
     if (availableModels.length === 0) return;
@@ -926,6 +949,8 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
 
   const refreshConversations = useCallback(async () => {
+    const ownerAtStart = cacheUserIdRef.current;
+    if (!ownerAtStart) return;
     setHistoryLoading(true);
     setHistoryError(null);
     try {
@@ -943,22 +968,33 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       const { data, error } = await query;
       if (error) throw error;
       setConversations((prev) =>
-        mergeRemoteConversations(prev, (data ?? []) as CloudConversationRow[]),
+        cacheUserIdRef.current === ownerAtStart
+          ? mergeRemoteConversations(
+              prev,
+              (data ?? []) as CloudConversationRow[],
+            )
+          : prev,
       );
     } catch (error: unknown) {
+      if (cacheUserIdRef.current !== ownerAtStart) return;
       const message =
         error instanceof Error ? error.message : "Failed to load cloud conversations";
       setHistoryError(message);
     } finally {
-      setHistoryLoading(false);
+      if (cacheUserIdRef.current === ownerAtStart) {
+        setHistoryLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
+    if (!cacheUserId) return;
     void refreshConversations();
-  }, [refreshConversations]);
+  }, [cacheUserId, refreshConversations]);
 
   const hydrateConversationMessages = useCallback(async (id: string) => {
+    const ownerAtStart = cacheUserIdRef.current;
+    if (!ownerAtStart) return;
     const target = conversationsRef.current.find((item) => item.id === id);
     if (!target || target.messages.length > 0) return;
     if (target.executionTarget === "local" || target.localConversationId) return;
@@ -983,21 +1019,29 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         ((data ?? []) as CloudMessageRow[]).map(messageRowToChatMessage),
       );
       setConversations((prev) =>
-        prev.map((conversation) =>
-          conversation.id === id
-            ? {
-                ...conversation,
-                messages: mergeMessagesById(conversation.messages, messages),
-              }
-            : conversation,
-        ),
+        cacheUserIdRef.current === ownerAtStart
+          ? prev.map((conversation) =>
+              conversation.id === id
+                ? {
+                    ...conversation,
+                    messages: mergeMessagesById(
+                      conversation.messages,
+                      messages,
+                    ),
+                  }
+                : conversation,
+            )
+          : prev,
       );
     } catch (error: unknown) {
+      if (cacheUserIdRef.current !== ownerAtStart) return;
       const message =
         error instanceof Error ? error.message : "Failed to load conversation messages";
       setHistoryError(message);
     } finally {
-      setHistoryLoading(false);
+      if (cacheUserIdRef.current === ownerAtStart) {
+        setHistoryLoading(false);
+      }
     }
   }, []);
 

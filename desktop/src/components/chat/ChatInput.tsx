@@ -21,6 +21,8 @@ interface ChatInputProps {
   onModeChange: (mode: ChatMode) => void;
   /** When true, the send button is disabled but the textarea remains typeable. */
   engineReady?: boolean;
+  /** Actionable reason that sending is temporarily blocked. */
+  sendBlockedReason?: string | null;
   /** When true, focus the textarea on mount. */
   autoFocus?: boolean;
   // Agent props
@@ -63,6 +65,7 @@ export function ChatInput({
   onModelChange,
   onModeChange,
   engineReady = true,
+  sendBlockedReason = null,
   autoFocus = false,
   agents = [],
   selectedAgentId = null,
@@ -120,6 +123,7 @@ export function ChatInput({
     (hasText || !!selectedAgentId) &&
     !isStreaming &&
     engineReady &&
+    !sendBlockedReason &&
     (!!model || !!selectedAgentId);
 
   const handleSend = useCallback(() => {
@@ -202,7 +206,9 @@ export function ChatInput({
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={
-            !engineReady
+            sendBlockedReason
+              ? sendBlockedReason
+              : !engineReady
               ? "Waiting for engine..."
               : mode === "code"
                 ? "Write or ask about code..."

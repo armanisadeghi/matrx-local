@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { engine as engineAPI } from "@/lib/api";
 import { loadSettings } from "@/lib/settings";
 import type { EngineStatus } from "@/hooks/use-engine";
-import type { ActiveAgent, AgentInfo, PromptVariable } from "@/types/agents";
+import type { ActiveAgent, PromptVariable } from "@/types/agents";
 import {
   ActionNeededCard,
   actionNeededStore,
@@ -56,7 +56,22 @@ export function ChatPanel({
     sharedAgents,
     isLoading: agentsLoading,
   } = useAgents({ engineUrl });
+  const allAgents = useMemo(
+    () => [...builtins, ...userAgents, ...sharedAgents],
+    [builtins, userAgents, sharedAgents],
+  );
   const [activeAgent, setActiveAgent] = useState<ActiveAgent | null>(null);
+  const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
+  const [agentSelectionError, setAgentSelectionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!pendingAgentId) return;
+    const resolved = allAgents.find((agent) => agent.id === pendingAgentId);
+    if (!resolved) return;
+    setActiveAgent(resolved);
+    setPendingAgentId(null);
+    setAgentSelectionError(null);
+  }, [allAgents, pendingAgentId]);
 
   const [variableValues, setVariableValues] = useState<Record<string, string>>(
     {},
@@ -342,6 +357,18 @@ export function ChatPanel({
         </div>
       )}
 
+      {agentSelectionError && (
+        <div className="shrink-0 px-4 pt-1">
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-600"
+          >
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{agentSelectionError}</span>
+          </div>
+        </div>
+      )}
+
       <div className={cn("shrink-0 px-4 pb-3", hasVariables ? "pt-0" : "pt-1")}>
         <ChatInput
           onSend={handleSend}
@@ -353,22 +380,29 @@ export function ChatPanel({
           onModelChange={setModel}
           onModeChange={setMode}
           engineReady={engineStatus === "connected"}
+          sendBlockedReason={agentSelectionError}
           autoFocus={compact}
           draftInsertion={draftInsertion}
-          agents={[...builtins, ...userAgents, ...sharedAgents]}
-          selectedAgentId={activeAgent?.id ?? null}
+          agents={allAgents}
+          selectedAgentId={pendingAgentId ?? activeAgent?.id ?? null}
           onAgentChange={(agentId) => {
             if (!agentId) {
               setActiveAgent(null);
+              setPendingAgentId(null);
+              setAgentSelectionError(null);
               return;
             }
-            const all: AgentInfo[] = [
-              ...builtins,
-              ...userAgents,
-              ...sharedAgents,
-            ];
-            const found = all.find((a) => a.id === agentId);
-            setActiveAgent(found ?? null);
+            const found = allAgents.find((agent) => agent.id === agentId);
+            if (!found) {
+              setPendingAgentId(agentId);
+              setAgentSelectionError(
+                "The selected agent is still syncing. Sending is paused until it is available.",
+              );
+              return;
+            }
+            setActiveAgent(found);
+            setPendingAgentId(null);
+            setAgentSelectionError(null);
           }}
           agentsLoading={agentsLoading}
         />

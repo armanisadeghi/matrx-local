@@ -68,6 +68,8 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [defaultAgentApplied, setDefaultAgentApplied] = useState(false);
   const [activeAgent, setActiveAgent] = useState<AgentInfo | null>(null);
+  const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
+  const [agentSelectionError, setAgentSelectionError] = useState<string | null>(null);
   const [activeVariables, setActiveVariables] = useState<PromptVariable[]>([]);
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -110,7 +112,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   const activeConversation = cloudChat.activeConversation;
   const messages = activeConversation?.messages ?? [];
   const hasMessages = messages.length > 0;
-  const selectedAgentId = activeAgent?.id ?? null;
+  const selectedAgentId = pendingAgentId ?? activeAgent?.id ?? null;
   const currentActiveAgent = selectedAgentId
     ? (agents.find((agent) => agent.id === selectedAgentId) ?? activeAgent)
     : null;
@@ -139,11 +141,25 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
     const conversationAgent = agents.find((agent) => agent.id === activeConversation.agentId);
     if (conversationAgent) {
       setActiveAgent(conversationAgent);
+      setPendingAgentId(null);
+      setAgentSelectionError(null);
       setDefaultAgentApplied(true);
     } else {
-      setActiveAgent(null);
+      setPendingAgentId(activeConversation.agentId);
+      setAgentSelectionError(
+        "This conversation's agent is still syncing. Sending is paused until it is available.",
+      );
     }
   }, [activeConversation?.agentId, activeConversationId, agents]);
+
+  useEffect(() => {
+    if (!pendingAgentId) return;
+    const resolved = agents.find((agent) => agent.id === pendingAgentId);
+    if (!resolved) return;
+    setActiveAgent(resolved);
+    setPendingAgentId(null);
+    setAgentSelectionError(null);
+  }, [agents, pendingAgentId]);
 
   useEffect(() => {
     if (!selectedAgentId || hasMessages) {
@@ -177,12 +193,23 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
     (agentId: string | null) => {
       if (!agentId) {
         setActiveAgent(null);
+        setPendingAgentId(null);
+        setAgentSelectionError(null);
         setActiveVariables([]);
         setVariableValues({});
         return;
       }
       const found = agents.find((agent) => agent.id === agentId) ?? null;
+      if (!found) {
+        setPendingAgentId(agentId);
+        setAgentSelectionError(
+          "The selected agent is still syncing. Sending is paused until it is available.",
+        );
+        return;
+      }
       setActiveAgent(found);
+      setPendingAgentId(null);
+      setAgentSelectionError(null);
       setDefaultAgentApplied(true);
       setActiveVariables([]);
       setVariableValues({});
@@ -280,6 +307,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
             "Local model is not registered with the engine.")
         : null;
   const cloudError =
+    agentSelectionError ??
     agentsError ??
     executionError ??
     cloudChat.modelError ??
@@ -393,6 +421,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
             onModelChange={setModel}
             onModeChange={setMode}
             engineReady={engineReady}
+            sendBlockedReason={agentSelectionError}
             selectedAgentId={selectedAgentId}
             showModelSelector={false}
             showModeSelector={false}

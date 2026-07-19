@@ -180,8 +180,8 @@ def test_tool_routes_into_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(calls[0]["session"], ToolSession)
 
     assert payload["ok"] is True
-    # ToolResult is returned via model_dump() — pin the envelope.
-    assert payload["result"] == result.model_dump()
+    # The wire envelope deliberately omits absent optional fields.
+    assert payload["result"] == result.model_dump(exclude_none=True)
 
 
 def test_tool_none_tool_input_defaults_to_empty_dict(
@@ -214,4 +214,4 @@ def test_tool_error_result_still_ok_true(monkeypatch: pytest.MonkeyPatch) -> Non
     _install_dispatch_spy(monkeypatch, result=err)
     payload = _run(HANDLERS["tool"]({"tool_name": "Nope"}, FAKE_REQUEST))
     assert payload["ok"] is True
-    assert payload["result"] == err.model_dump()
+    assert payload["result"] == err.model_dump(exclude_none=True)

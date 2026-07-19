@@ -185,7 +185,9 @@ scan_log() { # scan_log <file> <label>
 run_web() {
   info "Building the production bundle and booting it in a real browser…"
   local log="$RUN_DIR/web.log"
-  ( cd desktop && SMOKE_PREVIEW=1 pnpm exec playwright test boot.spec.ts --reporter=list ) > "$log" 2>&1
+  local smoke_port
+  smoke_port="$(node -e "const s=require('net').createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")"
+  ( cd desktop && SMOKE_PREVIEW=1 SMOKE_PORT="$smoke_port" pnpm exec playwright test boot.spec.ts --reporter=list ) > "$log" 2>&1
   local rc=$?
   if [ $rc -eq 0 ]; then
     record_ok "web: production bundle boots clean (no crash screen, no uncaught errors)"

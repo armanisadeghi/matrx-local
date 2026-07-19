@@ -8,6 +8,12 @@
  */
 import { defineConfig } from "@playwright/test";
 
+const webPort = Number(process.env.SMOKE_PORT ?? "1420");
+if (!Number.isInteger(webPort) || webPort < 1 || webPort > 65_535) {
+  throw new Error(`Invalid SMOKE_PORT: ${process.env.SMOKE_PORT}`);
+}
+const webOrigin = `http://localhost:${webPort}`;
+
 export default defineConfig({
   testDir: "./e2e",
   // One worker: a single shared Vite app + a single shared (optional) live
@@ -21,7 +27,7 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    baseURL: "http://localhost:1420",
+    baseURL: webOrigin,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
@@ -32,9 +38,9 @@ export default defineConfig({
     // reuseExistingServer must be false there — otherwise a stale `pnpm dev`
     // on 1420 gets tested and the prod bundle silently never runs.
     command: process.env.SMOKE_PREVIEW
-      ? "pnpm build && pnpm preview --port 1420 --strictPort"
-      : "pnpm dev",
-    url: "http://localhost:1420",
+      ? `pnpm build && pnpm preview --port ${webPort} --strictPort`
+      : `pnpm dev --port ${webPort} --strictPort`,
+    url: webOrigin,
     reuseExistingServer: !process.env.SMOKE_PREVIEW,
     timeout: process.env.SMOKE_PREVIEW ? 180_000 : 60_000,
   },

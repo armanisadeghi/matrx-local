@@ -11,6 +11,8 @@ import pytest
 from app.services.filesystem.index import FilesystemIndex
 from app.services.filesystem import index as filesystem_index_module
 from app.services.filesystem.models import Place, is_hidden
+from app.services.filesystem.paging import DirectoryListSessionRegistry
+from app.services.filesystem import paging as filesystem_paging_module
 from app.services.filesystem.roots import normalize_path_key
 from app.services.filesystem import service as filesystem_service_module
 from app.services.filesystem.service import FilesystemService, _minimal_roots
@@ -30,9 +32,136 @@ async def test_direct_listing_is_paged_before_index_is_warm(tmp_path: Path) -> N
 
     first = await service.list_directory(str(root), limit=2)
     assert [entry.name for entry in first.entries] == ["folder", "a.txt"]
-    assert first.next_cursor == "2"
+    assert first.next_cursor is not None
+    assert first.next_cursor != "2"
     second = await service.list_directory(str(root), cursor=first.next_cursor, limit=2)
     assert [entry.name for entry in second.entries] == ["z.txt"]
+    assert second.next_cursor is None
+
+
+@pytest.mark.anyio
+async def test_direct_listing_snapshot_is_stable_across_directory_mutation(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "browse"
+    root.mkdir()
+    for name in ("a.txt", "b.txt", "c.txt", "d.txt"):
+        (root / name).write_text(name, encoding="utf-8")
+    service = FilesystemService(tmp_path / "index.sqlite3")
+
+    first = await service.list_directory(str(root), limit=2)
+    assert [entry.name for entry in first.entries] == ["a.txt", "b.txt"]
+    assert first.next_cursor is not None
+
+    (root / "c.txt").unlink()
+    (root / "aa.txt").write_text("new", encoding="utf-8")
+    second = await service.list_directory(
+        str(root), cursor=first.next_cursor, limit=2
+    )
+
+    assert [entry.name for entry in second.entries] == ["c.txt", "d.txt"]
+    assert second.next_cursor is None
+
+
+@pytest.mark.anyio
+async def test_direct_listing_cursor_is_single_use_scoped_and_expiring(
+    tmp_path: Path,
+) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    for name in ("a", "b"):
+        (first_root / name).touch()
+        (second_root / name).touch()
+    now = [100.0]
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service._directory_lists = DirectoryListSessionRegistry(clock=lambda: now[0])
+
+    first = await service.list_directory(str(first_root), limit=1)
+    assert first.next_cursor is not None
+    with pytest.raises(ValueError, match="different directory"):
+        await service.list_directory(
+            str(second_root), cursor=first.next_cursor, limit=1
+        )
+    with pytest.raises(ValueError, match="already-used"):
+        await service.list_directory(
+            str(first_root), cursor=first.next_cursor, limit=1
+        )
+
+    expiring = await service.list_directory(str(first_root), limit=1)
+    assert expiring.next_cursor is not None
+    now[0] += filesystem_paging_module.DIRECTORY_LIST_SESSION_TTL_SECONDS + 1
+    with pytest.raises(ValueError, match="expired"):
+        await service.list_directory(
+            str(first_root), cursor=expiring.next_cursor, limit=1
+        )
+
+
+@pytest.mark.anyio
+async def test_direct_listing_progress_pages_have_bounded_work_and_honest_empty_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "large"
+    root.mkdir()
+    for index in range(7):
+        (root / f"item-{index}.txt").touch()
+    monkeypatch.setattr(filesystem_paging_module, "DIRECTORY_PAGE_SCAN_BUDGET", 3)
+    service = FilesystemService(tmp_path / "index.sqlite3")
+
+    first = await service.list_directory(str(root), limit=2)
+
+    assert first.entries == ()
+    assert first.total == 3
+    assert first.next_cursor is not None
+    second = await service.list_directory(
+        str(root), cursor=first.next_cursor, limit=2
+    )
+    assert second.entries == ()
+    assert second.total == 6
+    assert second.next_cursor is not None
+    third = await service.list_directory(
+        str(root), cursor=second.next_cursor, limit=2
+    )
+    assert [entry.name for entry in third.entries] == ["item-0.txt", "item-1.txt"]
+    assert third.total == 7
+
+
+@pytest.mark.anyio
+async def test_direct_listing_enforces_snapshot_entry_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "too-large"
+    root.mkdir()
+    for index in range(3):
+        (root / str(index)).touch()
+    monkeypatch.setattr(filesystem_paging_module, "MAX_DIRECTORY_SNAPSHOT_ENTRIES", 2)
+    service = FilesystemService(tmp_path / "index.sqlite3")
+
+    with pytest.raises(ValueError, match="more than 2 visible entries"):
+        await service.list_directory(str(root))
+
+
+@pytest.mark.anyio
+async def test_direct_listing_does_not_follow_symlinks(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "nested.txt").touch()
+    root = tmp_path / "browse"
+    root.mkdir()
+    link = root / "linked"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is unavailable")
+    service = FilesystemService(tmp_path / "index.sqlite3")
+
+    page = await service.list_directory(str(root))
+
+    assert [(entry.name, entry.kind) for entry in page.entries] == [
+        ("linked", "symlink")
+    ]
+    assert all(entry.name != "nested.txt" for entry in page.entries)
 
 
 def test_index_search_content_and_crash_safe_queue_lease(tmp_path: Path) -> None:

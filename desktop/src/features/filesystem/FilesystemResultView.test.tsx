@@ -32,6 +32,23 @@ describe("FilesystemResultView", () => {
     expect(html).not.toContain("This directory is empty.");
   });
 
+  it("renders an empty cursor page as snapshot progress, not an empty directory", () => {
+    const html = renderToStaticMarkup(<FilesystemResultView
+      result={{
+        kind: "filesystem.directory-page",
+        namespace: "host",
+        path: "/large",
+        entries: [],
+        nextCursor: "opaque-progress-token",
+      }}
+      onLoadMore={() => undefined}
+    />);
+
+    expect(html).toContain("Scanning this large directory");
+    expect(html).toContain("Continue scanning");
+    expect(html).not.toContain("This directory is empty.");
+  });
+
   it.each<{ result: FilesystemResult; expected: string }>([
     {
       result: {

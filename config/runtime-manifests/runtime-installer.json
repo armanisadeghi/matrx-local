@@ -8,12 +8,12 @@
     "aarch64-apple-darwin": {
       "archive": "uv-aarch64-apple-darwin.tar.gz",
       "sha256": "c3a6fff5b6b4abddff863117878194e35dbc6b0267d61ad259ab9896f9b8dcbb",
-      "executable_sha256": "7776014edc19b98d96f74aad96996bbeacaf4b009b945130cc2b5ef2f50431a3"
+      "executable_sha256": "200e9f404f4061ce975a4c911c0554020b15c0d053ed431b82b69d1b8a750444"
     },
     "x86_64-apple-darwin": {
       "archive": "uv-x86_64-apple-darwin.tar.gz",
       "sha256": "e0a1b22b039f8155765f5bc8c13df03a5f994a901901179791572e8e5f053281",
-      "executable_sha256": "e7a86914897ff5822ef782a42229bdb21036cbca26348b424f9a229236b8e548"
+      "executable_sha256": "5267264b7006a977709ff51166a1a06be8fc51570269953dad48241ff14fe7e6"
     },
     "x86_64-pc-windows-msvc": {
       "archive": "uv-x86_64-pc-windows-msvc.zip",

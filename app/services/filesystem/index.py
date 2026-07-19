@@ -210,19 +210,31 @@ class FilesystemIndex:
                    ON filesystem_path_mutations(parent_key,observed_at)"""
             )
             entry_columns = {row["name"] for row in db.execute("PRAGMA table_info(filesystem_entries)")}
+            entry_path_key_added = "path_key" not in entry_columns
             if "path_key" not in entry_columns:
                 db.execute("ALTER TABLE filesystem_entries ADD COLUMN path_key TEXT")
             if "parent_key" not in entry_columns:
                 db.execute("ALTER TABLE filesystem_entries ADD COLUMN parent_key TEXT")
-            for row in db.execute("SELECT rowid,path,parent_path FROM filesystem_entries").fetchall():
+            # Backfill only legacy/null rows. Re-normalizing every indexed path
+            # on every boot caused one UPDATE + two FTS trigger writes per file;
+            # a large durable index could block packaged startup indefinitely.
+            for row in db.execute(
+                "SELECT rowid,path,parent_path FROM filesystem_entries "
+                "WHERE path_key IS NULL OR parent_key IS NULL"
+            ).fetchall():
                 db.execute(
                     "UPDATE filesystem_entries SET path_key=?,parent_key=? WHERE rowid=?",
                     (_path_key(row["path"]), _path_key(row["parent_path"]), row["rowid"]),
                 )
-            db.execute(
-                "DELETE FROM filesystem_entries WHERE rowid NOT IN "
-                "(SELECT MIN(rowid) FROM filesystem_entries GROUP BY path_key)"
-            )
+            entry_indexes = {
+                str(row["name"])
+                for row in db.execute("PRAGMA index_list(filesystem_entries)")
+            }
+            if entry_path_key_added or "idx_filesystem_entries_path_key" not in entry_indexes:
+                db.execute(
+                    "DELETE FROM filesystem_entries WHERE rowid NOT IN "
+                    "(SELECT MIN(rowid) FROM filesystem_entries GROUP BY path_key)"
+                )
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_filesystem_entries_path_key ON filesystem_entries(path_key)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_filesystem_entries_parent_key ON filesystem_entries(parent_key)")
 
@@ -231,8 +243,9 @@ class FilesystemIndex:
                 db.execute("ALTER TABLE filesystem_content ADD COLUMN path_key TEXT")
             if "source_size" not in content_columns:
                 db.execute("ALTER TABLE filesystem_content ADD COLUMN source_size INTEGER")
-            db.execute("UPDATE filesystem_content SET path_key=COALESCE(path_key,path)")
-            for row in db.execute("SELECT path FROM filesystem_content").fetchall():
+            for row in db.execute(
+                "SELECT path FROM filesystem_content WHERE path_key IS NULL"
+            ).fetchall():
                 db.execute(
                     "UPDATE filesystem_content SET path_key=? WHERE path=?",
                     (_path_key(row["path"]), row["path"]),
@@ -244,7 +257,9 @@ class FilesystemIndex:
                 db.execute("ALTER TABLE filesystem_embeddings ADD COLUMN path_key TEXT")
             if "source_size" not in embedding_columns:
                 db.execute("ALTER TABLE filesystem_embeddings ADD COLUMN source_size INTEGER")
-            for row in db.execute("SELECT rowid,path FROM filesystem_embeddings").fetchall():
+            for row in db.execute(
+                "SELECT rowid,path FROM filesystem_embeddings WHERE path_key IS NULL"
+            ).fetchall():
                 db.execute(
                     "UPDATE filesystem_embeddings SET path_key=? WHERE rowid=?",
                     (_path_key(row["path"]), row["rowid"]),

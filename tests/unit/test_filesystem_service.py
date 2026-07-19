@@ -13,8 +13,8 @@ import pytest
 
 from app.services.filesystem.index import FilesystemIndex
 from app.services.filesystem import index as filesystem_index_module
-from app.services.filesystem.models import DirectoryPage, Place, is_hidden
-from app.services.filesystem.paging import DirectoryListSessionRegistry
+from app.services.filesystem.models import DirectoryPage, FileEntry, Place, SearchPage, is_hidden
+from app.services.filesystem.paging import DirectoryListSessionRegistry, SearchSessionRegistry
 from app.services.filesystem import paging as filesystem_paging_module
 from app.services.filesystem import roots as filesystem_roots_module
 from app.services.filesystem.roots import _is_browsable_partition, normalize_path_key
@@ -102,6 +102,120 @@ async def test_direct_listing_cursor_is_single_use_scoped_and_expiring(
         )
 
 
+def test_directory_snapshot_cleanup_backlog_retries_until_removed(tmp_path: Path) -> None:
+    root = tmp_path / "browse"
+    root.mkdir()
+    (root / "a").touch()
+    (root / "b").touch()
+    now = [100.0]
+    registry = DirectoryListSessionRegistry(clock=lambda: now[0])
+    page = registry.page(
+        str(root), cursor=None, limit=1, show_hidden=False
+    )
+    assert page.next_cursor is not None
+    session = next(iter(registry._sessions.values()))
+    snapshot_dir = session.snapshot.snapshot_path.parent
+    original_cleanup = session.snapshot._temporary_directory.cleanup
+    attempts = [0]
+
+    def temporarily_locked() -> None:
+        attempts[0] += 1
+        if attempts[0] <= 3:
+            raise PermissionError("scanner still holds the snapshot")
+        original_cleanup()
+
+    session.snapshot._temporary_directory.cleanup = temporarily_locked
+    now[0] += filesystem_paging_module.DIRECTORY_LIST_SESSION_TTL_SECONDS + 1
+
+    registry.reap_expired()
+    assert registry.session_count == 1
+    assert snapshot_dir.exists()
+    registry.reap_expired()
+    assert registry.session_count == 0
+    assert not snapshot_dir.exists()
+
+
+def test_search_snapshot_cursor_is_scoped_single_use_expiring_and_truncated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [100.0]
+    registry = SearchSessionRegistry(clock=lambda: now[0])
+    entries = tuple(
+        FileEntry(
+            name=f"item-{index}",
+            path=str(tmp_path / f"item-{index}"),
+            kind="file",
+            size=1,
+            modified_at=None,
+            hidden=False,
+            extension=None,
+        )
+        for index in range(3)
+    )
+    monkeypatch.setattr(filesystem_paging_module, "MAX_SEARCH_SNAPSHOT_ENTRIES", 2)
+    scope = ("needle", str(tmp_path))
+    first, cursor, _source, _complete, truncated = registry.page(
+        scope,
+        cursor=None,
+        limit=1,
+        entries=entries,
+        source="hybrid",
+        index_complete=False,
+    )
+    assert len(first) == 1
+    assert cursor is not None
+    assert truncated is True
+    with pytest.raises(ValueError, match="different filesystem search"):
+        registry.page(("other", str(tmp_path)), cursor=cursor, limit=1)
+
+    _first, replay_cursor, *_ = registry.page(
+        scope, cursor=None, limit=1, entries=entries
+    )
+    assert replay_cursor is not None
+    registry.page(scope, cursor=replay_cursor, limit=1)
+    with pytest.raises(ValueError, match="already-used search cursor"):
+        registry.page(scope, cursor=replay_cursor, limit=1)
+
+    _first, expiring_cursor, *_ = registry.page(
+        scope, cursor=None, limit=1, entries=entries
+    )
+    assert expiring_cursor is not None
+    now[0] += filesystem_paging_module.SEARCH_SESSION_TTL_SECONDS + 1
+    with pytest.raises(ValueError, match="expired"):
+        registry.page(scope, cursor=expiring_cursor, limit=1)
+
+
+def test_search_snapshot_evicts_oldest_session_under_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [100.0]
+    registry = SearchSessionRegistry(clock=lambda: now[0])
+    entries = tuple(
+        FileEntry(
+            name=f"item-{index}",
+            path=str(tmp_path / f"item-{index}"),
+            kind="file",
+            size=1,
+            modified_at=None,
+            hidden=False,
+            extension=None,
+        )
+        for index in range(2)
+    )
+    monkeypatch.setattr(filesystem_paging_module, "MAX_SEARCH_SESSIONS", 1)
+    _page, old_cursor, *_ = registry.page(
+        ("old", ""), cursor=None, limit=1, entries=entries
+    )
+    now[0] += 1
+    _page, new_cursor, *_ = registry.page(
+        ("new", ""), cursor=None, limit=1, entries=entries
+    )
+    assert old_cursor is not None and new_cursor is not None
+    with pytest.raises(ValueError, match="Invalid"):
+        registry.page(("old", ""), cursor=old_cursor, limit=1)
+    assert registry.page(("new", ""), cursor=new_cursor, limit=1)[0]
+
+
 @pytest.mark.anyio
 async def test_direct_listing_progress_pages_have_bounded_work_and_honest_empty_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -150,6 +264,35 @@ async def test_agent_directory_listing_labels_observed_progress_honestly(
 
     assert "scanned 3 entries so far" in result.output
     assert "3 items" not in result.output
+
+
+@pytest.mark.anyio
+async def test_agent_search_states_truncation_and_incomplete_index_honestly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeFilesystemService:
+        async def find(self, *_args: object, **_kwargs: object) -> SearchPage:
+            return SearchPage(
+                "needle",
+                (),
+                None,
+                source="hybrid",
+                index_complete=False,
+                truncated=True,
+            )
+
+    monkeypatch.setattr(
+        "app.services.filesystem.get_filesystem_service",
+        lambda: FakeFilesystemService(),
+    )
+
+    result = await file_ops.tool_find_paths(
+        ToolSession(working_dir=str(tmp_path)), "needle"
+    )
+
+    assert "stopped before every folder was examined" in result.output
+    assert "index is incomplete" in result.output
+    assert "still deepening" not in result.output
 
 
 @pytest.mark.anyio

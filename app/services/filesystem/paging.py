@@ -74,7 +74,8 @@ class _DirectorySnapshot:
         self._scan_complete = False
         self._entry_count = 0
         self._after: tuple[int, bytes, bytes, bytes] | None = None
-        self._closed = False
+        self._resources_closed = False
+        self._cleanup_complete = False
 
     @property
     def entry_count(self) -> int:
@@ -180,19 +181,21 @@ class _DirectorySnapshot:
         entries = tuple(FileEntry(**json.loads(row[4])) for row in visible_rows)
         return entries, len(rows) > limit, self._entry_count
 
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if self._iterator is not None:
-            self._iterator.close()
-            self._iterator = None
-        self._db.close()
+    def close(self) -> bool:
+        if self._cleanup_complete:
+            return True
+        if not self._resources_closed:
+            self._resources_closed = True
+            if self._iterator is not None:
+                self._iterator.close()
+                self._iterator = None
+            self._db.close()
         last_error: OSError | None = None
         for _attempt in range(3):
             try:
                 self._temporary_directory.cleanup()
-                return
+                self._cleanup_complete = True
+                return True
             except OSError as exc:
                 last_error = exc
                 time.sleep(0.05)
@@ -201,6 +204,7 @@ class _DirectorySnapshot:
             self.snapshot_path.parent,
             last_error,
         )
+        return False
 
 
 class _DirectoryListSession:
@@ -217,8 +221,8 @@ class _DirectoryListSession:
     def disk_bytes(self) -> int:
         return self.snapshot.disk_bytes
 
-    def close(self) -> None:
-        self.snapshot.close()
+    def close(self) -> bool:
+        return self.snapshot.close()
 
 
 class DirectoryListSessionRegistry:
@@ -229,6 +233,7 @@ class DirectoryListSessionRegistry:
         self._lock = threading.Lock()
         self._sessions: dict[str, _DirectoryListSession] = {}
         self._active: set[_DirectoryListSession] = set()
+        self._cleanup_backlog: list[_DirectoryListSession] = []
         self._reserved_entries = 0
         self._accepting = True
 
@@ -248,21 +253,30 @@ class DirectoryListSessionRegistry:
         ]
         return [self._sessions.pop(token) for token in expired_tokens]
 
-    @staticmethod
-    def _close_all(sessions: list[_DirectoryListSession]) -> None:
+    def _close_all(self, sessions: list[_DirectoryListSession]) -> None:
+        failed: list[_DirectoryListSession] = []
         for session in sessions:
             try:
-                session.close()
+                if not session.close():
+                    failed.append(session)
             except Exception:
+                failed.append(session)
                 logger.warning(
                     "Filesystem directory snapshot cleanup failed; continuing",
                     exc_info=True,
                 )
+        if failed:
+            with self._lock:
+                for session in failed:
+                    if session not in self._cleanup_backlog:
+                        self._cleanup_backlog.append(session)
 
     def reap_expired(self) -> None:
         with self._lock:
             expired = self._discard_expired_locked(self._clock())
-        self._close_all(expired)
+            retry = self._cleanup_backlog
+            self._cleanup_backlog = []
+        self._close_all([*expired, *retry])
 
     def _take_or_create(
         self, path: str, cursor: str | None, show_hidden: bool
@@ -278,7 +292,7 @@ class DirectoryListSessionRegistry:
                 self._active.add(session)
             elif cursor is None:
                 while self._sessions and (
-                    len(self._sessions) + len(self._active)
+                    len(self._sessions) + len(self._active) + len(self._cleanup_backlog)
                     >= MAX_DIRECTORY_LIST_SESSIONS
                 ):
                     oldest = min(
@@ -286,7 +300,10 @@ class DirectoryListSessionRegistry:
                         key=lambda token: self._sessions[token].expires_at,
                     )
                     retired.append(self._sessions.pop(oldest))
-                if len(self._active) >= MAX_DIRECTORY_LIST_SESSIONS:
+                if (
+                    len(self._active) + len(self._cleanup_backlog)
+                    >= MAX_DIRECTORY_LIST_SESSIONS
+                ):
                     session = None
                 else:
                     # Construct under the registry lock so concurrent first
@@ -309,7 +326,7 @@ class DirectoryListSessionRegistry:
         if session.scope != expected_scope:
             with self._lock:
                 self._active.discard(session)
-            session.close()
+            self._close_all([session])
             raise DirectoryPagingError(
                 "Cursor belongs to a different directory listing"
             )
@@ -325,7 +342,9 @@ class DirectoryListSessionRegistry:
             while self._sessions:
                 current_entries = sum(
                     item.entry_count for item in self._sessions.values()
-                ) + sum(item.entry_count for item in self._active)
+                ) + sum(item.entry_count for item in self._active) + sum(
+                    item.entry_count for item in self._cleanup_backlog
+                )
                 available = (
                     MAX_DIRECTORY_LIST_TOTAL_ENTRIES
                     - current_entries
@@ -340,7 +359,9 @@ class DirectoryListSessionRegistry:
                 retired.append(self._sessions.pop(oldest))
             current_entries = sum(
                 item.entry_count for item in self._sessions.values()
-            ) + sum(item.entry_count for item in self._active)
+            ) + sum(item.entry_count for item in self._active) + sum(
+                item.entry_count for item in self._cleanup_backlog
+            )
             available = (
                 MAX_DIRECTORY_LIST_TOTAL_ENTRIES
                 - current_entries
@@ -373,11 +394,15 @@ class DirectoryListSessionRegistry:
                 evicted.extend(self._discard_expired_locked(now))
                 while self._sessions and (
                     len(self._sessions) >= MAX_DIRECTORY_LIST_SESSIONS
+                    or len(self._sessions) + len(self._cleanup_backlog)
+                    >= MAX_DIRECTORY_LIST_SESSIONS
                     or sum(item.entry_count for item in self._sessions.values())
                     + session.entry_count
+                    + sum(item.entry_count for item in self._cleanup_backlog)
                     > MAX_DIRECTORY_LIST_TOTAL_ENTRIES
                     or sum(item.disk_bytes for item in self._sessions.values())
                     + session.disk_bytes
+                    + sum(item.disk_bytes for item in self._cleanup_backlog)
                     > MAX_DIRECTORY_LIST_TOTAL_DISK_BYTES
                 ):
                     oldest = min(
@@ -392,7 +417,7 @@ class DirectoryListSessionRegistry:
                 self._sessions[token] = session
         self._close_all(evicted)
         if not should_store:
-            session.close()
+            self._close_all([session])
             return None
         return token
 
@@ -417,7 +442,7 @@ class DirectoryListSessionRegistry:
                 self._release_scan_capacity(reservation)
             with self._lock:
                 self._active.discard(session)
-            session.close()
+            self._close_all([session])
             raise
         if reservation:
             self._release_scan_capacity(reservation)
@@ -429,7 +454,7 @@ class DirectoryListSessionRegistry:
         else:
             with self._lock:
                 self._active.discard(session)
-            session.close()
+            self._close_all([session])
             next_cursor = None
         return DirectoryPage(path, entries, next_cursor, total)
 
@@ -444,12 +469,14 @@ class DirectoryListSessionRegistry:
             self._accepting = False
             sessions = list(self._sessions.values())
             self._sessions.clear()
-        self._close_all(sessions)
+            backlog = self._cleanup_backlog
+            self._cleanup_backlog = []
+        self._close_all([*sessions, *backlog])
 
     @property
     def session_count(self) -> int:
         with self._lock:
-            return len(self._sessions)
+            return len(self._sessions) + len(self._cleanup_backlog)
 
 
 class _SearchSession:

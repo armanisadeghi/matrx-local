@@ -3996,6 +3996,7 @@ export interface FilesystemPageResponse {
   total?: number;
   source?: "index" | "disk" | "hybrid";
   index_complete?: boolean;
+  truncated?: boolean;
 }
 
 // ---- Setup types ----

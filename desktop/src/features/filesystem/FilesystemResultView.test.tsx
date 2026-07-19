@@ -77,7 +77,7 @@ describe("FilesystemResultView", () => {
         indexComplete: false,
         entries: [{ name: "roadmap.md", path: "/repo/roadmap.md", kind: "file" }],
       },
-      expected: "index still improving",
+      expected: "index incomplete",
     },
     {
       result: {

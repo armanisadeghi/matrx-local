@@ -419,7 +419,7 @@ function DirectoryPage({
             {result.source && (
               <span> · {result.source === "index" ? "indexed" : result.source === "hybrid" ? "index + disk" : "disk"}</span>
             )}
-            {result.indexComplete === false && <span> · index still improving</span>}
+            {result.indexComplete === false && <span> · index incomplete</span>}
             {result.truncated && <span> · bounded search stopped before every folder was examined; narrow the scope</span>}
           </div>
         )}

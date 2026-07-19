@@ -109,8 +109,16 @@ async def tool_find_paths(
         )
     if data["next_cursor"]:
         summary += f"\nMore results available (cursor={data['next_cursor']})."
+    if data["truncated"]:
+        summary += (
+            "\nThe bounded disk search stopped before every folder was examined; "
+            "narrow the path or query to search more precisely."
+        )
     if not data["index_complete"]:
-        summary += "\nThe background index is still deepening; later searches may find more."
+        summary += (
+            "\nThe local index is incomplete; indexing may be paused or some folders "
+            "may be unavailable."
+        )
     return ToolResult(output=summary, metadata=data)
 
 

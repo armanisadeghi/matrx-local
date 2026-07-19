@@ -1047,6 +1047,71 @@ def test_ensure_tree_hydrated_includes_every_pointer_under_managed_root(
     run_scenario(tmp_path, monkeypatch, scenario)
 
 
+def test_tree_copy_holds_file_sync_guard_through_filesystem_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        source = engine.root / "source"
+        destination = engine.root / "destination"
+        source.mkdir()
+        (source / "real.txt").write_text("real bytes", encoding="utf-8")
+        original_copytree = file_ops.shutil.copytree
+        guard_states: list[bool] = []
+
+        def guarded_copytree(src: str, dst: str, *args: object, **kwargs: object):
+            guard_states.append(engine._sync_lock.locked())
+            return original_copytree(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(file_ops.shutil, "copytree", guarded_copytree)
+
+        result = await file_ops.tool_copy(
+            ToolSession(working_dir=str(engine.root)), "source", "destination"
+        )
+
+        assert result.type.value == "success"
+        assert guard_states == [True]
+        assert (destination / "real.txt").read_text(encoding="utf-8") == "real bytes"
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_tree_hydration_pages_rows_and_uses_four_fixed_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        source = engine.root / "bulk"
+        source.mkdir()
+        for index in range(401):
+            await engine._index.upsert_state(
+                f"pointer-{index:03d}",
+                rel_path=f"bulk/pointer-{index:03d}.txt",
+                local_state="pointer",
+            )
+        active = 0
+        max_active = 0
+        hydrated: list[str] = []
+
+        async def hydrate(file_id_or_path: str, *, priority: int = 10, force: bool = False) -> Path:
+            nonlocal active, max_active
+            del priority, force
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0)
+            hydrated.append(file_id_or_path)
+            active -= 1
+            return source / f"{file_id_or_path}.txt"
+
+        monkeypatch.setattr(engine, "_hydrate", hydrate)
+
+        assert await hydration_module.ensure_tree_hydrated(str(source)) is None
+        assert len(hydrated) == 401
+        assert max_active == 4
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
 def test_tool_copy_does_not_start_when_tree_hydration_state_cannot_be_verified(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

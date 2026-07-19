@@ -475,6 +475,7 @@ class _UvicornLogForwarder(logging.Handler):
 
 _uvicorn_server: uvicorn.Server | None = None
 _server_thread: threading.Thread | None = None
+_server_stopped_event = threading.Event()
 def start_server(port: int) -> None:
     global _uvicorn_server
     config = uvicorn.Config(
@@ -504,6 +505,12 @@ def start_server(port: int) -> None:
         server.run()
     finally:
         logger.info("[shutdown] uvicorn server thread exited")
+        # Explicit completion barrier for the main thread. Thread.join()
+        # remained blocked in a packaged one-file process even after this
+        # finally block ran, causing Rust to SIGKILL an otherwise clean
+        # shutdown at T+20s. The event proves all server-thread work is done
+        # without depending on CPython's thread-state lock teardown.
+        _server_stopped_event.set()
         _shutdown_event.set()
 
 
@@ -666,10 +673,8 @@ def _wait_forever() -> None:
     teardown_clean = True
     if _uvicorn_server is not None:
         _uvicorn_server.should_exit = True
-        server_thread_ref = _server_thread
-        if server_thread_ref is not None:
-            server_thread_ref.join(timeout=join_s)
-            teardown_clean = not server_thread_ref.is_alive()
+        if _server_thread is not None:
+            teardown_clean = _server_stopped_event.wait(timeout=join_s)
     if not teardown_clean:
         # Lifespan teardown did not finish — clean up our own children.
         logger.error(

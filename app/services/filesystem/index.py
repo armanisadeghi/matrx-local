@@ -1625,8 +1625,18 @@ def _path_scope_range(path: str) -> tuple[str, str, str]:
     upper bound without SQL wildcards, so legal ``%``, ``_``, ``*``, and
     bracket characters in user paths remain literal.
     """
-    exact = _path_key(path)
-    descendant_start = exact if exact.endswith(os.sep) else exact + os.sep
+    return _component_scope_range(_path_key(path), separator=os.sep)
+
+
+def _component_scope_range(exact: str, *, separator: str) -> tuple[str, str, str]:
+    """Build the lexical range from an already-canonical platform key.
+
+    Split from :func:`_path_scope_range` so Windows drive and UNC semantics
+    can be proven on every CI host rather than only by Windows runners.
+    """
+    if len(separator) != 1:
+        raise ValueError("path separator must be exactly one character")
+    descendant_start = exact if exact.endswith(separator) else exact + separator
     descendant_end = descendant_start[:-1] + chr(ord(descendant_start[-1]) + 1)
     return exact, descendant_start, descendant_end
 

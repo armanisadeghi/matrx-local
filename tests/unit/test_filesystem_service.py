@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.filesystem.index import FilesystemIndex
+from app.services.filesystem.index import FilesystemIndex, _component_scope_range
 from app.services.filesystem import index as filesystem_index_module
 from app.services.filesystem.models import DirectoryPage, FileEntry, Place, SearchPage, is_hidden
 from app.services.filesystem.paging import DirectoryListSessionRegistry, SearchSessionRegistry
@@ -840,18 +840,22 @@ def test_component_safe_delete_handles_wildcards_without_sibling_damage(tmp_path
     assert [entry.name for entry in index.search("keep", limit=10, offset=0, root=str(sibling))] == ["keep.txt"]
 
 
+@pytest.mark.parametrize("force_like_fallback", [False, True])
 def test_scoped_search_uses_component_safe_range_without_recursive_walk(
     tmp_path: Path,
+    force_like_fallback: bool,
 ) -> None:
     root = tmp_path / "root"
-    target = root / "code%_[archive]"
-    sibling = root / "code%_[archive]-old"
+    target = root / "café_ß%_[archive]"
+    sibling = root / "café_ß%_[archive]-old"
     target.mkdir(parents=True)
     sibling.mkdir()
     (target / "needle-target.txt").write_text("target", encoding="utf-8")
     (sibling / "needle-sibling.txt").write_text("sibling", encoding="utf-8")
     index = FilesystemIndex(tmp_path / "index.sqlite3")
     index.initialize()
+    if force_like_fallback:
+        index.fts_available = False
     index.sync_roots([Place("root", "Root", str(root), "configured", 100)])
     while (claim := index.pop_next_directory()) is not None:
         index.index_directory(*claim)
@@ -871,6 +875,39 @@ def test_scoped_search_uses_component_safe_range_without_recursive_walk(
         finally:
             index._connect = index_connection  # type: ignore[method-assign]
     assert not any("WITH RECURSIVE" in statement.upper() for statement in statements)
+
+
+@pytest.mark.parametrize(
+    ("exact", "separator", "descendants", "siblings"),
+    [
+        ("/", "/", ["/tmp", "/é/ß"], []),
+        ("/code/é", "/", ["/code/é/file", "/code/é/ß"], ["/code/é-old"]),
+        ("c:\\", "\\", [r"c:\users", r"c:\é\ß"], [r"d:\users"]),
+        (
+            r"c:\code\é",
+            "\\",
+            [r"c:\code\é\file"],
+            [r"c:\code\é-old", r"c:\code\ê\file"],
+        ),
+        (
+            r"\\server\share",
+            "\\",
+            [r"\\server\share\folder", r"\\server\share\é"],
+            [r"\\server\share-old\folder", r"\\server\shared\folder"],
+        ),
+    ],
+)
+def test_component_scope_range_is_safe_across_platform_roots(
+    exact: str,
+    separator: str,
+    descendants: list[str],
+    siblings: list[str],
+) -> None:
+    exact_key, start, end = _component_scope_range(exact, separator=separator)
+
+    assert exact_key == exact
+    assert all(start <= candidate < end for candidate in descendants)
+    assert all(not (start <= candidate < end) for candidate in siblings)
 
 
 def test_content_cas_quota_and_semantic_similarity(tmp_path: Path) -> None:

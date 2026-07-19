@@ -76,6 +76,8 @@ export function MediaThumb({
    * lost.
    */
   onActivate,
+  videoControls = false,
+  videoAutoPlay = false,
   children,
 }: {
   item: MediaDescriptor;
@@ -86,6 +88,9 @@ export function MediaThumb({
   className?: string;
   chrome?: MediaThumbChrome;
   onActivate?: () => void;
+  /** Playback surfaces may opt into native controls without leaving canonical media chrome. */
+  videoControls?: boolean;
+  videoAutoPlay?: boolean;
   /** Extra overlay content (badges, selection ticks). */
   children?: React.ReactNode;
 }) {
@@ -112,7 +117,12 @@ export function MediaThumb({
       tabIndex={0}
       aria-label={onActivate ? "Select media" : `Open ${item.kind}`}
       title={item.prompt || "Open full size"}
-      onClick={open}
+      onClick={(e) => {
+        // Native playback controls must remain interactive. Full-size is still
+        // available from keyboard, right-click, or the canonical overflow menu.
+        if (videoControls && e.target instanceof HTMLVideoElement) return;
+        open();
+      }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -124,13 +134,15 @@ export function MediaThumb({
         e.stopPropagation();
         actions.openContextMenu(item, { x: e.clientX, y: e.clientY });
       }}
-      className={`group/thumb relative cursor-zoom-in overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${className}`}
+      className={`group/thumb relative overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${videoControls ? "" : "cursor-zoom-in"} ${className}`}
     >
       {displayKind === "video" ? (
         <video
           src={item.url}
           className={FIT[variant]}
-          muted
+          muted={!videoControls}
+          controls={videoControls}
+          autoPlay={videoAutoPlay}
           loop
           playsInline
           onMouseEnter={(e) =>

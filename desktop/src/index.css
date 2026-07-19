@@ -9,6 +9,7 @@
 
 @layer base {
   :root {
+    color-scheme: light;
     /* ── Backgrounds ──────────────────────────────────── */
     --background: 240 20% 96%;       /* #F2F2F7 — Apple standard light gray */
     --foreground: 240 6% 11%;        /* #1C1C1E — soft dark (not pure black) */
@@ -27,7 +28,7 @@
     --secondary: 240 6% 93%;
     --secondary-foreground: 240 6% 11%;
     --muted: 240 6% 93%;
-    --muted-foreground: 240 2% 57%;  /* #8E8E93 */
+    --muted-foreground: 240 2% 40%;  /* Accessible secondary text on #F2F2F7 */
     --accent: 240 6% 93%;
     --accent-foreground: 240 6% 11%;
 
@@ -37,7 +38,7 @@
 
     /* ── Borders / Inputs ─────────────────────────────── */
     --border: 240 6% 90%;
-    --input: 240 6% 90%;
+    --input: 240 4% 55%;             /* 3:1 control boundary on light surfaces */
     --ring: 211 100% 50%;
 
     /* ── Radius ───────────────────────────────────────── */
@@ -59,6 +60,7 @@
   }
 
   .dark {
+    color-scheme: dark;
     /* ── Backgrounds ──────────────────────────────────── */
     --background: 240 5% 9%;         /* #161618 — deep gray, not pure black */
     --foreground: 240 20% 96%;       /* #F2F2F7 — off-white */
@@ -89,7 +91,7 @@
 
     /* ── Borders / Inputs ─────────────────────────────── */
     --border: 240 4% 16%;
-    --input: 240 4% 16%;
+    --input: 240 4% 40%;             /* 3:1 control boundary on dark surfaces */
     --ring: 211 100% 52%;
 
     /* ── Glass / Glassmorphism ────────────────────────── */

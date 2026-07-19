@@ -108,7 +108,7 @@ function StatusBadge({
     );
   }
   return (
-    <span className="flex items-center gap-1.5 rounded-full bg-blue-500/10 px-3 py-1 text-xs font-medium text-blue-400">
+    <span className="flex items-center gap-1.5 rounded-full bg-blue-500/10 px-3 py-1 text-xs font-medium text-blue-700 dark:text-blue-400">
       <HardDrive className="h-3 w-3" />
       Downloaded
     </span>
@@ -200,11 +200,11 @@ function SpeakTab({
         <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-4">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
           <div className="flex-1">
-            <p className="text-sm text-red-400">{state.error}</p>
+            <p className="text-sm text-red-700 dark:text-red-400">{state.error}</p>
           </div>
           <button
             onClick={actions.clearError}
-            className="text-red-400 hover:text-red-300"
+            className="text-red-700 dark:text-red-400 hover:text-red-300"
           >
             <X className="h-4 w-4" />
           </button>
@@ -592,7 +592,7 @@ function HistoryItem({ entry }: { entry: TtsHistoryEntry }) {
           )}{" "}
           &middot; {new Date(entry.createdAt).toLocaleTimeString()}
           {playError && (
-            <span className="ml-2 text-red-400">· {playError}</span>
+            <span className="ml-2 text-red-700 dark:text-red-400">· {playError}</span>
           )}
         </p>
       </div>
@@ -788,7 +788,7 @@ function VoicesTab({
       {/* Favorites */}
       {favVoices.length > 0 && (
         <div className="space-y-3">
-          <h3 className="flex items-center gap-2 text-sm font-medium text-amber-400">
+          <h3 className="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-400">
             <Star className="h-4 w-4 fill-amber-400" />
             Favorites
           </h3>
@@ -929,7 +929,7 @@ function VoiceCard({
         className="shrink-0 text-muted-foreground hover:text-amber-400"
       >
         {isFavorite ? (
-          <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
+          <Star className="h-4 w-4 fill-amber-400 text-amber-700 dark:text-amber-400" />
         ) : (
           <StarOff className="h-4 w-4 opacity-0 group-hover:opacity-100" />
         )}
@@ -1110,10 +1110,10 @@ function BlendTab({
       {error && (
         <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-          <p className="flex-1 text-sm text-red-400">{error}</p>
+          <p className="flex-1 text-sm text-red-700 dark:text-red-400">{error}</p>
           <button
             onClick={() => setError(null)}
-            className="text-red-400 hover:text-red-300"
+            className="text-red-700 dark:text-red-400 hover:text-red-300"
           >
             <X className="h-4 w-4" />
           </button>
@@ -1123,7 +1123,7 @@ function BlendTab({
       {saveSuccess && (
         <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
           <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-          <p className="text-sm text-emerald-400">
+          <p className="text-sm text-emerald-700 dark:text-emerald-400">
             Voice "<span className="font-medium">{saveName}</span>" saved! It's
             now available in the voice selector.
           </p>
@@ -1509,10 +1509,10 @@ function ImportVoicesTab({
       {error && (
         <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-          <p className="flex-1 text-sm text-red-400">{error}</p>
+          <p className="flex-1 text-sm text-red-700 dark:text-red-400">{error}</p>
           <button
             onClick={() => setError(null)}
-            className="text-red-400 hover:text-red-300"
+            className="text-red-700 dark:text-red-400 hover:text-red-300"
           >
             <X className="h-4 w-4" />
           </button>

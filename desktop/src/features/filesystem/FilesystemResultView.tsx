@@ -14,6 +14,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { engine } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
@@ -241,12 +242,11 @@ function EntryRow({
             expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />
           ) : null}
         </button>
-        <input
-          type="checkbox"
+        <Checkbox
           checked={selected}
-          onChange={() => onToggleSelected(entry.path)}
+          onCheckedChange={() => onToggleSelected(entry.path)}
           aria-label={`Select ${entry.name}`}
-          className="h-3.5 w-3.5 rounded border-border"
+          className="h-3.5 w-3.5"
         />
         {icon}
         <button

@@ -1,9 +1,23 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      (() => {
+        const stored = localStorage.getItem("matrx-theme");
+        const theme = stored === "light" || stored === "dark" || stored === "system"
+          ? stored
+          : "dark";
+        const resolved = theme === "system"
+          ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+          : theme;
+        document.documentElement.classList.toggle("dark", resolved === "dark");
+        document.documentElement.style.colorScheme = resolved;
+      })();
+    </script>
     <title>AI Matrx</title>
   </head>
   <body class="bg-background text-foreground antialiased">

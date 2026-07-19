@@ -21,6 +21,7 @@
 
 import { useEffect, useRef } from "react";
 import type { WakeWordUIMode } from "@/hooks/use-wake-word";
+import { Button } from "@/components/ui/button";
 
 // ── Keyframes injected once ───────────────────────────────────────────────────
 
@@ -31,8 +32,8 @@ function ensureKeyframes() {
   s.id = KEYFRAMES_ID;
   s.textContent = `
     @keyframes ww-glow-breathe {
-      0%, 100% { box-shadow: 0 0 0 2px rgba(99,179,237,0.55), 0 0 28px 6px rgba(99,179,237,0.18); }
-      50%       { box-shadow: 0 0 0 3px rgba(99,179,237,0.85), 0 0 48px 10px rgba(99,179,237,0.30); }
+      0%, 100% { box-shadow: 0 0 0 2px hsl(var(--ring) / 0.55), 0 0 28px 6px hsl(var(--ring) / 0.18); }
+      50%       { box-shadow: 0 0 0 3px hsl(var(--ring) / 0.85), 0 0 48px 10px hsl(var(--ring) / 0.30); }
     }
     @keyframes ww-glow-dismiss {
       0%   { box-shadow: 0 0 0 3px rgba(239,68,68,0.85), 0 0 40px 8px rgba(239,68,68,0.35); }
@@ -80,28 +81,16 @@ export function WakeWordOverlay({ uiMode, onDismiss }: WakeWordOverlayProps) {
       />
       {/* Minimal "Shut it up" button — always visible while active so user can dismiss from any tab */}
       {!isDismissed && (
-        <button
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
           onClick={onDismiss}
-          className="fixed bottom-4 right-4 z-[51] flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all"
-          style={{
-            background: "rgba(15,23,42,0.85)",
-            border: "1px solid rgba(99,179,237,0.3)",
-            color: "rgba(148,210,232,0.85)",
-            backdropFilter: "blur(12px)",
-            boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
-          }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.2)";
-            (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(239,68,68,0.5)";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.background = "rgba(15,23,42,0.85)";
-            (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(99,179,237,0.3)";
-          }}
+          className="fixed bottom-4 right-4 z-[51] rounded-full border-border/80 bg-background/85 text-foreground shadow-lg backdrop-blur-xl hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive"
           title="Stop listening"
         >
           ✕ Stop
-        </button>
+        </Button>
       )}
     </>
   );

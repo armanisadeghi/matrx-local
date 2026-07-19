@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -80,6 +81,8 @@ import {
   PromptMatrixQueueBar,
 } from "./PromptMatrix";
 import type { ImageGenController } from "./imageController";
+import { MediaThumb } from "@/components/media/MediaThumb";
+import { descriptorFromInputImage } from "@/components/media/types";
 
 // ── Prompt ───────────────────────────────────────────────────────────────────
 
@@ -284,9 +287,9 @@ export function InputImageControl({ ctl }: { ctl: ImageGenController }) {
       />
       {img ? (
         <div className="flex items-center gap-3 rounded-lg border px-3 py-2">
-          <img
-            src={img.previewUrl}
-            alt="Input"
+          <MediaThumb
+            item={descriptorFromInputImage(img.previewUrl, img.name)}
+            variant="icon"
             className="h-12 w-12 rounded object-cover border"
           />
           <span className="text-xs truncate flex-1">{img.name}</span>
@@ -617,12 +620,11 @@ function InstalledLoraRow({
   return (
     <div className="space-y-2 rounded-lg border px-3 py-2.5">
       <div className="flex items-center gap-2">
-        <input
-          type="checkbox"
+        <Checkbox
           checked={enabled}
-          onChange={(e) => setSelection({ enabled: e.target.checked })}
+          onCheckedChange={(checked) => setSelection({ enabled: checked === true })}
           aria-label={`Enable ${lora.id}`}
-          className="h-3.5 w-3.5 accent-violet-500"
+          className="h-3.5 w-3.5"
         />
         <div className="min-w-0 flex-1">
           <p

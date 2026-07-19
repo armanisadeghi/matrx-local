@@ -53,6 +53,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { CloudAgentToolsCard } from "@/components/settings/CloudAgentToolsCard";
 import { SubTabBar } from "@/components/layout/SubTabBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -2135,20 +2136,19 @@ export function Settings({
                                     >
                                       {/* Top row: checkbox + labels + status */}
                                       <div className="flex items-center gap-3 px-4 py-3">
-                                        <input
-                                          type="checkbox"
+                                        <Checkbox
                                           checked={selected}
                                           disabled={!!savedOk}
-                                          onChange={(e) => {
+                                          onCheckedChange={(checked) => {
                                             setBulkSelected((prev) => {
                                               const next = new Set(prev);
-                                              if (e.target.checked)
+                                              if (checked === true)
                                                 next.add(entry.rawKey);
                                               else next.delete(entry.rawKey);
                                               return next;
                                             });
                                           }}
-                                          className="h-4 w-4 accent-primary shrink-0"
+                                          className="shrink-0"
                                         />
                                         <div className="flex-1 min-w-0">
                                           <div className="flex items-center gap-2 flex-wrap">
@@ -2275,23 +2275,22 @@ export function Settings({
                                       }`}
                                     >
                                       <div className="flex items-center gap-3 px-4 py-3">
-                                        <input
-                                          type="checkbox"
+                                        <Checkbox
                                           checked={selected && !!customProvider}
                                           disabled={
                                             !customProvider || !!savedOk
                                           }
-                                          onChange={(e) => {
+                                          onCheckedChange={(checked) => {
                                             if (!customProvider) return;
                                             setBulkSelected((prev) => {
                                               const next = new Set(prev);
-                                              if (e.target.checked)
+                                              if (checked === true)
                                                 next.add(entry.rawKey);
                                               else next.delete(entry.rawKey);
                                               return next;
                                             });
                                           }}
-                                          className="h-4 w-4 accent-primary shrink-0"
+                                          className="shrink-0"
                                         />
                                         <div className="flex-1 min-w-0 flex items-center gap-3 flex-wrap">
                                           <code className="font-mono text-sm font-medium text-muted-foreground">

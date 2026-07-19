@@ -134,15 +134,7 @@ export function AiMatrx() {
         <button
           onClick={() => setShowDebug((v) => !v)}
           title="Toggle debug panel"
-          style={{
-            fontSize: "10px",
-            padding: "2px 6px",
-            borderRadius: "4px",
-            border: "1px solid #374151",
-            background: "#1f2937",
-            color: "#9ca3af",
-            cursor: "pointer",
-          }}
+          className="rounded border border-border bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
         >
           {showDebug ? "Hide Debug" : "Show Debug"}
         </button>

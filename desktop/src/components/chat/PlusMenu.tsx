@@ -17,6 +17,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
@@ -488,11 +489,10 @@ export function CloudChatPlusMenu({
                       title={tool.description}
                       className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-xs text-foreground transition-colors hover:bg-accent/50"
                     >
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={!excludedTools.includes(tool.name)}
-                        onChange={() => toggleTool(tool.name)}
-                        className="h-3 w-3 accent-primary"
+                        onCheckedChange={() => toggleTool(tool.name)}
+                        className="h-3 w-3"
                       />
                       <span className="truncate">{tool.name}</span>
                     </label>

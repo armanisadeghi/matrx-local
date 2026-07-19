@@ -68,6 +68,31 @@ async function expectNoCrashScreen(page: Page): Promise<void> {
 }
 
 test.describe("boot", () => {
+  for (const theme of ["light", "dark"] as const) {
+    test(`applies the ${theme} theme before the app renders`, async ({ page }) => {
+      await page.addInitScript((value) => {
+        localStorage.setItem("matrx-theme", value);
+      }, theme);
+
+      await page.goto("/");
+      await expect(page.getByRole("heading", { name: "Matrx Local" })).toBeVisible({
+        timeout: 45_000,
+      });
+
+      const state = await page.evaluate(() => ({
+        darkClass: document.documentElement.classList.contains("dark"),
+        colorScheme: getComputedStyle(document.documentElement).colorScheme,
+        background: getComputedStyle(document.body).backgroundColor,
+        foreground: getComputedStyle(document.body).color,
+      }));
+
+      expect(state.darkClass).toBe(theme === "dark");
+      expect(state.colorScheme).toBe(theme);
+      expect(state.background).not.toBe(state.foreground);
+      await expectNoCrashScreen(page);
+    });
+  }
+
   test("app boots to the Login page with no crash and no uncaught errors", async ({
     page,
   }) => {

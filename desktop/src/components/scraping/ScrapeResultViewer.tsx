@@ -24,9 +24,9 @@ function formatElapsed(ms: number): string {
 
 function statusCodeColor(code: number): string {
   if (code >= 200 && code < 300) return "text-emerald-500";
-  if (code >= 300 && code < 400) return "text-blue-400";
-  if (code >= 400 && code < 500) return "text-amber-400";
-  if (code >= 500) return "text-red-400";
+  if (code >= 300 && code < 400) return "text-blue-700 dark:text-blue-400";
+  if (code >= 400 && code < 500) return "text-amber-700 dark:text-amber-400";
+  if (code >= 500) return "text-red-700 dark:text-red-400";
   return "text-muted-foreground";
 }
 
@@ -68,7 +68,7 @@ export function ScrapeResultViewer({
         {result.success ? (
           <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
         ) : (
-          <XCircle className="h-4 w-4 shrink-0 text-red-400" />
+          <XCircle className="h-4 w-4 shrink-0 text-red-700 dark:text-red-400" />
         )}
 
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground/80" title={displayUrl}>
@@ -117,8 +117,8 @@ export function ScrapeResultViewer({
         {result.error && !result.success ? (
           <div className="p-4">
             <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4">
-              <p className="mb-2 text-sm font-semibold text-red-400">Scrape failed</p>
-              <pre className="whitespace-pre-wrap font-mono text-xs text-red-400 dark:text-red-300 leading-relaxed">
+              <p className="mb-2 text-sm font-semibold text-red-700 dark:text-red-400">Scrape failed</p>
+              <pre className="whitespace-pre-wrap font-mono text-xs text-red-700 dark:text-red-400 dark:text-red-300 leading-relaxed">
                 {result.error}
               </pre>
             </div>

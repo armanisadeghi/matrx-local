@@ -25,9 +25,9 @@ interface ScrapeUrlListProps {
 
 function statusCodeColor(code: number): string {
   if (code >= 200 && code < 300) return "text-emerald-500";
-  if (code >= 300 && code < 400) return "text-blue-400";
-  if (code >= 400 && code < 500) return "text-amber-400";
-  if (code >= 500) return "text-red-400";
+  if (code >= 300 && code < 400) return "text-blue-700 dark:text-blue-400";
+  if (code >= 400 && code < 500) return "text-amber-700 dark:text-amber-400";
+  if (code >= 500) return "text-red-700 dark:text-red-400";
   return "text-muted-foreground";
 }
 
@@ -84,7 +84,7 @@ export function ScrapeUrlList({
                 <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
               )}
               {entry.status === "error" && (
-                <XCircle className="h-3.5 w-3.5 text-red-400" />
+                <XCircle className="h-3.5 w-3.5 text-red-700 dark:text-red-400" />
               )}
               {entry.status === "pending" && (
                 <span className="inline-block h-3 w-3 rounded-full border border-muted-foreground/40" />

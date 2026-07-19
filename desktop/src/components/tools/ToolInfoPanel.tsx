@@ -23,16 +23,16 @@ interface ToolInfoPanelProps {
 type Tab = "params" | "schema" | "examples";
 
 const FIELD_TYPE_COLORS: Record<string, string> = {
-  text: "bg-sky-500/15 text-sky-400 border-sky-500/30",
-  textarea: "bg-indigo-500/15 text-indigo-400 border-indigo-500/30",
-  code: "bg-violet-500/15 text-violet-400 border-violet-500/30",
-  number: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-  boolean: "bg-teal-500/15 text-teal-400 border-teal-500/30",
-  select: "bg-orange-500/15 text-orange-400 border-orange-500/30",
-  "file-path": "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-  tags: "bg-rose-500/15 text-rose-400 border-rose-500/30",
-  "key-value": "bg-purple-500/15 text-purple-400 border-purple-500/30",
-  json: "bg-slate-500/15 text-slate-400 border-slate-500/30",
+  text: "bg-sky-500/15 text-sky-700 dark:text-sky-400 border-sky-500/30",
+  textarea: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-400 border-indigo-500/30",
+  code: "bg-violet-500/15 text-violet-700 dark:text-violet-400 border-violet-500/30",
+  number: "bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30",
+  boolean: "bg-teal-500/15 text-teal-700 dark:text-teal-400 border-teal-500/30",
+  select: "bg-orange-500/15 text-orange-700 dark:text-orange-400 border-orange-500/30",
+  "file-path": "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30",
+  tags: "bg-rose-500/15 text-rose-700 dark:text-rose-400 border-rose-500/30",
+  "key-value": "bg-purple-500/15 text-purple-700 dark:text-purple-400 border-purple-500/30",
+  json: "bg-slate-500/15 text-slate-700 dark:text-slate-400 border-slate-500/30",
 };
 
 function CopyButton({ text }: { text: string }) {
@@ -48,7 +48,7 @@ function CopyButton({ text }: { text: string }) {
       className="text-muted-foreground hover:text-foreground transition-colors"
     >
       {copied ? (
-        <CheckCheck className="h-3.5 w-3.5 text-emerald-400" />
+        <CheckCheck className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />
       ) : (
         <Copy className="h-3.5 w-3.5" />
       )}

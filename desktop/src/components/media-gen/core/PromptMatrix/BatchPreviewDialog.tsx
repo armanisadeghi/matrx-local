@@ -12,6 +12,7 @@ import { CheckSquare, Copy, Eye, Layers, Loader2, XSquare } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -209,11 +210,10 @@ export function BatchPreviewDialog({
                   )}
                 >
                   <label className="flex cursor-pointer items-start gap-2 pt-0.5">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={checked}
-                      onChange={() => toggle(run.index)}
-                      className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                      onCheckedChange={() => toggle(run.index)}
+                      className="mt-0.5 h-3.5 w-3.5"
                       aria-label={`Include run ${run.index + 1}`}
                     />
                     <span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">

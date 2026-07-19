@@ -89,7 +89,7 @@ const PORT_CATEGORIES: PortCategory[] = [
   {
     id: "dev",
     label: "Dev Servers",
-    color: "text-green-400 border-green-400/40 bg-green-400/10",
+    color: "text-green-700 dark:text-green-400 border-green-400/40 bg-green-400/10",
     match: (p) => {
       const devPorts = [
         3000, 3001, 3002, 3003, 4000, 5000, 5173, 5174, 4200, 8080, 8000, 8888,
@@ -118,7 +118,7 @@ const PORT_CATEGORIES: PortCategory[] = [
   {
     id: "python",
     label: "Python",
-    color: "text-blue-400 border-blue-400/40 bg-blue-400/10",
+    color: "text-blue-700 dark:text-blue-400 border-blue-400/40 bg-blue-400/10",
     match: (p) => {
       const pyPorts = [
         8000, 8001, 8002, 8888, 8889, 5000, 5001,
@@ -139,7 +139,7 @@ const PORT_CATEGORIES: PortCategory[] = [
   {
     id: "database",
     label: "Databases",
-    color: "text-orange-400 border-orange-400/40 bg-orange-400/10",
+    color: "text-orange-700 dark:text-orange-400 border-orange-400/40 bg-orange-400/10",
     match: (p) => {
       const dbPorts = [
         5432, 5433, 3306, 3307, 27017, 27018, 6379, 6380, 9200, 9300, 1433,
@@ -166,7 +166,7 @@ const PORT_CATEGORIES: PortCategory[] = [
   {
     id: "docker",
     label: "Docker",
-    color: "text-sky-400 border-sky-400/40 bg-sky-400/10",
+    color: "text-sky-700 dark:text-sky-400 border-sky-400/40 bg-sky-400/10",
     match: (p) =>
       p.name.toLowerCase().includes("docker") ||
       p.name.toLowerCase().includes("containerd") ||
@@ -175,19 +175,19 @@ const PORT_CATEGORIES: PortCategory[] = [
   {
     id: "local",
     label: "Localhost Only",
-    color: "text-violet-400 border-violet-400/40 bg-violet-400/10",
+    color: "text-violet-700 dark:text-violet-400 border-violet-400/40 bg-violet-400/10",
     match: (p) => p.address === "127.0.0.1" || p.address === "::1",
   },
   {
     id: "external",
     label: "External / 0.0.0.0",
-    color: "text-red-400 border-red-400/40 bg-red-400/10",
+    color: "text-red-700 dark:text-red-400 border-red-400/40 bg-red-400/10",
     match: (p) => p.address === "0.0.0.0" || p.address === "::",
   },
   {
     id: "ai",
     label: "AI / LLM",
-    color: "text-fuchsia-400 border-fuchsia-400/40 bg-fuchsia-400/10",
+    color: "text-fuchsia-700 dark:text-fuchsia-400 border-fuchsia-400/40 bg-fuchsia-400/10",
     match: (p) => {
       const aiPorts = [11434, 8080, 5000, 7860, 7861, 7862, 3001, 1234, 4891];
       const aiNames = [
@@ -225,7 +225,7 @@ const TERM_CATEGORIES: TermCategory[] = [
   {
     id: "shells",
     label: "Active Shells",
-    color: "text-emerald-400 border-emerald-400/40 bg-emerald-400/10",
+    color: "text-emerald-700 dark:text-emerald-400 border-emerald-400/40 bg-emerald-400/10",
     match: (t) =>
       ["zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh"].some(
         (s) => t.name.toLowerCase() === s,
@@ -234,13 +234,13 @@ const TERM_CATEGORIES: TermCategory[] = [
   {
     id: "running",
     label: "Running Processes",
-    color: "text-green-400 border-green-400/40 bg-green-400/10",
+    color: "text-green-700 dark:text-green-400 border-green-400/40 bg-green-400/10",
     match: (t) => t.status === "running",
   },
   {
     id: "dev_code",
     label: "Dev / Code",
-    color: "text-blue-400 border-blue-400/40 bg-blue-400/10",
+    color: "text-blue-700 dark:text-blue-400 border-blue-400/40 bg-blue-400/10",
     match: (t) => {
       const names = [
         "node",
@@ -273,7 +273,7 @@ const TERM_CATEGORIES: TermCategory[] = [
   {
     id: "editors",
     label: "Editors / IDEs",
-    color: "text-yellow-400 border-yellow-400/40 bg-yellow-400/10",
+    color: "text-yellow-700 dark:text-yellow-400 border-yellow-400/40 bg-yellow-400/10",
     match: (t) => {
       const editors = [
         "cursor",
@@ -302,7 +302,7 @@ const TERM_CATEGORIES: TermCategory[] = [
   {
     id: "git",
     label: "Git",
-    color: "text-orange-400 border-orange-400/40 bg-orange-400/10",
+    color: "text-orange-700 dark:text-orange-400 border-orange-400/40 bg-orange-400/10",
     match: (t) =>
       t.cmdline.toLowerCase().includes("git") ||
       t.name.toLowerCase().includes("git"),
@@ -310,19 +310,19 @@ const TERM_CATEGORIES: TermCategory[] = [
   {
     id: "recent",
     label: "Recent (< 10 min)",
-    color: "text-cyan-400 border-cyan-400/40 bg-cyan-400/10",
+    color: "text-cyan-700 dark:text-cyan-400 border-cyan-400/40 bg-cyan-400/10",
     match: (t) => t.elapsed_s < 600,
   },
   {
     id: "long_running",
     label: "Long Running (> 1h)",
-    color: "text-purple-400 border-purple-400/40 bg-purple-400/10",
+    color: "text-purple-700 dark:text-purple-400 border-purple-400/40 bg-purple-400/10",
     match: (t) => t.elapsed_s > 3600,
   },
   {
     id: "project_dir",
     label: "In Code Dir",
-    color: "text-pink-400 border-pink-400/40 bg-pink-400/10",
+    color: "text-pink-700 dark:text-pink-400 border-pink-400/40 bg-pink-400/10",
     match: (t) => {
       const cwd = t.cwd.toLowerCase();
       return (
@@ -679,7 +679,7 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
     if (n.includes("python") || n.includes("uvicorn"))
       return <TerminalSquare className="h-4 w-4 text-blue-500" />;
     if (n.includes("docker"))
-      return <Server className="h-4 w-4 text-blue-400" />;
+      return <Server className="h-4 w-4 text-blue-700 dark:text-blue-400" />;
     if (n.includes("java")) return <Cpu className="h-4 w-4 text-orange-500" />;
     return <Activity className="h-4 w-4 text-muted-foreground" />;
   };
@@ -1024,7 +1024,7 @@ function PortTable({
         <div className="col-span-2 text-right">Actions</div>
       </div>
       <ScrollArea className="flex-1">
-        <div className="divide-y divide-white/5">
+        <div className="divide-y divide-border">
           {ports.map((port) => {
             const rowKey = `${port.pid}-${port.port}-${port.protocol}`;
             const isExpanded = expandedKey === rowKey;
@@ -1262,7 +1262,7 @@ function TerminalTable({
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="divide-y divide-white/5">
+        <div className="divide-y divide-border">
           {terminals.map((t) => {
             const isExpanded = expandedPid === t.pid;
             const tail = tailData[t.pid];
@@ -1277,7 +1277,7 @@ function TerminalTable({
                   {/* Process */}
                   <div className="col-span-3 flex items-center gap-3 min-w-0">
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted border border-border shadow-sm">
-                      <TerminalSquare className="h-4 w-4 text-emerald-400" />
+                      <TerminalSquare className="h-4 w-4 text-emerald-700 dark:text-emerald-400" />
                     </div>
                     <div className="flex flex-col min-w-0">
                       <span className="font-medium text-foreground/90 truncate text-sm">
@@ -1373,14 +1373,14 @@ function TerminalTable({
                     {tail && (
                       <div className="p-3 space-y-3">
                         {tail.note && (
-                          <p className="text-xs text-amber-400/80 bg-amber-400/10 border border-amber-400/20 rounded px-3 py-2">
+                          <p className="text-xs text-amber-700 dark:text-amber-400/80 bg-amber-400/10 border border-amber-400/20 rounded px-3 py-2">
                             {tail.note}
                           </p>
                         )}
 
                         {tail.output && (
                           <div ref={tailScrollRef}>
-                            <pre className="text-xs text-foreground/80 bg-black/40 border border-border rounded-md p-3 overflow-x-auto font-mono max-h-64 overflow-y-auto whitespace-pre-wrap">
+                            <pre className="text-xs text-foreground/80 bg-muted border border-border rounded-md p-3 overflow-x-auto font-mono max-h-64 overflow-y-auto whitespace-pre-wrap">
                               {tail.output}
                             </pre>
                           </div>

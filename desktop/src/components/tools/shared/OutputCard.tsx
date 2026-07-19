@@ -82,7 +82,7 @@ export function OutputCard({
       <pre
         className={cn(
           "whitespace-pre-wrap break-words text-xs font-mono",
-          status === "error" ? "text-red-400" : "text-foreground",
+          status === "error" ? "text-red-700 dark:text-red-400" : "text-foreground",
         )}
       >
         {content}
@@ -113,7 +113,7 @@ export function OutputCard({
                 onClick={handleCopy}
                 className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
               >
-                {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                {copied ? <Check className="h-3 w-3 text-emerald-700 dark:text-emerald-400" /> : <Copy className="h-3 w-3" />}
                 {copied ? "Copied" : "Copy"}
               </button>
             )}

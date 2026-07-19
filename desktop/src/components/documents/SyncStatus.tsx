@@ -158,7 +158,7 @@ export function SyncStatusBar({ status, syncing, lastResult, onSync }: SyncStatu
 
       {/* Pending push count */}
       {(status.pending_push_count ?? 0) > 0 && (
-        <span className="flex items-center gap-1 text-blue-400">
+        <span className="flex items-center gap-1 text-blue-700 dark:text-blue-400">
           <Upload className="h-3 w-3" />
           {status.pending_push_count} pending
         </span>
@@ -167,7 +167,7 @@ export function SyncStatusBar({ status, syncing, lastResult, onSync }: SyncStatu
       {/* Watcher status */}
       {status.watcher_active && (
         <span className="flex items-center gap-1">
-          <Eye className="h-3 w-3 text-blue-400" />
+          <Eye className="h-3 w-3 text-blue-700 dark:text-blue-400" />
           Watching
         </span>
       )}

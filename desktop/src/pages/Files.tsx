@@ -3,6 +3,13 @@ import { ArrowUp, Folder, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { FilesystemResultController } from "@/features/filesystem/FilesystemResultController";
 import { normalizeFilesystemPayload } from "@/features/filesystem/tool-results";
 import type { FilesystemResult } from "@/features/filesystem/types";
@@ -116,16 +123,18 @@ export function Files({ engineStatus }: { engineStatus: EngineStatus }) {
           <form className="flex min-w-64 flex-1 flex-wrap justify-end gap-2" role="search" onSubmit={(event) => { event.preventDefault(); void search(); }}>
             <label htmlFor="filesystem-search" className="sr-only">Search file names and paths</label>
             <Input id="filesystem-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search names and paths" className="max-w-md" />
-            <label htmlFor="filesystem-search-scope" className="sr-only">Search scope</label>
-            <select
-              id="filesystem-search-scope"
-              className="h-9 rounded-md border border-input bg-background px-2 text-xs"
+            <Select
               value={effectiveSearchScope}
-              onChange={(event) => setSearchScope(event.target.value as "current" | "all")}
+              onValueChange={(value) => setSearchScope(value as "current" | "all")}
             >
-              <option value="current" disabled={!activeDirectory}>Current folder</option>
-              <option value="all">All locations</option>
-            </select>
+              <SelectTrigger className="w-36 text-xs" aria-label="Search scope">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="current" disabled={!activeDirectory}>Current folder</SelectItem>
+                <SelectItem value="all">All locations</SelectItem>
+              </SelectContent>
+            </Select>
             <Button type="submit" variant="outline" disabled={!connected || !query.trim() || loading}>
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} Search
             </Button>

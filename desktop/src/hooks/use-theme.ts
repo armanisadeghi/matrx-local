@@ -13,6 +13,7 @@ function getSystemTheme(): "dark" | "light" {
 function applyTheme(theme: Theme) {
   const resolved = theme === "system" ? getSystemTheme() : theme;
   document.documentElement.classList.toggle("dark", resolved === "dark");
+  document.documentElement.style.colorScheme = resolved;
 }
 
 function getStoredTheme(): Theme {

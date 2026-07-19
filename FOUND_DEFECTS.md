@@ -526,7 +526,6 @@ expand these into proper entries / agent tasks.
 - Zustand (or equivalent) for shared app state — `App.tsx` prop-drills; defer until active bugs clear.
 - API key extras — rotation timestamps; optional OS keychain.
 - Configurations consistency gaps — see `docs/official/settings-catalog.md` §6 (theme live apply, `chatMaxConversations`, dual audio-device storage, wake keyword cloud vs Rust).
-- Dark mode full-app visual pass (modals, dropdowns, third-party wrappers).
 
 ### Wishlist / future
 - ComfyUI sidecar evaluation; cloud AI relay; cloud-assigned scrape job queue.

@@ -40,6 +40,7 @@ import { emitClientLog } from "@/hooks/use-unified-log";
 import { recovery } from "@/lib/recovery";
 import { useMediaActions } from "@/components/media/MediaActionsProvider";
 import { MediaOverflowMenu } from "@/components/media/MediaOverflowMenu";
+import { MediaThumb } from "@/components/media/MediaThumb";
 import {
   descriptorFromJob,
   descriptorFromResult,
@@ -1053,29 +1054,17 @@ export function GeneratedImageView({
 
   return (
     <div className="space-y-2">
-      <button
-        type="button"
-        onClick={() =>
-          onOpenLightbox ? onOpenLightbox() : actions.openOne(descriptor)
-        }
-        onContextMenu={(e) => {
-          e.preventDefault();
-          actions.openContextMenu(descriptor, { x: e.clientX, y: e.clientY });
-        }}
-        className="group relative block w-full cursor-zoom-in"
-        aria-label="Expand image"
-        title="Click to expand · right-click for every action"
+      <MediaThumb
+        item={descriptor}
+        variant="card"
+        onActivate={onOpenLightbox ?? (() => actions.openOne(descriptor))}
+        className="w-full rounded-lg border"
       >
-        <img
-          src={descriptor.url}
-          alt="Generated image"
-          className="w-full rounded-lg border object-contain"
-        />
         <span className="pointer-events-none absolute right-2 top-2 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-1 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
           <Maximize2 className="h-3 w-3" />
           Expand
         </span>
-      </button>
+      </MediaThumb>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <span className="flex flex-wrap items-center gap-2">
           <span className="tabular-nums">

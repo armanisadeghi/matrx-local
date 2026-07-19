@@ -59,7 +59,7 @@ function StatusIcon({ status, recommended }: { status: CompatibilityStatus; reco
     case "needs_more_ram":
       return <AlertCircle className="h-3.5 w-3.5 text-yellow-500" />;
     case "accessory_only":
-      return <Info className="h-3.5 w-3.5 text-blue-400" />;
+      return <Info className="h-3.5 w-3.5 text-blue-700 dark:text-blue-400" />;
     case "incompatible_format":
       return <XCircle className="h-3.5 w-3.5 text-muted-foreground" />;
   }

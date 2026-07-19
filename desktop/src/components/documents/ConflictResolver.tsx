@@ -86,8 +86,8 @@ function DiffView({
                 key={i}
                 className={cn(
                   "px-2 py-0.5 whitespace-pre-wrap break-all",
-                  d.type === "changed" && "bg-red-500/10 text-red-400",
-                  d.type === "local_only" && "bg-green-500/10 text-green-400",
+                  d.type === "changed" && "bg-red-500/10 text-red-700 dark:text-red-400",
+                  d.type === "local_only" && "bg-green-500/10 text-green-700 dark:text-green-400",
                   d.type === "remote_only" && "opacity-30",
                   d.type === "same" && "text-muted-foreground",
                 )}
@@ -115,8 +115,8 @@ function DiffView({
                 key={i}
                 className={cn(
                   "px-2 py-0.5 whitespace-pre-wrap break-all",
-                  d.type === "changed" && "bg-purple-500/10 text-purple-400",
-                  d.type === "remote_only" && "bg-green-500/10 text-green-400",
+                  d.type === "changed" && "bg-purple-500/10 text-purple-700 dark:text-purple-400",
+                  d.type === "remote_only" && "bg-green-500/10 text-green-700 dark:text-green-400",
                   d.type === "local_only" && "opacity-30",
                   d.type === "same" && "text-muted-foreground",
                 )}
@@ -151,11 +151,11 @@ function DiffView({
         if (d.type === "changed") {
           return (
             <div key={i}>
-              <div className="px-2 py-0.5 bg-red-500/10 text-red-400 whitespace-pre-wrap">
+              <div className="px-2 py-0.5 bg-red-500/10 text-red-700 dark:text-red-400 whitespace-pre-wrap">
                 <span className="inline-block w-6 text-right opacity-40 select-none mr-2">{d.lineNumber}</span>
                 <span className="select-none mr-1">-</span>{d.localContent}
               </div>
-              <div className="px-2 py-0.5 bg-green-500/10 text-green-400 whitespace-pre-wrap">
+              <div className="px-2 py-0.5 bg-green-500/10 text-green-700 dark:text-green-400 whitespace-pre-wrap">
                 <span className="inline-block w-6 text-right opacity-40 select-none mr-2">{d.lineNumber}</span>
                 <span className="select-none mr-1">+</span>{d.remoteContent}
               </div>
@@ -164,14 +164,14 @@ function DiffView({
         }
         if (d.type === "local_only") {
           return (
-            <div key={i} className="px-2 py-0.5 bg-red-500/10 text-red-400 whitespace-pre-wrap">
+            <div key={i} className="px-2 py-0.5 bg-red-500/10 text-red-700 dark:text-red-400 whitespace-pre-wrap">
               <span className="inline-block w-6 text-right opacity-40 select-none mr-2">{d.lineNumber}</span>
               <span className="select-none mr-1">-</span>{d.content}
             </div>
           );
         }
         return (
-          <div key={i} className="px-2 py-0.5 bg-green-500/10 text-green-400 whitespace-pre-wrap">
+          <div key={i} className="px-2 py-0.5 bg-green-500/10 text-green-700 dark:text-green-400 whitespace-pre-wrap">
             <span className="inline-block w-6 text-right opacity-40 select-none mr-2">{d.lineNumber}</span>
             <span className="select-none mr-1">+</span>{d.content}
           </div>
@@ -401,7 +401,7 @@ export function ConflictResolver({ conflicts, onResolve, onClose }: ConflictReso
           <button
             onClick={() => handleResolve("exclude")}
             disabled={resolving}
-            className="flex items-center gap-1.5 rounded-md border border-red-500/30 px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10 disabled:opacity-60"
+            className="flex items-center gap-1.5 rounded-md border border-red-500/30 px-3 py-1.5 text-xs text-red-700 dark:text-red-400 hover:bg-red-500/10 disabled:opacity-60"
             title="Exclude this note from all future syncs"
           >
             <Ban className="h-3.5 w-3.5" />

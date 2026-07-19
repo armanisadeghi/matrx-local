@@ -10,6 +10,15 @@ import {
 } from "lucide-react";
 import { engine } from "@/lib/api";
 import type { DocFolder, DocMappings } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface DirectoryMappingsProps {
   userId: string;
@@ -162,29 +171,29 @@ export function DirectoryMappings({
                 Add Mapping
               </h4>
               <div className="flex flex-col gap-2">
-                <select
+                <Select
                   value={newFolderId}
-                  onChange={(e) => setNewFolderId(e.target.value)}
-                  className="rounded-md border bg-background px-3 py-1.5 text-sm outline-none"
+                  onValueChange={setNewFolderId}
                 >
-                  <option value="">Select a folder...</option>
-                  {flatFolders.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger aria-label="Cloud folder">
+                    <SelectValue placeholder="Select a folder..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {flatFolders.map((f) => (
+                      <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <div className="flex items-center gap-2">
-                  <input
+                  <Input
                     value={newPath}
                     onChange={(e) => setNewPath(e.target.value)}
                     placeholder="/path/to/local/directory"
-                    className="flex-1 rounded-md border bg-background px-3 py-1.5 text-sm font-mono outline-none focus:ring-1 focus:ring-primary"
+                    className="flex-1 font-mono"
                   />
-                  <button
+                  <Button
                     onClick={handleAdd}
                     disabled={adding || !newFolderId || !newPath.trim()}
-                    className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1"
                   >
                     {adding ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -192,7 +201,7 @@ export function DirectoryMappings({
                       <Plus className="h-4 w-4" />
                     )}
                     Add
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>

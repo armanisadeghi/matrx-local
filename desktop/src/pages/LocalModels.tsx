@@ -187,10 +187,10 @@ function RatingCell({ value, label }: { value: number; label: string }) {
     value === 0
       ? "text-muted-foreground/30"
       : value <= 2
-        ? "text-amber-400"
+        ? "text-amber-700 dark:text-amber-400"
         : value <= 4
-          ? "text-blue-400"
-          : "text-green-400";
+          ? "text-blue-700 dark:text-blue-400"
+          : "text-green-700 dark:text-green-400";
   const tooltip = `${label}: ${value}/5 — ${RATING_LABELS[value] ?? ""}`;
   return (
     <span
@@ -1029,7 +1029,7 @@ function ModelRow({
           </button>
           {isRecommended && (
             <Badge
-              className="text-[10px] px-1.5 py-0 h-4 bg-blue-500/15 text-blue-400 border-blue-500/30 shrink-0"
+              className="text-[10px] px-1.5 py-0 h-4 bg-blue-500/15 text-blue-700 dark:text-blue-400 border-blue-500/30 shrink-0"
               title="Recommended for your hardware"
             >
               ★
@@ -1113,7 +1113,7 @@ function ModelRow({
               className="h-7 w-7 flex items-center justify-center"
               title={`Downloading ${downloadingFilename} — switch to that variant to cancel`}
             >
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-400" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-700 dark:text-amber-400" />
             </span>
           ) : effectiveQueued ? (
             <span
@@ -1232,7 +1232,7 @@ function ModelRow({
               {anyVariantDownloading &&
                 !effectiveDownloadingThis &&
                 downloadProgress.filename && (
-                  <span className="text-xs text-amber-400/80 tabular-nums shrink-0">
+                  <span className="text-xs text-amber-700 dark:text-amber-400/80 tabular-nums shrink-0">
                     {downloadProgress.filename
                       .replace(/\.gguf$/, "")
                       .slice(-20)}
@@ -1265,7 +1265,7 @@ function ModelRow({
       {isExpanded && (
         <div className="px-4 pb-3 pl-10 space-y-2 bg-muted/10 border-t">
           {model.is_uncensored && (
-            <div className="flex items-center gap-1.5 text-xs text-amber-400 pt-2">
+            <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400 pt-2">
               <AlertCircle className="h-3.5 w-3.5 shrink-0" />
               Uncensored — no content filtering
             </div>
@@ -1311,7 +1311,7 @@ function ModelRow({
                       <div className="flex items-center gap-1.5 mb-0.5">
                         <span className="font-semibold">{v.label}</span>
                         {fitsHardware && (
-                          <span className="text-[10px] bg-green-500/15 text-green-400 rounded px-1.5 py-0.5">
+                          <span className="text-[10px] bg-green-500/15 text-green-700 dark:text-green-400 rounded px-1.5 py-0.5">
                             fits your machine
                           </span>
                         )}
@@ -2024,7 +2024,7 @@ function ModelsTab() {
                       </span>
                     </div>
                     {isThisRunning && (
-                      <p className="text-xs text-green-400 flex items-center gap-1">
+                      <p className="text-xs text-green-700 dark:text-green-400 flex items-center gap-1">
                         <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
                         Currently running
                         {serverStatus?.context_length

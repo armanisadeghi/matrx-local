@@ -27,6 +27,7 @@ import { useMediaActions } from "@/components/media/MediaActionsProvider";
 import { MediaOverflowMenu } from "@/components/media/MediaOverflowMenu";
 import { CopyButton } from "@/components/media/MediaInfoDialog";
 import { descriptorFromVideoJob } from "@/components/media/types";
+import { MediaThumb } from "@/components/media/MediaThumb";
 import { InlineProgressBar } from "@/components/media-gen/shared";
 import type { VideoGenController } from "./videoController";
 
@@ -146,26 +147,17 @@ export function VideoPlayback({
     return (
       <div className="space-y-2">
         <div className="relative">
-          <video
-            key={url}
-            controls
-            autoPlay
-            loop
-            src={url}
-            onContextMenu={
-              descriptor
-                ? (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    actions.openContextMenu(descriptor, {
-                      x: e.clientX,
-                      y: e.clientY,
-                    });
-                  }
-                : undefined
-            }
-            className={videoClassName}
-          />
+          {descriptor ? (
+            <MediaThumb
+              key={url}
+              item={descriptor}
+              variant="gallery"
+              videoControls
+              videoAutoPlay
+              chrome="none"
+              className={videoClassName}
+            />
+          ) : null}
           <div className="absolute right-2 top-2 flex items-center gap-1">
             {onExpand && (
               <button

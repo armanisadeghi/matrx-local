@@ -17,7 +17,7 @@ import { AlertCircle, CheckCircle2, Loader2, X } from "lucide-react";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import type { ImageGenJob } from "@/lib/api";
 import { MediaThumb } from "@/components/media/MediaThumb";
-import type { MediaDescriptor } from "@/components/media/types";
+import { descriptorFromJob, type MediaDescriptor } from "@/components/media/types";
 import { CopyButton } from "@/components/media/MediaInfoDialog";
 import {
   ErrorNote,
@@ -112,7 +112,6 @@ function viewableProps(
 
 interface JobViewProps {
   job: ImageGenJob;
-  thumbUrl: string | null;
   /** Canonical descriptor — present once the job's bytes are available. */
   descriptor: MediaDescriptor | null;
   onCancel: (jobId: string) => void;
@@ -123,7 +122,6 @@ interface JobViewProps {
 
 function JobRowList({
   job,
-  thumbUrl,
   descriptor,
   onCancel,
   onReuseSeed,
@@ -157,15 +155,7 @@ function JobRowList({
               className="h-10 w-10 rounded border"
             />
           </div>
-        ) : (
-          thumbUrl && (
-            <img
-              src={thumbUrl}
-              alt="Generated"
-              className="h-10 w-10 shrink-0 rounded border object-cover"
-            />
-          )
-        )}
+        ) : null}
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-1.5">
             <p className="min-w-0 flex-1 truncate text-xs" title={job.prompt}>
@@ -211,7 +201,6 @@ function JobRowList({
 
 function JobChip({
   job,
-  thumbUrl,
   descriptor,
   onCancel,
   onReuseSeed,
@@ -236,12 +225,6 @@ function JobChip({
               className="h-9 w-9 rounded border"
             />
           </div>
-        ) : thumbUrl ? (
-          <img
-            src={thumbUrl}
-            alt="Generated"
-            className="h-9 w-9 shrink-0 rounded border object-cover"
-          />
         ) : (
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded border bg-muted/30">
             <JobStatusIcon job={job} opening={opening} />
@@ -428,10 +411,10 @@ export function ImageQueuePanel({
   const onCancel = (id: string) => void cancelImageJob(id);
 
   const items = jobs.map((j) => {
+    const thumbUrl = imageJobThumbs[j.job_id] ?? null;
     const common = {
       job: j,
-      thumbUrl: imageJobThumbs[j.job_id] ?? null,
-      descriptor: descriptorOf(j),
+      descriptor: descriptorOf(j) ?? (thumbUrl ? descriptorFromJob(j, thumbUrl) : null),
       onCancel,
       onReuseSeed: reuseSeed,
       onOpen: openJob,

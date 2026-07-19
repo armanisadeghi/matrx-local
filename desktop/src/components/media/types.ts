@@ -33,6 +33,8 @@ export type MediaSource =
   | "job"
   /** A fresh one-shot generation result (may also be a library item). */
   | "result"
+  /** A user-selected source image that has not been persisted by the engine. */
+  | "input"
   /** A screenshot or other media value returned by a local tool. */
   | "tool";
 
@@ -148,6 +150,22 @@ export function descriptorFromToolImage(
     source: "tool",
     prompt: "Tool image",
     params: { media_type: image.media_type },
+  };
+}
+
+/** A local file/blob selected as a generation input. */
+export function descriptorFromInputImage(
+  url: string,
+  fileName: string,
+): MediaDescriptor {
+  return {
+    id: `input:${fileName}:${url}`,
+    kind: "image",
+    url,
+    itemId: null,
+    source: "input",
+    fileName,
+    prompt: `Input image: ${fileName}`,
   };
 }
 

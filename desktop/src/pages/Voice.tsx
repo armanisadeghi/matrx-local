@@ -653,7 +653,7 @@ function SetupTab({
           <AlertCircle className="mt-0.5 h-4 w-4 text-red-500 flex-shrink-0" />
           <div className="flex-1">
             <p className="text-sm font-medium text-red-500">Error</p>
-            <p className="text-sm text-red-400 whitespace-pre-wrap">
+            <p className="text-sm text-red-700 dark:text-red-400 whitespace-pre-wrap">
               {state.error}
             </p>
           </div>
@@ -661,7 +661,7 @@ function SetupTab({
             variant="ghost"
             size="sm"
             onClick={actions.clearError}
-            className="text-red-400 hover:text-red-300"
+            className="text-red-700 dark:text-red-400 hover:text-red-300"
           >
             Dismiss
           </Button>
@@ -1456,7 +1456,7 @@ function TranscribeTab({
           {permError && (
             <div className="flex items-start gap-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
               <AlertCircle className="mt-0.5 h-4 w-4 text-amber-500 shrink-0" />
-              <p className="text-sm text-amber-400">{permError}</p>
+              <p className="text-sm text-amber-700 dark:text-amber-400">{permError}</p>
             </div>
           )}
 
@@ -1464,7 +1464,7 @@ function TranscribeTab({
           {state.error && (
             <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3">
               <AlertCircle className="mt-0.5 h-4 w-4 text-red-500 shrink-0" />
-              <p className="text-sm text-red-400">{state.error}</p>
+              <p className="text-sm text-red-700 dark:text-red-400">{state.error}</p>
             </div>
           )}
 
@@ -2958,7 +2958,7 @@ function DevicesTab({
     if (db > -20) return { label: "Loud", color: "text-amber-500" };
     if (db > -35) return { label: "Good", color: "text-emerald-500" };
     if (db > -50) return { label: "Quiet", color: "text-yellow-500" };
-    return { label: "Very quiet", color: "text-red-400" };
+    return { label: "Very quiet", color: "text-red-700 dark:text-red-400" };
   };
 
   const quality = getSignalQuality(testAvgDb);
@@ -3308,7 +3308,7 @@ function DevicesTab({
                       <p className="text-sm font-medium text-red-500">
                         Microphone access failed
                       </p>
-                      <p className="text-xs text-red-400 mt-0.5">{testError}</p>
+                      <p className="text-xs text-red-700 dark:text-red-400 mt-0.5">{testError}</p>
                     </div>
                   </div>
                 )}

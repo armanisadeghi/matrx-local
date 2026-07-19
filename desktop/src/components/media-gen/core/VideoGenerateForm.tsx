@@ -24,6 +24,8 @@ import {
   SeedInput,
 } from "@/components/media-gen/shared";
 import type { VideoGenController } from "./videoController";
+import { MediaThumb } from "@/components/media/MediaThumb";
+import { descriptorFromInputImage } from "@/components/media/types";
 
 export function VideoPromptField({
   ctl,
@@ -180,9 +182,9 @@ export function SourceImageControl({ ctl }: { ctl: VideoGenController }) {
       />
       {img ? (
         <div className="flex items-center gap-3 rounded-lg border px-3 py-2">
-          <img
-            src={img.previewUrl}
-            alt="Source"
+          <MediaThumb
+            item={descriptorFromInputImage(img.previewUrl, img.name)}
+            variant="icon"
             className="h-12 w-12 rounded object-cover border"
           />
           <span className="text-xs truncate flex-1">{img.name}</span>

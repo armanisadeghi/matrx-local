@@ -45,8 +45,8 @@ import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { useMediaLibraryApp } from "@/contexts/MediaLibraryContext";
 import type { MediaLibraryFilter } from "@/hooks/use-media-library";
 import type { MediaLibraryItem } from "@/lib/api";
-import { MediaItemThumb } from "@/components/media/MediaThumb";
-import { formatDate } from "@/components/media/types";
+import { MediaItemThumb, MediaThumb } from "@/components/media/MediaThumb";
+import { descriptorFromResult, formatDate } from "@/components/media/types";
 import { ImageGenInstaller } from "../ImageGenInstaller";
 import {
   CancelableGenerateButton,
@@ -212,6 +212,10 @@ export function VariantGallery() {
   }, [completedVideoJobId, refreshLibrary]);
 
   const freshResultItemId = imageResult?.itemId ?? null;
+  const freshResultDescriptor = useMemo(
+    () => imageResult ? descriptorFromResult(imageResult) : null,
+    [imageResult],
+  );
   useEffect(() => {
     if (!freshResultItemId) return;
     void refreshLibrary();
@@ -629,15 +633,14 @@ export function VariantGallery() {
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {/* Fresh foreground result */}
                 {imageResult && (
-                  <button
-                    type="button"
-                    onClick={() => setResultOpen(true)}
+                  <div
                     className="flex w-56 shrink-0 items-center gap-2 rounded-lg border border-green-500/40 bg-green-500/5 px-2.5 py-2 text-left transition-colors hover:bg-green-500/10"
                     title="View the result you just generated"
                   >
-                    <img
-                      src={`data:image/png;base64,${imageResult.b64}`}
-                      alt="Fresh result"
+                    <MediaThumb
+                      item={freshResultDescriptor!}
+                      variant="icon"
+                      onActivate={() => setResultOpen(true)}
                       className="h-9 w-9 shrink-0 rounded border object-cover"
                     />
                     <div className="min-w-0 flex-1">
@@ -648,7 +651,7 @@ export function VariantGallery() {
                       </p>
                     </div>
                     <CheckCircle2 className="h-4 w-4 shrink-0 text-green-500" />
-                  </button>
+                  </div>
                 )}
                 {/* Single active/most-recent video job */}
                 {activeJob && (

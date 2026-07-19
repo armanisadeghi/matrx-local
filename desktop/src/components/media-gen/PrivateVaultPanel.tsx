@@ -36,6 +36,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { MediaLibraryItem, MediaVaultOpResult } from "@/lib/api";
@@ -275,12 +276,11 @@ export function VaultCreateFlow({
       </div>
 
       <label className="flex items-start gap-2 text-xs cursor-pointer select-none">
-        <input
-          type="checkbox"
+        <Checkbox
           checked={understood}
-          onChange={(e) => setUnderstood(e.target.checked)}
+          onCheckedChange={(checked) => setUnderstood(checked === true)}
           disabled={busy}
-          className="mt-0.5 accent-violet-600"
+          className="mt-0.5"
         />
         <span>
           I understand that my Private items are protected by this password.

@@ -123,8 +123,8 @@ function formatJson(value: unknown): string {
 }
 
 function levelClassFor(direction: BridgeEvent["direction"]): string {
-  if (direction === "in") return "text-emerald-400";
-  if (direction === "out") return "text-sky-400";
+  if (direction === "in") return "text-emerald-700 dark:text-emerald-400";
+  if (direction === "out") return "text-sky-700 dark:text-sky-400";
   return "text-zinc-400";
 }
 
@@ -582,7 +582,7 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-sm">
-                <Heart className="h-4 w-4 text-rose-400" />
+                <Heart className="h-4 w-4 text-rose-700 dark:text-rose-400" />
                 Engine self-check
               </CardTitle>
             </CardHeader>
@@ -687,7 +687,7 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-sm">
-                <Plug className="h-4 w-4 text-emerald-400" />
+                <Plug className="h-4 w-4 text-emerald-700 dark:text-emerald-400" />
                 Live extension sessions
                 <Badge variant="secondary" className="ml-1 text-[10px]">
                   {sessions.length}
@@ -721,7 +721,7 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
               </div>
 
               {sessionsError && (
-                <div className="flex items-center gap-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                <div className="flex items-center gap-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
                   <AlertCircle className="h-3.5 w-3.5" />
                   {sessionsError}
                 </div>
@@ -804,7 +804,7 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-sm">
-                <Send className="h-4 w-4 text-sky-400" />
+                <Send className="h-4 w-4 text-sky-700 dark:text-sky-400" />
                 Invoke extension tool
               </CardTitle>
             </CardHeader>
@@ -868,7 +868,7 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
                   placeholder="{}"
                 />
                 {invokeArgsError && (
-                  <p className="text-xs text-red-400">{invokeArgsError}</p>
+                  <p className="text-xs text-red-700 dark:text-red-400">{invokeArgsError}</p>
                 )}
               </div>
 
@@ -903,9 +903,9 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-2 text-xs">
                     {invokeResult.ok ? (
-                      <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      <Check className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />
                     ) : (
-                      <X className="h-3.5 w-3.5 text-red-400" />
+                      <X className="h-3.5 w-3.5 text-red-700 dark:text-red-400" />
                     )}
                     <span className="text-muted-foreground">
                       Engine RPC {invokeResult.ok ? "succeeded" : "failed"}
@@ -923,7 +923,7 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-sm">
-                <Radio className="h-4 w-4 text-amber-400" />
+                <Radio className="h-4 w-4 text-amber-700 dark:text-amber-400" />
                 Broadcast plumb
                 {broadcastStatus?.enabled ? (
                   <Badge variant="default" className="text-[10px]">
@@ -957,7 +957,7 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
               </div>
 
               {!broadcastStatus?.enabled && (
-                <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-300">
+                <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-700 dark:text-amber-300">
                   Broadcast plumb is OFF. Toggle "Enable Broadcast plumb" under
                   Settings → Remote Access → Extension Bridge to enable
                   cross-machine fallback.
@@ -966,7 +966,7 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
 
               {broadcastError && (
                 <div
-                  className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-red-300"
+                  className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-red-700 dark:text-red-300"
                   role="alert"
                 >
                   Broadcast test failed: {broadcastError}
@@ -1007,9 +1007,9 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
                 <div className="rounded border bg-muted/40 px-3 py-2">
                   <div className="flex items-center gap-2">
                     {broadcastResult.sent ? (
-                      <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      <Check className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />
                     ) : (
-                      <X className="h-3.5 w-3.5 text-amber-400" />
+                      <X className="h-3.5 w-3.5 text-amber-700 dark:text-amber-400" />
                     )}
                     <span>
                       {broadcastResult.sent
@@ -1028,7 +1028,7 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-sm">
-                <ActivityIcon className="h-4 w-4 text-cyan-400" />
+                <ActivityIcon className="h-4 w-4 text-cyan-700 dark:text-cyan-400" />
                 Live event log
                 {logConnected ? (
                   <Badge variant="default" className="text-[10px]">
@@ -1140,9 +1140,9 @@ function RpcResultCard({
         <span className="font-medium">{label}</span>
         {result &&
           (result.ok ? (
-            <Check className="h-3 w-3 text-emerald-400" />
+            <Check className="h-3 w-3 text-emerald-700 dark:text-emerald-400" />
           ) : (
-            <X className="h-3 w-3 text-red-400" />
+            <X className="h-3 w-3 text-red-700 dark:text-red-400" />
           ))}
       </div>
       {result ? (
@@ -1197,7 +1197,7 @@ function PairingSection({ isEngineReady }: { isEngineReady: boolean }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 text-xs font-medium">
-        <ShieldCheck className="h-3.5 w-3.5 text-sky-400" />
+        <ShieldCheck className="h-3.5 w-3.5 text-sky-700 dark:text-sky-400" />
         Extension pairing
       </div>
       <p className="text-xs text-muted-foreground">
@@ -1231,7 +1231,7 @@ function PairingSection({ isEngineReady }: { isEngineReady: boolean }) {
             onClick={copyToken}
           >
             {copied ? (
-              <Check className="mr-2 h-3.5 w-3.5 text-emerald-400" />
+              <Check className="mr-2 h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />
             ) : null}
             {copied ? "Copied" : "Copy"}
           </Button>
@@ -1340,7 +1340,7 @@ function MetricsSection({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm">
-          <Gauge className="h-4 w-4 text-amber-300" />
+          <Gauge className="h-4 w-4 text-amber-700 dark:text-amber-300" />
           <span className="font-medium">Request metrics</span>
           <Badge variant="secondary" className="text-[10px]">
             {rows.length} commands
@@ -1386,14 +1386,14 @@ function MetricsSection({
       </p>
 
       {error && (
-        <div className="flex items-center gap-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+        <div className="flex items-center gap-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
           <AlertCircle className="h-3.5 w-3.5" />
           {error}
         </div>
       )}
 
       {overflow && (
-        <div className="flex items-center gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+        <div className="flex items-center gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
           <AlertCircle className="h-3.5 w-3.5" />
           Distinct-command cap reached. Newer command names are being dropped
           from metrics ({overflow.count} skipped). Reset to recover.
@@ -1433,7 +1433,7 @@ function MetricsSection({
                   <td
                     className={cn(
                       "px-3 py-2 text-right tabular-nums",
-                      r.errorCount > 0 && "text-red-400",
+                      r.errorCount > 0 && "text-red-700 dark:text-red-400",
                     )}
                   >
                     {r.errorCount}
@@ -1489,7 +1489,7 @@ function CapabilitiesCard({
           <span className="font-medium text-muted-foreground">
             Capabilities
           </span>
-          <X className="h-3 w-3 text-red-400" />
+          <X className="h-3 w-3 text-red-700 dark:text-red-400" />
         </div>
         <pre className="overflow-auto font-mono text-[10px]">
           {formatJson(result.error ?? result)}
@@ -1501,7 +1501,7 @@ function CapabilitiesCard({
     <div className="rounded border bg-muted/30 p-2 text-xs">
       <div className="mb-1 flex items-center gap-1.5">
         <span className="font-medium text-muted-foreground">Capabilities</span>
-        <Check className="h-3 w-3 text-emerald-400" />
+        <Check className="h-3 w-3 text-emerald-700 dark:text-emerald-400" />
         <Badge variant="outline" className="ml-auto text-[10px]">
           {count ?? "?"} tools
         </Badge>
@@ -1550,7 +1550,7 @@ function TunnelStatusSection({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <Cloud className="h-3.5 w-3.5 text-violet-400" />
+          <Cloud className="h-3.5 w-3.5 text-violet-700 dark:text-violet-400" />
           Tunnel status
           {status &&
             (status.active ? (
@@ -1577,7 +1577,7 @@ function TunnelStatusSection({
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+        <div className="flex items-center gap-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
           <AlertCircle className="h-3.5 w-3.5" />
           {error}
         </div>
@@ -1643,7 +1643,7 @@ function TunnelStatusSection({
               )}
             </div>
             {showRepairHint ? (
-              <div className="mt-1 flex items-start gap-1.5 text-[11px] text-amber-300">
+              <div className="mt-1 flex items-start gap-1.5 text-[11px] text-amber-700 dark:text-amber-300">
                 <AlertCircle className="mt-0.5 h-3 w-3 flex-shrink-0" />
                 <span>
                   Engine prefers tunnel — the extension may need to be re-paired
@@ -1686,9 +1686,9 @@ interface BootCheckSectionProps {
 }
 
 function bootCheckStatusClass(status: "ok" | "warn" | "fail"): string {
-  if (status === "ok") return "bg-emerald-500/15 text-emerald-300";
-  if (status === "warn") return "bg-amber-500/15 text-amber-300";
-  return "bg-red-500/15 text-red-300";
+  if (status === "ok") return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
+  if (status === "warn") return "bg-amber-500/15 text-amber-700 dark:text-amber-300";
+  return "bg-red-500/15 text-red-700 dark:text-red-300";
 }
 
 function formatBootCheckTimestamp(unixSec: number): string {
@@ -1719,7 +1719,7 @@ function BootCheckSection({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm">
-          <ShieldCheck className="h-4 w-4 text-sky-300" />
+          <ShieldCheck className="h-4 w-4 text-sky-700 dark:text-sky-300" />
           <span className="font-medium">Boot self-check</span>
           {hasChecks && (
             <Badge variant={overallBadgeVariant} className="text-[10px]">
@@ -1763,7 +1763,7 @@ function BootCheckSection({
       </p>
 
       {error && (
-        <div className="flex items-center gap-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+        <div className="flex items-center gap-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
           <AlertCircle className="h-3.5 w-3.5" />
           {error}
         </div>

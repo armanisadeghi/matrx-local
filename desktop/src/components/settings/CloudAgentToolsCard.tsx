@@ -142,7 +142,7 @@ export function CloudAgentToolsCard({
           refused with a clear error instead of executing.
         </p>
         {loadError && (
-          <p className="text-xs text-red-400">
+          <p className="text-xs text-red-700 dark:text-red-400">
             Could not reach the engine: {loadError}
           </p>
         )}

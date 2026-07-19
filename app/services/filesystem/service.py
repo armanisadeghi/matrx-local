@@ -7,6 +7,7 @@ from collections import deque
 import importlib.util
 import logging
 import os
+import sqlite3
 import time
 import threading
 from array import array
@@ -326,7 +327,7 @@ class FilesystemService:
                 disk_roots = await asyncio.to_thread(self.index.pending_root_paths)
             disk_search = asyncio.wait_for(
                 asyncio.to_thread(
-                    self._bounded_disk_find,
+                    self._bounded_disk_find_snapshot,
                     clean,
                     resolved_root,
                     snapshot_limit,
@@ -335,7 +336,9 @@ class FilesystemService:
                 ),
                 timeout=min(max(timeout_seconds + 0.25, 0.25), 10.25),
             )
-            indexed_entries, disk_entries = await asyncio.gather(index_search, disk_search)
+            indexed_entries, (disk_entries, disk_truncated) = await asyncio.gather(
+                index_search, disk_search
+            )
             by_path = {entry.path: entry for entry in indexed_entries}
             for entry in disk_entries:
                 by_path.setdefault(entry.path, entry)
@@ -356,9 +359,9 @@ class FilesystemService:
             source = "index"
             index_complete = True
             if not candidates:
-                candidates = await asyncio.wait_for(
+                candidates, disk_truncated = await asyncio.wait_for(
                     asyncio.to_thread(
-                        self._bounded_disk_find,
+                        self._bounded_disk_find_snapshot,
                         clean,
                         resolved_root,
                         snapshot_limit,
@@ -367,6 +370,8 @@ class FilesystemService:
                     timeout=min(max(timeout_seconds + 0.25, 0.25), 10.25),
                 )
                 source = "disk"
+            else:
+                disk_truncated = False
         candidates.sort(
             key=lambda entry: (
                 len(Path(entry.path).parts),
@@ -382,7 +387,9 @@ class FilesystemService:
             entries=tuple(candidates),
             source=source,
             index_complete=index_complete,
-            truncated=len(candidates) > MAX_SEARCH_SNAPSHOT_ENTRIES,
+            truncated=(
+                len(candidates) > MAX_SEARCH_SNAPSHOT_ENTRIES or disk_truncated
+            ),
         )
         return SearchPage(
             clean,
@@ -428,6 +435,19 @@ class FilesystemService:
         timeout_seconds: float,
         roots: list[str] | None = None,
     ) -> list[FileEntry]:
+        entries, _truncated = self._bounded_disk_find_snapshot(
+            query, root, limit, timeout_seconds, roots
+        )
+        return entries
+
+    def _bounded_disk_find_snapshot(
+        self,
+        query: str,
+        root: str | None,
+        limit: int,
+        timeout_seconds: float,
+        roots: list[str] | None = None,
+    ) -> tuple[list[FileEntry], bool]:
         deadline = time.monotonic() + min(max(timeout_seconds, 0.1), 5.0)
         needle = query.casefold()
         candidates = roots or ([root] if root else [place.path for place in self._places if place.available])
@@ -435,6 +455,7 @@ class FilesystemService:
         seen: set[str] = set()
         results: list[FileEntry] = []
         visited = 0
+        stopped_with_unread_entries = False
         while queue and len(results) < limit and time.monotonic() < deadline and visited < 50_000:
             directory = queue.popleft()
             normalized = os.path.normcase(os.path.abspath(directory))
@@ -451,6 +472,7 @@ class FilesystemService:
                     if needle in os.path.abspath(item.path).casefold():
                         results.append(FileEntry.from_dir_entry(item))
                         if len(results) >= limit:
+                            stopped_with_unread_entries = True
                             break
                     try:
                         is_dir = item.is_dir(follow_symlinks=False)
@@ -459,8 +481,15 @@ class FilesystemService:
                     if is_dir and not _should_skip_directory(item.name):
                         queue.append(item.path)
                     if visited >= 50_000 or time.monotonic() >= deadline:
+                        stopped_with_unread_entries = True
                         break
-        return results
+        truncated = (
+            stopped_with_unread_entries
+            or bool(queue)
+            or visited >= 50_000
+            or time.monotonic() >= deadline
+        )
+        return results, truncated
 
     async def status(self) -> dict[str, object]:
         entries, scan, enrichment = await asyncio.gather(
@@ -529,6 +558,7 @@ class FilesystemService:
     async def _crawl_loop(self) -> None:
         while not self._stop.is_set():
             item: tuple[str, str, int, int, str] | None = None
+            pruned = 0
             try:
                 if bool(_indexing_settings()["paused"]):
                     await asyncio.sleep(2.0)
@@ -540,6 +570,9 @@ class FilesystemService:
                     continue
                 self._crawl_iterations += 1
                 async with self._maintenance_lock:
+                    pruned = await asyncio.to_thread(
+                        self.index.prune_orphaned_entries
+                    )
                     item = await asyncio.to_thread(
                         self.index.pop_next_directory,
                         fair=self._crawl_iterations % 5 == 0,
@@ -558,7 +591,7 @@ class FilesystemService:
                             self._thread_stop,
                         )
                 if item is None:
-                    await asyncio.sleep(5.0)
+                    await asyncio.sleep(0.05 if pruned else 5.0)
                     continue
                 self._indexed_this_run += count
                 await asyncio.sleep(0.01 if priority >= 80_000 else 0.1)
@@ -665,11 +698,26 @@ class FilesystemService:
                 continue
             worked = False
             if settings["content_enabled"]:
-                candidate = await asyncio.to_thread(
-                    self.index.next_content_candidate,
-                    _TEXT_EXTENSIONS,
-                    int(settings["max_content_bytes"]),
-                )
+                try:
+                    async with self._maintenance_lock:
+                        claim_settings = _indexing_settings()
+                        candidate = (
+                            await asyncio.to_thread(
+                                self.index.next_content_candidate,
+                                _TEXT_EXTENSIONS,
+                                int(claim_settings["max_content_bytes"]),
+                            )
+                            if claim_settings["content_enabled"]
+                            and not claim_settings["paused"]
+                            else None
+                        )
+                except sqlite3.OperationalError as exc:
+                    logger.warning(
+                        "Filesystem content claim deferred after SQLite contention: %s",
+                        exc,
+                    )
+                    await asyncio.sleep(1.0)
+                    continue
                 if candidate:
                     path, modified_at, source_size = candidate
                     try:
@@ -718,23 +766,40 @@ class FilesystemService:
                     worked = True
 
             if settings["semantic_enabled"] and importlib.util.find_spec("fastembed") is not None:
-                candidate = await asyncio.to_thread(
-                    self.index.next_embedding_candidate,
-                    str(settings["embedding_model"]),
-                    int(settings["max_embedding_entries"]),
-                )
+                claimed_model = str(settings["embedding_model"])
+                try:
+                    async with self._maintenance_lock:
+                        claim_settings = _indexing_settings()
+                        claimed_model = str(claim_settings["embedding_model"])
+                        candidate = (
+                            await asyncio.to_thread(
+                                self.index.next_embedding_candidate,
+                                claimed_model,
+                                int(claim_settings["max_embedding_entries"]),
+                            )
+                            if claim_settings["semantic_enabled"]
+                            and not claim_settings["paused"]
+                            else None
+                        )
+                except sqlite3.OperationalError as exc:
+                    logger.warning(
+                        "Filesystem embedding claim deferred after SQLite contention: %s",
+                        exc,
+                    )
+                    await asyncio.sleep(1.0)
+                    continue
                 if candidate:
                     path, content, modified_at, source_size = candidate
                     try:
                         from app.api.openai_compat_routes import _embed_texts
 
                         vectors = await _embed_texts(
-                            (content[:16_000],), str(settings["embedding_model"])
+                            (content[:16_000],), claimed_model
                         )
                         vector = vectors[0]
                         async with self._maintenance_lock:
                             commit_settings = _indexing_settings()
-                            model = str(settings["embedding_model"])
+                            model = claimed_model
                             if (
                                 commit_settings["semantic_enabled"]
                                 and not commit_settings["paused"]
@@ -762,7 +827,7 @@ class FilesystemService:
                         logger.warning("Background embedding failed for %s", path, exc_info=True)
                         async with self._maintenance_lock:
                             commit_settings = _indexing_settings()
-                            model = str(settings["embedding_model"])
+                            model = claimed_model
                             if (
                                 commit_settings["semantic_enabled"]
                                 and not commit_settings["paused"]

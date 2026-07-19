@@ -325,9 +325,6 @@ class FilesystemIndex:
                 for row in db.execute("SELECT id,path FROM filesystem_roots")
             }
             active_ids = [root.id for root in roots]
-            removed_ids = [root_id for root_id in existing_paths if root_id not in active_ids]
-            for root_id in removed_ids:
-                self._delete_path(db, existing_paths[root_id])
             for root in roots:
                 previous_path = existing_paths.get(root.id)
                 if previous_path is None or previous_path == root.path:
@@ -531,8 +528,10 @@ class FilesystemIndex:
                    size=excluded.size,modified_at=excluded.modified_at,
                    hidden=excluded.hidden,extension=excluded.extension,indexed_at=excluded.indexed_at,
                    content_state=CASE WHEN filesystem_entries.modified_at IS NOT excluded.modified_at
+                                          OR filesystem_entries.size<>excluded.size
                      THEN 'not_indexed' ELSE filesystem_entries.content_state END,
                    embedding_state=CASE WHEN filesystem_entries.modified_at IS NOT excluded.modified_at
+                                            OR filesystem_entries.size<>excluded.size
                      THEN 'not_indexed' ELSE filesystem_entries.embedding_state END
                    WHERE filesystem_entries.indexed_at <= excluded.indexed_at""",
                 rows,
@@ -715,8 +714,10 @@ class FilesystemIndex:
                    modified_at=excluded.modified_at,hidden=excluded.hidden,
                    extension=excluded.extension,indexed_at=excluded.indexed_at,
                    content_state=CASE WHEN filesystem_entries.modified_at IS NOT excluded.modified_at
+                                          OR filesystem_entries.size<>excluded.size
                      THEN 'not_indexed' ELSE filesystem_entries.content_state END,
                    embedding_state=CASE WHEN filesystem_entries.modified_at IS NOT excluded.modified_at
+                                            OR filesystem_entries.size<>excluded.size
                      THEN 'not_indexed' ELSE filesystem_entries.embedding_state END""",
                 (
                     absolute, _path_key(absolute), os.path.dirname(absolute),
@@ -849,13 +850,15 @@ class FilesystemIndex:
                 sql = (
                     root_cte + "SELECT e.* FROM filesystem_entries_fts f "
                     "JOIN filesystem_entries e ON e.rowid=f.rowid "
+                    "JOIN filesystem_roots r ON r.id=e.root_id "
                     + root_join + "WHERE filesystem_entries_fts MATCH ?" +
                     " ORDER BY bm25(filesystem_entries_fts), length(e.path) LIMIT ? OFFSET ?"
                 )
                 params = [*params_root, _fts_query(query), limit, offset]
             else:
                 sql = (
-                    root_cte + "SELECT e.* FROM filesystem_entries e " + root_join + "WHERE "
+                    root_cte + "SELECT e.* FROM filesystem_entries e "
+                    "JOIN filesystem_roots r ON r.id=e.root_id " + root_join + "WHERE "
                     "(e.name LIKE ? ESCAPE '\\' COLLATE NOCASE OR "
                     "e.path LIKE ? ESCAPE '\\' COLLATE NOCASE) "
                     "ORDER BY length(e.path),e.name COLLATE NOCASE LIMIT ? OFFSET ?"
@@ -1038,8 +1041,49 @@ class FilesystemIndex:
 
     def entry_count(self) -> int:
         with self._connect() as db:
-            row = db.execute("SELECT COUNT(*) AS count FROM filesystem_entries").fetchone()
+            row = db.execute(
+                """SELECT COUNT(*) AS count FROM filesystem_entries e
+                   JOIN filesystem_roots r ON r.id=e.root_id"""
+            ).fetchone()
             return int(row["count"])
+
+    def prune_orphaned_entries(self, *, limit: int = 250) -> int:
+        """Incrementally reclaim rows whose discovered volume disappeared.
+
+        Root synchronization only needs to remove the authority row to make
+        stale results invisible. Physical cleanup stays bounded here so a
+        large detached or formerly aliased volume cannot stall startup.
+        """
+        bounded_limit = min(max(1, limit), 5_000)
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                """SELECT e.path,e.path_key FROM filesystem_entries e
+                   LEFT JOIN filesystem_roots r ON r.id=e.root_id
+                   WHERE r.id IS NULL ORDER BY e.indexed_at LIMIT ?""",
+                (bounded_limit,),
+            ).fetchall()
+            if not rows:
+                return 0
+            paths = [(str(row["path"]),) for row in rows]
+            keys = [(str(row["path_key"]),) for row in rows]
+            if self.fts_available:
+                db.executemany(
+                    "DELETE FROM filesystem_content_fts WHERE path=?", paths
+                )
+            db.executemany(
+                "DELETE FROM filesystem_content WHERE path_key=?", keys
+            )
+            db.executemany(
+                "DELETE FROM filesystem_embeddings WHERE path_key=?", keys
+            )
+            db.executemany(
+                "DELETE FROM filesystem_enrichment_failures WHERE path_key=?", keys
+            )
+            db.executemany(
+                "DELETE FROM filesystem_entries WHERE path_key=?", keys
+            )
+            return len(rows)
 
     def next_content_candidate(
         self, extensions: tuple[str, ...], max_content_bytes: int
@@ -1050,13 +1094,17 @@ class FilesystemIndex:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             used = db.execute(
-                "SELECT COALESCE(SUM(length(CAST(content AS BLOB))),0) AS bytes FROM filesystem_content"
+                """SELECT COALESCE(SUM(length(CAST(c.content AS BLOB))),0) AS bytes
+                   FROM filesystem_content c
+                   JOIN filesystem_entries e ON e.path_key=c.path_key
+                   JOIN filesystem_roots r ON r.id=e.root_id"""
             ).fetchone()
             if int(used["bytes"]) >= max_content_bytes:
                 return None
             remaining = max_content_bytes - int(used["bytes"])
             row = db.execute(
                 f"""SELECT e.path,e.modified_at,e.size FROM filesystem_entries e
+                    JOIN filesystem_roots r ON r.id=e.root_id
                     LEFT JOIN filesystem_enrichment_failures f
                       ON f.path_key=e.path_key AND f.kind='content'
                     WHERE e.kind='file'
@@ -1109,7 +1157,10 @@ class FilesystemIndex:
                 or int(current["size"]) != source_size
             ):
                 db.execute(
-                    "UPDATE filesystem_entries SET content_state='not_indexed' WHERE path_key=?", (key,)
+                    """UPDATE filesystem_entries SET content_state='not_indexed'
+                       WHERE path_key=? AND content_state='indexing'
+                       AND modified_at IS ? AND size=?""",
+                    (key, source_modified_at, source_size),
                 )
                 return False
             old = db.execute(
@@ -1117,7 +1168,10 @@ class FilesystemIndex:
                 (key,),
             ).fetchone()
             used = db.execute(
-                "SELECT COALESCE(SUM(length(CAST(content AS BLOB))),0) AS bytes FROM filesystem_content"
+                """SELECT COALESCE(SUM(length(CAST(c.content AS BLOB))),0) AS bytes
+                   FROM filesystem_content c
+                   JOIN filesystem_entries e ON e.path_key=c.path_key
+                   JOIN filesystem_roots r ON r.id=e.root_id"""
             ).fetchone()
             projected = int(used["bytes"]) - (int(old["bytes"]) if old else 0) + len(content.encode("utf-8"))
             if projected > max_content_bytes:
@@ -1252,17 +1306,25 @@ class FilesystemIndex:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             count = db.execute(
-                "SELECT COUNT(*) AS count FROM filesystem_embeddings WHERE model=?", (model,)
+                """SELECT COUNT(*) AS count FROM filesystem_embeddings v
+                   JOIN filesystem_entries e ON e.path_key=v.path_key
+                   JOIN filesystem_roots r ON r.id=e.root_id
+                   WHERE v.model=?""",
+                (model,),
             ).fetchone()
             if int(count["count"]) >= max_entries:
                 return None
             row = db.execute(
                 """SELECT e.path,c.content,c.source_modified_at,c.source_size FROM filesystem_entries e
+                   JOIN filesystem_roots r ON r.id=e.root_id
                    JOIN filesystem_content c ON c.path_key=e.path_key
                    LEFT JOIN filesystem_embeddings v ON v.path_key=e.path_key AND v.model=?
                    LEFT JOIN filesystem_enrichment_failures f
                      ON f.path_key=e.path_key AND f.kind='embedding'
-                   WHERE (
+                   WHERE e.content_state='indexed'
+                   AND c.source_modified_at IS e.modified_at
+                   AND c.source_size=e.size
+                   AND (
                      e.embedding_state='not_indexed'
                      OR (e.embedding_state='indexed' AND v.path IS NULL)
                      OR (e.embedding_state='unavailable' AND (
@@ -1307,7 +1369,10 @@ class FilesystemIndex:
                 or int(current["size"]) != source_size
             ):
                 db.execute(
-                    "UPDATE filesystem_entries SET embedding_state='not_indexed' WHERE path_key=?", (key,)
+                    """UPDATE filesystem_entries SET embedding_state='not_indexed'
+                       WHERE path_key=? AND embedding_state='indexing'
+                       AND modified_at IS ? AND size=?""",
+                    (key, source_modified_at, source_size),
                 )
                 return False
             existing = db.execute(
@@ -1316,7 +1381,10 @@ class FilesystemIndex:
             ).fetchone()
             if existing is None and max_entries is not None:
                 count = db.execute(
-                    "SELECT COUNT(*) AS count FROM filesystem_embeddings WHERE model=?",
+                    """SELECT COUNT(*) AS count FROM filesystem_embeddings v
+                       JOIN filesystem_entries e ON e.path_key=v.path_key
+                       JOIN filesystem_roots r ON r.id=e.root_id
+                       WHERE v.model=?""",
                     (model,),
                 ).fetchone()
                 if int(count["count"]) >= max(0, max_entries):
@@ -1359,16 +1427,29 @@ class FilesystemIndex:
 
     def enrichment_counts(self) -> dict[str, int]:
         with self._connect() as db:
-            content = db.execute("SELECT COUNT(*) AS count FROM filesystem_content").fetchone()
-            embeddings = db.execute("SELECT COUNT(*) AS count FROM filesystem_embeddings").fetchone()
+            content = db.execute(
+                """SELECT COUNT(*) AS count FROM filesystem_content c
+                   JOIN filesystem_entries e ON e.path_key=c.path_key
+                   JOIN filesystem_roots r ON r.id=e.root_id"""
+            ).fetchone()
+            embeddings = db.execute(
+                """SELECT COUNT(*) AS count FROM filesystem_embeddings v
+                   JOIN filesystem_entries e ON e.path_key=v.path_key
+                   JOIN filesystem_roots r ON r.id=e.root_id"""
+            ).fetchone()
             content_bytes = db.execute(
-                "SELECT COALESCE(SUM(length(CAST(content AS BLOB))),0) AS bytes FROM filesystem_content"
+                """SELECT COALESCE(SUM(length(CAST(c.content AS BLOB))),0) AS bytes
+                   FROM filesystem_content c
+                   JOIN filesystem_entries e ON e.path_key=c.path_key
+                   JOIN filesystem_roots r ON r.id=e.root_id"""
             ).fetchone()
             failures = db.execute(
                 """SELECT
-                     SUM(CASE WHEN kind='content' THEN 1 ELSE 0 END) AS content_failures,
-                     SUM(CASE WHEN kind='embedding' THEN 1 ELSE 0 END) AS embedding_failures
-                   FROM filesystem_enrichment_failures"""
+                     SUM(CASE WHEN f.kind='content' THEN 1 ELSE 0 END) AS content_failures,
+                     SUM(CASE WHEN f.kind='embedding' THEN 1 ELSE 0 END) AS embedding_failures
+                   FROM filesystem_enrichment_failures f
+                   JOIN filesystem_entries e ON e.path_key=f.path_key
+                   JOIN filesystem_roots r ON r.id=e.root_id"""
             ).fetchone()
         return {
             "content_entries": int(content["count"]),
@@ -1384,8 +1465,16 @@ class FilesystemIndex:
             return []
         with self._connect() as db:
             rows = db.execute(
-                """SELECT path,snippet(filesystem_content_fts,1,'[',']',' … ',24) AS snippet
-                   FROM filesystem_content_fts WHERE filesystem_content_fts MATCH ?
+                """SELECT c.path,
+                          snippet(filesystem_content_fts,1,'[',']',' … ',24) AS snippet
+                   FROM filesystem_content_fts
+                   JOIN filesystem_content c ON c.path=filesystem_content_fts.path
+                   JOIN filesystem_entries e ON e.path_key=c.path_key
+                   JOIN filesystem_roots r ON r.id=e.root_id
+                   WHERE filesystem_content_fts MATCH ?
+                   AND e.content_state='indexed'
+                   AND c.source_modified_at IS e.modified_at
+                   AND c.source_size=e.size
                    ORDER BY bm25(filesystem_content_fts) LIMIT ?""",
                 (expression, min(max(1, limit), 200)),
             ).fetchall()
@@ -1410,7 +1499,11 @@ class FilesystemIndex:
                           e.hidden,e.extension,e.name
                    FROM filesystem_embeddings v
                    JOIN filesystem_entries e ON e.path_key=v.path_key
+                   JOIN filesystem_roots r ON r.id=e.root_id
                    WHERE v.model=? AND v.dimensions=?
+                   AND e.embedding_state='indexed'
+                   AND v.source_modified_at IS e.modified_at
+                   AND v.source_size=e.size
                    ORDER BY v.indexed_at DESC LIMIT ?""",
                 (model, len(query_vector), min(max(1, max_scan), 50_000)),
             ).fetchall()

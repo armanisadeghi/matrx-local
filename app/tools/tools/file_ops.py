@@ -380,25 +380,7 @@ def _replace_from_staged_copy(source: str, destination: str, *, remove_source: b
 # a remote agent's mistake must be recoverable from the OS trash.
 
 
-async def tool_move(
-    session: ToolSession,
-    source: str,
-    destination: str,
-    overwrite: bool = False,
-) -> ToolResult:
-    src = session.resolve_path(source)
-    dst = session.resolve_path(destination)
-
-    if not os.path.exists(src):
-        return ToolResult(type=ToolResultType.ERROR, output=f"Source not found: {src}")
-
-    # A pointer source must carry its real bytes with the move — hydrate first.
-    from app.services.file_sync.hydration import ensure_tree_hydrated
-
-    hydrate_error = await ensure_tree_hydrated(src)
-    if hydrate_error:
-        return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
-    # Moving a file INTO an existing directory keeps its basename.
+def _move_hydrated(src: str, dst: str, overwrite: bool) -> ToolResult:
     if os.path.isdir(dst) and not os.path.isdir(src):
         dst = os.path.join(dst, os.path.basename(src))
     if os.path.abspath(dst) == os.path.abspath(src):
@@ -411,9 +393,11 @@ async def tool_move(
             )
         try:
             warning = _replace_from_staged_copy(src, dst, remove_source=True)
-        except OSError as e:
-            _note_io(dst, Capability.REPLACE, e)
-            return _io_error_result(path=dst, operation="replace", prefix="Cannot move", exc=e)
+        except OSError as exc:
+            _note_io(dst, Capability.REPLACE, exc)
+            return _io_error_result(
+                path=dst, operation="replace", prefix="Cannot move", exc=exc
+            )
         _note_io(dst, Capability.REPLACE)
         output = f"Moved {src} → {dst}"
         if warning:
@@ -422,16 +406,86 @@ async def tool_move(
             output=output,
             metadata={"source": src, "destination": dst, "warning": warning},
         )
-
     try:
         os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
         shutil.move(src, dst)
-    except OSError as e:
-        _note_io(dst, Capability.REPLACE, e)
-        return _io_error_result(path=dst, operation="move", prefix="Cannot move", exc=e)
+    except OSError as exc:
+        _note_io(dst, Capability.REPLACE, exc)
+        return _io_error_result(
+            path=dst, operation="move", prefix="Cannot move", exc=exc
+        )
     _note_io(dst, Capability.REPLACE)
+    return ToolResult(
+        output=f"Moved {src} → {dst}",
+        metadata={"source": src, "destination": dst},
+    )
 
-    return ToolResult(output=f"Moved {src} → {dst}", metadata={"source": src, "destination": dst})
+
+def _copy_hydrated(src: str, dst: str, overwrite: bool) -> ToolResult:
+    if os.path.isdir(dst) and not os.path.isdir(src):
+        dst = os.path.join(dst, os.path.basename(src))
+    if os.path.abspath(dst) == os.path.abspath(src):
+        return ToolResult(type=ToolResultType.ERROR, output="Source and destination are the same path.")
+    if os.path.exists(dst):
+        if not overwrite:
+            return ToolResult(
+                type=ToolResultType.ERROR,
+                output=f"Destination already exists: {dst}. Pass overwrite=true to replace it.",
+            )
+        try:
+            warning = _replace_from_staged_copy(src, dst, remove_source=False)
+        except OSError as exc:
+            _note_io(dst, Capability.REPLACE, exc)
+            return _io_error_result(
+                path=dst, operation="replace", prefix="Cannot copy", exc=exc
+            )
+        _note_io(dst, Capability.REPLACE)
+        output = f"Copied {src} → {dst}"
+        if warning:
+            output += f"\nWarning: {warning}"
+        return ToolResult(
+            output=output,
+            metadata={"source": src, "destination": dst, "warning": warning},
+        )
+    try:
+        os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+    except OSError as exc:
+        _note_io(dst, Capability.WRITE, exc)
+        return _io_error_result(
+            path=dst, operation="write", prefix="Cannot copy", exc=exc
+        )
+    _note_io(dst, Capability.WRITE)
+    return ToolResult(
+        output=f"Copied {src} → {dst}",
+        metadata={"source": src, "destination": dst},
+    )
+
+
+async def tool_move(
+    session: ToolSession,
+    source: str,
+    destination: str,
+    overwrite: bool = False,
+) -> ToolResult:
+    src = session.resolve_path(source)
+    dst = session.resolve_path(destination)
+
+    if not os.path.exists(src):
+        return ToolResult(type=ToolResultType.ERROR, output=f"Source not found: {src}")
+
+    from app.services.file_sync.hydration import run_tree_operation_hydrated
+
+    result, hydrate_error = await run_tree_operation_hydrated(
+        src, lambda: _move_hydrated(src, dst, overwrite)
+    )
+    if hydrate_error:
+        return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
+    assert result is not None
+    return result
 
 
 async def tool_copy(
@@ -446,48 +500,15 @@ async def tool_copy(
     if not os.path.exists(src):
         return ToolResult(type=ToolResultType.ERROR, output=f"Source not found: {src}")
 
-    # Copying a pointer must copy the real bytes, not the placeholder.
-    from app.services.file_sync.hydration import ensure_tree_hydrated
+    from app.services.file_sync.hydration import run_tree_operation_hydrated
 
-    hydrate_error = await ensure_tree_hydrated(src)
+    result, hydrate_error = await run_tree_operation_hydrated(
+        src, lambda: _copy_hydrated(src, dst, overwrite)
+    )
     if hydrate_error:
         return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
-    if os.path.isdir(dst) and not os.path.isdir(src):
-        dst = os.path.join(dst, os.path.basename(src))
-    if os.path.abspath(dst) == os.path.abspath(src):
-        return ToolResult(type=ToolResultType.ERROR, output="Source and destination are the same path.")
-    if os.path.exists(dst):
-        if not overwrite:
-            return ToolResult(
-                type=ToolResultType.ERROR,
-                output=f"Destination already exists: {dst}. Pass overwrite=true to replace it.",
-            )
-        try:
-            warning = _replace_from_staged_copy(src, dst, remove_source=False)
-        except OSError as e:
-            _note_io(dst, Capability.REPLACE, e)
-            return _io_error_result(path=dst, operation="replace", prefix="Cannot copy", exc=e)
-        _note_io(dst, Capability.REPLACE)
-        output = f"Copied {src} → {dst}"
-        if warning:
-            output += f"\nWarning: {warning}"
-        return ToolResult(
-            output=output,
-            metadata={"source": src, "destination": dst, "warning": warning},
-        )
-
-    try:
-        os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-        if os.path.isdir(src):
-            shutil.copytree(src, dst)
-        else:
-            shutil.copy2(src, dst)
-    except OSError as e:
-        _note_io(dst, Capability.WRITE, e)
-        return _io_error_result(path=dst, operation="write", prefix="Cannot copy", exc=e)
-    _note_io(dst, Capability.WRITE)
-
-    return ToolResult(output=f"Copied {src} → {dst}", metadata={"source": src, "destination": dst})
+    assert result is not None
+    return result
 
 
 async def tool_delete(

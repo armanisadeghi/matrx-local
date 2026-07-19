@@ -77,7 +77,7 @@ record_ok()   { echo "## ✅ $1" >> "$SUMMARY"; echo >> "$SUMMARY"; ok "$1"; }
 # Lines that mean "this build is broken". Kept deliberately tight: a smoke
 # signal nobody trusts is a smoke signal nobody reads. Add a pattern here the
 # moment a real startup failure slips through with a distinctive line.
-FATAL_PATTERNS='panicked at|Traceback \(most recent call last\)|Something went wrong|may be used only in the context of|ended unexpectedly|Uncaught (TypeError|ReferenceError|Error)|ModuleNotFoundError|ImportError|PackageNotFoundError|No package metadata was found|Address already in use|\[launcher\] [a-z-]+ → failed'
+FATAL_PATTERNS='panicked at|Traceback \(most recent call last\)|Something went wrong|may be used only in the context of|ended unexpectedly|Uncaught (TypeError|ReferenceError|Error)|ModuleNotFoundError|ImportError|PackageNotFoundError|No package metadata was found|Address already in use|\[launcher\] [a-z-]+ → failed|\[sigterm_then_kill\].*did NOT exit.*SIGKILL'
 # Noise that is expected on a dev machine and is NOT a build defect.
 BENIGN_PATTERNS='DeprecationWarning|urllib3|NotOpenSSLWarning|ExperimentalWarning'
 
@@ -365,10 +365,13 @@ run_packaged() {
   info "Quitting the app and checking for orphans…"
   terminate_pid "$pid"
   local t=0
-  while pid_alive "$pid" && [ $t -lt 20 ]; do sleep 1; t=$((t + 1)); done
+  # graceful_shutdown_sync contains a 20-second engine TERM→KILL ladder and
+  # the detached ownership safety net completes at T+26s. Allow both contracts
+  # to finish, with headroom for Whisper/LLM teardown, before declaring a hang.
+  while pid_alive "$pid" && [ $t -lt 40 ]; do sleep 1; t=$((t + 1)); done
   if pid_alive "$pid"; then
     force_kill_pid "$pid"
-    record_fail "packaged: app did not exit within 20s of a graceful quit signal (had to force-kill)"
+    record_fail "packaged: app did not exit within 40s of a graceful quit signal (had to force-kill)"
   else
     record_ok "packaged: app exited cleanly on a graceful quit signal in ${t}s"
   fi

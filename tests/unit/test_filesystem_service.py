@@ -786,6 +786,15 @@ def test_sync_roots_removes_entries_owned_by_disappeared_volume(tmp_path: Path) 
     index.sync_roots([retained_place])
 
     assert index.search("stale", limit=10, offset=0) == []
+    with index._connect() as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM filesystem_entries WHERE root_id='removed'"
+        ).fetchone()[0] == 1
+    assert index.prune_orphaned_entries() == 1
+    with index._connect() as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM filesystem_entries WHERE root_id='removed'"
+        ).fetchone()[0] == 0
 
 
 def test_watcher_resolves_containing_canonical_root(tmp_path: Path) -> None:

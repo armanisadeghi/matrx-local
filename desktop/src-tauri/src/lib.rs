@@ -5,9 +5,12 @@ use tauri::{Emitter, Manager};
 #[cfg(unix)]
 use libc;
 
-/// Global flag: set to true once graceful_shutdown_sync has run.
-/// Prevents the cleanup from running twice (tray quit → ExitRequested both fire).
-static SHUTDOWN_DONE: AtomicBool = AtomicBool::new(false);
+/// Shutdown is single-owner, but later triggers must distinguish "cleanup is
+/// running" from "cleanup completed". Treating STARTED as COMPLETE lets a
+/// second quit request terminate the process while GGML/engine teardown is
+/// still in flight.
+static SHUTDOWN_STARTED: AtomicBool = AtomicBool::new(false);
+static SHUTDOWN_COMPLETE: AtomicBool = AtomicBool::new(false);
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -803,13 +806,17 @@ fn graceful_shutdown_sync(
     wake_word_state: Option<&WakeWordAppState>,
     recording_state: Option<&RecordingState>,
 ) {
-    // Idempotent guard: if already called (e.g. tray quit fires ExitRequested too),
-    // skip the second run to avoid double-kill and spurious lock contention.
-    if SHUTDOWN_DONE.swap(true, Ordering::SeqCst) {
+    // Single-owner guard: if another trigger already owns cleanup (for example,
+    // tray quit followed by ExitRequested), wait for it instead of double-killing
+    // children or letting this caller terminate the process prematurely.
+    if SHUTDOWN_STARTED.swap(true, Ordering::SeqCst) {
         lifecycle_log::log(&format!(
-            "[graceful-shutdown] second trigger ignored (already shutting down): {}",
+            "[graceful-shutdown] duplicate trigger waiting for owner: {}",
             reason
         ));
+        while !SHUTDOWN_COMPLETE.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
         return;
     }
     // `reason` says WHO initiated the shutdown — window close, Cmd+Q, tray
@@ -987,6 +994,8 @@ fn graceful_shutdown_sync(
     //    owns cloudflared (and reclaims/kills any cloudflared orphans during
     //    its own preflight). See kill_orphaned_sidecars() for ownership rules.
     kill_orphaned_sidecars();
+    SHUTDOWN_COMPLETE.store(true, Ordering::SeqCst);
+    lifecycle_log::log("[graceful-shutdown] complete");
 }
 
 /// POST http://127.0.0.1:{port}/admin/shutdown to ask the engine to
@@ -1582,10 +1591,10 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 // stays responsive to macOS's NSApplication watchdog (which sends
                 // SIGKILL if the main thread is unresponsive for ~5-10s).
                 //
-                // If SHUTDOWN_DONE is already true (e.g. the window CloseRequested
-                // handler already started cleanup), we exit immediately instead of
-                // spawning a redundant thread.
-                if SHUTDOWN_DONE.load(Ordering::SeqCst) {
+                // Completed cleanup can exit immediately. If another trigger
+                // currently owns cleanup, the worker below joins it through
+                // graceful_shutdown_sync before requesting exit.
+                if SHUTDOWN_COMPLETE.load(Ordering::SeqCst) {
                     app.exit(0);
                     return;
                 }
@@ -1792,8 +1801,41 @@ pub fn run() {
                         Ok(mut sigterm) => {
                             if sigterm.recv().await.is_some() {
                                 lifecycle_log::log(
-                                    "[signal] SIGTERM received; requesting graceful Tauri exit",
+                                    "[signal] SIGTERM received; running graceful shutdown",
                                 );
+                                let shutdown_handle = handle.clone();
+                                if let Err(error) = tokio::task::spawn_blocking(move || {
+                                    if let (Some(sidecar), Some(transcription), Some(llm_proc)) = (
+                                        shutdown_handle.try_state::<SidecarState>(),
+                                        shutdown_handle.try_state::<TranscriptionState>(),
+                                        shutdown_handle
+                                            .try_state::<llm::commands::LlmProcessHandle>(),
+                                    ) {
+                                        let llm_srv = shutdown_handle
+                                            .try_state::<llm::commands::LlmServerState>();
+                                        let ww = shutdown_handle.try_state::<WakeWordAppState>();
+                                        let rec = shutdown_handle.try_state::<RecordingState>();
+                                        graceful_shutdown_sync(
+                                            "POSIX SIGTERM",
+                                            &sidecar,
+                                            &transcription,
+                                            &llm_proc,
+                                            llm_srv.as_deref(),
+                                            ww.as_deref(),
+                                            rec.as_deref(),
+                                        );
+                                    } else {
+                                        lifecycle_log::log(
+                                            "[signal] managed shutdown state unavailable",
+                                        );
+                                    }
+                                })
+                                .await
+                                {
+                                    lifecycle_log::log(&format!(
+                                        "[signal] graceful shutdown task failed: {error}"
+                                    ));
+                                }
                                 handle.exit(0);
                             }
                         }
@@ -2148,10 +2190,10 @@ pub fn run() {
                     // thread so the main thread stays responsive to the macOS watchdog.
                     // Prevent the close until cleanup is done, then close programmatically.
                     //
-                    // If SHUTDOWN_DONE is already true (tray quit handler beat us here),
-                    // let the close proceed immediately — cleanup is already running.
-                    if SHUTDOWN_DONE.load(Ordering::SeqCst) {
-                        // Cleanup already in progress — let window close naturally.
+                    // Completed cleanup may close naturally. An in-progress
+                    // cleanup must still keep the window/process alive; the
+                    // worker below waits for its owner before closing.
+                    if SHUTDOWN_COMPLETE.load(Ordering::SeqCst) {
                         return;
                     }
 
@@ -2184,7 +2226,7 @@ pub fn run() {
                         // Cleanup done — close every remaining window (panels/
                         // overlay included), then the triggering window.
                         // Re-closing fires CloseRequested again, but
-                        // SHUTDOWN_DONE=true causes it to be a no-op, allowing
+                        // SHUTDOWN_COMPLETE=true causes it to be a no-op, allowing
                         // the close to proceed.
                         for (label, w) in app_handle.webview_windows() {
                             if label != window_label {
@@ -2217,9 +2259,11 @@ pub fn run() {
                 }
 
                 // RunEvent::ExitRequested fires for native application quit
-                // requests and for the normalized SIGTERM path registered in
-                // setup above. Without this handler the app can exit without
-                // child-process cleanup, which causes:
+                // requests. The SIGTERM path registered in setup performs the
+                // same graceful cleanup before requesting exit, so this handler
+                // observes SHUTDOWN_COMPLETE and lets that request proceed. Without
+                // these paths the app can exit without child-process cleanup,
+                // which causes:
                 //   • macOS crash reports ("did not exit cleanly")
                 //   • The Python sidecar left running with its ports still bound
                 //   • GGML atexit handlers calling abort() → SIGABRT
@@ -2227,7 +2271,7 @@ pub fn run() {
                 // We intentionally do NOT call api.prevent_exit() here — we just
                 // run cleanup synchronously before the exit proceeds.
                 tauri::RunEvent::ExitRequested { api, code: _, .. } => {
-                    // If SHUTDOWN_DONE is true, cleanup has already run (from the tray
+                    // If SHUTDOWN_COMPLETE is true, cleanup has already run (from the tray
                     // quit handler or the window CloseRequested handler).  Let this
                     // ExitRequested proceed immediately — calling prevent_exit here would
                     // create an infinite loop: app.exit(0) → ExitRequested → prevent_exit
@@ -2235,9 +2279,9 @@ pub fn run() {
                     //
                     // code mapping:
                     //   code=None     → native Cmd+Q / NSApplication terminate: → needs cleanup
-                    //   code=Some(0)  → app.exit(0) from our own handlers → SHUTDOWN_DONE=true
-                    //   code=Some(_)  → update restart (request_restart) → SHUTDOWN_DONE=true
-                    if SHUTDOWN_DONE.load(Ordering::SeqCst) {
+                    //   code=Some(0)  → app.exit(0) from our own handlers → cleanup complete
+                    //   code=Some(_)  → update restart → cleanup complete
+                    if SHUTDOWN_COMPLETE.load(Ordering::SeqCst) {
                         // Cleanup already complete — let the exit proceed.
                         return;
                     }

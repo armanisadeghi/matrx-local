@@ -1002,7 +1002,9 @@ def test_ensure_tree_hydrated_fails_closed_when_pointer_state_cannot_be_verified
         source.mkdir()
         (source / "placeholder.txt").touch()
 
-        async def fail_lookup(_state: str, _path: str) -> list[dict[str, Any]]:
+        async def fail_lookup(
+            _state: str, _path: str, **_kwargs: object
+        ) -> list[dict[str, Any]]:
             raise RuntimeError("mirror unavailable")
 
         engine._index.list_by_state_under_path = fail_lookup  # type: ignore[method-assign]
@@ -1034,7 +1036,9 @@ def test_ensure_tree_hydrated_includes_every_pointer_under_managed_root(
             nested.write_text("real bytes", encoding="utf-8")
             return nested
 
-        engine.hydrate = hydrate  # type: ignore[method-assign]
+        # Tree hydration already owns _sync_lock, so it intentionally calls
+        # the lock-free internal primitive rather than the public wrapper.
+        engine._hydrate = hydrate  # type: ignore[method-assign]
 
         assert await hydration_module.ensure_tree_hydrated(str(engine.root)) is None
         assert hydrated == ["pointer-id"]
@@ -1055,7 +1059,9 @@ def test_tool_copy_does_not_start_when_tree_hydration_state_cannot_be_verified(
         (source / "placeholder.txt").touch()
         (destination / "original.txt").write_text("keep me", encoding="utf-8")
 
-        async def fail_lookup(_state: str, _path: str) -> list[dict[str, Any]]:
+        async def fail_lookup(
+            _state: str, _path: str, **_kwargs: object
+        ) -> list[dict[str, Any]]:
             raise RuntimeError("mirror unavailable")
 
         engine._index.list_by_state_under_path = fail_lookup  # type: ignore[method-assign]
@@ -1089,7 +1095,9 @@ def test_tool_move_does_not_start_when_tree_hydration_state_cannot_be_verified(
         (source / "placeholder.txt").touch()
         (destination / "original.txt").write_text("keep me", encoding="utf-8")
 
-        async def fail_lookup(_state: str, _path: str) -> list[dict[str, Any]]:
+        async def fail_lookup(
+            _state: str, _path: str, **_kwargs: object
+        ) -> list[dict[str, Any]]:
             raise RuntimeError("mirror unavailable")
 
         engine._index.list_by_state_under_path = fail_lookup  # type: ignore[method-assign]

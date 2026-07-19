@@ -202,26 +202,35 @@ class FileSyncIndex:
         return [dict(r) for r in rows]
 
     async def list_by_state_under_path(
-        self, state: str, rel_path: str
+        self,
+        state: str,
+        rel_path: str,
+        *,
+        limit: int = 200,
+        after_rel_path: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return every tracked descendant in ``state`` under a local path.
+        """Return one ordered page of tracked descendants in ``state``.
 
-        Directory copy/move needs this unbounded-by-page correctness query:
-        silently copying pointer placeholders would create corrupt zero-byte
-        replicas. The caller controls concurrency while hydrating the rows.
+        Directory copy/move walks every page, but never materializes the full
+        managed tree or creates one task per pointer.
         """
+        bounded_limit = min(max(1, limit), 1_000)
+        after = after_rel_path or ""
         if not rel_path or rel_path == ".":
             rows = await get_db().fetchall(
-                "SELECT * FROM file_sync_state WHERE local_state = ? ORDER BY rel_path",
-                (state,),
+                """SELECT * FROM file_sync_state
+                   WHERE local_state = ? AND rel_path > ?
+                   ORDER BY rel_path LIMIT ?""",
+                (state, after, bounded_limit),
             )
             return [dict(r) for r in rows]
         escaped = rel_path.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         prefix = escaped.rstrip("/") + "/%"
         rows = await get_db().fetchall(
             "SELECT * FROM file_sync_state WHERE local_state = ? "
-            "AND (rel_path = ? OR rel_path LIKE ? ESCAPE '\\') ORDER BY rel_path",
-            (state, rel_path, prefix),
+            "AND (rel_path = ? OR rel_path LIKE ? ESCAPE '\\') "
+            "AND rel_path > ? ORDER BY rel_path LIMIT ?",
+            (state, rel_path, prefix, after, bounded_limit),
         )
         return [dict(r) for r in rows]
 

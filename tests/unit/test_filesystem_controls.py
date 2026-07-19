@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -430,3 +431,130 @@ async def test_hybrid_search_cursor_pages_one_immutable_snapshot(
     assert {entry.path for entry in (*first.entries, *second.entries)} == {
         str(path) for path in paths
     }
+
+
+@pytest.mark.anyio
+async def test_bounded_disk_search_reports_incomplete_traversal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    service._places = [Place("root", "Root", str(root), "configured", 100)]
+    monkeypatch.setattr(
+        filesystem_service_module,
+        "_indexing_settings",
+        lambda: {
+            "paused": True,
+            "content_enabled": True,
+            "semantic_enabled": False,
+            "embedding_model": "test",
+            "max_content_bytes": 16 * 1024 * 1024,
+            "max_embedding_entries": 100,
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_bounded_disk_find_snapshot",
+        lambda *_args, **_kwargs: ([], True),
+    )
+
+    page = await service.find("beyond-budget", limit=10)
+
+    assert page.entries == ()
+    assert page.source == "hybrid"
+    assert page.truncated is True
+
+
+def test_same_mtime_size_change_invalidates_content_and_embedding(tmp_path: Path) -> None:
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    root = tmp_path / "root"
+    root.mkdir()
+    source = _scan_root(index, root)
+    original = source.stat()
+    assert index.store_content(
+        str(source), source.read_text(), original.st_mtime, original.st_size, 1024 * 1024
+    )
+    assert index.store_embedding(
+        str(source),
+        "model",
+        b"\x00\x00\x00\x00",
+        1,
+        original.st_mtime,
+        original.st_size,
+    )
+    source.write_text("different length", encoding="utf-8")
+    source.touch()
+    os.utime(source, (original.st_atime, original.st_mtime))
+    index.upsert_path(str(source), "root")
+
+    with index._connect() as db:
+        row = db.execute(
+            "SELECT content_state,embedding_state FROM filesystem_entries WHERE path=?",
+            (str(source),),
+        ).fetchone()
+    assert dict(row) == {
+        "content_state": "not_indexed",
+        "embedding_state": "not_indexed",
+    }
+
+
+def test_stale_enrichment_success_cannot_release_newer_claim(tmp_path: Path) -> None:
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    root = tmp_path / "root"
+    root.mkdir()
+    source = _scan_root(index, root)
+    old = source.stat()
+    assert index.next_content_candidate((".txt",), 1024 * 1024) is not None
+
+    source.write_text("new generation with a different size", encoding="utf-8")
+    index.upsert_path(str(source), "root")
+    new = source.stat()
+    assert index.next_content_candidate((".txt",), 1024 * 1024) is not None
+    assert not index.store_content(
+        str(source), "stale bytes", old.st_mtime, old.st_size, 1024 * 1024
+    )
+    with index._connect() as db:
+        row = db.execute(
+            "SELECT content_state FROM filesystem_entries WHERE path=?", (str(source),)
+        ).fetchone()
+    assert new.st_size != old.st_size
+    assert row["content_state"] == "indexing"
+
+
+def test_changed_file_hides_stale_content_and_blocks_stale_embedding(tmp_path: Path) -> None:
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    root = tmp_path / "root"
+    root.mkdir()
+    source = _scan_root(index, root)
+    old = source.stat()
+    old_text = source.read_text()
+    assert index.store_content(
+        str(source), old_text, old.st_mtime, old.st_size, 1024 * 1024
+    )
+    assert index.store_embedding(
+        str(source),
+        "model",
+        b"\x00\x00\x80?",
+        1,
+        old.st_mtime,
+        old.st_size,
+    )
+    assert index.search_content("private", 10)
+    assert index.semantic_search([1.0], "model", limit=10)
+
+    source.write_text("replacement generation", encoding="utf-8")
+    index.upsert_path(str(source), "root")
+    changed = source.stat()
+    assert index.next_content_candidate((".txt",), 1024 * 1024) is not None
+    assert index.finish_enrichment_failure(
+        str(source), "content", "temporarily unreadable", changed.st_mtime, changed.st_size
+    )
+
+    assert index.search_content("private", 10) == []
+    assert index.semantic_search([1.0], "model", limit=10) == []
+    assert index.next_embedding_candidate("model", 100) is None

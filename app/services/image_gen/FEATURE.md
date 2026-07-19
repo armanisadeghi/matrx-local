@@ -264,9 +264,13 @@ the target-native uv binary pinned by `runtime-installer.json`; the release
 build verifies Astral's published SHA-256 before packaging it, and Rust passes
 its absolute bundle path to the engine. The installer selects the release's
 Python minor and target platform explicitly, accepts wheels only, and verifies
-the finished slot inside the frozen engine process. A missing or wrong bundled
-installer is an application-package failure with Update/Reinstall guidance,
-never an instruction for the customer to install developer tooling.
+the finished slot inside the frozen engine process. Installer subprocesses
+discard inherited uv/pip/Python environments and hide customer `PATH`; uv's
+installer-only CPython and cache live under `image-gen-runtime/installer-control`.
+Every sidecar build proves this boundary from an empty `PATH` by bootstrapping a
+managed CPython and installing a local hash-locked probe wheel. A missing or
+wrong bundled installer is an application-package failure with Update/Reinstall
+guidance, never an instruction for the customer to install developer tooling.
 
 `packages_dir()` honors `MATRX_HOME_DIR` before platform defaults, so a dev
 engine can never inspect, withhold, or migrate the installed app's managed

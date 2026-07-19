@@ -167,7 +167,8 @@ async def refresh_hardware() -> HardwareResponse:
     """Re-run full hardware detection, update cache, and push to cloud.
 
     Use this when the user clicks "Refresh" in the System tab.
-    Detection runs in a thread pool to avoid blocking the event loop.
+    Detection runs on a dedicated daemon worker to avoid blocking the event
+    loop or delaying process shutdown on a stuck native inventory call.
     """
     global _cached_profile
 

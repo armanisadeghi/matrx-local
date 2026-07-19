@@ -504,14 +504,16 @@ def start_server(port: int) -> None:
     try:
         server.run()
     finally:
-        logger.info("[shutdown] uvicorn server thread exited")
         # Explicit completion barrier for the main thread. Thread.join()
         # remained blocked in a packaged one-file process even after this
         # finally block ran, causing Rust to SIGKILL an otherwise clean
         # shutdown at T+20s. The event proves all server-thread work is done
-        # without depending on CPython's thread-state lock teardown.
+        # without depending on CPython's thread-state lock teardown. Publish
+        # both no-I/O barriers BEFORE logging: a blocked rotating-file or
+        # console handler must never prevent the main thread from exiting.
         _server_stopped_event.set()
         _shutdown_event.set()
+        logger.info("[shutdown] uvicorn server thread exited")
 
 
 def on_quit(icon: Icon, item: MenuItem) -> None:
@@ -657,7 +659,8 @@ def _wait_forever() -> None:
     stop, Playwright close, SQLite close, etc.) before forcing exit. The
     previous fixed 10s join routinely fired MID-teardown and os._exit(0)'d
     with zero log output — that silent exit was the "engine vanished, UI spun
-    forever" bug of 2026-07-11/12. Every exit from this function now logs.
+    forever" bug of 2026-07-11/12. The lifespan logs completion before this
+    function takes the final no-I/O clean-exit path.
     """
     try:
         _shutdown_event.wait()
@@ -665,11 +668,6 @@ def _wait_forever() -> None:
         pass
 
     join_s = _teardown_join_seconds()
-    logger.info(
-        "[shutdown] Main thread woke — waiting up to %ds for uvicorn lifespan teardown",
-        join_s,
-    )
-    remove_discovery_file()
     teardown_clean = True
     if _uvicorn_server is not None:
         _uvicorn_server.should_exit = True
@@ -684,9 +682,12 @@ def _wait_forever() -> None:
             "Check the last '[launcher]' lines above for the stuck service.",
             join_s,
         )
+        remove_discovery_file()
         _kill_child_subprocesses()
-    else:
-        logger.info("[shutdown] Teardown complete — engine exiting cleanly (pid=%d)", os.getpid())
+    # Do not log or perform any other potentially blocking I/O on the clean
+    # path after the completion barrier. The lifespan already emitted
+    # "Shutdown complete" and the server thread published its barrier; the
+    # only remaining responsibility is to let the PyInstaller parent reap us.
     os._exit(0)
 
 

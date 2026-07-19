@@ -59,10 +59,16 @@ export function reconcileHydratedChatMessages(
   existing: ChatMessage[],
   hydrated: ChatMessage[],
 ): ChatMessage[] {
-  const hydratedIds = new Set(hydrated.map((message) => message.id));
+  const hydratedIndexById = new Map(
+    hydrated.map((message, index) => [message.id, index]),
+  );
   const consumedDurable = new Set<number>();
+  for (const message of existing) {
+    const index = hydratedIndexById.get(message.id);
+    if (index != null) consumedDurable.add(index);
+  }
   const optimistic = existing.filter((message) => {
-    if (hydratedIds.has(message.id)) return false;
+    if (hydratedIndexById.has(message.id)) return false;
     for (let index = 0; index < hydrated.length; index += 1) {
       const kind = durableReplacementKind(message, hydrated[index]!);
       if (!kind) continue;
@@ -71,7 +77,7 @@ export function reconcileHydratedChatMessages(
       // must not consume two repeated local messages.
       const canRepresentMultiplePrompts =
         kind === "combined" && message.role === "user";
-      if (!canRepresentMultiplePrompts && consumedDurable.has(index)) continue;
+      if (consumedDurable.has(index)) continue;
       if (!canRepresentMultiplePrompts) consumedDurable.add(index);
       return false;
     }

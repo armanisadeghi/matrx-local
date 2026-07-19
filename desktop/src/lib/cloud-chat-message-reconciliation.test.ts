@@ -84,4 +84,25 @@ describe("Cloud Chat durable message reconciliation", () => {
       reconcileHydratedChatMessages(existing, hydrated).map((item) => item.id),
     ).toEqual(["server-assistant", "local-assistant-2"]);
   });
+
+  it("does not reconcile a current background assistant against cached history", () => {
+    const durableHistory = message(
+      "server-assistant",
+      "assistant",
+      "Earlier durable answer.",
+    );
+    const existing = [
+      durableHistory,
+      message("local-current", "assistant", "", {
+        isStreaming: true,
+        streamStatus: "Local tools finished in the background.",
+      }),
+    ];
+
+    expect(
+      reconcileHydratedChatMessages(existing, [durableHistory]).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["server-assistant", "local-current"]);
+  });
 });

@@ -20,6 +20,10 @@ import {
   saveCloudChatCache,
 } from "@/lib/cloud-chat-cache";
 import { CloudChatRunGate } from "@/lib/cloud-chat-run-gate";
+import {
+  needsBackgroundChatReconciliation,
+  reconcileHydratedChatMessages,
+} from "@/lib/cloud-chat-message-reconciliation";
 import supabase from "@/lib/supabase";
 import {
   buildDesktopClientContext,
@@ -722,14 +726,6 @@ function isDefaultConversationTitle(title: string | undefined): boolean {
   return !normalized || normalized === "new conversation" || normalized === "new chat";
 }
 
-function mergeMessagesById(existing: ChatMessage[], hydrated: ChatMessage[]): ChatMessage[] {
-  const hydratedIds = new Set(hydrated.map((message) => message.id));
-  const optimistic = existing.filter((message) => !hydratedIds.has(message.id));
-  return [...hydrated, ...optimistic].sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-  );
-}
-
 function mergeRemoteConversations(
   current: Conversation[],
   remoteRows: CloudConversationRow[],
@@ -816,6 +812,17 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
   const runGateRef = useRef(new CloudChatRunGate());
   const conversationsRef = useRef(conversations);
   const cacheUserIdRef = useRef<string | null>(null);
+  const backgroundHydrationTimersRef = useRef<Set<number>>(new Set());
+
+  useEffect(
+    () => () => {
+      for (const timer of backgroundHydrationTimersRef.current) {
+        window.clearTimeout(timer);
+      }
+      backgroundHydrationTimersRef.current.clear();
+    },
+    [],
+  );
 
   useEffect(() => {
     let active = true;
@@ -996,11 +1003,21 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     void refreshConversations();
   }, [cacheUserId, refreshConversations]);
 
-  const hydrateConversationMessages = useCallback(async (id: string) => {
+  const hydrateConversationMessages = useCallback(async (
+    id: string,
+    force = false,
+  ) => {
     const ownerAtStart = cacheUserIdRef.current;
     if (!ownerAtStart) return;
     const target = conversationsRef.current.find((item) => item.id === id);
-    if (!target || target.messages.length > 0) return;
+    if (!target) return;
+    if (
+      !force &&
+      target.messages.length > 0 &&
+      !needsBackgroundChatReconciliation(target.messages)
+    ) {
+      return;
+    }
     if (target.executionTarget === "local" || target.localConversationId) return;
 
     const serverConversationId = target.serverConversationId ?? target.id;
@@ -1031,7 +1048,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               conversation.id === id
                 ? {
                     ...conversation,
-                    messages: mergeMessagesById(
+                    messages: reconcileHydratedChatMessages(
                       conversation.messages,
                       messages,
                     ),
@@ -1051,6 +1068,19 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       }
     }
   }, []);
+
+  const scheduleBackgroundHydration = useCallback(
+    (id: string) => {
+      for (const delay of [3_000, 10_000, 30_000, 60_000]) {
+        const timer = window.setTimeout(() => {
+          backgroundHydrationTimersRef.current.delete(timer);
+          void hydrateConversationMessages(id, true);
+        }, delay);
+        backgroundHydrationTimersRef.current.add(timer);
+      }
+    },
+    [hydrateConversationMessages],
+  );
 
   const createConversation = useCallback(
     (initialMode?: ChatMode): Conversation => {
@@ -1893,6 +1923,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                 "Local tool continuation was handed off to the background engine; the final reply lands in the conversation history.",
               );
               setStatus("Local tools finished in the background.");
+              scheduleBackgroundHydration(conversationId);
             }
             break;
           }
@@ -1978,6 +2009,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       refreshConversations,
       refreshLocalLlmStatus,
       runControls,
+      scheduleBackgroundHydration,
     ],
   );
 

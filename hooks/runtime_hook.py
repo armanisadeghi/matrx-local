@@ -107,6 +107,31 @@ if hasattr(sys, "_MEIPASS"):
 # outright in frozen builds.  Respect an explicit user override if already set.
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
+# Transformers 5.3's auto-docstring helper assumes inspect.getsourcefile()
+# contains at least three path components and indexes ``[-3]`` to detect
+# ``transformers/models/<family>``. PyInstaller preserves relative code-object
+# filenames (for example ``transformers/modeling_layers.py``), which makes that
+# valid import crash with IndexError before any model can load. Normalize only
+# relative Transformers source paths to their real frozen extraction path.
+if hasattr(sys, "_MEIPASS"):
+    import inspect as _matrx_inspect
+
+    _matrx_original_getsourcefile = _matrx_inspect.getsourcefile
+
+    def _matrx_frozen_getsourcefile(obj):
+        _matrx_source = _matrx_original_getsourcefile(obj)
+        _matrx_module = getattr(obj, "__module__", "")
+        if (
+            _matrx_source
+            and isinstance(_matrx_module, str)
+            and _matrx_module.startswith("transformers.")
+            and not os.path.isabs(_matrx_source)
+        ):
+            return os.path.join(sys._MEIPASS, _matrx_source)
+        return _matrx_source
+
+    _matrx_inspect.getsourcefile = _matrx_frozen_getsourcefile
+
 # A new managed media runtime is an immutable, versioned slot. Activate it only
 # when the durable state and slot manifest match the exact contract embedded in
 # this application. This executes before app imports, so it intentionally stays
@@ -197,22 +222,6 @@ try:
                     f"managed runtime requires glibc {_runtime_minimum_glibc}; "
                     f"found {_runtime_libc_name or 'unknown'} "
                     f"{_runtime_libc_version or 'unknown'}"
-                )
-        _runtime_minimum_glibc = _runtime_target_manifest.get("minimum_glibc")
-        if _runtime_minimum_glibc and sys.platform.startswith("linux"):
-            _runtime_libc_name, _runtime_libc_version = _runtime_platform.libc_ver()
-            _runtime_current_glibc = tuple(
-                int(_part) for _part in _runtime_libc_version.split(".")[:2]
-            )
-            _runtime_required_glibc = tuple(
-                int(_part) for _part in str(_runtime_minimum_glibc).split(".")[:2]
-            )
-            if (
-                _runtime_libc_name.lower() != "glibc"
-                or _runtime_current_glibc < _runtime_required_glibc
-            ):
-                raise RuntimeError(
-                    f"managed runtime requires glibc {_runtime_minimum_glibc} or newer"
                 )
         if _runtime_target_manifest.get("contract_sha256") != _runtime_required:
             raise RuntimeError("embedded target manifest is stale for this app contract")

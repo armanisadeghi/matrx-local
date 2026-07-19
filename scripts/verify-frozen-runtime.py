@@ -33,7 +33,9 @@ def _extension_module_name(archive_name: str) -> str | None:
     normalized = archive_name.replace("\\", "/")
     for suffix in sorted(importlib.machinery.EXTENSION_SUFFIXES, key=len, reverse=True):
         if normalized.endswith(suffix):
-            return normalized[: -len(suffix)].replace("/", ".")
+            stem = normalized[: -len(suffix)]
+            stem = re.sub(r"\.(?:cpython-\d+[^./]*|cp\d+[^./]*|abi3)$", "", stem)
+            return stem.replace("/", ".")
     # Normally verification is target-native. These conservative fallbacks
     # also keep archive-inspection tooling useful across build hosts.
     for suffix in (".pyd", ".so"):

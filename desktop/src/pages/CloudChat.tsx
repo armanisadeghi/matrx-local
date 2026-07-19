@@ -273,7 +273,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
     executionTarget === "local" && engineStatus !== "connected"
       ? "Local engine is not connected."
       : executionTarget === "local" &&
-          (localLlmError || localLlmStatus?.available === false)
+          (localLlmError || localLlmStatus?.registered === false)
         ? (localLlmError ??
             localLlmStatus?.error ??
             localLlmStatus?.instructions ??

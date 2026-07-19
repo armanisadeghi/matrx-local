@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invokeTauri as tauriInvoke, isTauri } from "@/lib/sidecar";
 import { engine } from "@/lib/api";
 import { findLlmModelInfo, overlayLlmCatalog } from "@/lib/llm/catalog";
+import { matchesRegisteredLocalLlm } from "@/lib/local-llm-registration";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
   LlmHardwareResult,
@@ -210,16 +211,24 @@ export function useLlm(): [LlmState, LlmActions] {
           // connectLocalLlm performs its own sidecar re-discovery below.
         }
         if (
-          engineStatus?.available &&
-          engineStatus.port === status.port &&
-          engineStatus.model_name === (status.model_name ?? "")
+          matchesRegisteredLocalLlm(
+            engineStatus,
+            status.port,
+            status.model_name ?? "",
+          )
         ) {
           return;
         }
 
         await engine.connectLocalLlm(status.port, status.model_name ?? "");
         const verified = await engine.getLocalLlmStatus();
-        if (!verified.available || verified.port !== status.port) {
+        if (
+          !matchesRegisteredLocalLlm(
+            verified,
+            status.port,
+            status.model_name ?? "",
+          )
+        ) {
           throw new Error(
             `Engine registration verification failed for llama-server port ${status.port}`,
           );

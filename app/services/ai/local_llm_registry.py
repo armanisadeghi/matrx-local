@@ -17,6 +17,7 @@ POST /chat/local-llm/connect with the port and model name.  This module:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from urllib.error import URLError
@@ -252,6 +253,7 @@ def get_local_llm_status() -> dict[str, Any]:
             )
 
     return {
+        "registered": registered,
         "available": registered and reachable,
         "port": _local_llm_port,
         "model_name": _local_llm_model,
@@ -271,6 +273,11 @@ def get_local_llm_status() -> dict[str, Any]:
             )
         ),
     }
+
+
+async def get_local_llm_status_async() -> dict[str, Any]:
+    """Probe status without blocking the engine's async event loop."""
+    return await asyncio.to_thread(get_local_llm_status)
 
 
 def resolve_local_llm_model(requested_model: str | None = None) -> dict[str, Any] | None:

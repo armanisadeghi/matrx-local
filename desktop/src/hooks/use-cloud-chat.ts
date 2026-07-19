@@ -81,6 +81,7 @@ interface UseCloudChatOptions {
 }
 
 interface LocalLlmStatus {
+  registered: boolean;
   available: boolean;
   port: number | null;
   model_name: string | null;
@@ -1211,7 +1212,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       let localStatus: LocalLlmStatus | null = null;
       if (executionTarget === "local") {
         localStatus = await refreshLocalLlmStatus();
-        if (!localStatus?.available || !localStatus.canonical_model_name) {
+        if (!localStatus?.registered || !localStatus.canonical_model_name) {
           const message =
             localStatus?.error ||
             localStatus?.instructions ||

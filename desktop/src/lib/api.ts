@@ -535,6 +535,7 @@ class EngineAPI {
     jwt_validation: { configured: boolean; warning: string | null };
     engine: { initialized: boolean; client_mode: boolean };
     local_llm: {
+      registered: boolean;
       available: boolean;
       port: number | null;
       model_name: string | null;
@@ -598,6 +599,7 @@ class EngineAPI {
 
   /** Get the current local LLM registration status from the engine. */
   async getLocalLlmStatus(): Promise<{
+    registered: boolean;
     available: boolean;
     port: number | null;
     model_name: string | null;

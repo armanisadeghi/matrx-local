@@ -562,14 +562,15 @@ async def ai_provider_status() -> dict[str, Any]:
         pass
 
     local_llm: dict[str, Any] = {
+        "registered": False,
         "available": False,
         "port": None,
         "model_name": None,
         "matrx_ai_support": False,
     }
     try:
-        from app.services.ai.local_llm_registry import get_local_llm_status
-        local_llm = get_local_llm_status()
+        from app.services.ai.local_llm_registry import get_local_llm_status_async
+        local_llm = await get_local_llm_status_async()
     except Exception:
         pass
 
@@ -689,7 +690,10 @@ async def local_llm_connect(req: LocalLlmConnectRequest) -> dict[str, Any]:
 
     Called by the Tauri frontend when llama-server emits llm-server-ready.
     """
-    from app.services.ai.local_llm_registry import set_local_llm, get_local_llm_status
+    from app.services.ai.local_llm_registry import (
+        get_local_llm_status_async,
+        set_local_llm,
+    )
 
     logger.info(
         "[chat_routes /local-llm/connect] Connecting local LLM: port=%d, model=%s",
@@ -698,7 +702,7 @@ async def local_llm_connect(req: LocalLlmConnectRequest) -> dict[str, Any]:
     )
 
     success = set_local_llm(req.port, req.model_name)
-    status = get_local_llm_status()
+    status = await get_local_llm_status_async()
 
     return {"status": "ok" if success else "error", **status}
 
@@ -706,16 +710,19 @@ async def local_llm_connect(req: LocalLlmConnectRequest) -> dict[str, Any]:
 @router.post("/local-llm/disconnect")
 async def local_llm_disconnect() -> dict[str, Any]:
     """Deregister the local LLM — called when llama-server stops."""
-    from app.services.ai.local_llm_registry import clear_local_llm, get_local_llm_status
+    from app.services.ai.local_llm_registry import (
+        clear_local_llm,
+        get_local_llm_status_async,
+    )
 
     logger.info("[chat_routes /local-llm/disconnect] Disconnecting local LLM")
     clear_local_llm()
-    return {"status": "ok", **get_local_llm_status()}
+    return {"status": "ok", **await get_local_llm_status_async()}
 
 
 @router.get("/local-llm/status")
 async def local_llm_status() -> dict[str, Any]:
     """Return current local LLM registration status."""
-    from app.services.ai.local_llm_registry import get_local_llm_status
+    from app.services.ai.local_llm_registry import get_local_llm_status_async
 
-    return get_local_llm_status()
+    return await get_local_llm_status_async()

@@ -18,6 +18,7 @@ other tests in the session.
 from __future__ import annotations
 
 import asyncio
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -325,6 +326,7 @@ def test_runtime_model_registration(seam_sandbox, monkeypatch):
     monkeypatch.setattr(reg, "_probe_llama_server", lambda port: (True, None))
     status = reg.get_local_llm_status()
     assert status["canonical_model_name"] == "local/qwen-test"
+    assert status["registered"] is True
     assert status["reachable"] is True
     assert status["available"] is True
     assert status["matrx_ai_support"] is True
@@ -337,6 +339,7 @@ def test_runtime_model_registration(seam_sandbox, monkeypatch):
     )
     unreachable = reg.get_local_llm_status()
     assert unreachable["reachable"] is False
+    assert unreachable["registered"] is True
     assert unreachable["available"] is False
     assert unreachable["port"] == 65533
     assert unreachable["model_name"] == "qwen-test"
@@ -347,3 +350,19 @@ def test_runtime_model_registration(seam_sandbox, monkeypatch):
     reg.clear_local_llm()
     assert get_runtime_model("local/qwen-test") is None
     assert not reg.is_local_llm_available()
+
+
+def test_local_llm_async_status_runs_probe_off_event_loop(monkeypatch):
+    """Async chat routes must not block streams/heartbeats on urlopen()."""
+    from app.services.ai import local_llm_registry as reg
+
+    main_thread = threading.get_ident()
+    monkeypatch.setattr(
+        reg,
+        "get_local_llm_status",
+        lambda: {"probe_thread": threading.get_ident()},
+    )
+
+    result = asyncio.run(reg.get_local_llm_status_async())
+
+    assert result["probe_thread"] != main_thread

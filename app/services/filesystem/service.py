@@ -152,27 +152,29 @@ class FilesystemService:
     ) -> dict[str, object]:
         from app.services.cloud_sync.settings_sync import get_settings_sync
 
-        old_settings = _indexing_settings()
-        sync = get_settings_sync()
-        current = sync.get("filesystem_index", {}) or {}
-        sync.set(
-            "filesystem_index",
-            {
-                **current,
-                "content_enabled": content_enabled,
-                "semantic_enabled": semantic_enabled,
-                "embedding_model": embedding_model.strip() or _DEFAULT_EMBEDDING_MODEL,
-                "max_content_bytes": max_content_bytes,
-                "max_embedding_entries": max_embedding_entries,
-            },
-        )
-        await asyncio.to_thread(
-            self.index.apply_enrichment_limits,
-            max_content_bytes,
-            max_embedding_entries,
-            embedding_model,
-            reset_content_quota=max_content_bytes > int(old_settings["max_content_bytes"]),
-        )
+        async with self._maintenance_lock:
+            old_settings = _indexing_settings()
+            sync = get_settings_sync()
+            current = sync.get("filesystem_index", {}) or {}
+            active_model = embedding_model.strip() or _DEFAULT_EMBEDDING_MODEL
+            sync.set(
+                "filesystem_index",
+                {
+                    **current,
+                    "content_enabled": content_enabled,
+                    "semantic_enabled": semantic_enabled,
+                    "embedding_model": active_model,
+                    "max_content_bytes": max_content_bytes,
+                    "max_embedding_entries": max_embedding_entries,
+                },
+            )
+            await asyncio.to_thread(
+                self.index.apply_enrichment_limits,
+                max_content_bytes,
+                max_embedding_entries,
+                active_model,
+                reset_content_quota=max_content_bytes > int(old_settings["max_content_bytes"]),
+            )
         return await self.status()
 
     async def control_index(self, action: str) -> dict[str, object]:
@@ -260,37 +262,42 @@ class FilesystemService:
         offset = _decode_cursor(cursor)
         resolved_root = str(Path(root).expanduser().absolute()) if root else None
         queued = await asyncio.to_thread(self.index.queue_count)
-        index_search = asyncio.wait_for(
-            asyncio.to_thread(
-                self.index.search, clean, limit=safe_limit + 1, offset=offset, root=resolved_root
-            ),
-            timeout=min(max(timeout_seconds, 0.1), 10.0),
-        )
-        disk_search = (
-            asyncio.wait_for(
+        if queued > 0:
+            # A partial index and the bounded disk fallback form one logical
+            # result set. Rebuild its bounded prefix for every numeric offset
+            # so a full indexed first page cannot hide cold disk-only matches.
+            prefix_limit = min(offset + safe_limit + 1, 50_001)
+            index_search = asyncio.wait_for(
+                asyncio.to_thread(
+                    self.index.search, clean, limit=prefix_limit, offset=0, root=resolved_root
+                ),
+                timeout=min(max(timeout_seconds, 0.1), 10.0),
+            )
+            disk_search = asyncio.wait_for(
                 asyncio.to_thread(
                     self._bounded_disk_find,
                     clean,
                     resolved_root,
-                    safe_limit + 1,
+                    prefix_limit,
                     timeout_seconds,
                 ),
                 timeout=min(max(timeout_seconds + 0.25, 0.25), 10.25),
             )
-            if offset == 0 and queued > 0
-            else None
-        )
-        if disk_search is not None:
             indexed_entries, disk_entries = await asyncio.gather(index_search, disk_search)
-            indexed_has_more = len(indexed_entries) > safe_limit
-            by_path = {entry.path: entry for entry in indexed_entries[:safe_limit]}
+            by_path = {entry.path: entry for entry in indexed_entries}
             for entry in disk_entries:
                 by_path.setdefault(entry.path, entry)
-            entries = list(by_path.values())[:safe_limit]
+            merged = list(by_path.values())
+            entries = merged[offset : offset + safe_limit]
             source = "hybrid"
-            has_more = indexed_has_more
+            has_more = len(merged) > offset + safe_limit
         else:
-            entries = await index_search
+            entries = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.index.search, clean, limit=safe_limit + 1, offset=offset, root=resolved_root
+                ),
+                timeout=min(max(timeout_seconds, 0.1), 10.0),
+            )
             source = "index"
             if not entries and offset == 0:
                 entries = await asyncio.wait_for(
@@ -311,7 +318,7 @@ class FilesystemService:
         return SearchPage(
             clean,
             tuple(entries),
-            str(offset + safe_limit) if has_more and source == "index" else None,
+            str(offset + safe_limit) if has_more else None,
             source=source,
             index_complete=queued == 0 and not paused and not unavailable,
             root=resolved_root,
@@ -519,18 +526,29 @@ class FilesystemService:
                 if bool(_indexing_settings()["paused"]):
                     continue
                 for change, path in changes:
-                    async with self._maintenance_lock:
-                        if change == watchfiles.Change.deleted:
-                            await asyncio.to_thread(self.index.delete_path, path)
-                        else:
-                            root_id = self._root_id_for_path(path)
-                            await asyncio.to_thread(self.index.upsert_path, path, root_id)
+                    await self._apply_watch_path(
+                        path,
+                        deleted=change == watchfiles.Change.deleted,
+                    )
                 if self._stop.is_set():
                     return
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.warning("Filesystem watcher stopped; periodic reconciliation remains active", exc_info=True)
+
+    async def _apply_watch_path(self, path: str, *, deleted: bool) -> None:
+        """Apply one watcher mutation only if indexing is still admitted."""
+        async with self._maintenance_lock:
+            # Pause/clear may have won the lock after this watch batch was
+            # received. The decision inside the lock is the commit fence.
+            if bool(_indexing_settings()["paused"]):
+                return
+            if deleted:
+                await asyncio.to_thread(self.index.delete_path, path)
+            else:
+                root_id = self._root_id_for_path(path)
+                await asyncio.to_thread(self.index.upsert_path, path, root_id)
 
     def _watch_roots(self) -> list[str]:
         return _minimal_roots([
@@ -579,14 +597,21 @@ class FilesystemService:
                         content = await asyncio.to_thread(
                             Path(path).read_text, encoding="utf-8", errors="replace"
                         )
-                        await asyncio.to_thread(
-                            self.index.store_content,
-                            path,
-                            content,
-                            modified_at,
-                            source_size,
-                            int(settings["max_content_bytes"]),
-                        )
+                        async with self._maintenance_lock:
+                            commit_settings = _indexing_settings()
+                            if commit_settings["content_enabled"] and not commit_settings["paused"]:
+                                await asyncio.to_thread(
+                                    self.index.store_content,
+                                    path,
+                                    content,
+                                    modified_at,
+                                    source_size,
+                                    int(commit_settings["max_content_bytes"]),
+                                )
+                            else:
+                                await asyncio.to_thread(
+                                    self.index.mark_content_skipped, path, "not_indexed"
+                                )
                     except OSError:
                         await asyncio.to_thread(self.index.mark_content_skipped, path, "error")
                     worked = True
@@ -606,15 +631,28 @@ class FilesystemService:
                             (content[:16_000],), str(settings["embedding_model"])
                         )
                         vector = vectors[0]
-                        await asyncio.to_thread(
-                            self.index.store_embedding,
-                            path,
-                            str(settings["embedding_model"]),
-                            array("f", vector).tobytes(),
-                            len(vector),
-                            modified_at,
-                            source_size,
-                        )
+                        async with self._maintenance_lock:
+                            commit_settings = _indexing_settings()
+                            model = str(settings["embedding_model"])
+                            if (
+                                commit_settings["semantic_enabled"]
+                                and not commit_settings["paused"]
+                                and str(commit_settings["embedding_model"]) == model
+                            ):
+                                await asyncio.to_thread(
+                                    self.index.store_embedding,
+                                    path,
+                                    model,
+                                    array("f", vector).tobytes(),
+                                    len(vector),
+                                    modified_at,
+                                    source_size,
+                                    max_entries=int(commit_settings["max_embedding_entries"]),
+                                )
+                            else:
+                                await asyncio.to_thread(
+                                    self.index.reset_embedding_candidate, path
+                                )
                     except Exception:
                         logger.warning("Background embedding failed for %s", path, exc_info=True)
                         await asyncio.to_thread(self.index.mark_embedding_unavailable, path)

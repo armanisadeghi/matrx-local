@@ -873,6 +873,13 @@ class FilesystemIndex:
             # The data deletion is authoritative; a concurrent reader may
             # temporarily prevent optional file compaction.
             pass
+        try:
+            # WAL mode can otherwise leave the pre-clear database size on disk
+            # even after VACUUM. Reported storage must reflect reclaimed bytes.
+            with self._connect() as db:
+                db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.OperationalError:
+            pass
 
     def apply_enrichment_limits(
         self,
@@ -1134,6 +1141,7 @@ class FilesystemIndex:
     def store_embedding(
         self, path: str, model: str, vector: bytes, dimensions: int,
         source_modified_at: float | None, source_size: int,
+        *, max_entries: int | None = None,
     ) -> bool:
         key = _path_key(path)
         try:
@@ -1157,6 +1165,21 @@ class FilesystemIndex:
                     "UPDATE filesystem_entries SET embedding_state='not_indexed' WHERE path_key=?", (key,)
                 )
                 return False
+            existing = db.execute(
+                "SELECT 1 FROM filesystem_embeddings WHERE path_key=? AND model=?",
+                (key, model),
+            ).fetchone()
+            if existing is None and max_entries is not None:
+                count = db.execute(
+                    "SELECT COUNT(*) AS count FROM filesystem_embeddings WHERE model=?",
+                    (model,),
+                ).fetchone()
+                if int(count["count"]) >= max(0, max_entries):
+                    db.execute(
+                        "UPDATE filesystem_entries SET embedding_state='not_indexed' WHERE path_key=?",
+                        (key,),
+                    )
+                    return False
             db.execute(
                 """INSERT INTO filesystem_embeddings
                    (path,path_key,model,dimensions,vector,source_modified_at,source_size,indexed_at)
@@ -1171,6 +1194,13 @@ class FilesystemIndex:
                 "UPDATE filesystem_entries SET embedding_state='indexed' WHERE path_key=?", (key,)
             )
             return True
+
+    def reset_embedding_candidate(self, path: str) -> None:
+        with self._connect() as db:
+            db.execute(
+                "UPDATE filesystem_entries SET embedding_state='not_indexed' WHERE path_key=?",
+                (_path_key(path),),
+            )
 
     def mark_embedding_unavailable(self, path: str) -> None:
         with self._connect() as db:

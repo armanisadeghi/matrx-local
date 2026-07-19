@@ -20,7 +20,7 @@ from app.services.filesystem.roots import normalize_path_key
 from app.services.filesystem import service as filesystem_service_module
 from app.services.filesystem.service import FilesystemService, _minimal_roots
 from app.tools.session import ToolSession
-from app.tools.tools import file_ops
+from app.tools.tools import file_ops, system
 
 
 @pytest.mark.anyio
@@ -829,6 +829,39 @@ async def test_prepare_open_returns_actionable_hydration_failure(
     result = await service.prepare_open(str(target))
     assert result["ready"] is False
     assert "Sign in" in str(result["error"])
+
+
+@pytest.mark.anyio
+async def test_agent_open_path_uses_canonical_hydration_seam(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "pointer.txt"
+    target.touch()
+    prepared: list[str] = []
+    opened: list[str] = []
+
+    class FakeFilesystemService:
+        async def prepare_open(self, path: str) -> dict[str, object]:
+            prepared.append(path)
+            return {"path": path, "ready": False, "error": "cloud bytes unavailable"}
+
+    monkeypatch.setattr(
+        "app.services.filesystem.get_filesystem_service",
+        lambda: FakeFilesystemService(),
+    )
+    monkeypatch.setattr(
+        "app.tools.tools.open_path_cross_platform",
+        lambda path: (opened.append(path) is None, "opened"),
+    )
+
+    result = await system.tool_open_path(
+        ToolSession(working_dir=str(tmp_path)), "pointer.txt"
+    )
+
+    assert result.type.value == "error"
+    assert result.output == "cloud bytes unavailable"
+    assert prepared == [str(target)]
+    assert opened == []
 
 
 class _FakeScandir:

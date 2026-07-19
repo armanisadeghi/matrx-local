@@ -70,7 +70,11 @@ async def ensure_tree_hydrated(abs_path: str) -> str | None:
 
     engine = get_file_sync_engine()
     try:
-        rel = target.resolve().relative_to(engine.root.resolve()).as_posix()
+        relative = target.resolve().relative_to(engine.root.resolve())
+        # Path.as_posix() represents the root-relative empty path as ".".
+        # File-sync rows never carry that prefix, so the canonical empty
+        # prefix means every managed descendant.
+        rel = "" if relative == Path(".") else relative.as_posix()
     except (ValueError, OSError):
         return None
     try:

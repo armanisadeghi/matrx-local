@@ -568,6 +568,7 @@ async def tool_open_path(
     path: str,
 ) -> ToolResult:
     """Open a file or directory using the OS default handler (Finder, Explorer, etc.)."""
+    from app.services.filesystem import get_filesystem_service
     from app.tools.tools import open_path_cross_platform
 
     resolved = session.resolve_path(path)
@@ -577,7 +578,14 @@ async def tool_open_path(
             type=ToolResultType.ERROR, output=f"Path not found: {resolved}"
         )
 
-    success, message = open_path_cross_platform(resolved)
+    prepared = await get_filesystem_service().prepare_open(resolved)
+    if not bool(prepared["ready"]):
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=str(prepared.get("error") or "The path is not ready to open."),
+        )
+
+    success, message = open_path_cross_platform(str(prepared["path"]))
     if not success:
         return ToolResult(type=ToolResultType.ERROR, output=message)
     return ToolResult(output=message)

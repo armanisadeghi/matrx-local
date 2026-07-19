@@ -210,6 +210,12 @@ class FileSyncIndex:
         silently copying pointer placeholders would create corrupt zero-byte
         replicas. The caller controls concurrency while hydrating the rows.
         """
+        if not rel_path or rel_path == ".":
+            rows = await get_db().fetchall(
+                "SELECT * FROM file_sync_state WHERE local_state = ? ORDER BY rel_path",
+                (state,),
+            )
+            return [dict(r) for r in rows]
         escaped = rel_path.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         prefix = escaped.rstrip("/") + "/%"
         rows = await get_db().fetchall(

@@ -1016,6 +1016,33 @@ def test_ensure_tree_hydrated_fails_closed_when_pointer_state_cannot_be_verified
     run_scenario(tmp_path, monkeypatch, scenario)
 
 
+def test_ensure_tree_hydrated_includes_every_pointer_under_managed_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        nested = engine.root / "docs" / "pointer.txt"
+        nested.parent.mkdir(parents=True)
+        nested.touch()
+        await engine._index.upsert_state(
+            "pointer-id", rel_path="docs/pointer.txt", local_state="pointer"
+        )
+        hydrated: list[str] = []
+
+        async def hydrate(file_id_or_path: str, *, priority: int = 10) -> Path:
+            hydrated.append(file_id_or_path)
+            nested.write_text("real bytes", encoding="utf-8")
+            return nested
+
+        engine.hydrate = hydrate  # type: ignore[method-assign]
+
+        assert await hydration_module.ensure_tree_hydrated(str(engine.root)) is None
+        assert hydrated == ["pointer-id"]
+        assert nested.read_text(encoding="utf-8") == "real bytes"
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
 def test_tool_copy_does_not_start_when_tree_hydration_state_cannot_be_verified(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

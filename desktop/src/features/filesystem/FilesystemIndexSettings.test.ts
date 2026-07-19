@@ -54,4 +54,30 @@ describe("FilesystemIndexSettings contracts", () => {
     fence.finishMutation(save!);
     expect(fence.beginMutation()).not.toBeNull();
   });
+
+  it("serializes loads with mutations and always releases the owning load", () => {
+    const fence = new FilesystemIndexRequestFence();
+    const load = fence.beginLoad();
+
+    expect(load).not.toBeNull();
+    expect(fence.beginLoad()).toBeNull();
+    expect(fence.beginMutation()).toBeNull();
+    expect(fence.finishLoad(load!)).toBe(true);
+
+    const save = fence.beginMutation();
+    expect(save).not.toBeNull();
+    expect(fence.beginLoad()).toBeNull();
+  });
+
+  it("does not let an invalidated load clear a later loading owner", () => {
+    const fence = new FilesystemIndexRequestFence();
+    const disconnectedLoad = fence.beginLoad();
+    expect(disconnectedLoad).not.toBeNull();
+
+    fence.invalidate();
+    const reconnectedLoad = fence.beginLoad();
+    expect(reconnectedLoad).not.toBeNull();
+    expect(fence.finishLoad(disconnectedLoad!)).toBe(false);
+    expect(fence.finishLoad(reconnectedLoad!)).toBe(true);
+  });
 });

@@ -50,6 +50,7 @@ type IndexingPolicy = Omit<FilesystemIndexingSettings, "priority_roots" | "pause
  */
 export class FilesystemIndexRequestFence {
   private generation = 0;
+  private activeLoad: number | null = null;
   private activeMutation: number | null = null;
 
   beginRequest(): number {
@@ -58,9 +59,16 @@ export class FilesystemIndexRequestFence {
   }
 
   beginMutation(): number | null {
-    if (this.activeMutation !== null) return null;
+    if (this.activeLoad !== null || this.activeMutation !== null) return null;
     const generation = this.beginRequest();
     this.activeMutation = generation;
+    return generation;
+  }
+
+  beginLoad(): number | null {
+    if (this.activeLoad !== null || this.activeMutation !== null) return null;
+    const generation = this.beginRequest();
+    this.activeLoad = generation;
     return generation;
   }
 
@@ -76,8 +84,15 @@ export class FilesystemIndexRequestFence {
     if (this.activeMutation === generation) this.activeMutation = null;
   }
 
+  finishLoad(generation: number): boolean {
+    if (this.activeLoad !== generation) return false;
+    this.activeLoad = null;
+    return true;
+  }
+
   invalidate(): void {
     this.generation += 1;
+    this.activeLoad = null;
   }
 }
 
@@ -98,11 +113,12 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
   const [indexAction, setIndexAction] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const requestFence = useRef(new FilesystemIndexRequestFence()).current;
-  const mutationBusy = saving || savingPolicy || indexAction !== null;
+  const mutationBusy = loading || saving || savingPolicy || indexAction !== null;
 
   const load = useCallback(async () => {
-    if (!connected || requestFence.hasActiveMutation()) return;
-    const request = requestFence.beginRequest();
+    if (!connected) return;
+    const request = requestFence.beginLoad();
+    if (request === null) return;
     setLoading(true);
     setMessage(null);
     try {
@@ -123,7 +139,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
       if (!requestFence.isCurrent(request)) return;
       setMessage({ text: reason instanceof Error ? reason.message : String(reason), error: true });
     } finally {
-      if (requestFence.isCurrent(request)) setLoading(false);
+      if (requestFence.finishLoad(request)) setLoading(false);
     }
   }, [connected, requestFence]);
 

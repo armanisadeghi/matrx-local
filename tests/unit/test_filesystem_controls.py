@@ -255,7 +255,12 @@ def test_clear_derived_removes_rebuildable_state_and_reports_storage(tmp_path: P
     assert index.entry_count() == 0
     assert index.queue_count() == 0
     assert index.last_scan_at() is None
-    assert not Path(f"{index.path}-wal").exists() or Path(f"{index.path}-wal").stat().st_size == 0
+    wal_path = Path(f"{index.path}-wal")
+    try:
+        wal_size = wal_path.stat().st_size
+    except FileNotFoundError:
+        wal_size = 0
+    assert wal_size == 0
 
 
 def test_embedding_commit_enforces_current_quota_atomically(tmp_path: Path) -> None:

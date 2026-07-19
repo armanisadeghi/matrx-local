@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import importlib.util
 import logging
 import os
@@ -273,6 +274,9 @@ class FilesystemService:
                 ),
                 timeout=min(max(timeout_seconds, 0.1), 10.0),
             )
+            disk_roots = [resolved_root] if resolved_root else await asyncio.to_thread(
+                self.index.pending_root_paths
+            )
             disk_search = asyncio.wait_for(
                 asyncio.to_thread(
                     self._bounded_disk_find,
@@ -280,6 +284,7 @@ class FilesystemService:
                     resolved_root,
                     prefix_limit,
                     timeout_seconds,
+                    disk_roots,
                 ),
                 timeout=min(max(timeout_seconds + 0.25, 0.25), 10.25),
             )
@@ -314,7 +319,7 @@ class FilesystemService:
             has_more = len(entries) > safe_limit
             entries = entries[:safe_limit]
         paused = bool(_indexing_settings()["paused"])
-        unavailable = self._unavailable_priority_roots()
+        unavailable = await asyncio.to_thread(self._unavailable_priority_roots)
         return SearchPage(
             clean,
             tuple(entries),
@@ -351,17 +356,22 @@ class FilesystemService:
         }
 
     def _bounded_disk_find(
-        self, query: str, root: str | None, limit: int, timeout_seconds: float
+        self,
+        query: str,
+        root: str | None,
+        limit: int,
+        timeout_seconds: float,
+        roots: list[str] | None = None,
     ) -> list[FileEntry]:
         deadline = time.monotonic() + min(max(timeout_seconds, 0.1), 5.0)
         needle = query.casefold()
-        roots = [root] if root else [place.path for place in self._places if place.available]
-        queue: list[str] = list(dict.fromkeys(value for value in roots if value))
+        candidates = roots or ([root] if root else [place.path for place in self._places if place.available])
+        queue = deque(dict.fromkeys(value for value in candidates if value))
         seen: set[str] = set()
         results: list[FileEntry] = []
         visited = 0
         while queue and len(results) < limit and time.monotonic() < deadline and visited < 50_000:
-            directory = queue.pop(0)
+            directory = queue.popleft()
             normalized = os.path.normcase(os.path.abspath(directory))
             if normalized in seen:
                 continue
@@ -373,7 +383,7 @@ class FilesystemService:
             with iterator:
                 for item in iterator:
                     visited += 1
-                    if needle in item.name.casefold():
+                    if needle in os.path.abspath(item.path).casefold():
                         results.append(FileEntry.from_dir_entry(item))
                         if len(results) >= limit:
                             break
@@ -397,7 +407,9 @@ class FilesystemService:
         fastembed_available = importlib.util.find_spec("fastembed") is not None
         queued = int(scan["total"])
         failed = int(scan["failed"])
-        unavailable_priority_roots = self._unavailable_priority_roots()
+        unavailable_priority_roots = await asyncio.to_thread(
+            self._unavailable_priority_roots
+        )
         metadata_state = (
             "partial" if failed or unavailable_priority_roots
             else "paused" if paused else "indexing" if queued else "complete"
@@ -436,16 +448,18 @@ class FilesystemService:
         }
 
     def _unavailable_priority_roots(self) -> list[dict[str, str]]:
-        available = {
-            normalize_path_key(place.path)
-            for place in self._places
-            if place.available
-        }
-        return [
-            {"path": str(root["path"]), "label": str(root.get("label") or root["path"])}
-            for root in configured_priority_roots()
-            if root.get("path") and normalize_path_key(str(root["path"])) not in available
-        ]
+        unavailable: list[dict[str, str]] = []
+        for root in configured_priority_roots():
+            raw_path = str(root.get("path") or "")
+            if not raw_path:
+                continue
+            path = Path(raw_path).expanduser().absolute()
+            if path.is_dir():
+                continue
+            unavailable.append(
+                {"path": raw_path, "label": str(root.get("label") or raw_path)}
+            )
+        return unavailable
 
     async def _crawl_loop(self) -> None:
         while not self._stop.is_set():
@@ -697,7 +711,13 @@ def _indexing_settings() -> dict[str, object]:
 
         stored = get_settings_sync().get("filesystem_index", {}) or {}
     except Exception:
-        stored = {}
+        # A transient settings failure must never silently re-enable private
+        # local indexing after the user paused or disabled enrichment.
+        stored = {
+            "paused": True,
+            "content_enabled": False,
+            "semantic_enabled": False,
+        }
     return {
         "paused": bool(stored.get("paused", False)),
         "content_enabled": bool(stored.get("content_enabled", True)),

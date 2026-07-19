@@ -852,6 +852,16 @@ class FilesystemIndex:
             row = db.execute("SELECT COUNT(*) AS count FROM filesystem_scan_queue").fetchone()
             return int(row["count"])
 
+    def pending_root_paths(self) -> list[str]:
+        """Return only roots that still own durable scan work."""
+        with self._connect() as db:
+            rows = db.execute(
+                """SELECT DISTINCT r.path FROM filesystem_scan_queue q
+                   JOIN filesystem_roots r ON r.id=q.root_id
+                   WHERE r.available=1 ORDER BY q.priority DESC,r.path"""
+            ).fetchall()
+        return [str(row["path"]) for row in rows]
+
     def clear_derived(self) -> None:
         """Delete the fully rebuildable local index without touching user files."""
         with self._connect() as db:

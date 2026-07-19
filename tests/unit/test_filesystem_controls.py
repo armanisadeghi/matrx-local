@@ -169,6 +169,58 @@ async def test_unavailable_authored_root_keeps_status_partial(
 
 
 @pytest.mark.anyio
+async def test_removed_authored_root_invalidates_cached_available_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    removable = tmp_path / "archive"
+    removable.mkdir()
+    authored = [{"path": str(removable), "label": "Archive drive"}]
+    monkeypatch.setattr(filesystem_service_module, "configured_priority_roots", lambda: authored)
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    service._places = [
+        Place("archive", "Archive drive", str(removable), "configured", 130, True, True)
+    ]
+    removable.rmdir()
+
+    status = await service.status()
+
+    assert status["metadata_state"] == "partial"
+    assert status["unavailable_priority_roots"] == authored
+
+
+def test_indexing_settings_fail_closed_when_settings_store_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.cloud_sync import settings_sync
+
+    def fail_settings() -> None:
+        raise RuntimeError("settings unavailable")
+
+    monkeypatch.setattr(settings_sync, "get_settings_sync", fail_settings)
+
+    settings = filesystem_service_module._indexing_settings()
+
+    assert settings["paused"] is True
+    assert settings["content_enabled"] is False
+    assert settings["semantic_enabled"] is False
+
+
+def test_bounded_disk_search_matches_full_path_like_index_search(tmp_path: Path) -> None:
+    root = tmp_path / "needle-parent"
+    root.mkdir()
+    child = root / "plain.txt"
+    child.write_text("plain", encoding="utf-8")
+    service = FilesystemService(tmp_path / "index.sqlite3")
+
+    results = service._bounded_disk_find(
+        "needle-parent", None, 10, 1.0, [str(root)]
+    )
+
+    assert [entry.path for entry in results] == [str(child)]
+
+
+@pytest.mark.anyio
 async def test_partial_index_search_merges_index_and_bounded_disk_results(tmp_path: Path) -> None:
     root = tmp_path / "root"
     root.mkdir()

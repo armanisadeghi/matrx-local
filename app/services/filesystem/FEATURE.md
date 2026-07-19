@@ -98,7 +98,8 @@ noise; they do not omit sibling user directories or mounted volumes.
 Directory pages cap at 500 entries. Direct listings use expiring, single-use,
 query-scoped opaque cursors and an incremental SQLite snapshot. Each request
 observes at most 20,000 raw entries, each snapshot caps at 1,000,000 visible
-entries, and service-wide session/count limits evict abandoned snapshots.
+entries and 512 MiB, and service-wide active/idle session, entry, and disk
+limits evict abandoned snapshots or reject excess concurrent work clearly.
 Snapshot construction may return an empty progress page with a non-null cursor;
 only an empty page without a cursor means the directory is empty. This keeps
 memory and event-loop work bounded while preserving directory-first lexical

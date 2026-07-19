@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import asyncio
+import sys
+import threading
 from array import array
 from pathlib import Path
 from types import SimpleNamespace
@@ -143,6 +146,108 @@ async def test_direct_listing_enforces_snapshot_entry_cap(
 
 
 @pytest.mark.anyio
+async def test_direct_listing_caps_concurrent_first_page_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "browse"
+    root.mkdir()
+    (root / "entry").touch()
+    entered = threading.Event()
+    release = threading.Event()
+    original_page = filesystem_paging_module._DirectorySnapshot.page
+
+    def blocked_page(self, limit: int, *, scan_budget: int):  # type: ignore[no-untyped-def]
+        entered.set()
+        assert release.wait(2)
+        return original_page(self, limit, scan_budget=scan_budget)
+
+    monkeypatch.setattr(filesystem_paging_module, "MAX_DIRECTORY_LIST_SESSIONS", 1)
+    monkeypatch.setattr(
+        filesystem_paging_module._DirectorySnapshot, "page", blocked_page
+    )
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    first = asyncio.create_task(service.list_directory(str(root)))
+    assert await asyncio.to_thread(entered.wait, 1)
+
+    with pytest.raises(ValueError, match="Too many concurrent"):
+        await service.list_directory(str(root))
+
+    release.set()
+    assert (await first).entries[0].name == "entry"
+
+
+@pytest.mark.anyio
+async def test_direct_listing_global_entry_reservations_include_active_scans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "browse"
+    root.mkdir()
+    for index in range(3):
+        (root / str(index)).touch()
+    entered = threading.Event()
+    release = threading.Event()
+    original_page = filesystem_paging_module._DirectorySnapshot.page
+    first_call = [True]
+
+    def blocked_first(self, limit: int, *, scan_budget: int):  # type: ignore[no-untyped-def]
+        if first_call[0]:
+            first_call[0] = False
+            entered.set()
+            assert release.wait(2)
+        return original_page(self, limit, scan_budget=scan_budget)
+
+    monkeypatch.setattr(filesystem_paging_module, "DIRECTORY_PAGE_SCAN_BUDGET", 2)
+    monkeypatch.setattr(filesystem_paging_module, "MAX_DIRECTORY_LIST_TOTAL_ENTRIES", 2)
+    monkeypatch.setattr(
+        filesystem_paging_module._DirectorySnapshot, "page", blocked_first
+    )
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    first = asyncio.create_task(service.list_directory(str(root)))
+    assert await asyncio.to_thread(entered.wait, 1)
+
+    with pytest.raises(ValueError, match="service-wide 2-entry limit"):
+        await service.list_directory(str(root))
+
+    release.set()
+    progress = await first
+    assert progress.entries == ()
+    assert progress.total == 2
+
+
+@pytest.mark.anyio
+async def test_direct_listing_stop_and_reaper_delete_abandoned_snapshots(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "browse"
+    root.mkdir()
+    (root / "a").touch()
+    (root / "b").touch()
+    now = [100.0]
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    registry = DirectoryListSessionRegistry(clock=lambda: now[0])
+    service._directory_lists = registry
+
+    first = await service.list_directory(str(root), limit=1)
+    assert first.next_cursor is not None
+    session = next(iter(registry._sessions.values()))
+    first_snapshot = session.snapshot.snapshot_path.parent
+    assert first_snapshot.exists()
+    now[0] += filesystem_paging_module.DIRECTORY_LIST_SESSION_TTL_SECONDS + 1
+    await asyncio.to_thread(registry.reap_expired)
+    assert registry.session_count == 0
+    assert not first_snapshot.exists()
+
+    second = await service.list_directory(str(root), limit=1)
+    assert second.next_cursor is not None
+    second_snapshot = next(iter(registry._sessions.values())).snapshot.snapshot_path.parent
+    await service.stop()
+    assert registry.session_count == 0
+    assert not second_snapshot.exists()
+    with pytest.raises(ValueError, match="stopping"):
+        await service.list_directory(str(root))
+
+
+@pytest.mark.anyio
 async def test_direct_listing_does_not_follow_symlinks(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.mkdir()
@@ -162,6 +267,32 @@ async def test_direct_listing_does_not_follow_symlinks(tmp_path: Path) -> None:
         ("linked", "symlink")
     ]
     assert all(entry.name != "nested.txt" for entry in page.entries)
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="Invalid UTF-8 filename bytes are supported on Linux filesystems",
+)
+async def test_direct_listing_round_trips_opaque_posix_filename_bytes(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "browse"
+    root.mkdir()
+    raw_name = b"opaque-\xff.txt"
+    descriptor = os.open(
+        os.fsencode(root) + os.sep.encode() + raw_name,
+        os.O_CREAT | os.O_WRONLY,
+        0o600,
+    )
+    os.close(descriptor)
+    service = FilesystemService(tmp_path / "index.sqlite3")
+
+    page = await service.list_directory(str(root))
+
+    assert len(page.entries) == 1
+    assert os.fsencode(page.entries[0].name) == raw_name
+    assert page.to_dict()["entries"][0]["name"] == page.entries[0].name
 
 
 def test_index_search_content_and_crash_safe_queue_lease(tmp_path: Path) -> None:

@@ -18,8 +18,12 @@ from app.services.filesystem.roots import normalize_path_key
 
 DIRECTORY_PAGE_SCAN_BUDGET = 20_000
 MAX_DIRECTORY_SNAPSHOT_ENTRIES = 1_000_000
-MAX_DIRECTORY_LIST_SESSIONS = 8
+MAX_DIRECTORY_LIST_SESSIONS = 4
 MAX_DIRECTORY_LIST_TOTAL_ENTRIES = 2_000_000
+MAX_DIRECTORY_SNAPSHOT_DISK_BYTES = 512 * 1024 * 1024
+MAX_DIRECTORY_LIST_TOTAL_DISK_BYTES = (
+    MAX_DIRECTORY_LIST_SESSIONS * MAX_DIRECTORY_SNAPSHOT_DISK_BYTES
+)
 DIRECTORY_LIST_SESSION_TTL_SECONDS = 300.0
 
 
@@ -46,6 +50,10 @@ class _DirectorySnapshot:
         self._db.execute("PRAGMA journal_mode=OFF")
         self._db.execute("PRAGMA synchronous=OFF")
         self._db.execute("PRAGMA temp_store=FILE")
+        page_size = int(self._db.execute("PRAGMA page_size").fetchone()[0])
+        self._db.execute(
+            f"PRAGMA max_page_count={MAX_DIRECTORY_SNAPSHOT_DISK_BYTES // page_size}"
+        )
         self._db.execute(
             """CREATE TABLE entries (
                    sort_kind INTEGER NOT NULL,
@@ -65,6 +73,20 @@ class _DirectorySnapshot:
     @property
     def entry_count(self) -> int:
         return self._entry_count
+
+    @property
+    def scan_complete(self) -> bool:
+        return self._scan_complete
+
+    @property
+    def disk_bytes(self) -> int:
+        try:
+            return sum(
+                item.stat().st_size
+                for item in Path(self._temporary_directory.name).iterdir()
+            )
+        except OSError:
+            return 0
 
     def _open_iterator(self) -> os.ScandirIterator[str]:
         if self._iterator is None:
@@ -109,9 +131,20 @@ class _DirectorySnapshot:
         finally:
             self._db.commit()
 
-    def page(self, limit: int) -> tuple[tuple[FileEntry, ...], bool, int]:
+    def page(
+        self, limit: int, *, scan_budget: int
+    ) -> tuple[tuple[FileEntry, ...], bool, int]:
         """Return entries, whether more work/results exist, and current total."""
-        self._scan(DIRECTORY_PAGE_SCAN_BUDGET)
+        try:
+            self._scan(scan_budget)
+        except sqlite3.OperationalError as exc:
+            if "full" in str(exc).lower():
+                raise DirectoryPagingError(
+                    "Directory snapshot exceeds its "
+                    f"{MAX_DIRECTORY_SNAPSHOT_DISK_BYTES // (1024 * 1024)} MiB "
+                    "disk limit; browse a narrower directory."
+                ) from exc
+            raise
         if not self._scan_complete:
             # Sorting cannot be honest until every sibling has been observed.
             return (), True, self._entry_count
@@ -162,6 +195,10 @@ class _DirectoryListSession:
     def entry_count(self) -> int:
         return self.snapshot.entry_count
 
+    @property
+    def disk_bytes(self) -> int:
+        return self.snapshot.disk_bytes
+
     def close(self) -> None:
         self.snapshot.close()
 
@@ -174,6 +211,7 @@ class DirectoryListSessionRegistry:
         self._lock = threading.Lock()
         self._sessions: dict[str, _DirectoryListSession] = {}
         self._active: set[_DirectoryListSession] = set()
+        self._reserved_entries = 0
         self._accepting = True
 
     @staticmethod
@@ -206,38 +244,98 @@ class DirectoryListSessionRegistry:
         self, path: str, cursor: str | None, show_hidden: bool
     ) -> _DirectoryListSession:
         expected_scope = self._scope(path, show_hidden)
+        retired: list[_DirectoryListSession] = []
         with self._lock:
             if not self._accepting:
                 raise DirectoryPagingError("Filesystem service is stopping")
-            expired = self._discard_expired_locked(self._clock())
+            retired.extend(self._discard_expired_locked(self._clock()))
             session = self._sessions.pop(cursor, None) if cursor is not None else None
             if session is not None:
                 self._active.add(session)
-        self._close_all(expired)
+            elif cursor is None:
+                while self._sessions and (
+                    len(self._sessions) + len(self._active)
+                    >= MAX_DIRECTORY_LIST_SESSIONS
+                ):
+                    oldest = min(
+                        self._sessions,
+                        key=lambda token: self._sessions[token].expires_at,
+                    )
+                    retired.append(self._sessions.pop(oldest))
+                if len(self._active) >= MAX_DIRECTORY_LIST_SESSIONS:
+                    session = None
+                else:
+                    # Construct under the registry lock so concurrent first
+                    # pages cannot all pass the session-cap check together.
+                    session = _DirectoryListSession(
+                        path, show_hidden=show_hidden, scope=expected_scope
+                    )
+                    self._active.add(session)
+        self._close_all(retired)
 
-        if cursor is not None:
-            if session is None:
+        if session is None:
+            if cursor is not None:
                 raise DirectoryPagingError(
                     "Invalid, expired, or already-used cursor for this directory listing"
                 )
-            if session.scope != expected_scope:
-                with self._lock:
-                    self._active.discard(session)
-                session.close()
-                raise DirectoryPagingError(
-                    "Cursor belongs to a different directory listing"
-                )
-            return session
-
-        session = _DirectoryListSession(
-            path, show_hidden=show_hidden, scope=expected_scope
-        )
-        with self._lock:
-            if not self._accepting:
-                session.close()
-                raise DirectoryPagingError("Filesystem service is stopping")
-            self._active.add(session)
+            raise DirectoryPagingError(
+                "Too many concurrent directory listings; finish an existing "
+                "listing or let its cursor expire."
+            )
+        if session.scope != expected_scope:
+            with self._lock:
+                self._active.discard(session)
+            session.close()
+            raise DirectoryPagingError(
+                "Cursor belongs to a different directory listing"
+            )
         return session
+
+    def _reserve_scan_capacity(
+        self, session: _DirectoryListSession
+    ) -> tuple[int, list[_DirectoryListSession]]:
+        if session.snapshot.scan_complete:
+            return 0, []
+        retired: list[_DirectoryListSession] = []
+        with self._lock:
+            while self._sessions:
+                current_entries = sum(
+                    item.entry_count for item in self._sessions.values()
+                ) + sum(item.entry_count for item in self._active)
+                available = (
+                    MAX_DIRECTORY_LIST_TOTAL_ENTRIES
+                    - current_entries
+                    - self._reserved_entries
+                )
+                if available > 0:
+                    break
+                oldest = min(
+                    self._sessions,
+                    key=lambda token: self._sessions[token].expires_at,
+                )
+                retired.append(self._sessions.pop(oldest))
+            current_entries = sum(
+                item.entry_count for item in self._sessions.values()
+            ) + sum(item.entry_count for item in self._active)
+            available = (
+                MAX_DIRECTORY_LIST_TOTAL_ENTRIES
+                - current_entries
+                - self._reserved_entries
+            )
+            reservation = min(DIRECTORY_PAGE_SCAN_BUDGET, max(0, available))
+            self._reserved_entries += reservation
+        if reservation == 0:
+            self._close_all(retired)
+            raise DirectoryPagingError(
+                "Concurrent directory snapshots reached the service-wide "
+                f"{MAX_DIRECTORY_LIST_TOTAL_ENTRIES:,}-entry limit; finish "
+                "another listing or let its cursor expire."
+            )
+        return reservation, retired
+
+    def _release_scan_capacity(self, reservation: int) -> None:
+        with self._lock:
+            self._reserved_entries -= reservation
 
     def _store(self, session: _DirectoryListSession) -> str | None:
         evicted: list[_DirectoryListSession] = []
@@ -254,6 +352,9 @@ class DirectoryListSessionRegistry:
                     or sum(item.entry_count for item in self._sessions.values())
                     + session.entry_count
                     > MAX_DIRECTORY_LIST_TOTAL_ENTRIES
+                    or sum(item.disk_bytes for item in self._sessions.values())
+                    + session.disk_bytes
+                    > MAX_DIRECTORY_LIST_TOTAL_DISK_BYTES
                 ):
                     oldest = min(
                         self._sessions,
@@ -280,13 +381,22 @@ class DirectoryListSessionRegistry:
         show_hidden: bool,
     ) -> DirectoryPage:
         session = self._take_or_create(path, cursor, show_hidden)
+        reservation = 0
         try:
-            entries, has_more, total = session.snapshot.page(limit)
+            reservation, retired = self._reserve_scan_capacity(session)
+            self._close_all(retired)
+            entries, has_more, total = session.snapshot.page(
+                limit, scan_budget=reservation
+            )
         except BaseException:
+            if reservation:
+                self._release_scan_capacity(reservation)
             with self._lock:
                 self._active.discard(session)
             session.close()
             raise
+        if reservation:
+            self._release_scan_capacity(reservation)
 
         if has_more:
             next_cursor = self._store(session)

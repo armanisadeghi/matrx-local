@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
+from app.common.process_shutdown import process_shutdown_requested
 
 logger = logging.getLogger(__name__)
 
@@ -1855,13 +1856,29 @@ async def check_all_permissions() -> list[dict[str, Any]]:
         PLATFORM["system"], PLATFORM["machine"], len(names),
     )
 
-    results = await asyncio.gather(
+    scan = asyncio.gather(
         *(
             _run_permission_check(name, checker)
             for name, checker in PERMISSION_CHECKERS.items()
         ),
         return_exceptions=True,
     )
+    try:
+        while not scan.done():
+            if process_shutdown_requested():
+                # Permission probes are advisory and may own platform
+                # subprocesses. Cancel the canonical gather during process
+                # shutdown; _run() handles CancelledError by killing/reaping
+                # its child before the request returns.
+                scan.cancel()
+                await asyncio.gather(scan, return_exceptions=True)
+                return []
+            await asyncio.sleep(0.1)
+        results = scan.result()
+    except asyncio.CancelledError:
+        scan.cancel()
+        await asyncio.gather(scan, return_exceptions=True)
+        raise
 
     output: list[dict[str, Any]] = []
     for i, result in enumerate(results):

@@ -11,6 +11,7 @@ from app.common.process_shutdown import (
     request_process_shutdown,
 )
 from app.services.downloads.manager import DownloadManager
+from app.services.permissions import checker as permission_checker
 
 
 @pytest.fixture(autouse=True)
@@ -121,3 +122,32 @@ async def test_wake_word_stream_exits_on_process_shutdown() -> None:
 
     with pytest.raises(StopAsyncIteration):
         await asyncio.wait_for(response.body_iterator.__anext__(), timeout=0.25)
+
+
+@pytest.mark.anyio
+async def test_permission_scan_cancels_probes_on_process_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def slow_probe() -> permission_checker.PermissionResult:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(
+        permission_checker,
+        "PERMISSION_CHECKERS",
+        {"slow": slow_probe},
+    )
+    scan = asyncio.create_task(permission_checker.check_all_permissions())
+    await started.wait()
+
+    request_process_shutdown()
+
+    assert await asyncio.wait_for(scan, timeout=0.5) == []
+    assert cancelled.is_set()

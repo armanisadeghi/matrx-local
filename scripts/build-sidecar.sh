@@ -511,8 +511,8 @@ for _pkg in ("replicate", "protobuf", "matrx-ai", "matrx-utils",
 # (google.protobuf, jinja2, huggingface_hub). This fallback path and specs/*.spec
 # read ONE list so they cannot drift: specs/_managed_runtime_bundle.py.
 sys.path.insert(0, "specs")
-from _managed_runtime_bundle import MANAGED_RUNTIME_SHARED_PACKAGES
-for _pkg in MANAGED_RUNTIME_SHARED_PACKAGES:
+from _managed_runtime_bundle import managed_runtime_shared_packages
+for _pkg in managed_runtime_shared_packages(os.environ["MATRX_BUILD_TARGET"]):
     args += ["--collect-submodules", _pkg]
 
 args.append("run.py")
@@ -521,7 +521,7 @@ print("Running:", " ".join(args))
 result = subprocess.run(args)
 sys.exit(result.returncode)
 PYINSTALLER_EOF
-    "$PYTHON_CMD" "$CMD_FILE"
+    MATRX_BUILD_TARGET="$TARGET" "$PYTHON_CMD" "$CMD_FILE"
     local rc=$?
     rm -f "$CMD_FILE"
     return $rc
@@ -670,6 +670,7 @@ echo "=== Verifying frozen sidecar + managed image runtime contract ==="
 "$PYTHON" scripts/verify-frozen-runtime.py \
     --binary "$FROZEN_VERIFY_BINARY" \
     --python "$PYTHON" \
+    --uv "$STAGED_UV" \
     --target "$TARGET" || {
     echo "ERROR: frozen sidecar runtime verification failed."
     exit 1

@@ -17,14 +17,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.metadata as metadata
 import json
 import sys
 import tomllib
 from pathlib import Path
 from typing import Iterable
 
-from packaging.markers import default_environment
+from packaging.markers import Marker
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
@@ -36,6 +35,7 @@ FROZEN_EXCLUDED_DISTRIBUTIONS = {
     "torchvision",
     "torchaudio",
 }
+FROZEN_EXCLUDED_PREFIXES = ("cuda-", "nvidia-", "triton")
 CRITICAL_FROZEN_MODULES = (
     "doctest",
     "filecmp",
@@ -83,10 +83,29 @@ RUNTIME_ATTRIBUTES = {
         "AutoTokenizer",
     ),
 }
+TARGETS = (
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+)
+DISTRIBUTION_IMPORT_OVERRIDES = {
+    "markdown-it-py": ("markdown_it",),
+    "pillow": ("PIL",),
+    "pyyaml": ("yaml", "_yaml"),
+    "setuptools": ("setuptools", "_distutils_hack"),
+    "sympy": ("sympy", "isympy"),
+}
 
 
 def _normalize(name: str) -> str:
     return canonicalize_name(name)
+
+
+def _is_frozen_excluded(name: str) -> bool:
+    return name in FROZEN_EXCLUDED_DISTRIBUTIONS or name.startswith(
+        FROZEN_EXCLUDED_PREFIXES
+    )
 
 
 def _read_project_contract() -> tuple[list[str], list[str]]:
@@ -116,20 +135,33 @@ def _requirement_names(requirements: Iterable[str]) -> set[str]:
     return {_normalize(Requirement(requirement).name) for requirement in requirements}
 
 
-def _distribution_closure(requirements: Iterable[str]) -> set[str]:
-    environment = default_environment()
-    environment["extra"] = ""
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    disabled_overrides = {
-        _normalize(requirement.name)
-        for raw in project.get("tool", {}).get("uv", {}).get("override-dependencies", ())
-        for requirement in (Requirement(raw),)
-        if requirement.marker and not requirement.marker.evaluate(environment)
+def _target_environment(target: str) -> dict[str, str]:
+    os_name, machine, system, sys_platform = {
+        "aarch64-apple-darwin": ("posix", "arm64", "Darwin", "darwin"),
+        "x86_64-apple-darwin": ("posix", "x86_64", "Darwin", "darwin"),
+        "x86_64-pc-windows-msvc": ("nt", "AMD64", "Windows", "win32"),
+        "x86_64-unknown-linux-gnu": ("posix", "x86_64", "Linux", "linux"),
+    }[target]
+    return {
+        "implementation_name": "cpython",
+        "implementation_version": "3.13.0",
+        "os_name": os_name,
+        "platform_machine": machine,
+        "platform_release": "",
+        "platform_system": system,
+        "platform_version": "",
+        "python_full_version": "3.13.0",
+        "python_version": "3.13",
+        "sys_platform": sys_platform,
+        "extra": "",
     }
-    # Evaluate markers on the project's direct requirements before resolving
-    # their installed distribution closure. Stripping markers here makes a
-    # Linux release runner demand macOS-only PyObjC packages (and deliberately
-    # disabled compatibility dependencies such as tflite-runtime).
+
+
+def _locked_distribution_closure(
+    requirements: Iterable[str], *, target: str, packages: dict[str, dict]
+) -> set[str]:
+    """Resolve a target from the committed uv graph, never host metadata."""
+    environment = _target_environment(target)
     pending: list[str] = []
     for raw_requirement in requirements:
         requirement = Requirement(raw_requirement)
@@ -137,57 +169,29 @@ def _distribution_closure(requirements: Iterable[str]) -> set[str]:
             continue
         pending.append(_normalize(requirement.name))
     result: set[str] = set()
-    missing: list[str] = []
-
+    missing: set[str] = set()
     while pending:
         name = pending.pop()
-        if name in result or name in disabled_overrides:
+        if name in result:
             continue
-        try:
-            distribution = metadata.distribution(name)
-        except metadata.PackageNotFoundError:
-            missing.append(name)
+        package = packages.get(name)
+        if package is None:
+            missing.add(name)
             continue
         result.add(name)
-        for raw_requirement in distribution.requires or ():
-            requirement = Requirement(raw_requirement)
-            if requirement.marker and not requirement.marker.evaluate(environment):
+        for dependency in package.get("dependencies", ()):
+            marker = dependency.get("marker")
+            if marker and not Marker(marker).evaluate(environment):
                 continue
-            pending.append(_normalize(requirement.name))
-
+            pending.append(_normalize(dependency["name"]))
     if missing:
         raise RuntimeError(
-            "exact release environment is missing required distributions: "
-            + ", ".join(sorted(set(missing)))
-            + ". Run uv sync --frozen --extra transcription --extra scheduler "
-            "--extra image-gen before generating/checking manifests."
+            f"uv.lock is missing {target} distributions: {', '.join(sorted(missing))}"
         )
     return result
 
 
-def _top_level_imports(distributions: Iterable[str]) -> dict[str, list[str]]:
-    package_map = metadata.packages_distributions()
-    result: dict[str, list[str]] = {}
-    for distribution in sorted(distributions):
-        imports = sorted(
-            package
-            for package, owners in package_map.items()
-            if any(_normalize(owner) == distribution for owner in owners)
-        )
-        if not imports:
-            candidate = distribution.replace("-", "_")
-            try:
-                __import__(candidate)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"cannot map distribution {distribution!r} to a top-level import"
-                ) from exc
-            imports = [candidate]
-        result[distribution] = imports
-    return result
-
-
-def _lock_payload() -> tuple[str, dict[str, str]]:
+def _lock_payload() -> tuple[str, dict[str, str], dict[str, dict]]:
     lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
     packages = []
     versions: dict[str, str] = {}
@@ -203,7 +207,10 @@ def _lock_payload() -> tuple[str, dict[str, str]]:
                 versions[_normalize(name)] = version
         packages.append(canonical)
     payload = json.dumps(packages, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(payload).hexdigest(), versions
+    package_index = {
+        _normalize(package["name"]): package for package in lock.get("package", ())
+    }
+    return hashlib.sha256(payload).hexdigest(), versions, package_index
 
 
 def _contract_payload() -> dict:
@@ -218,16 +225,40 @@ def _contract_payload() -> dict:
             f"only_project={sorted(project_names - runtime_names)}"
         )
 
-    core_closure = _distribution_closure(core_requirements)
-    managed_closure = _distribution_closure(runtime_requirements)
+    lock_sha256, locked_versions, locked_packages = _lock_payload()
+    shared_by_target: dict[str, list[str]] = {}
+    shared_versions_by_target: dict[str, dict[str, str]] = {}
+    for target in TARGETS:
+        core_closure = _locked_distribution_closure(
+            core_requirements, target=target, packages=locked_packages
+        )
+        managed_closure = _locked_distribution_closure(
+            runtime_requirements, target=target, packages=locked_packages
+        )
+        shared = sorted(
+            name
+            for name in core_closure & managed_closure
+            if not _is_frozen_excluded(name)
+        )
+        shared_by_target[target] = shared
+        shared_versions_by_target[target] = {
+            name: locked_versions[name] for name in shared
+        }
     shared_distributions = sorted(
-        (core_closure & managed_closure) - FROZEN_EXCLUDED_DISTRIBUTIONS
+        {name for values in shared_by_target.values() for name in values}
     )
-    shared_import_map = _top_level_imports(shared_distributions)
-    shared_imports = sorted(
-        {package for packages in shared_import_map.values() for package in packages}
-    )
-    lock_sha256, _locked_versions = _lock_payload()
+    shared_imports_by_target = {
+        target: sorted(
+            {
+                import_name
+                for distribution in distributions
+                for import_name in DISTRIBUTION_IMPORT_OVERRIDES.get(
+                    distribution, (distribution.replace("-", "_"),)
+                )
+            }
+        )
+        for target, distributions in shared_by_target.items()
+    }
     direct_versions = {
         _normalize(Requirement(raw).name): str(Requirement(raw).specifier).removeprefix("==")
         for raw in runtime_requirements
@@ -244,6 +275,8 @@ def _contract_payload() -> dict:
             module: list(attributes)
             for module, attributes in RUNTIME_ATTRIBUTES.items()
         },
+        "shared_versions_by_target": shared_versions_by_target,
+        "shared_import_packages_by_target": shared_imports_by_target,
     }
     contract_sha256 = hashlib.sha256(
         json.dumps(source_contract, sort_keys=True, separators=(",", ":")).encode()
@@ -257,8 +290,9 @@ def _contract_payload() -> dict:
         "managed_requirements": runtime_requirements,
         "managed_direct_versions": direct_versions,
         "shared_distributions": shared_distributions,
-        "shared_import_map": shared_import_map,
-        "shared_import_packages": shared_imports,
+        "shared_distributions_by_target": shared_by_target,
+        "shared_versions_by_target": shared_versions_by_target,
+        "shared_import_packages_by_target": shared_imports_by_target,
         "critical_frozen_modules": list(CRITICAL_FROZEN_MODULES),
         "runtime_imports": list(RUNTIME_IMPORTS),
         "runtime_attributes": {
@@ -305,7 +339,7 @@ def main() -> int:
     print(
         f"{verb} image runtime contract {contract['contract_sha256'][:12]} "
         f"({len(contract['shared_distributions'])} shared distributions, "
-        f"{len(contract['shared_import_packages'])} import roots)"
+        f"{len(contract['shared_distributions_by_target'])} targets)"
     )
     return 0
 

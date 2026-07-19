@@ -75,6 +75,13 @@ if os.environ.get("MATRX_FROZEN_RUNTIME_VERIFY") == "1":
                 "isolated runtime package inventory differs from target manifest: "
                 f"expected={expected_versions!r}, actual={actual_versions!r}"
             )
+        frozen_shared_versions = contract["shared_versions_by_target"][target]
+        for name, version in frozen_shared_versions.items():
+            if expected_versions.get(name) != version:
+                raise RuntimeError(
+                    f"managed lock shared {name}={expected_versions.get(name)!r}; "
+                    f"frozen contract requires {version!r}"
+                )
 
         imported: dict[str, str] = {}
         for module_name in contract["runtime_imports"]:
@@ -84,6 +91,16 @@ if os.environ.get("MATRX_FROZEN_RUNTIME_VERIFY") == "1":
             module = importlib.import_module(module_name)
             for attribute in attributes:
                 getattr(module, attribute)
+
+        frozen_shared_origins: dict[str, str] = {}
+        for module_name in contract["shared_import_packages_by_target"][target]:
+            module = importlib.import_module(module_name)
+            origin = Path(str(getattr(module, "__file__", ""))).resolve(strict=False)
+            if origin.is_relative_to(runtime_path):
+                raise RuntimeError(
+                    f"shared module {module_name} resolved from managed runtime: {origin}"
+                )
+            frozen_shared_origins[module_name] = str(origin)
 
         for module_name in (
             "accelerate",
@@ -111,8 +128,22 @@ if os.environ.get("MATRX_FROZEN_RUNTIME_VERIFY") == "1":
         # normal PyInit extension. `_has_ops()` proves that native activation.
         if not torchvision.extension._has_ops():
             raise RuntimeError("Torchvision native operators failed to load")
+        torch_variant = target_manifest["torch_variant"]
+        if torch_variant == "cu126":
+            if "+cu126" not in str(torch.__version__) or "+cu126" not in str(
+                torchvision.__version__
+            ):
+                raise RuntimeError("PyTorch/Torchvision are not cu126 builds")
+            if not str(torch.version.cuda or "").startswith("12.6"):
+                raise RuntimeError(
+                    f"PyTorch reports CUDA {torch.version.cuda!r}, expected 12.6"
+                )
+        elif torch_variant == "mps" and not torch.backends.mps.is_built():
+            raise RuntimeError("PyTorch was not built with required MPS support")
 
         result["imports"] = imported
+        result["frozen_shared_origins"] = frozen_shared_origins
+        result["torch_variant"] = torch_variant
         result["target"] = target
         result["torch"] = str(torch.__version__)
         result["torchvision"] = str(torchvision.__version__)

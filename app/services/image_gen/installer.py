@@ -17,6 +17,8 @@ once the install is complete, so the frozen binary can import them.
 from __future__ import annotations
 
 import asyncio
+import base64
+import csv
 import hashlib
 import importlib
 import importlib.metadata
@@ -47,11 +49,13 @@ from app.services.image_gen.runtime_state import (
     RuntimeSnapshot,
     active_slot_path,
     authoritative_snapshot,
+    cleanup_unreferenced_slots,
     create_staging_slot,
     current_runtime_contract,
     finalize_staging_slot,
     read_snapshot,
     remove_slot,
+    runtime_slots_dir,
     slot_path,
     validate_slot,
     write_slot_manifest,
@@ -66,6 +70,10 @@ _COMPATIBILITY_MIGRATION_MARKER = ".compatibility-upgrade-pending"
 _TORCH_REQUIREMENT_RE = re.compile(
     r"^torch\s*(?:\(\s*)?==\s*([^);\s]+)", re.IGNORECASE
 )
+
+_inventory_validation_cache: dict[
+    tuple[str, str, float], tuple[tuple[str, int, int], ...]
+] = {}
 
 CRITICAL_RUNTIME_IMPORTS = (
     "torch",
@@ -117,6 +125,7 @@ class RuntimeInstallContract:
     requirements_file: Path
     packages: dict[str, str]
     record_hashes: dict[str, str]
+    torch_variant: str = "mps"
 
     @property
     def runtime_revision(self) -> str:
@@ -201,6 +210,25 @@ def load_runtime_install_contract() -> RuntimeInstallContract:
                 f"Local media generation requires macOS {minimum_macos} or newer; "
                 f"this machine runs {current_text}."
             )
+    minimum_glibc = raw.get("minimum_glibc")
+    if minimum_glibc and sys.platform.startswith("linux"):
+        libc_name, libc_version = platform.libc_ver()
+        try:
+            current_glibc = tuple(int(part) for part in libc_version.split(".")[:2])
+            required_glibc = tuple(
+                int(part) for part in str(minimum_glibc).split(".")[:2]
+            )
+        except ValueError as exc:
+            raise RuntimeError("Runtime contract has an invalid minimum_glibc") from exc
+        if libc_name.lower() != "glibc" or current_glibc < required_glibc:
+            detected = f"{libc_name or 'unknown'} {libc_version or 'unknown'}"
+            raise UnsupportedRuntimeError(
+                f"Local media generation requires glibc {minimum_glibc} or newer; "
+                f"this machine reports {detected}."
+            )
+    torch_variant = raw.get("torch_variant")
+    if torch_variant not in {"mps", "cu126"}:
+        raise RuntimeError("Runtime contract has an invalid torch_variant")
     requirements_value = raw.get("lock_file")
     if not isinstance(requirements_value, str) or Path(requirements_value).name != requirements_value:
         raise RuntimeError("Runtime contract requirements_file must be a basename")
@@ -251,12 +279,29 @@ def load_runtime_install_contract() -> RuntimeInstallContract:
         if name in packages:
             raise RuntimeError(f"Duplicate runtime package entry: {name}")
         packages[name] = version
+    expected_shared = canonical.get("shared_versions_by_target", {}).get(
+        runtime_target_id()
+    )
+    if not isinstance(expected_shared, dict) or any(
+        packages.get(name) != version for name, version in expected_shared.items()
+    ):
+        raise RuntimeError(
+            "Target runtime shared package versions do not match the frozen engine"
+        )
+    expected_variant = (
+        "mps" if runtime_target_id() == "aarch64-apple-darwin" else "cu126"
+    )
+    if torch_variant != expected_variant:
+        raise RuntimeError(
+            f"Target runtime torch_variant must be {expected_variant}, got {torch_variant}"
+        )
     return RuntimeInstallContract(
         contract_sha256=str(claimed_contract),
         target=runtime_target_id(),
         requirements_file=requirements,
         packages=packages,
         record_hashes={},
+        torch_variant=torch_variant,
     )
 
 
@@ -287,21 +332,14 @@ def is_image_gen_installed() -> bool:
         contract = load_runtime_install_contract()
     except Exception:
         return False
-    return (
-        snapshot.runtime_revision == contract.runtime_revision
-        and validate_slot(
-            snapshot.active_slot,
-            expected_revision=contract.runtime_revision,
-            expected_packages=contract.packages,
-            expected_target=contract.target,
-        )[0]
-    )
+    return _snapshot_matches_contract(snapshot, contract)[0]
 
 
 def _compatibility_migration_pending() -> bool:
     """Whether an interrupted mandatory runtime migration must be resumed."""
     snapshot = authoritative_snapshot()
     if snapshot.state in {
+        RuntimePhase.INSTALLING,
         RuntimePhase.UPDATING,
         RuntimePhase.REPAIRING,
         RuntimePhase.VALIDATING,
@@ -311,6 +349,16 @@ def _compatibility_migration_pending() -> bool:
         RuntimePhase.ROLLED_BACK,
     }:
         return True
+    # state.json can be lost independently of immutable slots. Scheduling the
+    # locked reconciler lets it adopt an exact verified slot before GC.
+    try:
+        if any(
+            path.is_dir() and not path.name.startswith(".staging-")
+            for path in runtime_slots_dir().iterdir()
+        ):
+            return True
+    except OSError:
+        pass
     return (
         packages_dir("image-gen-packages") / _COMPATIBILITY_MIGRATION_MARKER
     ).exists()
@@ -334,6 +382,199 @@ def _package_versions_at(pkg_dir: Path) -> dict[str, str]:
     except OSError:
         pass
     return versions
+
+
+def _validate_installed_inventory(
+    pkg_dir: Path,
+    expected_packages: dict[str, str],
+) -> tuple[bool, str]:
+    """Validate the installed wheel inventory without importing native code.
+
+    Exact ``*.dist-info`` versions prevent a stale manifest from blessing a
+    partially replaced environment. Every in-slot wheel RECORD entry must also
+    exist with its recorded size, which detects interrupted updates, deleted
+    modules, and truncated native libraries before the runtime is advertised.
+    Console-script RECORD entries can legitimately point outside a ``--target``
+    tree and are ignored; they are not used by the media runtime.
+    """
+    actual_packages = _package_versions_at(pkg_dir)
+    if actual_packages != expected_packages:
+        return (
+            False,
+            "installed package inventory does not match the release contract: "
+            f"expected={expected_packages!r} actual={actual_packages!r}",
+        )
+
+    root = pkg_dir.resolve(strict=False)
+    for dist_info in sorted(pkg_dir.glob("*.dist-info")):
+        record = dist_info / "RECORD"
+        if not record.is_file():
+            return False, f"installed distribution has no RECORD: {dist_info.name}"
+        try:
+            with record.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.reader(handle))
+        except (OSError, UnicodeError, csv.Error) as exc:
+            return False, f"cannot read {dist_info.name}/RECORD: {exc}"
+        if not rows:
+            return False, f"installed distribution has an empty RECORD: {dist_info.name}"
+        for row in rows:
+            if not row or not row[0]:
+                return False, f"malformed RECORD entry in {dist_info.name}"
+            lexical_candidate = Path(
+                os.path.abspath(os.path.normpath(pkg_dir / row[0]))
+            )
+            if not lexical_candidate.is_relative_to(root):
+                continue
+            candidate = lexical_candidate.resolve(strict=False)
+            if not candidate.is_relative_to(root):
+                return False, f"installed runtime symlink escapes slot: {row[0]}"
+            if not candidate.is_file():
+                return False, f"installed runtime file is missing: {row[0]}"
+            if len(row) >= 3 and row[2]:
+                try:
+                    expected_size = int(row[2])
+                    actual_size = candidate.stat().st_size
+                except (OSError, ValueError) as exc:
+                    return False, f"cannot validate runtime file {row[0]}: {exc}"
+                if actual_size != expected_size:
+                    return (
+                        False,
+                        f"installed runtime file size mismatch: {row[0]} "
+                        f"({actual_size} != {expected_size})",
+                    )
+            if len(row) >= 2 and row[1]:
+                try:
+                    algorithm, encoded_expected = row[1].split("=", 1)
+                except ValueError:
+                    return False, f"malformed RECORD digest for {row[0]}"
+                if algorithm != "sha256":
+                    return False, f"unsupported RECORD digest {algorithm!r} for {row[0]}"
+                digest = hashlib.sha256()
+                try:
+                    with candidate.open("rb") as file_handle:
+                        while chunk := file_handle.read(1024 * 1024):
+                            digest.update(chunk)
+                except OSError as exc:
+                    return False, f"cannot hash runtime file {row[0]}: {exc}"
+                encoded_actual = base64.urlsafe_b64encode(digest.digest()).rstrip(b"=").decode()
+                if encoded_actual != encoded_expected.rstrip("="):
+                    return False, f"installed runtime file digest mismatch: {row[0]}"
+    return True, ""
+
+
+def _record_anchor_hashes(pkg_dir: Path) -> dict[str, str]:
+    """Anchor each wheel RECORD so entries cannot disappear undetected."""
+    anchors: dict[str, str] = {}
+    for record in sorted(pkg_dir.glob("*.dist-info/RECORD")):
+        relative = record.relative_to(pkg_dir).as_posix()
+        anchors[relative] = f"sha256:{hashlib.sha256(record.read_bytes()).hexdigest()}"
+    return anchors
+
+
+def _inventory_metadata_signature(pkg_dir: Path) -> tuple[tuple[str, int, int], ...]:
+    """Cheap cache invalidator: manifests/RECORDs only, never multi-GB wheels."""
+    paths = [pkg_dir / INSTALL_EVIDENCE, pkg_dir / ".runtime-manifest.json"]
+    paths.extend(sorted(pkg_dir.glob("*.dist-info/RECORD")))
+    signature: list[tuple[str, int, int]] = []
+    for path in paths:
+        try:
+            stat = path.stat()
+            signature.append(
+                (path.relative_to(pkg_dir).as_posix(), stat.st_size, stat.st_mtime_ns)
+            )
+        except OSError:
+            signature.append((path.name, -1, -1))
+    return tuple(signature)
+
+
+def _snapshot_matches_contract(
+    snapshot: RuntimeSnapshot,
+    contract: RuntimeInstallContract,
+    *,
+    force_inventory: bool = False,
+) -> tuple[bool, str]:
+    """Revalidate READY state against both durable evidence and disk contents."""
+    if not snapshot.ready or snapshot.active_slot is None:
+        return False, snapshot.failure_detail or snapshot.message
+    if snapshot.runtime_revision != contract.runtime_revision:
+        return (
+            False,
+            f"active={snapshot.runtime_revision!r} required={contract.runtime_revision!r}",
+        )
+    valid, reason, _ = validate_slot(
+        snapshot.active_slot,
+        expected_revision=contract.runtime_revision,
+        expected_packages=contract.packages,
+        expected_target=contract.target,
+    )
+    if not valid:
+        return False, reason
+    slot = slot_path(snapshot.active_slot)
+    cache_key = (
+        snapshot.active_slot,
+        contract.runtime_revision,
+        snapshot.updated_at,
+    )
+    metadata_signature = _inventory_metadata_signature(slot)
+    cached = _inventory_validation_cache.get(cache_key)
+    if (
+        not force_inventory
+        and cached is not None
+        and cached == metadata_signature
+    ):
+        return True, ""
+    inventory_valid, inventory_reason = _validate_installed_inventory(
+        slot, contract.packages
+    )
+    if inventory_valid:
+        # Cache successes only. State/slot/contract transitions necessarily
+        # change the key; failures are never hidden by a stale negative result.
+        _inventory_validation_cache.clear()
+        _inventory_validation_cache[cache_key] = metadata_signature
+    return inventory_valid, inventory_reason
+
+
+def _discover_exact_runtime_slot(
+    contract: RuntimeInstallContract,
+) -> RuntimeSnapshot | None:
+    """Recover a verified slot when state.json was lost or torn.
+
+    Discovery runs only under ``RuntimeFileLock`` and validates the exact
+    release contract plus every wheel RECORD before adoption. It therefore
+    cannot turn an arbitrary orphan directory into authoritative state.
+    """
+    root = runtime_slots_dir()
+    if not root.is_dir():
+        return None
+    candidates: list[tuple[int, RuntimeSnapshot]] = []
+    for path in root.iterdir():
+        if not path.is_dir() or path.name.startswith(".staging-"):
+            continue
+        try:
+            updated_at = path.stat().st_mtime
+        except OSError:
+            continue
+        recovered = RuntimeSnapshot(
+            state=RuntimePhase.READY,
+            runtime_revision=contract.runtime_revision,
+            stage="ready",
+            percent=100.0,
+            message="Recovered verified media runtime after state loss.",
+            active_slot=path.name,
+            packages=dict(contract.packages),
+            updated_at=updated_at,
+        )
+        valid, _ = _snapshot_matches_contract(
+            recovered,
+            contract,
+            force_inventory=True,
+        )
+        if valid:
+            candidates.append((path.stat().st_mtime_ns, recovered))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
 
 
 def get_installed_package_versions() -> dict[str, str]:
@@ -373,28 +614,22 @@ def needs_upgrade() -> bool:
     """
     if not getattr(sys, "frozen", False):
         return False
+    snapshot = authoritative_snapshot()
     if _compatibility_migration_pending():
         return True
     if not is_image_gen_installed():
         # A legacy completion marker is evidence that user opted into the
         # runtime, but is never authority. Convert it through a full staged
         # reinstall instead of trusting or mutating it in place.
-        return (packages_dir("image-gen-packages") / INSTALL_EVIDENCE).exists()
-    snapshot = authoritative_snapshot()
+        return (
+            snapshot.state is not RuntimePhase.ABSENT
+            or (packages_dir("image-gen-packages") / INSTALL_EVIDENCE).exists()
+        )
     try:
         contract = load_runtime_install_contract()
     except Exception:
         return True
-    if (
-        snapshot.runtime_revision != contract.runtime_revision
-        or snapshot.active_slot is None
-        or not validate_slot(
-            snapshot.active_slot,
-            expected_revision=contract.runtime_revision,
-            expected_packages=contract.packages,
-            expected_target=contract.target,
-        )[0]
-    ):
+    if not _snapshot_matches_contract(snapshot, contract)[0]:
         return True
     from app.services.image_gen.service import (  # noqa: PLC0415 — avoid cycle at import time
         MIN_DIFFUSERS_VERSION,
@@ -428,6 +663,7 @@ def critical_runtime_import_check(
     *,
     importer: Callable[[str], Any] = importlib.import_module,
     expected_root: Path | None = None,
+    expected_torch_variant: str | None = None,
 ) -> dict[str, str]:
     """Exercise the lazy imports that have caused packaged-only outages.
 
@@ -492,6 +728,17 @@ def critical_runtime_import_check(
     transformers = versions.get("transformers", "0.0")
     if tuple(int(part) for part in transformers.split(".")[:2]) < (5, 3):
         raise RuntimeError(f"Transformers >=5.3 is required, found {transformers!r}")
+    if expected_torch_variant == "cu126":
+        if "+cu126" not in versions.get("torch", "") or "+cu126" not in versions.get(
+            "torchvision", ""
+        ):
+            raise RuntimeError("Torch and Torchvision must be cu126 builds")
+        if not str(modules["torch"].version.cuda or "").startswith("12.6"):
+            raise RuntimeError(
+                f"Torch reports CUDA {modules['torch'].version.cuda!r}, expected 12.6"
+            )
+    elif expected_torch_variant == "mps" and not modules["torch"].backends.mps.is_built():
+        raise RuntimeError("Torch was not built with required MPS support")
     return versions
 
 
@@ -775,7 +1022,9 @@ def verify_runtime_path(path: Path) -> RuntimeVerification:
         # optional runtime. This is the only ordering the verifier may certify.
         sys.path.append(str(path))
     try:
-        packages = critical_runtime_import_check(expected_root=path)
+        packages = critical_runtime_import_check(
+            expected_root=path, expected_torch_variant=contract.torch_variant
+        )
     except Exception as exc:
         _rollback_runtime_activation(path, modules_before, path_was_present)
         return RuntimeVerification(False, {}, "critical_import_failed", str(exc))
@@ -796,7 +1045,7 @@ def verify_runtime_path(path: Path) -> RuntimeVerification:
     return RuntimeVerification(True, packages or dict(manifest["packages"]))
 
 
-def validate_active_runtime() -> RuntimeVerification:
+def validate_active_runtime(*, force_inventory: bool = False) -> RuntimeVerification:
     snapshot = authoritative_snapshot()
     if not snapshot.ready or snapshot.active_slot is None:
         return RuntimeVerification(
@@ -805,17 +1054,50 @@ def validate_active_runtime() -> RuntimeVerification:
             "runtime_not_ready",
             snapshot.failure_detail or snapshot.message,
         )
+    try:
+        contract = load_runtime_install_contract()
+    except Exception as exc:
+        return RuntimeVerification(False, {}, "contract_unavailable", str(exc))
+    inventory_valid, inventory_reason = _snapshot_matches_contract(
+        snapshot,
+        contract,
+        force_inventory=force_inventory,
+    )
+    if not inventory_valid:
+        return RuntimeVerification(
+            False,
+            {},
+            "runtime_inventory_invalid",
+            inventory_reason,
+        )
     return verify_runtime_path(slot_path(snapshot.active_slot))
 
 
-def record_runtime_integrity_failure(detail: str) -> None:
-    """Persist a verified-runtime import/native failure as repairable state."""
+def record_runtime_integrity_failure(exc: BaseException) -> bool:
+    """Confirm a suspicious loader error before poisoning shared runtime state.
+
+    Model repositories can raise their own ``ImportError`` for custom pipeline
+    code or optional model files. Such an error is not evidence that the shared
+    runtime is corrupt. Only a forced RECORD/inventory check plus the canonical
+    critical-import verifier may turn READY into repairable FAILED.
+    """
+    if not is_runtime_integrity_failure(exc):
+        return False
     if not getattr(sys, "frozen", False):
-        return
+        return False
     with RuntimeFileLock():
+        verification = validate_active_runtime(force_inventory=True)
+        if verification.valid:
+            logger.info(
+                "[image_gen_installer] Suspicious model-load error did not fail "
+                "runtime revalidation; preserving READY: %s",
+                exc,
+            )
+            return False
         snapshot = authoritative_snapshot()
         if not snapshot.ready:
-            return
+            return False
+        detail = verification.failure_detail or str(exc)
         write_snapshot(
             RuntimeSnapshot(
                 state=RuntimePhase.FAILED,
@@ -832,6 +1114,7 @@ def record_runtime_integrity_failure(detail: str) -> None:
                 packages=snapshot.packages,
             )
         )
+    return True
 
 
 def is_runtime_integrity_failure(exc: BaseException) -> bool:
@@ -903,6 +1186,7 @@ def get_runtime_status() -> dict[str, Any]:
                 "attempt_id": None,
                 "runtime_revision": "source-development",
                 "required_revision": "source-development",
+                "updated_at": 0.0,
                 "stage": "ready",
                 "percent": 100.0,
                 "message": "Source-development media runtime verified.",
@@ -959,15 +1243,50 @@ def get_runtime_status() -> dict[str, Any]:
             "This app build does not contain a valid media-runtime contract. "
             "Update AI Matrx to a corrected release."
         )
-    elif ready and (
-        contract is None or snapshot.runtime_revision != contract.runtime_revision
-    ):
-        state = RuntimePhase.FAILED.value
-        ready = False
-        failure_code = "contract_unavailable" if contract is None else "revision_mismatch"
-        failure_detail = contract_error or (
-            f"active={snapshot.runtime_revision!r} required={required_revision!r}"
-        )
+    elif ready:
+        exact, exact_reason = _snapshot_matches_contract(snapshot, contract)
+        if exact:
+            pass
+        else:
+            state = RuntimePhase.FAILED.value
+            ready = False
+            failure_code = (
+                "revision_mismatch"
+                if snapshot.runtime_revision != contract.runtime_revision
+                else "runtime_inventory_invalid"
+            )
+            failure_detail = exact_reason
+            message = (
+                "The active media runtime failed its startup integrity check. "
+                "Repair reinstalls it without removing models or generated media."
+            )
+            try:
+                with RuntimeFileLock(timeout=1.0):
+                    current = read_snapshot()
+                    if (
+                        current.ready
+                        and current.active_slot == snapshot.active_slot
+                        and current.runtime_revision == snapshot.runtime_revision
+                    ):
+                        snapshot = RuntimeSnapshot(
+                            state=RuntimePhase.FAILED,
+                            runtime_revision=current.runtime_revision,
+                            operation=current.operation,
+                            attempt_id=current.attempt_id,
+                            stage="startup_integrity",
+                            percent=current.percent,
+                            message=message,
+                            failure_code=failure_code,
+                            failure_detail=failure_detail,
+                            active_slot=current.active_slot,
+                            last_known_good_slot=current.last_known_good_slot,
+                            packages=current.packages,
+                        )
+                        write_snapshot(snapshot)
+            except TimeoutError:
+                # An installer currently owns the state. Its locked terminal
+                # write will supersede this read-only failure response.
+                pass
 
     logs: list[str] = []
     if progress is not None:
@@ -979,6 +1298,7 @@ def get_runtime_status() -> dict[str, Any]:
         "attempt_id": snapshot.attempt_id,
         "runtime_revision": snapshot.runtime_revision,
         "required_revision": required_revision,
+        "updated_at": snapshot.updated_at,
         "stage": snapshot.stage,
         "percent": snapshot.percent,
         "message": message,
@@ -1069,9 +1389,6 @@ def _install_runtime_sync(
     """Build, validate, and atomically publish one immutable runtime slot."""
     staging: Path | None = None
     candidate: Path | None = None
-    previous = authoritative_snapshot()
-    previous_active = previous.active_slot if previous.ready else None
-    last_known_good = previous_active or previous.last_known_good_slot
     phase = {
         "install": RuntimePhase.INSTALLING,
         "update": RuntimePhase.UPDATING,
@@ -1079,144 +1396,241 @@ def _install_runtime_sync(
     }[operation]
     try:
         with RuntimeFileLock(timeout=60.0):
-            contract = load_runtime_install_contract()
-            progress.update("preparing", 2.0, "Preparing immutable media runtime…")
-            _persist_progress(
-                phase=phase,
-                operation=operation,
-                attempt_id=attempt_id,
-                progress=progress,
-                active_slot=previous_active,
-                last_known_good_slot=last_known_good,
-                runtime_revision=contract.runtime_revision,
-            )
-            _, staging = create_staging_slot()
-
-            if not getattr(sys, "frozen", False):
-                python = _find_python()
-                _validate_selected_python(python, cancel_event=cancel_event)
-            progress.update("installing", 10.0, "Installing locked media runtime…")
-            _run_pip_streaming(
-                [],
-                staging,
-                progress,
-                cancel_event=cancel_event,
-                requirements_file=contract.requirements_file,
-                require_hashes=True,
-            )
-
-            progress.update("validating", 72.0, "Validating every critical runtime import…")
-            _persist_progress(
-                phase=RuntimePhase.VALIDATING,
-                operation=operation,
-                attempt_id=attempt_id,
-                progress=progress,
-                active_slot=previous_active,
-                last_known_good_slot=last_known_good,
-                runtime_revision=contract.runtime_revision,
-            )
-            installed_versions = _package_versions_at(staging)
-            if installed_versions != contract.packages:
-                raise RuntimeError(
-                    "Installed package versions do not exactly match the release contract: "
-                    f"expected={contract.packages!r} actual={installed_versions!r}"
+            # State is intentionally read only after taking the cross-process
+            # lock. A queued process must observe what the previous owner
+            # actually activated, never the snapshot that existed when its UI
+            # request was submitted.
+            previous = authoritative_snapshot()
+            previous_active: str | None = None
+            last_known_good = previous.last_known_good_slot
+            contract: RuntimeInstallContract | None = None
+            try:
+                contract = load_runtime_install_contract()
+                previous_exact, _ = _snapshot_matches_contract(
+                    previous, contract, force_inventory=True
                 )
-            _verify_runtime_subprocess(staging, cancel_event=cancel_event)
-            (staging / INSTALL_EVIDENCE).write_text(
-                contract.runtime_revision, encoding="utf-8"
-            )
-            write_slot_manifest(
-                staging,
-                runtime_revision=contract.runtime_revision,
-                packages=installed_versions,
-                target=contract.target,
-                record_hashes=contract.record_hashes,
-            )
-            candidate_name, candidate = finalize_staging_slot(
-                staging, contract.runtime_revision
-            )
-            staging = None
+                if not previous_exact:
+                    recovered = _discover_exact_runtime_slot(contract)
+                    if recovered is not None:
+                        previous = recovered
+                        previous_exact = True
+                        write_snapshot(recovered)
+                if previous_exact:
+                    previous_active = previous.active_slot
+                    last_known_good = previous.active_slot
 
-            progress.update("activating", 90.0, "Activating verified media runtime…")
-            _persist_progress(
-                phase=RuntimePhase.ACTIVATING,
-                operation=operation,
-                attempt_id=attempt_id,
-                progress=progress,
-                active_slot=previous_active,
-                last_known_good_slot=last_known_good,
-                candidate_slot=candidate_name,
-                runtime_revision=contract.runtime_revision,
-                packages=installed_versions,
-            )
-            verification = verify_runtime_path(candidate)
-            if not verification.valid:
-                if (
-                    verification.failure_code == "critical_import_failed"
-                    and verification.failure_detail
-                    and "outside candidate runtime" in verification.failure_detail
-                ):
-                    progress.finish("Runtime verified; engine restart required for activation.")
-                    _persist_progress(
-                        phase=RuntimePhase.RESTART_REQUIRED,
-                        operation=operation,
-                        attempt_id=attempt_id,
-                        progress=progress,
-                        active_slot=previous_active,
-                        last_known_good_slot=last_known_good,
-                        candidate_slot=candidate_name,
-                        runtime_revision=contract.runtime_revision,
-                        packages=installed_versions,
+                cleanup_unreferenced_slots(previous)
+
+                # Another process may have completed this exact install while
+                # this worker waited for the lock. Never redownload or replace
+                # its verified slot. Explicit repair remains a forced rebuild.
+                if operation != "repair" and previous_exact:
+                    progress.finish(
+                        "Managed media runtime was verified by another process."
                     )
                     return
-                raise RuntimeError(
-                    verification.failure_detail or "Production runtime activation failed"
+
+                progress.update("preparing", 2.0, "Preparing immutable media runtime…")
+                _persist_progress(
+                    phase=phase,
+                    operation=operation,
+                    attempt_id=attempt_id,
+                    progress=progress,
+                    active_slot=previous_active,
+                    last_known_good_slot=last_known_good,
+                    runtime_revision=contract.runtime_revision,
+                )
+                _, staging = create_staging_slot()
+
+                if not getattr(sys, "frozen", False):
+                    python = _find_python()
+                    _validate_selected_python(python, cancel_event=cancel_event)
+                progress.update("installing", 10.0, "Installing locked media runtime…")
+                _run_pip_streaming(
+                    [],
+                    staging,
+                    progress,
+                    cancel_event=cancel_event,
+                    requirements_file=contract.requirements_file,
+                    require_hashes=True,
                 )
 
-            from app.services.image_gen import service as image_service
-            from app.services.video_gen import service as video_service
-
-            image_service.DEPS_AVAILABLE, image_service.DEPS_REASON = image_service._check_deps()
-            video_service.DEPS_AVAILABLE, video_service.DEPS_REASON = video_service._check_deps()
-            if not image_service.DEPS_AVAILABLE or not video_service.DEPS_AVAILABLE:
-                raise RuntimeError(
-                    "Runtime imports passed but service activation failed: "
-                    f"image={image_service.DEPS_REASON!r}; video={video_service.DEPS_REASON!r}"
+                progress.update(
+                    "validating", 72.0, "Validating every critical runtime import…"
                 )
+                _persist_progress(
+                    phase=RuntimePhase.VALIDATING,
+                    operation=operation,
+                    attempt_id=attempt_id,
+                    progress=progress,
+                    active_slot=previous_active,
+                    last_known_good_slot=last_known_good,
+                    runtime_revision=contract.runtime_revision,
+                )
+                inventory_valid, inventory_reason = _validate_installed_inventory(
+                    staging, contract.packages
+                )
+                if not inventory_valid:
+                    raise RuntimeError(inventory_reason)
+                installed_versions = _package_versions_at(staging)
+                _verify_runtime_subprocess(staging, cancel_event=cancel_event)
+                (staging / INSTALL_EVIDENCE).write_text(
+                    contract.runtime_revision, encoding="utf-8"
+                )
+                write_slot_manifest(
+                    staging,
+                    runtime_revision=contract.runtime_revision,
+                    packages=installed_versions,
+                    target=contract.target,
+                    record_hashes={
+                        **contract.record_hashes,
+                        **_record_anchor_hashes(staging),
+                    },
+                )
+                candidate_name, candidate = finalize_staging_slot(
+                    staging, contract.runtime_revision
+                )
+                staging = None
 
-            progress.finish("Managed media runtime is verified and ready.")
-            _persist_progress(
-                phase=RuntimePhase.READY,
-                operation=operation,
-                attempt_id=attempt_id,
-                progress=progress,
-                active_slot=candidate_name,
-                last_known_good_slot=previous_active,
-                runtime_revision=contract.runtime_revision,
-                packages=installed_versions,
+                progress.update("activating", 90.0, "Activating verified media runtime…")
+                _persist_progress(
+                    phase=RuntimePhase.ACTIVATING,
+                    operation=operation,
+                    attempt_id=attempt_id,
+                    progress=progress,
+                    active_slot=previous_active,
+                    last_known_good_slot=last_known_good,
+                    candidate_slot=candidate_name,
+                    runtime_revision=contract.runtime_revision,
+                    packages=installed_versions,
+                )
+                verification = verify_runtime_path(candidate)
+                if not verification.valid:
+                    if (
+                        verification.failure_code == "critical_import_failed"
+                        and verification.failure_detail
+                        and "outside candidate runtime" in verification.failure_detail
+                    ):
+                        progress.finish(
+                            "Runtime verified; engine restart required for activation."
+                        )
+                        _persist_progress(
+                            phase=RuntimePhase.RESTART_REQUIRED,
+                            operation=operation,
+                            attempt_id=attempt_id,
+                            progress=progress,
+                            active_slot=previous_active,
+                            last_known_good_slot=last_known_good,
+                            candidate_slot=candidate_name,
+                            runtime_revision=contract.runtime_revision,
+                            packages=installed_versions,
+                        )
+                        cleanup_unreferenced_slots(read_snapshot())
+                        return
+                    raise RuntimeError(
+                        verification.failure_detail
+                        or "Production runtime activation failed"
+                    )
+
+                from app.services.image_gen import service as image_service
+                from app.services.video_gen import service as video_service
+
+                image_service.DEPS_AVAILABLE, image_service.DEPS_REASON = (
+                    image_service._check_deps()
+                )
+                video_service.DEPS_AVAILABLE, video_service.DEPS_REASON = (
+                    video_service._check_deps()
+                )
+                if not image_service.DEPS_AVAILABLE or not video_service.DEPS_AVAILABLE:
+                    raise RuntimeError(
+                        "Runtime imports passed but service activation failed: "
+                        f"image={image_service.DEPS_REASON!r}; "
+                        f"video={video_service.DEPS_REASON!r}"
+                    )
+
+                progress.finish("Managed media runtime is verified and ready.")
+                _persist_progress(
+                    phase=RuntimePhase.READY,
+                    operation=operation,
+                    attempt_id=attempt_id,
+                    progress=progress,
+                    active_slot=candidate_name,
+                    last_known_good_slot=previous_active,
+                    runtime_revision=contract.runtime_revision,
+                    packages=installed_versions,
+                )
+                # Retain exactly the new active slot and one verified rollback
+                # slot. Everything else is unreachable multi-GB disk usage.
+                cleanup_unreferenced_slots(read_snapshot())
+            except Exception as exc:
+                # Cleanup and the terminal state write happen while still
+                # holding the same lock as installation/activation. A later
+                # process can therefore never publish READY and then have it
+                # overwritten by this older attempt's failure handler.
+                if staging is not None:
+                    remove_slot(staging)
+                    staging = None
+                if candidate is not None:
+                    remove_slot(candidate)
+                    candidate = None
+                progress.fail(str(exc))
+                rolled_back = bool(previous_active and contract is not None)
+                _persist_progress(
+                    phase=(
+                        RuntimePhase.ROLLED_BACK
+                        if rolled_back
+                        else RuntimePhase.FAILED
+                    ),
+                    operation=operation,
+                    attempt_id=attempt_id,
+                    progress=progress,
+                    active_slot=previous_active if rolled_back else None,
+                    last_known_good_slot=last_known_good,
+                    runtime_revision=(
+                        previous.runtime_revision if rolled_back else None
+                    ),
+                    failure_code=(
+                        "activation_rolled_back" if rolled_back else "install_failed"
+                    ),
+                    failure_detail=str(exc),
+                    packages=previous.packages if rolled_back else {},
+                )
+    except TimeoutError as exc:
+        # The owner did not complete within the bounded wait. Expose a durable,
+        # repairable terminal state instead of stranding every restarted UI in
+        # an eternal transient phase. A concurrently published exact READY is
+        # never overwritten.
+        progress.fail(str(exc))
+        current = authoritative_snapshot()
+        try:
+            current_contract = load_runtime_install_contract()
+            current_ready, _ = _snapshot_matches_contract(
+                current, current_contract, force_inventory=True
+            )
+        except Exception:
+            current_ready = False
+        if not current_ready:
+            write_snapshot(
+                RuntimeSnapshot(
+                    state=RuntimePhase.FAILED,
+                    operation=operation,
+                    attempt_id=attempt_id,
+                    stage="lock_timeout",
+                    message=(
+                        "The prior media-runtime operation stopped responding. "
+                        "Repair can safely retry the immutable installation."
+                    ),
+                    failure_code="lock_timeout",
+                    failure_detail=str(exc),
+                    active_slot=current.active_slot if current.ready else None,
+                    last_known_good_slot=current.last_known_good_slot,
+                    packages=current.packages if current.ready else {},
+                )
             )
     except Exception as exc:
-        if staging is not None:
-            remove_slot(staging)
-        if candidate is not None:
-            remove_slot(candidate)
+        # Lock acquisition itself failed. Do not touch shared state without
+        # ownership; the process holding the lock remains authoritative.
         progress.fail(str(exc))
-        rolled_back = False
-        if previous_active:
-            valid, _, _ = validate_slot(previous_active)
-            rolled_back = valid
-        _persist_progress(
-            phase=RuntimePhase.ROLLED_BACK if rolled_back else RuntimePhase.FAILED,
-            operation=operation,
-            attempt_id=attempt_id,
-            progress=progress,
-            active_slot=previous_active if rolled_back else None,
-            last_known_good_slot=last_known_good,
-            runtime_revision=previous.runtime_revision if rolled_back else None,
-            failure_code=("activation_rolled_back" if rolled_back else "install_failed"),
-            failure_detail=str(exc),
-            packages=previous.packages if rolled_back else {},
-        )
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -1254,7 +1668,6 @@ async def ensure_runtime(
             _active_progress = progress
             return progress
 
-    snapshot = authoritative_snapshot()
     try:
         contract = load_runtime_install_contract()
     except UnsupportedRuntimeError as exc:
@@ -1262,19 +1675,21 @@ async def ensure_runtime(
         progress._loop = asyncio.get_running_loop()
         progress.fail(str(exc))
         _active_progress = progress
-        write_snapshot(
-            RuntimeSnapshot(
-                state=RuntimePhase.FAILED,
-                operation=operation,
-                attempt_id=uuid.uuid4().hex,
-                stage="unsupported",
-                message=str(exc),
-                failure_code="unsupported_platform",
-                failure_detail=str(exc),
-                active_slot=snapshot.active_slot if snapshot.ready else None,
-                last_known_good_slot=snapshot.last_known_good_slot,
+        with RuntimeFileLock():
+            snapshot = authoritative_snapshot()
+            write_snapshot(
+                RuntimeSnapshot(
+                    state=RuntimePhase.FAILED,
+                    operation=operation,
+                    attempt_id=uuid.uuid4().hex,
+                    stage="unsupported",
+                    message=str(exc),
+                    failure_code="unsupported_platform",
+                    failure_detail=str(exc),
+                    active_slot=snapshot.active_slot if snapshot.ready else None,
+                    last_known_good_slot=snapshot.last_known_good_slot,
+                )
             )
-        )
         return progress
     except Exception:
         contract = None
@@ -1284,39 +1699,24 @@ async def ensure_runtime(
         detail = "No valid locked media-runtime contract is embedded in this app build."
         progress.fail(detail)
         _active_progress = progress
-        write_snapshot(
-            RuntimeSnapshot(
-                state=RuntimePhase.FAILED,
-                operation=operation,
-                attempt_id=uuid.uuid4().hex,
-                stage="contract",
-                message=(
-                    "This app build cannot install media generation safely. "
-                    "Update AI Matrx to a corrected release."
-                ),
-                failure_code="contract_unavailable",
-                failure_detail=detail,
-                active_slot=snapshot.active_slot if snapshot.ready else None,
-                last_known_good_slot=snapshot.last_known_good_slot,
+        with RuntimeFileLock():
+            snapshot = authoritative_snapshot()
+            write_snapshot(
+                RuntimeSnapshot(
+                    state=RuntimePhase.FAILED,
+                    operation=operation,
+                    attempt_id=uuid.uuid4().hex,
+                    stage="contract",
+                    message=(
+                        "This app build cannot install media generation safely. "
+                        "Update AI Matrx to a corrected release."
+                    ),
+                    failure_code="contract_unavailable",
+                    failure_detail=detail,
+                    active_slot=snapshot.active_slot if snapshot.ready else None,
+                    last_known_good_slot=snapshot.last_known_good_slot,
+                )
             )
-        )
-        return progress
-    if (
-        snapshot.ready
-        and contract is not None
-        and snapshot.runtime_revision == contract.runtime_revision
-        and snapshot.active_slot is not None
-        and validate_slot(
-            snapshot.active_slot,
-            expected_revision=contract.runtime_revision,
-            expected_packages=contract.packages,
-            expected_target=contract.target,
-        )[0]
-    ):
-        progress = InstallProgress(log_prefix="image_gen_installer")
-        progress._loop = asyncio.get_running_loop()
-        progress.finish("Managed media runtime already verified.")
-        _active_progress = progress
         return progress
 
     progress = InstallProgress(log_prefix="image_gen_installer")
@@ -1327,18 +1727,6 @@ async def ensure_runtime(
     attempt_id = uuid.uuid4().hex
     effective: Literal["install", "update", "repair"] = operation
     progress.update("preparing", 1.0, f"Preparing media-runtime {operation}…")
-    phase = RuntimePhase.INSTALLING if operation == "install" else RuntimePhase.UPDATING
-    _persist_progress(
-        phase=phase,
-        operation=operation,
-        attempt_id=attempt_id,
-        progress=progress,
-        active_slot=snapshot.active_slot if snapshot.ready else None,
-        last_known_good_slot=(
-            snapshot.active_slot if snapshot.ready else snapshot.last_known_good_slot
-        ),
-        runtime_revision=contract.runtime_revision if contract is not None else None,
-    )
     _submit_background(
         _install_runtime_sync,
         progress,
@@ -1361,33 +1749,35 @@ async def repair_runtime() -> InstallProgress:
         progress._loop = asyncio.get_running_loop()
         progress.fail(str(exc))
         _active_progress = progress
-        write_snapshot(
-            RuntimeSnapshot(
-                state=RuntimePhase.FAILED,
-                operation="repair",
-                attempt_id=uuid.uuid4().hex,
-                stage="unsupported",
-                message=str(exc),
-                failure_code="unsupported_platform",
-                failure_detail=str(exc),
+        with RuntimeFileLock():
+            write_snapshot(
+                RuntimeSnapshot(
+                    state=RuntimePhase.FAILED,
+                    operation="repair",
+                    attempt_id=uuid.uuid4().hex,
+                    stage="unsupported",
+                    message=str(exc),
+                    failure_code="unsupported_platform",
+                    failure_detail=str(exc),
+                )
             )
-        )
         return progress
     except Exception as exc:
         progress = InstallProgress(log_prefix="image_gen_runtime_repair")
         progress._loop = asyncio.get_running_loop()
         progress.fail(str(exc))
         _active_progress = progress
-        write_snapshot(
-            RuntimeSnapshot(
-                state=RuntimePhase.FAILED,
-                operation="repair",
-                stage="contract",
-                message="Update AI Matrx to restore the media-runtime contract.",
-                failure_code="contract_unavailable",
-                failure_detail=str(exc),
+        with RuntimeFileLock():
+            write_snapshot(
+                RuntimeSnapshot(
+                    state=RuntimePhase.FAILED,
+                    operation="repair",
+                    stage="contract",
+                    message="Update AI Matrx to restore the media-runtime contract.",
+                    failure_code="contract_unavailable",
+                    failure_detail=str(exc),
+                )
             )
-        )
         return progress
     progress = InstallProgress(log_prefix="image_gen_runtime_repair")
     progress.status = "running"
@@ -1395,23 +1785,7 @@ async def repair_runtime() -> InstallProgress:
     _active_progress = progress
     _installer_cancel.clear()
     attempt_id = uuid.uuid4().hex
-    previous = authoritative_snapshot()
     progress.update("preparing", 1.0, "Preparing clean media-runtime repair…")
-    try:
-        required_revision = load_runtime_install_contract().runtime_revision
-    except Exception:
-        required_revision = None
-    _persist_progress(
-        phase=RuntimePhase.REPAIRING,
-        operation="repair",
-        attempt_id=attempt_id,
-        progress=progress,
-        active_slot=previous.active_slot if previous.ready else None,
-        last_known_good_slot=(
-            previous.active_slot if previous.ready else previous.last_known_good_slot
-        ),
-        runtime_revision=required_revision,
-    )
     _submit_background(
         _install_runtime_sync,
         progress,
@@ -1438,28 +1812,30 @@ async def start_compatibility_migration() -> InstallProgress | None:
     try:
         load_runtime_install_contract()
     except UnsupportedRuntimeError as exc:
-        write_snapshot(
-            RuntimeSnapshot(
-                state=RuntimePhase.FAILED,
-                operation="update",
-                stage="unsupported",
-                message=str(exc),
-                failure_code="unsupported_platform",
-                failure_detail=str(exc),
+        with RuntimeFileLock():
+            write_snapshot(
+                RuntimeSnapshot(
+                    state=RuntimePhase.FAILED,
+                    operation="update",
+                    stage="unsupported",
+                    message=str(exc),
+                    failure_code="unsupported_platform",
+                    failure_detail=str(exc),
+                )
             )
-        )
         return None
     except Exception as exc:
-        write_snapshot(
-            RuntimeSnapshot(
-                state=RuntimePhase.FAILED,
-                operation="update",
-                stage="contract",
-                message="Update AI Matrx to restore the media-runtime contract.",
-                failure_code="contract_unavailable",
-                failure_detail=str(exc),
+        with RuntimeFileLock():
+            write_snapshot(
+                RuntimeSnapshot(
+                    state=RuntimePhase.FAILED,
+                    operation="update",
+                    stage="contract",
+                    message="Update AI Matrx to restore the media-runtime contract.",
+                    failure_code="contract_unavailable",
+                    failure_detail=str(exc),
+                )
             )
-        )
         return None
     if _active_progress is not None and _active_progress.status == "running":
         return _active_progress
@@ -1470,23 +1846,7 @@ async def start_compatibility_migration() -> InstallProgress | None:
     _active_progress = progress
     _installer_cancel.clear()
     attempt_id = uuid.uuid4().hex
-    previous = authoritative_snapshot()
-    try:
-        required_revision = load_runtime_install_contract().runtime_revision
-    except Exception:
-        required_revision = None
     progress.update("preparing", 1.0, "Preparing required media-runtime update…")
-    _persist_progress(
-        phase=RuntimePhase.UPDATING,
-        operation="update",
-        attempt_id=attempt_id,
-        progress=progress,
-        active_slot=previous.active_slot if previous.ready else None,
-        last_known_good_slot=(
-            previous.active_slot if previous.ready else previous.last_known_good_slot
-        ),
-        runtime_revision=required_revision,
-    )
     _submit_background(
         _install_runtime_sync,
         progress,

@@ -2701,7 +2701,11 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     (status: MediaRuntimeStatus, enforceAttempt = true): boolean => {
       if (
         enforceAttempt &&
-        !acceptsRuntimeSnapshot(status, runtimeExpectedAttemptRef.current)
+        !acceptsRuntimeSnapshot(
+          status,
+          runtimeExpectedAttemptRef.current,
+          mediaRuntimeRef.current,
+        )
       ) {
         emitClientLog(
           "warn",
@@ -2733,8 +2737,12 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       if (!base) return;
       void getMediaRuntimeStatus(base)
         .then((status) => {
-          applyRuntimeSnapshot(status);
-          if (!isRuntimeActive(status) && runtimePollRef.current !== null) {
+          const accepted = applyRuntimeSnapshot(status);
+          if (
+            accepted &&
+            !isRuntimeActive(status) &&
+            runtimePollRef.current !== null
+          ) {
             window.clearInterval(runtimePollRef.current);
             runtimePollRef.current = null;
           }

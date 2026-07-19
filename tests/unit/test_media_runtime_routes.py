@@ -25,6 +25,7 @@ def _status(state: str = "ready", **patch):
         "active_slot": "runtime-1" if state == "ready" else None,
         "last_known_good_slot": None,
         "candidate_slot": None,
+        "updated_at": 1.0,
         "package_checks": [],
         "log_lines": [],
     }

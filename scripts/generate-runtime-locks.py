@@ -36,6 +36,12 @@ UNSUPPORTED_TARGETS = {
     ),
 }
 MINIMUM_MACOS = {"aarch64-apple-darwin": "12.0"}
+MINIMUM_GLIBC = {"x86_64-unknown-linux-gnu": "2.28"}
+TORCH_VARIANTS = {
+    "aarch64-apple-darwin": "mps",
+    "x86_64-pc-windows-msvc": "cu126",
+    "x86_64-unknown-linux-gnu": "cu126",
+}
 REQ_RE = re.compile(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)")
 HASH_RE = re.compile(r"--hash=sha256:([0-9a-f]{64})")
 
@@ -67,6 +73,8 @@ def _target_tags(target: str):
         platforms = [
             *(f"manylinux_2_{minor}_x86_64" for minor in range(35, 16, -1)),
             "manylinux2014_x86_64",
+            "manylinux2010_x86_64",
+            "manylinux1_x86_64",
             "linux_x86_64",
         ]
     else:  # pragma: no cover - TARGETS is closed
@@ -97,7 +105,7 @@ def _pypi_wheels(name: str, version: str) -> list[dict[str, str]]:
 
 
 def _pytorch_wheels(name: str) -> list[dict[str, str]]:
-    base = f"https://download.pytorch.org/whl/cpu/{name.replace('-', '_')}/"
+    base = f"https://download.pytorch.org/whl/cu126/{name.replace('-', '_')}/"
     with urllib.request.urlopen(base, timeout=30) as response:
         body = response.read().decode("utf-8")
     parser = _LinkParser()
@@ -120,7 +128,7 @@ def _compatible_wheels(package: dict[str, object], target: str) -> list[dict[str
     version = str(package["version"])
     hashes = set(package["sha256"])
     candidates = _pypi_wheels(name, version)
-    if name in {"torch", "torchvision", "torchaudio"} and target in {
+    if name in {"torch", "torchvision", "torchaudio", "triton"} and target in {
         "x86_64-pc-windows-msvc",
         "x86_64-unknown-linux-gnu",
     }:
@@ -149,11 +157,24 @@ def _compatible_wheels(package: dict[str, object], target: str) -> list[dict[str
 
 
 def _compile(target: str, output: Path) -> None:
+    contract = json.loads((MANIFEST_DIR / "image-gen-contract.json").read_text())
+    constraints = output.with_suffix(".constraints.txt")
+    constraints.write_text(
+        "".join(
+            f"{name}=={version}\n"
+            for name, version in sorted(
+                contract["shared_versions_by_target"][target].items()
+            )
+        ),
+        encoding="utf-8",
+    )
     command = [
         "uv",
         "pip",
         "compile",
         str(INPUT),
+        "--constraint",
+        str(constraints),
         "--python-version",
         "3.13",
         "--python-platform",
@@ -166,12 +187,12 @@ def _compile(target: str, output: Path) -> None:
         "--output-file",
         str(output),
     ]
-    # Linux/Windows releases intentionally use CPU Torch. The dedicated index
-    # participates only for packages it owns; PyPI remains the default index.
+    # Official CUDA 12.6 PyTorch wheels run CPU operations without a GPU while
+    # retaining CUDA acceleration when hardware is present.
     if target in ("x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"):
         command += [
             "--index",
-            "https://download.pytorch.org/whl/cpu",
+            "https://download.pytorch.org/whl/cu126",
             "--index-strategy",
             "unsafe-best-match",
             "--emit-index-url",
@@ -218,6 +239,7 @@ def _write_target_manifest(target: str, lock_path: Path, packages: list[dict[str
         "supported": True,
         "python_minor": "3.13",
         "contract_sha256": contract["contract_sha256"],
+        "torch_variant": TORCH_VARIANTS[target],
         "lock_file": lock_path.name,
         "lock_sha256": hashlib.sha256(lock_path.read_bytes()).hexdigest(),
         "packages": [
@@ -231,6 +253,8 @@ def _write_target_manifest(target: str, lock_path: Path, packages: list[dict[str
     }
     if target in MINIMUM_MACOS:
         manifest["minimum_macos"] = MINIMUM_MACOS[target]
+    if target in MINIMUM_GLIBC:
+        manifest["minimum_glibc"] = MINIMUM_GLIBC[target]
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
 
@@ -277,12 +301,28 @@ def _validate_target(target: str) -> list[str]:
             return errors
         if manifest.get("supported") is not True:
             errors.append(f"{target}: supported target is not explicitly supported")
+        if manifest.get("torch_variant") != TORCH_VARIANTS[target]:
+            errors.append(f"{target}: torch_variant is missing/stale")
         if manifest.get("minimum_macos") != MINIMUM_MACOS.get(target):
             if target in MINIMUM_MACOS or "minimum_macos" in manifest:
                 errors.append(f"{target}: minimum_macos is missing/stale")
+        if manifest.get("minimum_glibc") != MINIMUM_GLIBC.get(target):
+            if target in MINIMUM_GLIBC or "minimum_glibc" in manifest:
+                errors.append(f"{target}: minimum_glibc is missing/stale")
         if not lock_path.is_file():
             return errors + [f"{target}: supported target lock missing"]
         packages = _parse_requirements(lock_path)
+        locked_versions = {item["name"]: item["version"] for item in packages}
+        for name, expected_version in contract["shared_versions_by_target"][target].items():
+            if locked_versions.get(name) != expected_version:
+                errors.append(
+                    f"{target}: shared {name}={locked_versions.get(name)!r}, "
+                    f"frozen contract requires {expected_version!r}"
+                )
+        if target in {"x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"}:
+            for name in ("torch", "torchvision"):
+                if "+cu126" not in locked_versions.get(name, ""):
+                    errors.append(f"{target}: {name} is not the required cu126 build")
         if manifest.get("lock_file") != lock_path.name:
             errors.append(f"{target}: lock filename mismatch")
         if manifest.get("lock_sha256") != hashlib.sha256(lock_path.read_bytes()).hexdigest():

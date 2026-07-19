@@ -2198,6 +2198,7 @@ class MediaRuntimeStatusResponse(BaseModel):
     attempt_id: str | None = None
     runtime_revision: str | None = None
     required_revision: str
+    updated_at: float
     stage: str = ""
     percent: float = 0.0
     message: str = ""

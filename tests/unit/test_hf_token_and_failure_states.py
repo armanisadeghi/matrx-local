@@ -100,6 +100,11 @@ def _configure_ready_runtime_for_upgrade_check(
         ),
     )
     monkeypatch.setattr(installer, "validate_slot", lambda *args, **kwargs: (True, "", {}))
+    monkeypatch.setattr(
+        installer,
+        "_validate_installed_inventory",
+        lambda *args, **kwargs: (True, ""),
+    )
     monkeypatch.setattr(installer, "get_installed_package_versions", lambda: versions)
     monkeypatch.setattr(installer, "_get_torchvision_torch_requirement", lambda: "2.11.0")
 

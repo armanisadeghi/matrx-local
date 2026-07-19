@@ -498,7 +498,7 @@ class VideoGenService:
                 )
 
                 if is_runtime_integrity_failure(exc):
-                    record_runtime_integrity_failure(str(exc))
+                    record_runtime_integrity_failure(exc)
                 registry.failed("video-gen-model", exc, model=model.model_id)
                 self._pipeline = None
                 self._i2v_pipeline = None

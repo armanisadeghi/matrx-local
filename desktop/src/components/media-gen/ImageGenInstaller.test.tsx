@@ -33,6 +33,7 @@ function makeRuntime(
     state: "absent",
     operation: null,
     attempt_id: null,
+    updated_at: 1,
     runtime_revision: null,
     required_revision: "runtime-v1",
     stage: "",

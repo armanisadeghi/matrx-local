@@ -5368,6 +5368,8 @@ export interface MediaRuntimeStatus {
   state: RuntimeState;
   operation: RuntimeOperation;
   attempt_id: string | null;
+  /** Server-owned state timestamp used to reject out-of-order stream/poll replies. */
+  updated_at: number;
   runtime_revision: string | null;
   required_revision: string;
   stage: string;

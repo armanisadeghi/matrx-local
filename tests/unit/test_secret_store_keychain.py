@@ -79,6 +79,22 @@ def test_keychain_timeout_disables_encryption_without_retrying(
     assert secret_store._fernet_unavailable is True
 
 
+def test_isolated_test_never_touches_os_keychain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(secret_store, "_fernet", None)
+    monkeypatch.setattr(secret_store, "_fernet_unavailable", False)
+    monkeypatch.setenv("MATRX_ISOLATED_TEST", "1")
+    monkeypatch.setattr(
+        secret_store,
+        "read_key_from_helper",
+        lambda: pytest.fail("isolated tests must not touch the OS keychain"),
+    )
+
+    assert secret_store._get_fernet() is None
+    assert secret_store._fernet_unavailable is True
+
+
 def test_helper_serializes_read_and_create(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

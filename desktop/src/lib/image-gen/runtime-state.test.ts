@@ -15,6 +15,7 @@ function status(
     state,
     operation: null,
     attempt_id: null,
+    updated_at: 1,
     runtime_revision: null,
     required_revision: "runtime-v1",
     stage: "",
@@ -57,6 +58,24 @@ describe("media runtime state", () => {
     ).toBe(false);
     expect(
       acceptsRuntimeSnapshot(status("ready", { attempt_id: null }), "new"),
+    ).toBe(false);
+  });
+
+  it("rejects out-of-order snapshots within the same attempt", () => {
+    const ready = status("ready", { attempt_id: "same", updated_at: 20 });
+    expect(
+      acceptsRuntimeSnapshot(
+        status("validating", { attempt_id: "same", updated_at: 10 }),
+        "same",
+        ready,
+      ),
+    ).toBe(false);
+    expect(
+      acceptsRuntimeSnapshot(
+        status("validating", { attempt_id: "same", updated_at: 30 }),
+        "same",
+        ready,
+      ),
     ).toBe(false);
   });
 

@@ -36,7 +36,7 @@ def archive_modules(binary: Path) -> set[str]:
     return set(pyz.toc)
 
 
-def check_archive(binary: Path, contract: dict) -> None:
+def check_archive(binary: Path, contract: dict, *, target: str) -> None:
     modules = archive_modules(binary)
     missing_critical = sorted(set(contract["critical_frozen_modules"]) - modules)
     if missing_critical:
@@ -49,8 +49,11 @@ def check_archive(binary: Path, contract: dict) -> None:
     # not merely the spec inputs, against the exact build environment.
     from PyInstaller.utils.hooks import collect_submodules
 
+    sys.path.insert(0, str(ROOT / "specs"))
+    from _managed_runtime_bundle import managed_runtime_shared_packages
+
     missing_shared: dict[str, list[str]] = {}
-    for package in contract["shared_import_packages"]:
+    for package in managed_runtime_shared_packages(target):
         expected = set(collect_submodules(package))
         if not expected:
             raise RuntimeError(f"required shared package absent on build host: {package}")
@@ -120,7 +123,7 @@ def load_target_manifest(target: str, contract: dict) -> dict:
 
 
 def install_exact_target_runtime(
-    python: Path, target_manifest: dict, destination: Path
+    uv: Path, target: str, target_manifest: dict, destination: Path
 ) -> None:
     lock_path = (
         ROOT / "config" / "runtime-manifests" / str(target_manifest["lock_file"])
@@ -128,23 +131,47 @@ def install_exact_target_runtime(
     actual_digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
     if actual_digest != target_manifest.get("lock_sha256"):
         raise RuntimeError("target requirements digest does not match its manifest")
+    installer_manifest = json.loads(
+        (ROOT / "config" / "runtime-manifests" / "runtime-installer.json").read_text()
+    )
+    sys.path.insert(0, str(ROOT))
+    from app.services.optional_packages.runtime_installer import (
+        executable_sha256,
+        locked_target_install_environment,
+    )
+
+    uv = uv.resolve(strict=True)
+    expected_uv_hash = installer_manifest["artifacts"][target]["executable_sha256"]
+    if executable_sha256(uv) != expected_uv_hash:
+        raise RuntimeError("staged bundled uv failed executable identity validation")
     subprocess.run(
         [
-            "uv",
+            str(uv),
             "pip",
             "install",
             "--python",
-            str(python),
+            "3.13",
+            "--managed-python",
+            "--python-version",
+            "3.13",
+            "--python-platform",
+            target,
             "--target",
             str(destination),
+            "--only-binary",
+            ":all:",
             "--require-hashes",
             "--requirement",
             str(lock_path),
             "--no-cache",
+            "--no-progress",
+            "--no-config",
+            "--native-tls",
         ],
         cwd=ROOT,
+        env=locked_target_install_environment(destination),
         check=True,
-        timeout=900,
+        timeout=1800,
     )
 
 
@@ -152,39 +179,42 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
+    parser.add_argument("--uv", type=Path)
     parser.add_argument("--runtime-path", type=Path)
-    parser.add_argument("--target", choices=TARGETS)
+    parser.add_argument("--target", choices=TARGETS, required=True)
     parser.add_argument("--archive-only", action="store_true")
     args = parser.parse_args()
 
     binary = args.binary.resolve(strict=True)
     contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
-    check_archive(binary, contract)
+    check_archive(binary, contract, target=args.target)
     print(f"archive verified: {binary}")
     if not args.archive_only:
-        if args.runtime_path and args.target:
-            parser.error("--runtime-path and --target are mutually exclusive")
-        target_manifest = load_target_manifest(args.target, contract) if args.target else None
+        target_manifest = load_target_manifest(args.target, contract)
         if target_manifest is not None and target_manifest.get("supported") is False:
             print(
                 f"managed runtime explicitly unsupported for {args.target}; "
                 "archive verification is the complete release gate for this target"
             )
             return 0
-        if target_manifest is not None:
-            with tempfile.TemporaryDirectory(prefix=f"matrx-locked-{args.target}-") as temp:
-                runtime_path = Path(temp) / "site-packages"
-                install_exact_target_runtime(args.python, target_manifest, runtime_path)
-                run_frozen_probe(binary, runtime_path, contract, target=args.target)
-        else:
-            runtime_path = (
-                args.runtime_path.resolve(strict=True)
-                if args.runtime_path
-                else find_site_packages(args.python)
+        if args.runtime_path:
+            run_frozen_probe(
+                binary,
+                args.runtime_path.resolve(strict=True),
+                contract,
+                target=args.target,
             )
-            if not args.target:
-                parser.error("--target is required for a runtime probe")
-            run_frozen_probe(binary, runtime_path, contract, target=args.target)
+        else:
+            if args.uv is None:
+                parser.error("--uv is required for a full locked runtime probe")
+            with tempfile.TemporaryDirectory(prefix=f"matrx-locked-{args.target}-") as temp:
+                runtime_path = (
+                    Path(temp) / "image-gen-runtime" / "slots" / ".verification"
+                )
+                install_exact_target_runtime(
+                    args.uv, args.target, target_manifest, runtime_path
+                )
+                run_frozen_probe(binary, runtime_path, contract, target=args.target)
         print(
             "frozen managed-runtime probe verified: "
             f"{contract['contract_sha256'][:12]}"

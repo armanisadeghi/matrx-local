@@ -79,7 +79,9 @@ _protobuf_mods = collect_submodules('google.protobuf') + ['google._upb._message'
 # see specs/_managed_runtime_bundle.py before adding anything here.
 sys.path.insert(0, SPECPATH)
 from _managed_runtime_bundle import collect_managed_runtime_modules
-_shared_runtime_mods = collect_managed_runtime_modules(collect_submodules)
+_shared_runtime_mods = collect_managed_runtime_modules(
+    collect_submodules, target='x86_64-apple-darwin'
+)
 
 # ── Office (docx/pptx/xlsx) codec — matrx_files.specific_handlers.office ──────
 # The canonical Office codec and its renderers (python-docx/pptx/openpyxl/

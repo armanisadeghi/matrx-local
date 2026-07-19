@@ -25,6 +25,7 @@ Fail-safe contract (this is load-bearing — it sits on the auth path):
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 
@@ -63,6 +64,9 @@ def _get_fernet():
     Never raises. On any failure returns None and the caller stores plaintext.
     """
     global _fernet, _fernet_unavailable
+    if os.environ.get("MATRX_ISOLATED_TEST") == "1":
+        _fernet_unavailable = True
+        return None
     if _fernet is not None:
         return _fernet
     if _fernet_unavailable:

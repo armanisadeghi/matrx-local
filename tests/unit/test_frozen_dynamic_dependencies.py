@@ -28,7 +28,8 @@ def test_every_frozen_build_collects_all_jinja_submodules() -> None:
     fallback = (REPO_ROOT / "scripts" / "build-sidecar.sh").read_text(
         encoding="utf-8"
     )
-    assert "MANAGED_RUNTIME_SHARED_PACKAGES" in fallback
+    assert "managed_runtime_shared_packages" in fallback
+    assert 'os.environ["MATRX_BUILD_TARGET"]' in fallback
 
 
 def test_jinja_is_a_direct_engine_dependency() -> None:

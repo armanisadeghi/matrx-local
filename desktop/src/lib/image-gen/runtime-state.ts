@@ -25,8 +25,19 @@ export function isRuntimeReady(status: MediaRuntimeStatus | null): boolean {
 export function acceptsRuntimeSnapshot(
   status: MediaRuntimeStatus,
   expectedAttemptId: string | null,
+  currentStatus: MediaRuntimeStatus | null = null,
 ): boolean {
-  return expectedAttemptId === null || status.attempt_id === expectedAttemptId;
+  if (expectedAttemptId !== null && status.attempt_id !== expectedAttemptId) {
+    return false;
+  }
+  if (!currentStatus || status.attempt_id !== currentStatus.attempt_id) {
+    return true;
+  }
+  if (status.updated_at < currentStatus.updated_at) return false;
+  // A single server attempt is monotonic. Once it reaches a terminal state,
+  // no delayed response may put the UI back into an active phase.
+  if (!isRuntimeActive(currentStatus) && isRuntimeActive(status)) return false;
+  return true;
 }
 
 export function runtimeAction(

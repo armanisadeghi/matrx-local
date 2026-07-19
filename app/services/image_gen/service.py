@@ -1154,7 +1154,7 @@ class ImageGenService:
                 )
 
                 if is_runtime_integrity_failure(exc):
-                    record_runtime_integrity_failure(str(exc))
+                    record_runtime_integrity_failure(exc)
                 logger.error(
                     "[image_gen] Failed to load model %s: %s",
                     model.model_id,

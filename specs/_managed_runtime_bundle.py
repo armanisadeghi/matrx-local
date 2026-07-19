@@ -48,6 +48,7 @@ with ``--check`` and refuses stale or incomplete contracts.
 """
 
 import json
+import importlib.metadata
 from pathlib import Path
 
 
@@ -68,12 +69,40 @@ if _CONTRACT.get("schema_version") != 1:
         f"unsupported managed-runtime contract schema in {_CONTRACT_PATH}"
     )
 
-# Derived from the exact release dependency graph by
-# scripts/generate-runtime-manifests.py -- never hand-maintain this tuple.
-MANAGED_RUNTIME_SHARED_PACKAGES = tuple(_CONTRACT["shared_import_packages"])
+MANAGED_RUNTIME_SHARED_DISTRIBUTIONS_BY_TARGET = {
+    target: tuple(distributions)
+    for target, distributions in _CONTRACT["shared_distributions_by_target"].items()
+}
+MANAGED_RUNTIME_SHARED_PACKAGES_BY_TARGET = {
+    target: tuple(packages)
+    for target, packages in _CONTRACT["shared_import_packages_by_target"].items()
+}
 
 
-def collect_managed_runtime_modules(collect_submodules):
+def managed_runtime_shared_packages(target: str) -> tuple[str, ...]:
+    """Validate target build versions and return deterministic import roots."""
+    try:
+        distributions = MANAGED_RUNTIME_SHARED_DISTRIBUTIONS_BY_TARGET[target]
+        expected_versions = _CONTRACT["shared_versions_by_target"][target]
+        import_roots = MANAGED_RUNTIME_SHARED_PACKAGES_BY_TARGET[target]
+    except KeyError as exc:
+        raise RuntimeError(f"no managed-runtime shared contract for {target}") from exc
+    for distribution in distributions:
+        try:
+            actual = importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError as exc:
+            raise RuntimeError(
+                f"required target distribution {distribution!r} is absent"
+            ) from exc
+        if actual != expected_versions[distribution]:
+            raise RuntimeError(
+                f"target distribution {distribution!r} has version {actual!r}; "
+                f"contract requires {expected_versions[distribution]!r}"
+            )
+    return tuple(import_roots)
+
+
+def collect_managed_runtime_modules(collect_submodules, *, target: str):
     """Return every submodule of every shared package, for ``hiddenimports``.
 
     ``collect_submodules`` is injected rather than imported so this module stays
@@ -83,7 +112,7 @@ def collect_managed_runtime_modules(collect_submodules):
     one is how frozen-only outages reached production.
     """
     modules: list[str] = []
-    for package in MANAGED_RUNTIME_SHARED_PACKAGES:
+    for package in managed_runtime_shared_packages(target):
         try:
             collected = collect_submodules(package)
         except Exception as exc:

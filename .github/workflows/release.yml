@@ -74,6 +74,10 @@ jobs:
         working-directory: desktop
         run: pnpm tsc -b
 
+      - name: Desktop unit tests
+        working-directory: desktop
+        run: pnpm test:unit
+
       - name: Install Playwright Chromium
         working-directory: desktop
         run: pnpm exec playwright install --with-deps chromium
@@ -201,7 +205,13 @@ jobs:
           else
             TARGET="x86_64-unknown-linux-gnu"
           fi
-          "$PYTHON" scripts/verify-frozen-runtime.py --binary "$BINARY" --python "$PYTHON" --target "$TARGET"
+          UV="desktop/src-tauri/binaries/uv-$TARGET"
+          if [[ "$TARGET" == *"windows"* ]]; then
+            UV="${UV}.exe"
+          fi
+          # build-sidecar already performed the expensive full locked-runtime
+          # probe with bundled uv; independently re-check the copied archive.
+          "$PYTHON" scripts/verify-frozen-runtime.py --binary "$BINARY" --python "$PYTHON" --uv "$UV" --target "$TARGET" --archive-only
         shell: bash
 
       - name: Download cloudflared sidecar binary

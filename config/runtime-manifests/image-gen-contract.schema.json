@@ -13,8 +13,9 @@
     "managed_requirements",
     "managed_direct_versions",
     "shared_distributions",
-    "shared_import_map",
-    "shared_import_packages",
+    "shared_distributions_by_target",
+    "shared_versions_by_target",
+    "shared_import_packages_by_target",
     "critical_frozen_modules",
     "runtime_imports",
     "runtime_attributes"
@@ -32,12 +33,24 @@
     },
     "managed_direct_versions": { "$ref": "#/$defs/stringMap" },
     "shared_distributions": { "$ref": "#/$defs/stringList" },
-    "shared_import_map": {
+    "shared_distributions_by_target": {
       "type": "object",
-      "minProperties": 1,
+      "minProperties": 4,
+      "maxProperties": 4,
       "additionalProperties": { "$ref": "#/$defs/stringList" }
     },
-    "shared_import_packages": { "$ref": "#/$defs/stringList" },
+    "shared_versions_by_target": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "additionalProperties": { "$ref": "#/$defs/stringMap" }
+    },
+    "shared_import_packages_by_target": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "additionalProperties": { "$ref": "#/$defs/stringList" }
+    },
     "critical_frozen_modules": { "$ref": "#/$defs/stringList" },
     "runtime_imports": { "$ref": "#/$defs/stringList" },
     "runtime_attributes": {

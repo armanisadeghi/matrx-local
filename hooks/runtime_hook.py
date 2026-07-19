@@ -8,6 +8,8 @@ inside sys._MEIPASS (the PyInstaller extraction directory) or the user's home.
 
 import os
 import sys
+import base64
+import csv
 from pathlib import Path
 
 # ── Windows UTF-8 fix — MUST be first, before any other import ───────────────
@@ -175,6 +177,43 @@ try:
                 _runtime_target_manifest.get("unsupported_reason")
                 or f"managed runtime is unsupported for {_runtime_target}"
             )
+        _runtime_minimum_macos = _runtime_target_manifest.get("minimum_macos")
+        if _runtime_minimum_macos and sys.platform == "darwin":
+            _runtime_macos = _runtime_platform.mac_ver()[0]
+            if tuple(map(int, _runtime_macos.split(".")[:2])) < tuple(
+                map(int, str(_runtime_minimum_macos).split(".")[:2])
+            ):
+                raise RuntimeError(
+                    f"managed runtime requires macOS {_runtime_minimum_macos}; "
+                    f"found {_runtime_macos}"
+                )
+        _runtime_minimum_glibc = _runtime_target_manifest.get("minimum_glibc")
+        if _runtime_minimum_glibc and sys.platform.startswith("linux"):
+            _runtime_libc_name, _runtime_libc_version = _runtime_platform.libc_ver()
+            if _runtime_libc_name.lower() != "glibc" or tuple(
+                map(int, _runtime_libc_version.split(".")[:2])
+            ) < tuple(map(int, str(_runtime_minimum_glibc).split(".")[:2])):
+                raise RuntimeError(
+                    f"managed runtime requires glibc {_runtime_minimum_glibc}; "
+                    f"found {_runtime_libc_name or 'unknown'} "
+                    f"{_runtime_libc_version or 'unknown'}"
+                )
+        _runtime_minimum_glibc = _runtime_target_manifest.get("minimum_glibc")
+        if _runtime_minimum_glibc and sys.platform.startswith("linux"):
+            _runtime_libc_name, _runtime_libc_version = _runtime_platform.libc_ver()
+            _runtime_current_glibc = tuple(
+                int(_part) for _part in _runtime_libc_version.split(".")[:2]
+            )
+            _runtime_required_glibc = tuple(
+                int(_part) for _part in str(_runtime_minimum_glibc).split(".")[:2]
+            )
+            if (
+                _runtime_libc_name.lower() != "glibc"
+                or _runtime_current_glibc < _runtime_required_glibc
+            ):
+                raise RuntimeError(
+                    f"managed runtime requires glibc {_runtime_minimum_glibc} or newer"
+                )
         if _runtime_target_manifest.get("contract_sha256") != _runtime_required:
             raise RuntimeError("embedded target manifest is stale for this app contract")
         _runtime_lock_name = _runtime_target_manifest.get("lock_file")
@@ -235,6 +274,97 @@ try:
             raise RuntimeError("; ".join(_runtime_mismatches))
         if not (_runtime_slot / ".install-complete").is_file():
             raise RuntimeError("active runtime slot has no install evidence")
+        _runtime_record_anchors = _runtime_slot_manifest.get("record_hashes")
+        if not isinstance(_runtime_record_anchors, dict) or not _runtime_record_anchors:
+            raise RuntimeError("active runtime manifest has no RECORD anchors")
+        for _runtime_relative, _runtime_claimed_hash in _runtime_record_anchors.items():
+            _runtime_anchor_lexical = Path(
+                os.path.abspath(os.path.normpath(_runtime_slot / _runtime_relative))
+            )
+            if not _runtime_anchor_lexical.is_relative_to(_runtime_slot.resolve(strict=False)):
+                raise RuntimeError("runtime RECORD anchor escapes active slot")
+            _runtime_anchor = _runtime_anchor_lexical.resolve(strict=False)
+            if (
+                not _runtime_anchor.is_relative_to(_runtime_slot.resolve(strict=False))
+                or not _runtime_anchor.is_file()
+            ):
+                raise RuntimeError("runtime RECORD anchor is missing or resolves outside slot")
+            _runtime_anchor_digest = _runtime_hashlib.sha256(
+                _runtime_anchor.read_bytes()
+            ).hexdigest()
+            if _runtime_anchor_digest != str(_runtime_claimed_hash).removeprefix("sha256:"):
+                raise RuntimeError(f"runtime RECORD anchor mismatch: {_runtime_relative}")
+        _runtime_actual_packages = {}
+        for _runtime_dist_info in _runtime_slot.glob("*.dist-info"):
+            _runtime_dist_stem = _runtime_dist_info.name[: -len(".dist-info")]
+            _runtime_dist_name, _, _runtime_dist_version = _runtime_dist_stem.rpartition("-")
+            if _runtime_dist_name and _runtime_dist_version:
+                _runtime_actual_packages[
+                    _runtime_dist_name.replace("_", "-").lower()
+                ] = _runtime_dist_version
+        if _runtime_actual_packages != _runtime_packages:
+            raise RuntimeError(
+                "active runtime package inventory differs from the release contract"
+            )
+        _runtime_slot_root = _runtime_slot.resolve(strict=False)
+        for _runtime_dist_info in _runtime_slot.glob("*.dist-info"):
+            _runtime_record = _runtime_dist_info / "RECORD"
+            if not _runtime_record.is_file():
+                raise RuntimeError(
+                    f"active runtime distribution has no RECORD: {_runtime_dist_info.name}"
+                )
+            with _runtime_record.open(newline="", encoding="utf-8") as _runtime_handle:
+                _runtime_rows = list(csv.reader(_runtime_handle))
+            if not _runtime_rows:
+                raise RuntimeError(
+                    f"active runtime distribution has empty RECORD: {_runtime_dist_info.name}"
+                )
+            for _runtime_row in _runtime_rows:
+                if not _runtime_row or not _runtime_row[0]:
+                    raise RuntimeError(
+                        f"active runtime has malformed RECORD: {_runtime_dist_info.name}"
+                    )
+                _runtime_file_lexical = Path(
+                    os.path.abspath(os.path.normpath(_runtime_slot / _runtime_row[0]))
+                )
+                if not _runtime_file_lexical.is_relative_to(_runtime_slot_root):
+                    continue
+                _runtime_file = _runtime_file_lexical.resolve(strict=False)
+                if not _runtime_file.is_relative_to(_runtime_slot_root):
+                    raise RuntimeError(
+                        f"active runtime symlink escapes slot: {_runtime_row[0]}"
+                    )
+                if not _runtime_file.is_file():
+                    raise RuntimeError(
+                        f"active runtime file is missing: {_runtime_row[0]}"
+                    )
+                if len(_runtime_row) >= 3 and _runtime_row[2]:
+                    if _runtime_file.stat().st_size != int(_runtime_row[2]):
+                        raise RuntimeError(
+                            f"active runtime file size mismatch: {_runtime_row[0]}"
+                        )
+                if len(_runtime_row) >= 2 and _runtime_row[1]:
+                    _runtime_algorithm, _runtime_expected_digest = _runtime_row[1].split(
+                        "=", 1
+                    )
+                    if _runtime_algorithm != "sha256":
+                        raise RuntimeError(
+                            f"unsupported runtime RECORD digest: {_runtime_algorithm}"
+                        )
+                    _runtime_digest = _runtime_hashlib.sha256()
+                    with _runtime_file.open("rb") as _runtime_file_handle:
+                        while True:
+                            _runtime_chunk = _runtime_file_handle.read(1024 * 1024)
+                            if not _runtime_chunk:
+                                break
+                            _runtime_digest.update(_runtime_chunk)
+                    _runtime_actual_digest = base64.urlsafe_b64encode(
+                        _runtime_digest.digest()
+                    ).rstrip(b"=").decode()
+                    if _runtime_actual_digest != _runtime_expected_digest.rstrip("="):
+                        raise RuntimeError(
+                            f"active runtime file digest mismatch: {_runtime_row[0]}"
+                        )
         _runtime_slot_text = str(_runtime_slot)
         while _runtime_slot_text in sys.path:
             sys.path.remove(_runtime_slot_text)

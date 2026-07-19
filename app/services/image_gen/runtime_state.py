@@ -332,6 +332,34 @@ def remove_slot(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
+def cleanup_unreferenced_slots(snapshot: RuntimeSnapshot) -> list[str]:
+    """Remove abandoned staging/final slots while the caller holds the lock.
+
+    A process can die after creating a staging directory or after atomically
+    renaming it but before publishing the candidate in ``state.json``. The next
+    owner preserves every referenced slot and removes only unreachable trees.
+    """
+    root = runtime_slots_dir()
+    if not root.exists():
+        return []
+    preserved = {
+        name
+        for name in (
+            snapshot.active_slot,
+            snapshot.last_known_good_slot,
+            snapshot.candidate_slot,
+        )
+        if name
+    }
+    removed: list[str] = []
+    for child in root.iterdir():
+        if not child.is_dir() or child.name in preserved:
+            continue
+        remove_slot(child)
+        removed.append(child.name)
+    return removed
+
+
 class RuntimeFileLock(AbstractContextManager["RuntimeFileLock"]):
     """Cross-process exclusive lock for install, validation, and activation."""
 

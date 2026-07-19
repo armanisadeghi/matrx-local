@@ -41,6 +41,8 @@ from app.services.file_sync import hydration as hydration_module
 from app.services.file_sync.client import FileSyncHTTPError
 from app.services.file_sync.engine import FileSyncEngine
 from app.services.file_sync.index import EMPTY_SHA256, LOCAL_ID_PREFIX
+from app.tools.session import ToolSession
+from app.tools.tools import file_ops
 
 
 def _sha(data: bytes) -> str:
@@ -987,6 +989,97 @@ def test_ensure_hydrated_fails_closed_when_pointer_state_cannot_be_verified(
         assert message is not None
         assert "could not verify" in message
         assert "placeholder was not opened" in message
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_ensure_tree_hydrated_fails_closed_when_pointer_state_cannot_be_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        source = engine.root / "uncertain"
+        source.mkdir()
+        (source / "placeholder.txt").touch()
+
+        async def fail_lookup(_state: str, _path: str) -> list[dict[str, Any]]:
+            raise RuntimeError("mirror unavailable")
+
+        engine._index.list_by_state_under_path = fail_lookup  # type: ignore[method-assign]
+
+        message = await hydration_module.ensure_tree_hydrated(str(source))
+        assert message is not None
+        assert "could not verify" in message
+        assert "mirror unavailable" in message
+        assert "No copy/move was started" in message
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_tool_copy_does_not_start_when_tree_hydration_state_cannot_be_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        source = engine.root / "source"
+        destination = engine.root / "destination"
+        source.mkdir()
+        destination.mkdir()
+        (source / "placeholder.txt").touch()
+        (destination / "original.txt").write_text("keep me", encoding="utf-8")
+
+        async def fail_lookup(_state: str, _path: str) -> list[dict[str, Any]]:
+            raise RuntimeError("mirror unavailable")
+
+        engine._index.list_by_state_under_path = fail_lookup  # type: ignore[method-assign]
+
+        result = await file_ops.tool_copy(
+            ToolSession(working_dir=str(engine.root)),
+            "source",
+            "destination",
+            overwrite=True,
+        )
+
+        assert result.type.value == "error"
+        assert "No copy/move was started" in result.output
+        assert (source / "placeholder.txt").read_bytes() == b""
+        assert sorted(path.name for path in source.iterdir()) == ["placeholder.txt"]
+        assert (destination / "original.txt").read_text(encoding="utf-8") == "keep me"
+        assert sorted(path.name for path in destination.iterdir()) == ["original.txt"]
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_tool_move_does_not_start_when_tree_hydration_state_cannot_be_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        source = engine.root / "source"
+        destination = engine.root / "destination"
+        source.mkdir()
+        destination.mkdir()
+        (source / "placeholder.txt").touch()
+        (destination / "original.txt").write_text("keep me", encoding="utf-8")
+
+        async def fail_lookup(_state: str, _path: str) -> list[dict[str, Any]]:
+            raise RuntimeError("mirror unavailable")
+
+        engine._index.list_by_state_under_path = fail_lookup  # type: ignore[method-assign]
+
+        result = await file_ops.tool_move(
+            ToolSession(working_dir=str(engine.root)),
+            "source",
+            "destination",
+            overwrite=True,
+        )
+
+        assert result.type.value == "error"
+        assert "No copy/move was started" in result.output
+        assert (source / "placeholder.txt").read_bytes() == b""
+        assert sorted(path.name for path in source.iterdir()) == ["placeholder.txt"]
+        assert (destination / "original.txt").read_text(encoding="utf-8") == "keep me"
+        assert sorted(path.name for path in destination.iterdir()) == ["original.txt"]
 
     run_scenario(tmp_path, monkeypatch, scenario)
 

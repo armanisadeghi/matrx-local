@@ -75,9 +75,15 @@ async def ensure_tree_hydrated(abs_path: str) -> str | None:
         return None
     try:
         pointers = await engine._index.list_by_state_under_path("pointer", rel)
-    except Exception:
-        logger.debug("[file_sync] pointer-descendant lookup failed for %s", rel, exc_info=True)
-        return None
+    except Exception as exc:
+        logger.error(
+            "[file_sync] pointer-descendant lookup failed for %s", rel, exc_info=True
+        )
+        return (
+            f"{rel} is inside the managed Files folder, but Matrx could not verify whether "
+            f"all cloud-backed files in it are stored locally ({exc}). Check file sync "
+            "status and retry. No copy/move was started."
+        )
     semaphore = asyncio.Semaphore(4)
 
     async def _hydrate(row: dict) -> str | None:

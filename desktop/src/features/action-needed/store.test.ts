@@ -81,6 +81,19 @@ describe("ActionNeededStore", () => {
     expect(store.getSnapshot()).toEqual([]);
   });
 
+  it("does not publish a semantically identical local snapshot", () => {
+    const store = new ActionNeededStore();
+    let notifications = 0;
+    store.subscribe(() => {
+      notifications += 1;
+    });
+
+    store.reconcileLocal("test", [item("same", 10)]);
+    store.reconcileLocal("test", [{ ...item("same", 10), action: { kind: "navigate", label: "Open", route: "/settings" } }]);
+
+    expect(notifications).toBe(1);
+  });
+
   it("accepts a restarted source's lower versions and drops its old tombstones", () => {
     const store = new ActionNeededStore();
     store.reconcile({

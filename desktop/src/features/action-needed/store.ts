@@ -25,6 +25,24 @@ function isActionNeeded(value: unknown): value is ActionNeeded {
   );
 }
 
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
+
+function sameActionNeeded(left: ActionNeeded, right: ActionNeeded): boolean {
+  return stableJson(left) === stableJson(right);
+}
+
 export class ActionNeededStore {
   private items = new Map<string, ActionNeeded>();
   private sourceVersions = new Map<string, number>();
@@ -75,6 +93,7 @@ export class ActionNeededStore {
     ) {
       return;
     }
+    if (existing && sameActionNeeded(existing, item)) return;
     this.items.set(item.fingerprint, item);
     this.resolvedSources.delete(item.fingerprint);
     this.publish();
@@ -104,9 +123,11 @@ export class ActionNeededStore {
 
   resolveMatching(predicate: (item: ActionNeeded) => boolean): void {
     const now = Date.now();
+    let changed = false;
     for (const [fingerprint, item] of this.items) {
       if (predicate(item)) {
         this.items.delete(fingerprint);
+        changed = true;
         this.resolvedAt.set(
           fingerprint,
           Math.max(this.resolvedAt.get(fingerprint) ?? 0, now),
@@ -114,18 +135,22 @@ export class ActionNeededStore {
         this.resolvedSources.set(fingerprint, item.source);
       }
     }
-    this.publish();
+    if (changed) this.publish();
   }
 
   /** Replace all items owned by one source. `null` is an explicit clear. */
   reconcile(snapshot: ActionNeededSnapshot): void {
+    let changed = false;
     if (!this.localSources.has(snapshot.source)) {
       this.backendSources.add(snapshot.source);
     }
     const previousEpoch = this.sourceEpochs.get(snapshot.source);
     if (snapshot.epoch && previousEpoch && snapshot.epoch !== previousEpoch) {
       for (const [fingerprint, item] of this.items) {
-        if (item.source === snapshot.source) this.items.delete(fingerprint);
+        if (item.source === snapshot.source) {
+          this.items.delete(fingerprint);
+          changed = true;
+        }
       }
       for (const [fingerprint, source] of this.resolvedSources) {
         if (source === snapshot.source) {
@@ -151,6 +176,7 @@ export class ActionNeededStore {
       if (item.source === snapshot.source && !incoming.has(fingerprint)) {
         this.items.delete(fingerprint);
         this.resolvedSources.delete(fingerprint);
+        changed = true;
       }
     }
     for (const [fingerprint, item] of incoming) {
@@ -165,11 +191,14 @@ export class ActionNeededStore {
         item.observed_at == null ||
         item.observed_at >= existing.observed_at
       ) {
-        this.items.set(fingerprint, item);
-        this.resolvedSources.delete(fingerprint);
+        if (!existing || !sameActionNeeded(existing, item)) {
+          this.items.set(fingerprint, item);
+          this.resolvedSources.delete(fingerprint);
+          changed = true;
+        }
       }
     }
-    this.publish();
+    if (changed) this.publish();
   }
 
   reconcileLocal(source: string, items: ActionNeeded[] | null): void {
@@ -180,8 +209,12 @@ export class ActionNeededStore {
 
   acceptBackendEpoch(epoch: string): void {
     if (this.backendEpoch && this.backendEpoch !== epoch) {
+      let changed = false;
       for (const [fingerprint, item] of this.items) {
-        if (!this.localSources.has(item.source)) this.items.delete(fingerprint);
+        if (!this.localSources.has(item.source)) {
+          this.items.delete(fingerprint);
+          changed = true;
+        }
       }
       for (const [fingerprint, source] of this.resolvedSources) {
         if (!this.localSources.has(source)) {
@@ -194,7 +227,7 @@ export class ActionNeededStore {
         this.sourceEpochs.delete(source);
       }
       this.backendSources.clear();
-      this.publish();
+      if (changed) this.publish();
     }
     this.backendEpoch = epoch;
   }

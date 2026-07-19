@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Callable, Optional
 
 import httpx
 
@@ -101,6 +101,7 @@ class DelegationApiClient:
         self,
         base_url: str,
         transport: httpx.AsyncBaseTransport | None = None,
+        instance_id_provider: Callable[[], str | None] | None = None,
     ) -> None:
         if not base_url:
             raise ValueError(
@@ -109,6 +110,7 @@ class DelegationApiClient:
             )
         self._base_url = base_url.rstrip("/")
         self._transport = transport
+        self._instance_id_provider = instance_id_provider
 
     @property
     def base_url(self) -> str:
@@ -125,6 +127,22 @@ class DelegationApiClient:
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
+
+    def _instance_id(self) -> str | None:
+        try:
+            if self._instance_id_provider is not None:
+                return self._instance_id_provider()
+            from app.services.cloud_sync.instance_manager import (
+                get_instance_manager,
+            )
+
+            return get_instance_manager().instance_id
+        except Exception:
+            logger.debug(
+                "[delegation] could not resolve this desktop's instance_id",
+                exc_info=True,
+            )
+            return None
 
     # ------------------------------------------------------------------
     # Discovery
@@ -150,19 +168,9 @@ class DelegationApiClient:
         url = f"{self._base_url}/ai/user/pending_calls"
         params: dict[str, str] = {}
         if claim_for_instance:
-            try:
-                from app.services.cloud_sync.instance_manager import (
-                    get_instance_manager,
-                )
-
-                iid = get_instance_manager().instance_id
-                if iid:
-                    params["instance_id"] = iid
-            except Exception:
-                logger.debug(
-                    "[delegation] could not resolve instance_id for pending_calls",
-                    exc_info=True,
-                )
+            iid = self._instance_id()
+            if iid:
+                params["instance_id"] = iid
         async with self._client() as http:
             resp = await http.get(
                 url, headers=self._headers(jwt), params=params or None
@@ -196,9 +204,13 @@ class DelegationApiClient:
         ``continuation_needed`` (anti-pattern #2 in the protocol doc).
         """
         url = f"{self._base_url}/ai/conversations/{conversation_id}/tool_results"
+        instance_id = self._instance_id()
+        payload: dict[str, Any] = {"results": results}
+        if instance_id:
+            payload["instance_id"] = instance_id
         async with self._client() as http:
             resp = await http.post(
-                url, headers=self._headers(jwt), json={"results": results}
+                url, headers=self._headers(jwt), json=payload
             )
         if resp.status_code != 200:
             raise DelegationApiError(

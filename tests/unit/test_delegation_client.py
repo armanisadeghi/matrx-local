@@ -25,6 +25,7 @@ from app.services.delegation.outbox import MemoryDelegationOutbox
 
 JWT = "test-jwt"
 BASE = "https://aidream.test"
+INSTANCE_ID = "11111111-2222-4333-8444-555555555555"
 
 
 @pytest.fixture(autouse=True)
@@ -121,7 +122,11 @@ class FakeServer:
 def _engine(
     server: FakeServer, outbox: MemoryDelegationOutbox | None = None
 ) -> DelegationEngine:
-    client = DelegationApiClient(BASE, transport=server.transport())
+    client = DelegationApiClient(
+        BASE,
+        transport=server.transport(),
+        instance_id_provider=lambda: INSTANCE_ID,
+    )
     engine = DelegationEngine(
         client=client,
         poll_interval=999.0,
@@ -161,6 +166,7 @@ def test_full_round_trip_execute_deliver_resume(tmp_path: Path) -> None:
 
     # tool_results: exactly one POST, correct wire shape, real execution output.
     assert len(server.tool_results_bodies) == 1
+    assert server.tool_results_bodies[0]["instance_id"] == INSTANCE_ID
     result = server.tool_results_bodies[0]["results"][0]
     assert result["call_id"] == "call_1"
     assert result["tool_name"] == "local_file"

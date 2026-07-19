@@ -368,7 +368,7 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Cross-repo
 
-### MXL-D-059 — 🔴 chat_sync BLIND-UPSERTS server-owned cloud rows (already corrupted production data)
+### MXL-D-059 — ✅ chat_sync BLIND-UPSERTS server-owned cloud rows (already corrupted production data)
 - **Area:** chat_sync / cross-repo (shared Supabase `chat.*`)
 - **Symptom:** `_push_table` publishes locally-rebuilt rows to the shared cloud DB with an
   **unconditional** PostgREST upsert — no compare-and-swap, no predicate — so the desktop
@@ -390,7 +390,7 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   - Contrast `app/services/documents/sync_engine.py:329-366`, which does this CORRECTLY
     (`expected_content_hash` CAS + conflict preservation) and whose own comment calls the
     unconditional upsert a "SYNC_CONTRACT violation."
-- **Highest-severity columns still clobbered today (beyond the fixed content case):**
+- **Former highest-severity clobber paths (beyond the fixed content case):**
   1. `conversation.cache_state` / `metadata` / `config` — hardcoded `'{}'` at
      `conversation_handler.py:137-140` + `repositories.py:376-378`; destroys server prompt-cache state.
   2. `user_request` usage/cost — hardcoded zeros at `conversation_handler.py:196-199`, never
@@ -406,17 +406,22 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
      fractional-second width (Postgres trims trailing zeros, local `_now()` never does — this one
      fires constantly), mixed UTC offsets, and the space-form `datetime('now')` stamps written by
      `artifacts/service.py:370,403,470,483`. `_parse_ts` (`engine.py:73-83`) exists and is unused.
-- **Status:** open. Analyzed 2026-07-18 — verified in code (upsert predicate, `_STRIP_COLUMNS`,
-  hardcoded zeros, `cache_state='{}'` all read directly); server-side damage confirmed in the DB
-  and repaired.
+- **Status:** fixed 2026-07-18. Desktop writes now use batched
+  `resolution=ignore-duplicates` inserts and `(id, version)` conditional PATCHes; every table has
+  an explicit desktop-authored column allowlist, and cloud/tool-result ledger fields are excluded.
+  A CAS mismatch or conflicting pull stores both local and remote copies in a durable
+  `sync_queue.action='conflict'` row instead of overwriting either side. Characterization tests
+  pin projection, CAS mismatch, two-copy preservation, parent ordering, echo, and poison-row
+  isolation. Live Supabase introspection confirmed `platform._touch_row` increments `version` on
+  updates for every writable mirrored table except `chat.media`, which is now insert-only from
+  desktop when an existing row differs.
 - **Immediate mitigation already live (server side):** aidream migration 0207 installs
   `chat.message_tool_graph_write_guard`, which REJECTS any UPDATE changing a message's `tool_call`
   id multiset. Desktop pushes that would corrupt the tool graph now fail loudly with
   `tool_call_graph_change_forbidden`, retry, then dead-letter — cloud truth is protected, but the
   desktop mirror stays lossy and the other columns above are still unguarded.
-- **Owner hint:** chat_sync. Fix direction: adopt the `documents/sync_engine.py` CAS pattern —
-  stop stripping `version`, push only columns the desktop actually authors, and make the push an
-  allowlist rather than an ordering hint.
+- **Follow-up:** expose conflict resolution in the desktop chat UI. The data is safe and visible
+  in `/chat/mirror/status`, but users still need `keep_local` / `keep_cloud` controls.
 
 ### MXL-D-027 — Voice E2E unconfirmed on physical hardware
 - **Area:** desktop / voice

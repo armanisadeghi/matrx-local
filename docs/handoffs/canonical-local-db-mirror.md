@@ -38,9 +38,10 @@ access." The cloud DB is the spec — never local docs or local table shapes
   pull-BEFORE-push cycles; incremental keyset pull per table
   (`(updated_at|created_at, pk)`, checkpoints in `sync_meta` keyed
   `chat.<table>`, cursor JSON in `last_hash`); outbox drain as batched
-  PostgREST upserts (parents first, `client.py` with
-  `Content-Profile: chat`, cloud-owned columns stripped); atomic in-SQL
-  LWW/pending guards; dead-letter lane (`sync_queue.action='dead'`) for
+  insert-ignore plus version-conditional PATCHes (parents first, `client.py`
+  with `Content-Profile: chat`); explicit desktop-authoring column allowlists;
+  durable two-copy conflicts instead of stale overwrites; atomic in-SQL
+  pull/echo guards; dead-letter lane (`sync_queue.action='dead'`) for
   non-UUID ids, other-user rows, and permanent 4xx after 5 attempts;
   cloud-stamped echoes written back without re-enqueue. Managed service
   `chat_sync` (main.py Phase 2d + shutdown); `GET /chat/mirror/status`,
@@ -136,10 +137,10 @@ access." The cloud DB is the spec — never local docs or local table shapes
    `auth_tokens.expires_at` (`POST /auth/token` payload); fix the writer so
    the column stops lying.
 9. **Known accepted limits (documented in SYNC_CONTRACT.md, revisit if they
-   bite)**: push is an unconditional upsert (no cloud version predicate —
-   pull-before-push shrinks but does not eliminate the clobber window;
-   proper fix = conditional PATCH or cloud version column); field-clears
-   (set-to-NULL) never propagate (push omits nulls); message content is
+   bite)**: field-clears (set-to-NULL) never propagate (push omits nulls);
+   `chat.media` has no version column and is therefore insert-only from the
+   desktop; durable `sync_queue.action='conflict'` rows preserve both copies
+   but still need a user-facing resolver; message content is
    flattened to text parts locally (`_normalize_message`) — rich parts
    (images etc.) survive only as JSON-dumped text; `chat.request` rows are
    not produced by a client host (user_request↔conversation link rides

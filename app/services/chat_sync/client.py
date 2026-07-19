@@ -144,17 +144,22 @@ class SupabaseChatClient:
         return await self._request("GET", table, params=query)
 
     # ------------------------------------------------------------------
-    # Push — batched upserts
+    # Push — insert-if-absent + optimistic conditional updates
     # ------------------------------------------------------------------
 
-    async def upsert_rows(
+    async def insert_rows_if_absent(
         self,
         table: str,
         rows: list[dict[str, Any]],
         *,
         pk_col: str = "id",
     ) -> list[dict[str, Any]]:
-        """Upsert rows by primary key; returns the cloud-stamped rows."""
+        """Insert new rows without modifying rows that already exist.
+
+        Blind ``resolution=merge-duplicates`` upserts are forbidden here: a
+        stale desktop mirror must never replace newer cloud state.  Existing
+        rows are updated separately through :meth:`update_row_if_version`.
+        """
         if not rows:
             return []
         return await self._request(
@@ -162,5 +167,28 @@ class SupabaseChatClient:
             table,
             params={"on_conflict": pk_col},
             json_body=rows,
-            extra_headers={"Prefer": "resolution=merge-duplicates,return=representation"},
+            extra_headers={"Prefer": "resolution=ignore-duplicates,return=representation"},
+        )
+
+    async def update_row_if_version(
+        self,
+        table: str,
+        row: dict[str, Any],
+        *,
+        pk_col: str,
+        pk_value: str,
+        expected_version: int,
+    ) -> list[dict[str, Any]]:
+        """PATCH one row only when its cloud version is still expected.
+
+        PostgREST returns an empty representation when the predicate matches
+        no row.  The caller treats that as an optimistic-concurrency conflict,
+        refreshes the current cloud version, and may retry once.
+        """
+        return await self._request(
+            "PATCH",
+            table,
+            params={pk_col: f"eq.{pk_value}", "version": f"eq.{expected_version}"},
+            json_body=row,
+            extra_headers={"Prefer": "return=representation"},
         )

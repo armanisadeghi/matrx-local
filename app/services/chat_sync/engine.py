@@ -6,10 +6,10 @@ auth_tokens row every tick, pushes the sync_queue outbox, then pulls
 incremental changes per table with checkpoints in sync_meta.
 
 Doctrine (docs/SYNC_CONTRACT.md):
-- Chat rows are append-mostly. Conflict policy is last-write-wins per ROW on
-  ``updated_at``, EXCEPT a locally-changed row that is still pending in the
-  outbox is never overwritten by a pull (the unpushed local change wins until
-  it lands), and message rows are never destroyed — deletions travel as
+- Chat rows are append-mostly. Pulls use timestamp LWW, while pushes use
+  optimistic concurrency on the cloud ``version`` column.  A stale desktop
+  can update only explicitly desktop-authored columns and never blind-upserts
+  a whole cloud row. Message rows are never destroyed — deletions travel as
   ``deleted_at`` tombstones in both directions.
 - Loud failures: a permission/404 error from the cloud is an ERROR naming the
   table, never a silent skip.
@@ -45,12 +45,72 @@ _SCHEMA = "chat"
 # conversation row, so it must exist in the cloud first.
 _PUSH_ORDER = ["conversation", "user_request", "message", "tool_call", "media", "artifact"]
 
-# Cloud-owned columns (filled by _stamp_actor/_stamp_org_default/_touch_row
-# triggers); never pushed. updated_at IS pushed so cloud LWW reflects the
-# real local edit time — the cloud _touch_row trigger only fills it when the
-# payload omits it... it overwrites unconditionally, so the cloud timestamp
-# wins and the echo-write below realigns the local row.
-_STRIP_COLUMNS = frozenset({"organization_id", "created_by", "updated_by", "version"})
+# Explicit desktop-authoring boundary.  Pulling a column into SQLite does not
+# grant the desktop permission to publish it back.  This is deliberately an
+# allowlist (not a denylist) so newly-added server ledger columns remain
+# cloud-only until a local writer intentionally adopts them.
+_PUSH_COLUMNS: dict[str, frozenset[str]] = {
+    "conversation": frozenset(
+        {
+            "id", "title", "system_instruction", "config", "status",
+            "message_count", "forked_from_id", "forked_at_position",
+            "created_at", "deleted_at", "metadata", "last_model_id",
+            "parent_conversation_id", "variables", "overrides", "description",
+            "keywords", "project_id", "task_id", "source_app", "source_feature",
+            "is_ephemeral", "initial_agent_id", "initial_agent_version_id",
+            "is_favorite", "cache_state", "last_context_breakdown",
+            "last_request_status", "last_request_id", "exclude_from_kg",
+            "conversation_type", "visibility",
+        }
+    ),
+    "user_request": frozenset(
+        {
+            "id", "user_id", "status", "source_app", "source_feature",
+            "metadata", "error", "finish_reason", "agent_id", "agent_version_id",
+            "created_at", "completed_at", "last_activity_at", "deleted_at",
+            "api_duration_ms", "tool_duration_ms", "total_duration_ms",
+            "total_input_tokens", "total_output_tokens", "total_cached_tokens",
+            "total_tokens", "total_cost", "iterations", "total_tool_calls",
+        }
+    ),
+    "message": frozenset(
+        {
+            "id", "conversation_id", "role", "position", "status", "content",
+            "content_history", "user_content", "metadata", "model_context",
+            "error", "source", "is_visible_to_user", "is_visible_to_model",
+            "content_chars", "tool_results_chars", "agent_id", "voice",
+            "created_at", "deleted_at",
+        }
+    ),
+    "tool_call": frozenset(
+        {
+            "id", "conversation_id", "user_request_id", "message_id", "user_id",
+            "tool_name", "tool_name_as_called", "tool_type", "call_id", "arguments",
+            "status", "success", "is_error", "output", "output_preview",
+            "output_type", "output_chars", "error_message", "error_type",
+            "started_at", "completed_at", "duration_ms", "cost_usd", "input_tokens",
+            "output_tokens", "total_tokens", "iteration", "parent_call_id",
+            "retry_count", "execution_events", "metadata", "is_client_delegated",
+            "fault_domain", "file_path", "runtime_execution_id", "persist_key",
+            "value_ref_key", "model_stub_at", "created_at", "deleted_at",
+        }
+    ),
+    "media": frozenset(
+        {
+            "id", "conversation_id", "user_id", "kind", "url", "file_uri",
+            "mime_type", "file_size_bytes", "metadata", "created_at", "deleted_at",
+        }
+    ),
+    "artifact": frozenset(
+        {
+            "id", "message_id", "conversation_id", "user_id", "project_id",
+            "task_id", "artifact_type", "status", "external_system", "external_id",
+            "external_url", "title", "description", "thumbnail_url", "metadata",
+            "canvas_item_id", "source_system", "source_id", "artifact_index",
+            "created_at", "deleted_at",
+        }
+    ),
+}
 
 DEFAULT_INTERVAL = int(os.getenv("MATRX_CHAT_SYNC_INTERVAL", "300"))
 _PULL_PAGE_SIZE = 500
@@ -84,9 +144,9 @@ def _parse_ts(value: Any) -> datetime | None:
 
 
 def _shape_compatible_batches(
-    payloads: list[tuple[dict[str, Any], dict[str, Any]]],
+    payloads: list[tuple[dict[str, Any], dict[str, Any], int | None]],
     batch_size: int,
-) -> list[list[tuple[dict[str, Any], dict[str, Any]]]]:
+) -> list[list[tuple[dict[str, Any], dict[str, Any], int | None]]]:
     """Group PostgREST upserts by identical object keys.
 
     PostgREST rejects a JSON array when its objects have different key sets
@@ -96,17 +156,32 @@ def _shape_compatible_batches(
     cycle.
     """
     by_shape: dict[
-        tuple[str, ...], list[tuple[dict[str, Any], dict[str, Any]]]
+        tuple[str, ...], list[tuple[dict[str, Any], dict[str, Any], int | None]]
     ] = {}
     for item in payloads:
         shape = tuple(sorted(item[1]))
         by_shape.setdefault(shape, []).append(item)
 
-    batches: list[list[tuple[dict[str, Any], dict[str, Any]]]] = []
+    batches: list[list[tuple[dict[str, Any], dict[str, Any], int | None]]] = []
     for items in by_shape.values():
         for index in range(0, len(items), batch_size):
             batches.append(items[index : index + batch_size])
     return batches
+
+
+class _ChatSyncConflict(ChatSyncHTTPError):
+    """A guarded push found a different cloud row; carries its preserved copy."""
+
+    def __init__(
+        self, table: str, row_id: str, remote: dict[str, Any]
+    ) -> None:
+        self.remote = remote
+        super().__init__(
+            "PATCH",
+            table,
+            409,
+            f"optimistic-concurrency conflict for {row_id}",
+        )
 
 
 class ChatSyncEngine:
@@ -233,7 +308,7 @@ class ChatSyncEngine:
         db = get_db()
         rows = await db.fetchall(
             "SELECT id, entity_type, entity_id, attempts FROM sync_queue "
-            "WHERE entity_type LIKE 'chat.%' AND action != 'dead' "
+            "WHERE entity_type LIKE 'chat.%' AND action = 'upsert' "
             "ORDER BY created_at LIMIT ?",
             (_PUSH_LIMIT_PER_CYCLE,),
         )
@@ -284,7 +359,18 @@ class ChatSyncEngine:
         pk = spec["pk"][0]
 
         sent = failed = 0
-        payloads: list[tuple[dict[str, Any], dict[str, Any]]] = []  # (queue_row, payload)
+        allowed = _PUSH_COLUMNS.get(table)
+        if allowed is None:
+            logger.error(
+                "[chat_sync] chat.%s has no desktop push-column contract — "
+                "entries left queued instead of risking a blind write",
+                table,
+            )
+            return 0, len(entries)
+
+        payloads: list[
+            tuple[dict[str, Any], dict[str, Any], int | None]
+        ] = []  # (queue_row, projected payload, expected cloud version)
         for entry in entries:
             entity_id = entry["entity_id"]
             if not _looks_like_uuid(entity_id):
@@ -326,63 +412,96 @@ class ChatSyncEngine:
                 await self._dead_letter(entry["id"])
                 failed += 1
                 continue
-            payload = encode_local_row(_SCHEMA, table, local_row, strip=_STRIP_COLUMNS)
+            strip = frozenset(spec["columns"]) - allowed
+            payload = encode_local_row(_SCHEMA, table, local_row, strip=strip)
+            if not payload.get(pk):
+                logger.error(
+                    "[chat_sync] chat.%s %s projection omitted its primary key — "
+                    "entries left queued",
+                    table,
+                    entity_id,
+                )
+                failed += 1
+                continue
             # NOT NULL ownership column some child tables carry; local rows
             # written before sign-in may lack it (None or legacy '').
             if "user_id" in spec["columns"] and not payload.get("user_id"):
                 payload["user_id"] = self._user_id
-            payloads.append((entry, payload))
+            raw_version = local_row.get("version")
+            expected_version = (
+                int(raw_version) if raw_version is not None and "version" in spec["columns"] else None
+            )
+            payloads.append((entry, payload, expected_version))
 
         for batch in _shape_compatible_batches(payloads, _PUSH_BATCH):
+            batch_insert_failed = False
             try:
-                returned = await self._client.upsert_rows(
-                    table, [p for _, p in batch], pk_col=pk
+                # Most pending rows are newly-created messages/tool calls. A
+                # batched insert-ignore keeps that hot path efficient while
+                # guaranteeing an existing cloud row is never modified.
+                inserted = await self._client.insert_rows_if_absent(
+                    table, [payload for _, payload, _ in batch], pk_col=pk
                 )
-                # Remove the drained queue rows BEFORE applying the echo: a
-                # mid-push local edit re-enqueues under a fresh queue id, so
-                # after this delete "still pending" precisely means "changed
-                # again since we read it" — and the echo defers to it.
-                for entry, _ in batch:
-                    await self._meta.remove_from_queue(entry["id"])
-                await self._apply_cloud_echo(table, returned)
-                sent += len(batch)
             except ChatSyncHTTPError as exc:
                 if exc.is_auth:
                     raise
-                # Isolate poison rows so one bad payload can't wedge the queue.
+                batch_insert_failed = True
+                inserted = []
                 logger.error(
                     "[chat_sync] batch push to chat.%s failed (HTTP %s) — retrying "
                     "rows individually: %s",
                     table, exc.status_code, exc.body,
                 )
-                for entry, payload in batch:
-                    try:
-                        returned = await self._client.upsert_rows(table, [payload], pk_col=pk)
-                        await self._meta.remove_from_queue(entry["id"])
-                        await self._apply_cloud_echo(table, returned)
-                        sent += 1
-                    except ChatSyncHTTPError as row_exc:
-                        if row_exc.is_auth:
-                            raise
-                        failed += 1
-                        attempts = entry["attempts"] + 1
-                        await self._meta.increment_attempts(entry["id"])
-                        logger.error(
-                            "[chat_sync] PUSH FAILED chat.%s id=%s attempts=%d "
-                            "HTTP %s: %s",
-                            table, entry["entity_id"], attempts,
-                            row_exc.status_code, row_exc.body,
-                        )
-                        # Permanent 4xx after repeated tries can never succeed
-                        # with the same payload; dead-letter so poison rows
-                        # cannot starve the 1000-row push window forever.
-                        if row_exc.is_permanent and attempts >= _DEAD_LETTER_ATTEMPTS:
-                            logger.error(
-                                "[chat_sync] chat.%s id=%s DEAD-LETTERED after %d "
-                                "permanent failures — inspect via /chat/mirror/status",
-                                table, entry["entity_id"], attempts,
+
+            inserted_by_id = {str(row.get(pk)): row for row in inserted}
+            for entry, payload, expected_version in batch:
+                try:
+                    row_id = str(payload[pk])
+                    returned = inserted_by_id.get(row_id)
+                    if returned is None:
+                        if batch_insert_failed:
+                            returned = await self._write_one_row(
+                                table,
+                                pk,
+                                payload,
+                                expected_version,
                             )
-                            await self._dead_letter(entry["id"])
+                        else:
+                            returned = await self._update_existing_row(
+                                table,
+                                pk,
+                                row_id,
+                                payload,
+                                expected_version,
+                            )
+                    await self._accept_push_success(table, entry, returned)
+                    sent += 1
+                except ChatSyncHTTPError as row_exc:
+                    if row_exc.is_auth:
+                        raise
+                    failed += 1
+                    attempts = entry["attempts"] + 1
+                    await self._meta.increment_attempts(entry["id"])
+                    if isinstance(row_exc, _ChatSyncConflict):
+                        await self._preserve_push_conflict(
+                            entry["id"], payload, row_exc.remote
+                        )
+                    logger.error(
+                        "[chat_sync] PUSH FAILED chat.%s id=%s attempts=%d "
+                        "HTTP %s: %s",
+                        table, entry["entity_id"], attempts,
+                        row_exc.status_code, row_exc.body,
+                    )
+                    # Permanent payload errors eventually dead-letter. Generic
+                    # 409s remain retryable; only a proven two-copy conflict
+                    # is frozen above.
+                    if row_exc.is_permanent and row_exc.status_code != 409 and attempts >= _DEAD_LETTER_ATTEMPTS:
+                        logger.error(
+                            "[chat_sync] chat.%s id=%s DEAD-LETTERED after %d "
+                            "permanent failures — inspect via /chat/mirror/status",
+                            table, entry["entity_id"], attempts,
+                        )
+                        await self._dead_letter(entry["id"])
         if failed:
             await self._meta.set_last_sync(
                 f"{_SCHEMA}.{table}",
@@ -391,6 +510,137 @@ class ChatSyncEngine:
                 error_message=f"push: {failed} row(s) failed this cycle",
             )
         return sent, failed
+
+    async def _write_one_row(
+        self,
+        table: str,
+        pk: str,
+        payload: dict[str, Any],
+        expected_version: int | None,
+    ) -> dict[str, Any]:
+        inserted = await self._client.insert_rows_if_absent(
+            table, [payload], pk_col=pk
+        )
+        if inserted:
+            return inserted[0]
+        return await self._update_existing_row(
+            table,
+            pk,
+            str(payload[pk]),
+            payload,
+            expected_version,
+        )
+
+    async def _update_existing_row(
+        self,
+        table: str,
+        pk: str,
+        row_id: str,
+        payload: dict[str, Any],
+        expected_version: int | None,
+    ) -> dict[str, Any]:
+        """CAS-update an existing row without discarding either side."""
+        spec = MIRROR_TABLES[_SCHEMA][table]
+        if "version" not in spec["columns"]:
+            # chat.media currently has no version column and no desktop update
+            # writer. Existing media is therefore cloud-authoritative; treating
+            # it as an insert-only entity is safer than an unguarded PATCH.
+            current = await self._client.get_rows(
+                table, params={pk: f"eq.{row_id}", "limit": "1"}
+            )
+            if current:
+                if self._payload_matches_remote(table, payload, current[0]):
+                    return current[0]
+                raise _ChatSyncConflict(table, row_id, current[0])
+            # The row disappeared between insert-ignore and read; let the
+            # next cycle retry rather than issuing an unguarded update.
+            raise ChatSyncHTTPError(
+                "POST", table, 409, f"row {row_id} disappeared during safe insert"
+            )
+
+        if expected_version is not None:
+            updated = await self._client.update_row_if_version(
+                table,
+                payload,
+                pk_col=pk,
+                pk_value=row_id,
+                expected_version=expected_version,
+            )
+            if updated:
+                return updated[0]
+
+        current = await self._client.get_rows(
+            table, params={pk: f"eq.{row_id}", "limit": "1"}
+        )
+        if not current:
+            # Race: the row was removed after insert-ignore. A second safe
+            # insert may now succeed; it still cannot overwrite anything.
+            inserted = await self._client.insert_rows_if_absent(
+                table, [payload], pk_col=pk
+            )
+            if inserted:
+                return inserted[0]
+            raise ChatSyncHTTPError(
+                "POST", table, 409, f"row {row_id} changed during safe insert"
+            )
+
+        if expected_version is None and self._payload_matches_remote(
+            table, payload, current[0]
+        ):
+            # Idempotent recovery when the insert committed in the cloud but
+            # the desktop lost the response before applying its echo.
+            return current[0]
+        raise _ChatSyncConflict(table, row_id, current[0])
+
+    @staticmethod
+    def _payload_matches_remote(
+        table: str, payload: dict[str, Any], remote: dict[str, Any]
+    ) -> bool:
+        pg_types = MIRROR_TABLES[_SCHEMA][table]["pg_types"]
+        for key, value in payload.items():
+            remote_value = remote.get(key)
+            if pg_types.get(key) in {"timestamp", "timestamptz"}:
+                local_dt = _parse_ts(value)
+                remote_dt = _parse_ts(remote_value)
+                if local_dt is not None and remote_dt is not None:
+                    if local_dt != remote_dt:
+                        return False
+                    continue
+            if remote_value != value:
+                return False
+        return True
+
+    async def _preserve_push_conflict(
+        self,
+        queue_id: int,
+        local_payload: dict[str, Any],
+        remote: dict[str, Any] | None,
+    ) -> None:
+        """Freeze a conflict with both copies; never retry it destructively."""
+        conflict = {
+            "kind": "optimistic_concurrency",
+            "detected_at": datetime.now(timezone.utc).isoformat(),
+            "local": local_payload,
+            "remote": remote,
+        }
+        db = get_db()
+        await db.execute(
+            "UPDATE sync_queue SET action='conflict', payload=? WHERE id=?",
+            (json.dumps(conflict, ensure_ascii=False, default=str), queue_id),
+        )
+        await db.commit()
+
+    async def _accept_push_success(
+        self,
+        table: str,
+        entry: dict[str, Any],
+        returned: dict[str, Any],
+    ) -> None:
+        # Remove the drained queue row BEFORE applying the echo: a mid-push
+        # local edit re-enqueues under a fresh queue id, so "still pending"
+        # precisely means "changed again since we read it".
+        await self._meta.remove_from_queue(entry["id"])
+        await self._apply_cloud_echo(table, [returned])
 
     async def _dead_letter(self, queue_id: int) -> None:
         db = get_db()
@@ -543,6 +793,60 @@ class ChatSyncEngine:
                 table, unknown,
             )
 
+        entity_type = f"{_SCHEMA}.{table}"
+        pending = None
+        if source == "pull":
+            pending = await db.fetchone(
+                "SELECT id FROM main.sync_queue "
+                "WHERE entity_type=? AND entity_id=? AND action='upsert'",
+                (entity_type, str(row_id)),
+            )
+        if pending is not None:
+            local = await db.fetchone(
+                f'SELECT * FROM "{_SCHEMA}"."{table}" WHERE "{pk}"=?',
+                (str(row_id),),
+            )
+            allowed = _PUSH_COLUMNS.get(table)
+            if local is not None and allowed is not None:
+                local_row = dict(local)
+                local_payload = encode_local_row(
+                    _SCHEMA,
+                    table,
+                    local_row,
+                    strip=frozenset(spec["columns"]) - allowed,
+                )
+                if self._payload_matches_remote(table, local_payload, remote):
+                    # Recovery from a lost push response: the cloud already
+                    # contains every desktop-authored value. Drain the stale
+                    # intent and let this row apply as its authoritative echo.
+                    await self._meta.remove_from_queue(pending["id"])
+                    source = "echo"
+                else:
+                    remote_version = remote.get("version")
+                    local_version = local_row.get("version")
+                    remote_ts = _parse_ts(remote.get("updated_at"))
+                    local_ts = _parse_ts(local_row.get("updated_at"))
+                    cloud_changed = (
+                        remote_version is not None
+                        and local_version is not None
+                        and int(remote_version) != int(local_version)
+                    ) or (
+                        remote_ts is not None
+                        and local_ts is not None
+                        and remote_ts > local_ts
+                    )
+                    if cloud_changed:
+                        await self._preserve_push_conflict(
+                            pending["id"], local_payload, remote
+                        )
+                        logger.warning(
+                            "[chat_sync] preserved divergent local/cloud copies "
+                            "for chat.%s %s; pull did not overwrite local work",
+                            table,
+                            row_id,
+                        )
+                        return False
+
         # The pending-outbox / LWW decision lives INSIDE the upsert statement.
         # A separate check-then-write pair leaves an event-loop-yield-wide
         # window in which a request handler can commit a fresh local edit that
@@ -556,7 +860,6 @@ class ChatSyncEngine:
         #   pull: apply only if the remote row is strictly newer than the
         #         local one (timestamps normalized: local uses ...Z, cloud
         #         uses ...+00:00 — same instant must compare equal).
-        entity_type = f"{_SCHEMA}.{table}"
         no_pending_sql = (
             "NOT EXISTS (SELECT 1 FROM main.sync_queue q "
             "WHERE q.entity_type = ? AND q.entity_id = ?)"
@@ -565,14 +868,15 @@ class ChatSyncEngine:
             guard_sql = no_pending_sql
             guard_params: tuple[Any, ...] = (entity_type, str(row_id))
         elif "updated_at" in spec["columns"]:
-            # Remote strictly newer applies (even over a pending local edit —
-            # it lost LWW; the surviving queue entry then pushes back the
-            # merged row, a harmless echo). Remote older/equal never applies.
-            guard_sql = (
+            newer_sql = (
                 f"replace(COALESCE(excluded.updated_at, ''), 'Z', '+00:00') > "
                 f'replace(COALESCE("{table}".updated_at, \'\'), \'Z\', \'+00:00\')'
             )
-            guard_params = ()
+            # Keep the pending check in this exact statement. A local edit can
+            # enqueue after the preflight check; timestamp-only LWW here would
+            # otherwise overwrite it in the final event-loop window.
+            guard_sql = f"({no_pending_sql}) AND ({newer_sql})"
+            guard_params = (entity_type, str(row_id))
         else:
             # Append-only tables (created_at cursor): apply unless a local
             # pending change exists for the same row.
@@ -583,13 +887,14 @@ class ChatSyncEngine:
         col_sql = ", ".join(f'"{c}"' for c in cols)
         placeholders = ", ".join("?" for _ in cols)
         update_sql = ", ".join(f'"{c}" = excluded."{c}"' for c in cols if c != pk)
-        before = db.db.total_changes
-        await db.execute(
+        cursor = await db.execute(
             f'INSERT INTO "{_SCHEMA}"."{table}" ({col_sql}) VALUES ({placeholders}) '
             f'ON CONFLICT("{pk}") DO UPDATE SET {update_sql} WHERE {guard_sql}',
             tuple(decoded[c] for c in cols) + guard_params,
         )
-        return db.db.total_changes > before
+        # Cursor-local rowcount is immune to unrelated writes interleaving on
+        # the shared connection; connection.total_changes is not.
+        return cursor.rowcount > 0
 
     # ------------------------------------------------------------------
     # Background loop — engine-owned, creds from the persisted token row
@@ -659,7 +964,11 @@ class ChatSyncEngine:
         db = get_db()
         pending = await db.fetchone(
             "SELECT COUNT(*) AS cnt FROM sync_queue "
-            "WHERE entity_type LIKE 'chat.%' AND action != 'dead'"
+            "WHERE entity_type LIKE 'chat.%' AND action = 'upsert'"
+        )
+        conflicts = await db.fetchone(
+            "SELECT COUNT(*) AS cnt FROM sync_queue "
+            "WHERE entity_type LIKE 'chat.%' AND action = 'conflict'"
         )
         dead = await db.fetchone(
             "SELECT COUNT(*) AS cnt FROM sync_queue "
@@ -680,6 +989,7 @@ class ChatSyncEngine:
             "auto_sync_active": self.auto_sync_active,
             "interval_seconds": self._interval,
             "pending_outbox": pending["cnt"] if pending else 0,
+            "conflicts": conflicts["cnt"] if conflicts else 0,
             "dead_letter": dead["cnt"] if dead else 0,
             "last_cycle": self._last_cycle,
             "tables": tables,

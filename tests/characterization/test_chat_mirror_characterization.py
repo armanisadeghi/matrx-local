@@ -1054,7 +1054,7 @@ def _fake_cloud(engine: ChatSyncEngine):
     """Install capture fakes; returns the capture list."""
     pushed: list[tuple[str, list[dict[str, Any]]]] = []
 
-    async def fake_upsert(table: str, rows: list[dict], pk_col: str = "id"):
+    async def fake_insert(table: str, rows: list[dict], pk_col: str = "id"):
         pushed.append((table, rows))
         out = []
         for r in rows:
@@ -1068,7 +1068,7 @@ def _fake_cloud(engine: ChatSyncEngine):
     async def fake_get(table: str, **kw):
         return []
 
-    engine._client.upsert_rows = fake_upsert  # type: ignore[method-assign]
+    engine._client.insert_rows_if_absent = fake_insert  # type: ignore[method-assign]
     engine._client.get_rows_since = fake_get  # type: ignore[method-assign]
     return pushed
 
@@ -1077,19 +1077,19 @@ def test_postgrest_batches_only_contain_rows_with_matching_keys() -> None:
     from app.services.chat_sync.engine import _shape_compatible_batches
 
     payloads = [
-        ({"id": 1}, {"id": "a", "content": []}),
-        ({"id": 2}, {"id": "b", "content": [], "error": {"message": "x"}}),
-        ({"id": 3}, {"id": "c", "content": []}),
+        ({"id": 1}, {"id": "a", "content": []}, 1),
+        ({"id": 2}, {"id": "b", "content": [], "error": {"message": "x"}}, 1),
+        ({"id": 3}, {"id": "c", "content": []}, 1),
     ]
 
     batches = _shape_compatible_batches(payloads, batch_size=50)
 
-    assert [[entry["id"] for entry, _ in batch] for batch in batches] == [
+    assert [[entry["id"] for entry, _, _ in batch] for batch in batches] == [
         [1, 3],
         [2],
     ]
     assert all(
-        len({tuple(sorted(payload)) for _, payload in batch}) == 1
+        len({tuple(sorted(payload)) for _, payload, _ in batch}) == 1
         for batch in batches
     )
 
@@ -1141,6 +1141,239 @@ def test_push_drains_outbox_parent_first_and_applies_echo(tmp_path: Path) -> Non
         assert left["c"] == 0
 
     _run(tmp_path, scenario)
+
+
+def test_push_projection_excludes_cloud_tool_result_ledger(tmp_path: Path) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        from app.services.ai.conversation_handler import SQLiteConversationStore
+
+        store = SQLiteConversationStore()
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        tool_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa31"
+        await store.ensure_conversation_exists(conversation_id, "u1")
+        await store.log_tool_call_start(
+            tool_id,
+            {
+                "conversation_id": conversation_id,
+                "user_id": "u1",
+                "tool_name": "desktop_tool",
+                "call_id": "call-1",
+                "arguments": {"x": 1},
+                "target_instance_id": "server-target",
+                "claimed_at": "2026-07-18T01:00:00+00:00",
+                "claimed_by_instance_id": "server-claimer",
+                "claim_expires_at": "2026-07-18T01:05:00+00:00",
+                "resolved_at": "2026-07-18T01:02:00+00:00",
+                "resolution_source": "server-ledger",
+            },
+        )
+
+        engine = ChatSyncEngine()
+        engine.configure("u1", "jwt")
+        pushed = _fake_cloud(engine)
+        await engine.sync_cycle()
+
+        tool_payload = next(rows[0] for table, rows in pushed if table == "tool_call")
+        assert tool_payload["tool_name"] == "desktop_tool"
+        assert not {
+            "target_instance_id",
+            "claimed_at",
+            "claimed_by_instance_id",
+            "claim_expires_at",
+            "resolved_at",
+            "resolution_source",
+            "organization_id",
+            "created_by",
+            "updated_by",
+            "updated_at",
+            "version",
+        }.intersection(tool_payload)
+
+    _run(tmp_path, scenario)
+
+
+def test_existing_row_push_preserves_version_conflict(tmp_path: Path) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        from app.services.local_db.repositories import ConversationsRepo
+
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        convs = ConversationsRepo()
+        await convs.create(
+            {"id": conversation_id, "title": "local edit", "user_id": "u1"}
+        )
+
+        engine = ChatSyncEngine()
+        engine.configure("u1", "jwt")
+        versions: list[int] = []
+
+        async def fake_insert(table, rows, pk_col="id"):
+            return []  # the row already exists in the cloud
+
+        async def fake_get_rows(table, *, params=None):
+            return [{"id": conversation_id, "title": "cloud edit", "version": 7}]
+
+        async def fake_update(
+            table,
+            row,
+            *,
+            pk_col,
+            pk_value,
+            expected_version,
+        ):
+            versions.append(expected_version)
+            if expected_version == 1:
+                return []  # stale mirror version
+            raise AssertionError("a stale row must not be retried against a newer version")
+
+        async def fake_get_since(table, **kwargs):
+            return []
+
+        engine._client.insert_rows_if_absent = fake_insert  # type: ignore[method-assign]
+        engine._client.get_rows = fake_get_rows  # type: ignore[method-assign]
+        engine._client.update_row_if_version = fake_update  # type: ignore[method-assign]
+        engine._client.get_rows_since = fake_get_since  # type: ignore[method-assign]
+
+        summary = await engine.sync_cycle()
+
+        assert summary["pushed"] == {"sent": 0, "failed": 1}
+        assert versions == [1]
+        row = await db.fetchone(
+            "SELECT title, version FROM chat.conversation WHERE id = ?",
+            (conversation_id,),
+        )
+        assert row["title"] == "local edit"
+        assert row["version"] == 1
+        queued = await db.fetchone("SELECT action, payload FROM sync_queue")
+        assert queued["action"] == "conflict"
+        conflict = json.loads(queued["payload"])
+        assert conflict["local"]["title"] == "local edit"
+        assert conflict["remote"]["title"] == "cloud edit"
+
+    _run(tmp_path, scenario)
+
+
+def test_pull_preserves_pending_local_edit_when_cloud_also_changed(
+    tmp_path: Path,
+) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        from app.services.local_db.repositories import ConversationsRepo
+
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        convs = ConversationsRepo()
+        await convs.create(
+            {"id": conversation_id, "title": "local edit", "user_id": "u1"}
+        )
+        await db.execute(
+            "UPDATE chat.conversation SET updated_at=?, version=1 WHERE id=?",
+            ("2026-07-18T01:00:00+00:00", conversation_id),
+        )
+        await db.commit()
+
+        engine = ChatSyncEngine()
+        engine.configure("u1", "jwt")
+        changed = await engine._apply_remote_row(
+            "conversation",
+            {
+                "id": conversation_id,
+                "title": "cloud edit",
+                "version": 2,
+                "updated_at": "2026-07-18T02:00:00+00:00",
+            },
+            source="pull",
+        )
+
+        assert changed is False
+        local = await db.fetchone(
+            "SELECT title, version FROM chat.conversation WHERE id=?",
+            (conversation_id,),
+        )
+        assert dict(local) == {"title": "local edit", "version": 1}
+        queued = await db.fetchone("SELECT action, payload FROM sync_queue")
+        assert queued["action"] == "conflict"
+        conflict = json.loads(queued["payload"])
+        assert conflict["local"]["title"] == "local edit"
+        assert conflict["remote"]["title"] == "cloud edit"
+
+    _run(tmp_path, scenario)
+
+
+def test_pull_sql_atomically_protects_edit_enqueued_after_preflight(
+    tmp_path: Path,
+) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        from app.services.local_db.repositories import ConversationsRepo
+
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        await ConversationsRepo().create(
+            {"id": conversation_id, "title": "original", "user_id": "u1"}
+        )
+        await db.execute("DELETE FROM sync_queue")
+        await db.execute(
+            "UPDATE chat.conversation SET updated_at=? WHERE id=?",
+            ("2026-07-18T01:00:00+00:00", conversation_id),
+        )
+        await db.commit()
+
+        engine = ChatSyncEngine()
+        engine.configure("u1", "jwt")
+        original_execute = db.execute
+        injected = False
+
+        async def racing_execute(sql: str, params=()):
+            nonlocal injected
+            if not injected and sql.startswith('INSERT INTO "chat"."conversation"'):
+                injected = True
+                await original_execute(
+                    "UPDATE chat.conversation SET title=?, updated_at=? WHERE id=?",
+                    ("racing local edit", "2026-07-18T02:00:00+00:00", conversation_id),
+                )
+                await original_execute(
+                    "INSERT INTO sync_queue "
+                    "(entity_type, entity_id, action, payload) "
+                    "VALUES ('chat.conversation', ?, 'upsert', '{}')",
+                    (conversation_id,),
+                )
+            return await original_execute(sql, params)
+
+        db.execute = racing_execute  # type: ignore[method-assign]
+        try:
+            changed = await engine._apply_remote_row(
+                "conversation",
+                {
+                    "id": conversation_id,
+                    "title": "newer cloud edit",
+                    "version": 2,
+                    "updated_at": "2026-07-18T03:00:00+00:00",
+                },
+                source="pull",
+            )
+        finally:
+            db.execute = original_execute  # type: ignore[method-assign]
+
+        assert changed is False
+        row = await db.fetchone(
+            "SELECT title FROM chat.conversation WHERE id=?", (conversation_id,)
+        )
+        assert row["title"] == "racing local edit"
+        assert (await db.fetchone("SELECT COUNT(*) AS c FROM sync_queue"))["c"] == 1
+
+    _run(tmp_path, scenario)
+
+
+def test_idempotent_payload_match_normalizes_timestamp_offsets() -> None:
+    engine = ChatSyncEngine()
+    payload = {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+        "created_at": "2026-07-18T01:02:03.000000Z",
+        "title": "same",
+    }
+    remote = {
+        **payload,
+        "created_at": "2026-07-18T01:02:03+00:00",
+        "version": 1,
+    }
+
+    assert engine._payload_matches_remote("conversation", payload, remote) is True
 
 
 def test_flush_pending_pushes_without_running_a_pull(tmp_path: Path) -> None:
@@ -1270,11 +1503,11 @@ def test_pull_lww_tombstones_and_pending_protection(tmp_path: Path) -> None:
                 ]
             return []
 
-        async def fake_upsert(table, rows, pk_col="id"):
+        async def fake_insert(table, rows, pk_col="id"):
             return [dict(r) for r in rows]
 
         engine._client.get_rows_since = fake_get  # type: ignore[method-assign]
-        engine._client.upsert_rows = fake_upsert  # type: ignore[method-assign]
+        engine._client.insert_rows_if_absent = fake_insert  # type: ignore[method-assign]
         await engine.sync_cycle()
 
         # newer remote wins
@@ -1388,7 +1621,7 @@ def test_push_poison_row_isolation(tmp_path: Path) -> None:
         engine = ChatSyncEngine()
         engine.configure("u1", "jwt")
 
-        async def fake_upsert(table, rows, pk_col="id"):
+        async def fake_insert(table, rows, pk_col="id"):
             if any(r["id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa42" for r in rows):
                 raise ChatSyncHTTPError("POST", table, 400, "constraint violated")
             return [dict(r) for r in rows]
@@ -1396,7 +1629,7 @@ def test_push_poison_row_isolation(tmp_path: Path) -> None:
         async def fake_get(table, **kw):
             return []
 
-        engine._client.upsert_rows = fake_upsert  # type: ignore[method-assign]
+        engine._client.insert_rows_if_absent = fake_insert  # type: ignore[method-assign]
         engine._client.get_rows_since = fake_get  # type: ignore[method-assign]
         summary = await engine.sync_cycle()
 

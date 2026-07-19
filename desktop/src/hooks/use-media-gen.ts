@@ -98,6 +98,7 @@ import {
   isRuntimeActive,
   isRuntimeReady,
 } from "@/lib/image-gen/runtime-state";
+import { isTauri, restartSidecar } from "@/lib/sidecar";
 
 const ENGINE_NOT_CONNECTED = "Engine not connected";
 // User-facing message for ACTION paths (download/load/generate/…) that cannot
@@ -537,6 +538,7 @@ export interface MediaGenActions {
   refreshMediaRuntime: () => Promise<void>;
   ensureMediaRuntime: () => Promise<void>;
   repairMediaRuntime: () => Promise<void>;
+  restartMediaRuntime: () => Promise<void>;
   // Image
   refreshImage: () => Promise<void>;
   /** The latest fetched image model catalog (see getImageModels impl). */
@@ -2839,6 +2841,52 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     [runRuntimeOperation],
   );
 
+  const restartMediaRuntime = useCallback(async () => {
+    if (!isTauri()) {
+      setMediaRuntimeError(
+        "Restart the desktop app to activate the validated AI runtime.",
+      );
+      return;
+    }
+    stopRuntimeTransport();
+    setMediaRuntimeLoading(true);
+    setMediaRuntimeError(null);
+    runtimeExpectedAttemptRef.current = null;
+    try {
+      await restartSidecar();
+      const deadline = Date.now() + 90_000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 750));
+        const base = await engine.rediscover();
+        if (!base) continue;
+        try {
+          const status = await getMediaRuntimeStatus(base);
+          runtimeExpectedAttemptRef.current = status.attempt_id;
+          applyRuntimeSnapshot(status, false);
+          if (isRuntimeActive(status)) {
+            await connectRuntimeStream(base).catch(() => startRuntimePolling());
+          }
+          return;
+        } catch {
+          // The owned sidecar has spawned but has not bound its API yet.
+        }
+      }
+      throw new Error("The AI engine did not reconnect within 90 seconds.");
+    } catch (error) {
+      setMediaRuntimeError(
+        error instanceof Error
+          ? error.message
+          : "Could not restart the AI engine",
+      );
+      setMediaRuntimeLoading(false);
+    }
+  }, [
+    applyRuntimeSnapshot,
+    connectRuntimeStream,
+    startRuntimePolling,
+    stopRuntimeTransport,
+  ]);
+
   // ── Init fetches (in the hook, [] deps) ────────────────────────────────────
   useEffect(() => {
     void refreshMediaRuntime();
@@ -2958,6 +3006,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       refreshMediaRuntime,
       ensureMediaRuntime,
       repairMediaRuntime,
+      restartMediaRuntime,
       refreshImage,
       getImageModels,
       loadImageModel,
@@ -3018,6 +3067,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
       refreshMediaRuntime,
       ensureMediaRuntime,
       repairMediaRuntime,
+      restartMediaRuntime,
       refreshImage,
       getImageModels,
       loadImageModel,

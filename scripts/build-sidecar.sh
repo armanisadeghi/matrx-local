@@ -170,23 +170,33 @@ command -v uv &>/dev/null || {
     exit 1
 }
 echo "  → Exact-syncing the release build environment (including image runtime metadata)..."
-uv sync \
-    --frozen \
-    --extra transcription \
-    --extra scheduler \
-    --extra image-gen \
-    --no-cache
+SYNC_ARGS=(--frozen --extra transcription --extra scheduler --no-cache)
+if [[ "$TARGET" != "x86_64-apple-darwin" ]]; then
+    SYNC_ARGS+=(--extra image-gen)
+else
+    echo "  → Managed media runtime is explicitly unsupported on Intel macOS; syncing core-only build env."
+fi
+uv sync "${SYNC_ARGS[@]}"
 PYTHON="$(detect_venv_python)"
 [[ -n "$PYTHON" ]] || { echo "ERROR: .venv Python missing after exact uv sync."; exit 1; }
 
-"$PYTHON" scripts/generate-runtime-manifests.py --check || {
-    echo "ERROR: managed-runtime contract is stale; regenerate and commit it."
-    exit 1
-}
+if [[ "$TARGET" != "x86_64-apple-darwin" ]]; then
+    "$PYTHON" scripts/generate-runtime-manifests.py --check || {
+        echo "ERROR: managed-runtime contract is stale; regenerate and commit it."
+        exit 1
+    }
+else
+    echo "  → Canonical manifest derivation is enforced by the release verify job; unsupported target is archive-only."
+fi
 "$PYTHON" scripts/generate-runtime-locks.py --check --target "$TARGET" || {
     echo "ERROR: target runtime lock is missing/stale/unsupported for $TARGET."
     exit 1
 }
+
+# Customer machines must not be expected to provide uv/Python/pip. Stage the
+# exact target-native, checksum-pinned runtime installer that Tauri bundles.
+"$PYTHON" scripts/stage_bundled_uv.py --target "$TARGET"
+"$PYTHON" scripts/stage_bundled_uv.py --target "$TARGET" --check
 
 # Remove the obsolete 'pathlib' backport that matrx-utils pulls in via fitz →
 # nipype → pyxnat. Python 3.13 ships pathlib as stdlib; the backport breaks
@@ -654,7 +664,8 @@ fi
 echo "=== Verifying frozen sidecar + managed image runtime contract ==="
 "$PYTHON" scripts/verify-frozen-runtime.py \
     --binary "$FROZEN_VERIFY_BINARY" \
-    --python "$PYTHON" || {
+    --python "$PYTHON" \
+    --target "$TARGET" || {
     echo "ERROR: frozen sidecar runtime verification failed."
     exit 1
 }

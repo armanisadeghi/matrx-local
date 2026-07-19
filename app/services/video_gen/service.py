@@ -27,6 +27,7 @@ import asyncio
 import base64
 import io
 import random
+import sys
 import threading
 import time
 from datetime import datetime
@@ -203,6 +204,10 @@ class VideoGenService:
 
     @property
     def packages_installed(self) -> bool:
+        if getattr(sys, "frozen", False):
+            from app.services.image_gen.installer import get_runtime_status  # noqa: PLC0415
+
+            return DEPS_AVAILABLE and get_runtime_status()["state"] == "ready"
         return DEPS_AVAILABLE
 
     @property
@@ -211,9 +216,20 @@ class VideoGenService:
 
     def get_status(self) -> dict:
         compute = get_compute_profile()
-        available = DEPS_AVAILABLE and compute.video_supported
+        runtime_ready = True
+        runtime_reason: str | None = None
+        if getattr(sys, "frozen", False):
+            from app.services.image_gen.installer import get_runtime_status  # noqa: PLC0415
+
+            runtime = get_runtime_status()
+            runtime_ready = runtime["state"] == "ready"
+            if not runtime_ready:
+                runtime_reason = str(runtime["failure_detail"] or runtime["message"])
+        available = DEPS_AVAILABLE and runtime_ready and compute.video_supported
         if not compute.video_supported:
             reason: str | None = compute.video_unsupported_reason
+        elif not runtime_ready:
+            reason = runtime_reason
         elif not DEPS_AVAILABLE:
             reason = DEPS_REASON
         else:
@@ -224,7 +240,7 @@ class VideoGenService:
         return {
             "available": available,
             "unavailable_reason": reason,
-            "packages_installed": DEPS_AVAILABLE,
+            "packages_installed": DEPS_AVAILABLE and runtime_ready,
             "hardware_supported": compute.video_supported,
             "hardware_reason": compute.video_unsupported_reason,
             "loaded_model_id": self._loaded_model_id,
@@ -476,6 +492,13 @@ class VideoGenService:
                 return {"success": True, "model_id": model.model_id, "device": device}
 
             except Exception as exc:
+                from app.services.image_gen.installer import (  # noqa: PLC0415
+                    is_runtime_integrity_failure,
+                    record_runtime_integrity_failure,
+                )
+
+                if is_runtime_integrity_failure(exc):
+                    record_runtime_integrity_failure(str(exc))
                 registry.failed("video-gen-model", exc, model=model.model_id)
                 self._pipeline = None
                 self._i2v_pipeline = None

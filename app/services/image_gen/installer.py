@@ -22,8 +22,8 @@ import importlib
 import importlib.metadata
 import json
 import os
+import platform
 import re
-import shutil
 import sys
 import threading
 import uuid
@@ -76,6 +76,7 @@ CRITICAL_RUNTIME_IMPORTS = (
     "peft",
     "sentencepiece",
     "gguf",
+    "filecmp",
     "huggingface_hub.dataclasses",
     "jinja2.meta",
     "tqdm.contrib.logging",
@@ -96,6 +97,7 @@ CRITICAL_PIPELINE_CLASSES = (
     "WanPipeline",
     "WanImageToVideoPipeline",
     "LTXPipeline",
+    "LTX2Pipeline",
     "LTXImageToVideoPipeline",
 )
 
@@ -121,10 +123,25 @@ class RuntimeInstallContract:
         return self.contract_sha256
 
 
+class UnsupportedRuntimeError(RuntimeError):
+    pass
+
+
 def runtime_target_id() -> str:
     contract = current_runtime_contract()
-    abi = str(contract["python_abi"]).replace("-", "")
-    return f"{contract['platform']}-{contract['machine']}-{abi}"
+    platform_id = str(contract["platform"])
+    machine = str(contract["machine"])
+    if platform_id == "darwin" and machine in {"arm64", "aarch64"}:
+        return "aarch64-apple-darwin"
+    if platform_id == "darwin" and machine in {"x86_64", "amd64"}:
+        return "x86_64-apple-darwin"
+    if platform_id == "win32" and machine in {"x86_64", "amd64"}:
+        return "x86_64-pc-windows-msvc"
+    if platform_id.startswith("linux") and machine in {"x86_64", "amd64"}:
+        return "x86_64-unknown-linux-gnu"
+    raise RuntimeError(
+        f"No managed media-runtime target for platform={platform_id!r} machine={machine!r}"
+    )
 
 
 def _contract_manifest_candidates() -> list[Path]:
@@ -133,7 +150,12 @@ def _contract_manifest_candidates() -> list[Path]:
     if explicit:
         candidates.append(Path(explicit).expanduser())
     bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[3]))
-    candidates.append(bundle_root / "runtime-manifests" / f"{runtime_target_id()}.json")
+    filename = f"image-gen-{runtime_target_id()}.json"
+    candidates.append(bundle_root / "runtime-manifests" / filename)
+    candidates.append(bundle_root / "config" / "runtime-manifests" / filename)
+    candidates.append(
+        Path(__file__).resolve().parents[3] / "config" / "runtime-manifests" / filename
+    )
     return candidates
 
 
@@ -152,14 +174,34 @@ def load_runtime_install_contract() -> RuntimeInstallContract:
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Runtime contract cannot be read: {exc}") from exc
-    if raw.get("manifest_revision") != RUNTIME_MANIFEST_REVISION:
+    if raw.get("schema_version") != RUNTIME_MANIFEST_REVISION:
         raise RuntimeError("Runtime contract manifest revision is unsupported")
     if raw.get("target") != runtime_target_id():
         raise RuntimeError(
             f"Runtime contract target {raw.get('target')!r} does not match "
             f"{runtime_target_id()!r}"
         )
-    requirements_value = raw.get("requirements_file")
+    if raw.get("python_minor") != str(current_runtime_contract()["python_version"]):
+        raise RuntimeError("Target runtime Python minor does not match this engine")
+    supported = raw.get("supported", raw.get("support", True))
+    if supported is False:
+        raise UnsupportedRuntimeError(
+            str(raw.get("unsupported_reason") or raw.get("reason") or "Platform is unsupported")
+        )
+    minimum_macos = raw.get("minimum_macos")
+    if minimum_macos and sys.platform == "darwin":
+        current_text = platform.mac_ver()[0]
+        try:
+            current = tuple(int(part) for part in current_text.split(".")[:2])
+            required = tuple(int(part) for part in str(minimum_macos).split(".")[:2])
+        except ValueError as exc:
+            raise RuntimeError("Runtime contract has an invalid minimum_macos") from exc
+        if current < required:
+            raise UnsupportedRuntimeError(
+                f"Local media generation requires macOS {minimum_macos} or newer; "
+                f"this machine runs {current_text}."
+            )
+    requirements_value = raw.get("lock_file")
     if not isinstance(requirements_value, str) or Path(requirements_value).name != requirements_value:
         raise RuntimeError("Runtime contract requirements_file must be a basename")
     requirements = manifest_path.parent / requirements_value
@@ -167,44 +209,54 @@ def load_runtime_install_contract() -> RuntimeInstallContract:
         raise RuntimeError(f"Locked requirements artifact is missing: {requirements}")
     requirements_bytes = requirements.read_bytes()
     requirements_text = requirements_bytes.decode("utf-8")
-    effective_lines = [
+    pinned_lines = [
         line.strip()
         for line in requirements_text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
+        if line.strip()
+        and not line.lstrip().startswith(("#", "--"))
+        and not line.strip().startswith("\\")
     ]
-    if not effective_lines or any(
-        "==" not in line or "--hash=sha256:" not in line for line in effective_lines
-    ):
+    if not pinned_lines or any("==" not in line for line in pinned_lines):
         raise RuntimeError(
-            "Runtime requirements must contain only exact, sha256-hash-locked entries"
+            "Runtime lock must contain only exact package versions"
         )
-    claimed = raw.get("contract_sha256")
-    unsigned = dict(raw)
-    unsigned.pop("contract_sha256", None)
-    digest = hashlib.sha256(
-        json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        + b"\0"
-        + requirements_bytes
-    ).hexdigest()
-    if claimed != digest:
+    if "--hash=sha256:" not in requirements_text:
+        raise RuntimeError("Runtime lock contains no sha256 wheel hashes")
+    lock_digest = hashlib.sha256(requirements_bytes).hexdigest()
+    if raw.get("lock_sha256") != lock_digest:
         raise RuntimeError(
-            f"Runtime contract digest mismatch: claimed {claimed!r}, calculated {digest}"
+            f"Runtime lock digest mismatch: claimed {raw.get('lock_sha256')!r}, "
+            f"calculated {lock_digest}"
         )
-    packages = raw.get("packages")
-    if not isinstance(packages, dict) or not packages or any(
-        not isinstance(name, str) or not isinstance(version, str)
-        for name, version in packages.items()
-    ):
+    canonical_path = manifest_path.parent / "image-gen-contract.json"
+    try:
+        canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Canonical runtime contract cannot be read: {exc}") from exc
+    claimed_contract = raw.get("contract_sha256")
+    if canonical.get("contract_sha256") != claimed_contract:
+        raise RuntimeError("Target lock does not match the canonical runtime contract")
+    if canonical.get("python_minor") != str(current_runtime_contract()["python_version"]):
+        raise RuntimeError("Canonical runtime Python minor does not match this engine")
+    package_entries = raw.get("packages")
+    if not isinstance(package_entries, list) or not package_entries:
         raise RuntimeError("Runtime contract has no exact package-version map")
+    packages: dict[str, str] = {}
+    for entry in package_entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError("Runtime contract package entry is malformed")
+        name, version, wheels = entry.get("name"), entry.get("version"), entry.get("wheels")
+        if not isinstance(name, str) or not isinstance(version, str) or not isinstance(wheels, list):
+            raise RuntimeError("Runtime contract package entry is incomplete")
+        if name in packages:
+            raise RuntimeError(f"Duplicate runtime package entry: {name}")
+        packages[name] = version
     return RuntimeInstallContract(
-        contract_sha256=digest,
+        contract_sha256=str(claimed_contract),
         target=runtime_target_id(),
         requirements_file=requirements,
-        packages=dict(packages),
-        record_hashes={
-            str(key): str(value)
-            for key, value in raw.get("record_hashes", {}).items()
-        },
+        packages=packages,
+        record_hashes={},
     )
 
 
@@ -395,6 +447,17 @@ def critical_runtime_import_check(
             "Diffusers is missing required pipeline classes: "
             + ", ".join(missing_classes)
         )
+    transformers_module = modules["transformers"]
+    missing_transformers = [
+        name
+        for name in ("AutoImageProcessor", "AutoTokenizer")
+        if not hasattr(transformers_module, name)
+    ]
+    if missing_transformers:
+        raise RuntimeError(
+            "Transformers is missing required runtime attributes: "
+            + ", ".join(missing_transformers)
+        )
     if importer is importlib.import_module:
         torch = modules["torch"]
         torchvision = modules["torchvision"]
@@ -475,6 +538,43 @@ def _verify_runtime_subprocess(
     *,
     cancel_event: threading.Event | None,
 ) -> dict[str, str]:
+    if getattr(sys, "frozen", False):
+        contract = load_runtime_install_contract()
+        env = os.environ.copy()
+        env["MATRX_FROZEN_RUNTIME_VERIFY"] = "1"
+        env["MATRX_FROZEN_RUNTIME_PATH"] = str(pkg_dir)
+        env["MATRX_FROZEN_RUNTIME_TARGET"] = contract.target
+        check = _run_subprocess_cancellable(
+            [sys.executable],
+            cancel_event=cancel_event,
+            env=env,
+            timeout=180,
+        )
+        sentinel = "MATRX_FROZEN_RUNTIME_VERIFY="
+        line = next(
+            (item for item in check.stdout.splitlines() if item.startswith(sentinel)),
+            None,
+        )
+        if line is None:
+            raise RuntimeError(
+                "Frozen runtime verifier emitted no sentinel: "
+                f"rc={check.returncode} stderr={check.stderr[-4000:]}"
+            )
+        try:
+            result = json.loads(line.removeprefix(sentinel))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Frozen runtime verifier emitted invalid JSON") from exc
+        if (
+            check.returncode != 0
+            or result.get("ok") is not True
+            or result.get("contract") != contract.runtime_revision
+        ):
+            raise RuntimeError(
+                "Frozen runtime verification failed: "
+                + str(result.get("error") or result)
+            )
+        return dict(contract.packages)
+
     python = _find_python()
     _validate_selected_python(python, cancel_event=cancel_event)
     imports = json.dumps(CRITICAL_RUNTIME_IMPORTS)
@@ -486,6 +586,8 @@ def _verify_runtime_subprocess(
         f"mods={{n:importlib.import_module(n) for n in {imports}}}; "
         f"missing=[n for n in {classes} if not hasattr(mods['diffusers'],n)]; "
         "assert not missing, missing; "
+        "missing_t=[n for n in ('AutoImageProcessor','AutoTokenizer') "
+        "if not hasattr(mods['transformers'],n)]; assert not missing_t, missing_t; "
         "managed=('torch','torchvision','diffusers','transformers','accelerate','peft'); "
         "bad={n:str(pathlib.Path(mods[n].__file__).resolve()) for n in managed "
         "if root not in pathlib.Path(mods[n].__file__).resolve().parents}; "
@@ -518,18 +620,10 @@ def migrate_incompatible_runtime(
     progress: InstallProgress | None = None,
     cancel_event: threading.Event | None = None,
 ) -> bool:
-    """Synchronously upgrade a previously installed incompatible runtime.
+    """Compatibility facade for a synchronous clean, staged runtime update.
 
-    This is deliberately a startup migration, not UI advice: shipped app
-    updates must repair every existing image-gen install before importing its
-    optional packages. Only diffusers and its resolved lightweight Python
-    dependencies are touched; models, encoders, LoRAs, and user data stay put.
-    Torch and Torchvision are resolved together because pip target installs do
-    not consider packages already present in the target as satisfying new
-    dependencies. Leaving Torchvision behind can produce an ABI-incompatible
-    pair even when both distributions are individually valid.
-    The pending marker makes a power/network interruption retry on the next
-    engine start rather than allowing the known-broken loader to run.
+    It never mutates the legacy tree. Models, encoders, LoRAs, generated media,
+    and queues live outside runtime slots and remain untouched.
     """
     if not needs_upgrade():
         return False
@@ -547,66 +641,12 @@ def migrate_incompatible_runtime(
     return True
 
 
-def _purge_shadowing_protobuf(pkg_dir: Path) -> bool:
-    """Delete any protobuf copy from the managed image-gen dir — LOUDLY.
-    Returns True when the dir is clean (nothing found, or everything removed).
-
-    Older installs pip-installed protobuf into this dir. Older app releases prepended the dir
-    to sys.path, so that copy shadowed the engine's own
-    protobuf: xai-sdk aborted with "Unsupported protobuf version: 7.34.1" and
-    matrx-ai init failed on every packaged boot. The engine's protobuf serves
-    every consumer (xai-sdk AND transformers), so a copy here is never
-    correct. A False return means the caller must NOT inject the dir.
-
-    Scream-and-fix per platform doctrine: every removal is logged at WARNING.
-    """
-    victims: list[Path] = []
-    victims += list(pkg_dir.glob("protobuf-*.dist-info"))
-    for sub in ("protobuf", "_upb"):
-        p = pkg_dir / "google" / sub
-        if p.exists():
-            victims.append(p)
-    if not victims:
-        return True
-    import shutil  # noqa: PLC0415 — cold path, only when a stale copy exists
-
-    clean = True
-    for v in victims:
-        try:
-            shutil.rmtree(v) if v.is_dir() else v.unlink()
-            logger.warning(
-                "[image_gen_installer] PURGED stale protobuf artifact %s from the "
-                "managed image-gen dir — it shadowed the engine's bundled protobuf "
-                "and broke matrx-ai init",
-                v,
-            )
-        except OSError as exc:
-            clean = False
-            logger.error(
-                "[image_gen_installer] Could not purge shadowing protobuf artifact "
-                "%s: %s — matrx-ai init would fail with 'Unsupported protobuf "
-                "version'; the image-gen dir will NOT be injected this session",
-                v,
-                exc,
-            )
-    # If google/ was only a protobuf namespace shell, drop the empty husk.
-    google_dir = pkg_dir / "google"
-    try:
-        if google_dir.is_dir() and not any(google_dir.iterdir()):
-            google_dir.rmdir()
-    except OSError:
-        pass
-    return clean
-
 
 def inject_image_gen_path(pkg_dir_path: Path | None = None) -> bool:
     """Add the managed packages dir to sys.path if the install is complete.
 
     Called from runtime_hook.py and at engine startup.
     Returns True if path was injected, False if packages not yet installed.
-    Also applies the filecmp compatibility patch to transformers on first call
-    so that users who installed before the patch was introduced are fixed
-    automatically without needing to reinstall.
     """
     pending_activation = False
     if pkg_dir_path is None:
@@ -629,21 +669,6 @@ def inject_image_gen_path(pkg_dir_path: Path | None = None) -> bool:
                 return False
         else:
             return False
-    try:
-        purged_clean = _purge_shadowing_protobuf(pkg_dir_path)
-    except Exception:
-        purged_clean = False
-        logger.exception("[image_gen_installer] protobuf purge failed")
-    if not purged_clean:
-        # Keep the managed runtime internally coherent even though it now sits
-        # behind the engine's bundled dependencies in import precedence.
-        logger.error(
-            "[image_gen_installer] NOT injecting %s into sys.path — a protobuf "
-            "copy survived the purge and would break matrx-ai init. Image/video "
-            "generation is unavailable this session; restart the engine to retry.",
-            pkg_dir_path,
-        )
-        return False
     pkg_dir = str(pkg_dir_path)
     if pkg_dir not in sys.path:
         # Optional runtimes are fallbacks, never replacements for the frozen
@@ -655,13 +680,6 @@ def inject_image_gen_path(pkg_dir_path: Path | None = None) -> bool:
         sys.path.append(pkg_dir)
         logger.debug(
             "[image_gen_installer] Appended optional runtime %s to sys.path", pkg_dir
-        )
-    # Apply compatibility patch every startup — idempotent, fast (skips if already done)
-    try:
-        _patch_transformers_filecmp(pkg_dir_path)
-    except Exception as patch_err:
-        logger.warning(
-            "[image_gen_installer] filecmp patch attempt failed: %s", patch_err
         )
     if pending_activation:
         verification = verify_runtime_path(pkg_dir_path)
@@ -790,6 +808,61 @@ def validate_active_runtime() -> RuntimeVerification:
     return verify_runtime_path(slot_path(snapshot.active_slot))
 
 
+def record_runtime_integrity_failure(detail: str) -> None:
+    """Persist a verified-runtime import/native failure as repairable state."""
+    if not getattr(sys, "frozen", False):
+        return
+    with RuntimeFileLock():
+        snapshot = authoritative_snapshot()
+        if not snapshot.ready:
+            return
+        write_snapshot(
+            RuntimeSnapshot(
+                state=RuntimePhase.FAILED,
+                runtime_revision=snapshot.runtime_revision,
+                operation=None,
+                attempt_id=snapshot.attempt_id,
+                stage="runtime_integrity",
+                percent=100.0,
+                message="The active media runtime failed an integrity check and requires repair.",
+                failure_code="runtime_integrity_failed",
+                failure_detail=detail,
+                active_slot=snapshot.active_slot,
+                last_known_good_slot=snapshot.last_known_good_slot,
+                packages=snapshot.packages,
+            )
+        )
+
+
+def is_runtime_integrity_failure(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ImportError):
+            return True
+        text = str(current).lower()
+        if any(
+            marker in text
+            for marker in (
+                "failed to import",
+                "dlopen",
+                "undefined symbol",
+                "symbol not found",
+                "dll load failed",
+                "cannot open shared object",
+                "mach-o",
+                "wrong architecture",
+                "incompatible architecture",
+                "library not loaded",
+                "dynamic module does not define module export function",
+            )
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 # ── Global singleton ──────────────────────────────────────────────────────────
 
 _active_progress: InstallProgress | None = None
@@ -855,16 +928,38 @@ def get_runtime_status() -> dict[str, Any]:
         contract = load_runtime_install_contract()
         required_revision: str | None = contract.runtime_revision
         contract_error: str | None = None
+        unsupported = False
+    except UnsupportedRuntimeError as exc:
+        contract = None
+        required_revision = "unsupported"
+        contract_error = str(exc)
+        unsupported = True
     except Exception as exc:
         contract = None
-        required_revision = None
+        required_revision = "unavailable"
         contract_error = str(exc)
+        unsupported = False
 
     state = snapshot.state.value
+    message = snapshot.message
     failure_code = snapshot.failure_code
     failure_detail = snapshot.failure_detail
     ready = snapshot.ready
-    if ready and (
+    if unsupported:
+        state = RuntimePhase.FAILED.value
+        ready = False
+        failure_code = "unsupported_platform"
+        failure_detail = contract_error
+    elif contract is None:
+        state = RuntimePhase.FAILED.value
+        ready = False
+        failure_code = "contract_unavailable"
+        failure_detail = contract_error
+        message = (
+            "This app build does not contain a valid media-runtime contract. "
+            "Update AI Matrx to a corrected release."
+        )
+    elif ready and (
         contract is None or snapshot.runtime_revision != contract.runtime_revision
     ):
         state = RuntimePhase.FAILED.value
@@ -886,10 +981,14 @@ def get_runtime_status() -> dict[str, Any]:
         "required_revision": required_revision,
         "stage": snapshot.stage,
         "percent": snapshot.percent,
-        "message": snapshot.message,
+        "message": message,
         "failure_code": failure_code,
         "failure_detail": failure_detail,
-        "repairable": state in {"failed", "rolled_back"},
+        "repairable": (
+            state in {"failed", "rolled_back"}
+            and not unsupported
+            and failure_code != "contract_unavailable"
+        ),
         "image_available": ready,
         "video_packages_available": ready,
         "package_checks": [
@@ -925,77 +1024,6 @@ def _submit_background(function, *args) -> None:
 
 
 # ── Compatibility patches ─────────────────────────────────────────────────────
-
-
-def _patch_transformers_filecmp(pkg_dir: Path) -> None:
-    """Patch transformers/dynamic_module_utils.py to handle missing `filecmp`.
-
-    `filecmp` is a Python stdlib module that PyInstaller may not bundle when it
-    never appears in the engine's own import graph.  `transformers` imports it
-    unconditionally at the top of dynamic_module_utils.py, which causes an
-    ImportError inside a frozen binary even though the transformers package
-    itself was successfully installed.
-
-    The patch replaces the bare `import filecmp` with a try/except that falls
-    back to an always-copy stub.  The always-copy behaviour is safe and correct
-    — it's slightly redundant (copies a file even when it hasn't changed) but
-    produces identical results.
-
-    This function is idempotent — running it on an already-patched file is safe.
-    """
-    target = pkg_dir / "transformers" / "dynamic_module_utils.py"
-    if not target.exists():
-        logger.warning(
-            "[image_gen_installer] Could not find dynamic_module_utils.py to patch"
-        )
-        return
-
-    src = target.read_text(encoding="utf-8")
-
-    # Already patched?
-    if "_files_equal" in src:
-        logger.debug(
-            "[image_gen_installer] dynamic_module_utils.py already patched — skipping"
-        )
-        return
-
-    old_import = "import filecmp"
-    new_import = (
-        "try:\n"
-        "    import filecmp as _filecmp_mod\n"
-        "    def _files_equal(a: str, b: str) -> bool:\n"
-        "        return _filecmp_mod.cmp(a, b)\n"
-        "except ModuleNotFoundError:\n"
-        "    # filecmp is excluded from some frozen binaries (e.g. PyInstaller).\n"
-        "    # Always-copy fallback is safe: slightly redundant but functionally correct.\n"
-        "    def _files_equal(a: str, b: str) -> bool:  # type: ignore[misc]\n"
-        "        return False"
-    )
-
-    if old_import not in src:
-        logger.warning(
-            "[image_gen_installer] 'import filecmp' not found in dynamic_module_utils.py — "
-            "transformers version may have changed; skipping patch"
-        )
-        return
-
-    patched = src.replace(old_import, new_import, 1)
-    patched = patched.replace("filecmp.cmp(", "_files_equal(", 100)
-    target.write_text(patched, encoding="utf-8")
-
-    # Remove stale .pyc so Python uses our patched source
-    pyc_dir = target.parent / "__pycache__"
-    if pyc_dir.exists():
-        for pyc in pyc_dir.glob("dynamic_module_utils*.pyc"):
-            try:
-                pyc.unlink()
-            except OSError:
-                pass
-
-    logger.info("[image_gen_installer] Patched transformers/dynamic_module_utils.py ✓")
-
-
-# ── Main installer (runs in a thread) ────────────────────────────────────────
 
 
 
@@ -1064,8 +1092,9 @@ def _install_runtime_sync(
             )
             _, staging = create_staging_slot()
 
-            python = _find_python()
-            _validate_selected_python(python, cancel_event=cancel_event)
+            if not getattr(sys, "frozen", False):
+                python = _find_python()
+                _validate_selected_python(python, cancel_event=cancel_event)
             progress.update("installing", 10.0, "Installing locked media runtime…")
             _run_pip_streaming(
                 [],
@@ -1093,7 +1122,6 @@ def _install_runtime_sync(
                     f"expected={contract.packages!r} actual={installed_versions!r}"
                 )
             _verify_runtime_subprocess(staging, cancel_event=cancel_event)
-            _patch_transformers_filecmp(staging)
             (staging / INSTALL_EVIDENCE).write_text(
                 contract.runtime_revision, encoding="utf-8"
             )
@@ -1229,8 +1257,50 @@ async def ensure_runtime(
     snapshot = authoritative_snapshot()
     try:
         contract = load_runtime_install_contract()
+    except UnsupportedRuntimeError as exc:
+        progress = InstallProgress(log_prefix="image_gen_installer")
+        progress._loop = asyncio.get_running_loop()
+        progress.fail(str(exc))
+        _active_progress = progress
+        write_snapshot(
+            RuntimeSnapshot(
+                state=RuntimePhase.FAILED,
+                operation=operation,
+                attempt_id=uuid.uuid4().hex,
+                stage="unsupported",
+                message=str(exc),
+                failure_code="unsupported_platform",
+                failure_detail=str(exc),
+                active_slot=snapshot.active_slot if snapshot.ready else None,
+                last_known_good_slot=snapshot.last_known_good_slot,
+            )
+        )
+        return progress
     except Exception:
         contract = None
+    if contract is None:
+        progress = InstallProgress(log_prefix="image_gen_installer")
+        progress._loop = asyncio.get_running_loop()
+        detail = "No valid locked media-runtime contract is embedded in this app build."
+        progress.fail(detail)
+        _active_progress = progress
+        write_snapshot(
+            RuntimeSnapshot(
+                state=RuntimePhase.FAILED,
+                operation=operation,
+                attempt_id=uuid.uuid4().hex,
+                stage="contract",
+                message=(
+                    "This app build cannot install media generation safely. "
+                    "Update AI Matrx to a corrected release."
+                ),
+                failure_code="contract_unavailable",
+                failure_detail=detail,
+                active_slot=snapshot.active_slot if snapshot.ready else None,
+                last_known_good_slot=snapshot.last_known_good_slot,
+            )
+        )
+        return progress
     if (
         snapshot.ready
         and contract is not None
@@ -1284,6 +1354,41 @@ async def repair_runtime() -> InstallProgress:
     global _active_progress
     if _active_progress is not None and _active_progress.status == "running":
         return _active_progress
+    try:
+        load_runtime_install_contract()
+    except UnsupportedRuntimeError as exc:
+        progress = InstallProgress(log_prefix="image_gen_runtime_repair")
+        progress._loop = asyncio.get_running_loop()
+        progress.fail(str(exc))
+        _active_progress = progress
+        write_snapshot(
+            RuntimeSnapshot(
+                state=RuntimePhase.FAILED,
+                operation="repair",
+                attempt_id=uuid.uuid4().hex,
+                stage="unsupported",
+                message=str(exc),
+                failure_code="unsupported_platform",
+                failure_detail=str(exc),
+            )
+        )
+        return progress
+    except Exception as exc:
+        progress = InstallProgress(log_prefix="image_gen_runtime_repair")
+        progress._loop = asyncio.get_running_loop()
+        progress.fail(str(exc))
+        _active_progress = progress
+        write_snapshot(
+            RuntimeSnapshot(
+                state=RuntimePhase.FAILED,
+                operation="repair",
+                stage="contract",
+                message="Update AI Matrx to restore the media-runtime contract.",
+                failure_code="contract_unavailable",
+                failure_detail=str(exc),
+            )
+        )
+        return progress
     progress = InstallProgress(log_prefix="image_gen_runtime_repair")
     progress.status = "running"
     progress._loop = asyncio.get_running_loop()
@@ -1329,6 +1434,32 @@ async def start_compatibility_migration() -> InstallProgress | None:
     if authoritative_snapshot().state is RuntimePhase.RESTART_REQUIRED:
         return None
     if not needs_upgrade():
+        return None
+    try:
+        load_runtime_install_contract()
+    except UnsupportedRuntimeError as exc:
+        write_snapshot(
+            RuntimeSnapshot(
+                state=RuntimePhase.FAILED,
+                operation="update",
+                stage="unsupported",
+                message=str(exc),
+                failure_code="unsupported_platform",
+                failure_detail=str(exc),
+            )
+        )
+        return None
+    except Exception as exc:
+        write_snapshot(
+            RuntimeSnapshot(
+                state=RuntimePhase.FAILED,
+                operation="update",
+                stage="contract",
+                message="Update AI Matrx to restore the media-runtime contract.",
+                failure_code="contract_unavailable",
+                failure_detail=str(exc),
+            )
+        )
         return None
     if _active_progress is not None and _active_progress.status == "running":
         return _active_progress

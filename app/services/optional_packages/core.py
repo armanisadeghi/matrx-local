@@ -276,8 +276,26 @@ def run_pip_streaming(
 
     Raises RuntimeError on non-zero exit or inactivity timeout.
     """
-    python = find_python()
-    cmd = _install_command(python, target)
+    # A frozen release must be self-contained. For the release-owned,
+    # hash-locked media runtime, use the authenticated uv external binary that
+    # Tauri ships with the app. uv can target an explicit Python ABI/platform
+    # without discovering or installing into a customer Python interpreter.
+    # Source development and older non-locked optional-package callers retain
+    # the interpreter/pip behavior below.
+    if (
+        getattr(sys, "frozen", False)
+        and requirements_file is not None
+        and require_hashes
+    ):
+        from app.services.optional_packages.runtime_installer import (  # noqa: PLC0415
+            locked_target_install_command,
+        )
+
+        python = "<bundled-uv: no host Python>"
+        cmd = locked_target_install_command(target)
+    else:
+        python = find_python()
+        cmd = _install_command(python, target)
     if extra_index:
         cmd += ["--extra-index-url", extra_index]
     if requirements_file is not None:

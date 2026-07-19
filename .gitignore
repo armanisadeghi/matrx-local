@@ -194,6 +194,7 @@ desktop/src-tauri/sidecar/matrx-engine-*
 desktop/src-tauri/sidecar/aimatrx-engine-*
 desktop/src-tauri/sidecar/Matrx Engine.app/
 desktop/src-tauri/binaries/llama-server-*
+desktop/src-tauri/binaries/uv-*
 desktop/src-tauri/binaries/.llama-server-version
 
 # macOS Finder metadata

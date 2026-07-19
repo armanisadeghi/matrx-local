@@ -1,7 +1,7 @@
 {
-  "contract_sha256": "dc09897a76af3fd9c63a6c31205157349d15162c1f3d53ead23e7a152f2ec152",
+  "contract_sha256": "7f24ffc6b45213ad90a4db3903e23fa212c7ea16688602c0181fd6d004fc55dc",
   "lock_file": "image-gen-x86_64-unknown-linux-gnu.requirements.txt",
-  "lock_sha256": "c3ef1020e2d07f6217220ab5b5d03a8489c51a85540f41b92583066d3efeed96",
+  "lock_sha256": "81b2469a1a2e8aad868df9a353051a67ffe74d1ea4d02f47187059f667382c07",
   "packages": [
     {
       "name": "accelerate",
@@ -517,5 +517,6 @@
   ],
   "python_minor": "3.13",
   "schema_version": 1,
+  "supported": true,
   "target": "x86_64-unknown-linux-gnu"
 }

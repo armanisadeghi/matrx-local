@@ -120,10 +120,10 @@ jobs:
           # --no-cache forces a fresh PyPI index fetch (avoids stale CDN edge cache
           # when a matrx-* package was published moments before this workflow ran).
           # Retry once after 30s if resolution fails — gives CDN time to propagate.
-          uv sync --frozen --extra transcription --extra scheduler --extra image-gen --no-cache || {
+          uv sync --frozen --extra transcription --extra scheduler --no-cache || {
             echo "⚠ uv sync failed — retrying in 30s (PyPI CDN propagation delay)..."
             sleep 30
-            uv sync --frozen --extra transcription --extra scheduler --extra image-gen --no-cache
+            uv sync --frozen --extra transcription --extra scheduler --no-cache
           }
         shell: bash
 
@@ -192,7 +192,16 @@ jobs:
           else
             BINARY="desktop/src-tauri/sidecar/matrx-engine-x86_64-unknown-linux-gnu"
           fi
-          "$PYTHON" scripts/verify-frozen-runtime.py --binary "$BINARY" --python "$PYTHON"
+          if [[ "${{ matrix.args }}" == *"x86_64-apple-darwin"* ]]; then
+            TARGET="x86_64-apple-darwin"
+          elif [[ "${{ matrix.args }}" == *"aarch64-apple-darwin"* ]]; then
+            TARGET="aarch64-apple-darwin"
+          elif [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
+            TARGET="x86_64-pc-windows-msvc"
+          else
+            TARGET="x86_64-unknown-linux-gnu"
+          fi
+          "$PYTHON" scripts/verify-frozen-runtime.py --binary "$BINARY" --python "$PYTHON" --target "$TARGET"
         shell: bash
 
       - name: Download cloudflared sidecar binary
@@ -839,8 +848,15 @@ jobs:
           if not missing:
               print(f"✅ All {len(EXPECTED_PLATFORMS)} platforms present — nothing to backfill.")
           else:
-              print(f"⚠️  Missing platforms in {tag}: {missing}")
-              print("Scanning previous releases for backfill candidates...")
+              print(
+                  f"❌ REFUSING release {tag}: updater manifest is missing {sorted(missing)}. "
+                  "Older release artifacts cannot satisfy this release's frozen/managed "
+                  "runtime contract and must never be backfilled. Rebuild every current "
+                  "matrix artifact instead."
+              )
+              sys.exit(1)
+              # Historical backfill implementation remains below temporarily
+              # for release-workflow archaeology, but is unreachable by design.
               try:
                   expected_key = current_updater_key_id()
               except Exception as e:

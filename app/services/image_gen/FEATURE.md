@@ -226,32 +226,41 @@ published SHA-256 **before** `.download-complete` is written. A truncated,
 HTML, or mismatched file therefore remains pending and never reaches the
 pipeline loader.
 
-### Mandatory runtime migration
+### Managed media runtime — immutable, verified, and shared with video
 
-The packaged app owns the managed `image-gen-packages` runtime across macOS,
-Windows, and Linux. On startup, before that directory is injected into
-`sys.path`, an existing runtime below the required Diffusers/Transformers
-versions or missing PEFT/GGUF support is upgraded automatically in the
-background. This migration changes only managed Python packages—not model
-weights, encoders, LoRAs, or other user assets—and records a durable pending
-marker before it starts. Torch and Torchvision are resolved as a pair:
-pip target installs can otherwise upgrade Torch transitively while retaining an
-ABI-incompatible Torchvision native extension. An interrupted migration retries
-at the next engine start, and its retained executor future converts failures to
-a terminal installer state without emitting an unobserved-future warning. Image
-generation is hard-gated until the required runtime is verified, so an old
-known-broken loader is never used as a fallback.
+The packaged app owns one image/video runtime. Its authority is
+`image-gen-runtime/state.json`, whose state is one of `absent`, `installing`,
+`updating`, `repairing`, `validating`, `activating`, `restart_required`,
+`ready`, `failed`, or `rolled_back`. A `.install-complete` file is only evidence
+inside an immutable slot; its existence never means ready.
 
-Source-run `uv` environments intentionally may not contain pip. The shared
-optional-package installer probes the selected interpreter first and uses
-`uv pip install --python ... --target ...` when necessary; packaged Python
-continues to use pip (with `ensurepip` as its final bootstrap path). Never
-assume `sys.executable -m pip` exists merely because Python does.
-The image/video dependency probe stops when the root `torch` runtime is absent:
-probing bundled dependents such as Accelerate or Transformers after that point
-only creates false frozen-gap tracebacks on a clean first install. Once the
-managed runtime is injected, the installer reruns the complete dependency
-probe before enabling generation.
+Every app release carries a target-specific lock manifest and hashed
+requirements artifact. The installer fails closed when the artifact is absent,
+stale, unsupported on the current target, or does not match the exact CPython
+ABI/platform contract. It never falls back to floating package requirements.
+Installation and repair always build a new staging slot under
+`image-gen-runtime/slots/`, using an OS-level exclusive lock. The package graph,
+critical lazy imports, Diffusers/Transformers pipeline attributes, Torchvision
+native operators, and the real frozen sidecar import precedence all validate
+before the state atomically points at the new slot. The former slot remains the
+last-known-good rollback target. No installer overwrites an active package tree
+and no compatibility patch rewrites third-party source.
+
+The canonical `/image-gen/runtime/*` state gates image and video generation.
+Top-level imports, package versions, and completion markers are never alternate
+readiness signals. A runtime-class import/native failure during model loading
+transitions the frozen runtime to repairable `failed`; model configuration,
+weights, prompt, and user-input failures do not poison runtime state. Repair is
+a clean staged reinstall. Models, LoRAs, alternative encoders, generated media,
+and queues live outside runtime slots and are never modified by install,
+update, repair, activation, or rollback.
+
+Source development is intentionally separate: `uv sync --extra image-gen`
+provides the runtime directly from the dev environment and must pass the same
+critical import/native/pipeline verifier, but it never writes into live managed
+state. Packaged installation uses the bundled installer/verifier tools and must
+not depend on a user's Python, pip, or uv.
+
 `packages_dir()` honors `MATRX_HOME_DIR` before platform defaults, so a dev
 engine can never inspect, withhold, or migrate the installed app's managed
 runtime. It resolves every managed-package path before use; if an old dev-home
@@ -268,11 +277,10 @@ raises (naming the mismatch) when a KNOWN family differs from the model's
 are **never filtered out of the UI by family** — they always list; only an
 enabled cross-family selection is rejected at generate time.
 
-**PEFT is required to apply LoRAs.** The managed image-gen install includes
-``peft>=0.13.1`` (diffusers' ``load_lora_weights`` / ``set_adapters`` gate on
-``USE_PEFT_BACKEND``). Older installs without PEFT must re-run
-``POST /image-gen/install`` (``needs_upgrade()`` detects the gap). Generation
-with LoRAs enabled fails loudly with an install prompt if PEFT is still absent.
+**PEFT is required to apply LoRAs.** The target lock contract includes an exact
+PEFT version (diffusers' ``load_lora_weights`` / ``set_adapters`` gate on
+``USE_PEFT_BACKEND``). A slot missing it cannot pass validation or become
+`ready`; repair builds a clean locked slot rather than modifying it in place.
 
 ## Two locks, and never one — status must not queue behind a load
 

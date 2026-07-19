@@ -1,17 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aimatrx.com/schemas/image-gen-runtime-target-v1.json",
-  "title": "AI Matrx target-specific hash-locked image runtime",
+  "title": "AI Matrx target-specific managed media runtime",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "target",
+    "supported",
     "python_minor",
-    "contract_sha256",
-    "lock_file",
-    "lock_sha256",
-    "packages"
+    "contract_sha256"
   ],
   "properties": {
     "schema_version": { "const": 1 },
@@ -23,8 +21,11 @@
         "x86_64-unknown-linux-gnu"
       ]
     },
+    "supported": { "type": "boolean" },
     "python_minor": { "const": "3.13" },
     "contract_sha256": { "$ref": "#/$defs/sha256" },
+    "minimum_macos": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "unsupported_reason": { "type": "string", "minLength": 20 },
     "lock_file": { "type": "string", "pattern": "\\.requirements\\.txt$" },
     "lock_sha256": { "$ref": "#/$defs/sha256" },
     "packages": {
@@ -55,6 +56,24 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "supported": { "const": true } }, "required": ["supported"] },
+      "then": { "required": ["lock_file", "lock_sha256", "packages"] },
+      "else": {
+        "required": ["unsupported_reason"],
+        "not": { "anyOf": [
+          { "required": ["lock_file"] },
+          { "required": ["lock_sha256"] },
+          { "required": ["packages"] }
+        ] }
+      }
+    },
+    {
+      "if": { "properties": { "target": { "const": "aarch64-apple-darwin" } }, "required": ["target"] },
+      "then": { "properties": { "minimum_macos": { "const": "12.0" } }, "required": ["minimum_macos"] }
+    }
+  ],
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
   }

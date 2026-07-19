@@ -43,7 +43,8 @@
     "externalBin": [
       "sidecar/matrx-engine",
       "sidecar/cloudflared",
-      "binaries/llama-server"
+      "binaries/llama-server",
+      "binaries/uv"
     ],
     "windows": {
       "nsis": {

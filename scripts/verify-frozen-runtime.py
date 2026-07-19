@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -16,6 +18,12 @@ CONTRACT_PATH = (
     ROOT / "config" / "runtime-manifests" / "image-gen-contract.json"
 )
 SENTINEL = "MATRX_FROZEN_RUNTIME_VERIFY="
+TARGETS = (
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+)
 
 
 def archive_modules(binary: Path) -> set[str]:
@@ -56,10 +64,13 @@ def check_archive(binary: Path, contract: dict) -> None:
         raise RuntimeError(f"frozen shared-package collection is incomplete: {details}")
 
 
-def run_frozen_probe(binary: Path, runtime_path: Path, contract: dict) -> None:
+def run_frozen_probe(
+    binary: Path, runtime_path: Path, contract: dict, *, target: str
+) -> None:
     environment = os.environ.copy()
     environment["MATRX_FROZEN_RUNTIME_VERIFY"] = "1"
     environment["MATRX_FROZEN_RUNTIME_PATH"] = str(runtime_path)
+    environment["MATRX_FROZEN_RUNTIME_TARGET"] = target
     process = subprocess.run(
         [str(binary)],
         env=environment,
@@ -98,11 +109,51 @@ def find_site_packages(python: Path) -> Path:
     return path
 
 
+def load_target_manifest(target: str, contract: dict) -> dict:
+    path = ROOT / "config" / "runtime-manifests" / f"image-gen-{target}.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("target") != target:
+        raise RuntimeError(f"target manifest mismatch: {manifest.get('target')!r} != {target!r}")
+    if manifest.get("contract_sha256") != contract.get("contract_sha256"):
+        raise RuntimeError(f"target manifest is stale for canonical contract: {target}")
+    return manifest
+
+
+def install_exact_target_runtime(
+    python: Path, target_manifest: dict, destination: Path
+) -> None:
+    lock_path = (
+        ROOT / "config" / "runtime-manifests" / str(target_manifest["lock_file"])
+    )
+    actual_digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+    if actual_digest != target_manifest.get("lock_sha256"):
+        raise RuntimeError("target requirements digest does not match its manifest")
+    subprocess.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            str(python),
+            "--target",
+            str(destination),
+            "--require-hashes",
+            "--requirement",
+            str(lock_path),
+            "--no-cache",
+        ],
+        cwd=ROOT,
+        check=True,
+        timeout=900,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--runtime-path", type=Path)
+    parser.add_argument("--target", choices=TARGETS)
     parser.add_argument("--archive-only", action="store_true")
     args = parser.parse_args()
 
@@ -111,12 +162,29 @@ def main() -> int:
     check_archive(binary, contract)
     print(f"archive verified: {binary}")
     if not args.archive_only:
-        runtime_path = (
-            args.runtime_path.resolve(strict=True)
-            if args.runtime_path
-            else find_site_packages(args.python)
-        )
-        run_frozen_probe(binary, runtime_path, contract)
+        if args.runtime_path and args.target:
+            parser.error("--runtime-path and --target are mutually exclusive")
+        target_manifest = load_target_manifest(args.target, contract) if args.target else None
+        if target_manifest is not None and target_manifest.get("supported") is False:
+            print(
+                f"managed runtime explicitly unsupported for {args.target}; "
+                "archive verification is the complete release gate for this target"
+            )
+            return 0
+        if target_manifest is not None:
+            with tempfile.TemporaryDirectory(prefix=f"matrx-locked-{args.target}-") as temp:
+                runtime_path = Path(temp) / "site-packages"
+                install_exact_target_runtime(args.python, target_manifest, runtime_path)
+                run_frozen_probe(binary, runtime_path, contract, target=args.target)
+        else:
+            runtime_path = (
+                args.runtime_path.resolve(strict=True)
+                if args.runtime_path
+                else find_site_packages(args.python)
+            )
+            if not args.target:
+                parser.error("--target is required for a runtime probe")
+            run_frozen_probe(binary, runtime_path, contract, target=args.target)
         print(
             "frozen managed-runtime probe verified: "
             f"{contract['contract_sha256'][:12]}"

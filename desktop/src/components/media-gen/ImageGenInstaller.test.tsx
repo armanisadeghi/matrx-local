@@ -4,6 +4,7 @@ import type { MediaRuntimeStatus } from "@/lib/api";
 
 const ensure = vi.fn();
 const repair = vi.fn();
+const restart = vi.fn();
 const refresh = vi.fn();
 let runtime: MediaRuntimeStatus | null = null;
 
@@ -17,6 +18,7 @@ vi.mock("@/contexts/MediaGenContext", () => ({
     {
       ensureMediaRuntime: ensure,
       repairMediaRuntime: repair,
+      restartMediaRuntime: restart,
       refreshMediaRuntime: refresh,
     },
   ],
@@ -88,5 +90,16 @@ describe("ImageGenInstaller runtime panel", () => {
     expect(html).toContain("frozen-imports");
     expect(html).toContain("84%");
     expect(html).not.toContain("AI Packages Ready");
+  });
+
+  it("offers an owned engine restart when activation requires a new process", () => {
+    runtime = makeRuntime({
+      state: "restart_required",
+      attempt_id: "attempt-3",
+      message: "The validated runtime is ready for activation.",
+    });
+    const html = renderToStaticMarkup(<ImageGenInstaller />);
+    expect(html).toContain("Restart required to finish setup");
+    expect(html).toContain("Restart engine and finish");
   });
 });

@@ -1,7 +1,8 @@
 {
-  "contract_sha256": "dc09897a76af3fd9c63a6c31205157349d15162c1f3d53ead23e7a152f2ec152",
+  "contract_sha256": "7f24ffc6b45213ad90a4db3903e23fa212c7ea16688602c0181fd6d004fc55dc",
   "lock_file": "image-gen-aarch64-apple-darwin.requirements.txt",
   "lock_sha256": "a7ebd1df4cbaebfdc468b4ec4a8e1929c02a958e0439c3782f1ac14785c3771e",
+  "minimum_macos": "12.0",
   "packages": [
     {
       "name": "accelerate",
@@ -532,5 +533,6 @@
   ],
   "python_minor": "3.13",
   "schema_version": 1,
+  "supported": true,
   "target": "aarch64-apple-darwin"
 }

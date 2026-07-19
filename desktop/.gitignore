@@ -10,6 +10,7 @@ src-tauri/gen/
 # llama.cpp pre-built binaries and shared libraries — not committed to git.
 # Run scripts/setup-llama-binaries.sh to download them for your platform.
 src-tauri/binaries/llama-server-*
+src-tauri/binaries/uv-*
 src-tauri/binaries/*.dylib
 src-tauri/binaries/*.so
 src-tauri/binaries/*.dll

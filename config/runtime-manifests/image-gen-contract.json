@@ -1,8 +1,12 @@
 {
-  "contract_sha256": "dc09897a76af3fd9c63a6c31205157349d15162c1f3d53ead23e7a152f2ec152",
+  "contract_sha256": "7f24ffc6b45213ad90a4db3903e23fa212c7ea16688602c0181fd6d004fc55dc",
   "critical_frozen_modules": [
+    "doctest",
+    "filecmp",
     "huggingface_hub.dataclasses",
     "jinja2.meta",
+    "modulefinder",
+    "timeit",
     "tqdm.contrib.logging"
   ],
   "lock_graph_sha256": "a36cdb860bcdc973fa1759f65c5c5610e386632ee563f64c2edaf9a8674a9ecf",
@@ -32,6 +36,7 @@
   "python_minor": "3.13",
   "runtime_attributes": {
     "diffusers": [
+      "DiffusionPipeline",
       "FluxPipeline",
       "Flux2KleinPipeline",
       "LTX2Pipeline",
@@ -41,6 +46,7 @@
       "StableDiffusionPipeline",
       "StableDiffusionXLPipeline",
       "WanPipeline",
+      "WanImageToVideoPipeline",
       "ZImagePipeline"
     ],
     "transformers": [
@@ -51,6 +57,11 @@
   "runtime_imports": [
     "accelerate",
     "diffusers",
+    "diffusers.loaders.single_file_model",
+    "diffusers.models.autoencoders.autoencoder_kl",
+    "diffusers.models.autoencoders.autoencoder_kl_wan",
+    "diffusers.pipelines.pipeline_utils",
+    "filecmp",
     "gguf",
     "huggingface_hub.dataclasses",
     "jinja2.meta",

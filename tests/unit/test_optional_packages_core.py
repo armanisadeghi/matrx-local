@@ -101,6 +101,57 @@ def test_install_command_uses_uv_for_pipless_uv_environment(
     assert command[command.index("--target") + 1] == str(tmp_path)
 
 
+def test_frozen_hash_locked_install_uses_bundled_uv_without_finding_python(
+    monkeypatch, tmp_path: Path
+) -> None:
+    requirements = tmp_path / "locked.txt"
+    requirements.write_text(
+        "example==1.0 --hash=sha256:" + "a" * 64 + "\n", encoding="utf-8"
+    )
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+        stdout = iter(())
+
+        def poll(self):
+            return 0
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(core.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        core,
+        "find_python",
+        lambda: pytest.fail("frozen locked install must not discover host Python"),
+    )
+    monkeypatch.setattr(
+        "app.services.optional_packages.runtime_installer.locked_target_install_command",
+        lambda target: ["/app/uv", "pip", "install", "--target", str(target)],
+    )
+
+    def fake_popen(command, **_kwargs):
+        captured["command"] = command
+        return FakeProcess()
+
+    monkeypatch.setattr(core.subprocess, "Popen", fake_popen)
+
+    core.run_pip_streaming(
+        [],
+        tmp_path / "slot",
+        core.InstallProgress(),
+        requirements_file=requirements,
+        require_hashes=True,
+    )
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert command[:3] == ["/app/uv", "pip", "install"]
+    assert "--require-hashes" in command
+    assert command[command.index("--requirement") + 1] == str(requirements)
+
+
 def test_pip_process_is_reaped_when_engine_shutdown_is_requested(
     monkeypatch, tmp_path: Path
 ) -> None:

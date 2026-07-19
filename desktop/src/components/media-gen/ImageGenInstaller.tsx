@@ -44,7 +44,12 @@ export function ImageGenInstaller({
 }) {
   const [state, actions] = useMediaGenApp();
   const { mediaRuntime, mediaRuntimeLoading, mediaRuntimeError } = state;
-  const { ensureMediaRuntime, repairMediaRuntime, refreshMediaRuntime } = actions;
+  const {
+    ensureMediaRuntime,
+    repairMediaRuntime,
+    restartMediaRuntime,
+    refreshMediaRuntime,
+  } = actions;
 
   if (mediaRuntime?.state === "ready") return null;
 
@@ -131,9 +136,10 @@ export function ImageGenInstaller({
                 </Button>
               )}
               {action === "restart" && (
-                <p className="text-xs text-muted-foreground">
-                  Restart Matrx Local; validation resumes automatically.
-                </p>
+                <Button size="sm" onClick={() => void restartMediaRuntime()}>
+                  <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                  Restart engine and finish
+                </Button>
               )}
               {(mediaRuntimeError || mediaRuntime === null) && (
                 <Button

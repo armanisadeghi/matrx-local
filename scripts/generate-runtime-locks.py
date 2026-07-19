@@ -29,6 +29,13 @@ TARGETS = (
     "x86_64-pc-windows-msvc",
     "x86_64-unknown-linux-gnu",
 )
+UNSUPPORTED_TARGETS = {
+    "x86_64-apple-darwin": (
+        "PyTorch 2.10.0 does not publish a CPython 3.13 x86_64 macOS wheel; "
+        "the desktop application remains supported, but its managed media runtime is unavailable."
+    ),
+}
+MINIMUM_MACOS = {"aarch64-apple-darwin": "12.0"}
 REQ_RE = re.compile(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)")
 HASH_RE = re.compile(r"--hash=sha256:([0-9a-f]{64})")
 
@@ -167,6 +174,7 @@ def _compile(target: str, output: Path) -> None:
             "https://download.pytorch.org/whl/cpu",
             "--index-strategy",
             "unsafe-best-match",
+            "--emit-index-url",
         ]
     subprocess.run(command, cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
 
@@ -177,6 +185,8 @@ def _parse_requirements(path: Path) -> list[dict[str, object]]:
     for raw in path.read_text(encoding="utf-8").splitlines():
         stripped = raw.strip()
         if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith(("--index-url ", "--extra-index-url ")):
             continue
         current += stripped[:-1].strip() + " " if stripped.endswith("\\") else stripped
         if not stripped.endswith("\\"):
@@ -205,6 +215,7 @@ def _write_target_manifest(target: str, lock_path: Path, packages: list[dict[str
     manifest = {
         "schema_version": 1,
         "target": target,
+        "supported": True,
         "python_minor": "3.13",
         "contract_sha256": contract["contract_sha256"],
         "lock_file": lock_path.name,
@@ -218,6 +229,22 @@ def _write_target_manifest(target: str, lock_path: Path, packages: list[dict[str
             for package in packages
         ],
     }
+    if target in MINIMUM_MACOS:
+        manifest["minimum_macos"] = MINIMUM_MACOS[target]
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+
+def _write_unsupported_target_manifest(target: str) -> None:
+    contract = json.loads((MANIFEST_DIR / "image-gen-contract.json").read_text())
+    manifest_path = MANIFEST_DIR / f"image-gen-{target}.json"
+    manifest = {
+        "schema_version": 1,
+        "target": target,
+        "supported": False,
+        "python_minor": "3.13",
+        "contract_sha256": contract["contract_sha256"],
+        "unsupported_reason": UNSUPPORTED_TARGETS[target],
+    }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
 
@@ -225,10 +252,9 @@ def _validate_target(target: str) -> list[str]:
     errors: list[str] = []
     lock_path = MANIFEST_DIR / f"image-gen-{target}.requirements.txt"
     manifest_path = MANIFEST_DIR / f"image-gen-{target}.json"
-    if not lock_path.is_file() or not manifest_path.is_file():
-        return [f"{target}: lock or manifest missing"]
+    if not manifest_path.is_file():
+        return [f"{target}: target manifest missing"]
     try:
-        packages = _parse_requirements(lock_path)
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         contract = json.loads((MANIFEST_DIR / "image-gen-contract.json").read_text())
         if manifest.get("target") != target:
@@ -237,6 +263,26 @@ def _validate_target(target: str) -> list[str]:
             errors.append(f"{target}: Python ABI is not 3.13")
         if manifest.get("contract_sha256") != contract.get("contract_sha256"):
             errors.append(f"{target}: runtime contract is stale")
+        if target in UNSUPPORTED_TARGETS:
+            expected = UNSUPPORTED_TARGETS[target]
+            if manifest.get("supported") is not False:
+                errors.append(f"{target}: unsupported target is not fail-closed")
+            if manifest.get("unsupported_reason") != expected:
+                errors.append(f"{target}: unsupported reason is missing/stale")
+            unexpected = {"lock_file", "lock_sha256", "packages"} & set(manifest)
+            if unexpected:
+                errors.append(f"{target}: unsupported target declares install data {sorted(unexpected)}")
+            if lock_path.exists():
+                errors.append(f"{target}: unsupported target must not have an install lock")
+            return errors
+        if manifest.get("supported") is not True:
+            errors.append(f"{target}: supported target is not explicitly supported")
+        if manifest.get("minimum_macos") != MINIMUM_MACOS.get(target):
+            if target in MINIMUM_MACOS or "minimum_macos" in manifest:
+                errors.append(f"{target}: minimum_macos is missing/stale")
+        if not lock_path.is_file():
+            return errors + [f"{target}: supported target lock missing"]
+        packages = _parse_requirements(lock_path)
         if manifest.get("lock_file") != lock_path.name:
             errors.append(f"{target}: lock filename mismatch")
         if manifest.get("lock_sha256") != hashlib.sha256(lock_path.read_bytes()).hexdigest():
@@ -278,6 +324,13 @@ def main() -> int:
     failures: list[str] = []
     for target in selected_targets:
         try:
+            if target in UNSUPPORTED_TARGETS:
+                _write_unsupported_target_manifest(target)
+                stale_lock = MANIFEST_DIR / f"image-gen-{target}.requirements.txt"
+                if stale_lock.exists():
+                    stale_lock.unlink()
+                print(f"generated {target}: explicitly unsupported")
+                continue
             lock_path = MANIFEST_DIR / f"image-gen-{target}.requirements.txt"
             with tempfile.TemporaryDirectory(prefix=f"matrx-runtime-{target}-") as temp:
                 generated = Path(temp) / lock_path.name

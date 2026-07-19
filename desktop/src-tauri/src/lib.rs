@@ -476,6 +476,28 @@ async fn start_sidecar(
         // launcher that exits immediately, causing a false "parent gone" kill.
         .env("TAURI_APP_PID", std::process::id().to_string());
 
+    // The optional media runtime is installed by a target-native uv binary
+    // shipped as a Tauri externalBin. Pass its absolute, bundle-owned path to
+    // the frozen engine so it never searches PATH or asks a customer to install
+    // Python/pip/uv. In development the external binary is normally absent and
+    // source Python keeps using the repository's uv environment.
+    let bundled_uv_name = if cfg!(windows) { "uv.exe" } else { "uv" };
+    match std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(|parent| parent.join(bundled_uv_name)))
+        .filter(|path| path.is_file())
+    {
+        Some(path) => {
+            sidecar = sidecar.env("MATRX_BUNDLED_UV_PATH", path.as_os_str());
+        }
+        None if !cfg!(debug_assertions) => {
+            eprintln!(
+                "[sidecar] bundled media-runtime installer is missing; image/video runtime repair will be unavailable"
+            );
+        }
+        None => {}
+    }
+
     // Tauri's shell abstraction does not guarantee that every parent
     // environment override is forwarded identically on all platforms. Copy
     // the isolation contract explicitly so packaged smoke can never fall

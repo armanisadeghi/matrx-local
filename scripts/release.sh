@@ -61,7 +61,11 @@ _on_error() {
     echo -e "\033[0;31m║  Exit code : ${exit_code}$(printf '%*s' $((61 - ${#exit_code})) '')║\033[0m" >&2
     [[ -n "$line_no" ]] && \
     echo -e "\033[0;31m║  Line      : ${line_no}$(printf '%*s' $((61 - ${#line_no})) '')║\033[0m" >&2
-    echo -e "\033[0;31m║  No version was committed, tagged, or pushed.               ║\033[0m" >&2
+    if $RELEASE_COMMITTED; then
+        echo -e "\033[0;31m║  Release commit exists; inspect push/workflow status above.  ║\033[0m" >&2
+    else
+        echo -e "\033[0;31m║  No version was committed, tagged, or pushed.               ║\033[0m" >&2
+    fi
     echo -e "\033[0;31m╚══════════════════════════════════════════════════════════════╝\033[0m" >&2
     echo "" >&2
 }
@@ -328,7 +332,7 @@ monitor_build() {
         # Fetch job data. Never turn a GitHub API failure into an empty,
         # apparently successful run.
         local jobs_json
-        if ! jobs_json=$(gh run view "$run_id" --repo "$repo" --json jobs 2>/dev/null); then
+        if ! jobs_json=$(gh run view "$run_id" --repo "$repo" --json jobs,status,conclusion 2>/dev/null); then
             warn "Could not fetch job status from GitHub; retrying in 15s."
             sleep 15
             continue
@@ -537,13 +541,19 @@ monitor_build() {
             echo -e "  ${CYAN}Debug: https://github.com/${repo}/actions/runs/${run_id}${NC}"
         fi
 
-        # Check overall run status
-        local run_status
-        run_status=$(gh run view "$run_id" --repo "$repo" --json status --jq '.status' 2>/dev/null || echo "unknown")
+        # Read overall status and conclusion from the same API snapshot as the
+        # jobs above. A second request can observe the run as completed before
+        # the first response's jobs list catches up, falsely reporting 5/6.
+        local run_status run_conclusion
+        run_status=$(echo "$jobs_json" | jq -r '.status // "unknown"')
+        run_conclusion=$(echo "$jobs_json" | jq -r '.conclusion // ""')
 
-        if [[ "$run_status" == "completed" && ( "$job_count" -lt 6 || "$completed_count" -lt 6 ) ]]; then
+        # The workflow conclusion is authoritative once GitHub marks the run
+        # complete. Its final job verifies the published release and assets, so
+        # a successful conclusion must not be downgraded by stale job details.
+        if [[ "$run_status" == "completed" && "$run_conclusion" != "success" && "$any_failed" == "false" ]]; then
             any_failed=true
-            failed_platforms+=("Incomplete GitHub job data (${completed_count}/${job_count})")
+            failed_platforms+=("Workflow conclusion: ${run_conclusion:-unknown}")
         fi
 
         if [[ "$run_status" == "completed" ]] || [[ "$completed_count" -ge 6 && "$job_count" -ge 6 ]]; then

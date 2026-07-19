@@ -10,6 +10,8 @@ imports execute inside the real frozen CPython process.
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
+import hashlib
 import json
 import os
 import sys
@@ -44,6 +46,36 @@ if os.environ.get("MATRX_FROZEN_RUNTIME_VERIFY") == "1":
                 f"frozen Python {result['python']} != contract {contract['python_minor']}"
             )
 
+        target = os.environ["MATRX_FROZEN_RUNTIME_TARGET"]
+        target_path = (
+            base / "config" / "runtime-manifests" / f"image-gen-{target}.json"
+        )
+        target_manifest = json.loads(target_path.read_text(encoding="utf-8"))
+        if target_manifest.get("supported") is not True:
+            raise RuntimeError(f"verification invoked for unsupported target {target}")
+        if target_manifest.get("target") != target:
+            raise RuntimeError("embedded target manifest identifies the wrong platform")
+        if target_manifest.get("contract_sha256") != contract["contract_sha256"]:
+            raise RuntimeError("embedded target manifest is stale")
+        lock_path = target_path.parent / target_manifest["lock_file"]
+        if hashlib.sha256(lock_path.read_bytes()).hexdigest() != target_manifest.get(
+            "lock_sha256"
+        ):
+            raise RuntimeError("embedded target requirements digest is invalid")
+        expected_versions = {
+            item["name"].lower().replace("_", "-"): item["version"]
+            for item in target_manifest["packages"]
+        }
+        actual_versions = {
+            distribution.metadata["Name"].lower().replace("_", "-"): distribution.version
+            for distribution in importlib.metadata.distributions(path=[runtime_text])
+        }
+        if actual_versions != expected_versions:
+            raise RuntimeError(
+                "isolated runtime package inventory differs from target manifest: "
+                f"expected={expected_versions!r}, actual={actual_versions!r}"
+            )
+
         imported: dict[str, str] = {}
         for module_name in contract["runtime_imports"]:
             module = importlib.import_module(module_name)
@@ -52,6 +84,22 @@ if os.environ.get("MATRX_FROZEN_RUNTIME_VERIFY") == "1":
             module = importlib.import_module(module_name)
             for attribute in attributes:
                 getattr(module, attribute)
+
+        for module_name in (
+            "accelerate",
+            "diffusers",
+            "gguf",
+            "peft",
+            "sentencepiece",
+            "torch",
+            "torchvision",
+            "transformers",
+        ):
+            origin = Path(imported[module_name]).resolve(strict=False)
+            if not origin.is_relative_to(runtime_path):
+                raise RuntimeError(
+                    f"managed module {module_name} resolved outside isolated runtime: {origin}"
+                )
 
         import torch
         import torchvision
@@ -65,6 +113,7 @@ if os.environ.get("MATRX_FROZEN_RUNTIME_VERIFY") == "1":
             raise RuntimeError("Torchvision native operators failed to load")
 
         result["imports"] = imported
+        result["target"] = target
         result["torch"] = str(torch.__version__)
         result["torchvision"] = str(torchvision.__version__)
         result["ok"] = True

@@ -16,7 +16,6 @@ Run after an exact ``uv sync`` with the release extras, including ``image-gen``:
 from __future__ import annotations
 
 import argparse
-import ast
 import hashlib
 import importlib.metadata as metadata
 import json
@@ -38,13 +37,22 @@ FROZEN_EXCLUDED_DISTRIBUTIONS = {
     "torchaudio",
 }
 CRITICAL_FROZEN_MODULES = (
+    "doctest",
+    "filecmp",
     "huggingface_hub.dataclasses",
     "jinja2.meta",
+    "modulefinder",
+    "timeit",
     "tqdm.contrib.logging",
 )
 RUNTIME_IMPORTS = (
     "accelerate",
     "diffusers",
+    "diffusers.loaders.single_file_model",
+    "diffusers.models.autoencoders.autoencoder_kl",
+    "diffusers.models.autoencoders.autoencoder_kl_wan",
+    "diffusers.pipelines.pipeline_utils",
+    "filecmp",
     "gguf",
     "huggingface_hub.dataclasses",
     "jinja2.meta",
@@ -57,6 +65,7 @@ RUNTIME_IMPORTS = (
 )
 RUNTIME_ATTRIBUTES = {
     "diffusers": (
+        "DiffusionPipeline",
         "FluxPipeline",
         "Flux2KleinPipeline",
         "LTX2Pipeline",
@@ -66,6 +75,7 @@ RUNTIME_ATTRIBUTES = {
         "StableDiffusionPipeline",
         "StableDiffusionXLPipeline",
         "WanPipeline",
+        "WanImageToVideoPipeline",
         "ZImagePipeline",
     ),
     "transformers": (
@@ -77,21 +87,6 @@ RUNTIME_ATTRIBUTES = {
 
 def _normalize(name: str) -> str:
     return canonicalize_name(name)
-
-
-def _read_image_requirements() -> list[str]:
-    source = ROOT / "app" / "services" / "image_gen" / "installer.py"
-    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-    for node in tree.body:
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        if any(isinstance(target, ast.Name) and target.id == "IMAGE_GEN_PACKAGES" for target in targets):
-            value = ast.literal_eval(node.value)
-            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-                raise RuntimeError("IMAGE_GEN_PACKAGES must be a literal list[str]")
-            return value
-    raise RuntimeError("IMAGE_GEN_PACKAGES not found in installer.py")
 
 
 def _read_project_contract() -> tuple[list[str], list[str]]:
@@ -197,22 +192,14 @@ def _lock_payload() -> tuple[str, dict[str, str]]:
 
 def _contract_payload() -> dict:
     core_requirements, project_image_requirements = _read_project_contract()
-    installer_requirements = _read_image_requirements()
     runtime_requirements = _read_runtime_input()
     project_names = _requirement_names(project_image_requirements)
-    installer_names = _requirement_names(installer_requirements)
-    if project_names != installer_names:
-        raise RuntimeError(
-            "pyproject.toml [image-gen] and installer.py IMAGE_GEN_PACKAGES differ: "
-            f"only_project={sorted(project_names - installer_names)}, "
-            f"only_installer={sorted(installer_names - project_names)}"
-        )
     runtime_names = _requirement_names(runtime_requirements)
-    if runtime_names != installer_names:
+    if runtime_names != project_names:
         raise RuntimeError(
-            "image-gen.in and installer.py IMAGE_GEN_PACKAGES differ: "
-            f"only_runtime={sorted(runtime_names - installer_names)}, "
-            f"only_installer={sorted(installer_names - runtime_names)}"
+            "image-gen.in and pyproject.toml [image-gen] differ: "
+            f"only_runtime={sorted(runtime_names - project_names)}, "
+            f"only_project={sorted(project_names - runtime_names)}"
         )
 
     core_closure = _distribution_closure(core_requirements)
@@ -232,7 +219,7 @@ def _contract_payload() -> dict:
 
     source_contract = {
         "core_requirements": sorted(core_requirements),
-        "installer_requirements": installer_requirements,
+        "project_image_requirements": sorted(project_image_requirements),
         "runtime_requirements": runtime_requirements,
         "lock_graph_sha256": lock_sha256,
     }

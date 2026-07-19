@@ -47,6 +47,7 @@ import base64
 import gc
 import io
 import random
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -454,19 +455,20 @@ class ImageGenService:
 
     @property
     def available(self) -> bool:
-        # Never allow the known-broken 0.37.x Z-Image LoRA converter to run.
-        # Startup migrates existing installs before optional packages are
-        # imported; this remains a defense-in-depth gate if migration failed.
-        return DEPS_AVAILABLE and not are_packages_outdated()
+        if not getattr(sys, "frozen", False):
+            return DEPS_AVAILABLE
+        from app.services.image_gen.installer import get_runtime_status  # noqa: PLC0415
+
+        return DEPS_AVAILABLE and get_runtime_status()["state"] == "ready"
 
     @property
     def unavailable_reason(self) -> str:
-        if are_packages_outdated():
-            return (
-                "A required AI runtime update is pending or failed. Image generation "
-                "is paused until Diffusers 0.39.0 is installed; restart or reconnect "
-                "to retry the automatic migration."
-            )
+        if getattr(sys, "frozen", False):
+            from app.services.image_gen.installer import get_runtime_status  # noqa: PLC0415
+
+            runtime = get_runtime_status()
+            if runtime["state"] != "ready":
+                return str(runtime["failure_detail"] or runtime["message"])
         return DEPS_REASON
 
     @property
@@ -499,7 +501,7 @@ class ImageGenService:
             "is_generating": bool(gens),
             "cancel_requested": any(g["cancel_requested"] for g in gens),
             "packages_version": get_installed_diffusers_version(),
-            "packages_outdated": are_packages_outdated(),
+            "packages_outdated": False,
             "device": self._device or select_device(),
         }
 
@@ -1146,6 +1148,13 @@ class ImageGenService:
                 return {"success": True, "model_id": model.model_id, "device": device}
 
             except Exception as exc:
+                from app.services.image_gen.installer import (  # noqa: PLC0415
+                    is_runtime_integrity_failure,
+                    record_runtime_integrity_failure,
+                )
+
+                if is_runtime_integrity_failure(exc):
+                    record_runtime_integrity_failure(str(exc))
                 logger.error(
                     "[image_gen] Failed to load model %s: %s",
                     model.model_id,

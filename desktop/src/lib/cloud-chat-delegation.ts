@@ -9,6 +9,12 @@ export interface EngineDelegationState {
   continuation?: { user_request_id?: string | null; needed?: boolean } | null;
 }
 
+export type DelegationAccessToken = string | (() => Promise<string>);
+
+async function resolveAccessToken(source: DelegationAccessToken): Promise<string> {
+  return typeof source === "function" ? source() : source;
+}
+
 function authenticatedHeaders(accessToken: string): HeadersInit {
   return {
     Authorization: `Bearer ${accessToken}`,
@@ -64,13 +70,17 @@ export async function releaseDelegationUi(
 export async function waitForDelegatedContinuation(
   engineUrl: string,
   conversationId: string,
-  accessToken: string,
+  accessToken: DelegationAccessToken,
   signal: AbortSignal,
   onStatus: (status: string) => void,
 ): Promise<string | null> {
   const startedAt = Date.now();
   while (!signal.aborted && Date.now() - startedAt < DELEGATION_WAIT_CAP_MS) {
-    const state = await claimDelegationUi(engineUrl, conversationId, accessToken);
+    const state = await claimDelegationUi(
+      engineUrl,
+      conversationId,
+      await resolveAccessToken(accessToken),
+    );
     if (state) {
       const continuation = state.continuation;
       if (continuation?.needed && continuation.user_request_id) {

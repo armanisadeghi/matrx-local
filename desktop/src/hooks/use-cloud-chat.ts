@@ -19,6 +19,7 @@ import {
   loadCloudChatCache,
   saveCloudChatCache,
 } from "@/lib/cloud-chat-cache";
+import { CloudChatRunGate } from "@/lib/cloud-chat-run-gate";
 import supabase from "@/lib/supabase";
 import {
   buildDesktopClientContext,
@@ -812,6 +813,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     DEFAULT_RUN_CONTROLS,
   );
   const abortRef = useRef<AbortController | null>(null);
+  const runGateRef = useRef(new CloudChatRunGate());
   const conversationsRef = useRef(conversations);
   const cacheUserIdRef = useRef<string | null>(null);
 
@@ -823,6 +825,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       if (!active || cacheUserIdRef.current === userId) return;
       abortRef.current?.abort();
       abortRef.current = null;
+      runGateRef.current.cancel();
       cacheUserIdRef.current = userId;
       setCacheUserId(userId);
       setIsStreaming(false);
@@ -1154,6 +1157,15 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         setRequestError("Local engine is not connected.");
         return;
       }
+      const ownerAtStart = cacheUserIdRef.current;
+      if (!ownerAtStart) {
+        setRequestError("Sign in before starting a chat.");
+        return;
+      }
+      // React state does not update synchronously. Claim the run in a ref so
+      // two Enter/click submits in the same render cannot overlap.
+      const runId = generateId();
+      if (!runGateRef.current.tryStart(runId)) return;
       setRequestError(null);
       setLocalLlmError(null);
 
@@ -1223,6 +1235,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
             executionTarget: "local",
             ...(hasAgent && options?.agentId ? { agentId: options.agentId } : {}),
           });
+          runGateRef.current.finish(runId);
           return;
         }
       }
@@ -1428,10 +1441,16 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       let claimedDelegationConversation: string | null = null;
       let delegationAccessToken = "";
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        const token = session?.access_token ?? "";
+        const getFreshAccessToken = async (): Promise<string> => {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          if (session?.user.id !== ownerAtStart || !session.access_token) {
+            throw new DOMException("Chat owner changed while the run was active.", "AbortError");
+          }
+          return session.access_token;
+        };
+        const token = await getFreshAccessToken();
         delegationAccessToken = token;
         const allMessages = userMessage ? [...existingMessages, userMessage] : existingMessages;
         const cloudServerUrl = executionTarget === "cloud"
@@ -1646,7 +1665,11 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                 setStatus(`${toolName}: running on this computer...`);
                 if (executionTarget === "cloud" && engineUrl && cloudConversationId) {
                   claimedDelegationConversation = cloudConversationId;
-                  void claimDelegationUi(engineUrl, cloudConversationId, token);
+                  void getFreshAccessToken()
+                    .then((freshToken) =>
+                      claimDelegationUi(engineUrl, cloudConversationId!, freshToken),
+                    )
+                    .catch(() => null);
                 }
                 break;
               }
@@ -1803,11 +1826,13 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         const maxStreamSegments = 25;
         for (let segment = 0; segment < maxStreamSegments; segment += 1) {
           delegatedCallsThisSegment.clear();
+          const segmentToken = await getFreshAccessToken();
+          delegationAccessToken = segmentToken;
           const response = await fetch(requestUrl, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              Authorization: `Bearer ${segmentToken}`,
             },
             body: JSON.stringify(requestBody),
             signal: abort.signal,
@@ -1855,7 +1880,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           const userRequestId = await waitForDelegatedContinuation(
             engineUrl,
             cloudConversationId,
-            token,
+            getFreshAccessToken,
             abort.signal,
             setStatus,
           );
@@ -1919,15 +1944,23 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           });
         }
       } finally {
-        if (claimedDelegationConversation && engineUrl && delegationAccessToken) {
-          void releaseDelegationUi(
-            engineUrl,
-            claimedDelegationConversation,
-            delegationAccessToken,
-          );
+        if (runGateRef.current.finish(runId)) {
+          if (claimedDelegationConversation && engineUrl && delegationAccessToken) {
+            void supabase.auth
+              .getSession()
+              .then(({ data }) =>
+                releaseDelegationUi(
+                  engineUrl,
+                  claimedDelegationConversation!,
+                  data.session?.user.id === ownerAtStart
+                    ? (data.session.access_token ?? delegationAccessToken)
+                    : delegationAccessToken,
+                ),
+              );
+          }
+          setIsStreaming(false);
+          void refreshConversations();
         }
-        setIsStreaming(false);
-        void refreshConversations();
       }
     },
     [

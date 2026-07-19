@@ -6,6 +6,7 @@ import {
 } from "./cloud-chat-delegation";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -90,5 +91,66 @@ describe("Cloud Chat delegation UI requests", () => {
         }),
       }),
     );
+  });
+
+  it("re-reads the bearer while a delegated tool is still running", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            claimed: true,
+            calls: [{ call_id: "call-1", tool_name: "shell", state: "executing" }],
+            continuation: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            claimed: true,
+            calls: [],
+            continuation: { needed: true, user_request_id: "request-rotated" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const tokenProvider = vi
+      .fn()
+      .mockResolvedValueOnce("token-before-refresh")
+      .mockResolvedValueOnce("token-after-refresh");
+
+    const waiting = waitForDelegatedContinuation(
+      "http://127.0.0.1:22140",
+      "conversation-1",
+      tokenProvider,
+      new AbortController().signal,
+      vi.fn(),
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(waiting).resolves.toBe("request-rotated");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer token-before-refresh",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer token-after-refresh",
+        }),
+      }),
+    );
+    vi.useRealTimers();
   });
 });

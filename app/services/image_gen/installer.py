@@ -659,6 +659,40 @@ def needs_upgrade() -> bool:
     return False
 
 
+def _insert_runtime_sys_path(pkg_dir: Path) -> None:
+    """Place a managed runtime slot on sys.path with certified precedence.
+
+    The frozen runtime hook establishes the only certified ordering: frozen/core
+    entries first, then the managed media runtime slot, then loosely pinned
+    optional capability directories (ner-packages, transcription-packages, …).
+    Capability dirs carry their own torch/transformers copies, so an in-process
+    activation that merely appends the slot lets a capability's torch shadow the
+    slot's — mixing e.g. capability torch with slot torchvision, which fails
+    with cryptic native errors. Insert the slot ahead of the earliest optional
+    package dir already present; frozen/core entries always precede those, so
+    they keep priority.
+    """
+    text = str(pkg_dir)
+    if text in sys.path:
+        return
+    optional_home = packages_dir("image-gen-runtime").parent.resolve(strict=False)
+    for index, entry in enumerate(sys.path):
+        try:
+            entry_parent = Path(entry).resolve(strict=False).parent
+        except (OSError, ValueError):
+            continue
+        if entry_parent == optional_home:
+            sys.path.insert(index, text)
+            logger.info(
+                "[image_gen_installer] Inserted managed runtime %s ahead of "
+                "optional capability dir %s to preserve certified precedence",
+                text,
+                entry,
+            )
+            return
+    sys.path.append(text)
+
+
 def critical_runtime_import_check(
     *,
     importer: Callable[[str], Any] = importlib.import_module,
@@ -674,6 +708,26 @@ def critical_runtime_import_check(
     modules: dict[str, Any] = {}
     for name in CRITICAL_RUNTIME_IMPORTS:
         modules[name] = importer(name)
+
+    # Origin validation runs before any functional native call: exercising a
+    # shadowed torch against the slot's torchvision fails deep inside native
+    # op registration with unactionable errors (e.g. "'_ClassNamespace' object
+    # is not iterable"). A wrong-origin diagnostic must win.
+    if expected_root is not None:
+        expected = expected_root.resolve(strict=False)
+        for name in ("torch", "torchvision", "diffusers", "transformers", "accelerate", "peft"):
+            module_file = getattr(modules[name], "__file__", None)
+            if not module_file:
+                raise RuntimeError(f"{name} has no import origin")
+            try:
+                inside = Path(module_file).resolve(strict=False).is_relative_to(expected)
+            except (OSError, ValueError):
+                inside = False
+            if not inside:
+                raise RuntimeError(
+                    f"{name} resolved outside candidate runtime: {module_file}"
+                )
+
     diffusers = modules["diffusers"]
     missing_classes = [
         name for name in CRITICAL_PIPELINE_CLASSES if not hasattr(diffusers, name)
@@ -700,21 +754,6 @@ def critical_runtime_import_check(
         boxes = torch.empty((0, 4), dtype=torch.float32)
         scores = torch.empty((0,), dtype=torch.float32)
         torchvision.ops.nms(boxes, scores, 0.5)
-
-    if expected_root is not None:
-        expected = expected_root.resolve(strict=False)
-        for name in ("torch", "torchvision", "diffusers", "transformers", "accelerate", "peft"):
-            module_file = getattr(modules[name], "__file__", None)
-            if not module_file:
-                raise RuntimeError(f"{name} has no import origin")
-            try:
-                inside = Path(module_file).resolve(strict=False).is_relative_to(expected)
-            except (OSError, ValueError):
-                inside = False
-            if not inside:
-                raise RuntimeError(
-                    f"{name} resolved outside candidate runtime: {module_file}"
-                )
 
     versions: dict[str, str] = {}
     for name in ("torch", "torchvision", "diffusers", "transformers", "accelerate", "peft"):
@@ -923,10 +962,11 @@ def inject_image_gen_path(pkg_dir_path: Path | None = None) -> bool:
         # includes transitive copies of those core packages; prepending this dir
         # made them load-bearing and produced shutdown/runtime incompatibilities.
         # Heavy packages absent from the bundle (torch/diffusers/transformers)
-        # still resolve normally from the appended directory.
-        sys.path.append(pkg_dir)
+        # resolve from the slot — which must precede capability package dirs
+        # that ship their own conflicting torch stacks.
+        _insert_runtime_sys_path(pkg_dir_path)
         logger.debug(
-            "[image_gen_installer] Appended optional runtime %s to sys.path", pkg_dir
+            "[image_gen_installer] Added optional runtime %s to sys.path", pkg_dir
         )
     if pending_activation:
         verification = verify_runtime_path(pkg_dir_path)
@@ -1019,8 +1059,9 @@ def verify_runtime_path(path: Path) -> RuntimeVerification:
     path_was_present = str(path) in sys.path
     if not path_was_present:
         # Production precedence: frozen/core packages remain ahead of the
-        # optional runtime. This is the only ordering the verifier may certify.
-        sys.path.append(str(path))
+        # optional runtime, but the slot must precede every capability package
+        # dir. This is the only ordering the verifier may certify.
+        _insert_runtime_sys_path(path)
     try:
         packages = critical_runtime_import_check(
             expected_root=path, expected_torch_variant=contract.torch_variant

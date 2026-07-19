@@ -111,6 +111,33 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   handle SQLite contention inside the crawl loop, and supervise/restart crawl
   just as enrichment is supervised.
 
+### MXL-D-070 — Capability recipes install a full competing torch/transformers stack next to the strictly pinned media runtime
+- **Area:** `app/services/capabilities/installer.py` `CAPABILITY_INSTALL`
+  (`ner` and `transcription` recipes install `torch>=2.6` unpinned into
+  `~/.matrx/ner-packages` / `transcription-packages`), shared interpreter with
+  the hash-locked media runtime slot (torch 2.10.0 / transformers 5.3.0).
+- **Symptom:** Two ML stacks in one interpreter: the user's `ner-packages`
+  holds torch 2.13.0 + transformers 5.6.2 + numpy 2.5.1. Whichever dir comes
+  first on sys.path wins for shared packages. The inverted ordering during
+  in-engine repair caused the 2026-07-19 image-gen production outage
+  (`'_ClassNamespace' object is not iterable` — fixed by
+  `_insert_runtime_sys_path` certified precedence, see
+  `app/services/image_gen/FEATURE.md`). The residual risk: with the slot now
+  always first, NER/whisper run against the slot's torch 2.10/transformers 5.3
+  instead of the versions their own install verified — gliner2/whisper compat
+  with the slot pins is unvalidated. The `skip_torch` reuse path also still
+  references the legacy `get_image_gen_packages_dir()` flat dir, not the slot
+  system.
+- **Status:** open.
+- **Analysis stamp:** Analyzed 2026-07-19 — verified in code and on a live
+  machine (`~/.matrx/ner-packages` dist-infos: torch 2.13.0, transformers
+  5.6.2).
+- **Owner hint:** Capabilities that need torch should consume the managed
+  media runtime's stack when installed (and declare compat with its pins), or
+  run in an isolated subprocess. At minimum, capability install should refuse
+  to install a torch that conflicts with an installed media runtime, and the
+  verify step should run with the same sys.path precedence the engine uses.
+
 ---
 
 ## AI / local LLM runtime

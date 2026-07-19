@@ -246,6 +246,21 @@ before the state atomically points at the new slot. The former slot remains the
 last-known-good rollback target. No installer overwrites an active package tree
 and no compatibility patch rewrites third-party source.
 
+**sys.path precedence is part of the certified contract:** frozen/core entries
+first, then the managed runtime slot, then optional capability package dirs
+(`ner-packages`, `transcription-packages`, …). Capability dirs carry their own
+loosely pinned torch/transformers copies; if one precedes the slot, `import
+torch` resolves the capability's torch while torchvision/diffusers come from
+the slot, and cross-version native registration fails with unactionable errors
+(`'_ClassNamespace' object is not iterable` — the July 2026 image-gen outage,
+where a repair loop failed identically forever because in-process activation
+*appended* the slot after `ner-packages`). All in-process slot injection goes
+through `_insert_runtime_sys_path()`, which inserts ahead of the earliest
+optional package dir; `critical_runtime_import_check` validates import origins
+*before* exercising any native op so a future shadowing fails with the explicit
+"resolved outside candidate runtime" diagnostic (which routes to the
+restart-required recovery path when heavy modules were already imported).
+
 The canonical `/image-gen/runtime/*` state gates image and video generation.
 Top-level imports, package versions, and completion markers are never alternate
 readiness signals. A runtime-class import/native failure during model loading

@@ -306,6 +306,13 @@ former paste end -->
 | E007 | 2026-07-09 12:15:16 | WARN | `[downloads] CANCELLED: file=stabilityai--sdxl-turbo` |
 | E008 | 2026-07-09 12:18:04 | WARN | `[app.services.scraper.retry_queue] RetryQueue: remote queue unreachable` — scraper `GET /api/scraper/queue/pending` returned `500` |
 | E009 | 2026-07-09 12:18:04 | WARN | `[launcher] scraper_retry_queue → degraded — remote retry queue unreachable` (same 500 as E008) |
+| E010 | 2026-07-19 12:12:55 | ERR | `[image_gen_runtime_migration] FAILED: '_ClassNamespace' object is not iterable` + `[runtime_hook] Managed media runtime withheld (state 'failed')` — **root-caused & fixed 2026-07-19**: in-engine repair appended the runtime slot to sys.path AFTER `ner-packages` (torch 2.13), mixing capability torch with slot torchvision. Fix: `_insert_runtime_sys_path` certified precedence + origin-check-before-native-ops. See `app/services/image_gen/FEATURE.md`; deeper conflict filed as MXL-D-070. |
+| E011 | 2026-07-19 12:12:52 | ERR | `[uvicorn] ASGI callable returned without sending handshake.` — a WS upgrade returned before accept/close during startup congestion. Single occurrence, no traceback; watch for recurrence post-E010 fix. |
+| E012 | 2026-07-19 12:12:53 | WARN | React: `Select is changing from uncontrolled to controlled` — a Select's `value` starts undefined then becomes defined. Cosmetic; needs component hunt. |
+| E013 | 2026-07-19 12:13:12 | ERR | `Engine did not respond within 30s` cluster (media-library, prompt-matrix, image-gen, video-gen) — symptom of E010's failed migration stalling the engine at startup; expected gone once E010 fix ships. |
+| E014 | 2026-07-19 12:11:48 | WARN | `[downloads] Previous failure restored` (3 GGUF LLMs from 2026-03-29, size-mismatch validation) — by-design restore of durable failure records; the `action_needed` list (civitai_key_rejected / hf_gate_not_accepted / ai_packages_missing) is user-action state, not a bug. |
+| E015 | 2026-07-19 12:11:57 | WARN | `[launcher] app_config / catalogs → degraded — running on cache until remote fetch completes` — by-design loud-degraded; both refreshed successfully seconds later in the same boot. Cosmetic. |
+| E016 | 2026-07-19 12:13:06 | WARN | `[catalogs] llm_model overlay unavailable — AbortError` — frontend catalog fetch aborted while the engine was stalled (E013 symptom). |
 
 ### Notes from first export
 

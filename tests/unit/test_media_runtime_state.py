@@ -746,3 +746,70 @@ def test_linux_glibc_preflight_rejects_older_runtime(
 
     with pytest.raises(installer.UnsupportedRuntimeError, match="glibc 2.28"):
         installer.load_runtime_install_contract()
+
+
+def test_runtime_slot_inserts_before_optional_capability_dirs(
+    monkeypatch, tmp_path
+) -> None:
+    """In-process activation must match the certified boot ordering.
+
+    Capability dirs (ner-packages, transcription-packages) carry their own
+    torch/transformers copies. Appending the slot after them let a capability
+    torch shadow the slot's, crashing verification with native import errors
+    ('_ClassNamespace' object is not iterable) — the July 2026 image-gen
+    production outage.
+    """
+    home = tmp_path / "matrx-home"
+    ner_dir = home / "ner-packages"
+    ner_dir.mkdir(parents=True)
+    slot_dir = home / "image-gen-runtime" / "slots" / "slot-abc"
+    slot_dir.mkdir(parents=True)
+    monkeypatch.setattr(installer, "packages_dir", lambda name: home / name)
+
+    fake_path = ["/frozen/base_library.zip", "/frozen/lib-dynload", str(ner_dir)]
+    monkeypatch.setattr(installer.sys, "path", fake_path)
+
+    installer._insert_runtime_sys_path(slot_dir)
+
+    assert fake_path.index(str(slot_dir)) < fake_path.index(str(ner_dir))
+    assert fake_path[:2] == ["/frozen/base_library.zip", "/frozen/lib-dynload"]
+
+    # Idempotent: a second call never duplicates or reorders.
+    installer._insert_runtime_sys_path(slot_dir)
+    assert fake_path.count(str(slot_dir)) == 1
+
+
+def test_runtime_slot_appends_when_no_capability_dirs(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "matrx-home"
+    slot_dir = home / "image-gen-runtime" / "slots" / "slot-abc"
+    slot_dir.mkdir(parents=True)
+    monkeypatch.setattr(installer, "packages_dir", lambda name: home / name)
+
+    fake_path = ["/frozen/base_library.zip"]
+    monkeypatch.setattr(installer.sys, "path", fake_path)
+
+    installer._insert_runtime_sys_path(slot_dir)
+    assert fake_path == ["/frozen/base_library.zip", str(slot_dir)]
+
+
+def test_critical_import_check_validates_origin_before_native_ops(tmp_path) -> None:
+    """A shadowed torch must fail with the origin diagnostic, not a native
+    error from exercising mismatched torch/torchvision builds."""
+    outside = tmp_path / "elsewhere" / "torch" / "__init__.py"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("", encoding="utf-8")
+    slot = tmp_path / "slot"
+    slot.mkdir()
+
+    class _FakeModule:
+        def __init__(self, file: str) -> None:
+            self.__file__ = file
+            self.__version__ = "0.0"
+
+    def fake_importer(name: str):
+        return _FakeModule(str(outside))
+
+    with pytest.raises(RuntimeError, match="resolved outside candidate runtime"):
+        installer.critical_runtime_import_check(
+            importer=fake_importer, expected_root=slot
+        )

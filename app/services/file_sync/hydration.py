@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, TypeVar
 
 from app.common.system_logger import get_logger
@@ -87,7 +87,10 @@ async def ensure_tree_hydrated(abs_path: str) -> str | None:
 
 
 async def run_tree_operation_hydrated(
-    abs_path: str, operation: Callable[[], T]
+    abs_path: str,
+    operation: Callable[[], T],
+    *,
+    guard_paths: Iterable[str] = (),
 ) -> tuple[T | None, str | None]:
     """Hydrate and execute one copy/move under a single file-sync guard.
 
@@ -100,17 +103,69 @@ async def run_tree_operation_hydrated(
 
     engine = get_file_sync_engine()
     target = Path(abs_path)
-    try:
-        relative = target.resolve().relative_to(engine.root.resolve())
-        rel = "" if relative == Path(".") else relative.as_posix()
-    except (ValueError, OSError):
+    rel = _managed_relative(target, engine.root)
+    guarded = rel is not None or any(
+        _managed_relative(Path(path), engine.root) is not None
+        for path in guard_paths
+    )
+    if not guarded:
         return await asyncio.to_thread(operation), None
 
     async with engine._sync_lock:
-        error = await _ensure_tree_hydrated_locked(engine, target, rel)
-        if error:
-            return None, error
-        return await asyncio.to_thread(operation), None
+        if rel is not None:
+            error = await _ensure_tree_hydrated_locked(engine, target, rel)
+            if error:
+                return None, error
+        return await _run_sync_operation_to_completion(operation), None
+
+
+def _managed_relative(target: Path, root: Path) -> str | None:
+    """Return the sync-relative path when ``target`` belongs to ``root``."""
+    try:
+        relative = target.resolve().relative_to(root.resolve())
+    except (ValueError, OSError):
+        return None
+    return "" if relative == Path(".") else relative.as_posix()
+
+
+async def _run_sync_operation_to_completion(operation: Callable[[], T]) -> T:
+    """Keep a non-cancellable thread mutation owned until it actually exits.
+
+    ``asyncio.to_thread`` work continues after its awaiting task is cancelled.
+    Shielding and draining the worker before re-raising cancellation prevents
+    callers from releasing the file-sync lock while that mutation still runs.
+    """
+    worker = asyncio.create_task(asyncio.to_thread(operation))
+    cancellation: asyncio.CancelledError | None = None
+    while True:
+        try:
+            result = await asyncio.shield(worker)
+            break
+        except asyncio.CancelledError as exc:
+            cancellation = cancellation or exc
+            if worker.done():
+                break
+        except BaseException as exc:
+            if cancellation is None:
+                raise
+            logger.warning(
+                "[file_sync] guarded filesystem operation failed after cancellation: %s",
+                exc,
+            )
+            raise cancellation from exc
+    if cancellation is not None:
+        # Retrieve a terminal worker exception so asyncio never reports an
+        # orphaned task; cancellation remains the caller-visible outcome.
+        if worker.done() and not worker.cancelled():
+            try:
+                worker.result()
+            except Exception as exc:
+                logger.warning(
+                    "[file_sync] guarded filesystem operation failed after cancellation: %s",
+                    exc,
+                )
+        raise cancellation
+    return result
 
 
 async def _ensure_tree_hydrated_locked(

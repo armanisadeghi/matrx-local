@@ -46,6 +46,8 @@ _TEXT_EXTENSIONS = (
 _DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 _DEFAULT_CONTENT_QUOTA_BYTES = 512 * 1024 * 1024
 _DEFAULT_EMBEDDING_QUOTA_ENTRIES = 10_000
+_ENRICHMENT_CONTENTION_BACKOFF_SECONDS = 1.0
+_ENRICHMENT_UNEXPECTED_BACKOFF_SECONDS = 2.0
 
 
 class FilesystemService:
@@ -65,6 +67,8 @@ class FilesystemService:
         self._maintenance_lock = asyncio.Lock()
         self._directory_lists = DirectoryListSessionRegistry()
         self._searches = SearchSessionRegistry()
+        self._active_enrichment_claim: tuple[str, str, float | None, int] | None = None
+        self._pending_enrichment_resets: deque[tuple[str, str, float | None, int]] = deque()
 
     async def start(self) -> None:
         if self._started:
@@ -106,7 +110,28 @@ class FilesystemService:
     def _spawn(self, coroutine: Any, name: str) -> None:
         task = asyncio.create_task(coroutine, name=name)
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._background_task_done)
+
+    def _background_task_done(self, task: asyncio.Task[Any]) -> None:
+        """Make every unexpected background-task exit operator-visible."""
+        self._tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            error = task.exception()
+        except asyncio.CancelledError:
+            return
+        if error is not None:
+            logger.error(
+                "Filesystem background task %s exited unexpectedly",
+                task.get_name(),
+                exc_info=(type(error), error, error.__traceback__),
+            )
+        elif self._started and not self._stop.is_set():
+            logger.error(
+                "Filesystem background task %s exited unexpectedly without an error",
+                task.get_name(),
+            )
 
     async def _directory_list_reaper(self) -> None:
         """Delete expired disk snapshots even when a client abandons its cursor."""

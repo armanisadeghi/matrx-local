@@ -158,14 +158,26 @@ async def tool_read(
     if os.path.isdir(resolved):
         return ToolResult(type=ToolResultType.ERROR, output=f"Path is a directory: {resolved}")
 
-    # Pointer files under the Files root hydrate transparently (file sync
-    # virtual mapping) — an empty placeholder must never read as content.
-    from app.services.file_sync.hydration import ensure_hydrated
+    # Pointer files under the Files root hydrate transparently and remain under
+    # the sync guard through the actual byte read. A pull must never replace a
+    # hydrated file with a placeholder between hydration and consumption.
+    from app.services.file_sync.hydration import run_tree_operation_hydrated
 
-    hydrate_error = await ensure_hydrated(resolved)
+    result, hydrate_error = await run_tree_operation_hydrated(
+        resolved, lambda: _read_resolved(session, resolved, offset, limit)
+    )
     if hydrate_error:
         return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
+    assert result is not None
+    return result
 
+
+def _read_resolved(
+    session: ToolSession,
+    resolved: str,
+    offset: int | None,
+    limit: int | None,
+) -> ToolResult:
     mime, _ = mimetypes.guess_type(resolved)
     if mime and mime.startswith("image/"):
         return _read_image(session, resolved, mime)
@@ -488,7 +500,9 @@ async def tool_move(
     from app.services.file_sync.hydration import run_tree_operation_hydrated
 
     result, hydrate_error = await run_tree_operation_hydrated(
-        src, lambda: _move_hydrated(src, dst, overwrite)
+        src,
+        lambda: _move_hydrated(src, dst, overwrite),
+        guard_paths=(dst,),
     )
     if hydrate_error:
         return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
@@ -511,7 +525,9 @@ async def tool_copy(
     from app.services.file_sync.hydration import run_tree_operation_hydrated
 
     result, hydrate_error = await run_tree_operation_hydrated(
-        src, lambda: _copy_hydrated(src, dst, overwrite)
+        src,
+        lambda: _copy_hydrated(src, dst, overwrite),
+        guard_paths=(dst,),
     )
     if hydrate_error:
         return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)

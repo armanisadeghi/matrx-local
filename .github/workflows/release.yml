@@ -254,8 +254,10 @@ jobs:
           # Determine which llama-server binary applies to this build target
           if [[ "${{ matrix.args }}" == *"aarch64-apple-darwin"* ]]; then
             LLAMA_BIN="$DYLIB_DIR/llama-server-aarch64-apple-darwin"
+            UV_BIN="$DYLIB_DIR/uv-aarch64-apple-darwin"
           else
             LLAMA_BIN="$DYLIB_DIR/llama-server-x86_64-apple-darwin"
+            UV_BIN="$DYLIB_DIR/uv-x86_64-apple-darwin"
           fi
 
           # Sign all dylibs first (they are loaded at runtime by the binary).
@@ -296,6 +298,23 @@ jobs:
           else
             echo "Warning: llama-server binary not found at $LLAMA_BIN — skipping"
           fi
+
+          # uv performs customer-side managed-runtime installation. It is an
+          # executable in the notarized app and must carry the same hardened
+          # Developer ID signature as every other bundled helper.
+          if [[ ! -f "$UV_BIN" ]]; then
+            echo "ERROR: bundled runtime installer not found at $UV_BIN" >&2
+            exit 1
+          fi
+          echo "Signing bundled runtime installer: $(basename "$UV_BIN")"
+          codesign \
+            --force \
+            --timestamp \
+            --options runtime \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            "$UV_BIN"
+          codesign --verify --strict --verbose=2 "$UV_BIN"
+          echo "✅ bundled runtime installer signed"
 
       # ---- Frontend + Tauri build ----
       - name: Install pnpm

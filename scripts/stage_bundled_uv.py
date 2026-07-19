@@ -22,6 +22,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from app.services.optional_packages.runtime_installer import executable_sha256
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = (
@@ -36,6 +38,7 @@ class InstallerArtifact:
     version: str
     archive: str
     sha256: str
+    executable_sha256: str
     url: str
 
     @property
@@ -71,6 +74,7 @@ def load_artifact(manifest_path: Path, target: str) -> InstallerArtifact:
         raise RuntimeError(f"Runtime installer artifact for {target} is malformed")
     archive = entry.get("archive")
     digest = entry.get("sha256")
+    executable_digest = entry.get("executable_sha256")
     if not isinstance(archive, str) or PurePosixPath(archive).name != archive:
         raise RuntimeError(f"Runtime installer archive for {target} is invalid")
     if (
@@ -79,11 +83,18 @@ def load_artifact(manifest_path: Path, target: str) -> InstallerArtifact:
         or any(char not in "0123456789abcdef" for char in digest)
     ):
         raise RuntimeError(f"Runtime installer checksum for {target} is invalid")
+    if (
+        not isinstance(executable_digest, str)
+        or len(executable_digest) != 64
+        or any(char not in "0123456789abcdef" for char in executable_digest)
+    ):
+        raise RuntimeError(f"Runtime installer executable checksum for {target} is invalid")
     return InstallerArtifact(
         target=target,
         version=version,
         archive=archive,
         sha256=digest,
+        executable_sha256=executable_digest,
         url=f"{base_url.rstrip('/')}/{archive}",
     )
 
@@ -152,6 +163,12 @@ def extract_executable(
 
 
 def verify_executable(path: Path, artifact: InstallerArtifact) -> None:
+    actual_hash = executable_sha256(path)
+    if actual_hash != artifact.executable_sha256:
+        raise RuntimeError(
+            f"Staged uv executable checksum mismatch for {artifact.target}: "
+            f"expected {artifact.executable_sha256}, received {actual_hash}"
+        )
     try:
         result = subprocess.run(
             [str(path), "--version"],

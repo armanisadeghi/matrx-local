@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import platform
+import struct
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -18,7 +20,52 @@ BUNDLED_UV_ENV = "MATRX_BUNDLED_UV_PATH"
 class RuntimeInstallerContract:
     version: str
     python_minor: str
-    targets: frozenset[str]
+    executable_sha256: dict[str, str]
+
+    @property
+    def targets(self) -> frozenset[str]:
+        return frozenset(self.executable_sha256)
+
+
+def executable_sha256(path: Path) -> str:
+    """Hash executable code while ignoring a replaceable Mach-O signature.
+
+    Apple notarization requires Tauri to replace uv's upstream ad-hoc signature
+    with the AI Matrx Developer ID signature. That changes only the
+    ``LC_CODE_SIGNATURE`` payload and its size fields. Normalizing precisely
+    those bytes keeps the release-pinned executable identity stable across
+    signing; Windows/Linux use ordinary whole-file SHA-256.
+    """
+    data = bytearray(path.read_bytes())
+    # 64-bit little-endian Mach-O (the only two supported macOS targets).
+    if data[:4] == b"\xcf\xfa\xed\xfe" and len(data) >= 32:
+        ncmds = struct.unpack_from("<I", data, 16)[0]
+        offset = 32
+        signature: tuple[int, int] | None = None
+        for _ in range(ncmds):
+            if offset + 8 > len(data):
+                raise RuntimeError("Bundled uv has a truncated Mach-O load-command table")
+            command, command_size = struct.unpack_from("<II", data, offset)
+            if command_size < 8 or offset + command_size > len(data):
+                raise RuntimeError("Bundled uv has an invalid Mach-O load command")
+            if command == 0x1D:  # LC_CODE_SIGNATURE
+                if command_size < 16:
+                    raise RuntimeError("Bundled uv has an invalid code-signature command")
+                data_offset, data_size = struct.unpack_from("<II", data, offset + 8)
+                if data_offset + data_size > len(data):
+                    raise RuntimeError("Bundled uv has an invalid code-signature range")
+                # Preserve the LC_CODE_SIGNATURE command identity but normalize
+                # the signer-owned location/size fields before hashing.
+                data[offset + 8 : offset + 16] = b"\0" * 8
+                signature = (data_offset, data_size)
+            offset += command_size
+        if signature is not None:
+            start, size = signature
+            digest = hashlib.sha256()
+            digest.update(data[:start])
+            digest.update(data[start + size :])
+            return digest.hexdigest()
+    return hashlib.sha256(data).hexdigest()
 
 
 def runtime_target_id() -> str:
@@ -69,7 +116,18 @@ def load_runtime_installer_contract() -> RuntimeInstallerContract:
         or not isinstance(artifacts, dict)
     ):
         raise RuntimeError("The runtime installer contract is incomplete")
-    return RuntimeInstallerContract(version, python_minor, frozenset(artifacts))
+    executable_hashes: dict[str, str] = {}
+    for target, artifact in artifacts.items():
+        digest = artifact.get("executable_sha256") if isinstance(artifact, dict) else None
+        if (
+            not isinstance(target, str)
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            raise RuntimeError(f"The runtime installer identity for {target!r} is invalid")
+        executable_hashes[target] = digest
+    return RuntimeInstallerContract(version, python_minor, executable_hashes)
 
 
 def bundled_uv_path() -> Path:
@@ -95,6 +153,14 @@ def bundled_uv_path() -> Path:
     target = runtime_target_id()
     if target not in contract.targets:
         raise RuntimeError(f"The bundled runtime installer does not support {target}")
+    actual_hash = executable_sha256(path)
+    expected_hash = contract.executable_sha256[target]
+    if actual_hash != expected_hash:
+        raise RuntimeError(
+            "The bundled runtime installer failed executable integrity validation: "
+            f"expected {expected_hash}, received {actual_hash}. "
+            "Reinstall or update AI Matrx."
+        )
     try:
         result = subprocess.run(
             [str(path), "--version"],
@@ -130,6 +196,9 @@ def locked_target_install_command(target_dir: Path) -> list[str]:
         str(target_dir),
         "--python-version",
         contract.python_minor,
+        "--python",
+        contract.python_minor,
+        "--managed-python",
         "--python-platform",
         target,
         "--only-binary",

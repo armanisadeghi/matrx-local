@@ -36,25 +36,6 @@ class _BlockingProgress:
 
 
 @pytest.mark.anyio
-async def test_image_install_stream_reaps_pump_on_shutdown(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    progress = _BlockingProgress()
-    monkeypatch.setattr(image_gen_routes, "get_active_progress", lambda: progress)
-    monkeypatch.setattr(image_gen_routes, "is_image_gen_installed", lambda: False)
-    response = await image_gen_routes.stream_install_progress()
-    assert "connected" in await response.body_iterator.__anext__()
-    pending = asyncio.create_task(response.body_iterator.__anext__())
-    await progress.started.wait()
-
-    request_process_shutdown()
-
-    with pytest.raises(StopAsyncIteration):
-        await asyncio.wait_for(pending, timeout=0.75)
-    assert progress.cancelled.is_set()
-
-
-@pytest.mark.anyio
 async def test_capability_install_stream_reaps_pump_on_shutdown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

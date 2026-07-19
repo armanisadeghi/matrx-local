@@ -222,6 +222,12 @@ def _contract_payload() -> dict:
         "project_image_requirements": sorted(project_image_requirements),
         "runtime_requirements": runtime_requirements,
         "lock_graph_sha256": lock_sha256,
+        "critical_frozen_modules": list(CRITICAL_FROZEN_MODULES),
+        "runtime_imports": list(RUNTIME_IMPORTS),
+        "runtime_attributes": {
+            module: list(attributes)
+            for module, attributes in RUNTIME_ATTRIBUTES.items()
+        },
     }
     contract_sha256 = hashlib.sha256(
         json.dumps(source_contract, sort_keys=True, separators=(",", ":")).encode()

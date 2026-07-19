@@ -259,7 +259,14 @@ Source development is intentionally separate: `uv sync --extra image-gen`
 provides the runtime directly from the dev environment and must pass the same
 critical import/native/pipeline verifier, but it never writes into live managed
 state. Packaged installation uses the bundled installer/verifier tools and must
-not depend on a user's Python, pip, or uv.
+not depend on a user's Python, pip, uv, or `PATH`. Every Tauri release includes
+the target-native uv binary pinned by `runtime-installer.json`; the release
+build verifies Astral's published SHA-256 before packaging it, and Rust passes
+its absolute bundle path to the engine. The installer selects the release's
+Python minor and target platform explicitly, accepts wheels only, and verifies
+the finished slot inside the frozen engine process. A missing or wrong bundled
+installer is an application-package failure with Update/Reinstall guidance,
+never an instruction for the customer to install developer tooling.
 
 `packages_dir()` honors `MATRX_HOME_DIR` before platform defaults, so a dev
 engine can never inspect, withhold, or migrate the installed app's managed

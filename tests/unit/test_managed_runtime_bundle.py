@@ -15,7 +15,10 @@ asserts on the SPEC INPUTS rather than on runtime imports.
 from __future__ import annotations
 
 import pathlib
+import json
 import sys
+
+import pytest
 
 _SPECS_DIR = pathlib.Path(__file__).resolve().parents[2] / "specs"
 sys.path.insert(0, str(_SPECS_DIR))
@@ -103,10 +106,34 @@ def test_collection_reaches_submodules_static_analysis_misses() -> None:
     )
 
 
-def test_absent_package_does_not_break_the_build() -> None:
-    """An optional extra missing from the build host cannot shadow anything."""
+def test_absent_required_shared_package_fails_the_build() -> None:
+    """A missing shared package invalidates the frozen/runtime contract."""
 
     def exploding_collect(package: str) -> list[str]:
         raise ModuleNotFoundError(package)
 
-    assert collect_managed_runtime_modules(exploding_collect) == []
+    with pytest.raises(RuntimeError, match="required shared package"):
+        collect_managed_runtime_modules(exploding_collect)
+
+
+def test_release_probe_matches_runtime_activation_contract() -> None:
+    """Installer validation and frozen release proof must exercise identical paths."""
+    from app.services.image_gen.installer import (
+        CRITICAL_PIPELINE_CLASSES,
+        CRITICAL_RUNTIME_IMPORTS,
+    )
+
+    contract_path = (
+        _SPECS_DIR.parent
+        / "config"
+        / "runtime-manifests"
+        / "image-gen-contract.json"
+    )
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    assert set(contract["runtime_imports"]) == set(CRITICAL_RUNTIME_IMPORTS)
+    assert set(contract["runtime_attributes"]["diffusers"]) == set(
+        CRITICAL_PIPELINE_CLASSES
+    )
+    assert {"filecmp", "doctest", "modulefinder", "timeit"} <= set(
+        contract["critical_frozen_modules"]
+    )

@@ -48,6 +48,10 @@ Self-protection invariants:
       runs as a Tauri sidecar, calling clean_orphans() does not kill the Tauri
       shell that spawned us).
     • Only processes owned by the current user are killed (no sudo escalation).
+    • A source-run engine is DEV unless its process environment positively
+      opts into the live world with ``MATRX_LIVE_ENGINE=1``. LIVE preflight
+      never signals that DEV engine or any matched child in its process tree,
+      even before it has bound a port or written discovery state.
     • A LIVE, HEALTHY sibling engine is NEVER killed (services with
       protect_live_owner=True). A matched engine process is protected — along
       with its whole ancestor chain — when it is the discovery-file owner (pid
@@ -380,6 +384,10 @@ class FoundProcess:
     # psutil.Process.connections() is significantly slower than the cmdline
     # iter and we only want to pay that cost for matched processes.
     listening_ports: list[int] = field(default_factory=list)
+    # Source-run ``run.py`` processes are DEV by contract unless they carry the
+    # explicit live opt-in. Frozen engine binaries are always eligible for the
+    # current live preflight sweep.
+    source_run_dev: bool = False
 
 
 def _compile_patterns(svc: ManagedService) -> list[re.Pattern[str]]:
@@ -422,6 +430,25 @@ def _env_markers_ok(proc: psutil.Process, markers: tuple[tuple[str, str], ...]) 
         if needle.lower() not in value.lower():
             return False
     return True
+
+
+def _is_dev_source_engine(proc: psutil.Process, cmdline: str) -> bool:
+    """Return whether an engine candidate belongs to the source-run DEV world.
+
+    ``run.py`` defines the authority: every non-frozen source run is DEV unless
+    it was launched with ``MATRX_LIVE_ENGINE=1``. Environment inspection is
+    deliberately fail-closed; an unreadable source process is never safe for a
+    LIVE orphan sweep to signal.
+    """
+    if re.search(r"\brun\.py\b", cmdline, re.IGNORECASE) is None:
+        return False
+    try:
+        env = proc.environ()
+    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+        return True
+    except Exception:
+        return True
+    return env.get("MATRX_LIVE_ENGINE") != "1"
 
 
 def _is_orphaned(proc: psutil.Process) -> bool:
@@ -627,7 +654,17 @@ def _scan_processes(
             if svc.orphan_only and not _is_orphaned(proc):
                 break
 
-            found.append(FoundProcess(pid=pid, name=name, cmdline=cmdline, service=svc))
+            found.append(
+                FoundProcess(
+                    pid=pid,
+                    name=name,
+                    cmdline=cmdline,
+                    service=svc,
+                    source_run_dev=(
+                        svc.name == "engine" and _is_dev_source_engine(proc, cmdline)
+                    ),
+                )
+            )
             break
 
     return found
@@ -846,15 +883,37 @@ def clean_orphans(*, services: Iterable[ManagedService] | None = None) -> CleanR
         for _ in psutil.process_iter()  # cheap re-iter for the count
     )
 
+    # DEV/LIVE isolation is stronger than health/discovery protection. A DEV
+    # engine may still be starting, unhealthy, or using a throwaway home; none
+    # of those states grants LIVE preflight ownership of it. Protect its whole
+    # tree so an engine-owned child such as cloudflared cannot be reaped either.
+    dev_tree_pids: set[int] = set()
+    for fp in found:
+        if not fp.source_run_dev:
+            continue
+        dev_tree_pids.add(fp.pid)
+        dev_tree_pids |= _ancestor_pids(fp.pid)
+        dev_tree_pids.update(_descendant_pids(fp.pid))
+    if dev_tree_pids:
+        survivors: list[FoundProcess] = []
+        for fp in found:
+            if fp.pid in dev_tree_pids:
+                report.protected += 1
+                _ok(
+                    fp.service.name,
+                    f"pid {fp.pid} belongs to the source-run DEV world — leaving it running",
+                )
+            else:
+                survivors.append(fp)
+        found = survivors
+
     # Resolve TCP listening ports for matched processes BEFORE we report.
     # See `_resolve_listening_ports` — best-effort, never fails the sweep.
     _resolve_listening_ports(found)
 
-    # L2: protect live, healthy sibling engines (the packaged app vs a dev
-    # engine, etc.) — including their ancestor chains — from being reaped.
-    # These are removed from `found` so they're neither reported as orphans nor
-    # killed. Two intentional instances now coexist instead of one killing the
-    # other at startup.
+    # L2: protect live, healthy same-world sibling engines, including their
+    # ancestor chains. Cross-world DEV protection above does not depend on
+    # health or discovery because the LIVE sweep never owns DEV processes.
     protected_engine_pids = _protected_engine_pids(found)
     if protected_engine_pids:
         survivors: list[FoundProcess] = []

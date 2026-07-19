@@ -1014,13 +1014,16 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         .eq("conversation_id", serverConversationId)
         .is("deleted_at", null)
         .or("is_visible_to_user.is.null,is_visible_to_user.eq.true")
-        .order("position", { ascending: true })
-        .order("created_at", { ascending: true })
+        // Ask PostgREST for the newest page, not the oldest 200 rows of a
+        // long conversation. Reverse below to restore transcript order.
+        .order("position", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
         .limit(200);
 
       if (error) throw error;
+      const newestRows = [...((data ?? []) as CloudMessageRow[])].reverse();
       const messages = stitchHydratedToolMessages(
-        ((data ?? []) as CloudMessageRow[]).map(messageRowToChatMessage),
+        newestRows.map(messageRowToChatMessage),
       );
       setConversations((prev) =>
         cacheUserIdRef.current === ownerAtStart

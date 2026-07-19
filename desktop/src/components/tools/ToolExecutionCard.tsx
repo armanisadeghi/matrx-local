@@ -13,7 +13,6 @@ import {
   descriptorFromToolArtifact,
   descriptorFromToolImage,
 } from "@/components/media/types";
-import { EnginePlaces } from "@/features/filesystem/FilesystemResultView";
 import { FilesystemResultController } from "@/features/filesystem/FilesystemResultController";
 import {
   isFilesystemTool,
@@ -122,15 +121,6 @@ export function ToolExecutionCard({
         <div className="border-t">
           <FilesystemResultController result={filesystem} {...(onReferencePaths ? { onReference: onReferencePaths } : {})} />
         </div>
-      )}
-
-      {filesystemTool && result && (
-        <details className="border-t bg-background/50">
-          <summary className="cursor-pointer px-3 py-2 text-[11px] font-medium text-muted-foreground">
-            Places on this computer
-          </summary>
-          <EnginePlaces {...(onReferencePaths ? { onReference: onReferencePaths } : {})} />
-        </details>
       )}
 
       {expanded && (

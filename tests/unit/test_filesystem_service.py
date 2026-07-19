@@ -840,6 +840,39 @@ def test_component_safe_delete_handles_wildcards_without_sibling_damage(tmp_path
     assert [entry.name for entry in index.search("keep", limit=10, offset=0, root=str(sibling))] == ["keep.txt"]
 
 
+def test_scoped_search_uses_component_safe_range_without_recursive_walk(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    target = root / "code%_[archive]"
+    sibling = root / "code%_[archive]-old"
+    target.mkdir(parents=True)
+    sibling.mkdir()
+    (target / "needle-target.txt").write_text("target", encoding="utf-8")
+    (sibling / "needle-sibling.txt").write_text("sibling", encoding="utf-8")
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    index.sync_roots([Place("root", "Root", str(root), "configured", 100)])
+    while (claim := index.pop_next_directory()) is not None:
+        index.index_directory(*claim)
+
+    assert [
+        entry.name
+        for entry in index.search("needle", limit=10, offset=0, root=str(target))
+    ] == ["needle-target.txt"]
+
+    statements: list[str] = []
+    with index._connect() as db:
+        db.set_trace_callback(statements.append)
+        index_connection = index._connect
+        index._connect = lambda: db  # type: ignore[method-assign]
+        try:
+            index.search("needle", limit=10, offset=0, root=str(target))
+        finally:
+            index._connect = index_connection  # type: ignore[method-assign]
+    assert not any("WITH RECURSIVE" in statement.upper() for statement in statements)
+
+
 def test_content_cas_quota_and_semantic_similarity(tmp_path: Path) -> None:
     root = tmp_path / "root"
     root.mkdir()

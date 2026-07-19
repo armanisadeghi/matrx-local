@@ -867,38 +867,35 @@ class FilesystemIndex:
 
     def search(self, query: str, *, limit: int, offset: int, root: str | None = None) -> list[FileEntry]:
         params: list[object]
-        root_cte = ""
-        root_join = ""
+        root_filter = ""
+        root_params: list[object] = []
         if root:
-            root_cte = (
-                "WITH RECURSIVE subtree(path_key) AS ("
-                "SELECT ? UNION ALL SELECT e.path_key FROM filesystem_entries e "
-                "JOIN subtree s ON e.parent_key=s.path_key) "
+            exact_key, descendant_start, descendant_end = _path_scope_range(root)
+            root_filter = (
+                " AND (e.path_key=? OR "
+                "(e.path_key>=? AND e.path_key<?))"
             )
-            root_join = " JOIN subtree s ON s.path_key=e.path_key "
-            params_root: list[object] = [_path_key(root)]
-        else:
-            params_root = []
+            root_params = [exact_key, descendant_start, descendant_end]
         with self._connect() as db:
             if self.fts_available and _fts_query(query):
                 sql = (
-                    root_cte + "SELECT e.* FROM filesystem_entries_fts f "
+                    "SELECT e.* FROM filesystem_entries_fts f "
                     "JOIN filesystem_entries e ON e.rowid=f.rowid "
                     "JOIN filesystem_roots r ON r.id=e.root_id "
-                    + root_join + "WHERE filesystem_entries_fts MATCH ?" +
+                    "WHERE filesystem_entries_fts MATCH ?" + root_filter +
                     " ORDER BY bm25(filesystem_entries_fts), length(e.path) LIMIT ? OFFSET ?"
                 )
-                params = [*params_root, _fts_query(query), limit, offset]
+                params = [_fts_query(query), *root_params, limit, offset]
             else:
                 sql = (
-                    root_cte + "SELECT e.* FROM filesystem_entries e "
-                    "JOIN filesystem_roots r ON r.id=e.root_id " + root_join + "WHERE "
+                    "SELECT e.* FROM filesystem_entries e "
+                    "JOIN filesystem_roots r ON r.id=e.root_id WHERE "
                     "(e.name LIKE ? ESCAPE '\\' COLLATE NOCASE OR "
-                    "e.path LIKE ? ESCAPE '\\' COLLATE NOCASE) "
+                    "e.path LIKE ? ESCAPE '\\' COLLATE NOCASE)" + root_filter + " "
                     "ORDER BY length(e.path),e.name COLLATE NOCASE LIMIT ? OFFSET ?"
                 )
                 needle = f"%{_escape_like(query)}%"
-                params = [*params_root, needle, needle, limit, offset]
+                params = [needle, needle, *root_params, limit, offset]
             rows = db.execute(sql, params).fetchall()
         return [_row_to_entry(row) for row in rows]
 
@@ -1617,6 +1614,21 @@ def _fts_query(query: str) -> str:
 
 def _path_key(path: str) -> str:
     return normalize_path_key(os.path.abspath(path))
+
+
+def _path_scope_range(path: str) -> tuple[str, str, str]:
+    """Return an exact key plus a component-safe descendant key range.
+
+    Canonical keys use the runtime platform separator.  Appending that
+    separator makes sibling prefixes impossible (``/code`` cannot match
+    ``/code-old``).  Incrementing the final separator produces the exclusive
+    upper bound without SQL wildcards, so legal ``%``, ``_``, ``*``, and
+    bracket characters in user paths remain literal.
+    """
+    exact = _path_key(path)
+    descendant_start = exact if exact.endswith(os.sep) else exact + os.sep
+    descendant_end = descendant_start[:-1] + chr(ord(descendant_start[-1]) + 1)
+    return exact, descendant_start, descendant_end
 
 
 def _is_same_or_descendant(candidate: str, parent: str) -> bool:

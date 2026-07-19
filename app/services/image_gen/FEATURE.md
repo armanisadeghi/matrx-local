@@ -249,7 +249,10 @@ continues to use pip (with `ensurepip` as its final bootstrap path). Never
 assume `sys.executable -m pip` exists merely because Python does.
 `packages_dir()` honors `MATRX_HOME_DIR` before platform defaults, so a dev
 engine can never inspect, withhold, or migrate the installed app's managed
-runtime.
+runtime. It resolves every managed-package path before use; if an old dev-home
+symlink escapes the active home, reads and writes move to the deterministic
+`.isolated-packages/<name>` fallback inside that home without deleting or
+rewriting the user's link. New dev homes never create an image-runtime symlink.
 
 ### Family compatibility is HONEST — a mismatch fails loud, never silently hides
 

@@ -25,6 +25,13 @@ logger = get_logger()
 # CPU-only torch index — avoids the multi-GB CUDA wheel on Linux/Windows x86.
 # Apple Silicon uses the standard PyPI ARM wheel.
 TORCH_CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
+_ISOLATED_FALLBACK_DIR = ".isolated-packages"
+_reported_path_escapes: set[tuple[Path, Path]] = set()
+_reported_path_escapes_lock = threading.Lock()
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    return path == parent or parent in path.parents
 
 
 def packages_dir(name: str) -> Path:
@@ -35,9 +42,43 @@ def packages_dir(name: str) -> Path:
     Source-run isolation sets ``MATRX_HOME_DIR``. It must win on every
     platform so a dev engine can never migrate the installed app's runtime.
     """
+    if Path(name).name != name or name in ("", ".", ".."):
+        raise ValueError(f"Optional package directory must be a basename: {name!r}")
+
     isolated_home = os.getenv("MATRX_HOME_DIR")
     if isolated_home:
-        return Path(isolated_home) / name
+        active_home = Path(isolated_home).expanduser().resolve(strict=False)
+        requested = active_home / name
+        resolved = requested.resolve(strict=False)
+        if _is_within(resolved, active_home):
+            return requested
+
+        # Old dev setups shared the live image runtime through a symlink. That
+        # cache became mutable once automatic compatibility migrations shipped,
+        # allowing an ordinary dev startup to rewrite the installed app's
+        # runtime. Preserve the user's link untouched but never follow it.
+        fallback = active_home / _ISOLATED_FALLBACK_DIR / name
+        fallback_resolved = fallback.resolve(strict=False)
+        if not _is_within(fallback_resolved, active_home):
+            raise RuntimeError(
+                "Both the requested and fallback optional-package paths escape "
+                f"MATRX_HOME_DIR ({active_home})"
+            )
+        key = (requested, resolved)
+        with _reported_path_escapes_lock:
+            first_report = key not in _reported_path_escapes
+            _reported_path_escapes.add(key)
+        if first_report:
+            logger.error(
+                "[optional_packages] Refusing package path %s because it resolves "
+                "outside active MATRX_HOME_DIR %s (resolved=%s); using isolated "
+                "fallback %s without modifying the existing path",
+                requested,
+                active_home,
+                resolved,
+                fallback,
+            )
+        return fallback
     if sys.platform == "win32":
         base = Path(os.getenv("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
         return base / "AI Matrx" / name

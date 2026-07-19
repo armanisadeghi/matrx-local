@@ -467,6 +467,8 @@ are condensed under Completed. Still open:
 
 ## Completed
 
+- [BUG] Managed image-runtime startup now resolves Torch/Torchvision as an ABI-compatible pair, observes background migration failures, and prevents dev-home package symlinks from reading or rewriting the live app runtime by routing them to an in-home fallback without mutating user state — 106 focused media tests + 7 optional-package isolation tests green (2026-07-18)
+
 _(one line each, newest first; full detail in git history)_
 - [BUG] MXL-D-057 fixed: `app.config` and `app.common` cold-import independently — 2026-07-18 (`tests/smoke/test_cold_imports.py`)
 - [FEAT] Unified proactive grant remediation across permissions, provider keys, licenses, tools, panels, and downloads — 2026-07-18 (`desktop/src/features/action-needed/`)

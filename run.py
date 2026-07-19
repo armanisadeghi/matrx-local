@@ -114,7 +114,6 @@ if IS_DEV_ENGINE:
                 "image-models",
                 "video-models",
                 "playwright-browsers",
-                "image-gen-packages",
                 "tts",
                 "models",
                 "oww_models",

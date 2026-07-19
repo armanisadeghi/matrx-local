@@ -399,7 +399,13 @@ class FilesystemService:
         safe_limit: int,
         timeout_seconds: float,
     ) -> SearchPage:
-        """Build and register one bounded, mutation-stable first-page snapshot."""
+        """Build and register one bounded, mutation-stable first-page snapshot.
+
+        Admission covers this coroutine and caller cancellation. Python cannot
+        stop an OS or network-filesystem call already dispatched by an inner
+        ``wait_for(to_thread(...))``, so that thread may briefly outlive its
+        timeout even though its result is discarded.
+        """
 
         queued = await asyncio.to_thread(self.index.queue_count)
         paused = bool(_indexing_settings()["paused"])

@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import sys
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
@@ -21,13 +20,15 @@ from app.common.system_logger import get_logger
 from app.services.capabilities.installer import (
     get_active_progress,
     get_capability_packages_dir,
+    get_lightweight_capability_packages_dir,
     inject_capability_path,
+    inject_lightweight_capability_path,
     is_capability_installed,
     probe_module_available,
     start_capability_install,
     uses_managed_installer,
 )
-from app.services.optional_packages.core import find_python, packages_dir
+from app.services.optional_packages.core import find_python
 
 logger = get_logger()
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
@@ -188,6 +189,7 @@ def _capability_status(cap_id: str, spec: dict) -> CapabilityStatus:
         ):
             return "installed"
         return "not_installed"
+    inject_lightweight_capability_path(cap_id)
     return (
         "installed" if probe_module_available(spec["probe_module"]) else "not_installed"
     )
@@ -345,8 +347,10 @@ async def install_capability(req: InstallRequest) -> InstallStartResponse:
             error=str(exc),
         )
 
-    target = packages_dir(f"capability-{cap_id}")
+    target = get_lightweight_capability_packages_dir(cap_id)
     target.mkdir(parents=True, exist_ok=True)
+    marker = target / ".install-complete"
+    marker.unlink(missing_ok=True)
 
     try:
         returncode, _stdout, stderr = await _run_isolated(
@@ -400,11 +404,8 @@ async def install_capability(req: InstallRequest) -> InstallStartResponse:
                     error=err2.strip(),
                 )
 
-        marker = target / ".install-complete"
         marker.write_text(json.dumps({"capability_id": cap_id, "packages": packages}))
-        target_str = str(target)
-        if target_str not in sys.path:
-            sys.path.insert(0, target_str)
+        inject_lightweight_capability_path(cap_id)
 
         logger.info("Capability '%s' installed successfully", cap_id)
         return _status_payload(

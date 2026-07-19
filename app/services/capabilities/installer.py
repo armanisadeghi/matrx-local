@@ -50,6 +50,20 @@ CAPABILITY_INSTALL: dict[str, dict] = {
     },
 }
 
+# Lightweight capabilities use the same persistent ``pip --target`` contract
+# through app.api.capabilities_routes. Keep their directory names here so the
+# startup injector can restore completed installs before tools begin loading.
+LIGHTWEIGHT_CAPABILITY_IDS: tuple[str, ...] = (
+    "browser_automation",
+    "audio_recording",
+    "ocr",
+    "pdf_extraction",
+    "system_monitoring",
+    "network_discovery",
+    "media_download",
+    "video_processing",
+)
+
 _active: dict[str, InstallProgress] = {}
 
 
@@ -64,18 +78,56 @@ def is_capability_installed(capability_id: str) -> bool:
     return (get_capability_packages_dir(capability_id) / ".install-complete").exists()
 
 
-def inject_capability_path(capability_id: str) -> bool:
-    """Add managed packages dir to sys.path when install marker exists."""
-    if not is_capability_installed(capability_id):
+def get_lightweight_capability_packages_dir(capability_id: str) -> Path:
+    if capability_id not in LIGHTWEIGHT_CAPABILITY_IDS:
+        raise KeyError(capability_id)
+    return packages_dir(f"capability-{capability_id}")
+
+
+def is_lightweight_capability_installed(capability_id: str) -> bool:
+    if capability_id not in LIGHTWEIGHT_CAPABILITY_IDS:
         return False
-    pkg_dir = str(get_capability_packages_dir(capability_id))
-    if pkg_dir not in sys.path:
-        sys.path.insert(0, pkg_dir)
+    return (
+        get_lightweight_capability_packages_dir(capability_id)
+        / ".install-complete"
+    ).exists()
+
+
+def _append_optional_package_path(pkg_dir: Path, capability_id: str) -> None:
+    """Expose optional packages as fallbacks behind the frozen engine.
+
+    ``pip --target`` installs transitive dependencies alongside the requested
+    package. Prepending that directory can replace the FastAPI/Starlette/anyio
+    versions bundled and tested with the engine, so optional targets must never
+    take precedence over existing import locations.
+    """
+    pkg_dir_str = str(pkg_dir)
+    if pkg_dir_str not in sys.path:
+        sys.path.append(pkg_dir_str)
         logger.debug(
-            "[capabilities_installer] Injected %s into sys.path (%s)",
-            pkg_dir,
+            "[capabilities_installer] Appended %s to sys.path (%s)",
+            pkg_dir_str,
             capability_id,
         )
+
+
+def inject_capability_path(capability_id: str) -> bool:
+    """Append a managed packages dir when its install marker exists."""
+    if not is_capability_installed(capability_id):
+        return False
+    _append_optional_package_path(
+        get_capability_packages_dir(capability_id), capability_id
+    )
+    return True
+
+
+def inject_lightweight_capability_path(capability_id: str) -> bool:
+    """Append a completed lightweight capability target as a fallback."""
+    if not is_lightweight_capability_installed(capability_id):
+        return False
+    _append_optional_package_path(
+        get_lightweight_capability_packages_dir(capability_id), capability_id
+    )
     return True
 
 
@@ -84,6 +136,9 @@ def inject_all_capability_paths() -> list[str]:
     injected: list[str] = []
     for cap_id in CAPABILITY_INSTALL:
         if inject_capability_path(cap_id):
+            injected.append(cap_id)
+    for cap_id in LIGHTWEIGHT_CAPABILITY_IDS:
+        if inject_lightweight_capability_path(cap_id):
             injected.append(cap_id)
     return injected
 

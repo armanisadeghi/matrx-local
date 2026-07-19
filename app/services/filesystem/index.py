@@ -708,7 +708,19 @@ class FilesystemIndex:
         for stale_key in set(existing) - current_keys:
             self._delete_path(db, existing[stale_key], freshness_cutoff=scan_started)
 
-    def upsert_path(self, path: str, root_id: str = "watch") -> None:
+    def upsert_path(
+        self,
+        path: str,
+        root_id: str = "watch",
+        *,
+        content_changed: bool = False,
+    ) -> None:
+        """Refresh one path, invalidating derived data on a watcher change.
+
+        Periodic crawls can cheaply compare size and mtime. A watcher has
+        stronger evidence: it observed an actual Added/Modified event, which
+        must invalidate content even when an editor preserves both stat fields.
+        """
         absolute = os.path.abspath(path)
         try:
             info = os.lstat(absolute)
@@ -741,6 +753,13 @@ class FilesystemIndex:
                     is_hidden(name, info), suffix, time.time(),
                 ),
             )
+            if content_changed and kind == "file":
+                db.execute(
+                    """UPDATE filesystem_entries
+                       SET content_state='not_indexed',embedding_state='not_indexed'
+                       WHERE path_key=?""",
+                    (_path_key(absolute),),
+                )
             if kind == "dir":
                 root = db.execute(
                     "SELECT priority FROM filesystem_roots WHERE id=?", (root_id,)
@@ -1151,6 +1170,8 @@ class FilesystemIndex:
         source_modified_at: float | None,
         source_size: int,
         max_content_bytes: int,
+        *,
+        require_indexing: bool = False,
     ) -> bool:
         now = time.time()
         key = _path_key(path)
@@ -1161,7 +1182,8 @@ class FilesystemIndex:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             current = db.execute(
-                "SELECT path,modified_at,size FROM filesystem_entries WHERE path_key=?", (key,)
+                "SELECT path,modified_at,size,content_state FROM filesystem_entries WHERE path_key=?",
+                (key,),
             ).fetchone()
             if (
                 disk_state is None
@@ -1170,6 +1192,7 @@ class FilesystemIndex:
                 or current is None
                 or current["modified_at"] != source_modified_at
                 or int(current["size"]) != source_size
+                or (require_indexing and current["content_state"] != "indexing")
             ):
                 db.execute(
                     """UPDATE filesystem_entries SET content_state='not_indexed'
@@ -1364,6 +1387,7 @@ class FilesystemIndex:
         self, path: str, model: str, vector: bytes, dimensions: int,
         source_modified_at: float | None, source_size: int,
         *, max_entries: int | None = None,
+        require_indexing: bool = False,
     ) -> bool:
         key = _path_key(path)
         try:
@@ -1373,7 +1397,8 @@ class FilesystemIndex:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             current = db.execute(
-                "SELECT modified_at,size FROM filesystem_entries WHERE path_key=?", (key,)
+                "SELECT modified_at,size,embedding_state FROM filesystem_entries WHERE path_key=?",
+                (key,),
             ).fetchone()
             if (
                 disk_state is None
@@ -1382,6 +1407,7 @@ class FilesystemIndex:
                 or current is None
                 or current["modified_at"] != source_modified_at
                 or int(current["size"]) != source_size
+                or (require_indexing and current["embedding_state"] != "indexing")
             ):
                 db.execute(
                     """UPDATE filesystem_entries SET embedding_state='not_indexed'

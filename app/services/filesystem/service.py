@@ -810,6 +810,10 @@ class FilesystemService:
                     await self._apply_watch_path(
                         path,
                         deleted=change == watchfiles.Change.deleted,
+                        content_changed=change in {
+                            watchfiles.Change.added,
+                            watchfiles.Change.modified,
+                        },
                     )
                 if self._stop.is_set():
                     return
@@ -818,7 +822,13 @@ class FilesystemService:
         except Exception:
             logger.warning("Filesystem watcher stopped; periodic reconciliation remains active", exc_info=True)
 
-    async def _apply_watch_path(self, path: str, *, deleted: bool) -> None:
+    async def _apply_watch_path(
+        self,
+        path: str,
+        *,
+        deleted: bool,
+        content_changed: bool = False,
+    ) -> None:
         """Apply one watcher mutation only if indexing is still admitted."""
         async with self._maintenance_lock:
             # Pause/clear may have won the lock after this watch batch was
@@ -829,7 +839,12 @@ class FilesystemService:
                 await asyncio.to_thread(self.index.delete_path, path)
             else:
                 root_id = self._root_id_for_path(path)
-                await asyncio.to_thread(self.index.upsert_path, path, root_id)
+                await asyncio.to_thread(
+                    self.index.upsert_path,
+                    path,
+                    root_id,
+                    content_changed=content_changed,
+                )
 
     def _watch_roots(self) -> list[str]:
         return _minimal_roots([
@@ -954,6 +969,7 @@ class FilesystemService:
                                     modified_at,
                                     source_size,
                                     int(commit_settings["max_content_bytes"]),
+                                    require_indexing=True,
                                 )
                             else:
                                 await asyncio.to_thread(
@@ -1041,6 +1057,7 @@ class FilesystemService:
                                     modified_at,
                                     source_size,
                                     max_entries=int(commit_settings["max_embedding_entries"]),
+                                    require_indexing=True,
                                 )
                             else:
                                 await asyncio.to_thread(

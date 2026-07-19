@@ -474,6 +474,84 @@ async def test_pause_fences_watcher_mutation_already_waiting_on_maintenance_lock
 
 
 @pytest.mark.anyio
+async def test_watcher_change_invalidates_same_size_same_mtime_enrichment(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    source = root / "stable.txt"
+    source.write_text("alpha", encoding="utf-8")
+    place = Place("root", "Root", str(root), "configured", 100)
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    service.index.sync_roots([place])
+    service._places = [place]
+    service.index.upsert_path(str(source), place.id)
+
+    original = source.stat()
+    assert service.index.store_content(
+        str(source), "alpha", original.st_mtime, original.st_size, 1024 * 1024
+    )
+    assert service.index.store_embedding(
+        str(source),
+        "model",
+        b"\x00\x00\x80?",
+        1,
+        original.st_mtime,
+        original.st_size,
+    )
+    # Model in-flight workers that claimed the old generation. The watcher
+    # invalidation must also fence their eventual commits.
+    with service.index._connect() as db:
+        db.execute(
+            """UPDATE filesystem_entries
+               SET content_state='indexing',embedding_state='indexing'
+               WHERE path=?""",
+            (str(source),),
+        )
+
+    source.write_text("omega", encoding="utf-8")
+    os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+    changed = source.stat()
+    assert changed.st_size == original.st_size
+    assert changed.st_mtime_ns == original.st_mtime_ns
+
+    await service._apply_watch_path(
+        str(source), deleted=False, content_changed=True
+    )
+
+    assert not service.index.store_content(
+        str(source),
+        "alpha",
+        original.st_mtime,
+        original.st_size,
+        1024 * 1024,
+        require_indexing=True,
+    )
+    assert not service.index.store_embedding(
+        str(source),
+        "model",
+        b"\x00\x00\x80?",
+        1,
+        original.st_mtime,
+        original.st_size,
+        require_indexing=True,
+    )
+
+    with service.index._connect() as db:
+        row = db.execute(
+            "SELECT content_state,embedding_state FROM filesystem_entries WHERE path=?",
+            (str(source),),
+        ).fetchone()
+    assert dict(row) == {
+        "content_state": "not_indexed",
+        "embedding_state": "not_indexed",
+    }
+    assert service.index.search_content("alpha", 10) == []
+    assert service.index.semantic_search([1.0], "model", limit=10) == []
+
+
+@pytest.mark.anyio
 async def test_unavailable_authored_root_keeps_status_partial(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

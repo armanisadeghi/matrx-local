@@ -651,7 +651,21 @@ pub async fn stop_transcription(recording: State<'_, RecordingState>) -> Result<
 // ── Audio Devices ──────────────────────────────────────────────────────────
 
 /// List available audio input devices.
-#[tauri::command]
+///
+/// MUST stay `command(async)`. A plain `#[tauri::command]` with a sync body runs
+/// on the MAIN thread — which IS the tao/NSApplication event loop — and
+/// `list_input_devices()` enters CoreAudio, where `supported_input_configs()`
+/// blocks in `mach_msg` to `coreaudiod` with no timeout. That killed the event
+/// loop outright: the UI froze on mount (this is called by the fetch-all effect
+/// in `desktop/src/hooks/use-config-catalogs.ts`), every later IPC reply queued
+/// behind it, and on quit `handle.exit(0)` was posted to a loop that would never
+/// process it — so the app could not be quit and had to be force-killed.
+/// Sampling the stuck process showed 2886/2886 main-thread samples inside
+/// CoreAudio. `(async)` runs the sync body on a worker thread, so a stalled
+/// audio device degrades this one call instead of freezing the whole app.
+/// Real-world triggers: pending mic permission, device hot-plug, Bluetooth
+/// negotiation, `coreaudiod` restart.
+#[tauri::command(async)]
 pub fn list_audio_input_devices() -> Vec<audio_capture::AudioDeviceInfo> {
     audio_capture::list_input_devices()
 }

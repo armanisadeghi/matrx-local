@@ -407,9 +407,6 @@ args = [
     # the C-ext backend. Keep in sync with specs/*.spec.
     "--collect-submodules", "google.protobuf",
     "--hidden-import", "google._upb._message",
-    # User-installed transformers imports jinja2.meta lazily for chat-template
-    # schemas. Keep in sync with all specs/*.spec frozen-build configs.
-    "--collect-submodules", "jinja2",
     # Cross-component scheduler host (optional extra, lazily imported, gated off
     # by default) — bundle it so flipping MATRX_LOCAL_SCHEDULER_ENABLED works.
     "--hidden-import", "matrx_scheduler",
@@ -463,6 +460,16 @@ for _pkg in ("replicate", "protobuf", "matrx-ai", "matrx-utils",
         args += ["--copy-metadata", _pkg]
     except importlib.metadata.PackageNotFoundError:
         print(f"WARNING: {_pkg} not installed on build host — metadata not bundled")
+
+# Packages a managed runtime dir also provides. The runtime hook APPENDS those
+# dirs, so the bundled copy wins — and a PARTIAL bundle copy makes the complete
+# on-disk copy unreachable, failing in the frozen app only. Shipped three times
+# (google.protobuf, jinja2, huggingface_hub). This fallback path and specs/*.spec
+# read ONE list so they cannot drift: specs/_managed_runtime_bundle.py.
+sys.path.insert(0, "specs")
+from _managed_runtime_bundle import MANAGED_RUNTIME_SHARED_PACKAGES
+for _pkg in MANAGED_RUNTIME_SHARED_PACKAGES:
+    args += ["--collect-submodules", _pkg]
 
 args.append("run.py")
 

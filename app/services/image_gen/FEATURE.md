@@ -274,6 +274,35 @@ enabled cross-family selection is rejected at generate time.
 ``POST /image-gen/install`` (``needs_upgrade()`` detects the gap). Generation
 with LoRAs enabled fails loudly with an install prompt if PEFT is still absent.
 
+## Two locks, and never one — status must not queue behind a load
+
+`ImageGenService` (and `VideoGenService`) hold **two** `threading.Lock`s, and
+merging them back into one reintroduces a shipped outage:
+
+| Lock | Guards | Held for |
+|---|---|---|
+| `_lock` | pipeline lifecycle — `_pipeline`, `_loaded_model_id`, `_is_loading` | the **whole** load: `import torch`, `from_pretrained`, `pipe.to(device)` — tens of seconds |
+| `_gens_lock` | generation bookkeeping — `_active_gens` (video: `_active_cancel`) | microseconds |
+
+`_lock` is legitimately long-held: a generation must never observe a
+half-loaded pipeline. The rule that follows is therefore absolute:
+
+- **Nothing reachable from the asyncio event loop may take `_lock`.** Every
+  caller runs in the thread pool (`run_in_executor` / `to_thread`).
+- **Status and cancel take `_gens_lock` only.** `GET /image-gen/status` calls
+  `get_status()` *synchronously* inside `async def`, and cancel is the one call
+  that must work *while* a model is loading.
+
+v1.3.145 shipped with one lock for both. `get_status()` took `_lock`, a model
+load held it ~50s, and the event loop parked on the mutex — so **nine unrelated
+endpoints** (media-library, video-gen, prompt-matrix) all died at their 30s
+client timeout without ever being dequeued. It read as "the engine is dead";
+the engine was idle, waiting on a mutex.
+
+Do not add `_active_gens` access under `_lock`, and do not "simplify" the two
+locks into one. `tests/unit/test_media_gen_status_never_blocks.py` fails loudly
+if either happens.
+
 ## The client side
 
 The `{{variable}}` engine itself lives in the desktop app and is **media-agnostic**
@@ -292,3 +321,5 @@ variables; it just runs the jobs the matrix expands into.
 | `tests/smoke/test_media_gen_img2img_lora.py` | Img2img/LoRA plus revision validation, durable job lineage, and sidecar lineage |
 | `tests/unit/test_image_text_encoders.py` | Revision/file completion contract, pinned DownloadManager request, and gated-token failure |
 | `tests/unit/test_optional_packages_core.py` | pip/uv installer selection for packaged and uv source runtimes |
+| `tests/unit/test_media_gen_status_never_blocks.py` | Status/cancel never queue behind a model load (the v1.3.145 engine freeze) |
+| `tests/unit/test_managed_runtime_bundle.py` | Shared packages are collected WHOLE into the frozen bundle (the v1.3.145 `huggingface_hub.dataclasses` outage) |

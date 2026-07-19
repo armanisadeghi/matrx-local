@@ -183,7 +183,16 @@ class TtsService:
     """Singleton service wrapping the Kokoro ONNX TTS model."""
 
     def __init__(self) -> None:
+        # Guards MODEL LIFECYCLE only: _kokoro / _model_loaded. Held for the
+        # WHOLE of _load_model_sync, which builds the Kokoro ONNX session — so
+        # it must NEVER be acquired from the event loop. See the image-gen
+        # decomposition in app/services/image_gen/FEATURE.md; TTS had the same
+        # defect (five `async def` methods took this lock directly on the loop,
+        # stalling the whole engine behind a cold model load).
         self._lock = threading.Lock()
+        # Guards DOWNLOAD bookkeeping only (_is_downloading, _download_progress,
+        # _download_future) — always microseconds, never behind a model load.
+        self._download_lock = threading.Lock()
         self._kokoro: Any = None
         self._model_loaded = False
         self._is_downloading = False
@@ -346,7 +355,7 @@ class TtsService:
         # executor task, otherwise two concurrent callers can both pass the
         # guard and both spawn a download.
         loop = asyncio.get_running_loop()
-        with self._lock:
+        with self._download_lock:
             if self._is_downloading:
                 waiter = getattr(self, "_download_future", None)
             else:
@@ -376,13 +385,13 @@ class TtsService:
                     {"success": False, "error": str(exc),
                      "error_code": "download_failed"}
                 )
-            with self._lock:
+            with self._download_lock:
                 self._is_downloading = False
             raise
         else:
             if not self._download_future.done():
                 self._download_future.set_result(result)
-            with self._lock:
+            with self._download_lock:
                 self._is_downloading = False
             return result
 
@@ -918,8 +927,13 @@ class TtsService:
         if lang is not None:
             resolved_lang = lang
 
-        with self._lock:
-            kokoro = self._kokoro
+        # Plain read, NOT `with self._lock` — that lock is held for the whole
+        # Kokoro ONNX load, and this runs on the EVENT LOOP, so taking it here
+        # stalls the entire engine behind a cold load (the v1.3.145 image-gen
+        # freeze in its TTS form). An attribute read is atomic under the GIL:
+        # we see the old or the new object, never a torn one, and the None-check
+        # below already covers the not-yet-loaded case.
+        kokoro = self._kokoro
         if kokoro is None:
             yield frame_error("not_loaded", "Model not loaded")
             yield frame_end()
@@ -1048,8 +1062,13 @@ class TtsService:
         except Exception as exc:
             return SynthesisResult(success=False, error=str(exc), error_code="blend_failed")
 
-        with self._lock:
-            kokoro = self._kokoro
+        # Plain read, NOT `with self._lock` — that lock is held for the whole
+        # Kokoro ONNX load, and this runs on the EVENT LOOP, so taking it here
+        # stalls the entire engine behind a cold load (the v1.3.145 image-gen
+        # freeze in its TTS form). An attribute read is atomic under the GIL:
+        # we see the old or the new object, never a torn one, and the None-check
+        # below already covers the not-yet-loaded case.
+        kokoro = self._kokoro
         if kokoro is None:
             return SynthesisResult(success=False, error="Model not loaded",
                                    error_code="not_loaded")
@@ -1219,8 +1238,13 @@ class TtsService:
         except Exception as exc:
             return SynthesisResult(success=False, error=str(exc), error_code="blend_failed")
 
-        with self._lock:
-            kokoro = self._kokoro
+        # Plain read, NOT `with self._lock` — that lock is held for the whole
+        # Kokoro ONNX load, and this runs on the EVENT LOOP, so taking it here
+        # stalls the entire engine behind a cold load (the v1.3.145 image-gen
+        # freeze in its TTS form). An attribute read is atomic under the GIL:
+        # we see the old or the new object, never a torn one, and the None-check
+        # below already covers the not-yet-loaded case.
+        kokoro = self._kokoro
         if kokoro is None:
             return SynthesisResult(success=False, error="Model not loaded",
                                    error_code="not_loaded")

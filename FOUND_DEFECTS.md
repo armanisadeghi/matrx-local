@@ -71,6 +71,127 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## API keys / credentials
 
+### MXL-D-064 — Bundled package version can silently outrank a NEWER managed copy (append-order shadowing)
+- **Area:** `hooks/runtime_hook.py`, `app/services/image_gen/installer.py:429`,
+  `app/services/capabilities/installer.py:106`
+- **Symptom:** The managed runtime dirs are APPENDED to `sys.path`, so for any
+  package present in both, the BUNDLED copy wins regardless of version.
+  `specs/_managed_runtime_bundle.py` fixed *completeness* (the v1.3.145
+  outage), but not *staleness*: the bundle carries huggingface_hub **1.8.0**
+  while the managed dir has **1.24.0**, and 5 modules exist only in 1.24.0
+  (`_oidc`, `_sandbox`, `_sandbox_cache`, `_tree_cache`, `_upload_pipeline`)
+  and are permanently unreachable.
+- **Evidence:** Verified against the real build TOC 2026-07-19 — bundled hf is
+  complete at 168/168 for 1.8.0. Grepped transformers 5.14.1, diffusers 0.39.0,
+  accelerate and peft: **none import those 5 modules today**, so this ships
+  safe. But `transformers>=5.3.0` floats with no ceiling while the engine floor
+  is `huggingface_hub>=0.22.0` (pyproject.toml:169,177), so the gap widens on
+  every managed reinstall.
+- **Status:** open — NOT currently user-visible; a latent successor to the
+  v1.3.145 outage.
+- **Analysis stamp:** Analyzed 2026-07-19 — adversarial review with real
+  Analysis-00.toc diffing, not inference.
+- **Owner hint:** Durable fix is **selective path priority** — a `sys.meta_path`
+  finder (or targeted front-insert) preferring the managed dir for an explicit
+  ML-package allowlist, preserving the reason `append` was chosen (keeping pip
+  `--target`'s stray anyio/httpx/fastapi copies from outranking the engine).
+  Second-best: a build-time assertion that the bundled version >= the
+  installer's resolved floor. Note there are THREE appended managed dirs
+  (`image-gen-packages`, `transcription-packages`, `ner-packages`), all with
+  the same exposure. Related: MXL-D-062.
+
+### MXL-D-065 — Nothing ties the shared-bundle list to what the managed installers actually install
+- **Area:** `specs/_managed_runtime_bundle.py` ↔ `app/services/image_gen/installer.py:50`
+  (`IMAGE_GEN_PACKAGES`) and `app/services/capabilities/installer.py`
+- **Symptom:** `MANAGED_RUNTIME_SHARED_PACKAGES` is hand-maintained. Adding a
+  package to a managed installer that the engine also bundles reintroduces the
+  partial-shadow bug class silently — exactly the failure that shipped three
+  times (protobuf, jinja2, huggingface_hub).
+- **Evidence:** Grepped 2026-07-19 — no cross-reference or test links the two
+  lists.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-07-19 — verified by adversarial review.
+- **Owner hint:** Add a test asserting every top-level package the managed
+  installers pull that ALSO appears in the frozen bundle is present in
+  `MANAGED_RUNTIME_SHARED_PACKAGES`.
+
+### MXL-D-066 — `test_api_key_set_and_delete_roundtrip` times out on macOS (pre-existing)
+- **Area:** `tests/smoke/test_api_keys.py::test_api_key_set_and_delete_roundtrip`
+- **Symptom:** `httpx.ReadTimeout` after ~25s on `PUT /settings/api-keys/{provider}`.
+  Reproduced 3/3.
+- **Evidence:** **Confirmed pre-existing** — reproduced identically in a clean
+  worktree at HEAD `0efd2fb7d` with no working-tree changes, 2026-07-19. Key
+  writes go through the macOS keychain helper (`app/common/keychain_helper.py`),
+  which spawns a signed subprocess; a locked keychain or a suppressed prompt
+  blocks it past the client timeout.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-07-19 — control-tested at clean HEAD, so it
+  is NOT caused by the v1.3.145 outage fixes.
+- **Owner hint:** Either bound the keychain write with a timeout that surfaces a
+  clear error, or make the smoke test skip when the keychain is unavailable.
+  A test that hangs on an interactive OS prompt cannot run in CI.
+
+### MXL-D-061 — Filesystem index grows unbounded (3.5 GB on one live machine)
+- **Area:** `app/services/filesystem/` — the indexer and its scope policy
+- **Symptom:** `~/.matrx/filesystem-index.sqlite3` reached **3.5 GB** (plus a
+  5 MB WAL, still being written) on Arman's machine — an effectively
+  whole-machine index. No bounding policy, no cap, no user-visible disclosure
+  of the disk cost. This ships to every user.
+- **Evidence:** `du -sh ~/.matrx/filesystem-index.sqlite3` → 3.5G, 2026-07-19,
+  live home. Grew during the ~60 filesystem-indexer commits of 2026-07-18.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-07-19 — size measured directly on the live
+  home. NOT implicated in the v1.3.145 engine freeze (the engine was idle at
+  0% CPU in the diagnostic snapshot); this is a standalone disk-consumption
+  defect.
+- **Owner hint:** Needs a bounding policy (scope allowlist, size cap, or
+  eviction) plus a settings surface showing the index size with a rebuild/clear
+  action. Decide the default scope with Arman before implementing.
+
+### MXL-D-062 — Managed image-gen runtime floats its versions; the same click installs a different stack each day
+- **Area:** `app/services/image_gen/installer.py` `IMAGE_GEN_PACKAGES` (~line 50)
+- **Symptom:** `transformers>=5.3.0`, `huggingface_hub>=0.22.0`, `torch>=2.6`,
+  `peft>=0.13.1` all float while `diffusers==0.39.0` is hard-pinned. Two users
+  clicking Install on different days get different runtimes, and `needs_upgrade()`
+  force-migrates EXISTING working installs onto whatever PyPI has that day.
+  This is what detonated the v1.3.145 outage: transformers 5.3.0 did not import
+  `huggingface_hub.dataclasses`, 5.14.1 does — a time-based failure, not a code
+  change. The frozen-bundle side was fixed (`specs/_managed_runtime_bundle.py`),
+  but the floating pins remain.
+- **Evidence:** `installer.py:50-77`; `diffusers==0.39.0` declares no runtime
+  `transformers` requirement at all (only under `extra == "test"`/`"dev"`), so
+  the hard pin constrains nothing.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-07-19 — verified against installed
+  dist-info METADATA in `~/.matrx/image-gen-packages` (transformers 5.14.1,
+  hf_hub 1.24.0, torch 2.13.0 — none of which the pins chose deliberately).
+- **Owner hint:** Pin the managed runtime as a lockfile-grade exact set
+  validated together in CI, delivered via remote catalog / app config so it can
+  roll forward without shipping a binary. Related: the bundled hf_hub is 1.8.0
+  and WINS over the managed copy, so a future transformers requiring hf>=1.20
+  breaks again even with complete collection.
+
+### MXL-D-063 — Stale discovery file when the server thread exits on its own
+- **Area:** `run.py` `_wait_forever()` (~line 675)
+- **Symptom:** `remove_discovery_file()` runs in the signal handler and in the
+  `not teardown_clean` branch, but NOT on the clean path taken when
+  `_shutdown_event` is set by the server thread exiting by itself (no signal).
+  That path leaves `~/.matrx/local.json` behind pointing at a dead port, so
+  every client routes to nothing.
+- **Evidence:** `run.py:675-690` — removal sits only inside `if not
+  teardown_clean:`; the covering calls are `run.py:528, 606, 802, 982`.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-07-19 — narrow exposure (SIGTERM/SIGINT is
+  the normal Tauri path and IS covered). A fix placing `remove_discovery_file()`
+  in `_wait_forever` was written and then REVERTED: it violates the deliberate
+  no-blocking-I/O-around-the-completion-barrier invariant
+  (`tests/unit/test_run_shutdown_barrier.py`), and `run.py:770-785` documents
+  that the call does blocking I/O (flock'd writes, local.json reads) that can
+  wedge shutdown forever.
+- **Owner hint:** Fix belongs in the lifespan teardown (where the engine already
+  releases its own resources, before the barrier), NOT on the main thread's
+  post-barrier path. Do not "just add the call back" to `_wait_forever`.
+
 ### MXL-D-060 — Official settings catalog still describes persisted API-key verdicts
 - **Area:** `docs/official/settings-catalog.md` § 3
 - **Symptom:** The catalog says `api_key_validation` verdicts persist and sync,

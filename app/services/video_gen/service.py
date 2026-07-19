@@ -189,7 +189,13 @@ class VideoGenService:
         self._worker: threading.Thread | None = None
         # (job_id, cancel_event) for the job currently in the worker thread,
         # plus whether its pipeline supports per-step abort (None = unknown,
-        # hook not installed yet). Guarded by self._lock.
+        # hook not installed yet). Guarded by self._gens_lock — NOT self._lock,
+        # which is held for the whole of _load_model_sync. Cancelling a job
+        # while a model loads must not queue behind that load: DELETE
+        # /video-gen/jobs/{id} calls request_cancel_job() synchronously on the
+        # event loop, so a long-held lock there freezes the entire engine.
+        # This is the image-gen freeze of v1.3.145 in its video-gen form.
+        self._gens_lock = threading.Lock()
         self._active_cancel: tuple[str, threading.Event] | None = None
         self._active_supports_step_cancel: bool | None = None
 
@@ -238,7 +244,7 @@ class VideoGenService:
         """Cancel the running job's generation mid-flight. Returns
         {"found": bool, "mid_flight": bool} — found=False when that job has
         no in-flight generation (already finishing or not yet started)."""
-        with self._lock:
+        with self._gens_lock:
             if self._active_cancel is not None and self._active_cancel[0] == job_id:
                 self._active_cancel[1].set()
                 return {
@@ -636,7 +642,7 @@ class VideoGenService:
         assert job is not None
 
         cancel_event = threading.Event()
-        with self._lock:
+        with self._gens_lock:
             self._active_cancel = (job_id, cancel_event)
             self._active_supports_step_cancel = None
 
@@ -708,7 +714,7 @@ class VideoGenService:
                     job_id, current_step=step, total_steps=total
                 ),
             )
-            with self._lock:
+            with self._gens_lock:
                 self._active_supports_step_cancel = hook_mode != "none"
 
             if cancel_event.is_set():
@@ -796,9 +802,17 @@ class VideoGenService:
             release_generation_memory("video_gen")
             store.mark_failed(job_id, friendly_generation_error(exc))
         finally:
-            with self._lock:
-                self._active_cancel = None
-                self._active_supports_step_cancel = None
+            with self._gens_lock:
+                # Compare-and-clear, never an unconditional None. The terminal
+                # mark_completed/cancelled/failed above runs BEFORE this finally,
+                # so the client can already have started job B — whose thread
+                # installs its own (job_id, event) here. An unconditional clear
+                # then wiped B's handle, and DELETE /video-gen/jobs/B answered
+                # {"found": false} while B ran happily to completion after the
+                # user cancelled it.
+                if self._active_cancel is not None and self._active_cancel[0] == job_id:
+                    self._active_cancel = None
+                    self._active_supports_step_cancel = None
 
     def _encode_mp4(self, frames: list[Any], *, fps: int, job_id: str):
         """Encode frames to H.264 mp4 with imageio-ffmpeg (core dep)."""

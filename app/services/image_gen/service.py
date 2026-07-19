@@ -399,7 +399,23 @@ class ImageGenService:
     """
 
     def __init__(self) -> None:
+        # Guards PIPELINE LIFECYCLE only: _pipeline, _loaded_model_id,
+        # _is_loading and friends. Deliberately held for the WHOLE of
+        # _load_model_sync (tens of seconds: import torch, from_pretrained,
+        # pipe.to(device)) so a generation can never observe a half-loaded
+        # pipeline. Because it is long-held it must NEVER be acquired from the
+        # event loop — every caller runs in the thread pool. Active-generation
+        # bookkeeping does NOT belong here; it has its own lock below.
         self._lock = threading.Lock()
+        # Guards _active_gens ONLY, and is therefore always held for
+        # microseconds. Split out from _lock after the shipped freeze of
+        # v1.3.145: GET /image-gen/status called get_status() synchronously on
+        # the event loop, get_status() took _lock, and a model load held _lock
+        # for ~50s — so the loop parked on the mutex and NINE unrelated
+        # endpoints (media-library, video-gen, prompt-matrix) all died at their
+        # 30s client timeout without ever being dequeued. Status polling and
+        # cancellation must never queue behind a model load.
+        self._gens_lock = threading.Lock()
         # Serializes load_model() at the async boundary so two concurrent
         # requests can't both pass the "already loaded?" check and each spawn
         # a full model load (which would double VRAM use / OOM).
@@ -462,7 +478,7 @@ class ImageGenService:
         return self._is_loading
 
     def get_status(self) -> dict:
-        with self._lock:
+        with self._gens_lock:
             gens = [dict(g) for g in self._active_gens.values()]
         return {
             "available": self.available,
@@ -492,7 +508,7 @@ class ImageGenService:
     def _register_generation(
         self, kind: str, job_id: str | None, event: "threading.Event"
     ) -> str:
-        with self._lock:
+        with self._gens_lock:
             self._gen_counter += 1
             token = f"gen-{self._gen_counter}"
             self._active_gens[token] = {
@@ -506,7 +522,7 @@ class ImageGenService:
             return token
 
     def _unregister_generation(self, token: str) -> None:
-        with self._lock:
+        with self._gens_lock:
             self._active_gens.pop(token, None)
 
     def request_cancel(self) -> dict:
@@ -519,7 +535,7 @@ class ImageGenService:
         recorded and takes effect when the pipeline call finishes, never
         silently dropped.
         """
-        with self._lock:
+        with self._gens_lock:
             gens = list(self._active_gens.values())
             if not gens:
                 return {"cancelled": False, "reason": "nothing_running"}
@@ -541,7 +557,7 @@ class ImageGenService:
         """Cancel a specific RUNNING job's generation. Returns {"found": bool,
         "mid_flight": bool} — found=False when that job has no in-flight
         generation (already finishing, or not started yet)."""
-        with self._lock:
+        with self._gens_lock:
             for g in self._active_gens.values():
                 if g["job_id"] == job_id:
                     g["cancel_requested"] = True
@@ -1309,7 +1325,7 @@ class ImageGenService:
                 progress_callback=progress_callback,
             )
             if gen_token is not None:
-                with self._lock:
+                with self._gens_lock:
                     gen = self._active_gens.get(gen_token)
                     if gen is not None:
                         gen["supports_step_cancel"] = hook_mode != "none"

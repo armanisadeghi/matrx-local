@@ -176,14 +176,19 @@ def _check_core_packages() -> ComponentStatus:
         ("sounddevice", "Audio I/O"),
         ("numpy", "Numeric computing"),
     ]
-    missing = []
+    unavailable: list[str] = []
     for mod, label in required:
         try:
             __import__(mod)
-        except ImportError:
-            missing.append(label)
+        except Exception as exc:
+            # Some installed bindings fail at import time when their native
+            # runtime is absent (notably sounddevice without PortAudio on the
+            # Linux release runner). Setup status must report that component
+            # as unavailable instead of turning the whole endpoint into a 500.
+            logger.debug("Core package %s is unusable: %s", mod, exc)
+            unavailable.append(label)
 
-    if not missing:
+    if not unavailable:
         return ComponentStatus(
             id="core_packages",
             label="Core Engine Packages",
@@ -196,7 +201,10 @@ def _check_core_packages() -> ComponentStatus:
         label="Core Engine Packages",
         description="Essential libraries for system monitoring, audio, and network features",
         status="error",
-        detail=f"Missing: {', '.join(missing)}. Engine may need reinstallation.",
+        detail=(
+            f"Missing or unusable: {', '.join(unavailable)}. "
+            "Engine may need reinstallation."
+        ),
     )
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import builtins
+
 import pytest
 
 from app.api import hardware_routes, setup_routes
@@ -33,3 +35,21 @@ async def test_setup_status_uses_cached_gpu_without_reprobing(
     result = await setup_routes.get_setup_status()
 
     assert result.gpu_name == "Test GPU"
+
+
+def test_core_package_probe_reports_native_runtime_import_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_import = builtins.__import__
+
+    def import_with_missing_portaudio(name: str, *args, **kwargs):
+        if name == "sounddevice":
+            raise OSError("PortAudio library not found")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_with_missing_portaudio)
+
+    result = setup_routes._check_core_packages()
+
+    assert result.status == "error"
+    assert "Audio I/O" in (result.detail or "")

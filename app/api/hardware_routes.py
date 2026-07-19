@@ -36,6 +36,11 @@ _cached_profile: Optional[dict[str, Any]] = None
 _detection_lock = asyncio.Lock()
 
 
+def get_cached_hardware_profile() -> dict[str, Any] | None:
+    """Return the startup-owned hardware snapshot without triggering probes."""
+    return _cached_profile
+
+
 # ── Response models ───────────────────────────────────────────────────────────
 
 class HardwareResponse(BaseModel):

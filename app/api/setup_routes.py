@@ -203,20 +203,24 @@ def _check_core_packages() -> ComponentStatus:
 def _check_gpu() -> tuple[bool, str | None]:
     """Detect GPU availability (for transcription model recommendations).
 
-    Delegates to the hardware detector which handles NVIDIA (via nvidia-smi),
-    Apple Silicon (Metal), Vulkan, ROCm, and WSL passthrough.
+    Hardware detection already runs once during lifespan Phase 0d and is cached
+    by the canonical hardware route. Setup is polled frequently, so it must
+    never launch another system_profiler/nvidia-smi subprocess tree. Explicit
+    re-probes belong to POST /hardware/refresh.
     """
-    from app.services.hardware.detector import _detect_gpus
+    from app.api.hardware_routes import get_cached_hardware_profile
 
-    try:
-        gpus = _detect_gpus()
-        for gpu in gpus:
-            name = gpu.get("name", "")
-            backend = gpu.get("backend", "")
-            if name and name != "No GPU detected" and backend != "cpu":
-                return True, name
-    except Exception:
-        pass
+    profile = get_cached_hardware_profile() or {}
+    gpus = profile.get("gpus")
+    if not isinstance(gpus, list):
+        return False, None
+    for gpu in gpus:
+        if not isinstance(gpu, dict):
+            continue
+        name = gpu.get("name", "")
+        backend = gpu.get("backend", "")
+        if name and name != "No GPU detected" and backend != "cpu":
+            return True, str(name)
 
     return False, None
 
@@ -374,10 +378,7 @@ async def _check_permissions() -> ComponentStatus:
 @router.get("/status", response_model=SetupStatus)
 async def get_setup_status() -> SetupStatus:
     """Return comprehensive installation/setup status."""
-    # GPU detection invokes platform tools (system_profiler/nvidia-smi) with
-    # multi-second timeouts. Running it on Uvicorn's event loop starves every
-    # request and prevents shutdown signals from being observed.
-    gpu_available, gpu_name = await asyncio.to_thread(_check_gpu)
+    gpu_available, gpu_name = _check_gpu()
 
     components = [
         _check_core_packages(),

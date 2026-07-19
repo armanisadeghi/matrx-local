@@ -248,6 +248,22 @@ async def test_direct_listing_stop_and_reaper_delete_abandoned_snapshots(
 
 
 @pytest.mark.anyio
+async def test_filesystem_lifecycle_owns_directory_snapshot_reaper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(filesystem_service_module, "discover_places", lambda: [])
+    service = FilesystemService(tmp_path / "index.sqlite3")
+
+    await service.start()
+    task_names = {task.get_name() for task in service._tasks}
+    assert "filesystem-list-reaper" in task_names
+
+    await service.stop()
+    assert service._tasks == set()
+    assert service._started is False
+
+
+@pytest.mark.anyio
 async def test_direct_listing_does_not_follow_symlinks(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.mkdir()

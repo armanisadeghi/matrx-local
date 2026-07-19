@@ -13,7 +13,7 @@ import pytest
 
 from app.services.filesystem.index import FilesystemIndex
 from app.services.filesystem import index as filesystem_index_module
-from app.services.filesystem.models import Place, is_hidden
+from app.services.filesystem.models import DirectoryPage, Place, is_hidden
 from app.services.filesystem.paging import DirectoryListSessionRegistry
 from app.services.filesystem import paging as filesystem_paging_module
 from app.services.filesystem.roots import normalize_path_key
@@ -128,6 +128,27 @@ async def test_direct_listing_progress_pages_have_bounded_work_and_honest_empty_
     )
     assert [entry.name for entry in third.entries] == ["item-0.txt", "item-1.txt"]
     assert third.total == 7
+
+
+@pytest.mark.anyio
+async def test_agent_directory_listing_labels_observed_progress_honestly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeFilesystemService:
+        async def list_directory(self, *_args: object, **_kwargs: object) -> DirectoryPage:
+            return DirectoryPage(str(tmp_path), (), "opaque", 3)
+
+    monkeypatch.setattr(
+        "app.services.filesystem.get_filesystem_service",
+        lambda: FakeFilesystemService(),
+    )
+
+    result = await system.tool_list_directory(
+        ToolSession(working_dir=str(tmp_path)), "."
+    )
+
+    assert "scanned 3 entries so far" in result.output
+    assert "3 items" not in result.output
 
 
 @pytest.mark.anyio
@@ -788,7 +809,8 @@ async def test_scoped_search_page_preserves_root_for_cursor_followups(tmp_path: 
 
     assert page.root == str(root.resolve())
     assert page.to_dict()["root"] == str(root.resolve())
-    assert page.next_cursor == "1"
+    assert page.next_cursor is not None
+    assert not page.next_cursor.isdigit()
 
 
 @pytest.mark.anyio

@@ -420,6 +420,7 @@ function DirectoryPage({
               <span> · {result.source === "index" ? "indexed" : result.source === "hybrid" ? "index + disk" : "disk"}</span>
             )}
             {result.indexComplete === false && <span> · index still improving</span>}
+            {result.truncated && <span> · showing the first 50,000 matches; narrow the search</span>}
           </div>
         )}
         {selectedPaths.length > 0 && (

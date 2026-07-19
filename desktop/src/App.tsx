@@ -158,7 +158,7 @@ function AppInner() {
     error: engineError,
     refresh,
     restartEngine,
-  } = useEngine(auth.isAuthenticated);
+  } = useEngine();
 
   useEffect(() => {
     if (status !== "connected") actionNeededStore.reset();
@@ -355,6 +355,7 @@ function AppInner() {
   }, [status, url]);
 
   const isFirstRun =
+    auth.isAuthenticated &&
     status === "connected" &&
     url !== null &&
     setupComplete === false &&

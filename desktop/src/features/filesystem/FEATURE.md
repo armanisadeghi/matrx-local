@@ -39,7 +39,7 @@ Keep the model-facing text concise and put renderable structure in result metada
 ## Cross-platform actions
 
 - Directory selection uses `@tauri-apps/plugin-dialog` with `directory: true`.
-- Open/reveal uses `@tauri-apps/plugin-shell`. Revealing a file opens its containing directory using separator-neutral path parsing.
+- Open/reveal uses the allowlisted native Tauri `open_filesystem_path` command. Revealing a file opens its containing directory using separator-neutral path parsing; renderer code never chooses or interpolates an OS executable.
 - Do not import macOS, Windows, or Linux path conventions into components. Platform-specific enhancements must be capability-gated and retain the portable action.
 
 ## Reuse points
@@ -47,4 +47,5 @@ Keep the model-facing text concise and put renderable structure in result metada
 - Chat: `ChatToolCall` → `ToolExecutionCard` → `FilesystemResultView`.
 - Tool playground: `ToolOutput` → the same `ToolExecutionCard`.
 - Settings: `FilesystemIndexSettings` and the shared engine API types.
-- Future Files page, attachment picker, File Sync explorer, and storage chooser must compose these models/components rather than fork them.
+- Files page: `pages/Files.tsx` → `FilesystemResultController` → the same `FilesystemResultView`.
+- Future attachment picker, File Sync explorer, and storage chooser must compose these models/components rather than fork them.

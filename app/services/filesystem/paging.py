@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -15,6 +16,7 @@ from typing import Callable
 from app.services.filesystem.models import DirectoryPage, FileEntry
 from app.services.filesystem.roots import normalize_path_key
 
+logger = logging.getLogger(__name__)
 
 DIRECTORY_PAGE_SCAN_BUDGET = 20_000
 MAX_DIRECTORY_SNAPSHOT_ENTRIES = 1_000_000
@@ -25,6 +27,10 @@ MAX_DIRECTORY_LIST_TOTAL_DISK_BYTES = (
     MAX_DIRECTORY_LIST_SESSIONS * MAX_DIRECTORY_SNAPSHOT_DISK_BYTES
 )
 DIRECTORY_LIST_SESSION_TTL_SECONDS = 300.0
+SEARCH_SESSION_TTL_SECONDS = 300.0
+MAX_SEARCH_SESSIONS = 4
+MAX_SEARCH_SNAPSHOT_ENTRIES = 50_000
+MAX_SEARCH_TOTAL_ENTRIES = 100_000
 
 
 class DirectoryPagingError(ValueError):
@@ -182,7 +188,19 @@ class _DirectorySnapshot:
             self._iterator.close()
             self._iterator = None
         self._db.close()
-        self._temporary_directory.cleanup()
+        last_error: OSError | None = None
+        for _attempt in range(3):
+            try:
+                self._temporary_directory.cleanup()
+                return
+            except OSError as exc:
+                last_error = exc
+                time.sleep(0.05)
+        logger.warning(
+            "Could not remove filesystem directory snapshot %s after retries: %s",
+            self.snapshot_path.parent,
+            last_error,
+        )
 
 
 class _DirectoryListSession:
@@ -233,7 +251,13 @@ class DirectoryListSessionRegistry:
     @staticmethod
     def _close_all(sessions: list[_DirectoryListSession]) -> None:
         for session in sessions:
-            session.close()
+            try:
+                session.close()
+            except Exception:
+                logger.warning(
+                    "Filesystem directory snapshot cleanup failed; continuing",
+                    exc_info=True,
+                )
 
     def reap_expired(self) -> None:
         with self._lock:
@@ -421,6 +445,125 @@ class DirectoryListSessionRegistry:
             sessions = list(self._sessions.values())
             self._sessions.clear()
         self._close_all(sessions)
+
+    @property
+    def session_count(self) -> int:
+        with self._lock:
+            return len(self._sessions)
+
+
+class _SearchSession:
+    def __init__(
+        self,
+        scope: tuple[str, str],
+        entries: tuple[FileEntry, ...],
+        *,
+        source: str,
+        index_complete: bool,
+        truncated: bool,
+    ) -> None:
+        self.scope = scope
+        self.entries = entries
+        self.source = source
+        self.index_complete = index_complete
+        self.truncated = truncated
+        self.offset = 0
+        self.expires_at = 0.0
+
+
+class SearchSessionRegistry:
+    """Bounded, opaque, single-use snapshots for mutation-stable search paging."""
+
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._sessions: dict[str, _SearchSession] = {}
+        self._accepting = True
+
+    def start(self) -> None:
+        with self._lock:
+            self._accepting = True
+
+    def _discard_expired_locked(self, now: float) -> None:
+        for token in [
+            token
+            for token, session in self._sessions.items()
+            if session.expires_at <= now
+        ]:
+            self._sessions.pop(token, None)
+
+    def reap_expired(self) -> None:
+        with self._lock:
+            self._discard_expired_locked(self._clock())
+
+    def page(
+        self,
+        scope: tuple[str, str],
+        *,
+        cursor: str | None,
+        limit: int,
+        entries: tuple[FileEntry, ...] | None = None,
+        source: str = "index",
+        index_complete: bool = False,
+        truncated: bool = False,
+    ) -> tuple[tuple[FileEntry, ...], str | None, str, bool, bool]:
+        with self._lock:
+            if not self._accepting:
+                raise ValueError("Filesystem service is stopping")
+            now = self._clock()
+            self._discard_expired_locked(now)
+            if cursor is not None:
+                session = self._sessions.pop(cursor, None)
+                if session is None:
+                    raise ValueError("Invalid, expired, or already-used search cursor")
+                if session.scope != scope:
+                    raise ValueError("Cursor belongs to a different filesystem search")
+            else:
+                if entries is None:
+                    raise ValueError("Search entries are required for a new paging session")
+                was_truncated = truncated or len(entries) > MAX_SEARCH_SNAPSHOT_ENTRIES
+                session = _SearchSession(
+                    scope,
+                    entries[:MAX_SEARCH_SNAPSHOT_ENTRIES],
+                    source=source,
+                    index_complete=index_complete,
+                    truncated=was_truncated,
+                )
+
+            page_entries = session.entries[session.offset : session.offset + limit]
+            session.offset += len(page_entries)
+            next_cursor: str | None = None
+            if session.offset < len(session.entries):
+                while self._sessions and (
+                    len(self._sessions) >= MAX_SEARCH_SESSIONS
+                    or sum(len(item.entries) for item in self._sessions.values())
+                    + len(session.entries)
+                    > MAX_SEARCH_TOTAL_ENTRIES
+                ):
+                    oldest = min(
+                        self._sessions,
+                        key=lambda token: self._sessions[token].expires_at,
+                    )
+                    self._sessions.pop(oldest, None)
+                if len(session.entries) > MAX_SEARCH_TOTAL_ENTRIES:
+                    raise ValueError("Filesystem search snapshot exceeds the service limit")
+                session.expires_at = now + SEARCH_SESSION_TTL_SECONDS
+                next_cursor = secrets.token_urlsafe(24)
+                while next_cursor in self._sessions:
+                    next_cursor = secrets.token_urlsafe(24)
+                self._sessions[next_cursor] = session
+            return (
+                page_entries,
+                next_cursor,
+                session.source,
+                session.index_complete,
+                session.truncated,
+            )
+
+    def close(self) -> None:
+        with self._lock:
+            self._accepting = False
+            self._sessions.clear()
 
     @property
     def session_count(self) -> int:

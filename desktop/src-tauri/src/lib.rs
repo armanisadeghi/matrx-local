@@ -1777,6 +1777,33 @@ pub fn run() {
             dm_get,
         ])
         .setup(|app| {
+            // POSIX SIGTERM has a default action of terminating the process
+            // immediately; Tauri does not translate it into ExitRequested for
+            // us. Consume it on Tokio's signal stream and request a normal
+            // Tauri exit so the RunEvent handler below can cascade shutdown to
+            // every Rust-owned and engine-owned child before the app exits.
+            #[cfg(unix)]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tokio::signal::unix::{signal, SignalKind};
+
+                    match signal(SignalKind::terminate()) {
+                        Ok(mut sigterm) => {
+                            if sigterm.recv().await.is_some() {
+                                lifecycle_log::log(
+                                    "[signal] SIGTERM received; requesting graceful Tauri exit",
+                                );
+                                handle.exit(0);
+                            }
+                        }
+                        Err(error) => lifecycle_log::log(&format!(
+                            "[signal] failed to register SIGTERM handler: {error}"
+                        )),
+                    }
+                });
+            }
+
             // Register the config-created main window as the initial full
             // window (and therefore leader) in the multi-window registry.
             app.state::<windows::WindowRegistry>()
@@ -2189,11 +2216,10 @@ pub fn run() {
                     }
                 }
 
-                // RunEvent::ExitRequested fires when macOS (or the OS) sends a
-                // termination signal — e.g. from Activity Monitor, `kill`, system
-                // shutdown, or logout. Without this handler the process is terminated
-                // immediately by the OS without running Rust destructors or child
-                // process cleanup, which causes:
+                // RunEvent::ExitRequested fires for native application quit
+                // requests and for the normalized SIGTERM path registered in
+                // setup above. Without this handler the app can exit without
+                // child-process cleanup, which causes:
                 //   • macOS crash reports ("did not exit cleanly")
                 //   • The Python sidecar left running with its ports still bound
                 //   • GGML atexit handlers calling abort() → SIGABRT

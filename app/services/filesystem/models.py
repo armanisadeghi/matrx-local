@@ -116,6 +116,7 @@ class SearchPage:
     source: Literal["index", "disk", "hybrid"] = "index"
     index_complete: bool = False
     root: str | None = None
+    truncated: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -127,4 +128,5 @@ class SearchPage:
             "source": self.source,
             "index_complete": self.index_complete,
             "root": self.root,
+            "truncated": self.truncated,
         }

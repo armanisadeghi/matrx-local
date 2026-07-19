@@ -3957,6 +3957,8 @@ export interface FilesystemIndexStatus {
   content_entries: number;
   embedding_entries: number;
   content_bytes: number;
+  content_failures: number;
+  embedding_failures: number;
   content_indexing: string;
   embedding_indexing: string;
   embedding_model: string;

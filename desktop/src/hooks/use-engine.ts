@@ -21,7 +21,7 @@ interface EngineState {
   wsConnected: boolean;
 }
 
-export function useEngine(authenticated = true) {
+export function useEngine() {
   const [state, setState] = useState<EngineState>({
     status: "discovering",
     url: null,
@@ -333,15 +333,16 @@ export function useEngine(authenticated = true) {
     return () => stopBackgroundTasks();
   }, [isLeader]);
 
-  // Trigger initialize() whenever authentication state first becomes true.
-  // Guard against re-running when already connected — Supabase fires SIGNED_IN
-  // on every token refresh (including on window refocus), which would cause the
-  // engine to restart any time the user switches away from the app.
+  // The local engine is part of the desktop application's runtime, not an
+  // authenticated cloud resource. Start it as soon as this window mounts so
+  // login, logout, and packaged smoke runs all have the same lifecycle. Cloud
+  // configuration and the authenticated WebSocket remain gated below on an
+  // actual Supabase session.
   useEffect(() => {
-    if (authenticated && statusRef.current !== "connected") {
-      initialize();
+    if (statusRef.current !== "connected") {
+      void initialize();
     }
-  }, [authenticated, initialize]);
+  }, [initialize]);
 
   // Belt-and-suspenders: also watch supabase auth state directly so we catch
   // the SIGNED_IN event that fires from setSession() in completeOAuthExchange,

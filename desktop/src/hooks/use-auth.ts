@@ -148,13 +148,12 @@ export function useAuth() {
       // refreshes an expiring token — we must distinguish the two cases.
       //
       // If we are already authenticated, this is a token refresh: update the
-      // session/user objects so downstream callers have a fresh JWT, but do NOT
-      // re-set isAuthenticated (that would re-trigger useEngine's initialize()
-      // and restart the engine every time the user switches windows).
+      // session/user objects so downstream callers have a fresh JWT without
+      // needlessly churning the rest of the auth state.
       //
       // If we are NOT yet authenticated, this is a genuine first sign-in: fall
       // through to the full update so isAuthenticated flips to true and the
-      // engine initializes.
+      // authenticated cloud integrations can initialize.
       if (
         (event === "TOKEN_REFRESHED" || event === "SIGNED_IN") &&
         session !== null &&

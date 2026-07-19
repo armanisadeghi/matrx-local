@@ -225,6 +225,7 @@ function normalizeSearch(source: UnknownRecord): FilesystemSearchPage | null {
       : typeof source.indexComplete === "boolean"
         ? { indexComplete: source.indexComplete }
         : {}),
+    ...(typeof source.truncated === "boolean" ? { truncated: source.truncated } : {}),
   };
 }
 

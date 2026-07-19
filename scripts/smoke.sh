@@ -274,6 +274,20 @@ run_packaged() {
     record_fail "packaged: no packaged executable found under desktop/src-tauri/target (build first, or drop --no-build)"
     return 1
   fi
+
+  # A packaged build can take several minutes. Repeat the LIVE-world ownership
+  # check immediately before launch so an installed app (or dev.sh --live)
+  # started during the build cannot answer our probes and create a false pass.
+  existing_url="$(node -p "try{require(require('os').homedir()+'/.matrx/local.json').url}catch(e){''}" 2>/dev/null)"
+  if [ -n "$existing_url" ] && curl -sf --max-time 2 "$existing_url/health" >/dev/null 2>&1; then
+    record_fail "packaged: an engine started at $existing_url during the build — quit AI Matrx (and any live-world dev engine) and rerun"
+    return 1
+  fi
+
+  # A separate DEV-world engine is allowed and may own cloudflared/LLM
+  # children. The launch-time snapshot is authoritative: replacing the earlier
+  # baseline avoids both concurrent-dev false positives and stale-PID reuse.
+  pre_children="$(child_pids | tr '\n' ' ')"
   info "Launching $(basename "$bin") and capturing everything it logs…"
 
   "$bin" > "$log" 2>&1 &

@@ -36,6 +36,7 @@ export interface FilesystemSearchPage {
   nextCursor?: string | null;
   source?: "index" | "disk" | "hybrid";
   indexComplete?: boolean;
+  truncated?: boolean;
 }
 
 export interface FilesystemContentMatch {

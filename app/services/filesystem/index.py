@@ -105,6 +105,17 @@ CREATE TABLE IF NOT EXISTS filesystem_embeddings (
     indexed_at REAL NOT NULL,
     PRIMARY KEY(path_key, model)
 );
+CREATE TABLE IF NOT EXISTS filesystem_enrichment_failures (
+    path_key TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('content', 'embedding')),
+    source_modified_at REAL,
+    source_size INTEGER NOT NULL,
+    model TEXT,
+    attempts INTEGER NOT NULL,
+    retry_at REAL NOT NULL,
+    last_error TEXT NOT NULL,
+    PRIMARY KEY(path_key, kind)
+);
 """
 
 _FTS_SCHEMA = """
@@ -245,7 +256,7 @@ class FilesystemIndex:
             db.execute("UPDATE filesystem_entries SET content_state='not_indexed' WHERE content_state='indexing'")
             db.execute(
                 "UPDATE filesystem_entries SET embedding_state='not_indexed' "
-                "WHERE embedding_state IN ('indexing','unavailable')"
+                "WHERE embedding_state='indexing'"
             )
             try:
                 db.executescript(_FTS_SCHEMA)
@@ -776,6 +787,10 @@ class FilesystemIndex:
                 [(value,) for value in keys],
             )
             db.executemany(
+                "DELETE FROM filesystem_enrichment_failures WHERE path_key=?",
+                [(value,) for value in keys],
+            )
+            db.executemany(
                 "DELETE FROM filesystem_entries WHERE path_key=?",
                 [(value,) for value in reversed(keys)],
             )
@@ -870,6 +885,7 @@ class FilesystemIndex:
                 db.execute("DELETE FROM filesystem_content_fts")
             db.execute("DELETE FROM filesystem_content")
             db.execute("DELETE FROM filesystem_embeddings")
+            db.execute("DELETE FROM filesystem_enrichment_failures")
             db.execute("DELETE FROM filesystem_entries")
             db.execute("DELETE FROM filesystem_scan_queue")
             db.execute("DELETE FROM filesystem_scanned_dirs")
@@ -1037,12 +1053,22 @@ class FilesystemIndex:
                 return None
             remaining = max_content_bytes - int(used["bytes"])
             row = db.execute(
-                f"""SELECT path,modified_at,size FROM filesystem_entries
-                    WHERE kind='file' AND content_state='not_indexed'
-                    AND extension IN ({placeholders}) AND size BETWEEN 1 AND 1048576
-                    AND size <= ?
-                    ORDER BY indexed_at LIMIT 1""",
-                (*extensions, remaining),
+                f"""SELECT e.path,e.modified_at,e.size FROM filesystem_entries e
+                    LEFT JOIN filesystem_enrichment_failures f
+                      ON f.path_key=e.path_key AND f.kind='content'
+                    WHERE e.kind='file'
+                    AND (
+                      e.content_state='not_indexed'
+                      OR (e.content_state='error' AND (
+                        f.retry_at IS NULL OR f.retry_at<=?
+                        OR f.source_modified_at IS NOT e.modified_at
+                        OR f.source_size<>e.size
+                      ))
+                    )
+                    AND e.extension IN ({placeholders}) AND e.size BETWEEN 1 AND 1048576
+                    AND e.size <= ?
+                    ORDER BY e.indexed_at LIMIT 1""",
+                (time.time(), *extensions, remaining),
             ).fetchone()
             if row is None:
                 return None
@@ -1111,11 +1137,107 @@ class FilesystemIndex:
                 "UPDATE filesystem_entries SET content_state='indexed', embedding_state='not_indexed' WHERE path_key=?",
                 (key,),
             )
+            db.execute(
+                "DELETE FROM filesystem_enrichment_failures WHERE path_key=? AND kind='content'",
+                (key,),
+            )
             return True
 
     def mark_content_skipped(self, path: str, state: str = "skipped") -> None:
         with self._connect() as db:
             db.execute("UPDATE filesystem_entries SET content_state=? WHERE path_key=?", (state, _path_key(path)))
+
+    def finish_enrichment_failure(
+        self,
+        path: str,
+        kind: str,
+        error: str,
+        source_modified_at: float | None,
+        source_size: int,
+        *,
+        model: str | None = None,
+    ) -> bool:
+        """Persist a bounded-backoff failure only for the candidate still claimed.
+
+        Clear/rebuild and watcher mutations can replace a path while I/O or an
+        embedding request is in flight. The source fingerprint and `indexing`
+        state form the commit fence so that stale work cannot poison the new row.
+        """
+        if kind not in {"content", "embedding"}:
+            raise ValueError(f"unsupported enrichment kind: {kind}")
+        state_column = "content_state" if kind == "content" else "embedding_state"
+        key = _path_key(path)
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            current = db.execute(
+                f"SELECT modified_at,size,{state_column} AS state "
+                "FROM filesystem_entries WHERE path_key=?",
+                (key,),
+            ).fetchone()
+            if (
+                current is None
+                or current["state"] != "indexing"
+                or current["modified_at"] != source_modified_at
+                or int(current["size"]) != source_size
+            ):
+                return False
+            previous = db.execute(
+                "SELECT * FROM filesystem_enrichment_failures WHERE path_key=? AND kind=?",
+                (key, kind),
+            ).fetchone()
+            same_source = bool(
+                previous is not None
+                and previous["source_modified_at"] == source_modified_at
+                and int(previous["source_size"]) == source_size
+                and previous["model"] == model
+            )
+            attempts = int(previous["attempts"]) + 1 if same_source else 1
+            retry_delay = min(3_600.0, 5.0 * (2 ** min(attempts - 1, 10)))
+            db.execute(
+                """INSERT INTO filesystem_enrichment_failures
+                   (path_key,kind,source_modified_at,source_size,model,attempts,retry_at,last_error)
+                   VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(path_key,kind) DO UPDATE SET
+                   source_modified_at=excluded.source_modified_at,
+                   source_size=excluded.source_size,model=excluded.model,
+                   attempts=excluded.attempts,retry_at=excluded.retry_at,
+                   last_error=excluded.last_error""",
+                (
+                    key,
+                    kind,
+                    source_modified_at,
+                    source_size,
+                    model,
+                    attempts,
+                    time.time() + retry_delay,
+                    error[:2_000],
+                ),
+            )
+            failure_state = "error" if kind == "content" else "unavailable"
+            db.execute(
+                f"UPDATE filesystem_entries SET {state_column}=? WHERE path_key=?",
+                (failure_state, key),
+            )
+            return True
+
+    def reset_enrichment_candidate(
+        self,
+        path: str,
+        kind: str,
+        source_modified_at: float | None,
+        source_size: int,
+    ) -> bool:
+        """Release only the still-current enrichment claim back to the queue."""
+        if kind not in {"content", "embedding"}:
+            raise ValueError(f"unsupported enrichment kind: {kind}")
+        state_column = "content_state" if kind == "content" else "embedding_state"
+        with self._connect() as db:
+            cursor = db.execute(
+                f"""UPDATE filesystem_entries SET {state_column}='not_indexed'
+                    WHERE path_key=? AND {state_column}='indexing'
+                    AND modified_at IS ? AND size=?""",
+                (_path_key(path), source_modified_at, source_size),
+            )
+            return bool(cursor.rowcount)
 
     def reset_quota_candidates(self) -> None:
         with self._connect() as db:
@@ -1135,10 +1257,20 @@ class FilesystemIndex:
                 """SELECT e.path,c.content,c.source_modified_at,c.source_size FROM filesystem_entries e
                    JOIN filesystem_content c ON c.path_key=e.path_key
                    LEFT JOIN filesystem_embeddings v ON v.path_key=e.path_key AND v.model=?
-                   WHERE e.embedding_state='not_indexed'
-                      OR (e.embedding_state='indexed' AND v.path IS NULL)
+                   LEFT JOIN filesystem_enrichment_failures f
+                     ON f.path_key=e.path_key AND f.kind='embedding'
+                   WHERE (
+                     e.embedding_state='not_indexed'
+                     OR (e.embedding_state='indexed' AND v.path IS NULL)
+                     OR (e.embedding_state='unavailable' AND (
+                       f.retry_at IS NULL OR f.retry_at<=?
+                       OR f.source_modified_at IS NOT c.source_modified_at
+                       OR f.source_size<>c.source_size
+                       OR f.model IS NOT ?
+                     ))
+                   )
                    ORDER BY c.indexed_at LIMIT 1""",
-                (model,),
+                (model, time.time(), model),
             ).fetchone()
             if row is None:
                 return None
@@ -1203,6 +1335,10 @@ class FilesystemIndex:
             db.execute(
                 "UPDATE filesystem_entries SET embedding_state='indexed' WHERE path_key=?", (key,)
             )
+            db.execute(
+                "DELETE FROM filesystem_enrichment_failures WHERE path_key=? AND kind='embedding'",
+                (key,),
+            )
             return True
 
     def reset_embedding_candidate(self, path: str) -> None:
@@ -1225,10 +1361,18 @@ class FilesystemIndex:
             content_bytes = db.execute(
                 "SELECT COALESCE(SUM(length(CAST(content AS BLOB))),0) AS bytes FROM filesystem_content"
             ).fetchone()
+            failures = db.execute(
+                """SELECT
+                     SUM(CASE WHEN kind='content' THEN 1 ELSE 0 END) AS content_failures,
+                     SUM(CASE WHEN kind='embedding' THEN 1 ELSE 0 END) AS embedding_failures
+                   FROM filesystem_enrichment_failures"""
+            ).fetchone()
         return {
             "content_entries": int(content["count"]),
             "embedding_entries": int(embeddings["count"]),
             "content_bytes": int(content_bytes["bytes"]),
+            "content_failures": int(failures["content_failures"] or 0),
+            "embedding_failures": int(failures["embedding_failures"] or 0),
         }
 
     def search_content(self, query: str, limit: int = 50) -> list[dict[str, object]]:

@@ -54,7 +54,7 @@ function PanelInner({ page }: { page: PanelPage }) {
   const entry = PANEL_MANIFEST[page];
   const auth = useAuth();
   useTheme(); // applies the persisted light/dark class to this window
-  const { status, url, tools } = useEngine(auth.isAuthenticated);
+  const { status, url, tools } = useEngine();
 
   useEffect(() => {
     if (status !== "connected") actionNeededStore.reset();

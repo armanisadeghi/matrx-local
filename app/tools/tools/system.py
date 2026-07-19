@@ -539,7 +539,13 @@ async def tool_list_directory(
         f"  {entry['name']}{os.sep if entry['kind'] == 'dir' else ''}"
         for entry in data["entries"]
     ]
-    header = f"{target}{os.sep} ({page.total} items; showing {len(items)})"
+    if not items and page.next_cursor:
+        header = (
+            f"{target}{os.sep} (scanned {page.total} entries so far; "
+            "sorting before display)"
+        )
+    else:
+        header = f"{target}{os.sep} ({page.total} items; showing {len(items)})"
     if page.next_cursor:
         items.append(f"  ... more (cursor={page.next_cursor})")
     return ToolResult(

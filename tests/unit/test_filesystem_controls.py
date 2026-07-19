@@ -46,6 +46,8 @@ def test_enrichment_limits_prune_content_vectors_and_old_models(tmp_path: Path) 
         "content_entries": 0,
         "embedding_entries": 0,
         "content_bytes": 0,
+        "content_failures": 0,
+        "embedding_failures": 0,
     }
     with index._connect() as db:
         row = db.execute(
@@ -89,6 +91,101 @@ def test_embedding_commit_enforces_current_quota_atomically(tmp_path: Path) -> N
         stat.st_mtime, stat.st_size, max_entries=0,
     )
     assert index.enrichment_counts()["embedding_entries"] == 0
+
+
+def test_transient_content_failure_retries_after_backoff_and_resets_on_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    root = tmp_path / "root"
+    root.mkdir()
+    source = _scan_root(index, root)
+    stat = source.stat()
+    candidate = index.next_content_candidate((".txt",), 1024 * 1024)
+    assert candidate == (str(source), stat.st_mtime, stat.st_size)
+    now = [1_000.0]
+    monkeypatch.setattr("app.services.filesystem.index.time.time", lambda: now[0])
+
+    assert index.finish_enrichment_failure(
+        str(source), "content", "temporarily locked", stat.st_mtime, stat.st_size
+    )
+    assert index.next_content_candidate((".txt",), 1024 * 1024) is None
+    counts = index.enrichment_counts()
+    assert counts["content_failures"] == 1
+
+    now[0] += 5.1
+    assert index.next_content_candidate((".txt",), 1024 * 1024) == (
+        str(source), stat.st_mtime, stat.st_size
+    )
+    assert index.finish_enrichment_failure(
+        str(source), "content", "still locked", stat.st_mtime, stat.st_size
+    )
+    now[0] += 5.1
+    assert index.next_content_candidate((".txt",), 1024 * 1024) is None
+
+    source.write_text("changed source", encoding="utf-8")
+    index.upsert_path(str(source), "root")
+    changed = source.stat()
+    assert index.next_content_candidate((".txt",), 1024 * 1024) == (
+        str(source), changed.st_mtime, changed.st_size
+    )
+
+
+def test_stale_enrichment_failure_cannot_poison_rebuilt_row(tmp_path: Path) -> None:
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    root = tmp_path / "root"
+    root.mkdir()
+    source = _scan_root(index, root)
+    stat = source.stat()
+    assert index.next_content_candidate((".txt",), 1024 * 1024) is not None
+
+    index.clear_derived()
+    source.write_text("new generation", encoding="utf-8")
+    fresh = source.stat()
+    index.sync_roots([Place("root", "Root", str(root), "configured", 100)])
+    index.upsert_path(str(source), "root")
+
+    assert not index.finish_enrichment_failure(
+        str(source), "content", "stale read", stat.st_mtime, stat.st_size
+    )
+    with index._connect() as db:
+        row = db.execute(
+            "SELECT content_state FROM filesystem_entries WHERE path=?", (str(source),)
+        ).fetchone()
+    assert fresh.st_mtime != stat.st_mtime or fresh.st_size != stat.st_size
+    assert row["content_state"] == "not_indexed"
+
+
+def test_transient_embedding_failure_retries_and_model_change_bypasses_backoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    root = tmp_path / "root"
+    root.mkdir()
+    source = _scan_root(index, root)
+    stat = source.stat()
+    assert index.store_content(
+        str(source), source.read_text(), stat.st_mtime, stat.st_size, 1024 * 1024
+    )
+    candidate = index.next_embedding_candidate("model-a", 100)
+    assert candidate is not None
+    now = [2_000.0]
+    monkeypatch.setattr("app.services.filesystem.index.time.time", lambda: now[0])
+
+    assert index.finish_enrichment_failure(
+        str(source),
+        "embedding",
+        "provider unavailable",
+        stat.st_mtime,
+        stat.st_size,
+        model="model-a",
+    )
+    assert index.next_embedding_candidate("model-a", 100) is None
+    assert index.enrichment_counts()["embedding_failures"] == 1
+    assert index.next_embedding_candidate("model-b", 100) is not None
 
 
 @pytest.mark.anyio
@@ -259,10 +356,77 @@ async def test_partial_index_search_pages_one_merged_result_space(tmp_path: Path
 
     first = await service.find("needle", limit=2)
     assert first.source == "hybrid"
-    assert first.next_cursor == "2"
+    assert first.next_cursor is not None
+    assert not first.next_cursor.isdigit()
     second = await service.find("needle", cursor=first.next_cursor, limit=2)
 
     assert second.source == "hybrid"
+    assert {entry.path for entry in (*first.entries, *second.entries)} == {
+        str(path) for path in paths
+    }
+
+
+@pytest.mark.anyio
+async def test_paused_complete_index_search_merges_new_disk_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    old = root / "needle-old.txt"
+    old.write_text("old", encoding="utf-8")
+    place = Place("root", "Root", str(root), "configured", 100)
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    service._places = [place]
+    service.index.sync_roots([place])
+    claim = service.index.pop_next_directory()
+    assert claim is not None
+    service.index.index_directory(*claim)
+    new = root / "needle-new.txt"
+    new.write_text("new", encoding="utf-8")
+    monkeypatch.setattr(
+        filesystem_service_module,
+        "_indexing_settings",
+        lambda: {
+            "paused": True,
+            "content_enabled": True,
+            "semantic_enabled": False,
+            "embedding_model": "test",
+            "max_content_bytes": 16 * 1024 * 1024,
+            "max_embedding_entries": 100,
+        },
+    )
+
+    page = await service.find("needle", limit=10)
+
+    assert page.source == "hybrid"
+    assert page.index_complete is False
+    assert {entry.path for entry in page.entries} == {str(old), str(new)}
+
+
+@pytest.mark.anyio
+async def test_hybrid_search_cursor_pages_one_immutable_snapshot(
+    tmp_path: Path
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    paths = [root / f"needle-{index}.txt" for index in range(4)]
+    for path in paths:
+        path.write_text(path.name, encoding="utf-8")
+    place = Place("root", "Root", str(root), "configured", 100)
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    service._places = [place]
+    service.index.sync_roots([place])
+    service.index.upsert_path(str(paths[0]), place.id)
+
+    first = await service.find("needle", limit=2)
+    assert first.next_cursor is not None
+    paths[2].unlink()
+    (root / "needle-later.txt").write_text("later", encoding="utf-8")
+    second = await service.find("needle", cursor=first.next_cursor, limit=2)
+
+    assert second.next_cursor is None
     assert {entry.path for entry in (*first.entries, *second.entries)} == {
         str(path) for path in paths
     }

@@ -327,12 +327,12 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                   <label className="space-y-1 text-xs">
                     <span className="font-medium">Text storage limit (MiB)</span>
                     <Input disabled={mutationBusy} type="number" min={16} max={20 * 1024} value={Math.round(policy.max_content_bytes / (1024 * 1024))} onChange={(event) => { const mib = Number(event.target.value); if (Number.isFinite(mib)) { setPolicy((current) => current ? { ...current, max_content_bytes: Math.round(mib * 1024 * 1024) } : current); setPolicyDirty(true); } }} />
-                    <span className="text-muted-foreground">{status?.content_entries.toLocaleString() ?? "0"} files · {((status?.content_bytes ?? 0) / (1024 * 1024)).toFixed(1)} MiB used</span>
+                    <span className="text-muted-foreground">{status?.content_entries.toLocaleString() ?? "0"} files · {((status?.content_bytes ?? 0) / (1024 * 1024)).toFixed(1)} MiB used{status?.content_failures ? ` · ${status.content_failures.toLocaleString()} retrying` : ""}</span>
                   </label>
                   <label className="space-y-1 text-xs">
                     <span className="font-medium">Embedding file limit</span>
                     <Input disabled={mutationBusy} type="number" min={100} max={50_000} step={100} value={policy.max_embedding_entries} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value)) { setPolicy((current) => current ? { ...current, max_embedding_entries: Math.round(value) } : current); setPolicyDirty(true); } }} />
-                    <span className="text-muted-foreground">{status?.embedding_entries.toLocaleString() ?? "0"} files embedded</span>
+                    <span className="text-muted-foreground">{status?.embedding_entries.toLocaleString() ?? "0"} files embedded{status?.embedding_failures ? ` · ${status.embedding_failures.toLocaleString()} retrying` : ""}</span>
                   </label>
                   <label className="space-y-1 text-xs">
                     <span className="font-medium">Embedding model</span>

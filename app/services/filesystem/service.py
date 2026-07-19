@@ -20,6 +20,8 @@ from app.services.filesystem.models import DirectoryPage, FileEntry, Place, Sear
 from app.services.filesystem.paging import (
     DIRECTORY_LIST_SESSION_TTL_SECONDS,
     DirectoryListSessionRegistry,
+    MAX_SEARCH_SNAPSHOT_ENTRIES,
+    SearchSessionRegistry,
 )
 from app.services.filesystem.roots import (
     configured_priority_roots,
@@ -61,6 +63,7 @@ class FilesystemService:
         self._watch_signature: tuple[str, ...] = ()
         self._maintenance_lock = asyncio.Lock()
         self._directory_lists = DirectoryListSessionRegistry()
+        self._searches = SearchSessionRegistry()
 
     async def start(self) -> None:
         if self._started:
@@ -68,6 +71,7 @@ class FilesystemService:
         self._stop = asyncio.Event()
         self._thread_stop = threading.Event()
         self._directory_lists.start()
+        self._searches.start()
         await asyncio.to_thread(self.index.initialize)
         await self.refresh_roots()
         self._started = True
@@ -95,6 +99,7 @@ class FilesystemService:
                 await asyncio.gather(*crawl, return_exceptions=True)
         self._tasks.clear()
         await asyncio.to_thread(self._directory_lists.close)
+        await asyncio.to_thread(self._searches.close)
         self._started = False
 
     def _spawn(self, coroutine: Any, name: str) -> None:
@@ -109,7 +114,14 @@ class FilesystemService:
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=interval)
             except asyncio.TimeoutError:
-                await asyncio.to_thread(self._directory_lists.reap_expired)
+                try:
+                    await asyncio.to_thread(self._directory_lists.reap_expired)
+                    await asyncio.to_thread(self._searches.reap_expired)
+                except Exception:
+                    logger.warning(
+                        "Filesystem paging cleanup failed; reaper will retry",
+                        exc_info=True,
+                    )
 
     async def refresh_roots(self) -> list[Place]:
         places = await asyncio.to_thread(discover_places)
@@ -274,29 +286,50 @@ class FilesystemService:
         if not clean:
             raise ValueError("query must not be empty")
         safe_limit = min(max(1, limit), MAX_PAGE_SIZE)
-        offset = _decode_cursor(cursor)
         resolved_root = str(Path(root).expanduser().absolute()) if root else None
+        scope = (clean, normalize_path_key(resolved_root) if resolved_root else "")
+        if cursor is not None:
+            entries, next_cursor, source, index_complete, truncated = await asyncio.to_thread(
+                self._searches.page,
+                scope,
+                cursor=cursor,
+                limit=safe_limit,
+            )
+            return SearchPage(
+                clean,
+                entries,
+                next_cursor,
+                source=source,  # type: ignore[arg-type]
+                index_complete=index_complete,
+                root=resolved_root,
+                truncated=truncated,
+            )
+
         queued = await asyncio.to_thread(self.index.queue_count)
-        if queued > 0:
-            # A partial index and the bounded disk fallback form one logical
-            # result set. Rebuild its bounded prefix for every numeric offset
-            # so a full indexed first page cannot hide cold disk-only matches.
-            prefix_limit = min(offset + safe_limit + 1, 50_001)
+        paused = bool(_indexing_settings()["paused"])
+        unavailable = await asyncio.to_thread(self._unavailable_priority_roots)
+        partial = queued > 0 or paused or bool(unavailable)
+        snapshot_limit = MAX_SEARCH_SNAPSHOT_ENTRIES + 1
+        if partial:
             index_search = asyncio.wait_for(
                 asyncio.to_thread(
-                    self.index.search, clean, limit=prefix_limit, offset=0, root=resolved_root
+                    self.index.search,
+                    clean,
+                    limit=snapshot_limit,
+                    offset=0,
+                    root=resolved_root,
                 ),
                 timeout=min(max(timeout_seconds, 0.1), 10.0),
             )
-            disk_roots = [resolved_root] if resolved_root else await asyncio.to_thread(
-                self.index.pending_root_paths
-            )
+            disk_roots = [resolved_root] if resolved_root else None
+            if disk_roots is None and queued > 0 and not paused:
+                disk_roots = await asyncio.to_thread(self.index.pending_root_paths)
             disk_search = asyncio.wait_for(
                 asyncio.to_thread(
                     self._bounded_disk_find,
                     clean,
                     resolved_root,
-                    prefix_limit,
+                    snapshot_limit,
                     timeout_seconds,
                     disk_roots,
                 ),
@@ -306,41 +339,59 @@ class FilesystemService:
             by_path = {entry.path: entry for entry in indexed_entries}
             for entry in disk_entries:
                 by_path.setdefault(entry.path, entry)
-            merged = list(by_path.values())
-            entries = merged[offset : offset + safe_limit]
+            candidates = list(by_path.values())
             source = "hybrid"
-            has_more = len(merged) > offset + safe_limit
+            index_complete = False
         else:
-            entries = await asyncio.wait_for(
+            candidates = await asyncio.wait_for(
                 asyncio.to_thread(
-                    self.index.search, clean, limit=safe_limit + 1, offset=offset, root=resolved_root
+                    self.index.search,
+                    clean,
+                    limit=snapshot_limit,
+                    offset=0,
+                    root=resolved_root,
                 ),
                 timeout=min(max(timeout_seconds, 0.1), 10.0),
             )
             source = "index"
-            if not entries and offset == 0:
-                entries = await asyncio.wait_for(
+            index_complete = True
+            if not candidates:
+                candidates = await asyncio.wait_for(
                     asyncio.to_thread(
                         self._bounded_disk_find,
                         clean,
                         resolved_root,
-                        safe_limit + 1,
+                        snapshot_limit,
                         timeout_seconds,
                     ),
                     timeout=min(max(timeout_seconds + 0.25, 0.25), 10.25),
                 )
                 source = "disk"
-            has_more = len(entries) > safe_limit
-            entries = entries[:safe_limit]
-        paused = bool(_indexing_settings()["paused"])
-        unavailable = await asyncio.to_thread(self._unavailable_priority_roots)
+        candidates.sort(
+            key=lambda entry: (
+                len(Path(entry.path).parts),
+                entry.name.casefold(),
+                normalize_path_key(entry.path),
+            )
+        )
+        entries, next_cursor, source, index_complete, truncated = await asyncio.to_thread(
+            self._searches.page,
+            scope,
+            cursor=None,
+            limit=safe_limit,
+            entries=tuple(candidates),
+            source=source,
+            index_complete=index_complete,
+            truncated=len(candidates) > MAX_SEARCH_SNAPSHOT_ENTRIES,
+        )
         return SearchPage(
             clean,
-            tuple(entries),
-            str(offset + safe_limit) if has_more else None,
-            source=source,
-            index_complete=queued == 0 and not paused and not unavailable,
+            entries,
+            next_cursor,
+            source=source,  # type: ignore[arg-type]
+            index_complete=index_complete,
             root=resolved_root,
+            truncated=truncated,
         )
 
     async def semantic_find(self, query: str, *, limit: int = 20) -> dict[str, object]:
@@ -638,10 +689,32 @@ class FilesystemService:
                                 )
                             else:
                                 await asyncio.to_thread(
-                                    self.index.mark_content_skipped, path, "not_indexed"
+                                    self.index.reset_enrichment_candidate,
+                                    path,
+                                    "content",
+                                    modified_at,
+                                    source_size,
                                 )
-                    except OSError:
-                        await asyncio.to_thread(self.index.mark_content_skipped, path, "error")
+                    except OSError as exc:
+                        async with self._maintenance_lock:
+                            commit_settings = _indexing_settings()
+                            if commit_settings["content_enabled"] and not commit_settings["paused"]:
+                                await asyncio.to_thread(
+                                    self.index.finish_enrichment_failure,
+                                    path,
+                                    "content",
+                                    str(exc),
+                                    modified_at,
+                                    source_size,
+                                )
+                            else:
+                                await asyncio.to_thread(
+                                    self.index.reset_enrichment_candidate,
+                                    path,
+                                    "content",
+                                    modified_at,
+                                    source_size,
+                                )
                     worked = True
 
             if settings["semantic_enabled"] and importlib.util.find_spec("fastembed") is not None:
@@ -679,11 +752,39 @@ class FilesystemService:
                                 )
                             else:
                                 await asyncio.to_thread(
-                                    self.index.reset_embedding_candidate, path
+                                    self.index.reset_enrichment_candidate,
+                                    path,
+                                    "embedding",
+                                    modified_at,
+                                    source_size,
                                 )
-                    except Exception:
+                    except Exception as exc:
                         logger.warning("Background embedding failed for %s", path, exc_info=True)
-                        await asyncio.to_thread(self.index.mark_embedding_unavailable, path)
+                        async with self._maintenance_lock:
+                            commit_settings = _indexing_settings()
+                            model = str(settings["embedding_model"])
+                            if (
+                                commit_settings["semantic_enabled"]
+                                and not commit_settings["paused"]
+                                and str(commit_settings["embedding_model"]) == model
+                            ):
+                                await asyncio.to_thread(
+                                    self.index.finish_enrichment_failure,
+                                    path,
+                                    "embedding",
+                                    str(exc),
+                                    modified_at,
+                                    source_size,
+                                    model=model,
+                                )
+                            else:
+                                await asyncio.to_thread(
+                                    self.index.reset_enrichment_candidate,
+                                    path,
+                                    "embedding",
+                                    modified_at,
+                                    source_size,
+                                )
                     worked = True
             await asyncio.sleep(0.1 if worked else 10.0)
 

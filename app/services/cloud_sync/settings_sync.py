@@ -190,6 +190,13 @@ class SettingsSync:
         self._heartbeat_failures: int = 0
         self._last_registration_result: Optional[str] = None  # "ok" | "error:<msg>"
         self._configure_called_at: Optional[str] = None
+        # Remote-config provenance state (app_instances.metadata). The
+        # last-known server metadata is captured from the registration
+        # response so the merge costs no extra read; the last written
+        # provenance content gates the write so heartbeats stay free.
+        self._known_metadata: Optional[dict] = None
+        self._last_provenance_written: Optional[dict] = None
+        self._pending_provenance: Optional[tuple[dict, dict]] = None
 
         self._load_local()
 
@@ -249,6 +256,12 @@ class SettingsSync:
             "last_registration_result": self._last_registration_result,
             "last_error": self._last_error,
             "heartbeat_failures": self._heartbeat_failures,
+            # What this engine reports to the fleet view. Visible here even
+            # when the engine is unconfigured, so "what WOULD we publish?"
+            # is answerable without a cloud session.
+            "app_version": _safe_app_version(),
+            "config_provenance": self._last_provenance_written,
+            "config_provenance_pending": self._pending_provenance is not None,
         }
 
     # ── local settings ──────────────────────────────────────────────────
@@ -563,6 +576,13 @@ class SettingsSync:
                 if row:
                     self._is_orphan = False
                     self._last_registration_result = "ok"
+                    # Capture server-side metadata so the provenance merge on
+                    # the next heartbeat preserves keys written by other
+                    # writers (frontend/aidream) instead of clobbering them.
+                    existing_meta = row.get("metadata")
+                    self._known_metadata = (
+                        dict(existing_meta) if isinstance(existing_meta, dict) else {}
+                    )
                     logger.info(
                         "Instance registered successfully: instance_id=%s user_id=%s",
                         self._instance_id,
@@ -680,12 +700,17 @@ class SettingsSync:
             f"&instance_id=eq.{self._instance_id}"
         )
         headers = {**self._headers(), "Prefer": "return=minimal"}
-        payload = {"last_seen": datetime.now(timezone.utc).isoformat(), **tunnel_payload}
+        payload = {
+            "last_seen": datetime.now(timezone.utc).isoformat(),
+            **tunnel_payload,
+            **self._provenance_payload(),
+        }
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.patch(url, json=payload, headers=headers)
                 if resp.is_success:
                     self._heartbeat_failures = 0
+                    self._commit_provenance()
                 else:
                     # Heartbeat failure may indicate orphan state
                     self._log_http_error("heartbeat", resp)
@@ -704,6 +729,78 @@ class SettingsSync:
             # expected; a sustained run means the instance is unreachable from
             # the cloud even though it's running — surface that, don't bury it.
             self._note_heartbeat_failure(str(exc))
+
+    def _provenance_payload(self) -> dict:
+        """Version + remote-config provenance fields to fold into a heartbeat.
+
+        Returns ``{}`` when nothing has changed, so the ordinary heartbeat
+        stays exactly as cheap as it was — no new timer, no new request, and
+        no rewriting the same jsonb every five minutes. Registration already
+        wrote ``app_version``; this catches the case that registration
+        cannot: the background app_config/catalogs fetches complete AFTER
+        boot, so the tier at registration time is usually the pre-fetch
+        fallback and would otherwise be reported as the steady state.
+
+        Best-effort — never raises into the heartbeat.
+        """
+        try:
+            from app.services.cloud_sync.instance_manager import (  # noqa: PLC0415
+                PROVENANCE_CONTENT_KEYS,
+                build_config_provenance,
+                current_app_version,
+            )
+
+            provenance = build_config_provenance()
+            content = {k: provenance.get(k) for k in PROVENANCE_CONTENT_KEYS}
+            if content == self._last_provenance_written:
+                return {}
+
+            base = self._known_metadata if isinstance(self._known_metadata, dict) else {}
+            merged = {**base, **provenance}
+            # Staged, not committed: a heartbeat that fails must retry this
+            # write on the next tick rather than believing it landed.
+            self._pending_provenance = (merged, content)
+            logger.debug(
+                "Heartbeat carrying config provenance: app_config=%s catalogs=%s (%s entries)",
+                content.get("app_config_tier"),
+                content.get("catalogs_tier"),
+                content.get("catalog_entry_count"),
+            )
+            return {"app_version": current_app_version(), "metadata": merged}
+        except Exception as exc:
+            logger.debug("Skipping provenance on this heartbeat: %s", exc)
+            return {}
+
+    def dry_run_instance_write(self) -> dict:
+        """The exact body a registration + provenance heartbeat would send.
+
+        Read-only diagnostic — makes the fleet-reporting payload inspectable
+        on an engine that has no cloud session (and therefore cannot
+        register), instead of leaving it provable only in tests.
+        """
+        from app.services.cloud_sync.instance_manager import (  # noqa: PLC0415
+            build_config_provenance,
+            get_instance_manager,
+        )
+
+        base = self._known_metadata if isinstance(self._known_metadata, dict) else {}
+        provenance = build_config_provenance()
+        return {
+            "registration": get_instance_manager().get_registration_payload(),
+            "heartbeat_provenance": {
+                "app_version": _safe_app_version(),
+                "metadata": {**base, **provenance},
+            },
+        }
+
+    def _commit_provenance(self) -> None:
+        """Mark the staged provenance as landed (called only on a 2xx)."""
+        if self._pending_provenance is None:
+            return
+        merged, content = self._pending_provenance
+        self._known_metadata = merged
+        self._last_provenance_written = content
+        self._pending_provenance = None
 
     # Number of consecutive failures before we escalate from DEBUG to a single
     # WARNING (≈ this many heartbeat intervals of being unreachable).
@@ -726,6 +823,18 @@ class SettingsSync:
                 self._heartbeat_failures,
                 reason,
             )
+
+
+def _safe_app_version() -> Optional[str]:
+    """Running app version for diagnostics — never breaks a debug endpoint."""
+    try:
+        from app.services.cloud_sync.instance_manager import (  # noqa: PLC0415
+            current_app_version,
+        )
+
+        return current_app_version()
+    except Exception:  # pragma: no cover - diagnostics must not fail
+        return None
 
 
 # Module-level singleton

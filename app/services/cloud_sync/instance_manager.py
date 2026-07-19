@@ -22,6 +22,70 @@ from app.config import MATRX_HOME_DIR
 INSTANCE_FILE = MATRX_HOME_DIR / "instance.json"
 
 
+def current_app_version() -> str:
+    """The running app version, from the single resolver in app.api.routes.
+
+    Imported lazily — app.api.routes imports the service layer, so a
+    module-level import here would be circular. Never re-implement version
+    resolution; there is exactly one ``_APP_VERSION``.
+    """
+    from app.api.routes import _APP_VERSION  # noqa: PLC0415
+
+    return str(_APP_VERSION)
+
+
+def build_config_provenance() -> dict:
+    """Remote-config provenance for ``app_instances.metadata``.
+
+    Answers "is this installed client running real remote config, or has it
+    silently fallen back?" for the admin fleet view without adding columns.
+    Reads the already-resolved state from the app_config and catalogs
+    services — it never triggers a fetch.
+
+    Best-effort: a missing/broken service degrades a field to ``None``
+    rather than raising into the caller's write path.
+    """
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    app_config_tier: str | None = None
+    catalogs_tier: str | None = None
+    catalog_entry_count: int | None = None
+
+    try:
+        from app.services.app_config import get_app_config  # noqa: PLC0415
+
+        app_config_tier = get_app_config().tier
+    except Exception as exc:
+        logger.debug("build_config_provenance: app_config tier unavailable: %s", exc)
+
+    try:
+        from app.services.catalogs import get_catalogs_service  # noqa: PLC0415
+
+        status = get_catalogs_service().status_payload()
+        catalogs_tier = status.get("tier")
+        catalog_entry_count = status.get("entry_count")
+    except Exception as exc:
+        logger.debug("build_config_provenance: catalogs status unavailable: %s", exc)
+
+    return {
+        "app_config_tier": app_config_tier,
+        "catalogs_tier": catalogs_tier,
+        "catalog_entry_count": catalog_entry_count,
+        "provenance_reported_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# Keys owned by build_config_provenance() — compared to decide whether a
+# metadata write is worth making. provenance_reported_at is EXCLUDED: it
+# changes every call, and including it would turn every heartbeat into a
+# write (the write amplification this design exists to avoid).
+PROVENANCE_CONTENT_KEYS = (
+    "app_config_tier",
+    "catalogs_tier",
+    "catalog_entry_count",
+)
+
+
 def _stable_machine_id() -> str:
     """Generate a stable machine identifier from hardware characteristics.
 
@@ -244,10 +308,18 @@ class InstanceManager:
         self._instance_name = value
 
     def get_registration_payload(self) -> dict:
-        """Get the full payload for registering this instance with the cloud."""
+        """Get the full payload for registering this instance with the cloud.
+
+        Includes ``app_version`` — the fleet view (and
+        ``app_config.min_supported_app_version`` gating) is blind without a
+        record of what is actually RUNNING in the field. Registration is the
+        canonical write for this: it happens on every startup and on every
+        re-configure, and adds no request of its own.
+        """
         info = self.system_info
         return {
             "instance_id": self.instance_id,
+            "app_version": current_app_version(),
             "instance_name": self._instance_name,
             "platform": info.get("platform"),
             "os_version": info.get("os_version"),

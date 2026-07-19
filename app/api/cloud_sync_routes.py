@@ -43,6 +43,9 @@ class SyncResult(BaseModel):
 class InstanceInfo(BaseModel):
     instance_id: str
     instance_name: str
+    # The running version this instance publishes to app_instances.app_version
+    # (what min_supported_app_version is gating against).
+    app_version: str | None = None
     platform: str | None = None
     os_version: str | None = None
     architecture: str | None = None
@@ -287,3 +290,13 @@ async def cloud_debug() -> dict:
         "supabase_url_configured": bool(SUPABASE_URL),
         "supabase_key_configured": bool(SUPABASE_PUBLISHABLE_KEY),
     }
+
+
+@router.get("/instance/dry-run")
+async def cloud_instance_dry_run() -> dict:
+    """The exact app_instances body this engine would write.
+
+    Read-only: sends nothing. Lets an engine WITHOUT a cloud session (which
+    therefore cannot register) still prove what it reports to the fleet view.
+    """
+    return get_settings_sync().dry_run_instance_write()

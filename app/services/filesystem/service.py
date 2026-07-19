@@ -571,10 +571,10 @@ class FilesystemService:
                     )
                     if retry_delay is not None:
                         logger.warning(
-                            "Filesystem directory scan failed; retrying in %.0fs path=%s",
+                            "Filesystem directory unavailable; retrying in %.0fs path=%s error=%s",
                             retry_delay,
                             item[0],
-                            exc_info=True,
+                            exc,
                         )
                     else:
                         logger.info(

@@ -42,6 +42,29 @@ _VIRTUAL_FILESYSTEMS = {
 }
 
 
+def _is_browsable_partition(partition: object) -> bool:
+    """Exclude OS implementation mounts while retaining real user volumes."""
+    fstype = str(getattr(partition, "fstype", "")).lower()
+    mountpoint = os.path.abspath(str(getattr(partition, "mountpoint", "")))
+    if not mountpoint or fstype in _VIRTUAL_FILESYSTEMS:
+        return False
+    if sys.platform == "darwin" and mountpoint != "/":
+        # APFS exposes the root data volume again beneath /System/Volumes/Data;
+        # indexing it produces a second spelling for every user file. The
+        # remaining system/developer mounts are likewise not user volumes.
+        hidden_roots = (
+            "/System/Volumes",
+            "/Library/Developer/CoreSimulator/Volumes",
+            "/private/var/vm",
+        )
+        if any(
+            mountpoint == root or mountpoint.startswith(root + os.sep)
+            for root in hidden_roots
+        ):
+            return False
+    return True
+
+
 def _xdg_user_dirs(home: Path) -> dict[str, Path]:
     result: dict[str, Path] = {}
     config = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))) / "user-dirs.dirs"
@@ -213,7 +236,7 @@ def discover_places() -> list[Place]:
         discovered.append(Place(key, label, str(path), "standard", 80, True))
 
     for partition in psutil.disk_partitions(all=True):
-        if partition.fstype.lower() in _VIRTUAL_FILESYSTEMS:
+        if not _is_browsable_partition(partition):
             continue
         path = Path(partition.mountpoint).absolute()
         normalized = normalize_path_key(str(path))

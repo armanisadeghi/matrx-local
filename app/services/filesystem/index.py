@@ -325,6 +325,9 @@ class FilesystemIndex:
                 for row in db.execute("SELECT id,path FROM filesystem_roots")
             }
             active_ids = [root.id for root in roots]
+            removed_ids = [root_id for root_id in existing_paths if root_id not in active_ids]
+            for root_id in removed_ids:
+                self._delete_path(db, existing_paths[root_id])
             for root in roots:
                 previous_path = existing_paths.get(root.id)
                 if previous_path is None or previous_path == root.path:

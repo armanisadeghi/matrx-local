@@ -16,7 +16,8 @@ from app.services.filesystem import index as filesystem_index_module
 from app.services.filesystem.models import DirectoryPage, Place, is_hidden
 from app.services.filesystem.paging import DirectoryListSessionRegistry
 from app.services.filesystem import paging as filesystem_paging_module
-from app.services.filesystem.roots import normalize_path_key
+from app.services.filesystem import roots as filesystem_roots_module
+from app.services.filesystem.roots import _is_browsable_partition, normalize_path_key
 from app.services.filesystem import service as filesystem_service_module
 from app.services.filesystem.service import FilesystemService, _minimal_roots
 from app.tools.session import ToolSession
@@ -743,6 +744,48 @@ def test_platform_hidden_attributes() -> None:
     assert is_hidden("normal.txt", SimpleNamespace(st_file_attributes=0x2, st_flags=0))
     assert is_hidden("normal.txt", SimpleNamespace(st_file_attributes=0, st_flags=0x00008000))
     assert not is_hidden("normal.txt", SimpleNamespace(st_file_attributes=0, st_flags=0))
+
+
+def test_macos_partition_discovery_excludes_apfs_aliases_and_system_mounts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(filesystem_roots_module.sys, "platform", "darwin")
+
+    assert _is_browsable_partition(
+        SimpleNamespace(fstype="apfs", mountpoint="/")
+    )
+    assert _is_browsable_partition(
+        SimpleNamespace(fstype="apfs", mountpoint="/Volumes/External")
+    )
+    assert not _is_browsable_partition(
+        SimpleNamespace(fstype="apfs", mountpoint="/System/Volumes/Data")
+    )
+    assert not _is_browsable_partition(
+        SimpleNamespace(
+            fstype="apfs",
+            mountpoint="/Library/Developer/CoreSimulator/Volumes/iOS_Example",
+        )
+    )
+
+
+def test_sync_roots_removes_entries_owned_by_disappeared_volume(tmp_path: Path) -> None:
+    removed = tmp_path / "removed-volume"
+    retained = tmp_path / "retained-volume"
+    removed.mkdir()
+    retained.mkdir()
+    stale_file = removed / "stale.txt"
+    stale_file.write_text("gone", encoding="utf-8")
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    removed_place = Place("removed", "Removed", str(removed), "volume", 10)
+    retained_place = Place("retained", "Retained", str(retained), "volume", 10)
+    index.sync_roots([removed_place, retained_place])
+    index.upsert_path(str(stale_file), removed_place.id)
+    assert index.search("stale", limit=10, offset=0)
+
+    index.sync_roots([retained_place])
+
+    assert index.search("stale", limit=10, offset=0) == []
 
 
 def test_watcher_resolves_containing_canonical_root(tmp_path: Path) -> None:

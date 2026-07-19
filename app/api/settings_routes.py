@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field
 
 from app.services.cloud_sync.settings_sync import get_settings_sync
 from app.services.local_db.repositories import AppSettingsRepo
-from app.services.paths.manager import all_paths, set_path, reset_path, safe_dir
+from app.services.paths.manager import all_paths, reset_path, set_path
+from app.services.action_needed.registry import get_action_needed_registry
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -471,6 +472,10 @@ async def validate_api_key(provider: str, req: ValidateApiKeyRequest | None = No
     repo = ApiKeysRepo()
     if not candidate and result.verdict != "unsupported":
         await repo.record_validation(provider, result.verdict, result.account)
+    if not candidate and result.verdict in {"valid", "unsupported"}:
+        await get_action_needed_registry().resolve_matching(
+            lambda item: item.action.provider == provider
+        )
 
     return ApiKeyValidation(
         provider=result.provider,
@@ -502,6 +507,10 @@ async def validate_all_api_keys() -> ValidateAllResult:
     results = await validate_many(testable)
     for result in results:
         await repo.record_validation(result.provider, result.verdict, result.account)
+        if result.verdict in {"valid", "unsupported"}:
+            await get_action_needed_registry().resolve_matching(
+                lambda item, provider=result.provider: item.action.provider == provider
+            )
 
     return ValidateAllResult(
         results=[

@@ -24,6 +24,7 @@ import supabase from "@/lib/supabase";
 import { streamCompletion } from "@/lib/llm/api";
 import { loadSettings } from "@/lib/settings";
 import type { ToolImageData, ToolMediaArtifact } from "@/lib/api";
+import type { ActionNeeded } from "@/features/action-needed";
 
 // ---- Types ----
 
@@ -42,6 +43,7 @@ export interface ToolCallResult {
   image?: ToolImageData;
   artifact?: ToolMediaArtifact;
   metadata?: Record<string, unknown>;
+  action_needed?: ActionNeeded | null;
 }
 
 export interface ChatMessage {

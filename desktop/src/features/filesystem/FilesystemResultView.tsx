@@ -284,7 +284,7 @@ function EntryRow({
           {...(onNavigate ? { onNavigate } : {})}
         />
       ))}
-      {expanded && loadedChildren?.length === 0 && !loading && !childError && (
+      {expanded && loadedChildren?.length === 0 && !childCursor && !loading && !childError && (
         <div className="py-1 pr-2 text-[11px] text-muted-foreground" style={{ paddingLeft: `${44 + depth * 18}px` }}>
           Folder is empty.
         </div>
@@ -292,7 +292,7 @@ function EntryRow({
       {expanded && childCursor && (
         <div className="py-1 pr-2" style={{ paddingLeft: `${44 + depth * 18}px` }}>
           <Button type="button" variant="ghost" size="sm" className="h-7 text-[11px]" disabled={loading} onClick={() => void loadMoreChildren()}>
-            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Load more children
+            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {loadedChildren?.length === 0 ? "Continue scanning" : "Load more children"}
           </Button>
         </div>
       )}
@@ -431,7 +431,11 @@ function DirectoryPage({
       <div className={cn("overflow-y-auto p-1", layout === "page" ? "min-h-0 flex-1" : "max-h-80")}>
         {result.entries.length === 0 ? (
           <div className="p-4 text-center text-xs text-muted-foreground">
-            {result.kind === "filesystem.search-page" ? "No matching files or folders." : "This directory is empty."}
+            {result.kind === "filesystem.search-page"
+              ? "No matching files or folders."
+              : result.nextCursor
+                ? "Scanning this large directory…"
+                : "This directory is empty."}
           </div>
         ) : result.entries.map((entry) => (
           <EntryRow
@@ -449,7 +453,7 @@ function DirectoryPage({
       {result.nextCursor && onLoadMore && (
         <div className="border-t p-2 text-center">
           <Button type="button" variant="ghost" size="sm" disabled={loadingMore} onClick={() => onLoadMore(result.nextCursor!)}>
-            {loadingMore && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Load more
+            {loadingMore && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {result.entries.length === 0 ? "Continue scanning" : "Load more"}
           </Button>
         </div>
       )}

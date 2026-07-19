@@ -51,6 +51,7 @@ from pydantic import BaseModel, Field
 
 from app.common.route_errors import safe_route
 from app.services.action_needed import download_resolution_needed
+from app.services.action_needed.registry import get_action_needed_registry
 from app.services.downloads.failures import hf_token_missing
 from app.services.video_gen.jobs import get_video_job_store
 from app.services.video_gen.models import get_video_gen_models
@@ -277,6 +278,8 @@ async def download_video_model(req: DownloadModelRequest) -> DownloadModelRespon
     Progress streams over /downloads/stream (category "video_gen").
     Weights land in ~/.matrx/video-models/<id>/ and are resumable.
     """
+    operation_key = f"video-gen.download:{req.model_id}"
+    action_registry = get_action_needed_registry()
     result = await get_video_gen_service().start_download(req.model_id)
     if result.get("needs_hf_token"):
         resolution = hf_token_missing(req.model_id).resolution
@@ -286,6 +289,7 @@ async def download_video_model(req: DownloadModelRequest) -> DownloadModelRespon
             source="video-gen.download",
             resource_id=req.model_id,
         )
+        await action_registry.reconcile_operation(operation_key, action)
         raise HTTPException(
             status_code=409,
             detail={
@@ -295,7 +299,9 @@ async def download_video_model(req: DownloadModelRequest) -> DownloadModelRespon
             },
         )
     if result.get("error"):
+        await action_registry.reconcile_operation(operation_key, None)
         raise HTTPException(status_code=404, detail=result["error"])
+    await action_registry.reconcile_operation(operation_key, None)
     return DownloadModelResponse(
         queued=bool(result.get("queued")),
         download_id=result.get("download_id"),

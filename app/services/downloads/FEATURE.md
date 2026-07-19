@@ -25,7 +25,7 @@ That's not an error. It's a fact."** (Arman, repeatedly.)
   render in the history table. Client log lines for them are info-level
   `[action-needed]`, not ERROR (`DownloadManagerContext.tsx`).
 - Adding a new self-fixable failure = one constructor in `failures.py`
-  (+ a `useResolutionAction` case only for a brand-new action KIND).
+  (adapted through `actionNeededFromDownload` and the canonical dispatcher).
 
 ## Attribution precision (the FLUX lesson)
 

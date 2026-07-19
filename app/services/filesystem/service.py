@@ -17,6 +17,10 @@ import psutil
 
 from app.services.filesystem.index import FilesystemIndex, _should_skip_directory
 from app.services.filesystem.models import DirectoryPage, FileEntry, Place, SearchPage
+from app.services.filesystem.paging import (
+    DIRECTORY_LIST_SESSION_TTL_SECONDS,
+    DirectoryListSessionRegistry,
+)
 from app.services.filesystem.roots import (
     configured_priority_roots,
     discover_places,
@@ -56,18 +60,21 @@ class FilesystemService:
         self._crawl_iterations = 0
         self._watch_signature: tuple[str, ...] = ()
         self._maintenance_lock = asyncio.Lock()
+        self._directory_lists = DirectoryListSessionRegistry()
 
     async def start(self) -> None:
         if self._started:
             return
         self._stop = asyncio.Event()
         self._thread_stop = threading.Event()
+        self._directory_lists.start()
         await asyncio.to_thread(self.index.initialize)
         await self.refresh_roots()
         self._started = True
         self._spawn(self._crawl_loop(), "filesystem-crawl")
         self._spawn(self._watch_loop(), "filesystem-watch")
         self._spawn(self._enrichment_loop(), "filesystem-enrichment")
+        self._spawn(self._directory_list_reaper(), "filesystem-list-reaper")
 
     async def stop(self) -> None:
         self._stop.set()
@@ -87,12 +94,22 @@ class FilesystemService:
                     task.cancel()
                 await asyncio.gather(*crawl, return_exceptions=True)
         self._tasks.clear()
+        await asyncio.to_thread(self._directory_lists.close)
         self._started = False
 
     def _spawn(self, coroutine: Any, name: str) -> None:
         task = asyncio.create_task(coroutine, name=name)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    async def _directory_list_reaper(self) -> None:
+        """Delete expired disk snapshots even when a client abandons its cursor."""
+        interval = min(60.0, DIRECTORY_LIST_SESSION_TTL_SECONDS)
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                await asyncio.to_thread(self._directory_lists.reap_expired)
 
     async def refresh_roots(self) -> list[Place]:
         places = await asyncio.to_thread(discover_places)
@@ -220,19 +237,16 @@ class FilesystemService:
         if not os.path.isdir(absolute):
             raise NotADirectoryError(absolute)
         safe_limit = min(max(1, limit), MAX_PAGE_SIZE)
-        offset = _decode_cursor(cursor)
-
-        def _read() -> DirectoryPage:
-            with os.scandir(absolute) as iterator:
-                entries = [FileEntry.from_dir_entry(item) for item in iterator]
-            if not show_hidden:
-                entries = [entry for entry in entries if not entry.hidden]
-            entries.sort(key=lambda item: (item.kind != "dir", item.name.casefold()))
-            page = entries[offset : offset + safe_limit]
-            next_cursor = str(offset + safe_limit) if offset + safe_limit < len(entries) else None
-            return DirectoryPage(absolute, tuple(page), next_cursor, len(entries))
-
-        return await asyncio.wait_for(asyncio.to_thread(_read), timeout=5.0)
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                self._directory_lists.page,
+                absolute,
+                cursor=cursor,
+                limit=safe_limit,
+                show_hidden=show_hidden,
+            ),
+            timeout=5.0,
+        )
 
     async def prepare_open(self, path: str) -> dict[str, object]:
         """Return an OS-open target, hydrating cloud-backed pointer files first."""

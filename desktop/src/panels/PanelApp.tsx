@@ -16,7 +16,6 @@ import { HashRouter } from "react-router-dom";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AppActionBanner } from "@/components/layout/AppActionBanner";
 import {
-  ActionNeededNavigationBridge,
   ActionNeededSources,
   actionNeededStore,
 } from "@/features/action-needed";
@@ -91,7 +90,6 @@ function PanelInner({ page }: { page: PanelPage }) {
 
   return (
     <HashRouter>
-      <ActionNeededNavigationBridge />
       <PanelLayout title={entry.title} status={status}>
         <AppActionBanner engineStatus={status} />
         {body}

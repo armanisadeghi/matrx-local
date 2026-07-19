@@ -81,6 +81,41 @@ describe("ActionNeededStore", () => {
     expect(store.getSnapshot()).toEqual([]);
   });
 
+  it("accepts a restarted source's lower versions and drops its old tombstones", () => {
+    const store = new ActionNeededStore();
+    store.reconcile({
+      source: "engine",
+      epoch: "old-process",
+      version: 20,
+      items: [item("recurs", 100, "engine")],
+    });
+    store.resolve("recurs", 200);
+    store.reconcile({
+      source: "engine",
+      epoch: "new-process",
+      version: 1,
+      items: [item("recurs", 1, "engine")],
+    });
+    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual(["recurs"]);
+  });
+
+  it("clears old backend sources when a restarted registry is empty", () => {
+    const store = new ActionNeededStore();
+    store.acceptBackendEpoch("old");
+    store.reconcile({ source: "source-a", epoch: "old", version: 3, items: [item("old", 3, "source-a")] });
+    store.acceptBackendEpoch("new");
+    expect(store.getSnapshot()).toEqual([]);
+  });
+
+  it("clears source A when the restarted registry only publishes source B", () => {
+    const store = new ActionNeededStore();
+    store.acceptBackendEpoch("old");
+    store.reconcile({ source: "source-a", epoch: "old", version: 3, items: [item("old", 3, "source-a")] });
+    store.acceptBackendEpoch("new");
+    store.reconcile({ source: "source-b", epoch: "new", version: 1, items: [item("new", 1, "source-b")] });
+    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual(["new"]);
+  });
+
   it("ingests WebSocket upsert, resolve, and null-clear events", () => {
     actionNeededStore.reset();
     ingestActionNeededMessage({ action_needed: item("ws", 1, "socket") });

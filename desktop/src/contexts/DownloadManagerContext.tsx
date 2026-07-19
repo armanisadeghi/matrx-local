@@ -34,6 +34,11 @@ import { engine } from "@/lib/api";
 import { emitClientLog } from "@/hooks/use-unified-log";
 import type { DownloadEntry, EnqueueOptions } from "@/lib/downloads/types";
 import { DOWNLOAD_LOG_SOURCE } from "@/lib/downloads/types";
+import {
+  retryBackendFor,
+  usesHuggingFaceHttp,
+  type DownloadBackend,
+} from "@/lib/downloads/ownership";
 
 // Re-export for convenience
 export type { DownloadEntry, EnqueueOptions };
@@ -45,6 +50,7 @@ interface DownloadManagerContextValue {
   openModal: () => void;
   closeModal: () => void;
   enqueue: (opts: EnqueueOptions) => Promise<DownloadEntry | null>;
+  retry: (entry: DownloadEntry) => Promise<DownloadEntry | null>;
   cancel: (id: string) => Promise<void>;
 }
 
@@ -165,7 +171,7 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
 
   // ── Event handler ────────────────────────────────────────────────────────
 
-  const handleEvent = useCallback((raw: unknown) => {
+  const handleEvent = useCallback((raw: unknown, backend: DownloadBackend) => {
     if (!raw || typeof raw !== "object") return;
     const payload = raw as Partial<DownloadEntry> & { id?: string };
     if (!payload.id) return;
@@ -199,6 +205,7 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
 
     const merged = {
       ...(payload as DownloadEntry & { id: string }),
+      backend,
       speed_bps,
       ...(eta_seconds !== undefined ? { eta_seconds } : {}),
       // Ensure updated_at always present
@@ -254,12 +261,28 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
       ];
       for (const evt of coreEvents) {
         if (cancelled) break;
-        const unlisten = await tauriListen(evt, handleEvent);
+        const unlisten = await tauriListen(evt, (payload) =>
+          handleEvent(payload, "rust"),
+        );
         if (cancelled) {
           unlisten();
           break;
         }
         cleanup.push(unlisten);
+      }
+      if (!cancelled) {
+        try {
+          const restored = await tauriInvoke<DownloadEntry[]>("dm_list");
+          if (!cancelled) {
+            restored.forEach((entry) => handleEvent(entry, "rust"));
+          }
+        } catch (error) {
+          emitClientLog(
+            "error",
+            `[downloads] Native history hydration failed: ${String(error)}`,
+            DOWNLOAD_LOG_SOURCE,
+          );
+        }
       }
     })();
 
@@ -294,7 +317,7 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
       es.onmessage = (evt) => {
         try {
           const payload = JSON.parse(evt.data);
-          handleEvent(payload);
+          handleEvent(payload, "python");
           retryDelay = 2000;
         } catch {
           // Ignore malformed events
@@ -398,58 +421,26 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
 
   // ── API ──────────────────────────────────────────────────────────────────
 
-  const enqueue = useCallback(
+  const enqueuePython = useCallback(
     async (opts: EnqueueOptions): Promise<DownloadEntry | null> => {
       const id = opts.id ?? `${opts.category}-${opts.filename}-${Date.now()}`;
       try {
-        let entry: DownloadEntry;
-        if (isTauri()) {
-          entry = await tauriInvoke<DownloadEntry>("dm_enqueue", {
-            id,
-            category: opts.category,
-            filename: opts.filename,
-            displayName: opts.display_name,
-            urls: opts.urls,
-            priority: opts.priority ?? 0,
-            metadata: opts.metadata ? JSON.stringify(opts.metadata) : null,
-          });
-        } else {
-          const engineUrl = engine.engineUrl;
-          if (!engineUrl) return null;
-          const resp = await fetch(`${engineUrl}/downloads`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              download_id: id,
-              category: opts.category,
-              filename: opts.filename,
-              display_name: opts.display_name,
-              urls: opts.urls,
-              priority: opts.priority ?? 0,
-              metadata: opts.metadata,
-            }),
-          });
-          if (!resp.ok) {
-            emitClientLog(
-              "error",
-              `[downloads] enqueue HTTP ${resp.status} for ${opts.filename}`,
-              DOWNLOAD_LOG_SOURCE,
-            );
-            return null;
-          }
-          entry = (await resp.json()) as DownloadEntry;
-        }
-        setEntriesMap((prev) => mergeEntry(prev, entry));
-        emitClientLog(
-          "info",
-          `[downloads] Enqueued: ${opts.filename} (id=${id} category=${opts.category} priority=${opts.priority ?? 0})`,
-          DOWNLOAD_LOG_SOURCE,
-        );
-        return entry;
-      } catch (e) {
+        const entry = (await engine.post("/downloads", {
+          download_id: id,
+          category: opts.category,
+          filename: opts.filename,
+          display_name: opts.display_name,
+          urls: opts.urls,
+          priority: opts.priority ?? 0,
+          metadata: opts.metadata,
+        })) as DownloadEntry;
+        const owned = { ...entry, backend: "python" as const };
+        setEntriesMap((prev) => mergeEntry(prev, owned));
+        return owned;
+      } catch (error) {
         emitClientLog(
           "error",
-          `[downloads] enqueue FAILED for ${opts.filename}: ${String(e)}`,
+          `[downloads] Python enqueue FAILED for ${opts.filename}: ${String(error)}`,
           DOWNLOAD_LOG_SOURCE,
         );
         return null;
@@ -458,29 +449,110 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const cancel = useCallback(async (id: string): Promise<void> => {
-    try {
-      if (isTauri()) {
-        await tauriInvoke("dm_cancel", { id });
-      } else {
-        const engineUrl = engine.engineUrl;
-        if (!engineUrl) {
+  const enqueueRust = useCallback(
+    async (opts: EnqueueOptions): Promise<DownloadEntry | null> => {
+      const id = opts.id ?? `${opts.category}-${opts.filename}-${Date.now()}`;
+      try {
+        // This secret crosses IPC only for an HF HTTPS transfer. Rust keeps it
+        // in process memory for this queue item; it never enters metadata/DB.
+        const hfToken = usesHuggingFaceHttp(opts)
+          ? await engine.getHuggingfaceTokenForDownloads(true)
+          : null;
+        const entry = await tauriInvoke<DownloadEntry>("dm_enqueue", {
+          id,
+          category: opts.category,
+          filename: opts.filename,
+          displayName: opts.display_name,
+          urls: opts.urls,
+          priority: opts.priority ?? 0,
+          metadata: opts.metadata ? JSON.stringify(opts.metadata) : null,
+          hfToken,
+        });
+        const owned = { ...entry, backend: "rust" as const };
+        setEntriesMap((prev) => mergeEntry(prev, owned));
+        return owned;
+      } catch (error) {
+        emitClientLog(
+          "error",
+          `[downloads] Native enqueue FAILED for ${opts.filename}: ${String(error)}`,
+          DOWNLOAD_LOG_SOURCE,
+        );
+        return null;
+      }
+    },
+    [],
+  );
+
+  const enqueue = useCallback(
+    async (opts: EnqueueOptions): Promise<DownloadEntry | null> => {
+      const id = opts.id ?? `${opts.category}-${opts.filename}-${Date.now()}`;
+      const entry = isTauri()
+        ? await enqueueRust({ ...opts, id })
+        : await enqueuePython({ ...opts, id });
+      if (entry) {
+        emitClientLog(
+          "info",
+          `[downloads] Enqueued: ${opts.filename} (id=${id} category=${opts.category} priority=${opts.priority ?? 0})`,
+          DOWNLOAD_LOG_SOURCE,
+        );
+      }
+      return entry;
+    },
+    [enqueuePython, enqueueRust],
+  );
+
+  const retry = useCallback(
+    async (entry: DownloadEntry): Promise<DownloadEntry | null> => {
+      const backend = retryBackendFor(entry);
+      let source = entry;
+      // SSE progress snapshots intentionally stay lean. Hydrate the owning
+      // Python row before retry when URLs/metadata were not in the event.
+      if (
+        backend === "python" &&
+        (!entry.urls?.length || entry.metadata == null)
+      ) {
+        try {
+          source = (await engine.get(
+            `/downloads/${encodeURIComponent(entry.id)}`,
+          )) as DownloadEntry;
+        } catch (error) {
           emitClientLog(
             "error",
-            `[downloads] cancel FAILED for id=${id}: engine not connected`,
+            `[downloads] Could not hydrate Python retry ${entry.id}: ${String(error)}`,
             DOWNLOAD_LOG_SOURCE,
           );
-          throw new Error("Engine not connected — could not cancel download.");
+          return null;
         }
-        const resp = await fetch(`${engineUrl}/downloads/${id}`, {
-          method: "DELETE",
-        });
-        if (!resp.ok) {
-          const detail = await resp.text().catch(() => `HTTP ${resp.status}`);
-          throw new Error(
-            `Cancel request failed (HTTP ${resp.status}): ${detail}`,
-          );
-        }
+      }
+      let metadata = source.metadata ?? undefined;
+      if (metadata && "resolution" in metadata) {
+        const { resolution: _dropped, ...rest } = metadata;
+        metadata = rest;
+      }
+      const opts: EnqueueOptions = {
+        // Reuse the source-owned ID. Both managers replace failed rows in
+        // place, clearing their old resolution instead of leaving a stale
+        // blocker beside a second retry row.
+        id: entry.id,
+        category: source.category,
+        filename: source.filename,
+        display_name: source.display_name,
+        urls: source.urls,
+        priority: source.priority,
+        ...(metadata !== undefined ? { metadata } : {}),
+      };
+      return backend === "python" ? enqueuePython(opts) : enqueueRust(opts);
+    },
+    [enqueuePython, enqueueRust],
+  );
+
+  const cancel = useCallback(async (id: string): Promise<void> => {
+    try {
+      const backend = entriesMapRef.current.get(id)?.backend;
+      if (isTauri() && backend !== "python") {
+        await tauriInvoke("dm_cancel", { id });
+      } else {
+        await engine.delete(`/downloads/${encodeURIComponent(id)}`);
       }
       // Optimistically update UI — only reached when the cancel actually
       // succeeded (Tauri invoke resolved or the DELETE returned ok).
@@ -522,6 +594,7 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
         openModal,
         closeModal,
         enqueue,
+        retry,
         cancel,
       }}
     >

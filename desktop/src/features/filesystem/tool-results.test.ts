@@ -406,6 +406,30 @@ describe("tool call persistence", () => {
     expect(completed.results).toHaveLength(1);
     expect(completed.results[0]?.metadata).toEqual({ count: 1 });
   });
+
+  it("preserves contextual action-needed payloads for live tool results", () => {
+    const action = {
+      fingerprint: "os-permission:camera:Capture",
+      code: "camera_required",
+      kind: "os_permission",
+      feature: "Capture",
+      title: "Camera access is needed",
+      message: "Allow camera access.",
+      action: { kind: "request_os_permission", label: "Allow Camera" },
+      source: "tool.camera",
+      status: "active",
+    };
+    const completed = reduceLiveToolEvent(
+      { calls: [], results: [] },
+      {
+        event: "tool_error",
+        call_id: "camera-call",
+        tool_name: "CameraCapture",
+        data: { result: { output: "blocked", action_needed: action } },
+      },
+    );
+    expect(completed.results[0]?.action_needed).toEqual(action);
+  });
 });
 
 describe("engine paths", () => {

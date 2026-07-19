@@ -48,6 +48,7 @@ from app.services.action_needed import (
     ActionNeededAction,
     ActionNeededKind,
 )
+from app.services.action_needed.registry import get_action_needed_registry
 from app.tools.tool_schemas import (
     generate_all_tool_schemas,
     get_anthropic_tools,
@@ -604,6 +605,9 @@ async def provider_readiness(provider: str) -> ProviderReadiness:
 
     from app.services.ai.key_manager import get_cached_user_keys
 
+    operation_key = f"chat.provider-readiness:{provider}"
+    action_registry = get_action_needed_registry()
+
     if get_cached_user_keys().get(provider, "").strip():
         from app.services.local_db.repositories import ApiKeysRepo
 
@@ -614,10 +618,11 @@ async def provider_readiness(provider: str) -> ProviderReadiness:
             # validation is advisory and may be unavailable during early boot.
             validation = {}
         if validation.get("verdict") != "invalid":
+            await action_registry.reconcile_operation(operation_key, None)
             return ProviderReadiness(provider=provider, ready=True)
 
         spec = PROVIDER_GRANTS[provider]
-        return ProviderReadiness(
+        response = ProviderReadiness(
             provider=provider,
             ready=False,
             action_needed=ActionNeeded(
@@ -636,9 +641,13 @@ async def provider_readiness(provider: str) -> ProviderReadiness:
                 source="chat.provider_readiness",
             ),
         )
+        await action_registry.reconcile_operation(
+            operation_key, response.action_needed
+        )
+        return response
 
     spec = PROVIDER_GRANTS[provider]
-    return ProviderReadiness(
+    response = ProviderReadiness(
         provider=provider,
         ready=False,
         action_needed=ActionNeeded(
@@ -660,6 +669,8 @@ async def provider_readiness(provider: str) -> ProviderReadiness:
             source="chat.provider_readiness",
         ),
     )
+    await action_registry.reconcile_operation(operation_key, response.action_needed)
+    return response
 
 
 # ---------------------------------------------------------------------------

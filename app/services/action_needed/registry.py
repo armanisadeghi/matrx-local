@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -18,6 +19,9 @@ def invocation_key(tool: str, tool_input: dict[str, Any]) -> str:
 
 class ActionNeededRegistry:
     def __init__(self) -> None:
+        # Versions are process-local counters.  The epoch lets clients accept
+        # version 0/1 after an engine restart instead of treating it as stale.
+        self._epoch = uuid.uuid4().hex
         self._items: dict[str, ActionNeeded] = {}
         self._invocations: dict[str, str] = {}
         self._versions: dict[str, int] = {}
@@ -32,6 +36,7 @@ class ActionNeededRegistry:
         return {
             "type": "action_needed_snapshot",
             "source": source,
+            "epoch": self._epoch,
             "version": self._versions.get(source, 0),
             "items": [
                 item.model_dump(mode="json", exclude_none=True)
@@ -43,7 +48,13 @@ class ActionNeededRegistry:
     async def snapshots(self) -> list[dict[str, Any]]:
         async with self._lock:
             sources = set(self._versions) | {item.source for item in self._items.values()}
-            return [self._snapshot_unlocked(source) for source in sorted(sources)]
+            # Always lead with a process-wide epoch handshake. A restarted
+            # engine may have no sources at all (or a completely different set),
+            # and clients still must evict every item owned by the old process.
+            return [
+                {"type": "action_needed_epoch", "epoch": self._epoch},
+                *(self._snapshot_unlocked(source) for source in sorted(sources)),
+            ]
 
     async def reconcile_invocation(
         self,
@@ -51,7 +62,19 @@ class ActionNeededRegistry:
         tool_input: dict[str, Any],
         item: ActionNeeded | None,
     ) -> None:
-        key = invocation_key(tool, tool_input)
+        await self._reconcile_binding(
+            f"tool:{invocation_key(tool, tool_input)}", item
+        )
+
+    async def reconcile_operation(
+        self, operation_key: str, item: ActionNeeded | None
+    ) -> None:
+        """Own one non-tool operation's requirement through retry success."""
+        await self._reconcile_binding(f"operation:{operation_key}", item)
+
+    async def _reconcile_binding(
+        self, key: str, item: ActionNeeded | None
+    ) -> None:
         changed_sources: set[str] = set()
         async with self._lock:
             previous = self._invocations.pop(key, None)
@@ -67,6 +90,37 @@ class ActionNeededRegistry:
                 changed_sources.add(item.source)
                 if replaced is not None and replaced.source != item.source:
                     changed_sources.add(replaced.source)
+            for source in changed_sources:
+                self._versions[source] = self._versions.get(source, 0) + 1
+            snapshots = [self._snapshot_unlocked(source) for source in changed_sources]
+            listeners = tuple(self._listeners)
+        for snapshot in snapshots:
+            await asyncio.gather(
+                *(listener(snapshot) for listener in listeners),
+                return_exceptions=True,
+            )
+
+    async def resolve_matching(
+        self, predicate: Callable[[ActionNeeded], bool]
+    ) -> None:
+        """Resolve authoritative items after an out-of-band grant recheck."""
+        changed_sources: set[str] = set()
+        async with self._lock:
+            fingerprints = {
+                fingerprint
+                for fingerprint, item in self._items.items()
+                if predicate(item)
+            }
+            if not fingerprints:
+                return
+            for fingerprint in fingerprints:
+                item = self._items.pop(fingerprint)
+                changed_sources.add(item.source)
+            self._invocations = {
+                key: fingerprint
+                for key, fingerprint in self._invocations.items()
+                if fingerprint not in fingerprints
+            }
             for source in changed_sources:
                 self._versions[source] = self._versions.get(source, 0) + 1
             snapshots = [self._snapshot_unlocked(source) for source in changed_sources]

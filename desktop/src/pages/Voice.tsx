@@ -39,7 +39,6 @@ import {
 } from "@/components/ui/popover";
 import {
   Mic,
-  MicOff,
   Download,
   CheckCircle2,
   AlertCircle,
@@ -82,6 +81,11 @@ import {
 import { cn } from "@/lib/utils";
 import { getSession } from "@/lib/transcription/sessions";
 import { emitClientLog } from "@/hooks/use-client-log";
+import {
+  ActionNeededCard,
+  actionNeededStore,
+  type ActionNeeded,
+} from "@/features/action-needed";
 import type {
   WhisperModelTier,
   HardwareDetectionResult,
@@ -852,6 +856,39 @@ function TranscribeTab({
   onContinueSession: (sessionId: string) => Promise<void>;
 }) {
   const { permissions, check, request, openSettings } = usePermissionsContext();
+  const microphoneStatus = permissions.get("microphone")?.status;
+  const microphoneAction = useMemo<ActionNeeded | null>(() => {
+    if (
+      microphoneStatus === "granted" ||
+      microphoneStatus === "loading" ||
+      microphoneStatus === "unavailable"
+    ) {
+      return null;
+    }
+    return {
+      fingerprint: "os-permission:microphone:voice",
+      code: "microphone_required",
+      kind: "os_permission",
+      feature: "Voice recording",
+      title: "Microphone access is needed",
+      message: "Allow microphone access to record or transcribe your voice.",
+      action: {
+        kind: "request_os_permission",
+        label: "Allow Microphone",
+        permission_key: "microphone",
+        route: "/devices?permission=microphone",
+      },
+      source: "voice-permissions",
+      status: "active",
+      observed_at: Date.now(),
+    };
+  }, [microphoneStatus]);
+  useEffect(() => {
+    actionNeededStore.reconcileLocal(
+      "voice-permissions",
+      microphoneAction ? [microphoneAction] : null,
+    );
+  }, [microphoneAction]);
   const [permError, setPermError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -1485,19 +1522,9 @@ function TranscribeTab({
 
             <div className="flex flex-col items-center gap-3 py-4">
               {/* Mic permission denied banner */}
-              {permissions.get("microphone")?.status === "denied" &&
-                !state.isRecording && (
-                  <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-500">
-                    <MicOff className="h-4 w-4 shrink-0" />
-                    <span>Microphone access denied.</span>
-                    <button
-                      className="underline underline-offset-2 hover:text-amber-400"
-                      onClick={() => openSettings("microphone")}
-                    >
-                      Open Settings
-                    </button>
-                  </div>
-                )}
+              {microphoneAction && !state.isRecording && (
+                <ActionNeededCard item={microphoneAction} />
+              )}
 
               {/* Main mic button */}
               <RecordingMicButton

@@ -9,7 +9,10 @@ import errno
 from typing import Any, Callable, Coroutine
 
 from app.tools.session import ToolSession
-from app.services.action_needed.models import filesystem_access_needed
+from app.services.action_needed.models import (
+    capability_install_needed,
+    filesystem_access_needed,
+)
 from app.tools.tools.clipboard import tool_clipboard_read, tool_clipboard_write
 from app.tools.tools.execution import tool_bash, tool_bash_output, tool_task_stop
 from app.tools.tools.file_ops import (
@@ -522,6 +525,20 @@ async def dispatch(
                 type=ToolResultType.ERROR,
                 output=f"Tool {tool_name} failed: {type(e).__name__}: {e}",
             )
+    # Eliminate the legacy metadata-only remediation taxonomy at the dispatcher
+    # boundary. Existing tools can report the capability id, but every client
+    # receives the canonical ActionNeeded shape and the metadata key is removed.
+    capability_id = (
+        result.metadata.pop("fix_capability_id", None) if result.metadata else None
+    )
+    if capability_id and result.action_needed is None:
+        result.action_needed = capability_install_needed(
+            feature=tool_name,
+            capability_id=str(capability_id),
+            source=f"tool:{tool_name}",
+            message=result.output,
+        )
+
     from app.services.action_needed.registry import get_action_needed_registry
 
     await get_action_needed_registry().reconcile_invocation(

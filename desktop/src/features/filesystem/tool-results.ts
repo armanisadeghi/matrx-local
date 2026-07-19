@@ -390,11 +390,20 @@ export function extractToolParts(content: unknown): ExtractedToolParts {
       });
     } else if (type === "tool_result") {
       const output = item.content ?? item.output ?? item.result ?? item.output_preview ?? "";
+      const resultRecord = record(item.result) ?? record(output);
       results.push({
         tool_call_id: callId,
         type: item.is_error === true ? "error" : "success",
         output: safeToolOutput(output),
         ...(record(item.metadata) ? { metadata: record(item.metadata)! } : {}),
+        ...(record(item.action_needed) || record(resultRecord?.action_needed)
+          ? {
+              action_needed: (record(item.action_needed) ??
+                record(resultRecord?.action_needed)) as unknown as NonNullable<
+                ToolCallResult["action_needed"]
+              >,
+            }
+          : {}),
       });
     }
   }
@@ -489,6 +498,13 @@ export function reduceLiveToolEvent(
         : {}),
     ...(record(dataResult)?.image
       ? { image: record(dataResult)?.image as unknown as ToolImageData }
+      : {}),
+    ...(record(dataResult)?.action_needed
+      ? {
+          action_needed: record(dataResult)?.action_needed as NonNullable<
+            ToolCallResult["action_needed"]
+          >,
+        }
       : {}),
   };
   const hasResult = current.results.some((item) => item.tool_call_id === event.call_id);

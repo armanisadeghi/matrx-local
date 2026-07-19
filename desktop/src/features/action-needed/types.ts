@@ -35,6 +35,8 @@ export interface ActionNeeded {
 
 export interface ActionNeededSnapshot {
   source: string;
+  /** Process identity for the source's version sequence. */
+  epoch?: string;
   /** Monotonically increasing source version. Older snapshots are ignored. */
   version: number;
   items: ActionNeeded[] | null;

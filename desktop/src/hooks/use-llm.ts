@@ -58,13 +58,8 @@ export interface LlmState {
   serverStatus: LlmServerStatus | null;
   downloadedModels: DownloadedLlmModel[];
 
-  /** Hugging Face token is set (engine API Keys or legacy llm.json). */
+  /** Hugging Face token is set in the canonical engine API-key store. */
   hfTokenConfigured: boolean;
-  /** True when the last download failed because the repo uses XET storage and no token is set. */
-  xetTokenRequired: boolean;
-  /** The model that triggered the XET token requirement (so the modal can retry it). */
-  xetPendingFilename: string | null;
-  xetPendingUrls: string[];
 
   // Errors
   error: string | null;
@@ -73,11 +68,7 @@ export interface LlmState {
 export interface LlmActions {
   detectHardware: () => Promise<LlmHardwareResult>;
   /** Pass all part URLs in order. Single-file models have one URL; split models have multiple. */
-  downloadModel: (
-    filename: string,
-    urls: string[],
-    overrideHfToken?: string,
-  ) => Promise<void>;
+  downloadModel: (filename: string, urls: string[]) => Promise<void>;
   /**
    * Add a model to the download queue. If nothing is currently downloading,
    * the download starts immediately. Otherwise it runs after the current one
@@ -102,10 +93,6 @@ export interface LlmActions {
   ) => Promise<string>;
   /** Re-read whether a Hugging Face token is configured (after changing Settings). */
   refreshHfTokenConfigured: () => Promise<void>;
-  /** Save a new HF token and immediately retry the pending XET download. */
-  saveHfTokenAndRetry: (token: string) => Promise<void>;
-  /** Dismiss the XET token modal without retrying. */
-  dismissXetModal: () => void;
   startServer: (
     modelFilename: string,
     gpuLayers: number,
@@ -152,11 +139,6 @@ export function useLlm(): [LlmState, LlmActions] {
   >([]);
   const [error, setError] = useState<string | null>(null);
   const [hfTokenConfigured, setHfTokenConfigured] = useState(false);
-  const [xetTokenRequired, setXetTokenRequired] = useState(false);
-  const [xetPendingFilename, setXetPendingFilename] = useState<string | null>(
-    null,
-  );
-  const [xetPendingUrls, setXetPendingUrls] = useState<string[]>([]);
 
   const unlistenRef = useRef<UnlistenFn[]>([]);
   // Ref-based queue so the processor callback always sees latest value
@@ -420,16 +402,13 @@ export function useLlm(): [LlmState, LlmActions] {
    * by processQueue. Direct callers (quickSetup) can call this directly.
    */
   const downloadModel = useCallback(
-    async (filename: string, urls: string[], overrideHfToken?: string) => {
+    async (filename: string, urls: string[]) => {
       const generation = ++downloadGenerationRef.current;
       setIsDownloading(true);
       isDownloadingRef.current = true;
       setDownloadingFilename(filename);
       setDownloadProgress(null);
       setDownloadCancelled(false);
-      setXetTokenRequired(false);
-      setXetPendingFilename(null);
-      setXetPendingUrls([]);
       setError(null);
 
       const unlisten = await tauriListen<LlmDownloadProgress>(
@@ -444,11 +423,7 @@ export function useLlm(): [LlmState, LlmActions] {
       );
 
       try {
-        // Use override token (e.g. freshly entered in wizard) when provided so
-        // we don't race against the async engine fetch which could return null.
-        const hfTok =
-          overrideHfToken?.trim() ||
-          (await engine.getHuggingfaceTokenForDownloads());
+        const hfTok = await engine.getHuggingfaceTokenForDownloads();
         await tauriInvoke("download_llm_model", {
           filename,
           urls,
@@ -723,44 +698,7 @@ export function useLlm(): [LlmState, LlmActions] {
   const clearError = useCallback(() => {
     setError(null);
     setDownloadCancelled(false);
-    setXetTokenRequired(false);
-    setXetPendingFilename(null);
-    setXetPendingUrls([]);
   }, []);
-
-  const dismissXetModal = useCallback(() => {
-    setXetTokenRequired(false);
-    setXetPendingFilename(null);
-    setXetPendingUrls([]);
-  }, []);
-
-  const saveHfTokenAndRetry = useCallback(
-    async (token: string) => {
-      const trimmed = token.trim();
-      if (!trimmed) return;
-
-      if (!engine.engineUrl) throw new Error("Engine is unavailable");
-      await engine.put("/settings/api-keys/huggingface", { key: trimmed });
-      await refreshHfTokenConfigured();
-
-      const pendingFilename = xetPendingFilename;
-      const pendingUrls = xetPendingUrls;
-      setXetTokenRequired(false);
-      setXetPendingFilename(null);
-      setXetPendingUrls([]);
-      // Pass the token directly to the retry so we don't depend on an async
-      // engine fetch that could return null if the engine is momentarily busy.
-      if (pendingFilename && pendingUrls.length > 0) {
-        await downloadModel(pendingFilename, pendingUrls, trimmed);
-      }
-    },
-    [
-      xetPendingFilename,
-      xetPendingUrls,
-      refreshHfTokenConfigured,
-      downloadModel,
-    ],
-  );
 
   // One-click setup: detect hardware, download recommended model, start server
   const quickSetup = useCallback(async () => {
@@ -810,9 +748,6 @@ export function useLlm(): [LlmState, LlmActions] {
     serverStatus,
     downloadedModels,
     hfTokenConfigured,
-    xetTokenRequired,
-    xetPendingFilename,
-    xetPendingUrls,
     error,
   };
 
@@ -825,8 +760,6 @@ export function useLlm(): [LlmState, LlmActions] {
       cancelDownload,
       importLocalModel,
       refreshHfTokenConfigured,
-      saveHfTokenAndRetry,
-      dismissXetModal,
       startServer,
       stopServer,
       getServerStatus,
@@ -846,8 +779,6 @@ export function useLlm(): [LlmState, LlmActions] {
       cancelDownload,
       importLocalModel,
       refreshHfTokenConfigured,
-      saveHfTokenAndRetry,
-      dismissXetModal,
       startServer,
       stopServer,
       getServerStatus,

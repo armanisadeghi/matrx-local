@@ -24,9 +24,11 @@ export interface NavigationRuntime {
   openPeer: () => Promise<string>;
   emitTo: (label: string, event: string, payload: string) => Promise<void>;
   persistPendingRoute: (route: string) => void;
+  persistPendingAction: (item: ActionNeeded, handoffId: string) => void;
 }
 
 export const ACTION_NEEDED_PENDING_ROUTE_KEY = "matrx-action-needed-pending-route";
+export const ACTION_NEEDED_PENDING_ACTION_KEY = "matrx-action-needed-pending-action";
 
 function defaultNavigationRuntime(): NavigationRuntime {
   return {
@@ -45,6 +47,12 @@ function defaultNavigationRuntime(): NavigationRuntime {
       localStorage.setItem(
         ACTION_NEEDED_PENDING_ROUTE_KEY,
         JSON.stringify({ route, requestedAt: Date.now() }),
+      );
+    },
+    persistPendingAction: (item, handoffId) => {
+      localStorage.setItem(
+        ACTION_NEEDED_PENDING_ACTION_KEY,
+        JSON.stringify({ item, handoffId, requestedAt: Date.now() }),
       );
     },
   };
@@ -72,7 +80,20 @@ export async function navigateForActionNeeded(
   await runtime.emitTo(target, "action-needed://navigate", normalized);
 }
 
-async function dispatchBuiltIn(action: ActionNeededAction): Promise<boolean> {
+async function focusOrOpenPeer(runtime: NavigationRuntime): Promise<string> {
+  let target = "main";
+  try {
+    await runtime.focus(target);
+  } catch {
+    target = await runtime.openPeer();
+  }
+  return target;
+}
+
+async function dispatchBuiltIn(
+  action: ActionNeededAction,
+  runtime: NavigationRuntime,
+): Promise<boolean> {
   if (action.kind === "open_url" && action.url) {
     if (isTauri()) {
       const { open } = await import("@tauri-apps/plugin-shell");
@@ -83,19 +104,35 @@ async function dispatchBuiltIn(action: ActionNeededAction): Promise<boolean> {
     return true;
   }
   if (action.route) {
-    await navigateForActionNeeded(action.route);
+    await navigateForActionNeeded(action.route, runtime);
     return true;
   }
   return false;
 }
 
-export async function dispatchActionNeeded(item: ActionNeeded): Promise<void> {
+export async function dispatchActionNeeded(
+  item: ActionNeeded,
+  runtime: NavigationRuntime = defaultNavigationRuntime(),
+): Promise<void> {
   const handler = handlers.get(item.action.kind);
   if (handler) {
     await handler(item);
     return;
   }
-  if (await dispatchBuiltIn(item.action)) return;
+  if (await dispatchBuiltIn(item.action, runtime)) return;
+  if (!runtime.fullWindow && runtime.tauri) {
+    // Panels intentionally do not mount every heavyweight feature provider.
+    // Hand the complete item to a full window so its canonical handler can run.
+    const handoffId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    runtime.persistPendingAction(item, handoffId);
+    const target = await focusOrOpenPeer(runtime);
+    await runtime.emitTo(
+      target,
+      "action-needed://dispatch",
+      JSON.stringify({ item, handoffId }),
+    );
+    return;
+  }
   console.error(
     `[action-needed] no dispatcher for action kind ${item.action.kind}`,
     item,

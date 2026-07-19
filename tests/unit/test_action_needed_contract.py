@@ -76,15 +76,18 @@ def test_registry_reconciles_exact_invocation_and_emits_snapshots() -> None:
         registry.subscribe(listener)
         await registry.reconcile_invocation("ReadFile", {"path": "/a"}, _requirement())
         snapshots = await registry.snapshots()
-        assert snapshots[0]["version"] == 1
-        assert snapshots[0]["items"]
+        assert snapshots[0]["type"] == "action_needed_epoch"
+        assert isinstance(snapshots[0]["epoch"], str)
+        assert snapshots[0]["epoch"]
+        assert snapshots[1]["version"] == 1
+        assert snapshots[1]["items"]
 
         # A successful retry for a different invocation cannot clear /a.
         await registry.reconcile_invocation("ReadFile", {"path": "/b"}, None)
-        assert (await registry.snapshots())[0]["items"]
+        assert (await registry.snapshots())[1]["items"]
 
         await registry.reconcile_invocation("ReadFile", {"path": "/a"}, None)
-        assert (await registry.snapshots())[0]["items"] == []
+        assert (await registry.snapshots())[1]["items"] == []
         assert emitted[-1]["version"] == 2
 
     asyncio.run(exercise())
@@ -96,9 +99,27 @@ def test_registry_keeps_shared_requirement_until_every_invocation_recovers() -> 
         await registry.reconcile_invocation("Search", {"q": "a"}, _requirement())
         await registry.reconcile_invocation("Search", {"q": "b"}, _requirement())
         await registry.reconcile_invocation("Search", {"q": "a"}, None)
-        assert (await registry.snapshots())[0]["items"]
+        assert (await registry.snapshots())[1]["items"]
         await registry.reconcile_invocation("Search", {"q": "b"}, None)
-        assert (await registry.snapshots())[0]["items"] == []
+        assert (await registry.snapshots())[1]["items"] == []
+
+    asyncio.run(exercise())
+
+
+def test_registry_owns_non_tool_operations_and_resolves_provider_grants() -> None:
+    async def exercise() -> None:
+        registry = ActionNeededRegistry()
+        await registry.reconcile_operation("image.download:model-a", _requirement())
+        assert (await registry.snapshots())[1]["items"]
+
+        # An unrelated successful operation cannot clear this one.
+        await registry.reconcile_operation("image.download:model-b", None)
+        assert (await registry.snapshots())[1]["items"]
+
+        await registry.resolve_matching(
+            lambda item: item.action.provider == "huggingface"
+        )
+        assert (await registry.snapshots())[1]["items"] == []
 
     asyncio.run(exercise())
 

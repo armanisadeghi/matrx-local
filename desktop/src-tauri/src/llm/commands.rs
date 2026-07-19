@@ -1424,6 +1424,40 @@ fn hf_download_resolution(
         });
     }
     let lower = error.to_ascii_lowercase();
+    let approval = if lower.contains("pending")
+        || lower.contains("awaiting")
+    {
+        Some((
+            "hf_gate_pending",
+            "Your Hugging Face access request is pending",
+            "Your token was accepted, but this repository is still waiting for its authors to approve your access request.",
+            "Check access status",
+        ))
+    } else if lower.contains("gated")
+        || lower.contains("accept")
+        || lower.contains("terms")
+        || lower.contains("restricted")
+    {
+        Some((
+            "hf_gate_not_accepted",
+            "Accept this model's terms on Hugging Face",
+            "Your token was accepted, but this gated repository requires you to accept its terms before downloading.",
+            "Accept model terms",
+        ))
+    } else {
+        None
+    };
+    if let Some((code, title, message, label)) = approval {
+        return Some(crate::downloads::manager::DownloadResolution {
+            code: code.to_string(),
+            title: title.to_string(),
+            message: message.to_string(),
+            action_kind: "open_url".to_string(),
+            action_label: label.to_string(),
+            action_url: hf_repo_page(url),
+            provider: Some("huggingface".to_string()),
+        });
+    }
     if error.contains("HTTP 401") {
         return Some(crate::downloads::manager::DownloadResolution {
             code: "hf_token_invalid".to_string(),
@@ -1435,34 +1469,13 @@ fn hf_download_resolution(
             provider: Some("huggingface".to_string()),
         });
     }
-    let (code, title, message, label) = if lower.contains("pending")
-        || lower.contains("awaiting")
-    {
-        (
-            "hf_gate_pending",
-            "Your Hugging Face access request is pending",
-            "Your token was accepted, but this repository is still waiting for its authors to approve your access request.",
-            "Check access status",
-        )
-    } else if lower.contains("gated")
-        || lower.contains("accept")
-        || lower.contains("terms")
-        || lower.contains("restricted")
-    {
-        (
-            "hf_gate_not_accepted",
-            "Accept this model's terms on Hugging Face",
-            "Your token was accepted, but this gated repository requires you to accept its terms before downloading.",
-            "Accept model terms",
-        )
-    } else {
+    let (code, title, message, label) =
         (
             "hf_access_review_needed",
             "Hugging Face denied model access",
             "Your token was sent, but this repository denied access. Review the model page and your token permissions, then retry.",
             "Review model access",
-        )
-    };
+        );
     Some(crate::downloads::manager::DownloadResolution {
         code: code.to_string(),
         title: title.to_string(),
@@ -1500,6 +1513,20 @@ mod action_needed_tests {
         )
         .expect("403 must be actionable");
         assert_eq!(resolution.code, "hf_access_review_needed");
+        assert_eq!(resolution.action_kind, "open_url");
+        assert_eq!(resolution.action_url.as_deref(), Some("https://huggingface.co/org/repo"));
+    }
+
+    #[test]
+    fn token_present_gated_401_uses_license_action_not_invalid_token() {
+        let url = "https://huggingface.co/org/repo/resolve/main/model.gguf";
+        let resolution = hf_download_resolution(
+            "HTTP 401: Cannot access gated repo; accept its terms",
+            true,
+            Some(url),
+        )
+        .expect("gated 401 must be actionable");
+        assert_eq!(resolution.code, "hf_gate_not_accepted");
         assert_eq!(resolution.action_kind, "open_url");
         assert_eq!(resolution.action_url.as_deref(), Some("https://huggingface.co/org/repo"));
     }

@@ -128,6 +128,31 @@ def filesystem_access_needed(
     )
 
 
+def capability_install_needed(
+    *, feature: str, capability_id: str, source: str, message: str
+) -> ActionNeeded:
+    """Adapt a missing optional runtime into the one remediation contract."""
+    label = capability_id.replace("_", " ").title()
+    return ActionNeeded(
+        fingerprint=f"capability:{capability_id}:{feature}",
+        code="capability_install_required",
+        kind=ActionNeededKind.CAPABILITY_INSTALL,
+        feature=feature,
+        title=f"{label} needs to be installed",
+        message=message,
+        action=ActionNeededAction(
+            kind="install_capability",
+            label=f"Install {label}",
+            route=(
+                "/settings?tab=capabilities&capability="
+                f"{capability_id}"
+            ),
+        ),
+        source=source,
+        details={"capability_id": capability_id},
+    )
+
+
 def download_resolution_needed(
     resolution: Any,
     *,

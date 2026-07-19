@@ -22,6 +22,8 @@ from pydantic import BaseModel, Field
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
 from app.config import TEMP_DIR
+from app.services.action_needed import ActionNeededKind, os_permission_needed
+from app.services.action_needed.registry import get_action_needed_registry
 from app.services.permissions.checker import (
     check_all_permissions,
     grant_windows_permissions,
@@ -150,6 +152,30 @@ async def _run(cmd: list[str], timeout: int = 15) -> tuple[str, str, int]:
     return stdout.decode(errors="replace"), stderr.decode(errors="replace"), proc.returncode or 0
 
 
+async def _tool_result_payload(
+    result: Any,
+    *,
+    operation_key: str,
+    metadata: dict[str, Any] | None = None,
+    force_metadata: bool = False,
+) -> dict[str, Any]:
+    """Serialize a ToolResult without dropping its remediation contract."""
+    action_needed = getattr(result, "action_needed", None)
+    await get_action_needed_registry().reconcile_operation(
+        operation_key, action_needed
+    )
+    return {
+        "output": result.output,
+        "metadata": metadata if force_metadata else result.metadata,
+        "type": result.type.value if hasattr(result.type, "value") else str(result.type),
+        "action_needed": (
+            action_needed.model_dump(mode="json", exclude_none=True)
+            if action_needed is not None
+            else None
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # /devices/permissions cache
 #
@@ -206,6 +232,7 @@ async def _get_permissions_cached(force_refresh: bool) -> dict[str, Any]:
             return {**cached, "cached": True, "age_seconds": round(age, 2)}
 
         results = await check_all_permissions()
+        await _resolve_permissions_from_probe(results)
         payload = {
             "permissions": results,
             "platform": PLATFORM["system"],
@@ -225,6 +252,32 @@ def _invalidate_permissions_cache() -> None:
     """
     _perm_cache["fetched_at"] = 0.0
     _perm_cache["payload"] = None
+
+
+async def _resolve_granted_permissions(permission_names: set[str]) -> None:
+    """Clear every backend requirement satisfied by a confirmed OS grant."""
+    if not permission_names:
+        return
+    await get_action_needed_registry().resolve_matching(
+        lambda item: (
+            item.kind == ActionNeededKind.OS_PERMISSION
+            and item.action.permission_key in permission_names
+        )
+    )
+
+
+async def _resolve_permissions_from_probe(
+    results: list[dict[str, Any]],
+) -> None:
+    """Reconcile affirmative permission probes with authoritative actions."""
+    await _resolve_granted_permissions(
+        {
+            str(result["permission"])
+            for result in results
+            if result.get("status") == PermissionStatus.GRANTED.value
+            and result.get("permission")
+        }
+    )
 
 
 @router.get("/permissions")
@@ -279,6 +332,9 @@ async def grant_permissions(request: GrantPermissionsRequest):
         # the next ``GET /devices/permissions`` reflects reality instead
         # of replaying the pre-grant ``denied`` rows for ~30s.
         _invalidate_permissions_cache()
+        await _resolve_granted_permissions(
+            {name for name, succeeded in results.items() if succeeded}
+        )
         return {
             "platform": "windows",
             "permissions": requested,
@@ -314,6 +370,8 @@ async def request_screen_recording_permission():
     # exactly the kind of lie this whole fix exists to remove.
     _invalidate_permissions_cache()
     granted = result.status == PermissionStatus.GRANTED
+    if granted:
+        await _resolve_granted_permissions({"screen_recording"})
     return {
         "permission": "screen_recording",
         "status": result.status.value,
@@ -344,6 +402,8 @@ async def request_permission(name: str):
         )
     result = await request_engine_permission(name)
     _invalidate_permissions_cache()
+    if result.status == PermissionStatus.GRANTED:
+        await _resolve_granted_permissions({name})
     return result.to_dict()
 
 
@@ -361,6 +421,8 @@ async def get_permission(name: str):
             },
         )
     result = await checker()
+    if result.status == PermissionStatus.GRANTED:
+        await _resolve_granted_permissions({name})
     return result.to_dict()
 
 
@@ -370,11 +432,7 @@ async def get_audio_devices():
     session = ToolSession()
     try:
         result = await tool_list_audio_devices(session=session)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.audio")
     finally:
         await session.cleanup()
 
@@ -385,11 +443,7 @@ async def get_bluetooth_devices():
     session = ToolSession()
     try:
         result = await tool_bluetooth_devices(session=session)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.bluetooth")
     finally:
         await session.cleanup()
 
@@ -400,11 +454,7 @@ async def get_wifi_networks():
     session = ToolSession()
     try:
         result = await tool_wifi_networks(session=session, rescan=False)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.wifi")
     finally:
         await session.cleanup()
 
@@ -415,11 +465,7 @@ async def get_network_info():
     session = ToolSession()
     try:
         result = await tool_network_info(session=session)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.network")
     finally:
         await session.cleanup()
 
@@ -430,11 +476,7 @@ async def get_connected_devices():
     session = ToolSession()
     try:
         result = await tool_connected_devices(session=session)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.connected")
     finally:
         await session.cleanup()
 
@@ -488,11 +530,7 @@ async def get_screens():
     session = ToolSession()
     try:
         result = await tool_list_screens(session=session)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.screens")
     finally:
         await session.cleanup()
 
@@ -509,124 +547,73 @@ async def take_screenshot(monitor: str = "all"):
             pass
         result = await tool_screenshot(session=session, monitor=monitor_val)
         if result.metadata and result.metadata.get("base64"):
-            return {
-                "output": result.output,
-                "metadata": result.metadata,
-                "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-            }
+            return await _tool_result_payload(
+                result, operation_key=f"devices.screenshot:{monitor}"
+            )
         # If tool returned a file path, read and base64-encode it
         if result.metadata and result.metadata.get("path"):
             p = Path(str(result.metadata["path"]))
             if p.exists():
                 b64 = base64.b64encode(p.read_bytes()).decode()
-                return {
-                    "output": result.output,
-                    "metadata": {**result.metadata, "base64": b64, "mime": "image/png"},
-                    "type": "success",
-                }
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+                return await _tool_result_payload(
+                    result,
+                    operation_key=f"devices.screenshot:{monitor}",
+                    metadata={**result.metadata, "base64": b64, "mime": "image/png"},
+                    force_metadata=True,
+                )
+        return await _tool_result_payload(
+            result, operation_key=f"devices.screenshot:{monitor}"
+        )
     finally:
         await session.cleanup()
 
 
 @router.get("/location")
 async def get_location():
-    """Get current device location (if permission granted)."""
-    lat: float | None = None
-    lon: float | None = None
-    accuracy: float | None = None
-    source = "unavailable"
-
+    """Get current location through the canonical permission-aware tool."""
+    session = ToolSession()
     try:
-        if PLATFORM["is_mac"]:
-            # Use CoreLocation via a quick Swift/osascript approach or whereami
-            if CAPABILITIES["has_whereami"]:
-                out, _, rc = await _run(["whereami"], timeout=10)
-                if rc == 0:
-                    for line in out.split("\n"):
-                        if "Latitude" in line:
-                            lat = float(line.split(":")[-1].strip())
-                        elif "Longitude" in line:
-                            lon = float(line.split(":")[-1].strip())
-                        elif "Accuracy" in line:
-                            accuracy = float(line.split(":")[-1].strip())
-                    source = "whereami"
-            if lat is None:
-                # Try CoreLocation via Python objc
-                try:
-                    import objc
-                    objc.loadBundle(
-                        "CoreLocation",
-                        bundle_path="/System/Library/Frameworks/CoreLocation.framework",
-                        module_globals={},
-                    )
-                    CLLocationManager = objc.lookUpClass("CLLocationManager")
-                    status = CLLocationManager.authorizationStatus()
-                    # 0=notDetermined, 1=restricted, 2=denied, 3=authorizedAlways, 4=authorizedWhenInUse
-                    if status in (3, 4):
-                        source = "corelocation_authorized"
-                    elif status == 2:
-                        source = "corelocation_denied"
-                    elif status == 1:
-                        source = "corelocation_restricted"
-                    else:
-                        source = "corelocation_not_determined"
-                except Exception:
-                    source = "permission_check_failed"
-
-        elif PLATFORM["is_windows"]:
-            out, _, rc = await _run([
-                CAPABILITIES["powershell_path"], "-NoProfile", "-Command",
-                "Add-Type -AssemblyName System.Device; "
-                "$w = New-Object System.Device.Location.GeoCoordinateWatcher; "
-                "$w.Start(); Start-Sleep 3; "
-                "if ($w.Position.Location.IsUnknown) { 'UNKNOWN' } "
-                "else { \"$($w.Position.Location.Latitude),$($w.Position.Location.Longitude),$($w.Position.Location.HorizontalAccuracy)\" }",
-            ], timeout=15)
-            if rc == 0 and "," in out.strip():
-                parts = out.strip().split(",")
-                lat, lon = float(parts[0]), float(parts[1])
-                accuracy = float(parts[2]) if len(parts) > 2 else None
-                source = "windows_geolocation"
-
-        else:
-            # Try geoclue on Linux
-            if CAPABILITIES["has_geoclue"]:
-                out, _, rc = await _run(["geoclue-where-am-i", "-t", "5"], timeout=10)
-                if rc == 0:
-                    for line in out.split("\n"):
-                        if "Latitude" in line:
-                            lat = float(line.split(":")[-1].strip().rstrip("°"))
-                        elif "Longitude" in line:
-                            lon = float(line.split(":")[-1].strip().rstrip("°"))
-                        elif "Accuracy" in line:
-                            accuracy = float(line.split(":")[-1].strip().split()[0])
-                    source = "geoclue"
-
-    except Exception as e:
-        logger.warning("Location probe failed: %s", e)
-        source = f"error: {e}"
-
-    return {
-        "output": f"Location: {lat}, {lon}" if lat is not None else f"Location unavailable ({source})",
-        "metadata": {
-            "latitude": lat,
-            "longitude": lon,
-            "accuracy_meters": accuracy,
-            "source": source,
-            "available": lat is not None,
-        },
-        "type": "success" if lat is not None else "unavailable",
-    }
+        result = await tool_get_location(session=session, timeout=15.0)
+        return await _tool_result_payload(
+            result, operation_key="devices.location"
+        )
+    finally:
+        await session.cleanup()
 
 
 # ---------------------------------------------------------------------------
 # Recording endpoints
 # ---------------------------------------------------------------------------
+
+
+async def _permission_preflight_payload(
+    *,
+    permission_key: str,
+    feature: str,
+    source: str,
+    operation_key: str,
+) -> dict[str, Any] | None:
+    """Return a blocked response without touching protected hardware."""
+    permission = await PERMISSION_CHECKERS[permission_key]()
+    if permission.status not in {
+        PermissionStatus.DENIED,
+        PermissionStatus.NOT_DETERMINED,
+        PermissionStatus.RESTRICTED,
+    }:
+        return None
+    action = os_permission_needed(
+        feature=feature,
+        permission_key=permission_key,
+        source=source,
+    )
+    await get_action_needed_registry().reconcile_operation(operation_key, action)
+    return {
+        "output": permission.user_instructions
+        or f"{permission_key.replace('_', ' ').title()} access is required.",
+        "metadata": {"permission_status": permission.status.value},
+        "type": "error",
+        "action_needed": action.model_dump(mode="json", exclude_none=True),
+    }
 
 
 @router.post("/record-audio")
@@ -643,16 +630,15 @@ async def record_audio(req: RecordAudioRequest):
             p = Path(str(result.metadata["path"]))
             if p.exists():
                 b64 = base64.b64encode(p.read_bytes()).decode()
-                return {
-                    "output": result.output,
-                    "metadata": {**result.metadata, "base64": b64, "mime": "audio/wav"},
-                    "type": "success",
-                }
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+                return await _tool_result_payload(
+                    result,
+                    operation_key="devices.record-audio",
+                    metadata={**result.metadata, "base64": b64, "mime": "audio/wav"},
+                    force_metadata=True,
+                )
+        return await _tool_result_payload(
+            result, operation_key="devices.record-audio"
+        )
     finally:
         await session.cleanup()
 
@@ -660,6 +646,15 @@ async def record_audio(req: RecordAudioRequest):
 @router.post("/capture-photo")
 async def capture_photo(req: CapturePhotoRequest):
     """Capture a photo from webcam and return base64-encoded JPEG."""
+    operation_key = "devices.capture-photo"
+    blocked = await _permission_preflight_payload(
+        permission_key="camera",
+        feature="photo capture",
+        source="devices.capture-photo",
+        operation_key=operation_key,
+    )
+    if blocked is not None:
+        return blocked
     out_path = MEDIA_DIR / f"photo_{uuid.uuid4().hex[:8]}.jpg"
     try:
         if PLATFORM["is_mac"]:
@@ -673,6 +668,9 @@ async def capture_photo(req: CapturePhotoRequest):
                 _, _, rc = await _run(args, timeout=10)
                 if rc == 0 and out_path.exists():
                     b64 = base64.b64encode(out_path.read_bytes()).decode()
+                    await get_action_needed_registry().reconcile_operation(
+                        operation_key, None
+                    )
                     return {
                         "output": f"Photo captured to {out_path}",
                         "metadata": {"path": str(out_path), "base64": b64, "mime": "image/jpeg"},
@@ -703,6 +701,9 @@ async def capture_photo(req: CapturePhotoRequest):
             if data:
                 out_path.write_bytes(data)
                 b64 = base64.b64encode(data).decode()
+                await get_action_needed_registry().reconcile_operation(
+                    operation_key, None
+                )
                 return {
                     "output": f"Photo captured ({len(data)} bytes)",
                     "metadata": {"path": str(out_path), "base64": b64, "mime": "image/jpeg"},
@@ -711,18 +712,29 @@ async def capture_photo(req: CapturePhotoRequest):
         except ImportError:
             pass
 
+        await get_action_needed_registry().reconcile_operation(operation_key, None)
         return {
             "output": "Camera capture requires OpenCV (cv2) or imagesnap (macOS). Install: pip install opencv-python",
             "metadata": None,
             "type": "error",
         }
     except Exception as e:
+        await get_action_needed_registry().reconcile_operation(operation_key, None)
         return {"output": f"Photo capture failed: {e}", "metadata": None, "type": "error"}
 
 
 @router.post("/record-video")
 async def record_video(req: RecordVideoRequest):
     """Record a short video from webcam and return base64-encoded MP4."""
+    operation_key = "devices.record-video"
+    blocked = await _permission_preflight_payload(
+        permission_key="camera",
+        feature="video recording",
+        source="devices.record-video",
+        operation_key=operation_key,
+    )
+    if blocked is not None:
+        return blocked
     out_path = MEDIA_DIR / f"video_{uuid.uuid4().hex[:8]}.mp4"
     try:
         import cv2
@@ -754,6 +766,7 @@ async def record_video(req: RecordVideoRequest):
         data = await _asyncio.get_event_loop().run_in_executor(None, _record)
         if data:
             b64 = base64.b64encode(data).decode()
+            await get_action_needed_registry().reconcile_operation(operation_key, None)
             return {
                 "output": f"Video recorded ({len(data)} bytes, {req.duration_seconds}s)",
                 "metadata": {
@@ -764,14 +777,17 @@ async def record_video(req: RecordVideoRequest):
                 },
                 "type": "success",
             }
+        await get_action_needed_registry().reconcile_operation(operation_key, None)
         return {"output": "Video recording failed — camera may not be available", "metadata": None, "type": "error"}
     except ImportError:
+        await get_action_needed_registry().reconcile_operation(operation_key, None)
         return {
             "output": "Video recording requires OpenCV (cv2). Install: pip install opencv-python",
             "metadata": None,
             "type": "error",
         }
     except Exception as e:
+        await get_action_needed_registry().reconcile_operation(operation_key, None)
         return {"output": f"Video recording failed: {e}", "metadata": None, "type": "error"}
 
 
@@ -779,6 +795,28 @@ async def record_video(req: RecordVideoRequest):
 async def record_screen(req: RecordScreenRequest):
     """Record a screen capture video and return base64-encoded MP4."""
     out_path = MEDIA_DIR / f"screen_{uuid.uuid4().hex[:8]}.mp4"
+    operation_key = f"devices.record-screen:{req.screen_index or 'primary'}"
+    action_registry = get_action_needed_registry()
+
+    # CGPreflightScreenCaptureAccess is read-only. Do not enumerate an
+    # AVFoundation screen or invoke mss until the user has explicitly granted
+    # the engine access; either capture path can itself trigger native UI.
+    if PLATFORM["is_mac"]:
+        permission = await PERMISSION_CHECKERS["screen_recording"]()
+        if permission.status != PermissionStatus.GRANTED:
+            action = os_permission_needed(
+                feature="screen recording",
+                permission_key="screen_recording",
+                source="devices.record-screen",
+            )
+            await action_registry.reconcile_operation(operation_key, action)
+            return {
+                "output": permission.user_instructions
+                or "Screen Recording access is required before recording.",
+                "metadata": {"permission_status": permission.status.value},
+                "type": "error",
+                "action_needed": action.model_dump(mode="json", exclude_none=True),
+            }
 
     try:
         if CAPABILITIES["has_ffmpeg"]:
@@ -805,6 +843,7 @@ async def record_screen(req: RecordScreenRequest):
                             break
                 screen_id = screen_id or fallback_first_screen
                 if screen_id is None:
+                    await action_registry.reconcile_operation(operation_key, None)
                     return {
                         "output": "No screen capture device found — grant "
                                   "Screen Recording permission and retry",
@@ -854,6 +893,7 @@ async def record_screen(req: RecordScreenRequest):
             if rc == 0 and out_path.exists():
                 data = out_path.read_bytes()
                 b64 = base64.b64encode(data).decode()
+                await action_registry.reconcile_operation(operation_key, None)
                 return {
                     "output": f"Screen recording saved ({len(data)} bytes, {req.duration_seconds}s)",
                     "metadata": {
@@ -900,6 +940,7 @@ async def record_screen(req: RecordScreenRequest):
                 gif_path = out_path.with_suffix(".gif")
                 gif_path.write_bytes(data)
                 b64 = base64.b64encode(data).decode()
+                await action_registry.reconcile_operation(operation_key, None)
                 return {
                     "output": f"Screen recording (GIF fallback, {len(data)} bytes)",
                     "metadata": {
@@ -913,12 +954,14 @@ async def record_screen(req: RecordScreenRequest):
         except ImportError:
             pass
 
+        await action_registry.reconcile_operation(operation_key, None)
         return {
             "output": "Screen recording requires ffmpeg. Install: brew install ffmpeg (macOS) or sudo apt install ffmpeg (Linux)",
             "metadata": None,
             "type": "error",
         }
     except Exception as e:
+        await action_registry.reconcile_operation(operation_key, None)
         return {"output": f"Screen recording failed: {e}", "metadata": None, "type": "error"}
 
 
@@ -928,11 +971,7 @@ async def get_system_resources():
     session = ToolSession()
     try:
         result = await tool_system_resources(session=session)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.system")
     finally:
         await session.cleanup()
 
@@ -948,11 +987,7 @@ async def list_contacts(limit: int = 25):
     session = ToolSession()
     try:
         result = await tool_search_contacts(session=session, query=None, limit=limit)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.contacts.list")
     finally:
         await session.cleanup()
 
@@ -963,11 +998,7 @@ async def search_contacts(req: ContactSearchRequest):
     session = ToolSession()
     try:
         result = await tool_search_contacts(session=session, query=req.query, limit=req.limit)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.contacts.search")
     finally:
         await session.cleanup()
 
@@ -978,11 +1009,9 @@ async def get_contact(identifier: str):
     session = ToolSession()
     try:
         result = await tool_get_contact(session=session, identifier=identifier)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(
+            result, operation_key=f"devices.contacts.get:{identifier}"
+        )
     finally:
         await session.cleanup()
 
@@ -998,11 +1027,7 @@ async def list_calendar_events(days_ahead: int = 7, limit: int = 50):
     session = ToolSession()
     try:
         result = await tool_list_events(session=session, days_ahead=days_ahead, limit=limit)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.calendar.events.list")
     finally:
         await session.cleanup()
 
@@ -1021,11 +1046,7 @@ async def create_calendar_event(req: CreateEventRequest):
             calendar=req.calendar,
             all_day=req.all_day,
         )
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.calendar.events.create")
     finally:
         await session.cleanup()
 
@@ -1043,11 +1064,7 @@ async def list_reminders(include_completed: bool = False, limit: int = 50):
         result = await tool_list_reminders(
             session=session, include_completed=include_completed, limit=limit
         )
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.reminders.list")
     finally:
         await session.cleanup()
 
@@ -1064,11 +1081,7 @@ async def create_reminder(req: CreateReminderRequest):
             due=req.due,
             list_name=req.list_name,
         )
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.reminders.create")
     finally:
         await session.cleanup()
 
@@ -1086,11 +1099,7 @@ async def list_photos(media_type: str = "image", limit: int = 25, favorites_only
         result = await tool_search_photos(
             session=session, media_type=media_type, limit=limit, favorites_only=favorites_only
         )
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.photos.list")
     finally:
         await session.cleanup()
 
@@ -1103,11 +1112,9 @@ async def get_photo(identifier: str, thumbnail_size: int = 512):
         result = await tool_get_photo(
             session=session, identifier=identifier, thumbnail_size=thumbnail_size
         )
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(
+            result, operation_key=f"devices.photos.get:{identifier}"
+        )
     finally:
         await session.cleanup()
 
@@ -1123,11 +1130,7 @@ async def get_current_location(timeout: float = 15.0):
     session = ToolSession()
     try:
         result = await tool_get_location(session=session, timeout=timeout)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.location.current")
     finally:
         await session.cleanup()
 
@@ -1145,11 +1148,7 @@ async def list_messages_endpoint(limit: int = 50, contact: str | None = None, un
         result = await tool_list_messages(
             session=session, limit=limit, contact=contact, unread_only=unread_only
         )
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.messages.list")
     finally:
         await session.cleanup()
 
@@ -1160,11 +1159,9 @@ async def list_conversations_endpoint(limit: int = 25):
     session = ToolSession()
     try:
         result = await tool_list_conversations(session=session, limit=limit)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(
+            result, operation_key="devices.messages.conversations"
+        )
     finally:
         await session.cleanup()
 
@@ -1180,11 +1177,7 @@ async def send_message_endpoint(req: SendMessageRequest):
             body=req.body,
             service=req.service,
         )
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.messages.send")
     finally:
         await session.cleanup()
 
@@ -1200,11 +1193,7 @@ async def get_mail_accounts():
     session = ToolSession()
     try:
         result = await tool_get_email_accounts(session=session)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.mail.accounts")
     finally:
         await session.cleanup()
 
@@ -1217,11 +1206,7 @@ async def list_mail(mailbox: str = "INBOX", limit: int = 25, unread_only: bool =
         result = await tool_list_emails(
             session=session, mailbox=mailbox, limit=limit, unread_only=unread_only
         )
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key=f"devices.mail.list:{mailbox}")
     finally:
         await session.cleanup()
 
@@ -1239,11 +1224,7 @@ async def send_mail(req: SendEmailRequest):
             cc=req.cc,
             bcc=req.bcc,
         )
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.mail.send")
     finally:
         await session.cleanup()
 
@@ -1264,11 +1245,7 @@ async def transcribe_with_speech(req: TranscribeSpeechRequest):
             locale=req.locale,
             timeout=req.timeout,
         )
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.speech.transcribe")
     finally:
         await session.cleanup()
 
@@ -1279,10 +1256,6 @@ async def list_speech_locales():
     session = ToolSession()
     try:
         result = await tool_list_speech_locales(session=session)
-        return {
-            "output": result.output,
-            "metadata": result.metadata,
-            "type": result.type.value if hasattr(result.type, "value") else str(result.type),
-        }
+        return await _tool_result_payload(result, operation_key="devices.speech.locales")
     finally:
         await session.cleanup()

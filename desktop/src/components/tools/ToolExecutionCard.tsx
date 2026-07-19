@@ -9,6 +9,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { MediaThumb } from "@/components/media/MediaThumb";
+import { ActionNeededCard } from "@/features/action-needed";
 import {
   descriptorFromToolArtifact,
   descriptorFromToolImage,
@@ -114,6 +115,12 @@ export function ToolExecutionCard({
       {media && (
         <div className="border-t p-2">
           <MediaThumb item={media} variant="gallery" className="max-h-72 rounded border bg-black/20" />
+        </div>
+      )}
+
+      {result?.action_needed && (
+        <div className="border-t p-2">
+          <ActionNeededCard item={result.action_needed} compact />
         </div>
       )}
 

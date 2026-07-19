@@ -107,6 +107,7 @@ from app.services.image_gen.installer import (
 from app.common.route_errors import safe_route
 from app.common.system_logger import get_logger
 from app.services.action_needed import download_resolution_needed
+from app.services.action_needed.registry import get_action_needed_registry
 from app.services.downloads.failures import hf_token_missing
 
 from app.api.error_envelope import EnvelopeRoute
@@ -114,6 +115,18 @@ from app.api.error_envelope import EnvelopeRoute
 logger = get_logger()
 
 router = APIRouter(prefix="/image-gen", tags=["image-gen"], route_class=EnvelopeRoute)
+
+
+def _inspect_error_detail(exc: Any) -> str | dict[str, Any]:
+    if getattr(exc, "action_needed", None) is None:
+        return str(exc)
+    return {
+        "code": exc.action_needed.code,
+        "message": str(exc),
+        "action_needed": exc.action_needed.model_dump(
+            mode="json", exclude_none=True
+        ),
+    }
 
 
 # ── Response / Request schemas ────────────────────────────────────────────────
@@ -718,6 +731,8 @@ async def download_model(req: DownloadModelRequest) -> DownloadModelResponse:
     Progress streams over /downloads/stream (category "image_gen").
     Downloads are resumable and land in ~/.matrx/image-models/<id>/.
     """
+    operation_key = f"image-gen.download:{req.model_id}"
+    action_registry = get_action_needed_registry()
     svc = get_image_gen_service()
     result = await svc.start_download(req.model_id)
     if result.get("needs_hf_token"):
@@ -728,6 +743,7 @@ async def download_model(req: DownloadModelRequest) -> DownloadModelResponse:
             source="image-gen.download",
             resource_id=req.model_id,
         )
+        await action_registry.reconcile_operation(operation_key, action)
         raise HTTPException(
             status_code=409,
             detail={
@@ -737,7 +753,9 @@ async def download_model(req: DownloadModelRequest) -> DownloadModelResponse:
             },
         )
     if result.get("error"):
+        await action_registry.reconcile_operation(operation_key, None)
         raise HTTPException(status_code=404, detail=result["error"])
+    await action_registry.reconcile_operation(operation_key, None)
     return DownloadModelResponse(
         queued=bool(result.get("queued")),
         download_id=result.get("download_id"),
@@ -760,9 +778,14 @@ async def download_text_encoder(
         start_encoder_download,
     )
 
+    operation_key = (
+        f"image-gen.text-encoder-download:{req.model_id}:{req.text_encoder_id}"
+    )
+    action_registry = get_action_needed_registry()
     svc = get_image_gen_service()
     model = svc.get_model(req.model_id)
     if model is None:
+        await action_registry.reconcile_operation(operation_key, None)
         raise HTTPException(status_code=404, detail=f"Unknown model: {req.model_id}")
     result = await start_encoder_download(model, req.text_encoder_id)
     if result.get("needs_hf_token"):
@@ -773,6 +796,7 @@ async def download_text_encoder(
             source="image-gen.text-encoder-download",
             resource_id=req.text_encoder_id,
         )
+        await action_registry.reconcile_operation(operation_key, action)
         raise HTTPException(
             status_code=409,
             detail={
@@ -782,7 +806,9 @@ async def download_text_encoder(
             },
         )
     if result.get("error"):
+        await action_registry.reconcile_operation(operation_key, None)
         raise HTTPException(status_code=400, detail=result["error"])
+    await action_registry.reconcile_operation(operation_key, None)
     return DownloadTextEncoderResponse(
         queued=bool(result.get("queued")),
         download_id=result.get("download_id"),
@@ -1694,8 +1720,11 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
         lora_id_for_repo,
         write_lora_meta,
     )
+    operation_key = f"image-gen.lora-download:{req.civitai or req.repo_id or 'missing'}"
+    action_registry = get_action_needed_registry()
 
     if bool(req.repo_id) == bool(req.civitai):
+        await action_registry.reconcile_operation(operation_key, None)
         raise HTTPException(
             status_code=400,
             detail="Provide exactly one of repo_id (Hugging Face repo id or "
@@ -1704,22 +1733,33 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
     try:
         parsed = parse_ref(req.civitai or req.repo_id or "")
     except InspectError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        await action_registry.reconcile_operation(operation_key, exc.action_needed)
+        raise HTTPException(
+            status_code=exc.status_code, detail=_inspect_error_detail(exc)
+        )
     if req.civitai and parsed["kind"] != "civitai":
+        await action_registry.reconcile_operation(operation_key, None)
         raise HTTPException(
             status_code=400,
             detail=f"'{req.civitai}' is not a Civitai reference — pass "
             "Hugging Face repos via repo_id.",
         )
 
+    # Parsing succeeded, so any prior parse/credential requirement for this
+    # exact request is resolved even if a later, unrelated validation fails.
+    await action_registry.reconcile_operation(operation_key, None)
+
     if parsed["kind"] == "civitai":
-        return await _download_lora_civitai(parsed)
+        response = await _download_lora_civitai(parsed, operation_key)
+        await action_registry.reconcile_operation(operation_key, None)
+        return response
 
     # ── Hugging Face path (repo id or URL, normalized by parse_ref) ──────────
     repo_id = str(parsed["repo_id"])
     lora_id = lora_id_for_repo(repo_id)
     existing = get_installed_lora(lora_id)
     if existing and existing["installed"]:
+        await action_registry.reconcile_operation(operation_key, None)
         return LoraDownloadResponse(
             queued=False,
             already_installed=True,
@@ -1766,6 +1806,7 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
         },
         priority=1,
     )
+    await action_registry.reconcile_operation(operation_key, None)
     return LoraDownloadResponse(
         queued=True,
         download_id=entry.id,
@@ -1776,7 +1817,9 @@ async def download_lora(req: LoraDownloadRequest) -> LoraDownloadResponse:
     )
 
 
-async def _download_lora_civitai(parsed: dict[str, Any]) -> LoraDownloadResponse:
+async def _download_lora_civitai(
+    parsed: dict[str, Any], operation_key: str
+) -> LoraDownloadResponse:
     """Civitai LoRA download: resolve version metadata (type MUST be LORA),
     write the pending sidecar, queue the direct-URL download (Bearer auth from
     the stored Civitai key; 401/403 surfaces the friendly key message)."""
@@ -1794,7 +1837,12 @@ async def _download_lora_civitai(parsed: dict[str, Any]) -> LoraDownloadResponse
     try:
         info = await resolve_civitai(parsed)
     except InspectError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        await get_action_needed_registry().reconcile_operation(
+            operation_key, exc.action_needed
+        )
+        raise HTTPException(
+            status_code=exc.status_code, detail=_inspect_error_detail(exc)
+        )
 
     model_type = str(info["model_type"] or "")
     if model_type.upper() != "LORA":
@@ -1949,10 +1997,16 @@ async def inspect_custom_model(
     a Civitai LoRA pointed here → 400 directing to /loras/download."""
     from app.services.image_gen.custom_models import InspectError, inspect_ref  # noqa: PLC0415
 
+    operation_key = f"image-gen.custom-inspect:{req.ref}"
+    action_registry = get_action_needed_registry()
     try:
         result = await inspect_ref(req.ref)
     except InspectError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        await action_registry.reconcile_operation(operation_key, exc.action_needed)
+        raise HTTPException(
+            status_code=exc.status_code, detail=_inspect_error_detail(exc)
+        )
+    await action_registry.reconcile_operation(operation_key, None)
     return CustomModelInspectResponse(
         entry=CustomModelEntry(**result["entry"]),
         warnings=result["warnings"],
@@ -1975,27 +2029,59 @@ async def register_custom_model_route(
     from app.services.media_gen.paths import read_hf_token  # noqa: PLC0415
 
     payload = entry.model_dump()
+    resource_id = str(payload.get("source_ref") or payload.get("model_id"))
+    operation_key = f"image-gen.custom-register:{payload.get('model_id')}"
+    action_registry = get_action_needed_registry()
     # Token pre-check BEFORE registering — the user gets one clean message
     # instead of a registered-but-undownloadable entry.
     if payload.get("requires_hf_token") and read_hf_token() is None:
+        resolution = hf_token_missing(resource_id).resolution
+        action = download_resolution_needed(
+            resolution,
+            feature="custom image model registration",
+            source="image-gen.custom-register",
+            resource_id=resource_id,
+        )
+        await action_registry.reconcile_operation(operation_key, action)
         raise HTTPException(
-            status_code=400,
-            detail=f"{payload.get('name') or payload.get('model_id')} needs a "
-            "Hugging Face token (gated components). Add your read "
-            "token under Settings → API Keys → Hugging Face, then "
-            "register again.",
+            status_code=409,
+            detail={
+                "code": resolution.code,
+                "message": resolution.message,
+                "action_needed": action.model_dump(mode="json", exclude_none=True),
+            },
         )
     try:
         stored, created = register_custom_model(payload)
     except ValueError as exc:
+        await action_registry.reconcile_operation(operation_key, None)
         raise HTTPException(status_code=400, detail=str(exc))
 
     svc = get_image_gen_service()
     dl = await svc.start_download(stored["model_id"])
+    if dl.get("needs_hf_token"):
+        resolution = hf_token_missing(resource_id).resolution
+        action = download_resolution_needed(
+            resolution,
+            feature="custom image model registration",
+            source="image-gen.custom-register",
+            resource_id=resource_id,
+        )
+        await action_registry.reconcile_operation(operation_key, action)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": resolution.code,
+                "message": dl.get("error") or resolution.message,
+                "action_needed": action.model_dump(mode="json", exclude_none=True),
+            },
+        )
     if dl.get("error") and not dl.get("already_downloaded"):
         # Registration stands (retry via POST /image-gen/download); the
         # download problem is reported loudly, never swallowed.
+        await action_registry.reconcile_operation(operation_key, None)
         raise HTTPException(status_code=502, detail=dl["error"])
+    await action_registry.reconcile_operation(operation_key, None)
     return CustomModelRegisterResponse(
         registered=True,
         model_id=stored["model_id"],

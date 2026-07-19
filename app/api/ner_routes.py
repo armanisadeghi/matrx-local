@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from app.common.route_errors import safe_route
+from app.services.action_needed.registry import get_action_needed_registry
 from app.services.ner.service import (
     DEFAULT_MAX_CHARS,
     DEFAULT_OVERLAP_CHARS,
@@ -109,7 +110,7 @@ class NerBatchExtractResponse(BaseModel):
     results: list[NerExtractResponse]
 
 
-def _raise_ner(exc: NerError) -> None:
+async def _raise_ner(exc: NerError, operation_key: str) -> None:
     status_map = {
         "empty_text": 400,
         "empty_labels": 400,
@@ -128,6 +129,9 @@ def _raise_ner(exc: NerError) -> None:
         "load_failed": 500,
         "batch_too_large": 413,
     }
+    await get_action_needed_registry().reconcile_operation(
+        operation_key, exc.action_needed
+    )
     raise HTTPException(
         status_code=status_map.get(exc.code, 500),
         detail={
@@ -165,16 +169,19 @@ async def ner_models() -> list[dict[str, Any]]:
 @router.post("/download", response_model=NerDownloadResponse)
 @safe_route("ner_download")
 async def ner_download(req: NerDownloadRequest) -> NerDownloadResponse:
+    operation_key = f"ner.download:{req.model_id or 'default'}"
     try:
         result = await get_ner_service().download_model(req.model_id, force=req.force)
     except NerError as exc:
-        _raise_ner(exc)
+        await _raise_ner(exc, operation_key)
+    await get_action_needed_registry().reconcile_operation(operation_key, None)
     return NerDownloadResponse(**result)
 
 
 @router.post("/extract", response_model=NerExtractResponse)
 @safe_route("ner_extract")
 async def ner_extract(req: NerExtractRequest) -> NerExtractResponse:
+    operation_key = f"ner.extract:{req.model_id or 'default'}"
     try:
         result = await get_ner_service().extract(
             text=req.text,
@@ -185,13 +192,15 @@ async def ner_extract(req: NerExtractRequest) -> NerExtractResponse:
             overlap_chars=req.overlap_chars,
         )
     except NerError as exc:
-        _raise_ner(exc)
+        await _raise_ner(exc, operation_key)
+    await get_action_needed_registry().reconcile_operation(operation_key, None)
     return _to_response(result)
 
 
 @router.post("/extract/batch", response_model=NerBatchExtractResponse)
 @safe_route("ner_extract_batch")
 async def ner_extract_batch(req: NerBatchExtractRequest) -> NerBatchExtractResponse:
+    operation_key = f"ner.extract-batch:{req.model_id or 'default'}"
     try:
         results = await get_ner_service().extract_batch(
             texts=req.texts,
@@ -202,5 +211,6 @@ async def ner_extract_batch(req: NerBatchExtractRequest) -> NerBatchExtractRespo
             overlap_chars=req.overlap_chars,
         )
     except NerError as exc:
-        _raise_ner(exc)
+        await _raise_ner(exc, operation_key)
+    await get_action_needed_registry().reconcile_operation(operation_key, None)
     return NerBatchExtractResponse(results=[_to_response(r) for r in results])

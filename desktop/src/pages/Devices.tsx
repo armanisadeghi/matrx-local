@@ -46,6 +46,10 @@ import { useAudioDevices } from "@/contexts/AudioDevicesContext";
 import type { AudioDeviceInfo } from "@/lib/transcription/types";
 import { PLATFORM } from "@/lib/platformCtx";
 import { logWarn } from "@/lib/error-reporting";
+import {
+  actionNeededFromPermission,
+  actionNeededStore,
+} from "@/features/action-needed";
 
 const TRIGGER_REQUIRED_KEYS = new Set<string>([
   "screen_recording",
@@ -136,6 +140,9 @@ function SectionCard({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    if (defaultOpen) setOpen(true);
+  }, [defaultOpen]);
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.unknown;
 
   return (
@@ -185,6 +192,23 @@ function SectionCard({
 
 function PermissionAlert({ perm }: { perm: PermissionInfo | null }) {
   const { request } = usePermissionsContext();
+  const actionNeeded = useMemo(
+    () =>
+      perm
+        ? actionNeededFromPermission({
+            permission: perm.permission,
+            status: perm.status,
+            feature: `Devices: ${perm.permission.replace(/_/g, " ")}`,
+            source: `devices-permission:${perm.permission}`,
+          })
+        : null,
+    [perm?.permission, perm?.status],
+  );
+  useEffect(() => {
+    if (!perm) return;
+    const source = `devices-permission:${perm.permission}`;
+    actionNeededStore.reconcileLocal(source, actionNeeded ? [actionNeeded] : null);
+  }, [actionNeeded, perm?.permission]);
   if (!perm || perm.status === "granted") return null;
 
   const isTriggerRequired =
@@ -1872,6 +1896,11 @@ function ResourceBar({
 
 export function Devices({ engineStatus }: DevicesProps) {
   const [loading, setLoading] = useState(false);
+  const location = useLocation();
+  const requestedPermission = useMemo(
+    () => new URLSearchParams(location.search).get("permission"),
+    [location.search],
+  );
 
   // Shared stores only — the engine device list and the Tauri plugin Map both
   // live in PermissionsContext (ONE copy app-wide; the old private
@@ -1958,6 +1987,19 @@ export function Devices({ engineStatus }: DevicesProps) {
     (x) => x.status === "granted",
   ).length;
   const totalCount = Object.keys(permissions).length;
+  const dedicatedPermissionKeys = new Set([
+    "microphone",
+    "camera",
+    "screen_recording",
+    "bluetooth",
+    "wifi",
+    "network",
+    "location",
+    "accessibility",
+  ]);
+  const additionalPermissions = Object.values(permissions)
+    .filter((item) => !dedicatedPermissionKeys.has(item.permission))
+    .sort((a, b) => a.permission.localeCompare(b.permission));
 
   const sections = [
     {
@@ -2083,7 +2125,9 @@ export function Devices({ engineStatus }: DevicesProps) {
                   p("microphone")?.user_details ||
                   "Audio input for voice commands, recording, and transcription"
                 }
-                defaultOpen={true}
+                defaultOpen={
+                  requestedPermission === null || requestedPermission === "microphone"
+                }
               >
                 <MicrophoneCard perm={p("microphone")} />
               </SectionCard>
@@ -2109,6 +2153,7 @@ export function Devices({ engineStatus }: DevicesProps) {
                   p("camera")?.user_details ||
                   "Video input for capture and video calls"
                 }
+                defaultOpen={requestedPermission === "camera"}
               >
                 <CameraCard perm={p("camera")} />
               </SectionCard>
@@ -2125,6 +2170,7 @@ export function Devices({ engineStatus }: DevicesProps) {
                   p("screen_recording")?.user_details ||
                   "Screen capture for screenshots and video recording"
                 }
+                defaultOpen={requestedPermission === "screen_recording"}
               >
                 <ScreenRecordingCard perm={p("screen_recording")} />
               </SectionCard>
@@ -2140,6 +2186,7 @@ export function Devices({ engineStatus }: DevicesProps) {
                   p("bluetooth")?.user_details ||
                   "Bluetooth peripherals and smart devices"
                 }
+                defaultOpen={requestedPermission === "bluetooth"}
               >
                 <BluetoothCard perm={p("bluetooth")} />
               </SectionCard>
@@ -2155,6 +2202,7 @@ export function Devices({ engineStatus }: DevicesProps) {
                   p("wifi")?.user_details ||
                   "Scan and discover WiFi networks in range"
                 }
+                defaultOpen={requestedPermission === "wifi"}
               >
                 <WifiCard perm={p("wifi")} />
               </SectionCard>
@@ -2170,6 +2218,7 @@ export function Devices({ engineStatus }: DevicesProps) {
                   p("network")?.user_details ||
                   "Network adapters, IP addresses, and connectivity status"
                 }
+                defaultOpen={requestedPermission === "network"}
               >
                 <NetworkCard perm={p("network")} />
               </SectionCard>
@@ -2195,6 +2244,7 @@ export function Devices({ engineStatus }: DevicesProps) {
                   p("location")?.user_details ||
                   "Device location via GPS or network"
                 }
+                defaultOpen={requestedPermission === "location"}
               >
                 <LocationCard perm={p("location")} />
               </SectionCard>
@@ -2211,9 +2261,29 @@ export function Devices({ engineStatus }: DevicesProps) {
                   p("accessibility")?.user_details ||
                   "Keyboard/mouse automation, window management, and screen control"
                 }
+                defaultOpen={requestedPermission === "accessibility"}
               >
                 <AccessibilityCard perm={p("accessibility")} />
               </SectionCard>
+
+              {additionalPermissions.map((permission) => (
+                <SectionCard
+                  key={permission.permission}
+                  icon={<Shield className="h-5 w-5" />}
+                  title={permission.permission
+                    .replace(/_/g, " ")
+                    .replace(/\b\w/g, (character) => character.toUpperCase())}
+                  status={permission.status}
+                  description={
+                    permission.user_details ||
+                    permission.details ||
+                    "Optional operating-system access"
+                  }
+                  defaultOpen={requestedPermission === permission.permission}
+                >
+                  <PermissionAlert perm={permission} />
+                </SectionCard>
+              ))}
 
               {/* System Resources */}
               <SystemResourcesCard engineStatus={engineStatus} />

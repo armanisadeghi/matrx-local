@@ -35,6 +35,11 @@ import type {
   WakeWordSettings,
 } from "@/lib/transcription/types";
 import { engine as engineAPI } from "@/lib/api";
+import {
+  actionNeededStore,
+  registerActionNeededHandler,
+  type ActionNeeded,
+} from "@/features/action-needed";
 
 // ── Tauri IPC helpers (only used for whisper engine) ─────────────────────────
 
@@ -193,6 +198,54 @@ export function useWakeWord(
       // Notification permission denied or plugin unavailable — non-critical
     }
   }, []);
+
+  // Notification permission is optional until wake-word listening is enabled.
+  // Once enabled, publish a single explicit user action; detection never opens
+  // a native prompt on its own.
+  useEffect(() => {
+    const source = "wake-word-notifications";
+    if (!isTauri() || uiMode === "idle" || uiMode === "setup") {
+      actionNeededStore.reconcileLocal(source, null);
+      return;
+    }
+    let cancelled = false;
+    void import("@tauri-apps/plugin-notification").then(async ({ isPermissionGranted }) => {
+      const granted = await isPermissionGranted().catch(() => false);
+      if (cancelled) return;
+      const item: ActionNeeded = {
+        fingerprint: "os-permission:notifications:wake-word",
+        code: "notifications_required",
+        kind: "os_permission",
+        feature: "Wake word alerts",
+        title: "Notification access is needed",
+        message: "Allow notifications so Matrx can alert you when the wake word is detected.",
+        action: {
+          kind: "request_notification_permission",
+          label: "Allow Notifications",
+        },
+        source,
+        status: "active",
+        observed_at: Date.now(),
+      };
+      actionNeededStore.reconcileLocal(source, granted ? null : [item]);
+    });
+    return () => {
+      cancelled = true;
+      actionNeededStore.reconcileLocal(source, null);
+    };
+  }, [uiMode]);
+
+  useEffect(
+    () =>
+      registerActionNeededHandler("request_notification_permission", async (item) => {
+        const { requestPermission } = await import("@tauri-apps/plugin-notification");
+        if ((await requestPermission()) === "granted") {
+          actionNeededStore.resolve(item.fingerprint);
+          actionNeededStore.reconcileLocal("wake-word-notifications", null);
+        }
+      }),
+    [],
+  );
 
   // ── Floating transcript overlay helpers ────────────────────────────────
 

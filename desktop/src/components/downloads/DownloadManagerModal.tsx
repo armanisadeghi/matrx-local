@@ -31,7 +31,10 @@ import {
   HardDrive,
 } from "lucide-react";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
-import { useResolutionAction } from "@/components/downloads/useResolutionAction";
+import {
+  ActionNeededCard as CanonicalActionNeededCard,
+  actionNeededFromDownload,
+} from "@/features/action-needed";
 import { useClientLogSubscriber } from "@/hooks/use-unified-log";
 import type { DownloadEntry } from "@/lib/downloads/types";
 
@@ -282,46 +285,27 @@ function ActionNeededCard({
   entry: DownloadEntry;
   onRetry: (entry: DownloadEntry) => void;
 }) {
-  const dispatchAction = useResolutionAction();
-  const resolution = entry.resolution;
-  if (!resolution) return null;
+  const actionNeeded = actionNeededFromDownload(entry);
+  if (!actionNeeded) return null;
 
   return (
-    <div className="mx-4 my-3 rounded-lg border border-amber-300/70 bg-amber-50 p-4 dark:border-amber-700/50 dark:bg-amber-950/30">
-      <div className="flex items-start gap-3">
-        <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/60">
-          <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-500" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-foreground">
-            {resolution.title}
-          </p>
-          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-            {resolution.message}
-          </p>
-          <p
-            className="mt-1.5 truncate text-xs text-muted-foreground/70"
-            title={entry.display_name || entry.filename}
-          >
-            {entry.display_name || entry.filename}
-          </p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => void dispatchAction(resolution)}
-              className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
-            >
-              {resolution.action_label}
-            </button>
-            <button
-              onClick={() => onRetry(entry)}
-              className="flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-              title="Re-check access and start the download again"
-            >
-              <RotateCcw className="h-3 w-3" />
-              Check again & retry
-            </button>
-          </div>
-        </div>
+    <div className="mx-4 my-3 space-y-2">
+      <CanonicalActionNeededCard item={actionNeeded} />
+      <div className="flex items-center justify-between gap-3 px-1">
+        <p
+          className="min-w-0 truncate text-xs text-muted-foreground/70"
+          title={entry.display_name || entry.filename}
+        >
+          {entry.display_name || entry.filename}
+        </p>
+        <button
+          onClick={() => onRetry(entry)}
+          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+          title="Re-check access and start the download again"
+        >
+          <RotateCcw className="h-3 w-3" />
+          Check again & retry
+        </button>
       </div>
     </div>
   );
@@ -506,7 +490,7 @@ function LogPanel() {
 // ── Main modal ────────────────────────────────────────────────────────────
 
 export function DownloadManagerModal() {
-  const { downloads, isModalOpen, closeModal, cancel, enqueue } =
+  const { downloads, isModalOpen, closeModal, cancel, retry } =
     useDownloadManager();
 
   const [logsExpanded, setLogsExpanded] = useState(false);
@@ -543,25 +527,9 @@ export function DownloadManagerModal() {
 
   const handleRetry = useCallback(
     (entry: DownloadEntry) => {
-      // Carry the metadata forward but NOT the previous failure's resolution —
-      // the engine stores it in metadata, and copying it into a fresh download
-      // would make a brand-new attempt start life already asking for help.
-      let metadata = entry.metadata ?? undefined;
-      if (metadata && "resolution" in metadata) {
-        const { resolution: _dropped, ...rest } = metadata;
-        metadata = rest;
-      }
-      void enqueue({
-        id: `${entry.id}-retry-${Date.now()}`,
-        category: entry.category,
-        filename: entry.filename,
-        display_name: entry.display_name,
-        urls: entry.urls,
-        priority: entry.priority,
-        ...(metadata !== undefined ? { metadata } : {}),
-      });
+      void retry(entry);
     },
-    [enqueue],
+    [retry],
   );
 
   // Render the modal contents always (to avoid layout shifts when toggling),

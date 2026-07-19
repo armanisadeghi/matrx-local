@@ -22,6 +22,7 @@ pub async fn dm_enqueue(
     urls: Vec<String>,
     priority: Option<i32>,
     metadata: Option<String>,
+    hf_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let entry = state
         .enqueue(
@@ -33,6 +34,7 @@ pub async fn dm_enqueue(
             urls,
             priority.unwrap_or(0),
             metadata,
+            hf_token,
         )
         .await?;
     serde_json::to_value(&entry).map_err(|e| e.to_string())

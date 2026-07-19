@@ -302,6 +302,9 @@ pub struct DownloadManager {
     db_path: PathBuf,
     state: Arc<Mutex<ManagerState>>,
     semaphore: Arc<Semaphore>,
+    // Credentials are deliberately process-memory-only. DownloadEntry and its
+    // SQLite row must never contain a provider secret.
+    hf_tokens: Arc<Mutex<HashMap<String, String>>>,
 }
 
 fn restore_manager_state(db_path: &Path) -> ManagerState {
@@ -314,6 +317,18 @@ fn restore_manager_state(db_path: &Path) -> ManagerState {
                     if row.category == "llm" || row.category == "whisper" {
                         let message =
                             "Interrupted: app was closed mid-download. Please re-download.";
+                        row.status = DownloadStatus::Failed;
+                        row.error_msg = Some(message.to_string());
+                        row.resolution = None;
+                        row.updated_at = now_str();
+                        let _ = db_update_status(db_path, &id, "failed", Some(message));
+                    } else if row.urls.iter().any(|url| is_huggingface_https(url)) {
+                        // Provider credentials are intentionally never persisted.
+                        // Do not race a restored HF request against the frontend
+                        // bridge and then falsely claim its saved token is missing.
+                        // The UI hydrates this row and Retry supplies the current
+                        // canonical token through the authorized IPC command.
+                        let message = "Interrupted: app was closed mid-download. Retry from Downloads to resume with the current Hugging Face credentials.";
                         row.status = DownloadStatus::Failed;
                         row.error_msg = Some(message.to_string());
                         row.resolution = None;
@@ -345,6 +360,11 @@ fn restore_manager_state(db_path: &Path) -> ManagerState {
     restored
 }
 
+fn is_huggingface_https(url: &str) -> bool {
+    url.starts_with("https://huggingface.co/")
+        || url.starts_with("https://www.huggingface.co/")
+}
+
 impl DownloadManager {
     /// Create and start the manager. Call once from lib.rs setup.
     pub fn new(app: AppHandle, db_path: PathBuf) -> Arc<Self> {
@@ -364,6 +384,7 @@ impl DownloadManager {
             db_path: db_path.clone(),
             state: state.clone(),
             semaphore: semaphore.clone(),
+            hf_tokens: Arc::new(Mutex::new(HashMap::new())),
         });
 
         // Start dispatcher task
@@ -530,8 +551,12 @@ impl DownloadManager {
         urls: Vec<String>,
         priority: i32,
         metadata: Option<String>,
+        hf_token: Option<String>,
     ) -> Result<DownloadEntry, String> {
-        {
+        let hf_token = hf_token
+            .map(|token| token.trim().to_string())
+            .filter(|token| !token.is_empty());
+        let existing = {
             let state = self.state.lock().await;
             // Idempotency by ID
             if let Some(existing) = state.entries.get(&id) {
@@ -539,20 +564,38 @@ impl DownloadManager {
                     existing.status,
                     DownloadStatus::Queued | DownloadStatus::Active | DownloadStatus::Completed
                 ) {
-                    return Ok(existing.clone());
+                    Some(existing.clone())
+                } else {
+                    None
+                }
+            } else {
+                // Idempotency by filename+category
+                state
+                    .entries
+                    .values()
+                    .find(|entry| {
+                        entry.filename == filename
+                            && entry.category == category
+                            && matches!(
+                                entry.status,
+                                DownloadStatus::Queued
+                                    | DownloadStatus::Active
+                                    | DownloadStatus::Completed
+                            )
+                    })
+                    .cloned()
+            }
+        };
+        if let Some(existing) = existing {
+            if let Some(token) = hf_token {
+                if !matches!(existing.status, DownloadStatus::Completed) {
+                    self.hf_tokens
+                        .lock()
+                        .await
+                        .insert(existing.id.clone(), token);
                 }
             }
-            // Idempotency by filename+category
-            for entry in state.entries.values() {
-                if entry.filename == filename && entry.category == category {
-                    if matches!(
-                        entry.status,
-                        DownloadStatus::Queued | DownloadStatus::Active | DownloadStatus::Completed
-                    ) {
-                        return Ok(entry.clone());
-                    }
-                }
-            }
+            return Ok(existing);
         }
 
         // Parse metadata up front — a malformed JSON string is a caller bug and
@@ -590,6 +633,14 @@ impl DownloadManager {
             error!("[downloads] DB upsert failed for {}: {}", filename, e);
         }
 
+        // Install the ephemeral credential before exposing the pending ID to
+        // the dispatcher; otherwise a fast poll could launch unauthenticated.
+        if let Some(token) = hf_token.as_ref() {
+            self.hf_tokens
+                .lock()
+                .await
+                .insert(id.clone(), token.clone());
+        }
         {
             let mut state = self.state.lock().await;
             state.cancel_flags.insert(id.clone(), Arc::new(AtomicBool::new(false)));
@@ -634,6 +685,7 @@ impl DownloadManager {
         if let Err(e) = db_update_status(&self.db_path, id, "cancelled", None) {
             warn!("[downloads] DB cancel update failed for {}: {}", id, e);
         }
+        self.hf_tokens.lock().await.remove(id);
 
         let now = now_str();
         let pct = entry.percent();
@@ -767,6 +819,7 @@ impl DownloadManager {
             } else {
                 SECONDARY_CHUNK
             };
+            let hf_token = self.hf_tokens.lock().await.remove(&dl_id);
 
             let _ = db_update_status(&self.db_path, &dl_id, "active", None);
             // Extract data needed for the event, then drop the lock BEFORE emitting
@@ -788,7 +841,8 @@ impl DownloadManager {
             });
             let app_clone = app.clone();
             tauri::async_runtime::spawn(async move {
-                mgr.run(app_clone, entry, cancel_flag, chunk_size).await;
+                mgr.run(app_clone, entry, cancel_flag, chunk_size, hf_token)
+                    .await;
                 drop(permit);
             });
         }
@@ -811,15 +865,19 @@ impl DownloadSlotHandle {
         entry: DownloadEntry,
         cancel_flag: Arc<AtomicBool>,
         chunk_size: usize,
+        hf_token: Option<String>,
     ) {
         let id = entry.id.clone();
         let action_urls = entry.urls.clone();
         let actionable_resolution = |message: &str| {
-            action_urls.iter().find_map(|url| {
-                universal_hf_resolution(message, url)
-            })
+            action_urls
+                .iter()
+                .find_map(|url| universal_hf_resolution(message, url, hf_token.is_some()))
         };
-        match self.download(&app, entry, cancel_flag, chunk_size).await {
+        match self
+            .download(&app, entry, cancel_flag, chunk_size, hf_token.as_deref())
+            .await
+        {
             Ok(()) => {}
             Err(e) => {
                 // Extract state data, then drop the lock before emitting events.
@@ -890,6 +948,7 @@ impl DownloadSlotHandle {
         mut entry: DownloadEntry,
         cancel_flag: Arc<AtomicBool>,
         chunk_size: usize,
+        hf_token: Option<&str>,
     ) -> Result<(), String> {
         let id = entry.id.clone();
 
@@ -925,7 +984,7 @@ impl DownloadSlotHandle {
             .build()
             .map_err(|e| e.to_string())?;
 
-        let total_bytes = probe_total_bytes(&client, &entry.urls, None).await;
+        let total_bytes = probe_total_bytes(&client, &entry.urls, hf_token).await;
         if total_bytes > 0 {
             let mut state = self.state.lock().await;
             if let Some(e) = state.entries.get_mut(&id) {
@@ -1006,7 +1065,7 @@ impl DownloadSlotHandle {
                         &entry.filename,
                         &entry.display_name,
                         &entry.category,
-                        None,
+                        hf_token,
                         &cancel_flag,
                         chunk_size,
                     )
@@ -1030,8 +1089,8 @@ impl DownloadSlotHandle {
                             e
                         );
                         warn!("[downloads] {}", last_error);
-                        if universal_hf_resolution(&e, url).is_some() {
-                            break;
+                        if universal_hf_resolution(&e, url, hf_token.is_some()).is_some() {
+                            return Err(last_error);
                         }
                     }
                 }
@@ -1182,7 +1241,14 @@ impl DownloadSlotHandle {
 
         let response = req.send().await.map_err(|e| e.to_string())?;
         if !response.status().is_success() {
-            return Err(format!("HTTP {}", response.status()));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let excerpt: String = body.chars().take(500).collect();
+            return Err(if excerpt.is_empty() {
+                format!("HTTP {}", status)
+            } else {
+                format!("HTTP {}: {}", status, excerpt)
+            });
         }
 
         let part_total_bytes = response.content_length().unwrap_or(0);
@@ -1863,8 +1929,15 @@ mod action_resolution_tests {
         internal.status = DownloadStatus::Active;
         db_upsert(&db, &internal).unwrap();
 
+        let mut resumable = test_entry(None);
+        resumable.id = "public-asset".into();
+        resumable.category = "image_gen".into();
+        resumable.urls = vec!["https://example.com/public-model.bin".into()];
+        resumable.status = DownloadStatus::Active;
+        db_upsert(&db, &resumable).unwrap();
+
         let restored = restore_manager_state(&db);
-        assert_eq!(restored.entries.len(), 2);
+        assert_eq!(restored.entries.len(), 3);
         assert!(matches!(
             restored.entries["llm-test"].status,
             DownloadStatus::Failed
@@ -1876,10 +1949,82 @@ mod action_resolution_tests {
             .contains("Interrupted"));
         assert!(matches!(
             restored.entries["image-model"].status,
+            DownloadStatus::Failed
+        ));
+        assert!(restored.entries["image-model"]
+            .error_msg
+            .as_deref()
+            .unwrap_or_default()
+            .contains("current Hugging Face credentials"));
+        assert!(matches!(
+            restored.entries["public-asset"].status,
             DownloadStatus::Queued
         ));
         assert_eq!(restored.pending.len(), 1);
         let _ = std::fs::remove_file(db);
+    }
+
+    #[test]
+    fn native_hf_resolution_distinguishes_missing_invalid_and_gate_states() {
+        let url = "https://huggingface.co/org/gated-model/resolve/main/model.gguf";
+
+        let missing = universal_hf_resolution("HTTP 401", url, false).unwrap();
+        assert_eq!(missing.code, "hf_token_missing");
+        assert_eq!(missing.action_kind, "settings_api_keys");
+
+        let invalid = universal_hf_resolution("HTTP 401: unauthorized", url, true).unwrap();
+        assert_eq!(invalid.code, "hf_token_invalid");
+        assert_eq!(invalid.action_kind, "settings_api_keys");
+
+        let pending = universal_hf_resolution(
+            "HTTP 403: access request is pending author approval",
+            url,
+            true,
+        )
+        .unwrap();
+        assert_eq!(pending.code, "hf_gate_pending");
+        assert_eq!(pending.action_kind, "open_url");
+
+        let gated = universal_hf_resolution(
+            "HTTP 401: you must accept the gated repository terms",
+            url,
+            true,
+        )
+        .unwrap();
+        assert_eq!(gated.code, "hf_gate_not_accepted");
+        assert_eq!(
+            gated.action_url.as_deref(),
+            Some("https://huggingface.co/org/gated-model")
+        );
+
+        let generic = universal_hf_resolution("HTTP 403: forbidden", url, true).unwrap();
+        assert_eq!(generic.code, "hf_access_review_needed");
+        assert_ne!(generic.code, "hf_token_missing");
+    }
+
+    #[test]
+    fn native_hf_resolution_ignores_retryable_and_non_hf_errors() {
+        assert!(universal_hf_resolution(
+            "connection reset",
+            "https://huggingface.co/org/repo/model.gguf",
+            true,
+        )
+        .is_none());
+        assert!(universal_hf_resolution(
+            "HTTP 403",
+            "https://example.com/model.gguf",
+            true,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn native_download_entry_never_serializes_ephemeral_hf_token() {
+        let mut entry = test_entry(None);
+        entry.metadata = Some(serde_json::json!({"dest_dir": "/tmp/models"}));
+        let wire = serde_json::to_string(&entry).unwrap();
+        assert!(!wire.contains("hf_token"));
+        assert!(!wire.contains("hf_secret_must_not_persist"));
     }
 }
 
@@ -1927,23 +2072,89 @@ async fn probe_total_bytes(
     total
 }
 
-fn universal_hf_resolution(error: &str, url: &str) -> Option<DownloadResolution> {
+fn universal_hf_repo_page(url: &str) -> Option<String> {
+    let tail = url.split("huggingface.co/").nth(1)?;
+    let mut parts = tail.split('/').filter(|part| !part.is_empty());
+    Some(format!(
+        "https://huggingface.co/{}/{}",
+        parts.next()?,
+        parts.next()?
+    ))
+}
+
+fn universal_hf_resolution(
+    error: &str,
+    url: &str,
+    token_present: bool,
+) -> Option<DownloadResolution> {
     if !url.contains("huggingface.co")
         || !(error.contains("HTTP 401") || error.contains("HTTP 403"))
     {
         return None;
     }
+    if !token_present {
+        return Some(DownloadResolution {
+            code: "hf_token_missing".to_string(),
+            title: "Add a Hugging Face token".to_string(),
+            message: "This Hugging Face download requires an account token. Add it in API Keys, then retry.".to_string(),
+            action_kind: "settings_api_keys".to_string(),
+            action_label: "Add token".to_string(),
+            action_url: None,
+            provider: Some("huggingface".to_string()),
+        });
+    }
+    let lower = error.to_ascii_lowercase();
+    let approval_state = if lower.contains("pending") || lower.contains("awaiting") {
+        Some((
+            "hf_gate_pending",
+            "Your Hugging Face access request is pending",
+            "Your token was accepted, but this repository is still waiting for its authors to approve your access request.",
+            "Check access status",
+        ))
+    } else if lower.contains("gated")
+        || lower.contains("accept")
+        || lower.contains("terms")
+        || lower.contains("restricted")
+    {
+        Some((
+            "hf_gate_not_accepted",
+            "Accept this model's terms on Hugging Face",
+            "Your token was accepted, but this gated repository requires you to accept its terms before downloading.",
+            "Accept model terms",
+        ))
+    } else {
+        None
+    };
+    if let Some((code, title, message, label)) = approval_state {
+        return Some(DownloadResolution {
+            code: code.to_string(),
+            title: title.to_string(),
+            message: message.to_string(),
+            action_kind: "open_url".to_string(),
+            action_label: label.to_string(),
+            action_url: universal_hf_repo_page(url),
+            provider: Some("huggingface".to_string()),
+        });
+    }
+    if error.contains("HTTP 401") {
+        return Some(DownloadResolution {
+            code: "hf_token_invalid".to_string(),
+            title: "Hugging Face rejected your token".to_string(),
+            message: "The saved Hugging Face token was not accepted. Replace it with a current read token, then retry.".to_string(),
+            action_kind: "settings_api_keys".to_string(),
+            action_label: "Update token".to_string(),
+            action_url: None,
+            provider: Some("huggingface".to_string()),
+        });
+    }
+
     Some(DownloadResolution {
-        code: "hf_token_missing".to_string(),
-        title: "Add a Hugging Face token".to_string(),
-        message: (
-            "This Hugging Face download requires an account token. Add it in API Keys, "
-                .to_string()
-                + "then retry from the feature that requested the download."
-        ),
-        action_kind: "settings_api_keys".to_string(),
-        action_label: "Add token".to_string(),
-        action_url: None,
+        code: "hf_access_review_needed".to_string(),
+        title: "Hugging Face denied model access".to_string(),
+        message: "Your token was sent, but this repository denied access. Review the model page and your token permissions, then retry.".to_string(),
+        action_kind: "open_url".to_string(),
+        action_label: "Review model access".to_string(),
+        action_url: universal_hf_repo_page(url),
         provider: Some("huggingface".to_string()),
     })
 }

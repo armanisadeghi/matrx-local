@@ -7,6 +7,41 @@ import { deriveAccessPresentation } from "@/hooks/use-access-health";
 
 import type { ActionNeeded, ActionNeededAction } from "./types";
 
+export function actionNeededFromPermission({
+  permission,
+  status,
+  feature,
+  source,
+  observedAt = Date.now(),
+}: {
+  permission: string;
+  status: string;
+  feature: string;
+  source: string;
+  observedAt?: number;
+}): ActionNeeded | null {
+  if (!["denied", "not_determined", "restricted"].includes(status)) return null;
+  const label = permission.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+  return {
+    fingerprint: `os-permission:${permission}:${feature}`,
+    code: `${permission}_required`,
+    kind: "os_permission",
+    feature,
+    title: `${label} access is needed`,
+    message: `Allow ${label} access to use ${feature}, then retry.`,
+    action: {
+      kind: "request_os_permission",
+      label: `Allow ${label}`,
+      permission_key: permission,
+      route: `/devices?permission=${encodeURIComponent(permission)}`,
+    },
+    source,
+    status: "active",
+    observed_at: observedAt,
+    details: { permission_key: permission },
+  };
+}
+
 function epoch(value: string | number | null | undefined): number {
   if (typeof value === "number") return value;
   if (!value) return Date.now();

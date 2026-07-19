@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { navigateForActionNeeded, type NavigationRuntime } from "./actions";
+import {
+  dispatchActionNeeded,
+  navigateForActionNeeded,
+  type NavigationRuntime,
+} from "./actions";
+import type { ActionNeeded } from "./types";
 
 function runtime(
   overrides: Partial<NavigationRuntime> = {},
@@ -13,6 +18,7 @@ function runtime(
     openPeer: vi.fn(async () => "peer-1"),
     emitTo: vi.fn(async () => undefined),
     persistPendingRoute: vi.fn(),
+    persistPendingAction: vi.fn(),
     ...overrides,
   };
 }
@@ -23,6 +29,36 @@ describe("action-needed navigation", () => {
     await navigateForActionNeeded("settings?tab=api-keys", host);
     expect(host.setHash).toHaveBeenCalledWith("#/settings?tab=api-keys");
     expect(host.emitTo).not.toHaveBeenCalled();
+  });
+
+  it("hands a complete unhandled action from a panel to a full window", async () => {
+    const host = runtime({ fullWindow: false });
+    const item: ActionNeeded = {
+      fingerprint: "permission:camera",
+      code: "camera_required",
+      kind: "os_permission",
+      feature: "Camera",
+      title: "Camera access is needed",
+      message: "Allow camera access.",
+      action: {
+        kind: "request_os_permission",
+        label: "Allow Camera",
+        permission_key: "camera",
+      },
+      source: "test",
+      status: "active",
+    };
+    await dispatchActionNeeded(item, host);
+    expect(host.persistPendingAction).toHaveBeenCalledWith(
+      item,
+      expect.any(String),
+    );
+    const handoffId = vi.mocked(host.persistPendingAction).mock.calls[0]?.[1];
+    expect(host.emitTo).toHaveBeenCalledWith(
+      "main",
+      "action-needed://dispatch",
+      JSON.stringify({ item, handoffId }),
+    );
   });
 
   it("hands the exact route from a panel to the main window", async () => {

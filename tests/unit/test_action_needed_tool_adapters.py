@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 from app.services.action_needed import filesystem_access_needed, os_permission_needed
 from app.tools.session import ToolSession
+from app.tools import dispatcher
+from app.tools.types import ToolResult, ToolResultType
 from app.tools.tools import calendar_tools, system
 from app.tools.tools.file_ops import _io_error_result
 
@@ -91,3 +93,32 @@ def test_screenshot_permission_failure_returns_structured_action(monkeypatch):
     result = asyncio.run(system.tool_screenshot(ToolSession()))
     assert result.action_needed is not None
     assert result.action_needed.action.permission_key == "screen_recording"
+
+
+def test_legacy_capability_metadata_is_canonicalized_and_clears_on_retry(
+    monkeypatch,
+):
+    async def missing(*, session):
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output="Install the optional runtime.",
+            metadata={"fix_capability_id": "browser_automation"},
+        )
+
+    monkeypatch.setitem(dispatcher.TOOL_HANDLERS, "CapabilityProbe", missing)
+    first = asyncio.run(
+        dispatcher.dispatch("CapabilityProbe", {}, ToolSession())
+    )
+    assert first.action_needed is not None
+    assert first.action_needed.kind.value == "capability_install"
+    assert first.action_needed.details == {"capability_id": "browser_automation"}
+    assert first.metadata == {}
+
+    async def ready(*, session):
+        return ToolResult(output="ready")
+
+    monkeypatch.setitem(dispatcher.TOOL_HANDLERS, "CapabilityProbe", ready)
+    recovered = asyncio.run(
+        dispatcher.dispatch("CapabilityProbe", {}, ToolSession())
+    )
+    assert recovered.action_needed is None

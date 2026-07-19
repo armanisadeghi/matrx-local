@@ -60,6 +60,8 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from app.common.system_logger import get_logger
+from app.services.action_needed import ActionNeeded, download_resolution_needed
+from app.services.downloads import failures as download_failures
 from app.services.image_gen.models import ImageGenModel
 from app.services.media_gen.paths import (
     image_models_dir,
@@ -203,9 +205,16 @@ def map_civitai_base_model(base_model: str | None) -> str:
 class InspectError(Exception):
     """Raised by ref parsing / inspection with an HTTP-mappable status."""
 
-    def __init__(self, status_code: int, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        *,
+        action_needed: ActionNeeded | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.action_needed = action_needed
 
 
 # ── hardware heuristic ────────────────────────────────────────────────────────
@@ -441,22 +450,43 @@ def _friendly_civitai_http_error(exc: httpx.HTTPStatusError, what: str) -> Inspe
     if code in (401, 403):
         if read_civitai_key():
             if code == 401:
+                resolution = download_failures.civitai_key_rejected().resolution
                 return InspectError(
                     401,
                     f"Civitai rejected the saved API key while resolving {what}. "
                     "The key may have been revoked or regenerated — update it "
                     "under Settings → API Keys → Civitai, then try again.",
+                    action_needed=download_resolution_needed(
+                        resolution,
+                        feature="custom image models",
+                        source="image-gen.custom-inspect",
+                        resource_id=what,
+                    ),
                 )
+            resolution = download_failures.civitai_access_restricted().resolution
             return InspectError(
                 403,
                 f"Your Civitai key is connected, but Civitai says your account "
                 f"doesn't have access to {what}. Open the model page on Civitai "
                 "to unlock access, then try again.",
+                action_needed=download_resolution_needed(
+                    resolution,
+                    feature="custom image models",
+                    source="image-gen.custom-inspect",
+                    resource_id=what,
+                ),
             )
+        resolution = download_failures.civitai_key_required().resolution
         return InspectError(
             401,
             f"Civitai requires an API key to resolve {what}. Add your key "
             "under Settings → API Keys → Civitai, then try again.",
+            action_needed=download_resolution_needed(
+                resolution,
+                feature="custom image models",
+                source="image-gen.custom-inspect",
+                resource_id=what,
+            ),
         )
     if code == 404:
         return InspectError(404, f"Civitai has no {what} (404) — check the URL/id.")
@@ -624,7 +654,16 @@ async def resolve_hf(repo_id: str) -> dict[str, Any]:
             )
             if isinstance(classified, ActionableDownloadError):
                 resolution = classified.resolution
-                raise InspectError(401, resolution.message) from exc
+                raise InspectError(
+                    401,
+                    resolution.message,
+                    action_needed=download_resolution_needed(
+                        resolution,
+                        feature="custom image models",
+                        source="image-gen.custom-inspect",
+                        resource_id=repo_id,
+                    ),
+                ) from exc
             # Validation was inconclusive. Preserve uncertainty instead of
             # accusing the user of a missing token or unaccepted license.
             raise InspectError(

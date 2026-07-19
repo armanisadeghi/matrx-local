@@ -882,6 +882,9 @@ export function Settings({
         const { actionNeededStore } = await import("@/features/action-needed");
         if (validation?.verdict === "valid" || validation?.verdict === "unsupported") {
           actionNeededStore.resolve(`api-key:${provider}`, Date.now());
+          actionNeededStore.resolveMatching(
+            (item) => item.action.provider === provider,
+          );
         } else if (validation) {
           actionNeededStore.upsert({
             fingerprint: `api-key:${provider}`,

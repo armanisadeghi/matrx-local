@@ -11,8 +11,23 @@ import { enginePortList } from "@/lib/engine-ports";
 
 const DISCOVERY_PORTS = enginePortList();
 
-async function reportActionNeededErrorPayload(payload: unknown): Promise<void> {
-  if (!payload || typeof payload !== "object") return;
+function httpOperationKey(method: string, target: string, body?: BodyInit | null): string {
+  let resource = target;
+  try {
+    const url = new URL(target, "http://matrx.local");
+    resource = `${url.pathname}${url.search}`;
+  } catch {
+    // Preserve non-URL targets verbatim.
+  }
+  const bodyKey = typeof body === "string" ? body : body == null ? "" : String(body);
+  return `${method.toUpperCase()}:${resource}:${bodyKey}`;
+}
+
+async function reportActionNeededErrorPayload(
+  payload: unknown,
+  operationKey: string,
+): Promise<boolean> {
+  if (!payload || typeof payload !== "object") return false;
   const body = payload as Record<string, unknown>;
   const detail =
     body.detail && typeof body.detail === "object"
@@ -24,9 +39,21 @@ async function reportActionNeededErrorPayload(payload: unknown): Promise<void> {
       : undefined;
   const actionNeeded =
     body.action_needed ?? detail?.action_needed ?? details?.action_needed;
-  if (!actionNeeded) return;
+  if (!actionNeeded) return false;
   const { reportActionNeeded } = await import("@/features/action-needed/store");
-  reportActionNeeded(actionNeeded as import("@/features/action-needed").ActionNeeded);
+  const item = actionNeeded as import("@/features/action-needed").ActionNeeded;
+  reportActionNeeded({
+    ...item,
+    details: { ...(item.details ?? {}), http_operation: operationKey },
+  });
+  return true;
+}
+
+async function resolveHttpActionNeeded(operationKey: string): Promise<void> {
+  const { actionNeededStore } = await import("@/features/action-needed/store");
+  actionNeededStore.resolveMatching(
+    (item) => item.details?.http_operation === operationKey,
+  );
 }
 
 /** Operator broadcast carried by the remote app config (level-styled, shown once). */
@@ -265,6 +292,20 @@ class EngineAPI {
   /** Expose the current access token for SSE/EventSource connections that need ?token=. */
   async getAccessToken(): Promise<string | null> {
     return this.resolveAccessToken();
+  }
+
+  private async parseDeviceProbeResponse(
+    response: Response,
+    operationKey: string,
+    errorLabel: string,
+  ): Promise<DeviceProbeResult> {
+    const payload: unknown = await response.json().catch(() => null);
+    const reported = await reportActionNeededErrorPayload(payload, operationKey);
+    if (!reported) await resolveHttpActionNeeded(operationKey);
+    if (!response.ok) {
+      throw new Error(`${errorLabel}: ${response.status}`);
+    }
+    return payload as DeviceProbeResult;
   }
 
   /**
@@ -1928,9 +1969,10 @@ class EngineAPI {
       }
       throw e;
     }
+    const operationKey = httpOperationKey(init?.method ?? "GET", path, init?.body);
     if (!resp.ok) {
       const payload = await resp.json().catch(() => null);
-      await reportActionNeededErrorPayload(payload);
+      await reportActionNeededErrorPayload(payload, operationKey);
       const message =
         payload && typeof payload === "object"
           ? String(
@@ -1941,6 +1983,7 @@ class EngineAPI {
           : `HTTP ${resp.status}`;
       throw new Error(`${init?.method ?? "GET"} ${path} failed: ${message}`);
     }
+    await resolveHttpActionNeeded(operationKey);
     return resp.json();
   }
 
@@ -2040,8 +2083,15 @@ class EngineAPI {
    * Hugging Face token stored like other API keys (SQLite). Exposed only for
    * the Tauri GGUF downloader; returns null if unset or engine unavailable.
    */
-  async getHuggingfaceTokenForDownloads(): Promise<string | null> {
-    if (!this.baseUrl) return null;
+  async getHuggingfaceTokenForDownloads(
+    requireEngine = false,
+  ): Promise<string | null> {
+    if (!this.baseUrl) {
+      if (requireEngine) {
+        throw new Error("Engine unavailable — cannot read the Hugging Face key store");
+      }
+      return null;
+    }
     try {
       const authHdrs = await this.authHeaders();
       const resp = await fetch(
@@ -2051,11 +2101,19 @@ class EngineAPI {
         },
       );
       if (resp.status === 404) return null;
-      if (!resp.ok) return null;
+      if (!resp.ok) {
+        if (requireEngine) {
+          throw new Error(
+            `Could not read the Hugging Face key store (HTTP ${resp.status})`,
+          );
+        }
+        return null;
+      }
       const data = (await resp.json()) as { key: string };
       const k = data.key?.trim();
       return k || null;
-    } catch {
+    } catch (error) {
+      if (requireEngine) throw error;
       return null;
     }
   }
@@ -2504,8 +2562,11 @@ class EngineAPI {
       headers,
       signal: AbortSignal.timeout(10000),
     });
-    if (!resp.ok) throw new Error(`Audio device check failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("GET", "/devices/audio"),
+      "Audio device check failed",
+    );
   }
 
   /** List Bluetooth devices. */
@@ -2516,8 +2577,11 @@ class EngineAPI {
       headers,
       signal: AbortSignal.timeout(15000),
     });
-    if (!resp.ok) throw new Error(`Bluetooth check failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("GET", "/devices/bluetooth"),
+      "Bluetooth check failed",
+    );
   }
 
   /** List WiFi networks. */
@@ -2528,8 +2592,11 @@ class EngineAPI {
       headers,
       signal: AbortSignal.timeout(15000),
     });
-    if (!resp.ok) throw new Error(`WiFi scan failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("GET", "/devices/wifi"),
+      "WiFi scan failed",
+    );
   }
 
   /** Get network interface info. */
@@ -2540,8 +2607,11 @@ class EngineAPI {
       headers,
       signal: AbortSignal.timeout(10000),
     });
-    if (!resp.ok) throw new Error(`Network info failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("GET", "/devices/network"),
+      "Network info failed",
+    );
   }
 
   /** List connected peripherals (USB, Bluetooth, etc.). */
@@ -2552,9 +2622,11 @@ class EngineAPI {
       headers,
       signal: AbortSignal.timeout(10000),
     });
-    if (!resp.ok)
-      throw new Error(`Connected devices check failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("GET", "/devices/connected"),
+      "Connected devices check failed",
+    );
   }
 
   /**
@@ -2751,9 +2823,11 @@ class EngineAPI {
       headers,
       signal: AbortSignal.timeout(10000),
     });
-    if (!resp.ok)
-      throw new Error(`System resources check failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("GET", "/devices/system"),
+      "System resources check failed",
+    );
   }
 
   /** List cameras. */
@@ -2764,8 +2838,11 @@ class EngineAPI {
       headers,
       signal: AbortSignal.timeout(15000),
     });
-    if (!resp.ok) throw new Error(`Camera probe failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("GET", "/devices/camera"),
+      "Camera probe failed",
+    );
   }
 
   /** List all connected screens/monitors. */
@@ -2776,8 +2853,11 @@ class EngineAPI {
       headers,
       signal: AbortSignal.timeout(10000),
     });
-    if (!resp.ok) throw new Error(`Screens probe failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("GET", "/devices/screens"),
+      "Screens probe failed",
+    );
   }
 
   /** Take a screenshot (optionally for a specific monitor index or "all"/"primary"). */
@@ -2793,8 +2873,11 @@ class EngineAPI {
         signal: AbortSignal.timeout(15000),
       },
     );
-    if (!resp.ok) throw new Error(`Screenshot failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("GET", `/devices/screenshot?monitor=${encodeURIComponent(String(monitor))}`),
+      "Screenshot failed",
+    );
   }
 
   /** Get device location (lat/lon if permission granted). */
@@ -2805,8 +2888,11 @@ class EngineAPI {
       headers,
       signal: AbortSignal.timeout(20000),
     });
-    if (!resp.ok) throw new Error(`Location probe failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("GET", "/devices/location"),
+      "Location probe failed",
+    );
   }
 
   /** Record audio from microphone and return base64 WAV. */
@@ -2816,14 +2902,18 @@ class EngineAPI {
   }): Promise<DeviceProbeResult> {
     if (!this.baseUrl) throw new Error("Engine not discovered");
     const headers = await this.authHeaders();
+    const body = JSON.stringify(opts);
     const resp = await fetch(`${this.baseUrl}/devices/record-audio`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify(opts),
+      body,
       signal: AbortSignal.timeout((opts.duration_seconds ?? 5) * 1000 + 10000),
     });
-    if (!resp.ok) throw new Error(`Audio recording failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("POST", "/devices/record-audio", body),
+      "Audio recording failed",
+    );
   }
 
   /** Capture a photo from webcam and return base64 JPEG. */
@@ -2832,14 +2922,18 @@ class EngineAPI {
   }): Promise<DeviceProbeResult> {
     if (!this.baseUrl) throw new Error("Engine not discovered");
     const headers = await this.authHeaders();
+    const body = JSON.stringify(opts);
     const resp = await fetch(`${this.baseUrl}/devices/capture-photo`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify(opts),
+      body,
       signal: AbortSignal.timeout(15000),
     });
-    if (!resp.ok) throw new Error(`Photo capture failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("POST", "/devices/capture-photo", body),
+      "Photo capture failed",
+    );
   }
 
   /** Record a short video from webcam and return base64 MP4. */
@@ -2849,14 +2943,18 @@ class EngineAPI {
   }): Promise<DeviceProbeResult> {
     if (!this.baseUrl) throw new Error("Engine not discovered");
     const headers = await this.authHeaders();
+    const body = JSON.stringify(opts);
     const resp = await fetch(`${this.baseUrl}/devices/record-video`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify(opts),
+      body,
       signal: AbortSignal.timeout((opts.duration_seconds ?? 5) * 1000 + 10000),
     });
-    if (!resp.ok) throw new Error(`Video recording failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("POST", "/devices/record-video", body),
+      "Video recording failed",
+    );
   }
 
   /** Record screen video and return base64 MP4. */
@@ -2866,14 +2964,18 @@ class EngineAPI {
   }): Promise<DeviceProbeResult> {
     if (!this.baseUrl) throw new Error("Engine not discovered");
     const headers = await this.authHeaders();
+    const body = JSON.stringify(opts);
     const resp = await fetch(`${this.baseUrl}/devices/record-screen`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify(opts),
+      body,
       signal: AbortSignal.timeout((opts.duration_seconds ?? 5) * 1000 + 30000),
     });
-    if (!resp.ok) throw new Error(`Screen recording failed: ${resp.status}`);
-    return resp.json();
+    return this.parseDeviceProbeResponse(
+      resp,
+      httpOperationKey("POST", "/devices/record-screen", body),
+      "Screen recording failed",
+    );
   }
 
   // ── Platform context ───────────────────────────────────────────────────
@@ -3683,6 +3785,7 @@ export interface DeviceProbeResult {
   output: string;
   metadata: Record<string, unknown> | null;
   type: string;
+  action_needed?: import("@/features/action-needed").ActionNeeded | null;
 }
 
 // ---- Capabilities types ----
@@ -4459,6 +4562,7 @@ async function imageGenFetch<T>(
     extra.forEach((value, key) => mergedHeaders.set(key, value));
   }
   const method = options?.method ?? "GET";
+  const operationKey = httpOperationKey(method, url, options?.body);
   let resp: Response;
   try {
     resp = await fetch(url, {
@@ -4477,7 +4581,7 @@ async function imageGenFetch<T>(
     let detail = body;
     try {
       const parsed = JSON.parse(body) as { detail?: unknown };
-      await reportActionNeededErrorPayload(parsed);
+      await reportActionNeededErrorPayload(parsed, operationKey);
       if (parsed.detail) detail = stringifyErrorDetail(parsed.detail, body);
     } catch {
       // use raw body
@@ -4499,6 +4603,7 @@ async function imageGenFetch<T>(
     }
     throw new MediaGenHttpError(detail || `HTTP ${resp.status}`, resp.status);
   }
+  await resolveHttpActionNeeded(operationKey);
   return resp.json() as Promise<T>;
 }
 
@@ -5429,6 +5534,7 @@ async function videoGenFetch<T>(
     extra.forEach((value, key) => mergedHeaders.set(key, value));
   }
   const method = options?.method ?? "GET";
+  const operationKey = httpOperationKey(method, url, options?.body);
   let resp: Response;
   try {
     resp = await fetch(url, {
@@ -5447,7 +5553,7 @@ async function videoGenFetch<T>(
     let detail = body;
     try {
       const parsed = JSON.parse(body) as { detail?: unknown };
-      await reportActionNeededErrorPayload(parsed);
+      await reportActionNeededErrorPayload(parsed, operationKey);
       if (parsed.detail) detail = stringifyErrorDetail(parsed.detail, body);
     } catch {
       // use raw body
@@ -5472,6 +5578,7 @@ async function videoGenFetch<T>(
     err.status = resp.status;
     throw err;
   }
+  await resolveHttpActionNeeded(operationKey);
   return resp.json() as Promise<T>;
 }
 

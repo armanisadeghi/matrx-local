@@ -65,6 +65,8 @@ export interface DownloadEntry {
   eta_seconds?: number | null;
   /** Aggregate available bandwidth estimate (bytes/sec) shared from the manager */
   bandwidth_bps?: number;
+  /** Runtime transport owner. Client-only; never persisted by either manager. */
+  backend?: "rust" | "python";
 }
 
 export interface EnqueueOptions {

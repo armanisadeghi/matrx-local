@@ -15,6 +15,13 @@ export interface AppNotification {
   actionNeeded?: ActionNeeded;
 }
 
+/** A toast dismissal applies to one observation, not its stable requirement. */
+export function notificationToastKey(notification: AppNotification): string {
+  return notification.actionNeeded
+    ? `${notification.id}:${notification.actionNeeded.observed_at ?? notification.timestamp}`
+    : notification.id;
+}
+
 // Programmatically generated tones via Web Audio API — no asset files needed
 function playTone(type: "chime" | "alert" | "error" | "success"): void {
   try {
@@ -76,29 +83,6 @@ export function useNotifications() {
   const [hiddenToastIds, setHiddenToastIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const actionToastVersionsRef = useRef<Map<string, number>>(new Map());
-
-  // A resolved requirement may legitimately recur later with the same stable
-  // fingerprint. A newer observation earns a fresh toast; hiding the earlier
-  // toast must not suppress future occurrences forever.
-  useEffect(() => {
-    const recurringIds: string[] = [];
-    for (const item of actionNeeded) {
-      const version = item.observed_at ?? 0;
-      const previous = actionToastVersionsRef.current.get(item.fingerprint);
-      if (previous !== undefined && version > previous) {
-        recurringIds.push(`action:${item.fingerprint}`);
-      }
-      actionToastVersionsRef.current.set(item.fingerprint, version);
-    }
-    if (recurringIds.length > 0) {
-      setHiddenToastIds((prev) => {
-        const next = new Set(prev);
-        recurringIds.forEach((id) => next.delete(id));
-        return next;
-      });
-    }
-  }, [actionNeeded]);
   const soundEnabledRef = useRef(true);
   const soundStyleRef = useRef<AppSettings["notificationSoundStyle"]>("chime");
 
@@ -179,15 +163,6 @@ export function useNotifications() {
     setBaseNotifications((prev) => prev.filter((n) => n.id !== id));
   }, [actionNeeded]);
 
-  /** Hide a toast popup without deleting the notification from history. */
-  const hideToast = useCallback((id: string) => {
-    setHiddenToastIds((prev) => {
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
-  }, []);
-
   const clearAll = useCallback(() => {
     setBaseNotifications([]);
     setHiddenToastIds(new Set());
@@ -229,10 +204,24 @@ export function useNotifications() {
     [actionNotifications, baseNotifications],
   );
 
+  /** Hide a toast popup without deleting the notification from history. */
+  const hideToast = useCallback((id: string) => {
+    const notification = notifications.find((candidate) => candidate.id === id);
+    if (!notification) return;
+    setHiddenToastIds((prev) => {
+      const next = new Set(prev);
+      next.add(notificationToastKey(notification));
+      return next;
+    });
+  }, [notifications]);
+
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   const toasts = useMemo(
-    () => notifications.filter((n) => !hiddenToastIds.has(n.id)).slice(0, 3),
+    () =>
+      notifications
+        .filter((notification) => !hiddenToastIds.has(notificationToastKey(notification)))
+        .slice(0, 3),
     [notifications, hiddenToastIds],
   );
 

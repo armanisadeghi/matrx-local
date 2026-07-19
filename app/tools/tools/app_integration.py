@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import subprocess
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM

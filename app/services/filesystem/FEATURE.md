@@ -95,7 +95,14 @@ Metadata traversal does not follow symlinks. Dependency/VCS/cache internals
 trash/system-volume metadata are skipped. These exclusions avoid generated
 noise; they do not omit sibling user directories or mounted volumes.
 
-Directory pages cap at 500 entries. Fallback discovery observes both a time
+Directory pages cap at 500 entries. Direct listings use expiring, single-use,
+query-scoped opaque cursors and an incremental SQLite snapshot. Each request
+observes at most 20,000 raw entries, each snapshot caps at 1,000,000 visible
+entries, and service-wide session/count limits evict abandoned snapshots.
+Snapshot construction may return an empty progress page with a non-null cursor;
+only an empty page without a cursor means the directory is empty. This keeps
+memory and event-loop work bounded while preserving directory-first lexical
+order across mutations. Fallback discovery observes both a time
 deadline and a 50,000-entry budget. Index scans check a cooperative stop event
 between entries and keep the durable directory lease until the complete
 directory has been observed; exceptionally large directories are never marked

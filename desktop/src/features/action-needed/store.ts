@@ -28,7 +28,12 @@ function isActionNeeded(value: unknown): value is ActionNeeded {
 export class ActionNeededStore {
   private items = new Map<string, ActionNeeded>();
   private sourceVersions = new Map<string, number>();
+  private sourceEpochs = new Map<string, string>();
+  private backendSources = new Set<string>();
+  private localSources = new Set<string>();
+  private backendEpoch: string | null = null;
   private resolvedAt = new Map<string, number>();
+  private resolvedSources = new Map<string, string>();
   private listeners = new Set<Listener>();
   private cached: ActionNeeded[] = [];
   private localVersion = 0;
@@ -71,6 +76,7 @@ export class ActionNeededStore {
       return;
     }
     this.items.set(item.fingerprint, item);
+    this.resolvedSources.delete(item.fingerprint);
     this.publish();
   }
 
@@ -92,6 +98,7 @@ export class ActionNeededStore {
       fingerprint,
       Math.max(this.resolvedAt.get(fingerprint) ?? 0, resolvedVersion),
     );
+    if (existing) this.resolvedSources.set(fingerprint, existing.source);
     if (this.items.delete(fingerprint)) this.publish();
   }
 
@@ -104,6 +111,7 @@ export class ActionNeededStore {
           fingerprint,
           Math.max(this.resolvedAt.get(fingerprint) ?? 0, now),
         );
+        this.resolvedSources.set(fingerprint, item.source);
       }
     }
     this.publish();
@@ -111,6 +119,23 @@ export class ActionNeededStore {
 
   /** Replace all items owned by one source. `null` is an explicit clear. */
   reconcile(snapshot: ActionNeededSnapshot): void {
+    if (!this.localSources.has(snapshot.source)) {
+      this.backendSources.add(snapshot.source);
+    }
+    const previousEpoch = this.sourceEpochs.get(snapshot.source);
+    if (snapshot.epoch && previousEpoch && snapshot.epoch !== previousEpoch) {
+      for (const [fingerprint, item] of this.items) {
+        if (item.source === snapshot.source) this.items.delete(fingerprint);
+      }
+      for (const [fingerprint, source] of this.resolvedSources) {
+        if (source === snapshot.source) {
+          this.resolvedSources.delete(fingerprint);
+          this.resolvedAt.delete(fingerprint);
+        }
+      }
+      this.sourceVersions.delete(snapshot.source);
+    }
+    if (snapshot.epoch) this.sourceEpochs.set(snapshot.source, snapshot.epoch);
     const previousVersion = this.sourceVersions.get(snapshot.source) ?? -1;
     if (snapshot.version < previousVersion) return;
     this.sourceVersions.set(snapshot.source, snapshot.version);
@@ -125,6 +150,7 @@ export class ActionNeededStore {
     for (const [fingerprint, item] of this.items) {
       if (item.source === snapshot.source && !incoming.has(fingerprint)) {
         this.items.delete(fingerprint);
+        this.resolvedSources.delete(fingerprint);
       }
     }
     for (const [fingerprint, item] of incoming) {
@@ -140,20 +166,48 @@ export class ActionNeededStore {
         item.observed_at >= existing.observed_at
       ) {
         this.items.set(fingerprint, item);
+        this.resolvedSources.delete(fingerprint);
       }
     }
     this.publish();
   }
 
   reconcileLocal(source: string, items: ActionNeeded[] | null): void {
+    this.localSources.add(source);
     this.localVersion += 1;
     this.reconcile({ source, version: this.localVersion, items });
+  }
+
+  acceptBackendEpoch(epoch: string): void {
+    if (this.backendEpoch && this.backendEpoch !== epoch) {
+      for (const [fingerprint, item] of this.items) {
+        if (!this.localSources.has(item.source)) this.items.delete(fingerprint);
+      }
+      for (const [fingerprint, source] of this.resolvedSources) {
+        if (!this.localSources.has(source)) {
+          this.resolvedSources.delete(fingerprint);
+          this.resolvedAt.delete(fingerprint);
+        }
+      }
+      for (const source of this.backendSources) {
+        this.sourceVersions.delete(source);
+        this.sourceEpochs.delete(source);
+      }
+      this.backendSources.clear();
+      this.publish();
+    }
+    this.backendEpoch = epoch;
   }
 
   reset(): void {
     this.items.clear();
     this.sourceVersions.clear();
+    this.sourceEpochs.clear();
+    this.backendSources.clear();
+    this.localSources.clear();
+    this.backendEpoch = null;
     this.resolvedAt.clear();
+    this.resolvedSources.clear();
     this.localVersion = 0;
     this.publish();
   }
@@ -187,11 +241,18 @@ export function ingestActionNeededMessage(message: unknown): void {
     type?: string;
     source?: string;
     version?: number;
+    epoch?: string;
     items?: ActionNeeded[] | null;
     action_needed?: ActionNeeded | null;
     fingerprint?: string;
     observed_at?: number;
   };
+  if (
+    payload.type === "action_needed_epoch" &&
+    typeof payload.epoch === "string"
+  ) {
+    actionNeededStore.acceptBackendEpoch(payload.epoch);
+  }
   if (
     payload.type === "action_needed_snapshot" &&
     typeof payload.source === "string" &&
@@ -199,6 +260,7 @@ export function ingestActionNeededMessage(message: unknown): void {
   ) {
     actionNeededStore.reconcile({
       source: payload.source,
+      ...(payload.epoch ? { epoch: payload.epoch } : {}),
       version: payload.version,
       items: payload.items ?? null,
     });

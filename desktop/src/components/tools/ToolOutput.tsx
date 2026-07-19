@@ -25,6 +25,13 @@ function normalizeResult(result: unknown): ToolCallResult {
       : {}),
     ...(item?.artifact ? { artifact: item.artifact as ToolMediaArtifact } : {}),
     ...(item?.image ? { image: item.image as ToolImageData } : {}),
+    ...(item?.action_needed
+      ? {
+          action_needed: item.action_needed as NonNullable<
+            ToolCallResult["action_needed"]
+          >,
+        }
+      : {}),
   };
 }
 

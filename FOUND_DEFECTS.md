@@ -93,44 +93,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   handler vs uvicorn's, and that /admin/shutdown's self-signal actually
   sends a signal the process has a handler for.
 
-### MXL-D-048 — Ask-Arman checklist items for user-fixable app config are the wrong pattern
-- **Area:** `.matrx/ARMAN_TASKS.md` process / task-hygiene skill, and any
-  feature that gates on a missing key/permission
-- **Symptom:** Items like "Add your Hugging Face token" or "Grant Full Disk
-  Access" were listed in `.matrx/ARMAN_TASKS.md` as things to manually ask
-  Arman to go do via a settings page — but the app already has (or should
-  have, see MXL-D-046-adjacent "Proactive in-app permission prompts" task in
-  `.matrx/AGENT_TASKS.md`) the exact context needed to prompt the user
-  gently, in place, the moment a feature needs that config. Turning a
-  self-service, in-app, per-user config gap into a person-to-person "ask
-  Arman" checklist item is itself the bug — it hides a real UX gap behind a
-  manual workaround, and produces stale/wrong asks (see MXL-D-047) when the
-  checklist drifts from reality.
-- **Rule going forward:** `task-hygiene`/agents must not file "add your X
-  key" or "grant Y permission" as an `.matrx/ARMAN_TASKS.md` item UNLESS
-  there's a specific reason the app itself cannot prompt for it (e.g. a
-  literal external dashboard action like Supabase SMTP). If the app should
-  be able to self-serve this, file the missing prompt/UX as an
-  `.matrx/AGENT_TASKS.md` bug instead.
-- **Reinforced 2026-07-14 (Arman, emphatic):** this covers **OS permissions
-  too** (Full Disk Access, **Screen Recording**), not just API keys. The
-  distinction is lead-developer-action vs user-action: a user grant is NEVER
-  an Arman task. And the required app behavior is stronger than a passive
-  banner — an **urgent in-app notification + one-click deep-link to the exact
-  grant page**. "Grant Screen Recording" was living in ARMAN_TASKS as exactly
-  this anti-pattern; removed 2026-07-14 and folded into the "Proactive in-app
-  permission + API-key prompts" task (which now names Screen Recording and the
-  notification requirement).
-- **Status:** open
-- **Analysis stamp:** Unverified — from docs/logs only (process finding, not
-  code-verified beyond the two examples in this pass).
-- **Owner hint:** fold into the same effort as the "Proactive in-app
-  permission prompts" task (`.matrx/AGENT_TASKS.md`) — generalize that
-  task's scope from permissions to API keys too, since the failure mode is
-  identical (silent degrade / raw error instead of a contextual nudge).
-
----
-
 ## Downloads (audit 2026-05-04 remainder — see docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md)
 
 ### MXL-D-012 — Download progress freezes / 0% on chunked-encoding sources
@@ -400,25 +362,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   host is meant to ship) or correct the `pyproject.toml:85` comment to say it
   is NOT bundled and must be enabled+synced deliberately. Pick one so doc and
   build agree.
-
-### MXL-D-057 — `app.config` ↔ `app.common` import cycle makes import order load-bearing
-- **Area:** `app/config.py:5` (imports `app.common.platform_ctx`) ↔
-  `app/common/__init__.py` → `fancy_prints.py:4` (imports `app.config`)
-- **Symptom:** any module (or test) that imports `app.config`-dependent code
-  BEFORE `app.common` crashes with `ImportError: cannot import name
-  'LOG_VCPRINT' from partially initialized module 'app.config'`. The engine
-  only boots because its entrypoints happen to import `app.common` first.
-- **Evidence:** reproduced 2026-07-18 while adding
-  `tests/smoke/test_paths_provenance.py` — importing
-  `app.services.paths.manager` first fails; the test now carries an explicit
-  `import app.common` workaround with a comment.
-- **Status:** open
-- **Analysis stamp:** Analyzed 2026-07-18 — the cycle only resolves in one
-  direction (app.common first). Fix direction: `fancy_prints` should read
-  `LOG_VCPRINT` lazily (or from env) instead of importing `app.config` at
-  module level, killing the cycle.
-- **Owner hint:** whoever next touches `app/common/fancy_prints.py` or
-  `app/config.py`; small, self-contained.
 
 ## Cross-repo
 

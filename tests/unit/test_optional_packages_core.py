@@ -133,6 +133,7 @@ def test_frozen_hash_locked_install_uses_bundled_uv_without_finding_python(
 
     def fake_popen(command, **_kwargs):
         captured["command"] = command
+        captured["environment"] = _kwargs.get("env")
         return FakeProcess()
 
     monkeypatch.setattr(core.subprocess, "Popen", fake_popen)
@@ -150,6 +151,10 @@ def test_frozen_hash_locked_install_uses_bundled_uv_without_finding_python(
     assert command[:3] == ["/app/uv", "pip", "install"]
     assert "--require-hashes" in command
     assert command[command.index("--requirement") + 1] == str(requirements)
+    environment = captured["environment"]
+    assert isinstance(environment, dict)
+    assert environment["UV_MANAGED_PYTHON"] == "1"
+    assert "UV_OFFLINE" not in environment
 
 
 def test_pip_process_is_reaped_when_engine_shutdown_is_requested(

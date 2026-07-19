@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
@@ -22,10 +23,12 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from app.services.optional_packages.runtime_installer import executable_sha256
-
-
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from app.services.optional_packages.runtime_installer import executable_sha256  # noqa: E402
+
+
 DEFAULT_MANIFEST = (
     ROOT / "config" / "runtime-manifests" / "runtime-installer.json"
 )
@@ -52,6 +55,8 @@ class InstallerArtifact:
 
     @property
     def archive_member(self) -> str:
+        if "windows" in self.target:
+            return self.executable_name
         return f"uv-{self.target}/{self.executable_name}"
 
 

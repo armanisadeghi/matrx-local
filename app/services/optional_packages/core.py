@@ -289,13 +289,16 @@ def run_pip_streaming(
     ):
         from app.services.optional_packages.runtime_installer import (  # noqa: PLC0415
             locked_target_install_command,
+            locked_target_install_environment,
         )
 
         python = "<bundled-uv: no host Python>"
         cmd = locked_target_install_command(target)
+        process_environment = locked_target_install_environment(target)
     else:
         python = find_python()
         cmd = _install_command(python, target)
+        process_environment = None
     if extra_index:
         cmd += ["--extra-index-url", extra_index]
     if requirements_file is not None:
@@ -318,6 +321,7 @@ def run_pip_streaming(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        env=process_environment,
     )
 
     assert proc.stdout is not None

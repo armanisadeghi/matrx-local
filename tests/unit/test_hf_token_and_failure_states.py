@@ -17,10 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import gc
-import sys
-import threading
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -69,6 +67,244 @@ def test_read_hf_token_reflects_key_rotation_immediately(monkeypatch):
         assert paths.read_hf_token() is None
         cache["huggingface"] = "hf_rotated"
         assert paths.read_hf_token() == "hf_rotated"
+
+
+def _configure_ready_runtime_for_upgrade_check(
+    monkeypatch: pytest.MonkeyPatch,
+    versions: dict[str, str],
+) -> None:
+    """Provide authoritative slot/contract state around a version-policy test."""
+    from app.services.image_gen import installer
+    from app.services.image_gen.runtime_state import RuntimePhase, RuntimeSnapshot
+
+    monkeypatch.setattr(installer.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(installer, "_compatibility_migration_pending", lambda: False)
+    monkeypatch.setattr(installer, "is_image_gen_installed", lambda: True)
+    monkeypatch.setattr(
+        installer,
+        "authoritative_snapshot",
+        lambda: RuntimeSnapshot(
+            state=RuntimePhase.READY,
+            runtime_revision="contract-revision",
+            active_slot="verified-slot",
+            packages=dict(versions),
+        ),
+    )
+    monkeypatch.setattr(
+        installer,
+        "load_runtime_install_contract",
+        lambda: SimpleNamespace(
+            runtime_revision="contract-revision",
+            target="test-target",
+            packages=dict(versions),
+        ),
+    )
+    monkeypatch.setattr(installer, "validate_slot", lambda *args, **kwargs: (True, "", {}))
+    monkeypatch.setattr(installer, "get_installed_package_versions", lambda: versions)
+    monkeypatch.setattr(installer, "_get_torchvision_torch_requirement", lambda: "2.11.0")
+
+
+def test_needs_upgrade_when_peft_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.image_gen import installer
+
+    versions = {
+        "diffusers": "0.39.0",
+        "transformers": "5.3.0",
+        "gguf": "0.17.1",
+        "torch": "2.11.0",
+        "torchvision": "0.26.0",
+    }
+    _configure_ready_runtime_for_upgrade_check(monkeypatch, versions)
+    assert installer.needs_upgrade() is True
+
+    versions["peft"] = "0.19.1"
+    assert installer.needs_upgrade() is False
+
+
+def test_needs_upgrade_when_torchvision_requires_another_torch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.image_gen import installer
+
+    versions = {
+        "diffusers": "0.39.0",
+        "transformers": "5.3.0",
+        "peft": "0.19.1",
+        "gguf": "0.17.1",
+        "torch": "2.13.0",
+        "torchvision": "0.26.0",
+    }
+    _configure_ready_runtime_for_upgrade_check(monkeypatch, versions)
+    assert installer.needs_upgrade() is True
+
+
+def test_torchvision_torch_requirement_is_read_without_importing_native_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.services.image_gen import installer
+
+    metadata_dir = tmp_path / "torchvision-0.26.0.dist-info"
+    metadata_dir.mkdir()
+    (metadata_dir / "METADATA").write_text(
+        "Metadata-Version: 2.4\n"
+        "Name: torchvision\n"
+        "Version: 0.26.0\n"
+        "Requires-Dist: torch (==2.11.0)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(installer, "get_image_gen_packages_dir", lambda: tmp_path)
+
+    assert installer._get_torchvision_torch_requirement() == "2.11.0"
+
+
+def test_managed_image_runtime_cannot_shadow_engine_core_packages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A verified slot fills missing imports but remains behind bundled core."""
+    from app.services.image_gen import installer
+
+    monkeypatch.setattr(installer.sys, "path", ["/frozen-engine"])
+
+    assert installer.inject_image_gen_path(tmp_path) is True
+    assert installer.sys.path == ["/frozen-engine", str(tmp_path)]
+
+
+def test_frozen_runtime_hook_withholds_verifier_and_appends_verified_slot() -> None:
+    hook = (
+        Path(__file__).resolve().parents[2] / "hooks" / "runtime_hook.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'os.getenv("MATRX_FROZEN_RUNTIME_VERIFY") == "1"' in hook
+    assert "sys.path.append(_runtime_slot_text)" in hook
+    assert "sys.path.insert(0, _runtime_slot_text)" not in hook
+
+
+def test_needs_upgrade_when_diffusers_predates_z_image_lora_fix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.image_gen import installer
+
+    versions = {
+        "diffusers": "0.37.1",
+        "transformers": "5.3.0",
+        "peft": "0.19.1",
+        "gguf": "0.17.1",
+        "torch": "2.11.0",
+        "torchvision": "0.26.0",
+    }
+    _configure_ready_runtime_for_upgrade_check(monkeypatch, versions)
+    assert installer.needs_upgrade() is True
+
+
+def test_install_status_prefers_canonical_terminal_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import image_gen_routes
+
+    monkeypatch.setattr(
+        image_gen_routes,
+        "get_runtime_status",
+        lambda: {
+            "state": "failed",
+            "stage": "validating",
+            "percent": 72.0,
+            "message": "Runtime validation failed.",
+            "failure_detail": "frozen activation failed",
+            "log_lines": ["verification failed"],
+        },
+    )
+
+    response = asyncio.run(image_gen_routes.get_install_status())
+
+    assert response.status == "error"
+    assert response.error == "frozen activation failed"
+    assert response.already_installed is False
+
+
+def test_interrupted_staged_install_is_durable_and_retriable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.services.image_gen import installer, runtime_state
+
+    lock = tmp_path / "requirements.txt"
+    lock.write_text("diffusers==0.39.0 --hash=sha256:" + "a" * 64, encoding="utf-8")
+    contract = installer.RuntimeInstallContract(
+        contract_sha256="b" * 64,
+        target="test-target",
+        requirements_file=lock,
+        packages={"diffusers": "0.39.0"},
+        record_hashes={},
+    )
+    monkeypatch.setattr(runtime_state, "packages_dir", lambda name: tmp_path / name)
+    monkeypatch.setattr(installer.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(installer, "load_runtime_install_contract", lambda: contract)
+    monkeypatch.setattr(
+        installer,
+        "_run_pip_streaming",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+
+    progress = installer.InstallProgress()
+    installer._install_runtime_sync(progress, None, "install", "attempt-1")
+
+    snapshot = runtime_state.read_snapshot()
+    assert progress.status == "error"
+    assert snapshot.state is runtime_state.RuntimePhase.FAILED
+    assert snapshot.failure_code == "install_failed"
+    assert snapshot.failure_detail == "offline"
+    assert list(runtime_state.runtime_slots_dir().glob("*.staging-*")) == []
+
+
+def test_background_runtime_failure_is_observed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.image_gen import installer
+
+    def fail(progress: installer.InstallProgress) -> None:
+        progress.fail("migration exploded")
+        raise RuntimeError("migration exploded")
+
+    async def exercise() -> None:
+        loop = asyncio.get_running_loop()
+        unhandled: list[dict] = []
+        loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+        installer._background_futures.clear()
+        progress = installer.InstallProgress()
+
+        installer._submit_background(fail, progress)
+        for _ in range(100):
+            if not installer._background_futures:
+                break
+            await asyncio.sleep(0.001)
+        gc.collect()
+        await asyncio.sleep(0)
+
+        assert progress.status == "error"
+        assert not installer._background_futures
+        assert unhandled == []
+
+    asyncio.run(exercise())
+
+
+def test_nonready_runtime_is_hard_gated(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.image_gen import installer, service
+
+    monkeypatch.setattr(service.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(service, "DEPS_AVAILABLE", True)
+    monkeypatch.setattr(service, "DEPS_REASON", "")
+    monkeypatch.setattr(
+        installer,
+        "get_runtime_status",
+        lambda: {
+            "state": "failed",
+            "failure_detail": "Runtime update required.",
+            "message": "Runtime unavailable.",
+        },
+    )
+    svc = service.ImageGenService()
+
+    assert svc.available is False
+    assert "update required" in svc.unavailable_reason
 
 
 

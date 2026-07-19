@@ -36,6 +36,31 @@ class _BlockingProgress:
 
 
 @pytest.mark.anyio
+async def test_image_install_stream_exits_on_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = {
+        "state": "installing",
+        "stage": "installing",
+        "percent": 25.0,
+        "message": "Installing locked runtime.",
+        "failure_detail": None,
+        "log_lines": [],
+    }
+    monkeypatch.setattr(image_gen_routes, "get_runtime_status", lambda: runtime)
+    response = await image_gen_routes.stream_install_progress()
+    assert "connected" in await response.body_iterator.__anext__()
+    assert "Installing locked runtime" in await response.body_iterator.__anext__()
+    pending = asyncio.create_task(response.body_iterator.__anext__())
+    await asyncio.sleep(0)
+
+    request_process_shutdown()
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(pending, timeout=0.75)
+
+
+@pytest.mark.anyio
 async def test_capability_install_stream_reaps_pump_on_shutdown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

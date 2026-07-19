@@ -1242,7 +1242,7 @@ async def ensure_runtime(
     # touching the installed application's durable state.
     if not getattr(sys, "frozen", False):
         try:
-            packages = critical_runtime_import_check()
+            critical_runtime_import_check()
         except Exception:
             pass
         else:

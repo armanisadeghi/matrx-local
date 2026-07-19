@@ -58,6 +58,14 @@ def executable_sha256(path: Path) -> str:
                 # the signer-owned location/size fields before hashing.
                 data[offset + 8 : offset + 16] = b"\0" * 8
                 signature = (data_offset, data_size)
+            elif command == 0x19 and command_size >= 72:  # LC_SEGMENT_64
+                segment_name = bytes(data[offset + 8 : offset + 24]).rstrip(b"\0")
+                if segment_name == b"__LINKEDIT":
+                    # Re-signing resizes the signature at the end of __LINKEDIT,
+                    # which updates this segment's vmsize/filesize even though
+                    # executable code and all other link-edit data are unchanged.
+                    data[offset + 32 : offset + 40] = b"\0" * 8  # vmsize
+                    data[offset + 48 : offset + 56] = b"\0" * 8  # filesize
             offset += command_size
         if signature is not None:
             start, size = signature
@@ -208,3 +216,28 @@ def locked_target_install_command(target_dir: Path) -> list[str]:
         "--no-config",
         "--native-tls",
     ]
+
+
+def locked_target_install_environment(target_dir: Path) -> dict[str, str]:
+    """Isolate uv's interpreter and cache inside the app-owned runtime root."""
+    # The target is always <runtime-root>/slots/<staging-slot>. Keep the
+    # installer-only interpreter beside slots so cleanup/repair is deterministic
+    # and never borrows ~/.local/share/uv or another customer environment.
+    slots_dir = target_dir.resolve(strict=False).parent
+    runtime_root = slots_dir.parent
+    control_root = runtime_root / "installer-control"
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("UV_")
+    }
+    environment.update(
+        {
+            "UV_PYTHON_INSTALL_DIR": str(control_root / "python"),
+            "UV_CACHE_DIR": str(control_root / "cache"),
+            "UV_PYTHON_DOWNLOADS": "automatic",
+            "UV_MANAGED_PYTHON": "1",
+            "UV_LINK_MODE": "copy",
+            "UV_NATIVE_TLS": "1",
+            "UV_NO_CONFIG": "1",
+        }
+    )
+    return environment

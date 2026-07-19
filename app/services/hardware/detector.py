@@ -30,9 +30,11 @@ import logging
 import os
 import platform
 import re
+import signal
 import shutil
 import subprocess
 import time
+import threading
 from typing import Any
 
 from app.common.process_shutdown import process_shutdown_requested
@@ -110,22 +112,22 @@ def _run(cmd: list[str], timeout: int = 5) -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            start_new_session=not _IS_WIN,
+            creationflags=(
+                subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+                if _IS_WIN
+                else 0
+            ),
         )
         deadline = time.monotonic() + timeout
         while True:
             if process_shutdown_requested():
-                process.terminate()
-                try:
-                    process.communicate(timeout=0.5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.communicate()
+                _stop_probe_tree(process)
                 return ""
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                process.kill()
-                process.communicate()
+                _stop_probe_tree(process)
                 return ""
 
             try:
@@ -134,10 +136,86 @@ def _run(cmd: list[str], timeout: int = 5) -> str:
             except subprocess.TimeoutExpired:
                 continue
     except Exception:
-        if process is not None and process.poll() is None:
-            process.kill()
-            process.communicate()
+        if process is not None:
+            _stop_probe_tree(process)
         return ""
+
+
+def _stop_probe_tree(process: subprocess.Popen[str]) -> None:
+    """Terminate a probe and its descendants without an unbounded pipe wait."""
+    try:
+        if _IS_WIN:
+            _stop_windows_probe_tree(process)
+        else:
+            # Every probe starts a fresh session, so its PID is also the process
+            # group ID. Kill the group even if the leader already exited: a child
+            # may still own the captured stdout/stderr pipe.
+            for sig, grace in ((signal.SIGTERM, 0.5), (signal.SIGKILL, 0.5)):
+                try:
+                    os.killpg(process.pid, sig)
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.wait(timeout=grace)
+                except subprocess.TimeoutExpired:
+                    continue
+    except Exception as exc:
+        logger.debug("[hardware] Probe-tree cleanup degraded: %s", exc)
+    finally:
+        # Tree discovery is best-effort on restricted Windows installations.
+        # Always retain an owned-handle fallback for the direct process.
+        if process.poll() is None:
+            try:
+                process.kill()
+                process.wait(timeout=0.5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+
+        # Never call communicate() here. A late/untracked descendant could
+        # still hold a pipe open; closing our read handles keeps shutdown
+        # bounded.
+        for pipe in (process.stdout, process.stderr):
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+
+
+def _stop_windows_probe_tree(process: subprocess.Popen[str]) -> None:
+    """Terminate a Windows probe tree using the always-installed psutil."""
+    import psutil  # type: ignore[import]
+
+    targets: list[psutil.Process] = []
+    try:
+        root = psutil.Process(process.pid)
+        targets = [root, *root.children(recursive=True)]
+    except psutil.Error:
+        pass
+
+    # Stop the root first so it cannot add children while we drain the
+    # snapshot, then terminate descendants from the leaves upward.
+    ordered = targets[:1] + list(reversed(targets[1:]))
+    for target in ordered:
+        try:
+            target.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    _gone, alive = psutil.wait_procs(ordered, timeout=0.5)
+    for target in alive:
+        try:
+            target.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    psutil.wait_procs(alive, timeout=0.5)
+
+    if process.poll() is None:
+        try:
+            process.kill()
+            process.wait(timeout=0.5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 def _run_nvidia_smi(args: list[str], timeout: int = 5) -> str:
@@ -1023,6 +1101,46 @@ def detect_all_sync() -> dict[str, Any]:
 
 
 async def detect_all() -> dict[str, Any]:
-    """Run full hardware detection off the event loop (non-blocking)."""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, detect_all_sync)
+    """Run full detection without making event-loop shutdown wait on probes.
+
+    The detector is intentionally hosted on one daemon thread rather than the
+    loop's default executor. Most system commands are cooperatively terminated
+    above, but native inventory APIs can still block inside a library call.
+    A daemon worker lets the process finish graceful shutdown without waiting
+    indefinitely for such an OS/library call.
+    """
+    loop = asyncio.get_running_loop()
+    result: asyncio.Future[dict[str, Any]] = loop.create_future()
+
+    def deliver_profile(profile: dict[str, Any]) -> None:
+        if not result.done():
+            result.set_result(profile)
+
+    def deliver_error(exc: BaseException) -> None:
+        if not result.done():
+            result.set_exception(exc)
+
+    def schedule_delivery(callback: Any, value: Any) -> None:
+        try:
+            loop.call_soon_threadsafe(callback, value)
+        except RuntimeError:
+            # The owning loop can close between is_closed() and scheduling
+            # when shutdown cancels an active refresh.
+            pass
+
+    def worker() -> None:
+        try:
+            profile = detect_all_sync()
+        except BaseException as exc:
+            if not loop.is_closed():
+                schedule_delivery(deliver_error, exc)
+        else:
+            if not loop.is_closed():
+                schedule_delivery(deliver_profile, profile)
+
+    threading.Thread(
+        target=worker,
+        name="hardware-detection",
+        daemon=True,
+    ).start()
+    return await result

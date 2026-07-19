@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.machinery
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -26,6 +28,22 @@ TARGETS = (
 )
 
 
+def _extension_module_name(archive_name: str) -> str | None:
+    """Map a PyInstaller native-binary entry back to its import name."""
+    normalized = archive_name.replace("\\", "/")
+    for suffix in sorted(importlib.machinery.EXTENSION_SUFFIXES, key=len, reverse=True):
+        if normalized.endswith(suffix):
+            return normalized[: -len(suffix)].replace("/", ".")
+    # Normally verification is target-native. These conservative fallbacks
+    # also keep archive-inspection tooling useful across build hosts.
+    for suffix in (".pyd", ".so"):
+        if normalized.endswith(suffix):
+            stem = normalized[: -len(suffix)]
+            stem = re.sub(r"\.(?:cpython-\d+[^./]*|cp\d+[^./]*|abi3)$", "", stem)
+            return stem.replace("/", ".")
+    return None
+
+
 def archive_modules(binary: Path) -> set[str]:
     try:
         from PyInstaller.archive.readers import CArchiveReader
@@ -33,7 +51,16 @@ def archive_modules(binary: Path) -> set[str]:
         raise RuntimeError("PyInstaller is required to inspect the frozen archive") from exc
     archive = CArchiveReader(str(binary))
     pyz = archive.open_embedded_archive("PYZ.pyz")
-    return set(pyz.toc)
+    modules = set(pyz.toc)
+    # Extension modules are binary entries in the outer CArchive, never in the
+    # pure-Python PYZ table. Both tables are required to prove whole packages.
+    for name, entry in archive.toc.items():
+        if entry[-1] != "b":
+            continue
+        module = _extension_module_name(name)
+        if module:
+            modules.add(module)
+    return modules
 
 
 def check_archive(binary: Path, contract: dict, *, target: str) -> None:

@@ -201,3 +201,27 @@ def test_accelerator_and_linux_floor_are_explicit() -> None:
         (manifests / "image-gen-x86_64-unknown-linux-gnu.json").read_text()
     )
     assert linux["minimum_glibc"] == "2.28"
+
+
+def test_frozen_archive_normalizes_native_extension_modules() -> None:
+    script = _SPECS_DIR.parent / "scripts" / "verify-frozen-runtime.py"
+    spec = importlib.util.spec_from_file_location("frozen_runtime_verifier", script)
+    assert spec and spec.loader
+    verifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verifier)
+
+    assert (
+        verifier._extension_module_name(
+            "numpy/_core/_multiarray_umath.cpython-313-darwin.so"
+        )
+        == "numpy._core._multiarray_umath"
+    )
+    assert (
+        verifier._extension_module_name("tokenizers/tokenizers.abi3.so")
+        == "tokenizers.tokenizers"
+    )
+    assert (
+        verifier._extension_module_name(r"regex\_regex.cp313-win_amd64.pyd")
+        == "regex._regex"
+    )
+    assert verifier._extension_module_name("not-a-module.dylib") is None

@@ -11,6 +11,7 @@ import mimetypes
 import os
 import re
 import shutil
+import stat
 import uuid
 from pathlib import Path
 
@@ -38,6 +39,8 @@ def _note_io(path: str, capability: Capability, exc: BaseException | None = None
 
 MAX_READ_SIZE = 256_000
 MAX_INLINE_OUTPUT = 60_000
+MAX_READ_SCAN_BYTES = 8 * 1024 * 1024
+MAX_MATERIALIZED_FILE_BYTES = 16 * 1024 * 1024
 
 
 def _io_error_result(
@@ -178,8 +181,26 @@ def _read_resolved(
     offset: int | None,
     limit: int | None,
 ) -> ToolResult:
+    try:
+        info = os.stat(resolved)
+    except OSError as exc:
+        _note_io(resolved, Capability.READ, exc)
+        return _io_error_result(
+            path=resolved, operation="read", prefix="Cannot read file", exc=exc
+        )
+    if not stat.S_ISREG(info.st_mode):
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=(
+                f"Cannot read file: {resolved} is not a regular file. Device, socket, "
+                "pipe, and other special files require a purpose-built bounded tool."
+            ),
+        )
+
     mime, _ = mimetypes.guess_type(resolved)
     if mime and mime.startswith("image/"):
+        if info.st_size > MAX_MATERIALIZED_FILE_BYTES:
+            return _materialization_limit_error(resolved, info.st_size, "image")
         return _read_image(session, resolved, mime)
 
     # Office documents (.docx / .pptx / .xlsx) are OpenXML zips — reading them
@@ -189,29 +210,98 @@ def _read_resolved(
     from matrx_files.specific_handlers.office import classify_office
 
     if classify_office(mime, resolved) is not None:
+        if info.st_size > MAX_MATERIALIZED_FILE_BYTES:
+            return _materialization_limit_error(resolved, info.st_size, "Office document")
         return _read_office(session, resolved, mime)
 
+    return _read_text_bounded(session, resolved, offset, limit)
+
+
+def _materialization_limit_error(path: str, size: int, kind: str) -> ToolResult:
+    return ToolResult(
+        type=ToolResultType.ERROR,
+        output=(
+            f"Cannot read {kind}: {path} is {size:,} bytes; this tool materializes at "
+            f"most {MAX_MATERIALIZED_FILE_BYTES:,} bytes. Use a bounded/ranged or "
+            "format-specific extraction tool."
+        ),
+    )
+
+
+def _read_text_bounded(
+    session: ToolSession,
+    resolved: str,
+    offset: int | None,
+    limit: int | None,
+) -> ToolResult:
+    start_line = offset if offset and offset > 0 else 1
+    max_lines = limit if limit and limit > 0 else None
+    parts: list[str] = []
+    output_size = 0
+    scanned_bytes = 0
+    line_number = 0
+    selected_lines = 0
+    reached_eof = False
+    truncated = False
     try:
-        text = Path(resolved).read_text(encoding="utf-8", errors="replace")
+        with open(resolved, "rb") as handle:
+            while scanned_bytes < MAX_READ_SCAN_BYTES:
+                remaining_scan = MAX_READ_SCAN_BYTES - scanned_bytes
+                read_limit = min(MAX_READ_SIZE + 1, remaining_scan + 1)
+                raw = handle.readline(read_limit)
+                if not raw:
+                    reached_eof = True
+                    break
+                scanned_bytes += len(raw)
+                line_number += 1
+                line_complete = raw.endswith(b"\n") or len(raw) < read_limit
+                if line_number < start_line:
+                    if not line_complete:
+                        return ToolResult(
+                            type=ToolResultType.ERROR,
+                            output=(
+                                f"Cannot reach line {start_line} safely: line {line_number} "
+                                f"in {resolved} exceeds the bounded read size."
+                            ),
+                        )
+                    continue
+
+                decoded = raw.decode("utf-8", errors="replace")
+                numbered = f"{line_number:6d}|{decoded}"
+                remaining_output = MAX_READ_SIZE - output_size
+                if len(numbered) > remaining_output:
+                    parts.append(numbered[:remaining_output])
+                    truncated = True
+                    break
+                parts.append(numbered)
+                output_size += len(numbered)
+                selected_lines += 1
+                if not line_complete:
+                    truncated = True
+                    break
+                if max_lines is not None and selected_lines >= max_lines:
+                    break
+            else:
+                truncated = True
     except OSError as e:
         _note_io(resolved, Capability.READ, e)
         return _io_error_result(path=resolved, operation="read", prefix="Cannot read file", exc=e)
     _note_io(resolved, Capability.READ)
-
-    lines = text.splitlines(keepends=True)
-    total = len(lines)
-
-    start = (offset - 1) if offset and offset > 0 else 0
-    end = (start + limit) if limit else total
-
-    selected = lines[start:end]
-    numbered = "".join(f"{start + i + 1:6d}|{line}" for i, line in enumerate(selected))
-
-    if len(numbered) > MAX_READ_SIZE:
-        numbered = numbered[:MAX_READ_SIZE] + "\n... [truncated]"
-
+    numbered = "".join(parts)
+    if truncated:
+        numbered += "\n... [bounded read truncated]"
     session.mark_file_read(resolved)
-    return ToolResult(output=numbered, metadata={"path": resolved, "total_lines": total})
+    return ToolResult(
+        output=numbered,
+        metadata={
+            "path": resolved,
+            "total_lines": line_number if reached_eof else None,
+            "lines_observed": line_number,
+            "lines_returned": selected_lines,
+            "truncated": truncated,
+            "scan_bytes": scanned_bytes,
+        },
+    )
 
 
 def _read_office(session: ToolSession, path: str, mime: str | None) -> ToolResult:
@@ -347,6 +437,34 @@ def _copy_path(source: str, destination: str) -> None:
         shutil.copy2(source, destination, follow_symlinks=False)
 
 
+def _is_strict_descendant_path(candidate: str, parent: str) -> bool:
+    """Whether ``candidate`` resolves below ``parent`` on this platform."""
+    candidate_key = os.path.normcase(os.path.realpath(os.path.abspath(candidate)))
+    parent_key = os.path.normcase(os.path.realpath(os.path.abspath(parent)))
+    if candidate_key == parent_key:
+        return False
+    try:
+        return os.path.commonpath([candidate_key, parent_key]) == parent_key
+    except ValueError:
+        return False
+
+
+def _directory_descendant_error(src: str, dst: str) -> ToolResult | None:
+    if (
+        os.path.isdir(src)
+        and not os.path.islink(src)
+        and _is_strict_descendant_path(dst, src)
+    ):
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=(
+                "Destination cannot be inside the source directory; that would "
+                "recursively copy or delete the source tree."
+            ),
+        )
+    return None
+
+
 def _replace_from_staged_copy(source: str, destination: str, *, remove_source: bool) -> str | None:
     """Copy fully to a sibling stage, then atomically exchange the destination.
 
@@ -405,6 +523,8 @@ def _move_hydrated(src: str, dst: str, overwrite: bool) -> ToolResult:
         dst = os.path.join(dst, os.path.basename(src))
     if os.path.abspath(dst) == os.path.abspath(src):
         return ToolResult(type=ToolResultType.ERROR, output="Source and destination are the same path.")
+    if descendant_error := _directory_descendant_error(src, dst):
+        return descendant_error
     if os.path.exists(dst):
         if not overwrite:
             return ToolResult(
@@ -446,6 +566,8 @@ def _copy_hydrated(src: str, dst: str, overwrite: bool) -> ToolResult:
         dst = os.path.join(dst, os.path.basename(src))
     if os.path.abspath(dst) == os.path.abspath(src):
         return ToolResult(type=ToolResultType.ERROR, output="Source and destination are the same path.")
+    if descendant_error := _directory_descendant_error(src, dst):
+        return descendant_error
     if os.path.exists(dst):
         if not overwrite:
             return ToolResult(

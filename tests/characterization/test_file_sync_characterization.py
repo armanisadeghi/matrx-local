@@ -27,6 +27,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
+import stat
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1072,6 +1075,190 @@ def test_tree_copy_holds_file_sync_guard_through_filesystem_mutation(
         assert result.type.value == "success"
         assert guard_states == [True]
         assert (destination / "real.txt").read_text(encoding="utf-8") == "real bytes"
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_copy_into_managed_root_guards_destination_when_source_is_external(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        source = tmp_path / "external.txt"
+        source.write_text("outside bytes", encoding="utf-8")
+        destination = engine.root / "incoming.txt"
+        original_copy2 = file_ops.shutil.copy2
+        guard_states: list[bool] = []
+
+        def guarded_copy2(src: str, dst: str, *args: object, **kwargs: object):
+            guard_states.append(engine._sync_lock.locked())
+            return original_copy2(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(file_ops.shutil, "copy2", guarded_copy2)
+
+        result = await file_ops.tool_copy(
+            ToolSession(working_dir=str(tmp_path)), str(source), str(destination)
+        )
+
+        assert result.type.value == "success"
+        assert guard_states == [True]
+        assert destination.read_text(encoding="utf-8") == "outside bytes"
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_guarded_tree_operation_drains_worker_before_releasing_lock_on_cancel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        source = engine.root / "source.txt"
+        source.write_text("bytes", encoding="utf-8")
+        worker_started = threading.Event()
+        worker_release = threading.Event()
+
+        def operation() -> str:
+            worker_started.set()
+            worker_release.wait(timeout=2.0)
+            return "done"
+
+        task = asyncio.create_task(
+            hydration_module.run_tree_operation_hydrated(str(source), operation)
+        )
+        assert await asyncio.to_thread(worker_started.wait, 1.0)
+        assert engine._sync_lock.locked()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert engine._sync_lock.locked()
+        worker_release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not engine._sync_lock.locked()
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_tool_read_holds_file_sync_guard_through_actual_byte_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        target = engine.root / "read-me.txt"
+        target.write_text("stable bytes\n", encoding="utf-8")
+        original_read = file_ops._read_text_bounded
+        guard_states: list[bool] = []
+
+        def guarded_read(*args: object, **kwargs: object):
+            guard_states.append(engine._sync_lock.locked())
+            return original_read(*args, **kwargs)
+
+        monkeypatch.setattr(file_ops, "_read_text_bounded", guarded_read)
+
+        result = await file_ops.tool_read(
+            ToolSession(working_dir=str(engine.root)), "read-me.txt"
+        )
+
+        assert result.type.value == "success"
+        assert "stable bytes" in result.output
+        assert guard_states == [True]
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_tool_read_bounds_a_single_giant_text_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        target = tmp_path / "giant.txt"
+        target.write_bytes(b"x" * (file_ops.MAX_READ_SIZE * 2))
+
+        result = await file_ops.tool_read(
+            ToolSession(working_dir=str(tmp_path)), str(target)
+        )
+
+        assert result.type.value == "success"
+        assert result.metadata is not None and result.metadata["truncated"] is True
+        assert result.metadata["scan_bytes"] <= file_ops.MAX_READ_SIZE + 1
+        assert len(result.output) <= file_ops.MAX_READ_SIZE + 40
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_tool_read_rejects_oversized_materialized_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        target = tmp_path / "oversized.png"
+        with target.open("wb") as handle:
+            handle.truncate(file_ops.MAX_MATERIALIZED_FILE_BYTES + 1)
+
+        result = await file_ops.tool_read(
+            ToolSession(working_dir=str(tmp_path)), str(target)
+        )
+
+        assert result.type.value == "error"
+        assert "format-specific extraction tool" in result.output
+
+    run_scenario(tmp_path, monkeypatch, scenario)
+
+
+def test_read_resolved_rejects_non_regular_special_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "device-like"
+    target.touch()
+    real_stat = file_ops.os.stat
+
+    def fake_stat(path: str, *args: object, **kwargs: object):
+        if os.fspath(path) == str(target):
+            return SimpleNamespace(st_mode=stat.S_IFCHR, st_size=0)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(file_ops.os, "stat", fake_stat)
+    result = file_ops._read_resolved(
+        ToolSession(working_dir=str(tmp_path)), str(target), None, None
+    )
+
+    assert result.type.value == "error"
+    assert "not a regular file" in result.output
+
+
+@pytest.mark.parametrize("operation_name", ["copy", "move"])
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_copy_move_reject_directory_destination_inside_source_without_data_loss(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation_name: str,
+    overwrite: bool,
+) -> None:
+    async def scenario(engine: FileSyncEngine, db: LocalDatabase, fake: FakeFilesClient) -> None:
+        monkeypatch.setattr(engine_module, "_ENGINE", engine)
+        source = engine.root / f"{operation_name}-{overwrite}"
+        source.mkdir()
+        seed = source / "seed.txt"
+        seed.write_text("keep seed", encoding="utf-8")
+        destination = source / "nested"
+        if overwrite:
+            destination.mkdir()
+            (destination / "old.txt").write_text("keep old", encoding="utf-8")
+        operation = file_ops.tool_copy if operation_name == "copy" else file_ops.tool_move
+
+        result = await operation(
+            ToolSession(working_dir=str(engine.root)),
+            str(source),
+            str(destination),
+            overwrite=overwrite,
+        )
+
+        assert result.type.value == "error"
+        assert "inside the source directory" in result.output
+        assert seed.read_text(encoding="utf-8") == "keep seed"
+        if overwrite:
+            assert (destination / "old.txt").read_text(encoding="utf-8") == "keep old"
+        else:
+            assert not destination.exists()
 
     run_scenario(tmp_path, monkeypatch, scenario)
 

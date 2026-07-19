@@ -109,7 +109,7 @@ async def run_tree_operation_hydrated(
         for path in guard_paths
     )
     if not guarded:
-        return await asyncio.to_thread(operation), None
+        return await _run_sync_operation_to_completion(operation), None
 
     async with engine._sync_lock:
         if rel is not None:

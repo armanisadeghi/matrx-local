@@ -401,6 +401,8 @@ run_packaged() {
     elif [ "$image_install_status" = "error" ]; then
       image_install_error="$(node -p "require('$RUN_DIR/image-install-status.json').error || require('$RUN_DIR/image-install-status.json').message || 'no error recorded'" 2>/dev/null)"
       record_fail "packaged: image-runtime installer is in an error state" "$image_install_error"
+    elif [ "$image_install_status" != "idle" ] && [ "$image_install_status" != "complete" ]; then
+      record_fail "packaged: image-runtime installer returned an invalid status (${image_install_status:-missing})" "$(cat "$RUN_DIR/image-install-status.json" 2>/dev/null)"
     fi
   else
     record_fail "packaged: could not read /image-gen/install/status — background runtime migration unverified"

@@ -281,8 +281,13 @@ def migrate_incompatible_runtime(
         )
         # The old runtime was deliberately withheld by the frozen runtime hook,
         # so this is the first point this process may import image packages.
-        inject_image_gen_path()
+        # Capture process state so a frozen-only activation failure can be
+        # rolled back instead of leaving a rejected path/modules load-bearing.
+        modules_before_activation = set(sys.modules)
+        path_was_present = str(pkg_dir) in sys.path
         try:
+            if not inject_image_gen_path():
+                raise RuntimeError("managed package directory could not be activated")
             from app.services.image_gen import service as _svc_mod  # noqa: PLC0415
             from app.services.video_gen import service as _vid_mod  # noqa: PLC0415
 
@@ -302,6 +307,11 @@ def migrate_incompatible_runtime(
                     f"{reasons or 'dependency check returned unavailable'}"
                 )
         except Exception as exc:
+            _rollback_runtime_activation(
+                pkg_dir,
+                modules_before_activation,
+                path_was_present,
+            )
             raise RuntimeError(
                 f"Runtime migration installed but could not activate packages: {exc}"
             ) from exc
@@ -422,6 +432,50 @@ def inject_image_gen_path() -> bool:
             "[image_gen_installer] filecmp patch attempt failed: %s", patch_err
         )
     return True
+
+
+def _rollback_runtime_activation(
+    pkg_dir: Path,
+    modules_before: set[str],
+    path_was_present: bool,
+) -> None:
+    """Undo a failed managed-runtime activation within the current process.
+
+    Removing newly imported modules does not unload native libraries already
+    mapped by the OS, but it prevents a rejected/partial runtime from remaining
+    load-bearing or shadowing the engine's bundled dependencies. A clean engine
+    restart performs the durable retry recorded by the pending marker.
+    """
+    pkg_root = pkg_dir.resolve(strict=False)
+    if not path_was_present:
+        pkg_text = str(pkg_dir)
+        while pkg_text in sys.path:
+            sys.path.remove(pkg_text)
+
+    for name, module in list(sys.modules.items()):
+        if name in modules_before or module is None:
+            continue
+        locations: list[str] = []
+        module_file = getattr(module, "__file__", None)
+        if module_file:
+            locations.append(str(module_file))
+        module_path = getattr(module, "__path__", None)
+        if module_path:
+            locations.extend(str(entry) for entry in module_path)
+        try:
+            belongs_to_managed_runtime = any(
+                Path(location).resolve(strict=False).is_relative_to(pkg_root)
+                for location in locations
+            )
+        except (OSError, ValueError):
+            belongs_to_managed_runtime = False
+        if belongs_to_managed_runtime:
+            sys.modules.pop(name, None)
+
+    logger.warning(
+        "[image_gen_installer] Rolled back failed managed-runtime activation; "
+        "the pending migration will retry after restart"
+    )
 
 
 # ── Global singleton ──────────────────────────────────────────────────────────

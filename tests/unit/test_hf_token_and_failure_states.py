@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import sys
 import threading
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -207,6 +208,7 @@ def test_startup_migrates_old_image_runtime_before_it_can_load(
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="ok\n", stderr=""),
     )
     monkeypatch.setattr(installer, "_use_torch_cpu_index", lambda: False)
+    monkeypatch.setattr(installer, "inject_image_gen_path", lambda: True)
     monkeypatch.setattr(image_service, "_check_deps", lambda: (True, ""))
     monkeypatch.setattr(video_service, "_check_deps", lambda: (True, ""))
 
@@ -246,6 +248,7 @@ def test_runtime_migration_uses_cpu_torch_index_off_apple_silicon(
     monkeypatch.setattr(installer, "get_installed_package_versions", lambda: versions)
     monkeypatch.setattr(installer, "_find_python", lambda: "python")
     monkeypatch.setattr(installer, "_use_torch_cpu_index", lambda: True)
+    monkeypatch.setattr(installer, "inject_image_gen_path", lambda: True)
     monkeypatch.setattr(image_service, "_check_deps", lambda: (True, ""))
     monkeypatch.setattr(video_service, "_check_deps", lambda: (True, ""))
 
@@ -289,7 +292,6 @@ def test_runtime_migration_keeps_pending_state_when_activation_is_unavailable(
     monkeypatch.setattr(installer, "get_installed_package_versions", lambda: versions)
     monkeypatch.setattr(installer, "_find_python", lambda: "python")
     monkeypatch.setattr(installer, "_use_torch_cpu_index", lambda: False)
-    monkeypatch.setattr(installer, "inject_image_gen_path", lambda: True)
 
     def fake_pip(*args, **kwargs):
         versions["diffusers"] = "0.39.0"
@@ -305,11 +307,15 @@ def test_runtime_migration_keeps_pending_state_when_activation_is_unavailable(
     monkeypatch.setattr(image_service, "DEPS_REASON", "")
     monkeypatch.setattr(video_service, "DEPS_AVAILABLE", True)
     monkeypatch.setattr(video_service, "DEPS_REASON", "")
-    monkeypatch.setattr(
-        image_service,
-        "_check_deps",
-        lambda: (False, "torchvision native extension failed"),
-    )
+    bad_module_name = "_matrx_test_broken_image_runtime"
+
+    def failed_image_check() -> tuple[bool, str]:
+        partial_module = ModuleType(bad_module_name)
+        partial_module.__file__ = str(tmp_path / "torch" / "__init__.py")
+        sys.modules[bad_module_name] = partial_module
+        return False, "torchvision native extension failed"
+
+    monkeypatch.setattr(image_service, "_check_deps", failed_image_check)
     monkeypatch.setattr(video_service, "_check_deps", lambda: (True, ""))
 
     progress = installer.InstallProgress()
@@ -319,6 +325,8 @@ def test_runtime_migration_keeps_pending_state_when_activation_is_unavailable(
     assert progress.status == "error"
     assert not marker.exists()
     assert (tmp_path / ".compatibility-upgrade-pending").exists()
+    assert str(tmp_path) not in sys.path
+    assert bad_module_name not in sys.modules
 
 
 def test_install_status_prefers_terminal_error_over_complete_marker(

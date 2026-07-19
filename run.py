@@ -508,13 +508,18 @@ def start_server(port: int) -> None:
 
 
 def on_quit(icon: Icon, item: MenuItem) -> None:
-    logger.warning("[shutdown] Tray 'Quit' selected — beginning graceful shutdown")
-    remove_discovery_file()
-    icon.stop()
     if _uvicorn_server is not None:
+        # Arm graceful shutdown and its escape hatch before logging, file I/O,
+        # or the platform tray call. Any of those can block on a damaged
+        # desktop session; the server must already be on its way down.
         _request_process_shutdown()
         _uvicorn_server.should_exit = True
+        _schedule_force_exit(30)
+        logger.warning("[shutdown] Tray 'Quit' selected — beginning graceful shutdown")
+        remove_discovery_file()
+        icon.stop()
     else:
+        icon.stop()
         os._exit(0)
 
 

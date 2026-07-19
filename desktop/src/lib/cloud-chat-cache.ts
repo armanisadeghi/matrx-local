@@ -3,6 +3,22 @@ import type { Conversation } from "@/hooks/use-chat";
 const LEGACY_STORAGE_KEY = "matrx-cloud-chat-conversations";
 const STORAGE_KEY_PREFIX = `${LEGACY_STORAGE_KEY}:user:`;
 
+export class CloudChatAuthHydrationGuard {
+  private generation = 0;
+
+  captureInitialRequest(): number {
+    return this.generation;
+  }
+
+  noteAuthEvent(): void {
+    this.generation += 1;
+  }
+
+  acceptsInitialResult(capturedGeneration: number): boolean {
+    return this.generation === capturedGeneration;
+  }
+}
+
 export function cloudChatStorageKey(userId: string): string {
   return `${STORAGE_KEY_PREFIX}${userId}`;
 }

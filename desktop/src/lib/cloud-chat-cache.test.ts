@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  CloudChatAuthHydrationGuard,
   cloudChatStorageKey,
   discardLegacyCloudChatCache,
   loadCloudChatCache,
@@ -73,5 +74,14 @@ describe("cloud chat cache isolation", () => {
       "newest",
     ]);
     expect(memory.has(cloudChatStorageKey("account-a"))).toBe(true);
+  });
+
+  it("rejects stale initial-session hydration after a newer auth event", () => {
+    const guard = new CloudChatAuthHydrationGuard();
+    const initialRequest = guard.captureInitialRequest();
+
+    guard.noteAuthEvent();
+
+    expect(guard.acceptsInitialResult(initialRequest)).toBe(false);
   });
 });

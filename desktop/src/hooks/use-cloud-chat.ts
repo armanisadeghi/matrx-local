@@ -15,6 +15,7 @@ import {
   waitForDelegatedContinuation,
 } from "@/lib/cloud-chat-delegation";
 import {
+  CloudChatAuthHydrationGuard,
   discardLegacyCloudChatCache,
   loadCloudChatCache,
   saveCloudChatCache,
@@ -826,6 +827,8 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
 
   useEffect(() => {
     let active = true;
+    const authHydration = new CloudChatAuthHydrationGuard();
+    const initialRequest = authHydration.captureInitialRequest();
     discardLegacyCloudChatCache();
 
     const applyUser = (userId: string | null) => {
@@ -849,13 +852,16 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       );
     };
 
-    void supabase.auth.getSession().then(({ data }) => {
-      applyUser(data.session?.user.id ?? null);
-    });
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
+      authHydration.noteAuthEvent();
       applyUser(session?.user.id ?? null);
+    });
+    void supabase.auth.getSession().then(({ data }) => {
+      if (authHydration.acceptsInitialResult(initialRequest)) {
+        applyUser(data.session?.user.id ?? null);
+      }
     });
 
     return () => {

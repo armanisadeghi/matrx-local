@@ -56,6 +56,7 @@ interface DownloadManagerContextValue {
   enqueue: (opts: EnqueueOptions) => Promise<DownloadEntry | null>;
   retry: (entry: DownloadEntry) => Promise<DownloadEntry | null>;
   cancel: (id: string) => Promise<void>;
+  dismiss: (entry: DownloadEntry) => Promise<boolean>;
 }
 
 const DownloadManagerContext =
@@ -179,6 +180,20 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
     if (!raw || typeof raw !== "object") return;
     const payload = raw as Partial<DownloadEntry> & { id?: string };
     if (!payload.id) return;
+
+    // A dismissed/superseded record was deleted engine-side — drop it from
+    // the map entirely instead of merging a phantom row.
+    if ((payload as { status?: string }).status === "removed") {
+      const removedId = payload.id;
+      speedTrackerRef.current.delete(removedId);
+      setEntriesMap((prev) => {
+        if (!prev.has(removedId)) return prev;
+        const next = new Map(prev);
+        next.delete(removedId);
+        return next;
+      });
+      return;
+    }
 
     const speedTracker = speedTrackerRef.current;
 
@@ -576,6 +591,50 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const dismiss = useCallback(
+    async (entry: DownloadEntry): Promise<boolean> => {
+      // Only the Python manager persists history across boots; Rust rows
+      // age out of memory on their own (HISTORY_TTL_MS) and expose no
+      // dismiss command.
+      if (entry.backend !== "python") {
+        emitClientLog(
+          "warn",
+          `[downloads] dismiss unsupported for ${entry.backend} entry id=${entry.id}`,
+          DOWNLOAD_LOG_SOURCE,
+        );
+        return false;
+      }
+      try {
+        await engine.post(
+          `/downloads/${encodeURIComponent(entry.id)}/dismiss`,
+          {},
+        );
+      } catch (e) {
+        emitClientLog(
+          "error",
+          `[downloads] dismiss FAILED for id=${entry.id}: ${String(e)}`,
+          DOWNLOAD_LOG_SOURCE,
+        );
+        return false;
+      }
+      // The engine broadcasts a "removed" event too; drop it locally now so
+      // the row disappears even if this client's SSE stream is reconnecting.
+      setEntriesMap((prev) => {
+        if (!prev.has(entry.id)) return prev;
+        const next = new Map(prev);
+        next.delete(entry.id);
+        return next;
+      });
+      emitClientLog(
+        "info",
+        `[downloads] Dismissed: id=${entry.id} file=${entry.filename}`,
+        DOWNLOAD_LOG_SOURCE,
+      );
+      return true;
+    },
+    [],
+  );
+
   const openModal = useCallback(() => setIsModalOpen(true), []);
   const closeModal = useCallback(() => setIsModalOpen(false), []);
 
@@ -590,6 +649,7 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
         enqueue,
         retry,
         cancel,
+        dismiss,
       }}
     >
       {children}

@@ -281,9 +281,11 @@ function WaitingRow({
 function ActionNeededCard({
   entry,
   onRetry,
+  onDismiss,
 }: {
   entry: DownloadEntry;
   onRetry: (entry: DownloadEntry) => void;
+  onDismiss: (entry: DownloadEntry) => void;
 }) {
   const actionNeeded = actionNeededFromDownload(entry);
   if (!actionNeeded) return null;
@@ -298,14 +300,24 @@ function ActionNeededCard({
         >
           {entry.display_name || entry.filename}
         </p>
-        <button
-          onClick={() => onRetry(entry)}
-          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-          title="Re-check access and start the download again"
-        >
-          <RotateCcw className="h-3 w-3" />
-          Check again & retry
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            onClick={() => onDismiss(entry)}
+            className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Remove this request permanently — it will not come back on restart"
+          >
+            <X className="h-3 w-3" />
+            Dismiss
+          </button>
+          <button
+            onClick={() => onRetry(entry)}
+            className="flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+            title="Re-check access and start the download again"
+          >
+            <RotateCcw className="h-3 w-3" />
+            Check again & retry
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -316,9 +328,11 @@ function ActionNeededCard({
 function HistoryRow({
   entry,
   onRetry,
+  onDismiss,
 }: {
   entry: DownloadEntry;
   onRetry?: (entry: DownloadEntry) => void;
+  onDismiss?: (entry: DownloadEntry) => void;
 }) {
   const isCompleted = entry.status === "completed";
   const isFailed = entry.status === "failed";
@@ -380,6 +394,23 @@ function HistoryRow({
         disabled={!isFailed}
       >
         <RotateCcw className="h-3.5 w-3.5" />
+      </button>
+
+      {/* Dismiss (terminal rows, Python-backed only) */}
+      <button
+        onClick={() => onDismiss?.(entry)}
+        className={[
+          "flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground",
+          "transition-opacity hover:text-red-600 dark:hover:text-red-400",
+          onDismiss && entry.backend === "python"
+            ? "opacity-0 group-hover:opacity-100"
+            : "invisible",
+        ].join(" ")}
+        aria-label={`Remove ${entry.display_name || entry.filename} from history`}
+        title="Remove from history permanently"
+        disabled={!onDismiss || entry.backend !== "python"}
+      >
+        <X className="h-3.5 w-3.5" />
       </button>
     </div>
   );
@@ -490,7 +521,7 @@ function LogPanel() {
 // ── Main modal ────────────────────────────────────────────────────────────
 
 export function DownloadManagerModal() {
-  const { downloads, isModalOpen, closeModal, cancel, retry } =
+  const { downloads, isModalOpen, closeModal, cancel, retry, dismiss } =
     useDownloadManager();
 
   const [logsExpanded, setLogsExpanded] = useState(false);
@@ -530,6 +561,13 @@ export function DownloadManagerModal() {
       void retry(entry);
     },
     [retry],
+  );
+
+  const handleDismiss = useCallback(
+    (entry: DownloadEntry) => {
+      void dismiss(entry);
+    },
+    [dismiss],
   );
 
   // Render the modal contents always (to avoid layout shifts when toggling),
@@ -604,6 +642,7 @@ export function DownloadManagerModal() {
                   key={entry.id}
                   entry={entry}
                   onRetry={handleRetry}
+                  onDismiss={handleDismiss}
                 />
               ))}
             </>
@@ -663,12 +702,18 @@ export function DownloadManagerModal() {
                 { label: "Error", className: "w-48" },
                 { label: "Size", className: "w-24 text-right" },
                 { label: "", className: "w-6" },
+                { label: "", className: "w-6" },
               ]}
             />
           )}
           {history.length === 0 && <EmptyRow message="No history" />}
           {history.map((entry) => (
-            <HistoryRow key={entry.id} entry={entry} onRetry={handleRetry} />
+            <HistoryRow
+              key={entry.id}
+              entry={entry}
+              onRetry={handleRetry}
+              onDismiss={handleDismiss}
+            />
           ))}
         </div>
 

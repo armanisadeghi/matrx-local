@@ -88,6 +88,25 @@ The marker is written LAST by each writer, so its presence is a true
 "fully done" signal — a half-finished download (no marker) correctly reads as
 absent and re-downloads.
 
+## One artifact = one row; records are dismissible, never immortal
+
+`enqueue` treats filename+category as the artifact identity. A queued/active
+row wins; a completed row wins while its artifact is on disk. A failed or
+cancelled row is **re-queued in place** (same id, resolution and error
+cleared) — never left standing while a second row downloads beside it. Any
+other failed/cancelled duplicates of the winning row are removed as
+superseded. Before this, a `hf_gate_not_accepted` prompt card survived the
+user accepting the license AND the successful re-download, forever.
+
+`POST /downloads/{id}/dismiss` (`DownloadManager.dismiss`) permanently deletes
+a terminal record from memory + SQLite and broadcasts a `removed` event
+(handled by `DownloadManagerContext` → row disappears from every surface,
+including the global action-needed chips). Queued/active rows 409 — cancel
+first. This is the user's "address it and make it go away" affordance: a
+months-old failure must not be restored as a warning on every boot for the
+rest of time. The UI exposes it on prompt cards ("Dismiss") and history rows
+(X), Python-backed entries only.
+
 ## Stale-row re-triage
 
 Failed rows written before this taxonomy carry only `error_msg`.

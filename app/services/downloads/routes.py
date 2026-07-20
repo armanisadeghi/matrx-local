@@ -6,6 +6,7 @@ GET  /downloads           — list all downloads (optional ?status= ?category=)
 POST /downloads           — enqueue a new download
 GET  /downloads/{id}      — get a single download entry
 DELETE /downloads/{id}    — cancel a download
+POST /downloads/{id}/dismiss — permanently remove a terminal record
 GET  /downloads/stream    — SSE stream of DownloadProgressEvents
 """
 
@@ -93,6 +94,25 @@ async def get_download(download_id: str):
         if entry.id == download_id:
             return entry.to_dict()
     raise HTTPException(status_code=404, detail="Download not found")
+
+
+@router.post("/downloads/{download_id}/dismiss")
+@safe_route("downloads_dismiss")
+async def dismiss_download(download_id: str):
+    """Permanently remove a terminal (failed/cancelled/completed) record.
+
+    This is how the user addresses a stale failure or an obsolete
+    action-needed prompt and makes it go away — the record is deleted from
+    memory and SQLite, so it can never be "restored" on a later boot.
+    """
+    manager = get_download_manager()
+    try:
+        removed = await manager.dismiss(download_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not removed:
+        raise HTTPException(status_code=404, detail="Download not found")
+    return {"status": "removed", "id": download_id}
 
 
 @router.delete("/downloads/{download_id}")

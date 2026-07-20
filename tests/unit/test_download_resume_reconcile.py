@@ -173,3 +173,167 @@ def test_validate_catalog_never_raises_on_non_dict_entry(monkeypatch) -> None:
     problems = loras.validate_catalog()  # must not raise
     assert len(problems) == 3
     assert all("not a dict" in p for p in problems)
+
+
+# ── One artifact = one row; dismissible records ─────────────────────────────
+#
+# A failed/cancelled row must be re-queued IN PLACE by a retry (never left as
+# an immortal action-needed blocker beside a second row), superseded rows are
+# removed when a newer attempt exists, and dismiss deletes a terminal record
+# so it cannot be "restored" on every later boot.
+
+
+class _DismissFakeDb:
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
+        self.committed = 0
+
+    async def fetchall(self, _query: str, _params: tuple[object, ...] = ()):
+        return []
+
+    async def fetchone(self, _query: str, _params: tuple[object, ...] = ()):
+        return None
+
+    async def execute(self, query: str, params: tuple[object, ...] = ()) -> None:
+        self.executed.append((query, params))
+
+    async def commit(self) -> None:
+        self.committed += 1
+
+
+def _terminal_entry(
+    manager: DownloadManager,
+    *,
+    entry_id: str,
+    filename: str,
+    category: str,
+    status: str,
+    dest_dir: str,
+) -> None:
+    entry = downloads_manager.DownloadEntry(
+        id=entry_id,
+        category=category,
+        filename=filename,
+        display_name=filename,
+        urls=[f"https://example.test/{filename}"],
+        status=status,
+        created_at="2026-03-29T18:00:00Z",
+        updated_at="2026-03-29T18:00:00Z",
+        metadata={"dest_dir": dest_dir},
+    )
+    if status == "failed":
+        entry.error_msg = "401 gated repo"
+        entry.set_resolution(
+            {"code": "hf_gate_not_accepted", "title": "Accept the license"}
+        )
+    manager._entries[entry_id] = entry
+
+
+@pytest.mark.anyio
+async def test_enqueue_requeues_failed_row_in_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = _DismissFakeDb()
+    monkeypatch.setattr(downloads_manager, "get_db", lambda: db)
+    manager = DownloadManager()
+    _terminal_entry(
+        manager,
+        entry_id="old-fail",
+        filename="org--model",
+        category="image_gen_model",
+        status="failed",
+        dest_dir=str(tmp_path / "m"),
+    )
+
+    entry = await manager.enqueue(
+        category="image_gen_model",
+        filename="org--model",
+        display_name="org/model",
+        urls=["https://example.test/org--model"],
+        metadata={"dest_dir": str(tmp_path / "m")},
+    )
+
+    # Same row, back in the queue, old ask cleared — no duplicate row.
+    assert entry.id == "old-fail"
+    assert entry.status == "queued"
+    assert entry.resolution is None
+    assert entry.error_msg is None
+    assert "old-fail" in manager._pending_ids
+    assert len(manager._entries) == 1
+
+
+@pytest.mark.anyio
+async def test_enqueue_purges_superseded_failure_next_to_live_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = _DismissFakeDb()
+    monkeypatch.setattr(downloads_manager, "get_db", lambda: db)
+    manager = DownloadManager()
+    _terminal_entry(
+        manager,
+        entry_id="stale-fail",
+        filename="org--model",
+        category="image_gen_model",
+        status="failed",
+        dest_dir=str(tmp_path / "m"),
+    )
+    _terminal_entry(
+        manager,
+        entry_id="live-dl",
+        filename="org--model",
+        category="image_gen_model",
+        status="active",
+        dest_dir=str(tmp_path / "m"),
+    )
+
+    entry = await manager.enqueue(
+        category="image_gen_model",
+        filename="org--model",
+        display_name="org/model",
+        urls=["https://example.test/org--model"],
+        metadata={"dest_dir": str(tmp_path / "m")},
+    )
+
+    # The live transfer wins and the stale gate prompt is gone for good.
+    assert entry.id == "live-dl"
+    assert "stale-fail" not in manager._entries
+    assert any("DELETE FROM downloads" in q for q, _ in db.executed)
+
+
+@pytest.mark.anyio
+async def test_dismiss_removes_terminal_row_and_refuses_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = _DismissFakeDb()
+    monkeypatch.setattr(downloads_manager, "get_db", lambda: db)
+    manager = DownloadManager()
+    _terminal_entry(
+        manager,
+        entry_id="march-fail",
+        filename="old.gguf",
+        category="llm",
+        status="failed",
+        dest_dir=str(tmp_path / "g"),
+    )
+    _terminal_entry(
+        manager,
+        entry_id="running",
+        filename="new.gguf",
+        category="llm",
+        status="active",
+        dest_dir=str(tmp_path / "g"),
+    )
+
+    assert await manager.dismiss("march-fail") is True
+    assert "march-fail" not in manager._entries
+    assert any(
+        "DELETE FROM downloads" in q and params == ("march-fail",)
+        for q, params in db.executed
+    )
+
+    with pytest.raises(ValueError):
+        await manager.dismiss("running")
+    assert "running" in manager._entries
+
+    # Unknown everywhere → False (route turns this into a 404).
+    assert await manager.dismiss("nope") is False

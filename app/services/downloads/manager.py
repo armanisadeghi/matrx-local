@@ -535,45 +535,75 @@ class DownloadManager:
                 "without it the downloaded bytes have nowhere to go"
             )
 
-        # Idempotency: skip if already queued/active/completed for this file
-        for entry in self._entries.values():
-            if entry.filename == filename and entry.category == category:
-                if entry.status in ("queued", "active"):
-                    logger.debug("[downloads] Already queued/active: %s", filename)
-                    return entry
-                if entry.status == "completed":
-                    # Completed is only terminal while the file still exists —
-                    # a deleted file must be re-downloadable. ``artifact_present``
-                    # is the shared completion contract (marker / file), so this
-                    # can never disagree with the startup resume check.
-                    check_md = {
-                        **(entry.metadata or {}),
-                        # Fall back to the incoming dest_dir when the stored
-                        # entry never had one (shouldn't happen, but be safe).
-                        "dest_dir": (entry.metadata or {}).get("dest_dir", dest_dir),
-                    }
-                    if artifact_present(check_md, entry.filename):
-                        logger.debug("[downloads] Already completed: %s", filename)
-                        return entry
-                    logger.info(
-                        "[downloads] %s marked completed but file is gone — re-downloading",
-                        filename,
-                    )
-                    entry.status = "queued"
-                    entry.bytes_done = 0
-                    entry.completed_at = None
-                    entry.metadata = {**(entry.metadata or {}), "dest_dir": dest_dir}
-                    entry.set_resolution(None)  # re-queued: last failure's ask is stale
-                    entry.error_msg = None
-                    entry.updated_at = _now()
-                    self._cancel_flags[entry.id] = asyncio.Event()
-                    await self._persist(entry)
-                    # CRITICAL: without re-inserting into the pending queue the
-                    # worker never dispatches this re-queued entry and the
-                    # download hangs in "queued" forever until restart. Mirror
-                    # the fresh-entry path.
-                    self._insert_pending(entry.id, entry.priority, entry.created_at)
-                    return entry
+        # Idempotency: one artifact = one row. A queued/active/completed row
+        # wins; stale failed/cancelled attempts for the same artifact are
+        # superseded and REMOVED — they must never survive as immortal
+        # action-needed blockers beside a newer attempt (the FLUX gate chip
+        # that outlived its accepted license and running re-download).
+        matches = [
+            e
+            for e in self._entries.values()
+            if e.filename == filename and e.category == category
+        ]
+        live = next((e for e in matches if e.status in ("queued", "active")), None)
+        if live is not None:
+            await self._purge_superseded(matches, keep_id=live.id)
+            logger.debug("[downloads] Already queued/active: %s", filename)
+            return live
+        completed = next((e for e in matches if e.status == "completed"), None)
+        if completed is not None:
+            entry = completed
+            # Completed is only terminal while the file still exists —
+            # a deleted file must be re-downloadable. ``artifact_present``
+            # is the shared completion contract (marker / file), so this
+            # can never disagree with the startup resume check.
+            check_md = {
+                **(entry.metadata or {}),
+                # Fall back to the incoming dest_dir when the stored
+                # entry never had one (shouldn't happen, but be safe).
+                "dest_dir": (entry.metadata or {}).get("dest_dir", dest_dir),
+            }
+            if artifact_present(check_md, entry.filename):
+                await self._purge_superseded(matches, keep_id=entry.id)
+                logger.debug("[downloads] Already completed: %s", filename)
+                return entry
+            logger.info(
+                "[downloads] %s marked completed but file is gone — re-downloading",
+                filename,
+            )
+            await self._purge_superseded(matches, keep_id=entry.id)
+            await self._requeue_in_place(entry, dest_dir)
+            return entry
+        stale = next(
+            (e for e in matches if e.status in ("failed", "cancelled")), None
+        )
+        if stale is not None:
+            # Re-queue the SAME row instead of stacking a second one beside it.
+            # This clears the old resolution/error, so a retry after the user
+            # fixed the condition (accepted the gate, added the key) replaces
+            # the prompt card with a live queued row.
+            logger.info(
+                "[downloads] Re-queueing previous %s attempt in place: %s (id=%s)",
+                stale.status,
+                filename,
+                stale.id,
+            )
+            await self._purge_superseded(matches, keep_id=stale.id)
+            await self._requeue_in_place(stale, dest_dir)
+            await self._broadcast(ProgressEvent(
+                id=stale.id,
+                category=stale.category,
+                filename=stale.filename,
+                display_name=stale.display_name,
+                status="queued",
+                bytes_done=0,
+                total_bytes=0,
+                percent=0.0,
+                part_current=1,
+                part_total=len(stale.urls) or 1,
+                updated_at=stale.updated_at,
+            ))
+            return stale
 
         dl_id = download_id or str(uuid.uuid4())
         now = _now()
@@ -611,6 +641,117 @@ class DownloadManager:
         self._insert_pending(dl_id, priority, now)
         logger.info("[downloads] Enqueued: %s (%s) priority=%d", filename, category, priority)
         return entry
+
+    async def _requeue_in_place(self, entry: DownloadEntry, dest_dir: str) -> None:
+        """Reset one existing row back to queued and hand it to the worker."""
+        entry.status = "queued"
+        entry.bytes_done = 0
+        entry.completed_at = None
+        entry.metadata = {**(entry.metadata or {}), "dest_dir": dest_dir}
+        entry.set_resolution(None)  # re-queued: last failure's ask is stale
+        entry.error_msg = None
+        entry.updated_at = _now()
+        self._cancel_flags[entry.id] = asyncio.Event()
+        await self._persist(entry)
+        # CRITICAL: without re-inserting into the pending queue the
+        # worker never dispatches this re-queued entry and the
+        # download hangs in "queued" forever until restart. Mirror
+        # the fresh-entry path.
+        self._insert_pending(entry.id, entry.priority, entry.created_at)
+
+    async def _purge_superseded(
+        self, matches: list[DownloadEntry], *, keep_id: str
+    ) -> None:
+        """Remove failed/cancelled duplicates of an artifact that has a newer
+        authoritative row. Their resolution prompts describe a superseded
+        attempt and would otherwise persist forever."""
+        for entry in matches:
+            if entry.id == keep_id or entry.status not in ("failed", "cancelled"):
+                continue
+            logger.info(
+                "[downloads] Removing superseded %s record: %s (id=%s)",
+                entry.status,
+                entry.filename,
+                entry.id,
+            )
+            await self._remove_record(entry)
+
+    async def _remove_record(self, entry: DownloadEntry) -> None:
+        """Drop one record from memory and SQLite, and tell every UI."""
+        self._entries.pop(entry.id, None)
+        self._cancel_flags.pop(entry.id, None)
+        try:
+            db = get_db()
+            await db.execute("DELETE FROM downloads WHERE id=?", (entry.id,))
+            await db.commit()
+        except Exception as exc:
+            logger.warning(
+                "[downloads] DB delete FAILED for %s (id=%s): %s",
+                entry.filename,
+                entry.id,
+                exc,
+                exc_info=True,
+            )
+        await self._broadcast(ProgressEvent(
+            id=entry.id,
+            category=entry.category,
+            filename=entry.filename,
+            display_name=entry.display_name,
+            status="removed",
+            bytes_done=entry.bytes_done,
+            total_bytes=entry.total_bytes,
+            percent=entry.percent,
+            part_current=entry.part_current,
+            part_total=entry.part_total,
+            updated_at=_now(),
+        ))
+
+    async def dismiss(self, download_id: str) -> bool:
+        """Permanently remove a terminal record (failed/cancelled/completed).
+
+        This is the user's "address it and make it go away" affordance: a
+        March failure must not be restored as a warning on every boot for the
+        rest of time. Queued/active rows must be cancelled first — dismiss
+        never silently kills a transfer.
+
+        Raises ValueError for a queued/active row; returns False when the id
+        is unknown everywhere (memory and SQLite).
+        """
+        entry = self._entries.get(download_id)
+        if entry is not None:
+            if entry.status in ("queued", "active"):
+                raise ValueError("Cancel the download before dismissing it")
+            logger.info(
+                "[downloads] Dismissed %s record: %s (id=%s)",
+                entry.status,
+                entry.filename,
+                entry.id,
+            )
+            await self._remove_record(entry)
+            return True
+        # Rows older than the in-memory history window still live in SQLite
+        # and would resurface once newer rows are dismissed — purge those too.
+        try:
+            db = get_db()
+            row = await db.fetchone(
+                "SELECT id FROM downloads WHERE id=? AND status IN "
+                "('completed','failed','cancelled')",
+                (download_id,),
+            )
+            if row is None:
+                return False
+            await db.execute("DELETE FROM downloads WHERE id=?", (download_id,))
+            await db.commit()
+            logger.info("[downloads] Dismissed archived record id=%s", download_id)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "[downloads] DB dismiss FAILED for id=%s: %s",
+                download_id,
+                exc,
+                exc_info=True,
+            )
+            return False
 
     async def cancel(self, download_id: str) -> bool:
         """Request cancellation of a queued or active download."""

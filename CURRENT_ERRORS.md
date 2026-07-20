@@ -310,7 +310,7 @@ former paste end -->
 | E011 | 2026-07-19 12:12:52 | ERR | `[uvicorn] ASGI callable returned without sending handshake.` — a WS upgrade returned before accept/close during startup congestion. Single occurrence, no traceback; watch for recurrence post-E010 fix. |
 | E012 | 2026-07-19 12:12:53 | WARN | React: `Select is changing from uncontrolled to controlled` — a Select's `value` starts undefined then becomes defined. Cosmetic; needs component hunt. |
 | E013 | 2026-07-19 12:13:12 | ERR | `Engine did not respond within 30s` cluster (media-library, prompt-matrix, image-gen, video-gen) — symptom of E010's failed migration stalling the engine at startup; expected gone once E010 fix ships. |
-| E014 | 2026-07-19 12:11:48 | WARN | `[downloads] Previous failure restored` (3 GGUF LLMs from 2026-03-29, size-mismatch validation) — by-design restore of durable failure records; the `action_needed` list (civitai_key_rejected / hf_gate_not_accepted / ai_packages_missing) is user-action state, not a bug. |
+| E014 | 2026-07-19 12:11:48 | WARN | `[downloads] Previous failure restored` (3 GGUF LLMs from 2026-03-29, size-mismatch validation) — records were immortal (no dismiss, stale action-needed chips outlived their fix). **Fixed 2026-07-19**: dismiss endpoint + UI, retry re-queues in place, superseded failures purged. See `app/services/downloads/FEATURE.md`. |
 | E015 | 2026-07-19 12:11:57 | WARN | `[launcher] app_config / catalogs → degraded — running on cache until remote fetch completes` — by-design loud-degraded; both refreshed successfully seconds later in the same boot. Cosmetic. |
 | E016 | 2026-07-19 12:13:06 | WARN | `[catalogs] llm_model overlay unavailable — AbortError` — frontend catalog fetch aborted while the engine was stalled (E013 symptom). |
 

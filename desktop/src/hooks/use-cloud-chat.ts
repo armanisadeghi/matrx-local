@@ -20,6 +20,7 @@ import {
   loadCloudChatCache,
   saveCloudChatCache,
 } from "@/lib/cloud-chat-cache";
+import { StreamBlockBuilder } from "@/lib/chat-blocks";
 import { CloudChatRunGate } from "@/lib/cloud-chat-run-gate";
 import {
   needsBackgroundChatReconciliation,
@@ -1458,6 +1459,20 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       const answerRenderBlocks = new Map<string, BlockAccumulatorEntry>();
       const reasoningRenderBlocks = new Map<string, BlockAccumulatorEntry>();
       let liveToolParts: ExtractedToolParts = { calls: [], results: [] };
+      // Ordered-block model (ports matrx-frontend's chat-protocol): one block
+      // list in true arrival order, tool blocks patched in place by call_id.
+      // Survives across /resume segments — same builder for the whole turn.
+      const blockBuilder = new StreamBlockBuilder();
+
+      const publishBlocks = () => {
+        updateAssistant({
+          blocks: blockBuilder.snapshot().flatMap((block) => {
+            if (block.type !== "text" || block.blockId) return [block];
+            const answer = splitInlineReasoning(block.content).answer;
+            return answer ? [{ ...block, content: answer }] : [];
+          }),
+        });
+      };
 
       const setStatus = (status: string) => {
         lastStatus = status;
@@ -1573,13 +1588,17 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
 
           switch (event.event) {
             case EventType.CHUNK: {
+              blockBuilder.addText(event.data.text);
               applyAnswerText(rawAnswer + event.data.text);
+              publishBlocks();
               break;
             }
 
             case EventType.REASONING_CHUNK: {
+              blockBuilder.addThinking(event.data.text);
               reasoning += event.data.text;
               updateReasoning("Reasoning...");
+              publishBlocks();
               break;
             }
 
@@ -1662,12 +1681,18 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                     text: `![Generated image](${urlValue})`,
                   });
                   applyRenderAnswerBlocks();
+                  blockBuilder.addStandaloneMarkdown(`![Generated image](${urlValue})`);
+                  publishBlocks();
                 } else if (urlValue) {
                   answerRenderBlocks.set(`data-${eventCount}-${type}`, {
                     index: eventCount,
                     text: `[Generated ${type.replace("_output", "")}](${urlValue})`,
                   });
                   applyRenderAnswerBlocks();
+                  blockBuilder.addStandaloneMarkdown(
+                    `[Generated ${type.replace("_output", "")}](${urlValue})`,
+                  );
+                  publishBlocks();
                 }
               } else if (
                 type === "search_error" ||
@@ -1692,7 +1717,9 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               sawTerminalEvent = true;
               const output = completionText(event.data.result);
               if (output && !accumulated) {
+                blockBuilder.addText(output);
                 applyAnswerText(output);
+                publishBlocks();
               }
 
               if (event.data.status === "failed" || event.data.status === "cancelled") {
@@ -1712,11 +1739,14 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               sawTerminalEvent = true;
               const message = errorMessage(event.data);
               setRequestError(message);
+              blockBuilder.addError(event.data);
+              blockBuilder.failPendingTools("Stream errored before this tool finished.");
               updateAssistant({
                 error: message,
                 isStreaming: false,
                 streamStatus: `${serviceLabel} returned an error.`,
               });
+              publishBlocks();
               addDiagnostic(`Error: ${message}`);
               break;
             }
@@ -1725,10 +1755,12 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               const toolName = event.data.tool_name || "tool";
               const message = event.data.message || humanizeToken(event.data.event);
               liveToolParts = reduceLiveToolEvent(liveToolParts, event.data);
+              blockBuilder.applyToolEvent(event.data);
               updateAssistant({
                 tool_calls: liveToolParts.calls,
                 tool_results: liveToolParts.results,
               });
+              publishBlocks();
 
               if (event.data.event === "tool_delegated") {
                 // The server suspended the turn and handed this call to the
@@ -1780,6 +1812,8 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               const content = readString(event.data.content);
               const blockText = renderBlockText(blockType, content, event.data.data ?? null);
               const blockId = event.data.blockId || `${event.data.blockIndex}-${blockType}`;
+              blockBuilder.applyRenderBlock(event.data, blockText, isReasoningBlockType(blockType));
+              publishBlocks();
 
               if (blockText) {
                 if (isReasoningBlockType(blockType)) {
@@ -2000,7 +2034,9 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         updateAssistant({ content: accumulated, isStreaming: false });
       } catch (error: unknown) {
         if (error instanceof Error && error.name === "AbortError") {
+          blockBuilder.failPendingTools("Stopped before this tool finished.");
           updateAssistant({ isStreaming: false, streamStatus: "Stopped." });
+          publishBlocks();
         } else {
           const message =
             error instanceof SyntaxError
@@ -2010,12 +2046,14 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                 : "Connection error";
           setRequestError(message);
           console.error("[cloud-chat] stream failure", error);
+          blockBuilder.failPendingTools("Stream failed before this tool finished.");
           updateAssistant({
             content: accumulated,
             isStreaming: false,
             streamStatus: accumulated ? "Stream failed after partial response." : "Stream failed.",
             error: message,
           });
+          publishBlocks();
         }
       } finally {
         if (runGateRef.current.finish(runId)) {

@@ -25,6 +25,7 @@ import { streamCompletion } from "@/lib/llm/api";
 import { loadSettings } from "@/lib/settings";
 import type { ToolImageData, ToolMediaArtifact } from "@/lib/api";
 import type { ActionNeeded } from "@/features/action-needed";
+import type { ChatMessageBlock } from "@/lib/chat-blocks";
 
 // ---- Types ----
 
@@ -51,6 +52,13 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
   timestamp: string;
+  /**
+   * Ordered content blocks in true stream-arrival order (text / thinking /
+   * tool_call / error interleaved). When present, renderers use this and
+   * ignore the flat content/tool_calls fields for layout. Built live by
+   * use-cloud-chat via StreamBlockBuilder (lib/chat-blocks.ts).
+   */
+  blocks?: ChatMessageBlock[];
   tool_calls?: ToolCall[];
   tool_results?: ToolCallResult[];
   model?: string;

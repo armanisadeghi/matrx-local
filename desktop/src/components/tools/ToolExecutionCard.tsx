@@ -28,6 +28,10 @@ import { cn } from "@/lib/utils";
 export interface ToolExecutionCardProps {
   toolCall: ToolCall;
   result?: ToolCallResult;
+  /** Latest per-call status line (tool_progress/tool_step) while running. */
+  statusMessage?: string;
+  /** Delegated calls run on the local engine — labeled while in flight. */
+  isDelegated?: boolean;
   elapsedMs?: number;
   defaultExpanded?: boolean;
   onReferencePaths?: (paths: string[]) => void;
@@ -60,6 +64,8 @@ function GenericOutput({ output, error }: { output: string; error: boolean }) {
 export function ToolExecutionCard({
   toolCall,
   result,
+  statusMessage,
+  isDelegated,
   elapsedMs,
   defaultExpanded = false,
   onReferencePaths,
@@ -105,6 +111,11 @@ export function ToolExecutionCard({
         {isError && <XCircle className="h-3.5 w-3.5 text-destructive" />}
         <Wrench className="h-3 w-3 text-muted-foreground" />
         <span className="min-w-0 truncate font-medium">{toolCall.name}</span>
+        {!result && (statusMessage || isDelegated) && (
+          <span className="min-w-0 truncate text-[10px] text-muted-foreground">
+            {isDelegated ? "running on this computer…" : statusMessage}
+          </span>
+        )}
         {elapsedMs != null && (
           <span className="text-[10px] tabular-nums text-muted-foreground">
             {elapsedMs < 1000 ? `${elapsedMs} ms` : `${(elapsedMs / 1000).toFixed(1)} s`}

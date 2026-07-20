@@ -12,7 +12,8 @@ import {
   AlertTriangle,
   Info,
 } from "lucide-react";
-import type { ChatMessage } from "@/hooks/use-chat";
+import type { ChatMessage, ToolCallResult } from "@/hooks/use-chat";
+import type { ChatMessageBlock, ChatToolBlock } from "@/lib/chat-blocks";
 import { ChatToolCall } from "./ChatToolCall";
 
 interface ChatMessagesProps {
@@ -131,6 +132,135 @@ function UserMessage({ message }: { message: ChatMessage }) {
   );
 }
 
+function MessageMarkdown({ text }: { text: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        pre: ({ children }) => (
+          <pre className="overflow-x-auto rounded-md bg-muted p-3 text-[0.8125rem]">
+            {children}
+          </pre>
+        ),
+        code: ({ className, children, ...props }) => {
+          const isInline = !className;
+          if (isInline) {
+            return (
+              <code
+                className="rounded bg-muted px-1.5 py-0.5 text-[0.8125rem] font-mono"
+                {...props}
+              >
+                {children}
+              </code>
+            );
+          }
+          return (
+            <code className={className} {...props}>
+              {children}
+            </code>
+          );
+        },
+      }}
+    >
+      {text}
+    </ReactMarkdown>
+  );
+}
+
+/** Map an ordered tool block to the ToolExecutionCard contract, preferring the
+ * richer legacy tool_results entry (image/artifact/action_needed) by call_id. */
+function toolBlockResult(
+  block: ChatToolBlock,
+  richResults: ToolCallResult[] | undefined,
+): ToolCallResult | undefined {
+  const rich = richResults?.find((r) => r.tool_call_id === block.callId);
+  if (rich) return rich;
+  if (block.phase === "complete") {
+    return {
+      tool_call_id: block.callId,
+      type: "success",
+      output:
+        typeof block.output === "string"
+          ? block.output
+          : JSON.stringify(block.output ?? "", null, 2),
+    };
+  }
+  if (block.phase === "error") {
+    return {
+      tool_call_id: block.callId,
+      type: "error",
+      output: block.errorMessage ?? "Tool execution failed",
+    };
+  }
+  return undefined;
+}
+
+/** Ordered stream blocks: text / thinking / tool cards / errors rendered at
+ * their true arrival position — never grouped by type. */
+function MessageBlocks({
+  blocks,
+  message,
+  onReferencePaths,
+}: {
+  blocks: ChatMessageBlock[];
+  message: ChatMessage;
+  onReferencePaths?: (paths: string[]) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      {blocks.map((block, index) => {
+        const key = `${message.id}-block-${index}`;
+        switch (block.type) {
+          case "text":
+            return (
+              <div key={key} className="chat-prose text-[0.9375rem] leading-[1.7]">
+                <MessageMarkdown text={block.content} />
+              </div>
+            );
+          case "thinking":
+            return (
+              <details
+                key={key}
+                className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
+              >
+                <summary className="cursor-pointer font-medium text-foreground/80">
+                  Reasoning
+                </summary>
+                <div className="mt-2 whitespace-pre-wrap leading-relaxed">
+                  {block.content}
+                </div>
+              </details>
+            );
+          case "tool_call": {
+            const result = toolBlockResult(block, message.tool_results);
+            const statusMessage = block.progress[block.progress.length - 1];
+            return (
+              <ChatToolCall
+                key={block.callId}
+                toolCall={{ id: block.callId, name: block.toolName, input: block.input }}
+                {...(result ? { result } : {})}
+                {...(statusMessage ? { statusMessage } : {})}
+                isDelegated={block.phase === "delegated"}
+                {...(onReferencePaths ? { onReferencePaths } : {})}
+              />
+            );
+          }
+          case "error":
+            return (
+              <div
+                key={key}
+                className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              >
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span className="whitespace-pre-wrap">{block.message}</span>
+              </div>
+            );
+        }
+      })}
+    </div>
+  );
+}
+
 function AssistantMessage({
   message,
   ttsEnabled,
@@ -146,6 +276,7 @@ function AssistantMessage({
   onStopReadAloud?: () => void;
   onReferencePaths?: (paths: string[]) => void;
 }) {
+  const hasBlocks = !!message.blocks?.length;
   return (
     <div className="group py-5 px-4 md:px-0">
       <div className="mx-auto max-w-3xl">
@@ -174,50 +305,39 @@ function AssistantMessage({
           )}
         </div>
 
-        {/* Content */}
-        <div className="chat-prose text-[0.9375rem] leading-[1.7]">
-          {message.content ? (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                pre: ({ children }) => (
-                  <pre className="overflow-x-auto rounded-md bg-muted p-3 text-[0.8125rem]">
-                    {children}
-                  </pre>
-                ),
-                code: ({ className, children, ...props }) => {
-                  const isInline = !className;
-                  if (isInline) {
-                    return (
-                      <code
-                        className="rounded bg-muted px-1.5 py-0.5 text-[0.8125rem] font-mono"
-                        {...props}
-                      >
-                        {children}
-                      </code>
-                    );
-                  }
-                  return (
-                    <code className={className} {...props}>
-                      {children}
-                    </code>
-                  );
-                },
-              }}
-            >
-              {message.content}
-            </ReactMarkdown>
-          ) : message.streamStatus ? (
-            <p className="text-sm text-muted-foreground">{message.streamStatus}</p>
-          ) : null}
+        {/* Content — ordered stream blocks when available (live cloud chat),
+            legacy flat content otherwise (hydrated / local chat). */}
+        {hasBlocks ? (
+          <div>
+            <MessageBlocks
+              blocks={message.blocks!}
+              message={message}
+              {...(onReferencePaths ? { onReferencePaths } : {})}
+            />
+            {message.isStreaming && (
+              <span className="ml-0.5 inline-block h-[1.1em] w-[2px] animate-pulse bg-primary align-text-bottom" />
+            )}
+          </div>
+        ) : (
+          <div className="chat-prose text-[0.9375rem] leading-[1.7]">
+            {message.content ? (
+              <MessageMarkdown text={message.content} />
+            ) : message.streamStatus ? (
+              <p className="text-sm text-muted-foreground">{message.streamStatus}</p>
+            ) : null}
 
-          {/* Streaming cursor */}
-          {message.isStreaming && (
-            <span className="ml-0.5 inline-block h-[1.1em] w-[2px] animate-pulse bg-primary align-text-bottom" />
-          )}
-        </div>
+            {/* Streaming cursor */}
+            {message.isStreaming && (
+              <span className="ml-0.5 inline-block h-[1.1em] w-[2px] animate-pulse bg-primary align-text-bottom" />
+            )}
+          </div>
+        )}
 
-        {message.reasoning && (
+        {hasBlocks && !message.content && message.isStreaming && message.streamStatus && (
+          <p className="mt-1 text-sm text-muted-foreground">{message.streamStatus}</p>
+        )}
+
+        {!hasBlocks && message.reasoning && (
           <details className="mt-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
             <summary className="cursor-pointer font-medium text-foreground/80">
               Reasoning
@@ -248,8 +368,9 @@ function AssistantMessage({
           </div>
         )}
 
-        {/* Tool calls */}
-        {message.tool_calls && message.tool_calls.length > 0 && (
+        {/* Tool calls (legacy flat list — block-rendered messages place tool
+            cards inline at their stream position instead) */}
+        {!hasBlocks && message.tool_calls && message.tool_calls.length > 0 && (
           <div className="mt-3 space-y-2">
             {message.tool_calls.map((tc) => {
               const result = message.tool_results?.find(

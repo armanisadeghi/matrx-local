@@ -2376,7 +2376,7 @@ pub fn run() {
                 //
                 // We intentionally do NOT call api.prevent_exit() here — we just
                 // run cleanup synchronously before the exit proceeds.
-                tauri::RunEvent::ExitRequested { api, code: _, .. } => {
+                tauri::RunEvent::ExitRequested { api, code, .. } => {
                     // If SHUTDOWN_COMPLETE is true, cleanup has already run (from the tray
                     // quit handler or the window CloseRequested handler).  Let this
                     // ExitRequested proceed immediately — calling prevent_exit here would
@@ -2388,7 +2388,36 @@ pub fn run() {
                     //   code=Some(0)  → app.exit(0) from our own handlers → cleanup complete
                     //   code=Some(_)  → update restart → cleanup complete
                     if SHUTDOWN_COMPLETE.load(Ordering::SeqCst) {
-                        // Cleanup already complete — let the exit proceed.
+                        // Cleanup already complete. Letting the normal libc exit
+                        // path run would execute __cxa_finalize static
+                        // destructors — including GGML's Metal device teardown,
+                        // which calls ggml_abort() → SIGABRT, so macOS records
+                        // every intentional Quit as a crash ("AI Matrx quit
+                        // unexpectedly"). Verified from the 2026-07-19 .ips
+                        // report: -[NSApplication terminate:] → exit →
+                        // __cxa_finalize_ranges → ggml_metal_device_free →
+                        // ggml_abort. Every sidecar, GGML context, and child we
+                        // own is already torn down by graceful_shutdown_sync;
+                        // the remaining atexit handlers have nothing left to do
+                        // except crash. Skip them with _exit(0) for true quits.
+                        // An update restart (code=Some(nonzero)) must instead
+                        // flow through tauri's relaunch sequence untouched.
+                        #[cfg(unix)]
+                        if matches!(code, None | Some(0)) {
+                            // RunEvent::Exit will never fire — persist window
+                            // geometry now (the window-state plugin saves on
+                            // Exit, which _exit(0) skips).
+                            {
+                                use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+                                let _ = app.save_window_state(StateFlags::all());
+                            }
+                            lifecycle_log::log(
+                                "[graceful-shutdown] cleanup complete — terminating with _exit(0) to bypass GGML atexit destructors",
+                            );
+                            unsafe { libc::_exit(0) };
+                        }
+                        // Windows / update restart: let the exit proceed.
+                        let _ = code;
                         return;
                     }
 

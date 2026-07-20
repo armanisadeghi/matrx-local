@@ -302,12 +302,21 @@ rewriting the user's link. New dev homes never create an image-runtime symlink.
 
 ### Family compatibility is HONEST — a mismatch fails loud, never silently hides
 
-`guess_base_family` maps a LoRA to `sdxl|sd15|flux|z-image|unknown` from the
-declared `base_model` then repo-id/filename heuristics. `check_lora_model_compat`
-raises (naming the mismatch) when a KNOWN family differs from the model's
-`lora_family`; `unknown` is attempted and diffusers' own error surfaces. LoRAs
-are **never filtered out of the UI by family** — they always list; only an
-enabled cross-family selection is rejected at generate time.
+`guess_base_family` maps a LoRA to
+`sdxl|sd15|flux|flux2|z-image|unknown` from the declared `base_model` then
+repo-id/filename heuristics. Civitai's size-qualified `Flux.2 Klein 4B` and
+`Flux.2 Klein 9B` labels map to `flux2`; when an older installed sidecar still
+records `unknown`, the exact version-pinned remote catalog row repairs it
+atomically during listing. Known sidecar families are never overwritten.
+
+`check_lora_model_compat` raises (naming the mismatch) when a KNOWN family
+differs from the model's `lora_family`; `unknown` is attempted and diffusers'
+own error surfaces. The generate form shows only active adapters. Its searchable
+manager defaults Installed and Available results to confirmed family matches,
+with an explicit **Show all families** override for downloading and cleanup.
+Confirmed cross-family entries can be managed but not activated, and a model
+switch preserves their selection records while disabling them. This mirrors the
+engine contract instead of inventing a broader UI-only rejection for `unknown`.
 
 **PEFT is required to apply LoRAs.** The target lock contract includes an exact
 PEFT version (diffusers' ``load_lora_weights`` / ``set_adapters`` gate on

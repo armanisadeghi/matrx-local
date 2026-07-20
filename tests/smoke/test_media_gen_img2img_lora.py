@@ -912,9 +912,9 @@ def test_loras_list_contract(client: TestClient, lora_store: Path) -> None:
             "installed",
         ):
             assert key in c, f"catalog entry missing {key}: {c}"
-        assert c["unverified"] is False, (
-            "current curated entries were all verified against live HF / "
-            "Civitai metadata"
+        assert isinstance(c["unverified"], bool), (
+            "catalog verification state must remain explicit so the UI can "
+            "label GPU-QA-pending entries instead of hiding them"
         )
         assert c["source"] in ("hf", "civitai")
     zit = [c for c in data["catalog"] if c["base_family"] == "z-image"]

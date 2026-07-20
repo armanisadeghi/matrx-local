@@ -200,6 +200,8 @@ def test_map_civitai_base_model_table() -> None:
     assert cm.map_civitai_base_model("SD 1.5") == "sd15"
     assert cm.map_civitai_base_model("Flux.1 D") == "flux"
     assert cm.map_civitai_base_model("Flux.1 S") == "flux"
+    assert cm.map_civitai_base_model("Flux.2 Klein 4B") == "flux2"
+    assert cm.map_civitai_base_model("Flux.2 Klein 9B") == "flux2"
     # Live Civitai string is the camel-concat form, not "Z-Image Turbo".
     assert cm.map_civitai_base_model("ZImageTurbo") == "z-image"
     assert cm.map_civitai_base_model("ZImageBase") == "z-image"

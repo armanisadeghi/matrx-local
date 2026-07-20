@@ -98,6 +98,7 @@ import {
   isRuntimeActive,
   isRuntimeReady,
 } from "@/lib/image-gen/runtime-state";
+import { disableIncompatibleLoraSelections } from "@/lib/image-gen/lora-compatibility";
 import { isTauri, restartSidecar } from "@/lib/sidecar";
 
 const ENGINE_NOT_CONNECTED = "Engine not connected";
@@ -823,6 +824,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const imageHistoryLimitRef = useRef(50);
   const imageModelsRef = useRef<ImageGenModelInfo[]>([]);
   const imagePresetsRef = useRef<ImageGenWorkflowPreset[]>([]);
+  const loraListRef = useRef<ImageGenLoraList | null>(null);
   // Video enqueue run id — guards the brief "Starting…" phase so a cancel
   // issued before the job id exists doesn't get resurrected by a late 202.
   const videoRunRef = useRef(0);
@@ -962,9 +964,25 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     setImageFormState((prev) => ({ ...prev, ...patch }));
   }, []);
 
+  const disableIncompatibleLorasForModel = useCallback(
+    (model: ImageGenModelInfo | null | undefined) => {
+      if (!model) return;
+      setImageFormState((prev) => {
+        const loras = disableIncompatibleLoraSelections(
+          prev.loras,
+          loraListRef.current?.installed ?? [],
+          model,
+        );
+        return loras === prev.loras ? prev : { ...prev, loras };
+      });
+    },
+    [],
+  );
+
   const prepareImageGenerate = useCallback(
     async (model: ImageGenModelInfo) => {
       setSelectedImageModelIdState(model.model_id);
+      disableIncompatibleLorasForModel(model);
       setImageFormState((prev) => ({
         ...prev,
         view: "generate",
@@ -1009,8 +1027,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         paramsLoading: false,
         paramsError,
         defaults,
-        // Apply the new model's defaults; the prompt text, input image and
-        // LoRA selections are preserved (mismatches are warned, not dropped).
+        // Apply the new model's defaults; prompt text, input image and all
+        // LoRA selections are preserved. Confirmed cross-family selections
+        // were disabled above, so they remain available when switching back.
         negativePrompt: defaults.negativePrompt,
         steps: defaults.steps,
         guidance: defaults.guidance,
@@ -1025,7 +1044,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         advancedText: advancedJsonOf(defaults.advanced),
       }));
     },
-    [fetchParams],
+    [disableIncompatibleLorasForModel, fetchParams],
   );
 
   const remixImageForm = useCallback((record: ImageRemixRecord) => {
@@ -1126,6 +1145,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         const result = await apiLoadImageGenModel(base, modelId);
         if (result.success) {
           setSelectedImageModelIdState(modelId);
+          disableIncompatibleLorasForModel(
+            imageModelsRef.current.find((model) => model.model_id === modelId),
+          );
           await refreshImage();
         }
         return result;
@@ -1137,7 +1159,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setLoadingImageModelId(null);
       }
     },
-    [refreshImage],
+    [disableIncompatibleLorasForModel, refreshImage],
   );
 
   const unloadImageModel = useCallback(async () => {
@@ -1757,6 +1779,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     }
     try {
       const list = await apiListImageGenLoras(base);
+      loraListRef.current = list;
       setLoraList(list);
       setLoraError(null);
     } catch (e) {
@@ -2172,7 +2195,12 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
 
   const setSelectedImageModelId = useCallback((modelId: string | null) => {
     setSelectedImageModelIdState(modelId);
-  }, []);
+    if (modelId) {
+      disableIncompatibleLorasForModel(
+        imageModelsRef.current.find((model) => model.model_id === modelId),
+      );
+    }
+  }, [disableIncompatibleLorasForModel]);
   const clearImageResult = useCallback(() => setImageResult(null), []);
   const clearImageGenError = useCallback(() => setImageGenError(null), []);
   const clearImageQueueNotice = useCallback(

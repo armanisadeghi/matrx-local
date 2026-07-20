@@ -1011,7 +1011,6 @@ export interface PdfPipelineResultData {
   chunks?: string[] | null;
   ai_processed?: Record<string, unknown>[] | null;
   cloud_uri?: string | null;
-  supabase_url?: string | null;
   file_id?: string | null;
 }
 

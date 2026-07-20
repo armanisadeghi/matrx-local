@@ -6,9 +6,7 @@
  *  - ImageCommonSettings     negative → steps/guidance → size → seed (+reset)
  *  - InputImageControl       img2img: drop/pick/paste + preview + strength
  *  - AlternativeTextEncodersSection model-scoped Standard/alternative choice
- *  - LoraStylesSection       "Styles (LoRA)": installed toggles/scales,
- *                            base-family mismatch warnings, Get-more dialog
- *                            with DownloadManager progress + HF repo paste
+ *  - LoraStylesSection       compact active summary + searchable manager
  *  - ImageAdvancedSection    editable advanced-JSON (every pipeline kwarg)
  *  - ImageFormNotices        params-error banner + gen error + queue notice
  *  - ImageGenerateActions    CancelableGenerateButton + Add-to-queue
@@ -19,43 +17,25 @@
  * pure views over it, configurable by layout-level props only.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
-  ChevronDown,
-  ChevronRight,
   Download,
   GitBranch,
   Image as ImageIcon,
   ImagePlus,
-  KeyRound,
   Layers,
   ListPlus,
   Loader2,
-  Sparkles,
-  Trash2,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
-import type { ImageGenLoraInfo } from "@/lib/api";
 import { IMG2IMG_DEFAULT_STRENGTH } from "@/hooks/use-media-gen";
-import type { SelectedLora } from "@/hooks/use-media-gen";
 import {
   AdvancedParamsEditor,
   CancelableGenerateButton,
@@ -81,6 +61,8 @@ import {
   PromptMatrixQueueBar,
 } from "./PromptMatrix";
 import type { ImageGenController } from "./imageController";
+import { LoraStylesSection } from "./LoraManager";
+export { LoraStylesSection };
 import { MediaThumb } from "@/components/media/MediaThumb";
 import { descriptorFromInputImage } from "@/components/media/types";
 
@@ -561,387 +543,6 @@ export function AlternativeTextEncodersSection({
           message={`The recorded text encoder '${selectedId}' is no longer offered for this model. Choose Standard or another alternative.`}
         />
       )}
-    </div>
-  );
-}
-
-// ── LoRA styles ──────────────────────────────────────────────────────────────
-
-/**
- * Loose base-family ↔ pipeline-type match; unknowns never warn (the engine
- * is the authority and errors loudly on a real mismatch).
- */
-export function loraFamilyMatches(
-  baseFamily: string,
-  pipelineType: string | null | undefined,
-): boolean {
-  if (!baseFamily || !pipelineType) return true;
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const aliases: Record<string, string> = {
-    sdxl: "stablediffusionxl",
-    sd: "stablediffusion",
-    sd15: "stablediffusion",
-  };
-  const bfRaw = norm(baseFamily);
-  const bf = aliases[bfRaw] ?? bfRaw;
-  const pt = norm(pipelineType);
-  return pt.includes(bf) || bf.includes(pt);
-}
-
-function selectedLoraOf(
-  loras: SelectedLora[],
-  id: string,
-): SelectedLora | null {
-  return loras.find((l) => l.id === id) ?? null;
-}
-
-function InstalledLoraRow({
-  lora,
-  ctl,
-}: {
-  lora: ImageGenLoraInfo;
-  ctl: ImageGenController;
-}) {
-  const [, actions] = useMediaGenApp();
-  const { setImageForm, deleteLora } = actions;
-  const selected = selectedLoraOf(ctl.form.loras, lora.id);
-  const enabled = selected?.enabled ?? false;
-  const scale = selected?.scale ?? 1;
-  const mismatch =
-    enabled && !loraFamilyMatches(lora.base_family, ctl.model?.pipeline_type);
-
-  const setSelection = (patch: Partial<SelectedLora>) => {
-    const others = ctl.form.loras.filter((l) => l.id !== lora.id);
-    setImageForm({
-      loras: [...others, { id: lora.id, scale, enabled, ...patch }],
-    });
-  };
-
-  return (
-    <div className="space-y-2 rounded-lg border px-3 py-2.5">
-      <div className="flex items-center gap-2">
-        <Checkbox
-          checked={enabled}
-          onCheckedChange={(checked) => setSelection({ enabled: checked === true })}
-          aria-label={`Enable ${lora.id}`}
-          className="h-3.5 w-3.5"
-        />
-        <div className="min-w-0 flex-1">
-          <p
-            className="truncate text-xs font-medium"
-            title={lora.name ?? lora.repo_id}
-          >
-            {lora.name || lora.id}
-          </p>
-          <p className="truncate text-[10px] text-muted-foreground">
-            {lora.repo_id}
-            {lora.size_bytes > 0
-              ? ` · ${formatGb(lora.size_bytes / 1024 ** 3)}`
-              : ""}
-            {lora.source ? ` · ${lora.source}` : ""}
-          </p>
-        </div>
-        {lora.base_family && (
-          <span
-            className={`rounded px-1.5 py-0.5 text-[10px] shrink-0 ${
-              mismatch
-                ? "bg-amber-500/20 text-amber-600 dark:text-amber-400"
-                : "bg-muted text-muted-foreground"
-            }`}
-            title={
-              mismatch
-                ? `This LoRA targets ${lora.base_family}; the selected model is ${ctl.model?.pipeline_type ?? "unknown"}`
-                : `Base family: ${lora.base_family}`
-            }
-          >
-            {lora.base_family}
-          </span>
-        )}
-        <button
-          type="button"
-          onClick={() => void deleteLora(lora.id)}
-          className="shrink-0 text-muted-foreground hover:text-destructive"
-          aria-label={`Remove ${lora.id}`}
-          title="Delete this LoRA from disk"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      {mismatch && (
-        <p className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400">
-          <AlertCircle className="h-3 w-3 shrink-0" />
-          Family mismatch — trained for {lora.base_family}, the selected model
-          is {ctl.model?.pipeline_type}. The engine will refuse a real
-          incompatibility.
-        </p>
-      )}
-      {enabled && (
-        <div className="flex items-center gap-2 pl-5">
-          <span className="text-[10px] text-muted-foreground shrink-0 w-16">
-            Strength
-          </span>
-          <Slider
-            min={0}
-            max={1.5}
-            step={0.05}
-            value={[scale]}
-            onValueChange={([v]) =>
-              v !== undefined && setSelection({ scale: v })
-            }
-            className="flex-1"
-          />
-          <span className="w-9 text-right text-[10px] tabular-nums text-muted-foreground">
-            {scale.toFixed(2)}
-          </span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function LoraCatalogDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const [state, actions] = useMediaGenApp();
-  const { loraList, loraError, loraDownloads, loraNeedsCivitaiKey } = state;
-  const { downloadLora, refreshLoras } = actions;
-  const { downloads } = useDownloadManager();
-  const navigate = useNavigate();
-  const [repoInput, setRepoInput] = useState("");
-
-  // Live progress: repo_id → DownloadEntry, joined by the returned id.
-  const entryByRepo = useMemo(() => {
-    const map: Record<string, (typeof downloads)[number]> = {};
-    for (const [repoId, dlId] of Object.entries(loraDownloads)) {
-      const entry = downloads.find((d) => d.id === dlId);
-      if (entry) map[repoId] = entry;
-    }
-    return map;
-  }, [downloads, loraDownloads]);
-
-  // When a tracked LoRA download completes, refresh the installed list.
-  const completedTracked = useMemo(
-    () =>
-      Object.values(entryByRepo).filter((d) => d.status === "completed").length,
-    [entryByRepo],
-  );
-  useEffect(() => {
-    if (completedTracked === 0) return;
-    void refreshLoras();
-  }, [completedTracked, refreshLoras]);
-
-  const installedIds = new Set(
-    (loraList?.installed ?? []).map((l) => l.repo_id),
-  );
-  const catalog = (loraList?.catalog ?? []).filter(
-    (c) => !installedIds.has(c.repo_id),
-  );
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Get more styles (LoRA)</DialogTitle>
-          <DialogDescription>
-            Download style adapters from the curated catalog, or paste any
-            Hugging Face LoRA repo or Civitai link.
-          </DialogDescription>
-        </DialogHeader>
-        {loraError && <ErrorNote message={loraError} />}
-        {loraNeedsCivitaiKey && (
-          <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2.5">
-            <p className="flex items-start gap-2 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
-              <KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              Civitai downloads need your Civitai API key.
-            </p>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 shrink-0 text-xs"
-              onClick={() => navigate("/settings?tab=api-keys")}
-            >
-              Set your Civitai API key
-            </Button>
-          </div>
-        )}
-        <div className="max-h-[45vh] space-y-2 overflow-y-auto pr-1">
-          {catalog.map((c) => {
-            const dl = entryByRepo[c.repo_id];
-            const downloading =
-              dl && (dl.status === "active" || dl.status === "queued");
-            return (
-              <div
-                key={c.repo_id}
-                className="space-y-1.5 rounded-lg border px-3 py-2.5"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium">
-                      {c.name || c.repo_id}
-                    </p>
-                    <p className="truncate text-[10px] text-muted-foreground">
-                      {c.repo_id}
-                      {c.base_family ? ` · ${c.base_family}` : ""}
-                      {c.size_bytes > 0
-                        ? ` · ${formatGb(c.size_bytes / 1024 ** 3)}`
-                        : ""}
-                      {c.source ? ` · ${c.source}` : ""}
-                      {c.unverified ? " · unverified" : ""}
-                    </p>
-                  </div>
-                  {downloading ? (
-                    <span className="text-[11px] tabular-nums text-violet-500">
-                      {Math.round(dl.percent)}%
-                    </span>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2.5 text-xs"
-                      onClick={() =>
-                        void downloadLora(c.repo_id, c.weight_name ?? undefined)
-                      }
-                    >
-                      <Download className="mr-1 h-3 w-3" />
-                      Get
-                    </Button>
-                  )}
-                </div>
-                {downloading && (
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/60">
-                    <div
-                      className="h-full rounded-full bg-violet-500 transition-[width] duration-300"
-                      style={{
-                        width: `${Math.min(100, Math.max(0, dl.percent))}%`,
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          {catalog.length === 0 && !loraError && (
-            <p className="py-4 text-center text-xs text-muted-foreground">
-              No catalog entries — paste a Hugging Face repo or Civitai link
-              below.
-            </p>
-          )}
-        </div>
-        <div className="space-y-1.5 border-t pt-3">
-          <Label className="text-xs">Hugging Face repo or Civitai link</Label>
-          <div className="flex gap-2">
-            <Input
-              value={repoInput}
-              onChange={(e) => setRepoInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && repoInput.trim()) {
-                  void downloadLora(repoInput.trim());
-                  setRepoInput("");
-                }
-              }}
-              placeholder="HF repo, or civitai.com / civitai.red link with ?modelVersionId=…"
-              className="text-sm"
-            />
-            <Button
-              size="sm"
-              disabled={!repoInput.trim()}
-              onClick={() => {
-                void downloadLora(repoInput.trim());
-                setRepoInput("");
-              }}
-            >
-              <Download className="mr-1.5 h-3.5 w-3.5" />
-              Download
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
- * Collapsible "Styles (LoRA)" section. Always visible on the image form —
- * when the engine's LoRA endpoints are missing (404) the failure is shown
- * LOUDLY here rather than the section silently disappearing.
- */
-export function LoraStylesSection({ ctl }: { ctl: ImageGenController }) {
-  const [state] = useMediaGenApp();
-  const { loraList, loraError } = state;
-  const [open, setOpen] = useState(false);
-  const [catalogOpen, setCatalogOpen] = useState(false);
-
-  const enabledCount = ctl.form.loras.filter((l) => l.enabled).length;
-  const installed = loraList?.installed ?? [];
-  // Enabled selections whose LoRA is no longer installed — warn, never hide.
-  const missingEnabled = loraList
-    ? ctl.form.loras.filter(
-        (l) => l.enabled && !installed.some((i) => i.id === l.id),
-      )
-    : [];
-
-  return (
-    <div className="rounded-lg border">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between px-3 py-2 text-left"
-        aria-expanded={open}
-      >
-        <span className="flex items-center gap-1.5 text-xs font-medium">
-          {open ? (
-            <ChevronDown className="h-3.5 w-3.5" />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5" />
-          )}
-          <Sparkles className="h-3.5 w-3.5 text-violet-500" />
-          Styles (LoRA)
-          <span className="text-muted-foreground font-normal">
-            (optional style adapters)
-          </span>
-        </span>
-        {enabledCount > 0 && (
-          <span className="rounded bg-violet-500/15 text-violet-600 dark:text-violet-400 px-1.5 py-0.5 text-[10px] font-medium shrink-0">
-            {enabledCount} active
-          </span>
-        )}
-      </button>
-      {open && (
-        <div className="space-y-2 border-t px-3 py-2.5">
-          {loraError && (
-            <ErrorNote message={`LoRA styles unavailable — ${loraError}`} />
-          )}
-          {missingEnabled.length > 0 && (
-            <ErrorNote
-              message={`Enabled style${missingEnabled.length === 1 ? "" : "s"} no longer installed: ${missingEnabled.map((l) => l.id).join(", ")} — the engine will reject them by name.`}
-            />
-          )}
-          {installed.map((l) => (
-            <InstalledLoraRow key={l.id} lora={l} ctl={ctl} />
-          ))}
-          {!loraError && installed.length === 0 && (
-            <p className="rounded-md border border-dashed px-3 py-3 text-center text-[11px] text-muted-foreground">
-              No styles installed yet — use Get more to download one.
-            </p>
-          )}
-          <div className="flex justify-end">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-xs"
-              onClick={() => setCatalogOpen(true)}
-            >
-              <Download className="mr-1.5 h-3 w-3" />
-              Get more
-            </Button>
-          </div>
-        </div>
-      )}
-      <LoraCatalogDialog open={catalogOpen} onOpenChange={setCatalogOpen} />
     </div>
   );
 }

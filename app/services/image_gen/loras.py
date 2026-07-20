@@ -30,6 +30,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app.common.system_logger import get_logger
 from app.services.media_gen.paths import (
@@ -129,6 +130,68 @@ def resolve_lora_display_name(
         if isinstance(cat_name, str) and cat_name.strip():
             return cat_name.strip()
     return None
+
+
+def backfill_lora_family_from_catalog(
+    meta: dict[str, Any],
+    *,
+    catalog_by_repo: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Repair an installed LoRA whose sidecar predates reliable family data.
+
+    Version-pinned catalog entries are authoritative for their exact artifact.
+    When an older Civitai install was recorded as ``unknown`` because its
+    ``baseModel`` label carried an unmapped size suffix, persist the catalog's
+    known family atomically.  Known sidecar families are never overwritten:
+    disagreement there is evidence to investigate, not something to hide.
+    """
+    current = str(meta.get("base_family") or "unknown")
+    repo_id = meta.get("repo_id")
+    if current != "unknown" or not isinstance(repo_id, str):
+        return meta
+    catalog_entry = catalog_by_repo.get(repo_id)
+    catalog_family = (
+        str(catalog_entry.get("base_family") or "unknown")
+        if catalog_entry
+        else "unknown"
+    )
+    if catalog_family == "unknown":
+        return meta
+
+    lora_id = str(meta.get("id") or "")
+    if not is_valid_lora_id(lora_id):
+        return meta
+    meta_path = lora_dir(lora_id) / "lora.json"
+    tmp: Path | None = None
+    try:
+        persisted = json.loads(meta_path.read_text(encoding="utf-8"))
+        if not isinstance(persisted, dict):
+            raise ValueError("lora.json root is not an object")
+        persisted["base_family"] = catalog_family
+        tmp = meta_path.with_name(f"{meta_path.name}.{uuid4().hex}.tmp")
+        tmp.write_text(json.dumps(persisted, indent=2), encoding="utf-8")
+        tmp.replace(meta_path)
+    except Exception as exc:  # noqa: BLE001 — listing must remain fault-isolated
+        logger.error(
+            "[image_gen] Could not backfill LoRA family for %s from catalog: %s",
+            lora_id,
+            exc,
+        )
+        return meta
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    meta["base_family"] = catalog_family
+    logger.info(
+        "[image_gen] Backfilled LoRA %s family from catalog: %s",
+        lora_id,
+        catalog_family,
+    )
+    return meta
 
 
 def check_lora_model_compat(model_lora_family: str, lora_meta: dict[str, Any]) -> None:

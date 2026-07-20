@@ -196,10 +196,22 @@ CIVITAI_BASE_MODEL_TO_FAMILY: dict[str, str] = {
 
 
 def map_civitai_base_model(base_model: str | None) -> str:
-    """Civitai baseModel → our family; "unknown" when unmapped (never a guess)."""
+    """Civitai baseModel → our family; "unknown" when unmapped.
+
+    Civitai appends architecture variants to some otherwise-stable family
+    labels (for example ``Flux.2 Klein 4B`` / ``Flux.2 Klein 9B``).  Those
+    suffixes are still authoritative family metadata, not a heuristic guess,
+    so recognize the documented prefix before falling back to the exact map.
+    """
     if not base_model:
         return "unknown"
-    return CIVITAI_BASE_MODEL_TO_FAMILY.get(base_model.strip().lower(), "unknown")
+    normalized = base_model.strip().lower()
+    exact = CIVITAI_BASE_MODEL_TO_FAMILY.get(normalized)
+    if exact:
+        return exact
+    if normalized.startswith("flux.2 klein "):
+        return "flux2"
+    return "unknown"
 
 
 class InspectError(Exception):

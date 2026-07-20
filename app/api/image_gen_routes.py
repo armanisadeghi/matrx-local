@@ -1625,6 +1625,7 @@ async def list_image_loras() -> LorasResponse:
     curated catalog (verified well-known LoRAs, one click from
     POST /image-gen/loras/download)."""
     from app.services.image_gen.loras import (  # noqa: PLC0415
+        backfill_lora_family_from_catalog,
         get_curated_lora_catalog,
         list_loras,
         lora_id_for_repo,
@@ -1632,7 +1633,12 @@ async def list_image_loras() -> LorasResponse:
     )
 
     catalog_entries = get_curated_lora_catalog()
-    catalog_by_repo = {e["repo_id"]: e for e in catalog_entries}
+    catalog_by_repo = {
+        repo_id: e
+        for e in catalog_entries
+        if isinstance(e, dict)
+        and isinstance((repo_id := e.get("repo_id")), str)
+    }
     items = list_loras()
     # .get() (not m[...]) so a single odd row can't 500 the endpoint BEFORE the
     # isolated builder loop below even runs.
@@ -1648,6 +1654,10 @@ async def list_image_loras() -> LorasResponse:
     installed: list[LoraInstalledInfo] = []
     for m in items:
         try:
+            m = backfill_lora_family_from_catalog(
+                m,
+                catalog_by_repo=catalog_by_repo,
+            )
             installed.append(
                 LoraInstalledInfo(
                     id=m["id"],
@@ -1829,6 +1839,7 @@ async def _download_lora_civitai(
         resolve_civitai,
     )
     from app.services.image_gen.loras import (  # noqa: PLC0415
+        get_curated_lora_catalog,
         get_installed_lora,
         lora_dir,
         write_lora_meta,
@@ -1873,7 +1884,18 @@ async def _download_lora_civitai(
             source="civitai",
         )
 
-    base_family = str(info["family"])  # "unknown" is allowed for LoRAs
+    base_family = str(info["family"])  # "unknown" is allowed for custom LoRAs
+    if base_family == "unknown":
+        catalog_entry = next(
+            (
+                entry
+                for entry in get_curated_lora_catalog()
+                if entry.get("repo_id") == canonical_ref
+            ),
+            None,
+        )
+        if catalog_entry:
+            base_family = str(catalog_entry.get("base_family") or "unknown")
     weight_name = str(info["file_name"])
     write_lora_meta(
         lora_id,

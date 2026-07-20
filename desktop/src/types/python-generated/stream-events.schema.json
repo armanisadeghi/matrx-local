@@ -7784,18 +7784,6 @@
         "default": null,
         "title": "Cloud Uri"
       },
-      "supabase_url": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "default": null,
-        "title": "Supabase Url"
-      },
       "file_id": {
         "anyOf": [
           {

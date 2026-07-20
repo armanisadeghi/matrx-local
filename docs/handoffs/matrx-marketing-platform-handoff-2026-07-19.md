@@ -144,7 +144,7 @@ The implemented route tree is recorded in `features/marketing/FEATURE.md`. Known
 
 ## Suggested skills
 
-- `supabase` for all database, RLS, Auth, Storage, Realtime, migrations, generated types, and direct-client work.
+- `supabase` for database, RLS, Auth, Realtime, migrations, generated types, and direct-client work.
 - `supabase-postgres-best-practices` when adding integration/metric/CMS tables, views, indexes, rollups, and high-volume queries.
 - `browser:control-in-app-browser` or `chrome:control-chrome` for authenticated production UX and end-to-end testing.
 - `handoff` when transferring the work again so the architecture constraints and live/pending distinction remain intact.

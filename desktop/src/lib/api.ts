@@ -4306,6 +4306,8 @@ export interface ImageGenModelInfo {
   name: string;
   provider: string;
   pipeline_type: string;
+  /** Architecture family accepted by the model's LoRA loader. */
+  lora_family: string;
   vram_gb: number;
   ram_gb: number;
   description: string;

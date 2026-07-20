@@ -115,4 +115,9 @@ def test_ner_capability_has_managed_installer() -> None:
     assert "ner" in CAPABILITY_SPECS
     assert "ner" in CAPABILITY_INSTALL
     assert "gliner2[local]>=1.3.2" in CAPABILITY_INSTALL["ner"]["packages"]
-    assert CAPABILITY_INSTALL["ner"]["needs_torch_index"] is True
+    # NER consumes the managed media runtime's torch stack — it must never
+    # install its own (MXL-D-070 / single-ML-stack doctrine).
+    assert CAPABILITY_INSTALL["ner"]["requires_ml_runtime"] is True
+    assert not any(
+        pkg.lower().startswith("torch") for pkg in CAPABILITY_INSTALL["ner"]["packages"]
+    )

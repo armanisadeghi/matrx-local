@@ -261,6 +261,12 @@ optional package dir; `critical_runtime_import_check` validates import origins
 "resolved outside candidate runtime" diagnostic (which routes to the
 restart-required recovery path when heavy modules were already imported).
 
+The slot is also the platform's ONLY ML-stack provider: capabilities that
+need torch (NER, transcription) consume this runtime via
+`requires_ml_runtime` instead of installing their own copies, enforced by
+screening/sanitization guardrails and tripwire tests. Doctrine and pin-bump
+checklist: [app/services/optional_packages/FEATURE.md](../optional_packages/FEATURE.md).
+
 The canonical `/image-gen/runtime/*` state gates image and video generation.
 Top-level imports, package versions, and completion markers are never alternate
 readiness signals. A runtime-class import/native failure during model loading

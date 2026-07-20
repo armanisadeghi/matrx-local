@@ -111,32 +111,30 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   handle SQLite contention inside the crawl loop, and supervise/restart crawl
   just as enrichment is supervised.
 
-### MXL-D-070 — Capability recipes install a full competing torch/transformers stack next to the strictly pinned media runtime
-- **Area:** `app/services/capabilities/installer.py` `CAPABILITY_INSTALL`
-  (`ner` and `transcription` recipes install `torch>=2.6` unpinned into
-  `~/.matrx/ner-packages` / `transcription-packages`), shared interpreter with
-  the hash-locked media runtime slot (torch 2.10.0 / transformers 5.3.0).
-- **Symptom:** Two ML stacks in one interpreter: the user's `ner-packages`
-  holds torch 2.13.0 + transformers 5.6.2 + numpy 2.5.1. Whichever dir comes
-  first on sys.path wins for shared packages. The inverted ordering during
-  in-engine repair caused the 2026-07-19 image-gen production outage
-  (`'_ClassNamespace' object is not iterable` — fixed by
-  `_insert_runtime_sys_path` certified precedence, see
-  `app/services/image_gen/FEATURE.md`). The residual risk: with the slot now
-  always first, NER/whisper run against the slot's torch 2.10/transformers 5.3
-  instead of the versions their own install verified — gliner2/whisper compat
-  with the slot pins is unvalidated. The `skip_torch` reuse path also still
-  references the legacy `get_image_gen_packages_dir()` flat dir, not the slot
-  system.
+### MXL-D-071 — fastembed puts a second tokenizers/huggingface_hub/numpy set in the engine env with no isolation contract
+- **Area:** `pyproject.toml` `[project.optional-dependencies] embeddings =
+  ["fastembed>=0.7.0"]`; imported in-process at
+  `app/api/openai_compat_routes.py:114` and
+  `app/services/filesystem/service.py` (580/670/1010).
+- **Symptom:** fastembed is the only in-engine ML consumer with no install
+  contract: no capability installer, no `--target` dir, no guardrail
+  screening — it must arrive via `uv sync --extra embeddings` (dev) or a
+  bundle, and it drags onnxruntime + tokenizers + huggingface_hub + numpy
+  into the engine environment. If its resolved tokenizers/hf-hub versions
+  ever diverge from the managed runtime slot's pins (tokenizers 0.22.2,
+  hf-hub 1.8.0), engine-env copies win over the slot by sys.path order and
+  the slot's transformers 5.3 runs against a tokenizers it wasn't locked
+  with — the same class of mismatch as the resolved MXL-D-070, one layer up.
 - **Status:** open.
-- **Analysis stamp:** Analyzed 2026-07-19 — verified in code and on a live
-  machine (`~/.matrx/ner-packages` dist-infos: torch 2.13.0, transformers
-  5.6.2).
-- **Owner hint:** Capabilities that need torch should consume the managed
-  media runtime's stack when installed (and declare compat with its pins), or
-  run in an isolated subprocess. At minimum, capability install should refuse
-  to install a torch that conflicts with an installed media runtime, and the
-  verify step should run with the same sys.path precedence the engine uses.
+- **Analysis stamp:** Analyzed 2026-07-19 during the single-ML-stack
+  guardrail build (see `app/services/optional_packages/FEATURE.md`); shipped
+  frozen builds may not bundle fastembed at all — first step is determining
+  where it actually ships.
+- **Owner hint:** Either give embeddings a real capability recipe under the
+  guardrail system (screened, sanitized, slot-constrained) or pin fastembed's
+  ML-family transitives to the slot's exact versions in
+  `pyproject.toml` `constraint-dependencies` and assert alignment in
+  `tests/unit/test_ml_stack_guardrails.py`.
 
 ---
 

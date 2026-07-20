@@ -271,6 +271,8 @@ def run_pip_streaming(
     *,
     requirements_file: Path | None = None,
     require_hashes: bool = False,
+    constraints_file: Path | None = None,
+    no_deps: bool = False,
 ) -> None:
     """Run ``pip install --target``, forwarding each output line to progress.
 
@@ -301,6 +303,10 @@ def run_pip_streaming(
         process_environment = None
     if extra_index:
         cmd += ["--extra-index-url", extra_index]
+    if constraints_file is not None:
+        cmd += ["--constraint", str(constraints_file)]
+    if no_deps:
+        cmd.append("--no-deps")
     if requirements_file is not None:
         if packages:
             raise ValueError("packages and requirements_file are mutually exclusive")

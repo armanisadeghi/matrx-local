@@ -26,6 +26,7 @@
 | **Verify a startup/UI change actually runs** | **[docs/SMOKE_HARNESS.md](docs/SMOKE_HARNESS.md)** — `./scripts/smoke.sh` builds, launches, and hands you the logs |
 | **Any image/video UI** (thumbnails, lightbox, info, delete/vault/remix) | **[desktop/src/components/media/FEATURE.md](desktop/src/components/media/FEATURE.md)** — one `MediaDescriptor`, one thumb, one action set. Never hand-roll an `<img>` for media. |
 | **Multi-window** (peer windows, panel windows, leader election, close policy, native menus, tray window list) | **[desktop/src/panels/FEATURE.md](desktop/src/panels/FEATURE.md)** — window labels are the taxonomy; leader runs the singletons; adding a panel is a 4-step checklist. |
+| **Any Python dependency that touches torch/transformers/numpy** (capabilities, recipes, ML consumers) | **[app/services/optional_packages/FEATURE.md](app/services/optional_packages/FEATURE.md)** — single-ML-stack doctrine: the managed media runtime slot is the ONLY torch provider; recipes declare `requires_ml_runtime`, never install their own. Guardrails + tripwire tests refuse violations. |
 | Code-local rules | `app/tools/FEATURE.md`, `app/api/FEATURE.md`, `app/services/*/FEATURE.md` |
 | Defect holding area | [FOUND_DEFECTS.md](FOUND_DEFECTS.md) |
 | Approved agent work | [.matrx/AGENT_TASKS.md](.matrx/AGENT_TASKS.md) |

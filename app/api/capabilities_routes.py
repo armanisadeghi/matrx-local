@@ -20,6 +20,7 @@ from app.common.platform_ctx import refresh_package_capabilities
 from app.common.process_shutdown import process_shutdown_requested
 from app.common.system_logger import get_logger
 from app.services.capabilities.installer import (
+    CAPABILITY_INSTALL,
     get_active_progress,
     get_capability_packages_dir,
     get_lightweight_capability_packages_dir,
@@ -31,6 +32,10 @@ from app.services.capabilities.installer import (
     uses_managed_installer,
 )
 from app.services.optional_packages.core import find_python
+from app.services.optional_packages.guardrails import (
+    sanitize_target_dir,
+    screen_install_packages,
+)
 
 logger = get_logger()
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
@@ -96,7 +101,10 @@ CAPABILITY_SPECS: dict[str, dict] = {
         "name": "Audio Recording & Playback",
         "description": "Record from microphone and play audio files. Powers the RecordAudio, PlayAudio, and ListAudioDevices tools.",
         "probe_module": "sounddevice",
-        "packages": ["sounddevice", "numpy"],
+        # numpy is NOT listed: it is slot-owned (managed ML runtime) and core-
+        # bundled; sounddevice's own dependency resolution plus the post-install
+        # sanitizer keep the capability dir free of a second copy.
+        "packages": ["sounddevice"],
         "install_extra": None,
         "size_warning": None,
         "docs_url": "https://python-sounddevice.readthedocs.io/",
@@ -107,16 +115,22 @@ CAPABILITY_SPECS: dict[str, dict] = {
         "probe_module": "whisper",
         "packages": ["openai-whisper"],
         "install_extra": "transcription",
-        "size_warning": "~400–800 MB download (includes PyTorch)",
+        "size_warning": (
+            "Uses the shared media runtime for PyTorch — installs it first "
+            "(~2 GB) if media generation is not set up yet"
+        ),
         "docs_url": "https://github.com/openai/whisper",
     },
     "ner": {
         "name": "Entity Extraction (GLiNER)",
         "description": "Extract zero-shot named entities and common PII locally using GLiNER / GLiNER2. Powers local_extract_entities and local_extract_pii. Requires PyTorch — large download.",
         "probe_module": "gliner2",
-        "packages": ["gliner2[local]", "gliner", "huggingface_hub"],
+        "packages": ["gliner2[local]", "gliner"],
         "install_extra": "ner",
-        "size_warning": "~1–2 GB download before model weights (includes PyTorch)",
+        "size_warning": (
+            "Uses the shared media runtime for PyTorch — installs it first "
+            "(~2 GB) if media generation is not set up yet"
+        ),
         "docs_url": "https://github.com/fastino-ai/GLiNER2",
     },
     "ocr": {
@@ -179,7 +193,10 @@ CAPABILITY_SPECS: dict[str, dict] = {
 def _capability_status(cap_id: str, spec: dict) -> CapabilityStatus:
     if uses_managed_installer(cap_id):
         inject_capability_path(cap_id)
-        if cap_id == "transcription":
+        if CAPABILITY_INSTALL.get(cap_id, {}).get("requires_ml_runtime"):
+            # These capabilities import torch from the managed runtime slot;
+            # make sure the slot is on sys.path (with certified precedence)
+            # before probing.
             try:
                 from app.services.image_gen.installer import inject_image_gen_path
 
@@ -344,6 +361,7 @@ async def install_capability(req: InstallRequest) -> InstallStartResponse:
     logger.info("Installing capability '%s': %s", cap_id, packages)
 
     try:
+        screen_install_packages(packages, context=f"lightweight capability {cap_id}")
         python = find_python()
     except RuntimeError as exc:
         return _status_payload(
@@ -416,6 +434,10 @@ async def install_capability(req: InstallRequest) -> InstallStartResponse:
                     ),
                     error=err2.strip(),
                 )
+
+        # The managed ML runtime is the only torch/numpy-family provider; strip
+        # any copy pip pulled transitively before the install is marked done.
+        sanitize_target_dir(target, log_prefix=f"capabilities:{cap_id}")
 
         marker.write_text(json.dumps({"capability_id": cap_id, "packages": packages}))
         inject_lightweight_capability_path(cap_id)

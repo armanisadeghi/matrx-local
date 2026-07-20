@@ -40,6 +40,25 @@ them; the OPEN Cloud Chat view claims the continuation over loopback so the
 resumed stream renders live. See `app/services/delegation/FEATURE.md`
 § Local UI stream claims.
 
+## Ordered stream blocks (2026-07-19)
+
+Live cloud-chat messages render from `ChatMessage.blocks` — an ordered
+block list (text / thinking / tool_call / error) built event-by-event by
+`StreamBlockBuilder` (`desktop/src/lib/chat-blocks.ts`), the desktop port
+of matrx-frontend's `lib/chat-protocol`. Rules (do not regress):
+
+- Blocks stay in true stream-arrival order; never group by type. A tool
+  event closes the current text run — later text starts a NEW block.
+- ONE tool block per `call_id`, anchored at first appearance, patched in
+  place through `pending → running/delegated → complete | error`. Results
+  match by ID, never by array position; a result arriving before (or
+  without) its start event materializes the block.
+- On stream error/abort, `failPendingTools()` force-terminates every
+  non-terminal tool block so no card spins forever.
+- Legacy flat `content` + `tool_calls`/`tool_results` are still maintained
+  for cache/TTS/copy and for hydrated (DB-loaded) messages, which render
+  through the legacy path in `ChatMessages.tsx` when `blocks` is absent.
+
 ## The "+" menu (`desktop/src/components/chat/PlusMenu.tsx`)
 
 Working now: model override, temperature / max-tokens overrides

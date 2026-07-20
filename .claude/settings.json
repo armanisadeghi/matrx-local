@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r .session_id | { read -r s; touch \"/tmp/matrx-landing-dirty-$s\"; } 2>/dev/null || true",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "IN=$(cat); sid=$(printf %s \"$IN\" | jq -r .session_id); d=\"/tmp/matrx-landing-dirty-$sid\"; m=\"/tmp/matrx-landing-shown-$sid\"; f=\"${CLAUDE_PROJECT_DIR:-.}/.matrx/LANDING_CHECKLIST.md\"; if [ -f \"$d\" ] && [ ! -f \"$m\" ] && [ -f \"$f\" ]; then touch \"$m\"; jq -n --rawfile cl \"$f\" '{decision:\"block\", reason:(\"Pre-finish gate (fires once per session): scan this landing checklist. If nothing you touched this session appears on it, state that in one line and finish. If something does, verify the paired item before finishing.\\n\\n\"+$cl)}'; fi",
+            "timeout": 10,
+            "statusMessage": "Landing checklist"
+          }
+        ]
+      }
+    ]
+  }
+}

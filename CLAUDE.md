@@ -274,6 +274,7 @@ Never let a discovered issue go untracked. Prefer the right file; do not invent 
 
 ## Preferences
 
+- **Before finishing any task that changed code, scan [.matrx/LANDING_CHECKLIST.md](.matrx/LANDING_CHECKLIST.md)** — 8 trigger→verify pairs covering the regression classes that have actually shipped (a Stop hook also surfaces it once per session; the manual scan still applies to later tasks in the same session)
 - Work systematically, one task at a time
 - Track discoveries in `FOUND_DEFECTS.md`; execute approved work from `.matrx/AGENT_TASKS.md`
 - Production-grade only — no stubs, no TODOs, no placeholder logic

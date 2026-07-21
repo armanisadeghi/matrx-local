@@ -82,9 +82,11 @@ export function announceMediaItemsAdded(
   opts?: Pick<MediaItemsAddedDetail, "fullRefresh">,
 ): void {
   if (itemIds.length === 0) return;
+  const detail: MediaItemsAddedDetail = { itemIds };
+  if (opts?.fullRefresh) detail.fullRefresh = true;
   window.dispatchEvent(
     new CustomEvent<MediaItemsAddedDetail>(MEDIA_ITEMS_ADDED_EVENT, {
-      detail: { itemIds, fullRefresh: opts?.fullRefresh },
+      detail,
     }),
   );
 }

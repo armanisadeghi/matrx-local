@@ -141,7 +141,6 @@ export function VariantStudio() {
     imageStatusError,
     imageResult,
     imageForm,
-    imageJobs,
     videoStatus,
     videoStatusError,
     activeJob,
@@ -164,7 +163,7 @@ export function VariantStudio() {
 
   // ── Library filmstrip (the ONE shared store, images only, first 20) ──────
   const [libState, libActions] = useMediaLibraryApp();
-  const { getThumbUrl, refresh: refreshLibrary } = libActions;
+  const { getThumbUrl } = libActions;
   const filmstripItems = useMemo(
     () => libState.items.filter((i) => i.media_type === "image").slice(0, 20),
     [libState.items],
@@ -184,21 +183,6 @@ export function VariantStudio() {
     if (!selectedItemId) return;
     void getFileUrl(selectedItemId);
   }, [selectedItemId, getFileUrl]);
-
-  // A fresh direct generation was persisted → the library has a new item.
-  useEffect(() => {
-    if (!imageResult?.itemId) return;
-    void refreshLibrary();
-  }, [imageResult?.itemId, refreshLibrary]);
-
-  // Queue jobs completing also add library items. Gated on the COUNT.
-  const completedImageJobCount = imageJobs.filter(
-    (j) => j.status === "completed",
-  ).length;
-  useEffect(() => {
-    if (completedImageJobCount === 0) return;
-    void refreshLibrary();
-  }, [completedImageJobCount, refreshLibrary]);
 
   // ── Viewing set: the fresh result first, then the filmstrip ─────────────
   //

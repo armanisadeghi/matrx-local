@@ -237,6 +237,42 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
     await fetchPage(0, true);
   }, [fetchPage]);
 
+  /**
+   * Pull the newest page and prepend any items missing locally — without
+   * setting `loading`, revoking cached URLs, or dropping load-more tail pages.
+   * Used when generation (or a targeted add) announces fresh library ids.
+   */
+  const mergeNewItems = useCallback(async (_hintItemIds: string[]) => {
+    const base = engine.engineUrl;
+    if (!base) return;
+    const existingIds = new Set(itemsRef.current.map((i) => i.id));
+    try {
+      const f = filterRef.current;
+      const page = await listMediaLibraryItems(base, {
+        ...(f === "all" ? {} : { media_type: f }),
+        limit: PAGE_SIZE,
+        offset: 0,
+      });
+      const toPrepend = page.items.filter((i) => !existingIds.has(i.id));
+      if (toPrepend.length > 0) {
+        itemsRef.current = [...toPrepend, ...itemsRef.current];
+        setItems((prev) => {
+          const known = new Set(prev.map((i) => i.id));
+          const fresh = page.items.filter((i) => !known.has(i.id));
+          return fresh.length > 0 ? [...fresh, ...prev] : prev;
+        });
+      }
+      setHasMore(itemsRef.current.length < page.total);
+      setError(null);
+    } catch (e) {
+      emitClientLog(
+        "warn",
+        `[media-library] merge-new-items failed: ${String(e)}`,
+        "engine",
+      );
+    }
+  }, []);
+
   const setFilter = useCallback(
     (next: MediaLibraryFilter) => {
       filterRef.current = next;
@@ -431,9 +467,18 @@ export function useMediaLibrary(): [MediaLibraryState, MediaLibraryActions] {
   }, [error, fetchPage]);
 
   // Items restored OUT of the vault are library items again — pull them in.
+  // Generation announcements use merge (prepend only); vault restore may
+  // surface items that are not on the head page and requests a full reload.
   useEffect(
-    () => onMediaItemsAdded(() => void fetchPage(0, true)),
-    [fetchPage],
+    () =>
+      onMediaItemsAdded(({ itemIds, fullRefresh }) => {
+        if (fullRefresh) {
+          void fetchPage(0, true);
+          return;
+        }
+        void mergeNewItems(itemIds);
+      }),
+    [fetchPage, mergeNewItems],
   );
 
   // Another store removed items (the vault move announces; the vault's own

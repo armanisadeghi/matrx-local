@@ -11,7 +11,7 @@
  * chips and video job card all come from media-gen/core.
  */
 
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback } from "react";
 import {
   AlertCircle,
   ChevronDown,
@@ -186,35 +186,10 @@ export function VariantGallery() {
   const imageCtl = useImageGenController({ onAfterSelect: closePicker });
   const videoCtl = useVideoGenController({ onAfterSelect: closePicker });
 
-  // ── Library freshness: new generations surface at the top ────────────────
-  const completedImageJobCount = useMemo(
-    () => imageJobs.filter((j) => j.status === "completed").length,
-    [imageJobs],
-  );
-  const prevCompletedCountRef = useRef(completedImageJobCount);
-  useEffect(() => {
-    if (completedImageJobCount > prevCompletedCountRef.current) {
-      void refreshLibrary();
-    }
-    prevCompletedCountRef.current = completedImageJobCount;
-  }, [completedImageJobCount, refreshLibrary]);
-
-  const completedVideoJobId =
-    activeJob?.status === "completed" ? activeJob.job_id : null;
-  useEffect(() => {
-    if (!completedVideoJobId) return;
-    void refreshLibrary();
-  }, [completedVideoJobId, refreshLibrary]);
-
-  const freshResultItemId = imageResult?.itemId ?? null;
   const freshResultDescriptor = useMemo(
     () => (imageResult ? descriptorFromResult(imageResult) : null),
     [imageResult],
   );
-  useEffect(() => {
-    if (!freshResultItemId) return;
-    void refreshLibrary();
-  }, [freshResultItemId, refreshLibrary]);
 
   // ── Form plumbing (ALL content state lives in context) ───────────────────
   const isImage = mode === "image";

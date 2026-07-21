@@ -2092,8 +2092,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
 
     const fresh = completed.filter(
       (j) =>
-        (j.finished_sequence ?? 0) >
-        lastAnnouncedLibrarySequenceRef.current,
+        (j.finished_sequence ?? 0) > lastAnnouncedLibrarySequenceRef.current,
     );
     if (fresh.length === 0) return;
 

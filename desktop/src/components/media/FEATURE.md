@@ -81,7 +81,8 @@ two other surfaces.
   (deleted, or vaulted). Every store holding that id drops it in the same tick:
   the library grid, the job thumbnails, the fresh-result pane, an open lightbox,
   the info dialog, the context menu.
-- `announceMediaItemsAdded(ids)` — a vault restore put items back.
+- `announceMediaItemsAdded(ids)` — items entered the plaintext library (new
+  generation, or a vault restore with `{ fullRefresh: true }`).
 - `announceVaultLocked()` — **revoking a blob URL does not blank an `<img>` that
   already rendered.** A lock that only revokes URLs leaves decrypted vault
   images on screen for the rest of the session. Every store holding vault bytes

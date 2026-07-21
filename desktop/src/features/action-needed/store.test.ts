@@ -222,7 +222,7 @@ describe("ActionNeededStore", () => {
     const store = new ActionNeededStore();
     const download = item("download:abc:hf_token_missing", 100, "downloads");
     store.reconcileLocal("downloads", [download]);
-    store.resolve(download.fingerprint, download.observed_at);
+    store.resolve(download.fingerprint, download.observed_at ?? undefined);
     store.reconcileLocal("downloads", [download]);
     expect(store.getSnapshot()).toEqual([]);
   });

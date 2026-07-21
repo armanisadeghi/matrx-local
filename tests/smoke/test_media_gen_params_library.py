@@ -104,11 +104,10 @@ def test_image_params_endpoint_sdxl(client: TestClient) -> None:
     # SDXL family: guidance_scale is always passed; DDIM knobs exposed.
     for key in ("guidance_scale", "num_images_per_prompt", "eta", "guidance_rescale"):
         assert key in adv, f"advanced missing {key}: {adv}"
-    from app.services.image_gen.models import IMAGE_GEN_MODELS
+    from app.services.image_gen.models import get_image_gen_model
 
-    catalog = next(
-        m for m in IMAGE_GEN_MODELS if m.model_id == "stabilityai/sdxl-turbo"
-    )
+    catalog = get_image_gen_model("stabilityai/sdxl-turbo")
+    assert catalog is not None
     assert data["supports_negative_prompt"] == catalog.supports_negative_prompt
 
 

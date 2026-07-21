@@ -3,6 +3,7 @@
  * times (Images tab rows, Studio chips, Workspace rows, Gallery chips, Focus
  * feed cards). One implementation, three layouts:
  *  - "list":  full-width rows with thumbnails (classic sections, Workspace)
+ *  - "split": two columns — history (left) + active queue (right)
  *  - "chips": compact horizontal chips for rails/strips (Studio, Gallery)
  *  - "feed":  large vertical cards with the full image (Focus)
  *
@@ -17,7 +18,10 @@ import { AlertCircle, CheckCircle2, Loader2, X } from "lucide-react";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import type { ImageGenJob } from "@/lib/api";
 import { MediaThumb } from "@/components/media/MediaThumb";
-import { descriptorFromJob, type MediaDescriptor } from "@/components/media/types";
+import {
+  descriptorFromJob,
+  type MediaDescriptor,
+} from "@/components/media/types";
 import { CopyButton } from "@/components/media/MediaInfoDialog";
 import {
   ErrorNote,
@@ -28,7 +32,19 @@ import {
   useImageJobLightbox,
 } from "@/components/media-gen/shared";
 
-export type ImageQueueLayout = "list" | "chips" | "feed";
+export type ImageQueueLayout = "list" | "chips" | "feed" | "split";
+
+function isHistoryJob(job: ImageGenJob): boolean {
+  return (
+    job.status === "completed" ||
+    job.status === "failed" ||
+    job.status === "cancelled"
+  );
+}
+
+function isQueueJob(job: ImageGenJob): boolean {
+  return job.status === "queued" || job.status === "running";
+}
 
 function JobStatusIcon({
   job,
@@ -127,10 +143,17 @@ function JobRowList({
   onReuseSeed,
   onOpen,
   opening,
-}: JobViewProps) {
+  comfortable = false,
+}: JobViewProps & { comfortable?: boolean }) {
   const active = job.status === "queued" || job.status === "running";
   const cancelling = active && !!job.cancel_requested;
   const viewable = job.status === "completed" && !!job.item_id;
+  const thumbClass = comfortable
+    ? "h-14 w-14 rounded-md border"
+    : "h-10 w-10 rounded border";
+  const promptClass = comfortable
+    ? "line-clamp-2 text-xs leading-snug"
+    : "truncate text-xs";
   return (
     <div
       className={`rounded-lg border bg-card px-3 py-2.5 space-y-1.5 ${
@@ -138,32 +161,27 @@ function JobRowList({
       }`}
       {...viewableProps(job, onOpen)}
     >
-      <div className="flex items-center gap-3">
-        <div className="w-5 shrink-0">
+      <div
+        className={`flex gap-3 ${comfortable ? "items-start" : "items-center"}`}
+      >
+        <div className={`shrink-0 ${comfortable ? "pt-0.5" : "w-5"}`}>
           <JobStatusIcon job={job} opening={opening} />
         </div>
         {descriptor ? (
-          // Canonical thumb — a queue thumbnail opens full size, right-clicks
-          // to every action, and shows its metadata, exactly like a library
-          // tile. Clicks are stopped from reaching the row (which opens the
-          // same viewer anyway, with the whole queue as the browse set).
           <div onClick={(e) => e.stopPropagation()} className="shrink-0">
             <MediaThumb
               item={descriptor}
               variant="icon"
               onActivate={() => onOpen(job)}
-              className="h-10 w-10 rounded border"
+              className={thumbClass}
             />
           </div>
         ) : null}
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-1.5">
-            <p className="min-w-0 flex-1 truncate text-xs" title={job.prompt}>
+            <p className={`min-w-0 flex-1 ${promptClass}`} title={job.prompt}>
               {job.prompt || "(no prompt)"}
             </p>
-            {/* A queued/running job has no descriptor yet (no bytes), so the ⋯
-                menu cannot be its escape hatch — the prompt must be copyable
-                right here or it is unrecoverable. */}
             {job.prompt && (
               <CopyButton
                 value={job.prompt}
@@ -172,14 +190,13 @@ function JobRowList({
               />
             )}
           </div>
-          <p className="text-[10px] text-muted-foreground">
+          <p className="mt-0.5 text-[10px] text-muted-foreground">
             {job.model_id || "—"} · {cancelling ? "cancelling…" : job.status}
             {job.status === "failed" && job.error ? ` — ${job.error}` : ""}
           </p>
         </div>
-        {/* Controls: clicks here must never bubble into the row's open. */}
         <div
-          className="flex items-center gap-2 shrink-0"
+          className="flex shrink-0 items-center gap-2"
           onClick={(e) => e.stopPropagation()}
         >
           {isUpNextJob(job) && <UpNextBadge />}
@@ -232,7 +249,10 @@ function JobChip({
         )}
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-1">
-            <p className="min-w-0 flex-1 truncate text-[11px]" title={job.prompt}>
+            <p
+              className="min-w-0 flex-1 truncate text-[11px]"
+              title={job.prompt}
+            >
               {job.prompt || "(no prompt)"}
             </p>
             {job.prompt && (
@@ -296,7 +316,9 @@ function JobFeedCard({
             <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
               {job.prompt || "(no prompt)"}
             </p>
-            {job.prompt && <CopyButton value={job.prompt} label="Copy prompt" />}
+            {job.prompt && (
+              <CopyButton value={job.prompt} label="Copy prompt" />
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
             {typeof job.seed === "number" && (
@@ -378,7 +400,7 @@ function JobFeedCard({
 
 /**
  * The panel. Renders nothing when the queue is empty and healthy (unless
- * `alwaysRender`). Mounts ONE shared lightbox for its jobs.
+ * `alwaysRender` or `layout="split"`). Mounts ONE shared lightbox for its jobs.
  */
 export function ImageQueuePanel({
   layout = "list",
@@ -393,7 +415,8 @@ export function ImageQueuePanel({
   showHeading?: boolean;
 }) {
   const [state, actions] = useMediaGenApp();
-  const { imageJobs, imageJobsError, imageJobThumbs, canLoadMoreImageHistory } = state;
+  const { imageJobs, imageJobsError, imageJobThumbs, canLoadMoreImageHistory } =
+    state;
   const { cancelImageJob, setImageForm, loadMoreImageHistory } = actions;
 
   const reuseSeed = (seed: number) => setImageForm({ seedText: String(seed) });
@@ -402,28 +425,94 @@ export function ImageQueuePanel({
     thumbs: imageJobThumbs,
   });
 
-  if (imageJobs.length === 0 && !imageJobsError) return null;
+  if (imageJobs.length === 0 && !imageJobsError && layout !== "split")
+    return null;
 
-  const jobs = typeof limit === "number" ? imageJobs.slice(0, limit) : imageJobs;
-  const activeCount = imageJobs.filter(
-    (j) => j.status === "queued" || j.status === "running",
-  ).length;
+  const jobs =
+    typeof limit === "number" ? imageJobs.slice(0, limit) : imageJobs;
+  const activeCount = imageJobs.filter(isQueueJob).length;
   const onCancel = (id: string) => void cancelImageJob(id);
 
-  const items = jobs.map((j) => {
+  const jobProps = (j: ImageGenJob) => {
     const thumbUrl = imageJobThumbs[j.job_id] ?? null;
-    const common = {
+    return {
       job: j,
-      descriptor: descriptorOf(j) ?? (thumbUrl ? descriptorFromJob(j, thumbUrl) : null),
+      descriptor:
+        descriptorOf(j) ?? (thumbUrl ? descriptorFromJob(j, thumbUrl) : null),
       onCancel,
       onReuseSeed: reuseSeed,
       onOpen: openJob,
       opening: openingJobId === j.job_id,
     };
+  };
+
+  const renderJob = (j: ImageGenJob, comfortable = false) => {
+    const common = jobProps(j);
     if (layout === "chips") return <JobChip key={j.job_id} {...common} />;
     if (layout === "feed") return <JobFeedCard key={j.job_id} {...common} />;
-    return <JobRowList key={j.job_id} {...common} />;
-  });
+    return (
+      <JobRowList
+        key={j.job_id}
+        {...common}
+        {...(comfortable ? { comfortable: true } : {})}
+      />
+    );
+  };
+
+  if (layout === "split") {
+    const historyJobs = jobs.filter(isHistoryJob);
+    const queueJobs = jobs.filter(isQueueJob);
+
+    return (
+      <div className="space-y-2">
+        {imageJobsError && <ErrorNote message={imageJobsError} />}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold">History</h3>
+            {historyJobs.length === 0 ? (
+              <p className="rounded-lg border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+                Completed generations appear here.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {historyJobs.map((j) => renderJob(j, true))}
+              </div>
+            )}
+            {canLoadMoreImageHistory && (
+              <button
+                type="button"
+                onClick={() => void loadMoreImageHistory()}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Load older history
+              </button>
+            )}
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold">
+              Queue
+              {activeCount > 0 && (
+                <span className="ml-2 text-xs font-normal text-muted-foreground">
+                  {activeCount} active
+                </span>
+              )}
+            </h3>
+            {queueJobs.length === 0 ? (
+              <p className="rounded-lg border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+                Nothing queued — use Add to queue or batch variations.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {queueJobs.map((j) => renderJob(j, true))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const items = jobs.map((j) => renderJob(j));
 
   return (
     <div className="space-y-2">

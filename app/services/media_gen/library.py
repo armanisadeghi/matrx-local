@@ -326,6 +326,64 @@ def get_item(item_id: str) -> dict[str, Any] | None:
     return None
 
 
+def list_revision_branch(root_item_id: str) -> list[dict[str, Any]]:
+    """Every image in a linear revision branch, root-first (oldest → newest).
+
+    Branch membership is ``id == root_item_id`` or
+    ``params.revision_root_item_id == root_item_id``. Ordering walks the
+    ``revision_parent_item_id`` chain from the root; items that cannot be
+    linked (orphans) are appended by ``created_at``.
+    """
+    if not is_valid_item_id(root_item_id):
+        return []
+
+    root_meta = get_item(root_item_id)
+    if root_meta is None or root_meta.get("media_type") != "image":
+        return []
+
+    members: dict[str, dict[str, Any]] = {root_item_id: root_meta}
+    directory = media_type_dir("image")
+    if directory.is_dir():
+        for sidecar in directory.glob("*.json"):
+            meta = _load_sidecar(sidecar)
+            if meta is None:
+                continue
+            item_id = meta.get("id")
+            if not isinstance(item_id, str) or item_id == root_item_id:
+                continue
+            params = meta.get("params")
+            if not isinstance(params, dict):
+                continue
+            if params.get("revision_root_item_id") == root_item_id:
+                members[item_id] = meta
+
+    ordered: list[dict[str, Any]] = [root_meta]
+    current_id = root_item_id
+    linked: set[str] = {root_item_id}
+    while True:
+        child: dict[str, Any] | None = None
+        for item_id, meta in members.items():
+            if item_id in linked:
+                continue
+            params = meta.get("params")
+            if not isinstance(params, dict):
+                continue
+            if params.get("revision_parent_item_id") == current_id:
+                child = meta
+                break
+        if child is None:
+            break
+        child_id = str(child["id"])
+        ordered.append(child)
+        linked.add(child_id)
+        current_id = child_id
+
+    orphans = [meta for item_id, meta in members.items() if item_id not in linked]
+    orphans.sort(key=lambda m: str(m.get("created_at", "")))
+    ordered.extend(orphans)
+    return ordered
+
+
 def delete_item(item_id: str) -> bool:
     """Delete an item's media file, sidecar AND stored init image. False when
     the id is unknown.

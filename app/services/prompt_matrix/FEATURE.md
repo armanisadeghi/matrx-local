@@ -13,7 +13,8 @@ Files (always under `MATRX_HOME_DIR`, so `~/.matrx` or `~/.matrx-dev`):
 
 | File | Contents |
 |------|----------|
-| `library.json` | Reusable pools + variables (option lists with names) |
+| `library.json` | **Legacy** v1 option lists (pool/variable kind) — migrated into `lists.json` on first read |
+| `lists.json` | Named option lists (v2 — no pool/variable kind) |
 | `templates.json` | Named full `MatrixSpec` templates |
 
 Writes are atomic (temp file + `replace`). Corrupt / missing files reset to an
@@ -24,7 +25,8 @@ invent options.
 
 `app/api/prompt_matrix_routes.py` — prefix `/prompt-matrix`:
 
-- `GET  /library` / `PUT /library`
+- `GET  /library` / `PUT /library` — legacy v1 shelf (still used by batch UI until Phase 2 wiring)
+- `GET  /lists` / `PUT /lists` — v2 named lists (no pool/variable kind)
 - `GET  /templates` / `PUT /templates`
 - `GET  /paths` — absolute paths for the UI ("stored at …") so the user can
   find the files on disk without hunting

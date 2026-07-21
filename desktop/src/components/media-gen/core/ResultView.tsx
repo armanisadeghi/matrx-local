@@ -26,11 +26,7 @@ export function ImageResultPane({
   onOpenLightbox?: () => void;
 }) {
   const [state, actions] = useMediaGenApp();
-  const {
-    imageResult,
-    imageGenerating,
-    imageGenStartedAt,
-  } = state;
+  const { imageResult, imageGenerating, imageGenStartedAt } = state;
   const { clearImageResult, setImageForm, useImageAsInput } = actions;
 
   if (imageResult) {
@@ -54,9 +50,12 @@ export function ImageResultPane({
     return (
       <div className={placeholderClassName}>
         <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
-        <span className="text-sm">Generating image…</span>
-        <StillWorkingNote startedAt={imageGenStartedAt} />
-        <span className="text-xs">
+        <span className="whitespace-nowrap text-sm">Generating image…</span>
+        <StillWorkingNote
+          startedAt={imageGenStartedAt}
+          className="whitespace-nowrap"
+        />
+        <span className="whitespace-nowrap text-xs text-center">
           Can take minutes on CPU — use Cancel to stop at any time
         </span>
       </div>

@@ -20,8 +20,8 @@ import {
   Film,
   Image as ImageIcon,
   Library,
+  ListTree,
   ListPlus,
-  Layers,
   Loader2,
   Minus,
   Plus,
@@ -39,6 +39,7 @@ import {
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { WorkflowSection } from "@/components/media-gen/WorkflowSection";
 import { MediaLibrarySection } from "@/components/media-gen/MediaLibrarySection";
+import { ListLibrarySurface } from "@/components/media-gen/ListLibrarySurface";
 import {
   CancelableGenerateButton,
   NegativePromptField,
@@ -47,10 +48,7 @@ import {
 } from "@/components/media-gen/shared";
 import { useImageGenController } from "@/components/media-gen/core/imageController";
 import { useVideoGenController } from "@/components/media-gen/core/videoController";
-import {
-  ImageGenGate,
-  VideoGenGate,
-} from "@/components/media-gen/core/gates";
+import { ImageGenGate, VideoGenGate } from "@/components/media-gen/core/gates";
 import {
   ImageModelPicker,
   VideoModelPicker,
@@ -59,14 +57,13 @@ import {
   ImageAdvancedSection,
   ImageCommonSettings,
   ImageFormNotices,
-  ImageGenerateForm,
   ImageParamsErrorNotice,
   ImagePromptField,
   InputImageControl,
   AlternativeTextEncodersSection,
   LoraStylesSection,
-  useImageGenMode,
 } from "@/components/media-gen/core/ImageGenerateForm";
+import { ImagePromptToolbar } from "@/components/media-gen/core/ImagePromptToolbar";
 import {
   SourceImageControl,
   VideoAdvancedSection,
@@ -303,8 +300,6 @@ function ImageFocusFlow() {
   } = state;
   const { setImageForm, resetImageAll, cancelImageGeneration } = actions;
   const ctl = useImageGenController();
-  const [batchBuilderOpen, setBatchBuilderOpen] = useState(false);
-  const [, setImageGenMode] = useImageGenMode();
 
   const feedHasContent =
     !!imageResult || imageGenerating || imageJobs.length > 0;
@@ -312,7 +307,6 @@ function ImageFocusFlow() {
   return (
     <ImageGenGate>
       <div className="space-y-8">
-
         {/* 1 · Model */}
         <ModelStep hasModel={!!ctl.model}>
           <ImageModelPicker
@@ -327,12 +321,17 @@ function ImageFocusFlow() {
 
         {/* 2 · Prompt */}
         <section className="space-y-2.5">
-          <StepHeading step={2} title="Prompt" />
+          <StepHeading
+            step={2}
+            title="Prompt"
+            aside={<ImagePromptToolbar ctl={ctl} compact />}
+          />
           <ImagePromptField
             ctl={ctl}
             showLabel={false}
+            showToolbar={false}
             placeholder="Describe the image you want to see…"
-            textareaClassName="min-h-[110px] max-h-[400px] resize-y rounded-xl bg-card px-4 py-3 text-[15px] leading-relaxed shadow-sm"
+            textareaClassName="min-h-[110px] resize-y rounded-xl bg-card px-4 py-3 text-[15px] leading-relaxed shadow-sm"
           />
           <NegativePromptReveal
             supported={ctl.defaults?.supportsNegativePrompt ?? true}
@@ -412,31 +411,17 @@ function ImageFocusFlow() {
                 </>
               }
             />
-            <Button
-              size="lg"
-              variant="outline"
-              className="h-12 rounded-xl"
-              disabled={ctl.formInvalid}
-              onClick={() => void ctl.handleEnqueue()}
-              title="Queue this generation and keep writing the next prompt"
-            >
-              <ListPlus className="mr-2 h-4 w-4" />
-              {ctl.isRevision ? "Queue revision" : "Queue"}
-            </Button>
             {!ctl.isRevision && (
               <Button
                 size="lg"
                 variant="outline"
                 className="h-12 rounded-xl"
-                disabled={!ctl.defaults}
-                onClick={() => {
-                  setImageGenMode("batch");
-                  setBatchBuilderOpen(true);
-                }}
-                title="Build a randomized image batch"
+                disabled={ctl.formInvalid}
+                onClick={() => void ctl.handleEnqueue()}
+                title="Queue this generation and keep writing the next prompt"
               >
-                <Layers className="mr-2 h-4 w-4" />
-                Batch
+                <ListPlus className="mr-2 h-4 w-4" />
+                {ctl.isRevision ? "Queue revision" : "Queue"}
               </Button>
             )}
           </div>
@@ -471,18 +456,6 @@ function ImageFocusFlow() {
             <ImageQueuePanel layout="feed" showHeading={false} />
           </section>
         )}
-
-        <Dialog open={batchBuilderOpen} onOpenChange={setBatchBuilderOpen}>
-          <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Randomized image batch</DialogTitle>
-              <DialogDescription>
-                Every new preview or queue action draws a fresh randomized batch.
-              </DialogDescription>
-            </DialogHeader>
-            <ImageGenerateForm ctl={ctl} hideNotices />
-          </DialogContent>
-        </Dialog>
       </div>
     </ImageGenGate>
   );
@@ -521,7 +494,7 @@ function VideoFocusFlow() {
             ctl={ctl}
             showLabel={false}
             placeholder="Describe the video you want to see…"
-            textareaClassName="min-h-[110px] max-h-[400px] resize-y rounded-xl bg-card px-4 py-3 text-[15px] leading-relaxed shadow-sm"
+            textareaClassName="min-h-[110px] resize-y rounded-xl bg-card px-4 py-3 text-[15px] leading-relaxed shadow-sm"
           />
           <NegativePromptReveal
             supported={ctl.defaults?.supportsNegativePrompt ?? true}
@@ -614,6 +587,7 @@ export function VariantFocus() {
   // Layout-only local state: which segment is shown + the library dialog.
   const [segment, setSegment] = useState<Segment>("image");
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [listsOpen, setListsOpen] = useState(false);
 
   const videoBusy =
     state.activeJob?.status === "queued" ||
@@ -628,14 +602,24 @@ export function VariantFocus() {
             onChange={setSegment}
             videoBusy={videoBusy}
           />
-          <button
-            type="button"
-            onClick={() => setLibraryOpen(true)}
-            className="flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <Library className="h-3 w-3" />
-            Open library
-          </button>
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => setListsOpen(true)}
+              className="flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ListTree className="h-3 w-3" />
+              Open lists
+            </button>
+            <button
+              type="button"
+              onClick={() => setLibraryOpen(true)}
+              className="flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Library className="h-3 w-3" />
+              Open library
+            </button>
+          </div>
         </div>
 
         {segment === "image" && <ImageFocusFlow />}
@@ -646,6 +630,12 @@ export function VariantFocus() {
           </div>
         )}
       </div>
+
+      <ListLibrarySurface
+        surface="dialog"
+        open={listsOpen}
+        onOpenChange={setListsOpen}
+      />
 
       <Dialog open={libraryOpen} onOpenChange={setLibraryOpen}>
         <DialogContent className="flex h-[88vh] max-w-5xl flex-col overflow-hidden p-0">

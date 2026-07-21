@@ -20,6 +20,7 @@ import {
   Dices,
   Download,
   ImagePlus,
+  Info,
   ListPlus,
   Loader2,
   Maximize2,
@@ -28,8 +29,20 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import type { DownloadEntry } from "@/lib/downloads/types";
@@ -40,6 +53,7 @@ import { emitClientLog } from "@/hooks/use-unified-log";
 import { recovery } from "@/lib/recovery";
 import { useMediaActions } from "@/components/media/MediaActionsProvider";
 import { MediaOverflowMenu } from "@/components/media/MediaOverflowMenu";
+import { CopyButton } from "@/components/media/MediaInfoDialog";
 import { MediaThumb } from "@/components/media/MediaThumb";
 import {
   descriptorFromJob,
@@ -256,10 +270,10 @@ export function StillWorkingNote({
   const seconds = elapsedSeconds ?? ticking;
   return (
     <p
-      className={`flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground tabular-nums ${className}`}
+      className={`flex items-center justify-center gap-1.5 whitespace-nowrap text-[11px] text-muted-foreground tabular-nums ${className}`}
     >
-      <Loader2 className="h-3 w-3 animate-spin text-violet-500" />
-      <span>
+      <Loader2 className="h-3 w-3 shrink-0 animate-spin text-violet-500" />
+      <span className="truncate">
         {label}
         {seconds !== null ? ` — ${formatElapsed(seconds)} elapsed` : "…"}
       </span>
@@ -293,6 +307,7 @@ export function CancelableGenerateButton({
   buttonClassName = "w-full",
   containerClassName = "",
   size,
+  showWorkingNote = true,
 }: {
   /** True while the generation this button controls is in flight. */
   generating: boolean;
@@ -314,6 +329,8 @@ export function CancelableGenerateButton({
   buttonClassName?: string;
   containerClassName?: string;
   size?: "default" | "sm" | "lg" | "icon";
+  /** When false, omit the sub-button elapsed readout (e.g. action rows — preview shows it). */
+  showWorkingNote?: boolean;
 }) {
   if (!generating) {
     return (
@@ -351,11 +368,17 @@ export function CancelableGenerateButton({
           </>
         )}
       </Button>
-      <StillWorkingNote
-        startedAt={startedAt}
-        elapsedSeconds={elapsedSeconds}
-        label={cancelling ? `Cancelling ${workingLabel.toLowerCase()}` : `${workingLabel} — still working`}
-      />
+      {showWorkingNote && (
+        <StillWorkingNote
+          startedAt={startedAt}
+          elapsedSeconds={elapsedSeconds}
+          label={
+            cancelling
+              ? `Cancelling ${workingLabel.toLowerCase()}`
+              : `${workingLabel} — still working`
+          }
+        />
+      )}
     </div>
   );
 }
@@ -392,10 +415,27 @@ export function ModelLoadingNotice({
         />
         {stale && (
           <div className="mt-2 flex items-center justify-between gap-3 border-t pt-2 text-xs">
-            <span className="text-amber-600 dark:text-amber-400">This load is taking unusually long. Refresh its status or reset this view; your queues are preserved.</span>
+            <span className="text-amber-600 dark:text-amber-400">
+              This load is taking unusually long. Refresh its status or reset
+              this view; your queues are preserved.
+            </span>
             <div className="flex shrink-0 gap-1">
-              <Button size="sm" variant="outline" onClick={() => void recovery.refreshSurface("/media-generation")}>Refresh status</Button>
-              <Button size="sm" variant="outline" onClick={() => void recovery.resetSurface("/media-generation")}>Reset view</Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  void recovery.refreshSurface("/media-generation")
+                }
+              >
+                Refresh status
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void recovery.resetSurface("/media-generation")}
+              >
+                Reset view
+              </Button>
             </div>
           </div>
         )}
@@ -431,20 +471,22 @@ export function SeedInput({
   value,
   onChange,
   disabled = false,
+  layout = "stack",
 }: {
   value: string;
   onChange: (text: string) => void;
   disabled?: boolean;
+  layout?: "stack" | "row";
 }) {
-  return (
-    <div className="flex gap-2">
+  const field = (
+    <>
       <Input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         inputMode="numeric"
-        placeholder="random"
+        placeholder="Random"
         disabled={disabled}
-        className="text-sm"
+        className={`text-xs ${layout === "row" ? "h-7 flex-1" : "text-sm"}`}
         aria-label="Seed"
       />
       <Button
@@ -454,13 +496,24 @@ export function SeedInput({
         disabled={disabled}
         onClick={() => onChange(String(randomSeed()))}
         aria-label="Randomize seed"
-        title="Pick a random seed"
-        className="shrink-0"
+        title="Random seed"
+        className={`shrink-0 ${layout === "row" ? "h-7 w-7" : ""}`}
       >
-        <Dices className="h-4 w-4" />
+        <Dices className={layout === "row" ? "h-3.5 w-3.5" : "h-4 w-4"} />
       </Button>
-    </div>
+    </>
   );
+
+  if (layout === "row") {
+    return (
+      <div className="flex items-center gap-2">
+        <Label className="w-16 shrink-0 text-xs">Seed</Label>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">{field}</div>
+      </div>
+    );
+  }
+
+  return <div className="flex gap-2">{field}</div>;
 }
 
 // ── Reset affordance ─────────────────────────────────────────────────────────
@@ -505,6 +558,7 @@ export function NumberSliderField({
   step,
   defaultValue,
   disabled = false,
+  layout = "stack",
 }: {
   label: string;
   value: number;
@@ -515,15 +569,52 @@ export function NumberSliderField({
   /** The model's default/recommended value (labeled next to the control). */
   defaultValue: number | null;
   disabled?: boolean;
+  layout?: "stack" | "row";
 }) {
   const isDecimal = step < 1;
+  const clamped = Math.min(max, Math.max(min, value));
+  const numberInput = (
+    <Input
+      value={String(value)}
+      onChange={(e) => {
+        const n = Number(e.target.value);
+        if (Number.isFinite(n)) onChange(n);
+      }}
+      inputMode={isDecimal ? "decimal" : "numeric"}
+      disabled={disabled}
+      className="h-7 w-14 shrink-0 px-1.5 text-xs text-right tabular-nums"
+      aria-label={`${label} value`}
+    />
+  );
+  const slider = (
+    <Slider
+      min={min}
+      max={max}
+      step={step}
+      value={[clamped]}
+      onValueChange={([v]) => v !== undefined && onChange(v)}
+      disabled={disabled}
+      className={layout === "row" ? "flex-1" : undefined}
+    />
+  );
+
+  if (layout === "row") {
+    return (
+      <div className="flex items-center gap-2">
+        <Label className="w-16 shrink-0 text-xs">{label}</Label>
+        {slider}
+        {numberInput}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-2">
         <Label className="text-xs">
           {label}
           {defaultValue !== null && (
-            <span className="text-muted-foreground font-normal">
+            <span className="font-normal text-muted-foreground">
               {" "}
               (model default:{" "}
               {isDecimal ? defaultValue.toFixed(1) : defaultValue})
@@ -538,18 +629,11 @@ export function NumberSliderField({
           }}
           inputMode={isDecimal ? "decimal" : "numeric"}
           disabled={disabled}
-          className="h-6 w-16 px-1.5 text-xs text-right tabular-nums"
+          className="h-6 w-16 px-1.5 text-right text-xs tabular-nums"
           aria-label={`${label} value`}
         />
       </div>
-      <Slider
-        min={min}
-        max={max}
-        step={step}
-        value={[Math.min(max, Math.max(min, value))]}
-        onValueChange={([v]) => v !== undefined && onChange(v)}
-        disabled={disabled}
-      />
+      {slider}
     </div>
   );
 }
@@ -578,6 +662,10 @@ export function dimensionError(width: number, height: number): string | null {
   return null;
 }
 
+function sizePresetKey(p: SizePreset): string {
+  return `${p.label}|${p.width}x${p.height}`;
+}
+
 /** Preset chips + free width/height inputs with multiple-of-8 validation. */
 export function DimensionPicker({
   width,
@@ -585,23 +673,103 @@ export function DimensionPicker({
   onChange,
   presets,
   disabled = false,
+  layout = "stack",
 }: {
   width: number;
   height: number;
   onChange: (w: number, h: number) => void;
   presets: SizePreset[];
   disabled?: boolean;
+  layout?: "stack" | "row";
 }) {
   const error = dimensionError(width, height);
+  const matchedPreset = presets.find(
+    (p) => p.width === width && p.height === height,
+  );
+  const selectValue = matchedPreset ? sizePresetKey(matchedPreset) : "custom";
+
+  const dimensionInputs = (
+    <div className="flex items-center gap-1.5">
+      <Input
+        value={String(width)}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          if (Number.isFinite(n)) onChange(Math.floor(n), height);
+        }}
+        inputMode="numeric"
+        disabled={disabled}
+        className="h-7 w-[4.5rem] px-2 text-xs tabular-nums"
+        aria-label="Width"
+      />
+      <span className="text-xs text-muted-foreground">×</span>
+      <Input
+        value={String(height)}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          if (Number.isFinite(n)) onChange(width, Math.floor(n));
+        }}
+        inputMode="numeric"
+        disabled={disabled}
+        className="h-7 w-[4.5rem] px-2 text-xs tabular-nums"
+        aria-label="Height"
+      />
+      <span className="text-[11px] text-muted-foreground">px</span>
+    </div>
+  );
+
+  if (layout === "row") {
+    return (
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <Label className="w-16 shrink-0 text-xs">Size</Label>
+          <Select
+            value={selectValue}
+            onValueChange={(value) => {
+              if (value === "custom") return;
+              const preset = presets.find((p) => sizePresetKey(p) === value);
+              if (preset) onChange(preset.width, preset.height);
+            }}
+            disabled={disabled}
+          >
+            <SelectTrigger className="h-7 w-[9.5rem] shrink-0 px-2 text-xs">
+              <SelectValue placeholder="Size" />
+            </SelectTrigger>
+            <SelectContent>
+              {presets.map((p) => (
+                <SelectItem
+                  key={sizePresetKey(p)}
+                  value={sizePresetKey(p)}
+                  className="text-xs"
+                >
+                  {p.label}
+                </SelectItem>
+              ))}
+              <SelectItem value="custom" className="text-xs">
+                Custom
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          {dimensionInputs}
+        </div>
+        {error && (
+          <p className="flex items-center gap-1 pl-[4.5rem] text-[11px] text-destructive">
+            <AlertCircle className="h-3 w-3 shrink-0" />
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-1.5">
       <Label className="text-xs">Size (width × height)</Label>
-      <div className="flex gap-1.5 flex-wrap">
+      <div className="flex flex-wrap gap-1.5">
         {presets.map((p) => {
           const active = p.width === width && p.height === height;
           return (
             <button
-              key={`${p.label}-${p.width}x${p.height}`}
+              key={sizePresetKey(p)}
               type="button"
               disabled={disabled}
               onClick={() => onChange(p.width, p.height)}
@@ -617,34 +785,9 @@ export function DimensionPicker({
           );
         })}
       </div>
-      <div className="flex items-center gap-2">
-        <Input
-          value={String(width)}
-          onChange={(e) => {
-            const n = Number(e.target.value);
-            if (Number.isFinite(n)) onChange(Math.floor(n), height);
-          }}
-          inputMode="numeric"
-          disabled={disabled}
-          className="text-sm w-24 tabular-nums"
-          aria-label="Width"
-        />
-        <span className="text-xs text-muted-foreground">×</span>
-        <Input
-          value={String(height)}
-          onChange={(e) => {
-            const n = Number(e.target.value);
-            if (Number.isFinite(n)) onChange(width, Math.floor(n));
-          }}
-          inputMode="numeric"
-          disabled={disabled}
-          className="text-sm w-24 tabular-nums"
-          aria-label="Height"
-        />
-        <span className="text-[11px] text-muted-foreground">px</span>
-      </div>
+      {dimensionInputs}
       {error && (
-        <p className="text-[11px] text-destructive flex items-center gap-1">
+        <p className="flex items-center gap-1 text-[11px] text-destructive">
           <AlertCircle className="h-3 w-3 shrink-0" />
           {error}
         </p>
@@ -680,8 +823,8 @@ export function promptCapacityHint(
   }
 }
 
-/** Subtle hint line under a prompt field — renders nothing for unknown families. */
-export function PromptCapacityHint({
+/** Info icon for prompt token limits — hover for details. */
+export function PromptCapacityInfo({
   pipelineType,
   className = "",
 }: {
@@ -691,9 +834,33 @@ export function PromptCapacityHint({
   const hint = promptCapacityHint(pipelineType);
   if (!hint) return null;
   return (
-    <p className={`text-[10px] text-muted-foreground/80 ${className}`}>
-      {hint}
-    </p>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className={`inline-flex shrink-0 rounded-sm text-muted-foreground/70 hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${className}`}
+          aria-label="Prompt length limits"
+        >
+          <Info className="h-3 w-3" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
+        {hint}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** @deprecated Use PromptCapacityInfo inline with the label. */
+export function PromptCapacityHint({
+  pipelineType,
+  className = "",
+}: {
+  pipelineType: string | null | undefined;
+  className?: string;
+}) {
+  return (
+    <PromptCapacityInfo pipelineType={pipelineType} className={className} />
   );
 }
 
@@ -709,30 +876,28 @@ export function NegativePromptField({
   value,
   onChange,
   disabled = false,
+  hideLabel = false,
 }: {
   supported: boolean;
   value: string;
   onChange: (v: string) => void;
   disabled?: boolean;
+  hideLabel?: boolean;
 }) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs">
-        Negative prompt{" "}
-        <span className="text-muted-foreground">(what to avoid)</span>
-      </Label>
+      {!hideLabel && <Label className="text-xs">Negative prompt</Label>}
       {supported ? (
         <Textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="blurry, low quality, deformed…"
           disabled={disabled}
-          className="text-sm min-h-[60px] max-h-[240px] resize-y"
+          className="min-h-[60px] resize-y text-sm"
         />
       ) : (
         <p className="rounded-md border border-dashed px-3 py-2 text-[11px] text-muted-foreground">
-          Not supported by this model — it ignores negative prompts, so the
-          field is disabled rather than silently dropped.
+          Not supported by this model.
         </p>
       )}
     </div>
@@ -1042,6 +1207,7 @@ export function GeneratedImageView({
   onUseAsInput?: () => void;
 }) {
   const actions = useMediaActions();
+  const resolvedPrompt = prompt ?? result.request.prompt;
   const descriptor = useMemo<MediaDescriptor>(
     () =>
       descriptorFromResult(result, {
@@ -1065,53 +1231,72 @@ export function GeneratedImageView({
           Expand
         </span>
       </MediaThumb>
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span className="flex flex-wrap items-center gap-2">
-          <span className="tabular-nums">
-            {result.width}×{result.height} · {result.elapsed.toFixed(1)}s
-          </span>
-          {result.seed !== null && (
-            <SeedChip seed={result.seed} {...(onReuseSeed !== undefined ? { onReuse: onReuseSeed } : {})} />
-          )}
+
+      <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
+        <span className="shrink-0 whitespace-nowrap text-[11px] tabular-nums text-muted-foreground">
+          {result.width}×{result.height} · {result.elapsed.toFixed(1)}s
         </span>
-        <div className="flex shrink-0 items-center gap-2">
-          {onClear && (
-            <Button size="sm" variant="ghost" onClick={onClear}>
-              Clear
-            </Button>
-          )}
+        {result.seed !== null && (
+          <SeedChip
+            seed={result.seed}
+            {...(onReuseSeed !== undefined ? { onReuse: onReuseSeed } : {})}
+          />
+        )}
+        {resolvedPrompt.trim() && (
+          <>
+            <span
+              className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+              title={resolvedPrompt}
+            >
+              {resolvedPrompt}
+            </span>
+            <CopyButton value={resolvedPrompt} label="Copy prompt" />
+          </>
+        )}
+        <span className="ml-auto flex shrink-0 items-center gap-0.5">
           {onUseAsInput && (
             <Button
               size="sm"
-              variant="outline"
+              variant="ghost"
+              className="h-7 px-2 text-xs"
               onClick={onUseAsInput}
-              title="Use this image as the img2img input"
+              title="Use as input"
             >
-              <ImagePlus className="h-3.5 w-3.5 mr-1.5" />
-              Use as input
+              <ImagePlus className="h-3.5 w-3.5" />
             </Button>
           )}
           <Button
             size="sm"
-            variant="outline"
+            variant="ghost"
+            className="h-7 px-2 text-xs"
             onClick={() => void actions.download(descriptor)}
+            title="Download"
           >
-            <Download className="h-3.5 w-3.5 mr-1.5" />
-            Download
+            <Download className="h-3.5 w-3.5" />
           </Button>
-          {/* Everything else — remix, info, copy image, copy prompt, delete,
-              move to Private, show in folder — the SAME menu as everywhere. */}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-xs"
+            onClick={() => actions.openOne(descriptor)}
+            title="Expand"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </Button>
+          {onClear && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-xs"
+              onClick={onClear}
+              title="Clear"
+            >
+              Clear
+            </Button>
+          )}
           <MediaOverflowMenu item={descriptor} />
-        </div>
+        </span>
       </div>
-      {result.filePath && (
-        <p
-          className="text-[10px] text-muted-foreground/70 font-mono break-all"
-          title="Saved to your media library"
-        >
-          Saved: {result.filePath}
-        </p>
-      )}
     </div>
   );
 }

@@ -310,6 +310,44 @@ def test_media_library_pagination(client: TestClient, library_tmp) -> None:
     assert len(body["items"]) == 2
 
 
+def test_media_library_revision_branch(client: TestClient, library_tmp) -> None:
+    root = library_tmp.save_generated_image(
+        FAKE_PNG,
+        model_id="black-forest-labs/FLUX.1-schnell",
+        prompt="root portrait",
+        negative_prompt="",
+        params={},
+        seed=1,
+        width=512,
+        height=512,
+        elapsed_seconds=0.01,
+    )
+    root_id = root["id"]
+    child = library_tmp.save_generated_image(
+        FAKE_PNG,
+        model_id="black-forest-labs/FLUX.1-schnell",
+        prompt="red jacket",
+        negative_prompt="",
+        params={
+            "revision_parent_item_id": root_id,
+            "revision_root_item_id": root_id,
+        },
+        seed=2,
+        width=512,
+        height=512,
+        elapsed_seconds=0.01,
+    )
+    r = client.get(f"/media-library/revision-branch/{root_id}")
+    assert r.status_code == 200, f"unexpected {r.status_code}: {r.text}"
+    body = r.json()
+    assert body["total"] == 2
+    assert [row["id"] for row in body["items"]] == [root_id, child["id"]]
+    assert body["items"][0]["prompt"] == "root portrait"
+    assert body["items"][1]["prompt"] == "red jacket"
+
+    assert client.get("/media-library/revision-branch/not-a-uuid").json()["total"] == 0
+
+
 def _real_png_bytes(size: int = 64) -> bytes:
     """A real decodeable PNG — FAKE_PNG is storage-only and cannot be thumbed."""
     from PIL import Image

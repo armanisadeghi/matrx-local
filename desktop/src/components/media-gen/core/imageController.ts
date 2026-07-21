@@ -32,6 +32,7 @@ import {
   parseSeedText,
   randomSeed,
 } from "@/components/media-gen/shared";
+import { classifyLoraCompatibility } from "@/lib/image-gen/lora-compatibility";
 import type {
   AdvancedOverrides,
   SizePreset,
@@ -65,6 +66,8 @@ export interface ImageGenController {
   isRevision: boolean;
   /** Build the request body (null when the form is not submittable). */
   buildInput: () => ImageGenerateInput | null;
+  /** Base payload for batch/matrix enqueue — prompt may be empty (overridden per job). */
+  buildBatchBaseInput: () => ImageGenerateInput | null;
   handleGenerate: () => Promise<void>;
   handleEnqueue: () => Promise<void>;
   reuseSeed: (seed: number) => void;
@@ -94,6 +97,7 @@ export function useImageGenController(options?: {
     selectedImageModelId,
     imageForm,
     imageJobs,
+    loraList,
   } = state;
   const {
     refreshImage,
@@ -172,6 +176,23 @@ export function useImageGenController(options?: {
     : null;
   const textEncoderInvalid =
     imageForm.textEncoderId !== null && selectedTextEncoder?.installed !== true;
+  const loraFormInvalid = useMemo(() => {
+    const installedById = new Map(
+      (loraList?.installed ?? []).map((lora) => [lora.id, lora]),
+    );
+    for (const selection of imageForm.loras) {
+      if (!selection.enabled) continue;
+      const installed = installedById.get(selection.id);
+      if (!installed || installed.installed === false) return true;
+      if (
+        classifyLoraCompatibility(installed.base_family, model) ===
+        "incompatible"
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }, [imageForm.loras, loraList?.installed, model]);
   const formInvalid =
     mediaRuntime?.state !== "ready" ||
     mediaRuntime.image_available !== true ||
@@ -179,64 +200,94 @@ export function useImageGenController(options?: {
     !defaults ||
     !advanced.ok ||
     dimError !== null ||
-    textEncoderInvalid;
+    textEncoderInvalid ||
+    loraFormInvalid;
   const isRevision = imageForm.revision !== null;
 
+  const assembleGenerateInput = useCallback(
+    (prompt: string): ImageGenerateInput | null => {
+      if (mediaRuntime?.state !== "ready" || !mediaRuntime.image_available) {
+        return null;
+      }
+      const d = imageForm.defaults;
+      if (!d) return null;
+      const adv = computeAdvancedOverrides(imageForm.advancedText, d.advanced);
+      if (!adv.ok) return null;
+      const useInitImage = d.supportsImg2Img && imageForm.initImage !== null;
+      const enabledLoras = imageForm.loras
+        .filter((l) => l.enabled)
+        .map(({ id, scale }) => ({ id, scale }));
+      const negativePrompt = d.supportsNegativePrompt
+        ? imageForm.negativePrompt.trim() || undefined
+        : undefined;
+      const initImageB64 = useInitImage
+        ? (imageForm.initImage as PickedImage).base64
+        : undefined;
+      const strength =
+        useInitImage && d.strength !== null ? imageForm.strength : undefined;
+      const loras = enabledLoras.length > 0 ? enabledLoras : undefined;
+      const extraParams = adv.count > 0 ? adv.overrides : undefined;
+      const textEncoderId = imageForm.textEncoderId ?? undefined;
+      return {
+        prompt,
+        model_id: d.modelId,
+        steps: imageForm.steps,
+        guidance: imageForm.guidance,
+        width: imageForm.width,
+        height: imageForm.height,
+        seed: parseSeedText(imageForm.seedText) ?? randomSeed(),
+        ...(negativePrompt !== undefined
+          ? { negative_prompt: negativePrompt }
+          : {}),
+        ...(initImageB64 !== undefined ? { init_image_b64: initImageB64 } : {}),
+        ...(strength !== undefined ? { strength } : {}),
+        ...(imageForm.revision !== null
+          ? {
+              revision: {
+                parent_item_id: imageForm.revision.parentItemId,
+                root_item_id: imageForm.revision.rootItemId,
+              },
+            }
+          : {}),
+        ...(loras !== undefined ? { loras } : {}),
+        ...(textEncoderId !== undefined
+          ? { text_encoder_id: textEncoderId }
+          : {}),
+        ...(extraParams !== undefined ? { extra_params: extraParams } : {}),
+      };
+    },
+    [imageForm, mediaRuntime],
+  );
+
   const buildInput = useCallback((): ImageGenerateInput | null => {
-    if (mediaRuntime?.state !== "ready" || !mediaRuntime.image_available) {
+    const prompt = imageForm.prompt.trim();
+    if (!prompt) return null;
+    return assembleGenerateInput(prompt);
+  }, [assembleGenerateInput, imageForm.prompt]);
+
+  const buildBatchBaseInput = useCallback((): ImageGenerateInput | null => {
+    if (
+      mediaRuntime?.state !== "ready" ||
+      !mediaRuntime.image_available ||
+      !imageForm.defaults ||
+      !advanced.ok ||
+      dimError !== null ||
+      textEncoderInvalid ||
+      loraFormInvalid
+    ) {
       return null;
     }
-    const d = imageForm.defaults;
-    if (!d) return null;
-    const adv = computeAdvancedOverrides(imageForm.advancedText, d.advanced);
-    if (!adv.ok) return null;
-    // Resolve a concrete seed even for "random" so every result is
-    // reproducible — the used seed is shown on the result and in the queue.
-    const seed = parseSeedText(imageForm.seedText) ?? randomSeed();
-    const useInitImage = d.supportsImg2Img && imageForm.initImage !== null;
-    const enabledLoras = imageForm.loras
-      .filter((l) => l.enabled)
-      .map(({ id, scale }) => ({ id, scale }));
-    const negativePrompt = d.supportsNegativePrompt
-      ? imageForm.negativePrompt.trim() || undefined
-      : undefined;
-    const initImageB64 = useInitImage
-      ? (imageForm.initImage as PickedImage).base64
-      : undefined;
-    // d.strength is null when the params endpoint omits it — that model
-    // (e.g. flux2-klein) edits from the reference image directly and the
-    // engine 400s on an explicit strength. Never send one there.
-    const strength =
-      useInitImage && d.strength !== null ? imageForm.strength : undefined;
-    const loras = enabledLoras.length > 0 ? enabledLoras : undefined;
-    const extraParams = adv.count > 0 ? adv.overrides : undefined;
-    const textEncoderId = imageForm.textEncoderId ?? undefined;
-    return {
-      prompt: imageForm.prompt.trim(),
-      model_id: d.modelId,
-      steps: imageForm.steps,
-      guidance: imageForm.guidance,
-      width: imageForm.width,
-      height: imageForm.height,
-      seed,
-      ...(negativePrompt !== undefined ? { negative_prompt: negativePrompt } : {}),
-      ...(initImageB64 !== undefined ? { init_image_b64: initImageB64 } : {}),
-      ...(strength !== undefined ? { strength } : {}),
-      ...(imageForm.revision !== null
-        ? {
-            revision: {
-              parent_item_id: imageForm.revision.parentItemId,
-              root_item_id: imageForm.revision.rootItemId,
-            },
-          }
-        : {}),
-      ...(loras !== undefined ? { loras } : {}),
-      ...(textEncoderId !== undefined
-        ? { text_encoder_id: textEncoderId }
-        : {}),
-      ...(extraParams !== undefined ? { extra_params: extraParams } : {}),
-    };
-  }, [imageForm, mediaRuntime]);
+    return assembleGenerateInput(imageForm.prompt.trim() || "batch");
+  }, [
+    assembleGenerateInput,
+    imageForm.prompt,
+    imageForm.defaults,
+    mediaRuntime,
+    advanced.ok,
+    dimError,
+    textEncoderInvalid,
+    loraFormInvalid,
+  ]);
 
   const handleGenerate = useCallback(async () => {
     const input = buildInput();
@@ -261,10 +312,7 @@ export function useImageGenController(options?: {
   const handleLoadModel = useCallback(
     async (m: ImageGenModelInfo): Promise<boolean> => {
       setLocalError(null);
-      if (
-        imageForm.revision &&
-        imageForm.defaults?.modelId !== m.model_id
-      ) {
+      if (imageForm.revision && imageForm.defaults?.modelId !== m.model_id) {
         setImageForm({ revision: null, initImage: null });
       }
       const result = await loadImageModel(m.model_id);
@@ -399,6 +447,7 @@ export function useImageGenController(options?: {
       activeJobCount,
       isRevision,
       buildInput,
+      buildBatchBaseInput,
       handleGenerate,
       handleEnqueue,
       reuseSeed,
@@ -422,6 +471,7 @@ export function useImageGenController(options?: {
       activeJobCount,
       isRevision,
       buildInput,
+      buildBatchBaseInput,
       handleGenerate,
       handleEnqueue,
       reuseSeed,

@@ -21,7 +21,10 @@ import {
   Film,
   Image as ImageIcon,
   Library,
+  ListTree,
   Loader2,
+  MessageSquareText,
+  Shuffle,
   Wand2,
   X,
 } from "lucide-react";
@@ -30,13 +33,13 @@ import { Button } from "@/components/ui/button";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { WorkflowSection } from "../WorkflowSection";
 import { MediaLibrarySection } from "../MediaLibrarySection";
+import { ListLibrarySection } from "../ListLibrarySection";
+import { SavedPromptsSection } from "../SavedPromptsSection";
+import { VariationBatchesSection } from "../VariationBatchesSection";
 import { InlineProgressBar } from "../shared";
 import { useImageGenController } from "../core/imageController";
 import { useVideoGenController } from "../core/videoController";
-import {
-  ImageGenGate,
-  VideoGenGate,
-} from "../core/gates";
+import { ImageGenGate, VideoGenGate } from "../core/gates";
 import { ImageModelPicker, VideoModelPicker } from "../core/ModelPicker";
 import {
   ImageGenerateForm,
@@ -56,12 +59,23 @@ import {
 
 // ── Navigation model ─────────────────────────────────────────────────────────
 
-type NavId = "image" | "video" | "workflows" | "library" | "models";
+type NavId =
+  | "image"
+  | "video"
+  | "workflows"
+  | "lists"
+  | "prompts"
+  | "variations"
+  | "library"
+  | "models";
 
 const NAV_ITEMS: { id: NavId; label: string; Icon: LucideIcon }[] = [
   { id: "image", label: "Generate Image", Icon: ImageIcon },
   { id: "video", label: "Generate Video", Icon: Film },
   { id: "workflows", label: "Workflows", Icon: Wand2 },
+  { id: "lists", label: "Lists", Icon: ListTree },
+  { id: "prompts", label: "Prompts", Icon: MessageSquareText },
+  { id: "variations", label: "Variations", Icon: Shuffle },
   { id: "library", label: "Library", Icon: Library },
   { id: "models", label: "Models", Icon: Boxes },
 ];
@@ -463,6 +477,9 @@ export function VariantWorkspace() {
               <VideoGenerateView onGoToModels={goToModels} />
             )}
             {active === "workflows" && <WorkflowSection />}
+            {active === "lists" && <ListLibrarySection />}
+            {active === "prompts" && <SavedPromptsSection />}
+            {active === "variations" && <VariationBatchesSection />}
             {active === "library" && <MediaLibrarySection />}
             {active === "models" && (
               <ModelsView onGoToImage={goToImage} onGoToVideo={goToVideo} />

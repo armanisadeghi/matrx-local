@@ -87,6 +87,20 @@ async def list_media_items(
     )
 
 
+@router.get(
+    "/revision-branch/{root_item_id}",
+    response_model=MediaLibraryListResponse,
+)
+@safe_route("media_library_revision_branch")
+async def list_revision_branch(root_item_id: str) -> MediaLibraryListResponse:
+    """All images in a revision branch, root-first (oldest → newest)."""
+    items = library.list_revision_branch(root_item_id)
+    return MediaLibraryListResponse(
+        items=[MediaLibraryItem(**item) for item in items],
+        total=len(items),
+    )
+
+
 @router.get("/thumb/{item_id}")
 async def get_media_thumb(item_id: str) -> Response:
     """Small JPEG for gallery / filmstrip / queue tiles.

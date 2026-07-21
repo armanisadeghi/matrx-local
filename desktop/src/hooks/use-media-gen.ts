@@ -22,6 +22,11 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
+  blobToBase64Png,
+  findLatestCompletedImageJob,
+  generatedImageResultFromJob,
+} from "@/lib/media-gen/image-result-from-job";
+import {
   engine,
   getImageGenStatus,
   listImageGenModels,
@@ -46,6 +51,7 @@ import {
   cancelImageGeneration as apiCancelImageGeneration,
   cancelVideoGenJob as apiCancelVideoGenJob,
   fetchMediaLibraryThumb as apiFetchMediaLibraryThumb,
+  fetchMediaLibraryFile as apiFetchMediaLibraryFile,
   MediaFileError,
   getVideoGenStatus,
   listVideoGenModels,
@@ -174,7 +180,10 @@ export interface ImageGenerateInput {
 }
 
 /** Immutable request metadata kept with a result (without duplicate image bytes). */
-export type GeneratedImageRequest = Omit<ImageGenerateInput, "init_image_b64"> & {
+export type GeneratedImageRequest = Omit<
+  ImageGenerateInput,
+  "init_image_b64"
+> & {
   has_init_image: boolean;
 };
 
@@ -291,12 +300,7 @@ export interface VideoFormDefaults extends Omit<
 
 export interface VideoFormState extends Omit<
   ImageFormState,
-  | "defaults"
-  | "initImage"
-  | "strength"
-  | "loras"
-  | "textEncoderId"
-  | "revision"
+  "defaults" | "initImage" | "strength" | "loras" | "textEncoderId" | "revision"
 > {
   numFrames: number;
   fps: number;
@@ -709,9 +713,13 @@ export interface MediaGenActions {
 
 export function useMediaGen(): [MediaGenState, MediaGenActions] {
   // ── Shared managed runtime state ─────────────────────────────────────────
-  const [mediaRuntime, setMediaRuntime] = useState<MediaRuntimeStatus | null>(null);
+  const [mediaRuntime, setMediaRuntime] = useState<MediaRuntimeStatus | null>(
+    null,
+  );
   const [mediaRuntimeLoading, setMediaRuntimeLoading] = useState(true);
-  const [mediaRuntimeError, setMediaRuntimeError] = useState<string | null>(null);
+  const [mediaRuntimeError, setMediaRuntimeError] = useState<string | null>(
+    null,
+  );
 
   // ── Image state ──────────────────────────────────────────────────────────
   const [imageStatus, setImageStatus] = useState<ImageGenStatus | null>(null);
@@ -819,6 +827,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   // cancellation, or a later poll.  The server supplies the authoritative
   // ordering; this guards client delivery order.
   const imageJobsRefreshRef = useRef(0);
+  /** Latest job completion already shown in the preview pane. */
+  const lastPromotedFinishedSequenceRef = useRef(0);
+  /** Cancels in-flight preview fetches when a newer completion arrives. */
+  const imageResultPromoteRef = useRef(0);
   /** Prevent a slow older queue poll from overwriting a newer mutation refresh. */
   const imageQueueRefreshRef = useRef(0);
   const imageHistoryLimitRef = useRef(50);
@@ -888,7 +900,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     if (!base) return;
     const requestId = ++imageJobsRefreshRef.current;
     try {
-      const list = await apiListImageGenJobs(base, imageHistoryLimitRef.current);
+      const list = await apiListImageGenJobs(
+        base,
+        imageHistoryLimitRef.current,
+      );
       if (requestId !== imageJobsRefreshRef.current) return;
       setImageJobs(list);
       setImageJobsError(null);
@@ -978,6 +993,25 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     },
     [],
   );
+
+  useEffect(() => {
+    const modelId =
+      imageForm.defaults?.modelId ??
+      selectedImageModelId ??
+      imageStatus?.loaded_model_id ??
+      null;
+    if (!modelId || !loraList) return;
+    const model =
+      imageModelsRef.current.find((entry) => entry.model_id === modelId) ??
+      null;
+    disableIncompatibleLorasForModel(model);
+  }, [
+    loraList,
+    imageForm.defaults?.modelId,
+    selectedImageModelId,
+    imageStatus?.loaded_model_id,
+    disableIncompatibleLorasForModel,
+  ]);
 
   const prepareImageGenerate = useCallback(
     async (model: ImageGenModelInfo) => {
@@ -1221,7 +1255,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         return true;
       } catch (e) {
         const message =
-          e instanceof Error ? e.message : "Failed to start text encoder download";
+          e instanceof Error
+            ? e.message
+            : "Failed to start text encoder download";
         setImageGenError(message);
         emitClientLog(
           "error",
@@ -1330,9 +1366,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
           const nextItemId = nextResult.itemId;
           if (revision && nextItemId) {
             setImageFormState((prev) => {
-              if (
-                prev.revision?.parentItemId !== revision.parent_item_id
-              ) {
+              if (prev.revision?.parentItemId !== revision.parent_item_id) {
                 return prev;
               }
               return {
@@ -1344,8 +1378,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
                 },
                 revision: {
                   parentItemId: nextItemId,
-                  rootItemId:
-                    revision.root_item_id ?? revision.parent_item_id,
+                  rootItemId: revision.root_item_id ?? revision.parent_item_id,
                 },
               };
             });
@@ -1981,6 +2014,52 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     return () => window.clearInterval(id);
   }, [hasActiveImageJobs, refreshImageJobs, refreshImageQueue]);
 
+  // One-shot, queued, and batch jobs all land in imageJobs. The preview pane
+  // tracks the latest terminal completion — not only synchronous /generate.
+  useEffect(() => {
+    const latest = findLatestCompletedImageJob(imageJobs);
+    if (!latest?.item_id) return;
+
+    const seq = latest.finished_sequence ?? 0;
+    if (seq <= lastPromotedFinishedSequenceRef.current) return;
+
+    if (imageResult?.itemId === latest.item_id && imageResult.b64) {
+      lastPromotedFinishedSequenceRef.current = seq;
+      return;
+    }
+
+    const base = engine.engineUrl;
+    if (!base) return;
+
+    const promoteId = ++imageResultPromoteRef.current;
+    const { job_id: jobId, item_id: itemId } = latest;
+
+    void (async () => {
+      try {
+        const objectUrl = await apiFetchMediaLibraryFile(base, itemId);
+        if (promoteId !== imageResultPromoteRef.current) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        const resp = await fetch(objectUrl);
+        const blob = await resp.blob();
+        URL.revokeObjectURL(objectUrl);
+        const b64 = await blobToBase64Png(blob);
+        if (promoteId !== imageResultPromoteRef.current) return;
+
+        setImageResult(generatedImageResultFromJob(latest, b64));
+        lastPromotedFinishedSequenceRef.current = seq;
+      } catch (e) {
+        if (promoteId !== imageResultPromoteRef.current) return;
+        emitClientLog(
+          "warn",
+          `[media-gen] preview promote failed for job ${jobId}: ${String(e)}`,
+          "engine",
+        );
+      }
+    })();
+  }, [imageJobs, imageResult?.itemId, imageResult?.b64]);
+
   // One init fetch, so the paused flag is known before anything is queued (a
   // queue left paused last session must not silently swallow new work).
   // In the hook, NOT the page — a page-level init effect re-runs every render.
@@ -2193,15 +2272,22 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     [],
   );
 
-  const setSelectedImageModelId = useCallback((modelId: string | null) => {
-    setSelectedImageModelIdState(modelId);
-    if (modelId) {
-      disableIncompatibleLorasForModel(
-        imageModelsRef.current.find((model) => model.model_id === modelId),
-      );
-    }
-  }, [disableIncompatibleLorasForModel]);
-  const clearImageResult = useCallback(() => setImageResult(null), []);
+  const setSelectedImageModelId = useCallback(
+    (modelId: string | null) => {
+      setSelectedImageModelIdState(modelId);
+      if (modelId) {
+        disableIncompatibleLorasForModel(
+          imageModelsRef.current.find((model) => model.model_id === modelId),
+        );
+      }
+    },
+    [disableIncompatibleLorasForModel],
+  );
+  const clearImageResult = useCallback(() => {
+    const latest = findLatestCompletedImageJob(imageJobsRef.current);
+    lastPromotedFinishedSequenceRef.current = latest?.finished_sequence ?? 0;
+    setImageResult(null);
+  }, []);
   const clearImageGenError = useCallback(() => setImageGenError(null), []);
   const clearImageQueueNotice = useCallback(
     () => setImageQueueNotice(null),
@@ -2489,10 +2575,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const loadVideoModel = useCallback(
     async (modelId: string): Promise<MediaLoadResult> => {
       const runtime = mediaRuntimeRef.current;
-      if (
-        runtime?.state !== "ready" ||
-        !runtime.video_packages_available
-      ) {
+      if (runtime?.state !== "ready" || !runtime.video_packages_available) {
         setVideoGenError(MEDIA_RUNTIME_NOT_READY);
         return { success: false, error: MEDIA_RUNTIME_NOT_READY };
       }
@@ -2560,10 +2643,7 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const generateVideo = useCallback(
     async (req: VideoGenRequest): Promise<{ ok: boolean; error?: string }> => {
       const runtime = mediaRuntimeRef.current;
-      if (
-        runtime?.state !== "ready" ||
-        !runtime.video_packages_available
-      ) {
+      if (runtime?.state !== "ready" || !runtime.video_packages_available) {
         setVideoGenError(MEDIA_RUNTIME_NOT_READY);
         return { ok: false, error: MEDIA_RUNTIME_NOT_READY };
       }
@@ -2822,7 +2902,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     } catch (error) {
       if (requestId !== runtimeRequestRef.current) return;
       setMediaRuntimeError(
-        error instanceof Error ? error.message : "Could not check the AI runtime",
+        error instanceof Error
+          ? error.message
+          : "Could not check the AI runtime",
       );
       setMediaRuntimeLoading(false);
     }

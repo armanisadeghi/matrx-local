@@ -79,6 +79,7 @@ import {
   variableKey,
   type MatrixSpec,
   type MatrixPlan,
+  type MatrixTarget,
   type MatrixVariable,
   type ParamAxis,
 } from "@/lib/prompt-matrix";
@@ -131,10 +132,39 @@ function useOptionErrors(): Map<string, Map<string, string>> {
 
 // ── Panel: template → variables → strategy ───────────────────────────────────
 
-export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
-  const { state, actions, target } = usePromptMatrixApp();
+export function PromptMatrixEditor<TJob>({
+  state,
+  actions,
+  target,
+  showNegativePrompt = true,
+  showParamAxes = true,
+  showLibrary = true,
+}: {
+  state: import("@/hooks/use-prompt-matrix").PromptMatrixState;
+  actions: PromptMatrixActions;
+  target: MatrixTarget<TJob>;
+  showNegativePrompt?: boolean;
+  showParamAxes?: boolean;
+  showLibrary?: boolean;
+}) {
   const { spec } = state;
-  const optionErrors = useOptionErrors();
+
+  const optionErrors = useMemo(() => {
+    const out = new Map<string, Map<string, string>>();
+    for (const v of spec.variables) {
+      if (v.binding.kind !== "param") continue;
+      const axis = target.resolveAxis(v.binding.axisId);
+      if (axis === null) continue;
+      const errs = new Map<string, string>();
+      for (const option of v.options) {
+        if (!option.enabled) continue;
+        const parsed = axis.parse(option.value);
+        if (!parsed.ok) errs.set(option.id, parsed.error);
+      }
+      if (errs.size > 0) out.set(v.id, errs);
+    }
+    return out;
+  }, [spec.variables, target]);
 
   const poolSlotsByKey = useMemo(() => {
     const refs = extractPoolRefs(spec.fields.map((f) => f.text));
@@ -226,29 +256,30 @@ export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
             }
           />
         )}
-        {negativeField !== undefined &&
-          (ctl.defaults?.supportsNegativePrompt ?? false) && (
-            <TemplateEditor
-              label="Negative prompt template"
-              value={negativeField.text}
-              onChange={(text) => actions.setFieldText("negative_prompt", text)}
-              knownVariables={knownVariables}
-              placeholder="blurry, low quality"
-              minHeightClass="min-h-[60px]"
-            />
-          )}
+        {negativeField !== undefined && showNegativePrompt && (
+          <TemplateEditor
+            label="Negative prompt template"
+            value={negativeField.text}
+            onChange={(text) => actions.setFieldText("negative_prompt", text)}
+            knownVariables={knownVariables}
+            placeholder="blurry, low quality"
+            minHeightClass="min-h-[60px]"
+          />
+        )}
       </div>
 
       {/* 2. on-disk library — always visible, not buried in a menu */}
-      <LibraryPanel
-        entries={state.library}
-        diskPath={state.libraryPath}
-        error={state.libraryError}
-        ready={state.libraryReady}
-        onInsert={actions.insertLibraryEntry}
-        onRemove={(id) => void actions.removeLibraryEntry(id)}
-        onRefresh={() => void actions.refreshLibrary()}
-      />
+      {showLibrary && (
+        <LibraryPanel
+          entries={state.library}
+          diskPath={state.libraryPath}
+          error={state.libraryError}
+          ready={state.libraryReady}
+          onInsert={actions.insertLibraryEntry}
+          onRemove={(id) => void actions.removeLibraryEntry(id)}
+          onRefresh={() => void actions.refreshLibrary()}
+        />
+      )}
 
       {/* 3. the variables */}
       <div className="space-y-2">
@@ -260,10 +291,12 @@ export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
             </span>
           )}
           <div className="ml-auto">
-            <AddParamAxisMenu
-              axes={availableAxes}
-              onAdd={(axis) => actions.addParamVariable(axis.id, axis.label)}
-            />
+            {showParamAxes && (
+              <AddParamAxisMenu
+                axes={availableAxes}
+                onAdd={(axis) => actions.addParamVariable(axis.id, axis.label)}
+              />
+            )}
           </div>
         </div>
 
@@ -278,7 +311,9 @@ export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
               <code className="rounded bg-violet-500/15 px-1 text-violet-700 dark:text-violet-300">
                 {"{{color#1}}"}
               </code>
-              , or sweep a setting like Steps or Model.
+              {showParamAxes
+                ? ", or sweep a setting like Steps or Model."
+                : "."}
             </p>
           </div>
         ) : (
@@ -343,6 +378,20 @@ export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
         cartesianTotal={cartesianTotal}
       />
     </div>
+  );
+}
+
+export function PromptMatrixPanel({ ctl }: { ctl: ImageGenController }) {
+  const matrix = usePromptMatrixApp();
+  return (
+    <PromptMatrixEditor
+      state={matrix.state}
+      actions={matrix.actions}
+      target={matrix.target}
+      showNegativePrompt={ctl.defaults?.supportsNegativePrompt ?? false}
+      showParamAxes
+      showLibrary
+    />
   );
 }
 
@@ -661,16 +710,16 @@ function summarizeMatrix(spec: MatrixSpec): string {
 
 // ── sub-controls ─────────────────────────────────────────────────────────────
 
-function AddParamAxisMenu({
+function AddParamAxisMenu<TJob>({
   axes,
   onAdd,
 }: {
-  axes: ParamAxis<ImageGenerateInput>[];
-  onAdd: (axis: ParamAxis<ImageGenerateInput>) => void;
+  axes: ParamAxis<TJob>[];
+  onAdd: (axis: ParamAxis<TJob>) => void;
 }) {
   const [open, setOpen] = useState(false);
   const groups = useMemo(() => {
-    const out = new Map<string, ParamAxis<ImageGenerateInput>[]>();
+    const out = new Map<string, ParamAxis<TJob>[]>();
     for (const axis of axes) {
       const list = out.get(axis.group) ?? [];
       list.push(axis);

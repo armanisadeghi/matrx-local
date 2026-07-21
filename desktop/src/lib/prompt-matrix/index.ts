@@ -82,6 +82,14 @@ export {
 } from "./imageTarget";
 
 export {
+  createEmptyPromptJob,
+  createPromptTarget,
+  PROMPT_TARGET_ID,
+  PROMPT_TEMPLATE_FIELDS,
+  type PromptJob,
+} from "./promptTarget";
+
+export {
   MATRIX_EXPORT_VERSION,
   downloadMatrixExport,
   matrixExportFilename,

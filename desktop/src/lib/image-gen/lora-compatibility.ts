@@ -8,6 +8,7 @@ const FAMILY_ALIASES: Record<string, string> = {
   flux: "flux",
   zimage: "zimage",
   zimageturbo: "zimage",
+  "z-image": "zimage",
   stablediffusionxl: "sdxl",
   sdxl: "sdxl",
   stablediffusion: "sd15",
@@ -22,14 +23,20 @@ export function normalizeLoraFamily(value: string | null | undefined): string {
 }
 
 export function modelLoraFamily(
-  model: Pick<ImageGenModelInfo, "pipeline_type" | "lora_family"> | null | undefined,
+  model:
+    | Pick<ImageGenModelInfo, "pipeline_type" | "lora_family">
+    | null
+    | undefined,
 ): string {
   return normalizeLoraFamily(model?.lora_family ?? model?.pipeline_type);
 }
 
 export function classifyLoraCompatibility(
   baseFamily: string | null | undefined,
-  model: Pick<ImageGenModelInfo, "pipeline_type" | "lora_family"> | null | undefined,
+  model:
+    | Pick<ImageGenModelInfo, "pipeline_type" | "lora_family">
+    | null
+    | undefined,
 ): LoraCompatibility {
   const loraFamily = normalizeLoraFamily(baseFamily);
   const targetFamily = modelLoraFamily(model);
@@ -40,7 +47,10 @@ export function classifyLoraCompatibility(
 /** Mirrors the engine contract: unknown families are attempted, not rejected. */
 export function loraFamilyMatches(
   baseFamily: string | null | undefined,
-  model: Pick<ImageGenModelInfo, "pipeline_type" | "lora_family"> | null | undefined,
+  model:
+    | Pick<ImageGenModelInfo, "pipeline_type" | "lora_family">
+    | null
+    | undefined,
 ): boolean {
   return classifyLoraCompatibility(baseFamily, model) !== "incompatible";
 }
@@ -48,18 +58,28 @@ export function loraFamilyMatches(
 /** Default manager filter: only confirmed matches; Show all reveals the rest. */
 export function loraVisibleForModel(
   lora: Pick<ImageGenLoraInfo, "base_family">,
-  model: Pick<ImageGenModelInfo, "pipeline_type" | "lora_family"> | null | undefined,
+  model:
+    | Pick<ImageGenModelInfo, "pipeline_type" | "lora_family">
+    | null
+    | undefined,
   showAllFamilies: boolean,
 ): boolean {
   return (
-    showAllFamilies || classifyLoraCompatibility(lora.base_family, model) === "compatible"
+    showAllFamilies ||
+    classifyLoraCompatibility(lora.base_family, model) === "compatible"
   );
 }
 
 export function loraMatchesSearch(
   lora: Pick<
     ImageGenLoraInfo,
-    "id" | "repo_id" | "name" | "description" | "base_family" | "source" | "license"
+    | "id"
+    | "repo_id"
+    | "name"
+    | "description"
+    | "base_family"
+    | "source"
+    | "license"
   >,
   query: string,
 ): boolean {
@@ -90,7 +110,10 @@ export interface LoraSelectionLike {
 export function disableIncompatibleLoraSelections<T extends LoraSelectionLike>(
   selections: T[],
   installed: Pick<ImageGenLoraInfo, "id" | "base_family">[],
-  model: Pick<ImageGenModelInfo, "pipeline_type" | "lora_family"> | null | undefined,
+  model:
+    | Pick<ImageGenModelInfo, "pipeline_type" | "lora_family">
+    | null
+    | undefined,
 ): T[] {
   const installedById = new Map(installed.map((lora) => [lora.id, lora]));
   let changed = false;

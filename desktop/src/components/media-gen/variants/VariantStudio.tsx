@@ -20,6 +20,7 @@ import {
   Film,
   Image as ImageIcon,
   Layers,
+  ListTree,
   Loader2,
   Workflow,
   X,
@@ -50,6 +51,7 @@ import {
 } from "@/components/media/types";
 import { WorkflowSection } from "@/components/media-gen/WorkflowSection";
 import { MediaLibrarySection } from "@/components/media-gen/MediaLibrarySection";
+import { ListLibrarySurface } from "@/components/media-gen/ListLibrarySurface";
 import { SeedChip, StillWorkingNote } from "@/components/media-gen/shared";
 import { useImageGenController } from "@/components/media-gen/core/imageController";
 import { useVideoGenController } from "@/components/media-gen/core/videoController";
@@ -63,7 +65,6 @@ import {
   ImageGenerateActions,
   ImageGenerateForm,
   ImageParamsErrorNotice,
-  useImageGenMode,
 } from "@/components/media-gen/core/ImageGenerateForm";
 import {
   VideoFormNotices,
@@ -151,11 +152,10 @@ export function VariantStudio() {
 
   // ── Pure-presentation local state ────────────────────────────────────────
   const [mode, setMode] = useState<StudioMode>("image");
-  const [imageMode] = useImageGenMode();
-  const imageBatchActive = mode === "image" && imageMode === "batch";
   const [pickerOpen, setPickerOpen] = useState(false);
   const [workflowsOpen, setWorkflowsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [listsOpen, setListsOpen] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
 
   const closePicker = useCallback(() => setPickerOpen(false), []);
@@ -461,6 +461,16 @@ export function VariantStudio() {
               size="icon"
               variant="ghost"
               className="h-8 w-8 shrink-0"
+              onClick={() => setListsOpen(true)}
+              aria-label="Open option lists"
+              title="Lists"
+            >
+              <ListTree className="h-4 w-4" />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8 shrink-0"
               onClick={() => setLibraryOpen(true)}
               aria-label="Open media library"
               title="Media library"
@@ -544,17 +554,15 @@ export function VariantStudio() {
         {/* Sticky action bar */}
         <div className="shrink-0 space-y-2 border-t bg-background/95 p-3">
           {isImage ? (
-            imageBatchActive ? null : (
-              <>
-                <ImageParamsErrorNotice ctl={imageCtl} />
-                <ImageFormNotices ctl={imageCtl} />
-                <ImageGenerateActions
-                  ctl={imageCtl}
-                  extraDisabled={!modeReady}
-                  queueLabel="Queue"
-                />
-              </>
-            )
+            <>
+              <ImageParamsErrorNotice ctl={imageCtl} />
+              <ImageFormNotices ctl={imageCtl} />
+              <ImageGenerateActions
+                ctl={imageCtl}
+                extraDisabled={!modeReady}
+                queueLabel="Queue"
+              />
+            </>
           ) : (
             <>
               <VideoParamsErrorNotice ctl={videoCtl} />
@@ -576,7 +584,7 @@ export function VariantStudio() {
         </div>
 
         {/* Queue rail */}
-        {isImage && !imageBatchActive && (
+        {isImage && (
           <div className="shrink-0 border-t px-4 py-2 empty:hidden">
             <ImageQueuePanel layout="chips" heading="Generation history" />
           </div>
@@ -696,6 +704,13 @@ export function VariantStudio() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ── Lists dialog ────────────────────────────────────────────────── */}
+      <ListLibrarySurface
+        surface="dialog"
+        open={listsOpen}
+        onOpenChange={setListsOpen}
+      />
 
       {/* ── Library dialog ──────────────────────────────────────────────── */}
       <Dialog open={libraryOpen} onOpenChange={setLibraryOpen}>

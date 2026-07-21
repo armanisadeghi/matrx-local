@@ -61,7 +61,10 @@ images expose it from the same canonical menu on every surface. It restores the
 source model/settings, pins the selected image as the revision parent, and sends
 Apply through the normal image queue. FLUX.2 prompts are edit instructions;
 Z-Image/FLUX.1 prompts remain full revised-image descriptions. Each result
-advances the parent while preserving the branch root. Normal **Use as input**
+advances the parent while preserving the branch root. While revision mode is
+active, the generate banner exposes a **Versions** picker (`GET
+/media-library/revision-branch/{root_item_id}`) so the user can switch back to
+an older branch member as the parent for the next Apply. Normal **Use as input**
 and a model switch exit revision mode so lineage can never leak into an
 unrelated generation.
 

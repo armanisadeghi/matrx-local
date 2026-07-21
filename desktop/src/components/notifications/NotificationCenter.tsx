@@ -1,27 +1,62 @@
 import { useRef, useEffect, useState } from "react";
-import { Bell, X, CheckCheck, Trash2, Info, CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
+import {
+  Bell,
+  X,
+  CheckCheck,
+  Trash2,
+  Info,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { AppNotification, NotificationLevel } from "@/hooks/use-notifications";
+import type {
+  AppNotification,
+  NotificationLevel,
+} from "@/hooks/use-notifications";
 import { dispatchActionNeeded } from "@/features/action-needed";
 
 // ── Per-level styling ─────────────────────────────────────────────────────
 
-const LEVEL_CONFIG: Record<NotificationLevel, {
-  icon: React.ElementType;
-  iconClass: string;
-  barClass: string;
-  bgClass: string;
-}> = {
-  info:    { icon: Info,          iconClass: "text-sky-400",     barClass: "bg-sky-500",     bgClass: "bg-sky-500/8" },
-  success: { icon: CheckCircle2,  iconClass: "text-emerald-400", barClass: "bg-emerald-500", bgClass: "bg-emerald-500/8" },
-  warning: { icon: AlertTriangle, iconClass: "text-amber-400",   barClass: "bg-amber-500",   bgClass: "bg-amber-500/8" },
-  error:   { icon: XCircle,       iconClass: "text-red-400",     barClass: "bg-red-500",     bgClass: "bg-red-500/8" },
+const LEVEL_CONFIG: Record<
+  NotificationLevel,
+  {
+    icon: React.ElementType;
+    iconClass: string;
+    barClass: string;
+    bgClass: string;
+  }
+> = {
+  info: {
+    icon: Info,
+    iconClass: "text-sky-400",
+    barClass: "bg-sky-500",
+    bgClass: "bg-sky-500/8",
+  },
+  success: {
+    icon: CheckCircle2,
+    iconClass: "text-emerald-400",
+    barClass: "bg-emerald-500",
+    bgClass: "bg-emerald-500/8",
+  },
+  warning: {
+    icon: AlertTriangle,
+    iconClass: "text-amber-400",
+    barClass: "bg-amber-500",
+    bgClass: "bg-amber-500/8",
+  },
+  error: {
+    icon: XCircle,
+    iconClass: "text-red-400",
+    barClass: "bg-red-500",
+    bgClass: "bg-red-500/8",
+  },
 };
 
 function timeAgo(ts: number): string {
   const diff = Math.floor((Date.now() - ts) / 1000);
-  if (diff < 5)  return "just now";
+  if (diff < 5) return "just now";
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
@@ -32,17 +67,18 @@ function timeAgo(ts: number): string {
 
 interface ToastProps {
   notification: AppNotification;
+  onHide: (id: string) => void;
   onDismiss: (id: string) => void;
 }
 
-function NotificationToast({ notification: n, onDismiss }: ToastProps) {
+function NotificationToast({ notification: n, onHide, onDismiss }: ToastProps) {
   const cfg = LEVEL_CONFIG[n.level];
   const Icon = cfg.icon;
 
   useEffect(() => {
-    const t = setTimeout(() => onDismiss(n.id), 6000);
+    const t = setTimeout(() => onHide(n.id), 6000);
     return () => clearTimeout(t);
-  }, [n.id, onDismiss]);
+  }, [n.id, onHide]);
 
   return (
     <div
@@ -54,11 +90,18 @@ function NotificationToast({ notification: n, onDismiss }: ToastProps) {
       style={{ minWidth: 300, maxWidth: 380 }}
     >
       {/* left colour bar */}
-      <div className={cn("absolute left-0 top-3 bottom-3 w-0.5 rounded-full", cfg.barClass)} />
+      <div
+        className={cn(
+          "absolute left-0 top-3 bottom-3 w-0.5 rounded-full",
+          cfg.barClass,
+        )}
+      />
       <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", cfg.iconClass)} />
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold leading-tight">{n.title}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground leading-snug line-clamp-3">{n.message}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground leading-snug line-clamp-3">
+          {n.message}
+        </p>
         {n.actionNeeded && (
           <Button
             size="sm"
@@ -84,16 +127,25 @@ function NotificationToast({ notification: n, onDismiss }: ToastProps) {
 
 interface ToastContainerProps {
   toasts: AppNotification[];
+  onHide: (id: string) => void;
   onDismiss: (id: string) => void;
 }
 
-export function NotificationToastContainer({ toasts, onDismiss }: ToastContainerProps) {
+export function NotificationToastContainer({
+  toasts,
+  onHide,
+  onDismiss,
+}: ToastContainerProps) {
   if (toasts.length === 0) return null;
   return (
     <div className="fixed bottom-10 right-4 z-50 flex flex-col gap-2 pointer-events-none">
       {toasts.map((n) => (
         <div key={n.id} className="pointer-events-auto">
-          <NotificationToast notification={n} onDismiss={onDismiss} />
+          <NotificationToast
+            notification={n}
+            onHide={onHide}
+            onDismiss={onDismiss}
+          />
         </div>
       ))}
     </div>
@@ -184,10 +236,24 @@ export function NotificationCenter({
             <div className="flex items-center gap-1">
               {notifications.length > 0 && (
                 <>
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onMarkAllRead} title="Mark all read" aria-label="Mark all notifications read">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={onMarkAllRead}
+                    title="Mark all read"
+                    aria-label="Mark all notifications read"
+                  >
                     <CheckCheck className="h-3.5 w-3.5" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClearAll} title="Clear all" aria-label="Clear notification history">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={onClearAll}
+                    title="Clear all"
+                    aria-label="Clear notification history"
+                  >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </>
@@ -218,20 +284,28 @@ export function NotificationCenter({
                       {!n.read && (
                         <div className="absolute left-1.5 top-4 h-1.5 w-1.5 rounded-full bg-primary" />
                       )}
-                      <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", cfg.iconClass)} />
+                      <Icon
+                        className={cn("mt-0.5 h-4 w-4 shrink-0", cfg.iconClass)}
+                      />
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-semibold">{n.title}</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground leading-snug">{n.message}</p>
+                        <p className="mt-0.5 text-xs text-muted-foreground leading-snug">
+                          {n.message}
+                        </p>
                         {n.actionNeeded && (
                           <Button
                             size="sm"
                             className="mt-2 h-6 px-2 text-[11px]"
-                            onClick={() => void dispatchActionNeeded(n.actionNeeded!)}
+                            onClick={() =>
+                              void dispatchActionNeeded(n.actionNeeded!)
+                            }
                           >
                             {n.actionNeeded.action.label}
                           </Button>
                         )}
-                        <p className="mt-1 text-[10px] text-muted-foreground/60">{timeAgo(n.timestamp)}</p>
+                        <p className="mt-1 text-[10px] text-muted-foreground/60">
+                          {timeAgo(n.timestamp)}
+                        </p>
                       </div>
                       <button
                         onClick={() => onDismiss(n.id)}

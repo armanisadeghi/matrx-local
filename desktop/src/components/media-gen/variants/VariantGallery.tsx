@@ -19,7 +19,6 @@ import {
   Film,
   Image as ImageIcon,
   ListPlus,
-  Layers,
   Loader2,
   RefreshCw,
   Settings2,
@@ -51,7 +50,7 @@ import { ImageGenInstaller } from "../ImageGenInstaller";
 import {
   CancelableGenerateButton,
   ErrorNote,
-  PromptCapacityHint,
+  PromptCapacityInfo,
   QueueNotice,
 } from "../shared";
 import { useImageGenController } from "../core/imageController";
@@ -64,11 +63,10 @@ import {
   ImageParamsErrorNotice,
   InputImageControl,
   AlternativeTextEncodersSection,
-  ImageGenerateForm,
   ImageRevisionBanner,
   LoraStylesSection,
-  useImageGenMode,
 } from "../core/ImageGenerateForm";
+import { ImagePromptToolbar } from "../core/ImagePromptToolbar";
 import {
   SourceImageControl,
   VideoAdvancedSection,
@@ -183,8 +181,6 @@ export function VariantGallery() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [resultOpen, setResultOpen] = useState(false);
-  const [batchBuilderOpen, setBatchBuilderOpen] = useState(false);
-  const [, setImageGenMode] = useImageGenMode();
 
   const closePicker = useCallback(() => setModelPickerOpen(false), []);
   const imageCtl = useImageGenController({ onAfterSelect: closePicker });
@@ -212,7 +208,7 @@ export function VariantGallery() {
 
   const freshResultItemId = imageResult?.itemId ?? null;
   const freshResultDescriptor = useMemo(
-    () => imageResult ? descriptorFromResult(imageResult) : null,
+    () => (imageResult ? descriptorFromResult(imageResult) : null),
     [imageResult],
   );
   useEffect(() => {
@@ -315,9 +311,7 @@ export function VariantGallery() {
           )}
 
           {!engineDown && runtimeUnavailable ? (
-            <ImageGenInstaller
-              models={mediaGen.imageModels}
-            />
+            <ImageGenInstaller models={mediaGen.imageModels} />
           ) : !engineDown ? (
             <>
               {isImage && imageCtl.isRevision && (
@@ -353,6 +347,8 @@ export function VariantGallery() {
                   ))}
                 </div>
 
+                {isImage && <ImagePromptToolbar ctl={imageCtl} compact />}
+
                 <Textarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
@@ -380,6 +376,12 @@ export function VariantGallery() {
                   }}
                   aria-label="Prompt"
                 />
+
+                {isImage && (
+                  <PromptCapacityInfo
+                    pipelineType={imageCtl.model?.pipeline_type}
+                  />
+                )}
 
                 <div className="flex shrink-0 items-start gap-1.5">
                   <CancelableGenerateButton
@@ -430,21 +432,6 @@ export function VariantGallery() {
                         <ListPlus className="mr-1.5 h-4 w-4" />
                         {imageCtl.isRevision ? "Queue revision" : "Queue"}
                       </Button>
-                      {!imageCtl.isRevision && (
-                        <Button
-                          variant="outline"
-                          disabled={!imageCtl.defaults}
-                          onClick={() => {
-                            setImageGenMode("batch");
-                            setBatchBuilderOpen(true);
-                          }}
-                          className="h-[38px]"
-                          title="Build a randomized image batch"
-                        >
-                          <Layers className="mr-1.5 h-4 w-4" />
-                          Batch
-                        </Button>
-                      )}
                     </>
                   )}
                 </div>
@@ -604,13 +591,6 @@ export function VariantGallery() {
                     {isImage ? imageCtl.dimError : videoCtl.dimError}
                   </span>
                 )}
-
-                {isImage && (
-                  <PromptCapacityHint
-                    pipelineType={imageCtl.model?.pipeline_type}
-                    className="w-full"
-                  />
-                )}
               </div>
 
               {genError && (
@@ -762,18 +742,6 @@ export function VariantGallery() {
             </DialogDescription>
           </DialogHeader>
           {imageResult && <ImageResultPane hideIdle />}
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={batchBuilderOpen} onOpenChange={setBatchBuilderOpen}>
-        <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Randomized image batch</DialogTitle>
-            <DialogDescription>
-              Every new preview or queue action draws a fresh randomized batch.
-            </DialogDescription>
-          </DialogHeader>
-          <ImageGenerateForm ctl={imageCtl} hideNotices />
         </DialogContent>
       </Dialog>
     </div>

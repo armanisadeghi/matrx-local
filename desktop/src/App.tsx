@@ -63,6 +63,9 @@ import { DownloadManagerProvider } from "@/contexts/DownloadManagerContext";
 import { MediaGenProvider } from "@/contexts/MediaGenContext";
 import { PromptMatrixProvider } from "@/contexts/PromptMatrixContext";
 import { MediaLibraryProvider } from "@/contexts/MediaLibraryContext";
+import { ListLibraryProvider } from "@/contexts/ListLibraryContext";
+import { SavedPromptsProvider } from "@/contexts/SavedPromptsContext";
+import { VariationBatchesProvider } from "@/contexts/VariationBatchesContext";
 import { MediaVaultProvider } from "@/contexts/MediaVaultContext";
 import { MediaActionsProvider } from "@/components/media/MediaActionsProvider";
 import { TtsProvider } from "@/contexts/TtsContext";
@@ -116,27 +119,33 @@ export default function App() {
                 MediaGenProvider because it reads the model/LoRA catalog to
                 validate what each variable is allowed to sweep. */}
             <PromptMatrixProvider>
-            <MediaLibraryProvider>
-              <MediaVaultProvider>
-                <MediaActionsProvider>
-                  <TtsProvider>
-                    <LlmProvider>
-                      <WakeWordProvider>
-                        <TranscriptionSessionsProvider>
-                          <PermissionsProvider>
-                            <AudioDevicesProvider>
-                              <TranscriptionProvider>
-                                <AppInner />
-                              </TranscriptionProvider>
-                            </AudioDevicesProvider>
-                          </PermissionsProvider>
-                        </TranscriptionSessionsProvider>
-                      </WakeWordProvider>
-                    </LlmProvider>
-                  </TtsProvider>
-                </MediaActionsProvider>
-              </MediaVaultProvider>
-            </MediaLibraryProvider>
+              <SavedPromptsProvider>
+                <VariationBatchesProvider>
+                  <ListLibraryProvider>
+                    <MediaLibraryProvider>
+                      <MediaVaultProvider>
+                        <MediaActionsProvider>
+                          <TtsProvider>
+                            <LlmProvider>
+                              <WakeWordProvider>
+                                <TranscriptionSessionsProvider>
+                                  <PermissionsProvider>
+                                    <AudioDevicesProvider>
+                                      <TranscriptionProvider>
+                                        <AppInner />
+                                      </TranscriptionProvider>
+                                    </AudioDevicesProvider>
+                                  </PermissionsProvider>
+                                </TranscriptionSessionsProvider>
+                              </WakeWordProvider>
+                            </LlmProvider>
+                          </TtsProvider>
+                        </MediaActionsProvider>
+                      </MediaVaultProvider>
+                    </MediaLibraryProvider>
+                  </ListLibraryProvider>
+                </VariationBatchesProvider>
+              </SavedPromptsProvider>
             </PromptMatrixProvider>
           </MediaGenProvider>
         </DownloadManagerProvider>
@@ -405,7 +414,10 @@ function AppInner() {
         path: "/chat",
         element: <Chat engineStatus={status} engineUrl={url} tools={tools} />,
       },
-      { path: "/cloud-chat", element: <CloudChat engineStatus={status} engineUrl={url} /> },
+      {
+        path: "/cloud-chat",
+        element: <CloudChat engineStatus={status} engineUrl={url} />,
+      },
       {
         path: "/notes",
         element: (
@@ -536,73 +548,74 @@ function AppInner() {
           Settings) — single poll owner, generation-fenced updates. Lives here
           (not in the provider stack) because it needs engineStatus. */}
       <AccessHealthProvider engineStatus={status}>
-      <HashRouter>
-        <ActionNeededSources />
-        <ActionNeededNavigationBridge />
-        <Routes>
-          <Route path="/overlay" element={<TranscriptOverlay />} />
-          <Route path="/auth/callback" element={<AuthCallback />} />
+        <HashRouter>
+          <ActionNeededSources />
+          <ActionNeededNavigationBridge />
+          <Routes>
+            <Route path="/overlay" element={<TranscriptOverlay />} />
+            <Route path="/auth/callback" element={<AuthCallback />} />
 
-          {!auth.isAuthenticated ? (
-            <Route path="*" element={<Login auth={auth} />} />
-          ) : (
-            <>
-              <Route
-                path="/*"
-                element={
-                  <AppLayout
-                    engineStatus={status}
-                    engineUrl={url}
-                    engineVersion={engineVersion}
-                    onRefresh={refresh}
-                    onRestartEngine={restartEngine}
-                    user={auth.user}
-                    onSignOut={auth.signOut}
-                    isRecording={transcriptionState.isRecording}
-                    onRecord={enterCompactMode}
-                    onBackgroundRecord={toggleBackgroundRecording}
-                    isBackgroundRecording={bgRecording}
-                    transcriptionState={transcriptionState}
-                    transcriptionActions={transcriptionActions}
-                    tools={tools}
-                    updateState={updateState}
-                    updateActions={updateActions}
-                    notifications={notif.notifications}
-                    unreadCount={notif.unreadCount}
-                    onMarkRead={notif.markRead}
-                    onMarkAllRead={notif.markAllRead}
-                    onDismissNotification={notif.dismiss}
-                    onClearAllNotifications={notif.clearAll}
-                    onOpenMonitor={handleOpenMonitor}
-                    pages={appPages}
-                  />
-                }
-              />
-            </>
-          )}
-        </Routes>
-        {/* These live INSIDE HashRouter (though outside Routes): several of
+            {!auth.isAuthenticated ? (
+              <Route path="*" element={<Login auth={auth} />} />
+            ) : (
+              <>
+                <Route
+                  path="/*"
+                  element={
+                    <AppLayout
+                      engineStatus={status}
+                      engineUrl={url}
+                      engineVersion={engineVersion}
+                      onRefresh={refresh}
+                      onRestartEngine={restartEngine}
+                      user={auth.user}
+                      onSignOut={auth.signOut}
+                      isRecording={transcriptionState.isRecording}
+                      onRecord={enterCompactMode}
+                      onBackgroundRecord={toggleBackgroundRecording}
+                      isBackgroundRecording={bgRecording}
+                      transcriptionState={transcriptionState}
+                      transcriptionActions={transcriptionActions}
+                      tools={tools}
+                      updateState={updateState}
+                      updateActions={updateActions}
+                      notifications={notif.notifications}
+                      unreadCount={notif.unreadCount}
+                      onMarkRead={notif.markRead}
+                      onMarkAllRead={notif.markAllRead}
+                      onDismissNotification={notif.dismiss}
+                      onClearAllNotifications={notif.clearAll}
+                      onOpenMonitor={handleOpenMonitor}
+                      pages={appPages}
+                    />
+                  }
+                />
+              </>
+            )}
+          </Routes>
+          {/* These live INSIDE HashRouter (though outside Routes): several of
             them — DownloadManagerModal's action dialog especially — call
             useNavigate(). Hoisting them out crashes the app on boot. */}
-        <MenuEventBridge />
-        <NotificationToastContainer
-          toasts={toasts}
-          onDismiss={notif.hideToast}
-        />
-        <EngineMonitor
-          open={monitorOpen}
-          onOpenChange={setMonitorOpen}
-          engineStatus={status}
-          engineError={engineError}
-          onRestartEngine={restartEngine}
-          onRefresh={refresh}
-        />
-        <RestartingOverlay visible={updateState.restarting} />
-        <UpdateBanner state={updateState} actions={updateActions} />
-        <UpdateDialog state={updateState} actions={updateActions} />
-        <DownloadManagerModal />
-        <DevTerminalPanel />
-      </HashRouter>
+          <MenuEventBridge />
+          <NotificationToastContainer
+            toasts={toasts}
+            onHide={notif.hideToast}
+            onDismiss={notif.dismiss}
+          />
+          <EngineMonitor
+            open={monitorOpen}
+            onOpenChange={setMonitorOpen}
+            engineStatus={status}
+            engineError={engineError}
+            onRestartEngine={restartEngine}
+            onRefresh={refresh}
+          />
+          <RestartingOverlay visible={updateState.restarting} />
+          <UpdateBanner state={updateState} actions={updateActions} />
+          <UpdateDialog state={updateState} actions={updateActions} />
+          <DownloadManagerModal />
+          <DevTerminalPanel />
+        </HashRouter>
       </AccessHealthProvider>
     </TooltipProvider>
   );

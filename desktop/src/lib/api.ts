@@ -11,7 +11,11 @@ import { enginePortList } from "@/lib/engine-ports";
 
 const DISCOVERY_PORTS = enginePortList();
 
-function httpOperationKey(method: string, target: string, body?: BodyInit | null): string {
+function httpOperationKey(
+  method: string,
+  target: string,
+  body?: BodyInit | null,
+): string {
   let resource = target;
   try {
     const url = new URL(target, "http://matrx.local");
@@ -19,7 +23,8 @@ function httpOperationKey(method: string, target: string, body?: BodyInit | null
   } catch {
     // Preserve non-URL targets verbatim.
   }
-  const bodyKey = typeof body === "string" ? body : body == null ? "" : String(body);
+  const bodyKey =
+    typeof body === "string" ? body : body == null ? "" : String(body);
   return `${method.toUpperCase()}:${resource}:${bodyKey}`;
 }
 
@@ -155,7 +160,10 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function toolInvocationKey(tool: string, input: Record<string, unknown>): string {
+function toolInvocationKey(
+  tool: string,
+  input: Record<string, unknown>,
+): string {
   return `${tool}:${stableJson(input)}`;
 }
 
@@ -235,7 +243,11 @@ class EngineAPI {
   private ws: WebSocket | null = null;
   private pendingRequests = new Map<
     string,
-    { resolve: (v: ToolResult) => void; reject: (e: Error) => void; invocationKey: string }
+    {
+      resolve: (v: ToolResult) => void;
+      reject: (e: Error) => void;
+      invocationKey: string;
+    }
   >();
   private eventListeners = new Map<string, Set<(data: unknown) => void>>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -268,7 +280,12 @@ class EngineAPI {
         this._getAccessToken(),
         new Promise<never>((_, reject) => {
           timeoutId = setTimeout(
-            () => reject(new Error(`Authentication token lookup timed out after ${timeoutMs / 1000}s`)),
+            () =>
+              reject(
+                new Error(
+                  `Authentication token lookup timed out after ${timeoutMs / 1000}s`,
+                ),
+              ),
             timeoutMs,
           );
         }),
@@ -300,7 +317,10 @@ class EngineAPI {
     errorLabel: string,
   ): Promise<DeviceProbeResult> {
     const payload: unknown = await response.json().catch(() => null);
-    const reported = await reportActionNeededErrorPayload(payload, operationKey);
+    const reported = await reportActionNeededErrorPayload(
+      payload,
+      operationKey,
+    );
     if (!reported) await resolveHttpActionNeeded(operationKey);
     if (!response.ok) {
       throw new Error(`${errorLabel}: ${response.status}`);
@@ -1032,8 +1052,12 @@ class EngineAPI {
     }
 
     const result: ToolResult = await resp.json();
-    const { reconcileToolActionNeeded } = await import("@/features/action-needed/store");
-    reconcileToolActionNeeded(toolInvocationKey(tool, input), result.action_needed);
+    const { reconcileToolActionNeeded } =
+      await import("@/features/action-needed/store");
+    reconcileToolActionNeeded(
+      toolInvocationKey(tool, input),
+      result.action_needed,
+    );
     console.info(`[api/invokeTool] ✓ ${tool} — ${elapsed}ms`, {
       callId,
       resultType: result.type,
@@ -1097,7 +1121,10 @@ class EngineAPI {
             this.pendingRequests.delete(data.id);
             void import("@/features/action-needed/store").then(
               ({ reconcileToolActionNeeded }) =>
-                reconcileToolActionNeeded(pending.invocationKey, data.action_needed),
+                reconcileToolActionNeeded(
+                  pending.invocationKey,
+                  data.action_needed,
+                ),
             );
             if (data.type === "error") {
               pending.reject(new Error(data.output || data.error));
@@ -1971,7 +1998,11 @@ class EngineAPI {
       }
       throw e;
     }
-    const operationKey = httpOperationKey(init?.method ?? "GET", path, init?.body);
+    const operationKey = httpOperationKey(
+      init?.method ?? "GET",
+      path,
+      init?.body,
+    );
     if (!resp.ok) {
       const payload = await resp.json().catch(() => null);
       await reportActionNeededErrorPayload(payload, operationKey);
@@ -2090,7 +2121,9 @@ class EngineAPI {
   ): Promise<string | null> {
     if (!this.baseUrl) {
       if (requireEngine) {
-        throw new Error("Engine unavailable — cannot read the Hugging Face key store");
+        throw new Error(
+          "Engine unavailable — cannot read the Hugging Face key store",
+        );
       }
       return null;
     }
@@ -2653,27 +2686,35 @@ class EngineAPI {
   }
 
   async getFilesystemIndexingSettings(): Promise<FilesystemIndexingSettings> {
-    return this.request<FilesystemIndexingSettings>("/filesystem/indexing-settings");
+    return this.request<FilesystemIndexingSettings>(
+      "/filesystem/indexing-settings",
+    );
   }
 
   async setFilesystemIndexingSettings(
     settings: Omit<FilesystemIndexingSettings, "priority_roots" | "paused">,
   ): Promise<FilesystemIndexStatus> {
-    return this.request<FilesystemIndexStatus>("/filesystem/indexing-settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(settings),
-    });
+    return this.request<FilesystemIndexStatus>(
+      "/filesystem/indexing-settings",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      },
+    );
   }
 
   async setFilesystemPriorityRoots(
     roots: FilesystemPriorityRoot[],
   ): Promise<FilesystemPlacesResponse> {
-    return this.request<FilesystemPlacesResponse>("/filesystem/priority-roots", {
+    return this.request<FilesystemPlacesResponse>(
+      "/filesystem/priority-roots",
+      {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ roots }),
-    });
+      },
+    );
   }
 
   async getFilesystemIndexStatus(): Promise<FilesystemIndexStatus> {
@@ -2690,12 +2731,17 @@ class EngineAPI {
     });
   }
 
-  async prepareFilesystemOpen(path: string): Promise<FilesystemPrepareOpenResponse> {
-    return this.request<FilesystemPrepareOpenResponse>("/filesystem/prepare-open", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path }),
-    });
+  async prepareFilesystemOpen(
+    path: string,
+  ): Promise<FilesystemPrepareOpenResponse> {
+    return this.request<FilesystemPrepareOpenResponse>(
+      "/filesystem/prepare-open",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      },
+    );
   }
 
   async listFilesystem(
@@ -2877,7 +2923,10 @@ class EngineAPI {
     );
     return this.parseDeviceProbeResponse(
       resp,
-      httpOperationKey("GET", `/devices/screenshot?monitor=${encodeURIComponent(String(monitor))}`),
+      httpOperationKey(
+        "GET",
+        `/devices/screenshot?monitor=${encodeURIComponent(String(monitor))}`,
+      ),
       "Screenshot failed",
     );
   }
@@ -4264,7 +4313,14 @@ export interface ExtensionBootCheckSummary {
 // Singleton instance
 export const engine = new EngineAPI();
 
-export type RecoveryServiceAction = "probe" | "refresh" | "repair" | "stop" | "start" | "restart" | "snapshot";
+export type RecoveryServiceAction =
+  | "probe"
+  | "refresh"
+  | "repair"
+  | "stop"
+  | "start"
+  | "restart"
+  | "snapshot";
 export interface EngineRecoveryService {
   state: string;
   capabilities: RecoveryServiceAction[];
@@ -4737,13 +4793,10 @@ export async function downloadImageGenTextEncoder(
   already_installed: boolean;
   text_encoder_id: string;
 }> {
-  return imageGenFetch(
-    imageGenUrl(baseUrl, "/text-encoders/download"),
-    {
-      method: "POST",
-      body: JSON.stringify({ model_id, text_encoder_id }),
-    },
-  );
+  return imageGenFetch(imageGenUrl(baseUrl, "/text-encoders/download"), {
+    method: "POST",
+    body: JSON.stringify({ model_id, text_encoder_id }),
+  });
 }
 
 export async function unloadImageGenModel(baseUrl: string): Promise<void> {
@@ -5098,6 +5151,9 @@ export async function cancelImageGenJob(
 export interface PromptMatrixPaths {
   root: string;
   library: string;
+  lists: string;
+  prompts: string;
+  variationBatches: string;
   templates: string;
 }
 
@@ -5125,6 +5181,24 @@ export async function putPromptMatrixLibrary(
   );
 }
 
+export async function getPromptMatrixLists(
+  baseUrl: string,
+): Promise<{ v: number; lists: unknown[] }> {
+  return imageGenFetch<{ v: number; lists: unknown[] }>(
+    `${baseUrl}/prompt-matrix/lists`,
+  );
+}
+
+export async function putPromptMatrixLists(
+  baseUrl: string,
+  lists: unknown[],
+): Promise<{ v: number; lists: unknown[] }> {
+  return imageGenFetch<{ v: number; lists: unknown[] }>(
+    `${baseUrl}/prompt-matrix/lists`,
+    { method: "PUT", body: JSON.stringify({ lists }) },
+  );
+}
+
 export async function getPromptMatrixTemplates(
   baseUrl: string,
 ): Promise<{ v: number; templates: unknown[] }> {
@@ -5140,6 +5214,42 @@ export async function putPromptMatrixTemplates(
   return imageGenFetch<{ v: number; templates: unknown[] }>(
     `${baseUrl}/prompt-matrix/templates`,
     { method: "PUT", body: JSON.stringify({ templates }) },
+  );
+}
+
+export async function getPromptMatrixPrompts(
+  baseUrl: string,
+): Promise<{ v: number; prompts: unknown[] }> {
+  return imageGenFetch<{ v: number; prompts: unknown[] }>(
+    `${baseUrl}/prompt-matrix/prompts`,
+  );
+}
+
+export async function putPromptMatrixPrompts(
+  baseUrl: string,
+  prompts: unknown[],
+): Promise<{ v: number; prompts: unknown[] }> {
+  return imageGenFetch<{ v: number; prompts: unknown[] }>(
+    `${baseUrl}/prompt-matrix/prompts`,
+    { method: "PUT", body: JSON.stringify({ prompts }) },
+  );
+}
+
+export async function getPromptMatrixVariationBatches(
+  baseUrl: string,
+): Promise<{ v: number; batches: unknown[] }> {
+  return imageGenFetch<{ v: number; batches: unknown[] }>(
+    `${baseUrl}/prompt-matrix/variation-batches`,
+  );
+}
+
+export async function putPromptMatrixVariationBatches(
+  baseUrl: string,
+  batches: unknown[],
+): Promise<{ v: number; batches: unknown[] }> {
+  return imageGenFetch<{ v: number; batches: unknown[] }>(
+    `${baseUrl}/prompt-matrix/variation-batches`,
+    { method: "PUT", body: JSON.stringify({ batches }) },
   );
 }
 
@@ -5883,6 +5993,16 @@ export async function listMediaLibraryItems(
   const qs = params.toString();
   return mediaLibraryFetch<MediaLibraryListResponse>(
     mediaLibraryUrl(baseUrl, `/items${qs ? `?${qs}` : ""}`),
+  );
+}
+
+/** Revision branch members for a root item, oldest → newest. */
+export async function listMediaRevisionBranch(
+  baseUrl: string,
+  rootItemId: string,
+): Promise<MediaLibraryListResponse> {
+  return mediaLibraryFetch<MediaLibraryListResponse>(
+    mediaLibraryUrl(baseUrl, `/revision-branch/${rootItemId}`),
   );
 }
 

@@ -44,14 +44,18 @@ describe("ActionNeededStore", () => {
     store.upsert(item("one", 1, "one-source"));
     store.upsert(item("two", 1, "two-source"));
     store.resolve("one");
-    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual(["two"]);
+    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual([
+      "two",
+    ]);
   });
 
   it("does not let a stale resolved observation clear a newer active item", () => {
     const store = new ActionNeededStore();
     store.upsert(item("one", 10));
     store.upsert({ ...item("one", 9), status: "resolved" });
-    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual(["one"]);
+    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual([
+      "one",
+    ]);
     store.upsert({ ...item("one", 11), status: "resolved" });
     expect(store.getSnapshot()).toEqual([]);
   });
@@ -63,15 +67,27 @@ describe("ActionNeededStore", () => {
     store.upsert(item("late", 10));
     expect(store.getSnapshot()).toEqual([]);
     store.upsert(item("late", 21));
-    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual(["late"]);
+    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual([
+      "late",
+    ]);
   });
 
   it("treats a null snapshot as an explicit source clear", () => {
     const store = new ActionNeededStore();
-    store.reconcile({ source: "one-source", version: 1, items: [item("one", 1, "one-source")] });
-    store.reconcile({ source: "two-source", version: 1, items: [item("two", 1, "two-source")] });
+    store.reconcile({
+      source: "one-source",
+      version: 1,
+      items: [item("one", 1, "one-source")],
+    });
+    store.reconcile({
+      source: "two-source",
+      version: 1,
+      items: [item("two", 1, "two-source")],
+    });
     store.reconcile({ source: "one-source", version: 2, items: null });
-    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual(["two"]);
+    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual([
+      "two",
+    ]);
   });
 
   it("rejects stale source snapshots so reconnect races cannot resurrect state", () => {
@@ -89,7 +105,12 @@ describe("ActionNeededStore", () => {
     });
 
     store.reconcileLocal("test", [item("same", 10)]);
-    store.reconcileLocal("test", [{ ...item("same", 10), action: { kind: "navigate", label: "Open", route: "/settings" } }]);
+    store.reconcileLocal("test", [
+      {
+        ...item("same", 10),
+        action: { kind: "navigate", label: "Open", route: "/settings" },
+      },
+    ]);
 
     expect(notifications).toBe(1);
   });
@@ -109,13 +130,20 @@ describe("ActionNeededStore", () => {
       version: 1,
       items: [item("recurs", 1, "engine")],
     });
-    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual(["recurs"]);
+    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual([
+      "recurs",
+    ]);
   });
 
   it("clears old backend sources when a restarted registry is empty", () => {
     const store = new ActionNeededStore();
     store.acceptBackendEpoch("old");
-    store.reconcile({ source: "source-a", epoch: "old", version: 3, items: [item("old", 3, "source-a")] });
+    store.reconcile({
+      source: "source-a",
+      epoch: "old",
+      version: 3,
+      items: [item("old", 3, "source-a")],
+    });
     store.acceptBackendEpoch("new");
     expect(store.getSnapshot()).toEqual([]);
   });
@@ -123,10 +151,22 @@ describe("ActionNeededStore", () => {
   it("clears source A when the restarted registry only publishes source B", () => {
     const store = new ActionNeededStore();
     store.acceptBackendEpoch("old");
-    store.reconcile({ source: "source-a", epoch: "old", version: 3, items: [item("old", 3, "source-a")] });
+    store.reconcile({
+      source: "source-a",
+      epoch: "old",
+      version: 3,
+      items: [item("old", 3, "source-a")],
+    });
     store.acceptBackendEpoch("new");
-    store.reconcile({ source: "source-b", epoch: "new", version: 1, items: [item("new", 1, "source-b")] });
-    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual(["new"]);
+    store.reconcile({
+      source: "source-b",
+      epoch: "new",
+      version: 1,
+      items: [item("new", 1, "source-b")],
+    });
+    expect(store.getSnapshot().map((entry) => entry.fingerprint)).toEqual([
+      "new",
+    ]);
   });
 
   it("ingests WebSocket upsert, resolve, and null-clear events", () => {
@@ -151,7 +191,10 @@ describe("ActionNeededStore", () => {
 
   it("clears a prior tool requirement when that tool later succeeds", () => {
     actionNeededStore.reset();
-    reconcileToolActionNeeded("Search:{}", item("tool-action", 10, "tools.network"));
+    reconcileToolActionNeeded(
+      "Search:{}",
+      item("tool-action", 10, "tools.network"),
+    );
     expect(actionNeededStore.getSnapshot()).toHaveLength(1);
     reconcileToolActionNeeded("Search:{}", null);
     expect(actionNeededStore.getSnapshot()).toEqual([]);
@@ -160,10 +203,27 @@ describe("ActionNeededStore", () => {
 
   it("does not clear a different target from the same tool", () => {
     actionNeededStore.reset();
-    reconcileToolActionNeeded("Read:{path:a}", item("path-a", 10, "tools.file"));
-    reconcileToolActionNeeded("Read:{path:b}", item("path-b", 10, "tools.file"));
+    reconcileToolActionNeeded(
+      "Read:{path:a}",
+      item("path-a", 10, "tools.file"),
+    );
+    reconcileToolActionNeeded(
+      "Read:{path:b}",
+      item("path-b", 10, "tools.file"),
+    );
     reconcileToolActionNeeded("Read:{path:a}", null);
-    expect(actionNeededStore.getSnapshot().map((entry) => entry.fingerprint)).toEqual(["path-b"]);
+    expect(
+      actionNeededStore.getSnapshot().map((entry) => entry.fingerprint),
+    ).toEqual(["path-b"]);
     actionNeededStore.reset();
+  });
+
+  it("keeps a dismissed download requirement suppressed across reconcile", () => {
+    const store = new ActionNeededStore();
+    const download = item("download:abc:hf_token_missing", 100, "downloads");
+    store.reconcileLocal("downloads", [download]);
+    store.resolve(download.fingerprint, download.observed_at);
+    store.reconcileLocal("downloads", [download]);
+    expect(store.getSnapshot()).toEqual([]);
   });
 });

@@ -1,9 +1,10 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { dispatchActionNeeded } from "./actions";
+import { dismissActionNeeded } from "./store";
 import type { ActionNeeded } from "./types";
 
 export function ActionNeededCard({
@@ -32,13 +33,23 @@ export function ActionNeededCard({
           {item.message}
         </p>
       </div>
-      <Button
-        size="sm"
-        className="h-7 shrink-0 bg-amber-600 px-2.5 text-xs text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
-        onClick={() => void dispatchActionNeeded(item)}
-      >
-        {item.action.label}
-      </Button>
+      <div className="flex shrink-0 items-center gap-1">
+        <Button
+          size="sm"
+          className="h-7 bg-amber-600 px-2.5 text-xs text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
+          onClick={() => void dispatchActionNeeded(item)}
+        >
+          {item.action.label}
+        </Button>
+        <button
+          type="button"
+          onClick={() => dismissActionNeeded(item)}
+          className="rounded-sm p-1 text-amber-800/70 transition-colors hover:text-amber-950 dark:text-amber-100/70 dark:hover:text-amber-50"
+          aria-label={`Dismiss ${item.title}`}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
     </div>
   );
 }

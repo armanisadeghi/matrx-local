@@ -248,8 +248,15 @@ export class ActionNeededStore {
 
 export const actionNeededStore = new ActionNeededStore();
 
-export function reportActionNeeded(item: ActionNeeded | null | undefined): void {
+export function reportActionNeeded(
+  item: ActionNeeded | null | undefined,
+): void {
   if (item) actionNeededStore.upsert(item);
+}
+
+/** User dismissed a remediation card — tombstone until a newer observation arrives. */
+export function dismissActionNeeded(item: ActionNeeded): void {
+  actionNeededStore.resolve(item.fingerprint, item.observed_at ?? undefined);
 }
 
 export function reconcileToolActionNeeded(

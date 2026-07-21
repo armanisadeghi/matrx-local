@@ -2,14 +2,14 @@
  * ImageGenerateForm — the canonical image generate-form building blocks.
  * Every layout composes these; none re-implements a control:
  *
- *  - ImagePromptField        prompt + per-family capacity hint
- *  - ImageCommonSettings     negative → steps/guidance → size → seed (+reset)
+ *  - ImagePromptField        prompt label + inline toolbar + capacity info icon
+ *  - ImageCommonSettings     negative → steps/guidance → size → seed
  *  - InputImageControl       img2img: drop/pick/paste + preview + strength
  *  - AlternativeTextEncodersSection model-scoped Standard/alternative choice
  *  - LoraStylesSection       compact active summary + searchable manager
  *  - ImageAdvancedSection    editable advanced-JSON (every pipeline kwarg)
  *  - ImageFormNotices        params-error banner + gen error + queue notice
- *  - ImageGenerateActions    CancelableGenerateButton + Add-to-queue
+ *  - ImageGenerateActions    Generate + Add-to-queue + Reset
  *  - ImageFormHeader         model name/provider + reset-all + switch/unload
  *  - ImageGenerateForm       the full vertical composition of all the above
  *
@@ -17,7 +17,13 @@
  * pure views over it, configurable by layout-level props only.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   AlertCircle,
   Download,
@@ -44,7 +50,7 @@ import {
   NegativePromptField,
   NumberSliderField,
   ParamsErrorBanner,
-  PromptCapacityHint,
+  PromptCapacityInfo,
   QueueNotice,
   ResetButton,
   SeedInput,
@@ -56,11 +62,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  BatchQueuePanel,
-  PromptMatrixPanel,
-  PromptMatrixQueueBar,
-} from "./PromptMatrix";
+  ImagePromptToolbar,
+  type ImageFormPanelToggles,
+} from "./ImagePromptToolbar";
+import { IMAGE_GEN_PANEL_KEYS, usePersistedToggle } from "./usePersistedToggle";
 import type { ImageGenController } from "./imageController";
+import { ImageRevisionVersionPicker } from "./ImageRevisionVersionPicker";
 import { LoraStylesSection } from "./LoraManager";
 export { LoraStylesSection };
 import { MediaThumb } from "@/components/media/MediaThumb";
@@ -82,19 +89,19 @@ export function ImageRevisionBanner({ ctl }: { ctl: ImageGenController }) {
             ? "Describe the change. Apply keeps this result as the next parent."
             : "Adjust the image description. Apply keeps this result as the next parent."}
         </p>
-        <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground/70">
-          Parent {ctl.form.revision.parentItemId}
-        </p>
       </div>
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        className="h-7 shrink-0 px-2 text-xs"
-        onClick={actions.endImageRevision}
-      >
-        Exit
-      </Button>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <ImageRevisionVersionPicker ctl={ctl} />
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2 text-xs"
+          onClick={actions.endImageRevision}
+        >
+          Exit
+        </Button>
+      </div>
     </div>
   );
 }
@@ -102,24 +109,48 @@ export function ImageRevisionBanner({ ctl }: { ctl: ImageGenController }) {
 export function ImagePromptField({
   ctl,
   placeholder = "Describe the image you want to generate…",
-  textareaClassName = "text-sm min-h-[100px] max-h-[320px] resize-y",
+  textareaClassName = "min-h-[100px] resize-y text-sm",
   showLabel = true,
+  showToolbar = true,
+  showActions = false,
+  renderActions,
+  panels,
 }: {
   ctl: ImageGenController;
   placeholder?: string;
   textareaClassName?: string;
   showLabel?: boolean;
+  showToolbar?: boolean;
+  showActions?: boolean;
+  /** Shared action row factory — call in every slot so rows stay identical. */
+  renderActions?: () => ReactNode;
+  panels?: ImageFormPanelToggles;
 }) {
   const [, actions] = useMediaGenApp();
+  const d = ctl.defaults;
+  const negativeSupported =
+    d?.supportsNegativePrompt ?? ctl.model?.supports_negative_prompt ?? true;
+  const label =
+    ctl.isRevision && ctl.model?.pipeline_type === "flux2-klein"
+      ? "Change"
+      : "Prompt";
   return (
     <div className="space-y-1.5">
       <ImageRevisionBanner ctl={ctl} />
       {showLabel && (
-        <Label className="text-xs">
-          {ctl.isRevision && ctl.model?.pipeline_type === "flux2-klein"
-            ? "Change"
-            : "Prompt"}
-        </Label>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-1">
+            <Label className="text-xs">{label}</Label>
+            <PromptCapacityInfo pipelineType={ctl.model?.pipeline_type} />
+          </div>
+          {showToolbar && (
+            <ImagePromptToolbar
+              ctl={ctl}
+              compact
+              {...(panels !== undefined ? { panels } : {})}
+            />
+          )}
+        </div>
       )}
       <Textarea
         value={ctl.form.prompt}
@@ -131,7 +162,16 @@ export function ImagePromptField({
         }
         className={textareaClassName}
       />
-      <PromptCapacityHint pipelineType={ctl.model?.pipeline_type} />
+      {panels?.showNegative && (
+        <NegativePromptField
+          supported={negativeSupported}
+          value={ctl.form.negativePrompt}
+          onChange={(v) => actions.setImageForm({ negativePrompt: v })}
+          disabled={ctl.form.paramsLoading}
+          hideLabel
+        />
+      )}
+      {showActions && renderActions?.()}
     </div>
   );
 }
@@ -142,8 +182,9 @@ export function ImageCommonSettings({
   ctl,
   showNegative = true,
   showSeed = true,
-  showReset = true,
+  showReset = false,
   sliderColumns = true,
+  layout = "stack",
 }: {
   ctl: ImageGenController;
   showNegative?: boolean;
@@ -151,12 +192,14 @@ export function ImageCommonSettings({
   showReset?: boolean;
   /** Steps/Guidance side by side (true) or stacked (false). */
   sliderColumns?: boolean;
+  layout?: "stack" | "row";
 }) {
   const [, actions] = useMediaGenApp();
   const { setImageForm, resetImageCommon } = actions;
   const d = ctl.defaults;
   if (!d) return null;
   const disabled = ctl.form.paramsLoading;
+  const row = layout === "row";
   const sliders = (
     <>
       <NumberSliderField
@@ -168,6 +211,7 @@ export function ImageCommonSettings({
         step={1}
         defaultValue={d.steps}
         disabled={disabled}
+        layout={layout}
       />
       <NumberSliderField
         label="Guidance"
@@ -178,11 +222,12 @@ export function ImageCommonSettings({
         step={0.5}
         defaultValue={d.guidance}
         disabled={disabled}
+        layout={layout}
       />
     </>
   );
   return (
-    <div className="space-y-4">
+    <div className={row ? "space-y-2" : "space-y-4"}>
       {showNegative && (
         <NegativePromptField
           supported={d.supportsNegativePrompt}
@@ -191,7 +236,9 @@ export function ImageCommonSettings({
           disabled={disabled}
         />
       )}
-      {sliderColumns ? (
+      {row ? (
+        sliders
+      ) : sliderColumns ? (
         <div className="grid grid-cols-2 gap-3">{sliders}</div>
       ) : (
         sliders
@@ -202,22 +249,26 @@ export function ImageCommonSettings({
         onChange={(w, h) => setImageForm({ width: w, height: h })}
         presets={ctl.sizePresets}
         disabled={disabled}
+        layout={layout}
       />
-      {showSeed && (
-        <div className="space-y-1.5">
-          <Label className="text-xs">
-            Seed{" "}
-            <span className="text-muted-foreground">
-              (blank = random — the used seed is shown on the result)
-            </span>
-          </Label>
+      {showSeed &&
+        (row ? (
           <SeedInput
             value={ctl.form.seedText}
             onChange={(seedText) => setImageForm({ seedText })}
             disabled={disabled}
+            layout="row"
           />
-        </div>
-      )}
+        ) : (
+          <div className="space-y-1.5">
+            <Label className="text-xs">Seed</Label>
+            <SeedInput
+              value={ctl.form.seedText}
+              onChange={(seedText) => setImageForm({ seedText })}
+              disabled={disabled}
+            />
+          </div>
+        ))}
       {showReset && (
         <div className="flex justify-end">
           <ResetButton
@@ -238,7 +289,13 @@ export function ImageCommonSettings({
  * strength slider ("How much to change the input") with the model default
  * labeled.
  */
-export function InputImageControl({ ctl }: { ctl: ImageGenController }) {
+export function InputImageControl({
+  ctl,
+  compact = false,
+}: {
+  ctl: ImageGenController;
+  compact?: boolean;
+}) {
   const [, actions] = useMediaGenApp();
   const { setImageForm } = actions;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -250,12 +307,7 @@ export function InputImageControl({ ctl }: { ctl: ImageGenController }) {
 
   return (
     <div className="space-y-2">
-      <Label className="text-xs">
-        Input image{" "}
-        <span className="text-muted-foreground">
-          (optional — generate from this image instead of noise)
-        </span>
-      </Label>
+      {!compact && <Label className="text-xs">Input image</Label>}
       <input
         ref={fileInputRef}
         type="file"
@@ -316,33 +368,25 @@ export function InputImageControl({ ctl }: { ctl: ImageGenController }) {
           className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border border-dashed px-4 py-5 text-center transition-colors ${
             dragOver ? "border-violet-500 bg-violet-500/5" : "hover:bg-muted/20"
           }`}
-          title="Click to choose an image, or drop / paste one here"
+          title="Drop, paste, or choose an image"
         >
           <ImagePlus className="h-5 w-5 text-muted-foreground" />
           <p className="text-xs text-muted-foreground">
-            Drop an image here, click to choose, or paste
-          </p>
-          <p className="text-[10px] text-muted-foreground/70">
-            PNG / JPEG / WebP, up to 20 MB
+            Drop, paste, or choose
           </p>
         </div>
       )}
       {img && d.strength !== null && (
         <NumberSliderField
-          label="How much to change the input"
+          label="Strength"
           value={ctl.form.strength}
           onChange={(strength) => setImageForm({ strength })}
           min={0}
           max={1}
           step={0.05}
           defaultValue={d.strength ?? IMG2IMG_DEFAULT_STRENGTH}
+          layout="row"
         />
-      )}
-      {img && d.strength === null && (
-        <p className="text-[11px] text-muted-foreground">
-          This model edits from the reference image and your prompt directly —
-          it has no strength control.
-        </p>
       )}
     </div>
   );
@@ -597,10 +641,10 @@ export function ImageFormNotices({ ctl }: { ctl: ImageGenController }) {
   );
 }
 
-/** Generate (cancelable) + Add-to-queue action pair. */
+/** Generate (cancelable) + Add-to-queue + Reset — one implementation, every slot. */
 export function ImageGenerateActions({
   ctl,
-  size,
+  size = "default",
   buttonClassName = "w-full",
   queueLabel = "Add to queue",
   extraDisabled = false,
@@ -611,10 +655,12 @@ export function ImageGenerateActions({
   queueLabel?: string;
   /** Extra gating from the layout (e.g. mode not ready). */
   extraDisabled?: boolean;
+  /** @deprecated Ignored — all action rows share one layout. */
+  compact?: boolean;
 }) {
   const [state, actions] = useMediaGenApp();
   const { imageGenerating, imageCancelling, imageGenStartedAt } = state;
-  const { cancelImageGeneration } = actions;
+  const { cancelImageGeneration, resetImageCommon } = actions;
   const disabled = ctl.formInvalid || extraDisabled;
   return (
     <div className="flex gap-2">
@@ -625,12 +671,13 @@ export function ImageGenerateActions({
         disabled={disabled}
         onGenerate={() => void ctl.handleGenerate()}
         onCancel={() => void cancelImageGeneration()}
-        containerClassName="flex-1"
-        {...(size !== undefined ? { size } : {})}
+        containerClassName="flex-1 min-w-0"
+        size={size}
         buttonClassName={buttonClassName}
+        showWorkingNote={false}
         idleContent={
           <>
-            <ImageIcon className="h-4 w-4 mr-2" />
+            <ImageIcon className="mr-2 h-4 w-4" />
             {ctl.isRevision ? "Apply change" : "Generate"}
           </>
         }
@@ -640,11 +687,17 @@ export function ImageGenerateActions({
         size={size}
         disabled={disabled}
         onClick={() => void ctl.handleEnqueue()}
-        title="Queue this generation and keep editing — write the next prompt right away"
+        title="Add to queue"
+        className="flex-1"
       >
-        <ListPlus className="h-4 w-4 mr-2" />
+        <ListPlus className="mr-2 h-4 w-4" />
         {ctl.isRevision ? "Queue revision" : queueLabel}
       </Button>
+      <ResetButton
+        onClick={resetImageCommon}
+        label="Reset settings"
+        disabled={ctl.form.paramsLoading}
+      />
     </div>
   );
 }
@@ -792,15 +845,36 @@ export function ImageGenerateForm({
   onSwitchModel,
 }: {
   ctl: ImageGenController;
-  /** Layout renders the actions elsewhere (e.g. Studio's sticky bar). */
   hideActions?: boolean;
-  /** Layout renders errors/notices elsewhere. */
   hideNotices?: boolean;
   showHeader?: boolean;
   onSwitchModel?: () => void;
 }) {
-  const [mode, setMode] = useImageGenMode();
-  const batch = !ctl.isRevision && mode === "batch";
+  const negativePanel = usePersistedToggle(IMAGE_GEN_PANEL_KEYS.negative);
+  const inputImagePanel = usePersistedToggle(IMAGE_GEN_PANEL_KEYS.inputImage);
+  const lorasPanel = usePersistedToggle(IMAGE_GEN_PANEL_KEYS.loras);
+  const advancedPanel = usePersistedToggle(IMAGE_GEN_PANEL_KEYS.advanced);
+  const activeLoraCount = ctl.form.loras.filter((lora) => lora.enabled).length;
+  const supportsImg2Img = ctl.defaults?.supportsImg2Img ?? false;
+
+  const panels: ImageFormPanelToggles = {
+    showNegative: negativePanel.open,
+    onToggleNegative: negativePanel.toggle,
+    onRevealNegative: negativePanel.reveal,
+    showInputImage: inputImagePanel.open,
+    onToggleInputImage: inputImagePanel.toggle,
+    showInputImageButton: supportsImg2Img,
+    showLoras: lorasPanel.open,
+    onToggleLoras: lorasPanel.toggle,
+    activeLoraCount,
+    showAdvanced: advancedPanel.open,
+    onToggleAdvanced: advancedPanel.toggle,
+  };
+
+  const renderActions = useCallback(
+    () => <ImageGenerateActions ctl={ctl} />,
+    [ctl],
+  );
 
   return (
     <div className="space-y-4">
@@ -812,40 +886,23 @@ export function ImageGenerateForm({
       )}
       {!hideNotices && <ImageParamsErrorNotice ctl={ctl} />}
 
-      {!ctl.isRevision && (
-        <ImageGenModeToggle
-          mode={mode}
-          onChange={setMode}
-          queuedCount={ctl.activeJobCount}
-        />
+      <ImagePromptField
+        ctl={ctl}
+        showActions
+        renderActions={renderActions}
+        panels={panels}
+      />
+
+      <ImageCommonSettings ctl={ctl} showNegative={false} layout="row" />
+      {inputImagePanel.open && supportsImg2Img && (
+        <InputImageControl ctl={ctl} compact />
       )}
-
-      {/* In batch mode the matrix REPLACES the single prompt field: the
-          template, its variables and the strategy all live above the base
-          settings that every run in the batch shares. */}
-      {batch ? <PromptMatrixPanel ctl={ctl} /> : <ImagePromptField ctl={ctl} />}
-
-      {batch && (
-        <p className="text-[11px] text-muted-foreground">
-          Settings below apply to every run in the batch — except any you sweep
-          as a variable, which wins.
-        </p>
-      )}
-
-      <ImageCommonSettings ctl={ctl} showNegative={!batch} />
-      <InputImageControl ctl={ctl} />
       <AlternativeTextEncodersSection ctl={ctl} />
-      <LoraStylesSection ctl={ctl} />
-      <ImageAdvancedSection ctl={ctl} />
+      {lorasPanel.open && <LoraStylesSection ctl={ctl} />}
+      {advancedPanel.open && <ImageAdvancedSection ctl={ctl} />}
       {!hideNotices && <ImageFormNotices ctl={ctl} />}
 
-      {batch ? (
-        <PromptMatrixQueueBar ctl={ctl} />
-      ) : (
-        !hideActions && <ImageGenerateActions ctl={ctl} />
-      )}
-
-      {batch && <BatchQueuePanel />}
+      {!hideActions && renderActions()}
     </div>
   );
 }

@@ -22,6 +22,13 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import type { ImageGenModelInfo, VideoGenModelInfo } from "@/lib/api";
@@ -29,6 +36,7 @@ import {
   ErrorNote,
   InlineProgressBar,
   ModelLoadingNotice,
+  ResetButton,
   StarRating,
   findModelDownload,
   formatGb,
@@ -529,7 +537,9 @@ export function ImageModelPicker({
             onLoad={() => void ctl.handleLoadModel(m)}
             onDownload={() => void ctl.handleDownloadModel(m)}
             onGenerate={() => ctl.handleOpenGenerate(m)}
-            {...(m.custom ? { onDeleteCustom: () => deleteCustomModel(m.model_id) } : {})}
+            {...(m.custom
+              ? { onDeleteCustom: () => deleteCustomModel(m.model_id) }
+              : {})}
           />
         ))}
         {imageModels.length === 0 && (
@@ -624,6 +634,262 @@ export function VideoModelPicker({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Compact one-row model selector for generate views (Classic, Workspace). */
+export function ImageModelBar({ ctl }: { ctl: ImageGenController }) {
+  const [state, actions] = useMediaGenApp();
+  const { imageModels, imageStatus, imageModelLoading, loadingImageModelId } =
+    state;
+  const { resetImageAll } = actions;
+  const current = ctl.model;
+  const currentId = current?.model_id ?? "";
+  const loadedId = imageStatus?.loaded_model_id ?? null;
+  const isLoaded = !!currentId && loadedId === currentId;
+  const anyLoadInFlight = imageModelLoading || !!imageStatus?.is_loading;
+  const { dl, openModal } = useModelDownload("image_gen", currentId || "none");
+  const downloading =
+    !!currentId && (dl?.status === "active" || dl?.status === "queued");
+
+  const handleSelect = (modelId: string) => {
+    const m = imageModels.find((row) => row.model_id === modelId);
+    if (m) ctl.handleOpenGenerate(m);
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-1.5 rounded-lg border bg-card px-2 py-1.5">
+        <Select
+          {...(currentId ? { value: currentId } : {})}
+          onValueChange={handleSelect}
+          disabled={imageModels.length === 0}
+        >
+          <SelectTrigger className="h-8 min-w-[12rem] max-w-[20rem] flex-1 text-xs">
+            <SelectValue placeholder="Select image model…" />
+          </SelectTrigger>
+          <SelectContent>
+            {imageModels.map((m) => (
+              <SelectItem
+                key={m.model_id}
+                value={m.model_id}
+                className="text-xs"
+              >
+                {m.name}
+                {!m.is_downloaded ? " · not downloaded" : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {current && (
+          <span className="hidden shrink-0 rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground sm:inline">
+            {current.provider}
+          </span>
+        )}
+
+        {anyLoadInFlight && (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+        )}
+
+        {!anyLoadInFlight && isLoaded && (
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-500" />
+        )}
+
+        {downloading && dl && (
+          <button
+            type="button"
+            className="text-[10px] text-violet-500 hover:underline"
+            onClick={() => openModal()}
+          >
+            {Math.round(dl.percent)}%
+          </button>
+        )}
+
+        <div className="ml-auto flex flex-wrap items-center gap-1">
+          {current && !current.is_downloaded && !downloading && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1 px-2 text-xs"
+              onClick={() => ctl.handleDownloadModel(current)}
+            >
+              <Download className="h-3 w-3" />
+              Download
+            </Button>
+          )}
+          {current &&
+            current.is_downloaded &&
+            !isLoaded &&
+            !anyLoadInFlight && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => void ctl.handleLoadModel(current)}
+              >
+                Load
+              </Button>
+            )}
+          {current && (
+            <>
+              <ResetButton onClick={resetImageAll} label="Reset settings" />
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs"
+                disabled={!loadedId}
+                onClick={() => void ctl.handleUnload()}
+              >
+                Unload
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+      {anyLoadInFlight && (
+        <ModelLoadingNotice
+          loading
+          startedAt={state.imageLoadStartedAt}
+          loadError={imageStatus?.load_error}
+          what={loadingImageModelId ?? "model"}
+        />
+      )}
+      {ctl.genError && (
+        <ErrorNote message={ctl.genError} onDismiss={ctl.dismissGenError} />
+      )}
+    </div>
+  );
+}
+
+/** Compact one-row model selector for video generate views. */
+export function VideoModelBar({ ctl }: { ctl: VideoGenController }) {
+  const [state, actions] = useMediaGenApp();
+  const { videoModels, videoStatus, videoModelLoading, loadingVideoModelId } =
+    state;
+  const { resetVideoAll } = actions;
+  const current = ctl.model;
+  const currentId = current?.model_id ?? "";
+  const loadedId = videoStatus?.loaded_model_id ?? null;
+  const isLoaded = !!currentId && loadedId === currentId;
+  const anyLoadInFlight = videoModelLoading || !!videoStatus?.is_loading;
+  const { dl, openModal } = useModelDownload("video_gen", currentId || "none");
+  const downloading =
+    !!currentId && (dl?.status === "active" || dl?.status === "queued");
+
+  const handleSelect = (modelId: string) => {
+    const m = videoModels.find((row) => row.model_id === modelId);
+    if (m) ctl.handleOpenGenerate(m);
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-1.5 rounded-lg border bg-card px-2 py-1.5">
+        <Select
+          {...(currentId ? { value: currentId } : {})}
+          onValueChange={handleSelect}
+          disabled={videoModels.length === 0}
+        >
+          <SelectTrigger className="h-8 min-w-[12rem] max-w-[20rem] flex-1 text-xs">
+            <SelectValue placeholder="Select video model…" />
+          </SelectTrigger>
+          <SelectContent>
+            {videoModels.map((m) => (
+              <SelectItem
+                key={m.model_id}
+                value={m.model_id}
+                className="text-xs"
+              >
+                {m.name}
+                {!m.is_downloaded ? " · not downloaded" : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {current && (
+          <span className="hidden shrink-0 rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground sm:inline">
+            {current.provider}
+          </span>
+        )}
+
+        {anyLoadInFlight && (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+        )}
+
+        {!anyLoadInFlight && isLoaded && (
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-500" />
+        )}
+
+        {downloading && dl && (
+          <button
+            type="button"
+            className="text-[10px] text-violet-500 hover:underline"
+            onClick={() => openModal()}
+          >
+            {Math.round(dl.percent)}%
+          </button>
+        )}
+
+        <div className="ml-auto flex flex-wrap items-center gap-1">
+          {current && !current.is_downloaded && !downloading && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1 px-2 text-xs"
+              onClick={() => ctl.handleDownloadModel(current)}
+            >
+              <Download className="h-3 w-3" />
+              Download
+            </Button>
+          )}
+          {current &&
+            current.is_downloaded &&
+            !isLoaded &&
+            !anyLoadInFlight && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => void ctl.handleLoadModel(current)}
+              >
+                Load
+              </Button>
+            )}
+          {current && (
+            <>
+              <ResetButton onClick={resetVideoAll} label="Reset settings" />
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs"
+                disabled={!loadedId}
+                onClick={() => void ctl.handleUnload()}
+              >
+                Unload
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+      {anyLoadInFlight && (
+        <ModelLoadingNotice
+          loading
+          startedAt={state.videoLoadStartedAt}
+          loadError={videoStatus?.load_error}
+          what={loadingVideoModelId ?? "model"}
+        />
+      )}
+      {ctl.genError && (
+        <ErrorNote message={ctl.genError} onDismiss={ctl.dismissGenError} />
+      )}
     </div>
   );
 }

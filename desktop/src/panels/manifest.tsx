@@ -21,6 +21,9 @@ import { DownloadManagerModal } from "@/components/downloads/DownloadManagerModa
 import { MediaGenProvider } from "@/contexts/MediaGenContext";
 import { PromptMatrixProvider } from "@/contexts/PromptMatrixContext";
 import { MediaLibraryProvider } from "@/contexts/MediaLibraryContext";
+import { ListLibraryProvider } from "@/contexts/ListLibraryContext";
+import { SavedPromptsProvider } from "@/contexts/SavedPromptsContext";
+import { VariationBatchesProvider } from "@/contexts/VariationBatchesContext";
 import { MediaVaultProvider } from "@/contexts/MediaVaultContext";
 import { MediaActionsProvider } from "@/components/media/MediaActionsProvider";
 import { TtsProvider } from "@/contexts/TtsContext";
@@ -75,7 +78,9 @@ function provide(
 const ACCESS_HEALTH_PROVIDER: PanelProvider = {
   id: "access-health",
   wrap: (children, ctx) => (
-    <AccessHealthProvider engineStatus={ctx.status}>{children}</AccessHealthProvider>
+    <AccessHealthProvider engineStatus={ctx.status}>
+      {children}
+    </AccessHealthProvider>
   ),
 };
 
@@ -91,6 +96,12 @@ const DOWNLOAD_MANAGER_PROVIDER: PanelProvider = {
 
 const MEDIA_GEN_PROVIDER = provide("media-generation", MediaGenProvider);
 const PROMPT_MATRIX_PROVIDER = provide("prompt-matrix", PromptMatrixProvider);
+const LIST_LIBRARY_PROVIDER = provide("list-library", ListLibraryProvider);
+const SAVED_PROMPTS_PROVIDER = provide("saved-prompts", SavedPromptsProvider);
+const VARIATION_BATCHES_PROVIDER = provide(
+  "variation-batches",
+  VariationBatchesProvider,
+);
 const MEDIA_LIBRARY_PROVIDER = provide("media-library", MediaLibraryProvider);
 const MEDIA_VAULT_PROVIDER = provide("media-vault", MediaVaultProvider);
 const MEDIA_ACTIONS_PROVIDER = provide("media-actions", MediaActionsProvider);
@@ -128,7 +139,9 @@ export const PANEL_MANIFEST: Record<PanelPage, PanelEntry> = {
   "cloud-chat": {
     title: "Cloud Chat",
     providers: [],
-    render: ({ status, url }) => <CloudChat engineStatus={status} engineUrl={url} />,
+    render: ({ status, url }) => (
+      <CloudChat engineStatus={status} engineUrl={url} />
+    ),
   },
   notes: {
     title: "Notes",
@@ -144,12 +157,16 @@ export const PANEL_MANIFEST: Record<PanelPage, PanelEntry> = {
   activity: {
     title: "Activity",
     providers: [],
-    render: ({ status, url }) => <Activity engineStatus={status} engineUrl={url} />,
+    render: ({ status, url }) => (
+      <Activity engineStatus={status} engineUrl={url} />
+    ),
   },
   ports: {
     title: "Ports",
     providers: [],
-    render: ({ status, url }) => <Ports engineStatus={status} engineUrl={url} />,
+    render: ({ status, url }) => (
+      <Ports engineStatus={status} engineUrl={url} />
+    ),
   },
   transcription: {
     title: "Transcription",
@@ -175,6 +192,9 @@ export const PANEL_MANIFEST: Record<PanelPage, PanelEntry> = {
       DOWNLOAD_MANAGER_PROVIDER,
       MEDIA_GEN_PROVIDER,
       PROMPT_MATRIX_PROVIDER,
+      LIST_LIBRARY_PROVIDER,
+      SAVED_PROMPTS_PROVIDER,
+      VARIATION_BATCHES_PROVIDER,
       MEDIA_LIBRARY_PROVIDER,
       MEDIA_VAULT_PROVIDER,
       MEDIA_ACTIONS_PROVIDER,

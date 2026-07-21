@@ -92,7 +92,9 @@ function InstalledLoraRow({
   const enabled = selected?.enabled ?? false;
   const scale = selected?.scale ?? 1;
   const compatibility = classifyLoraCompatibility(lora.base_family, ctl.model);
-  const cannotEnable = !lora.installed || (compatibility === "incompatible" && !enabled);
+  const isInstalled = lora.installed !== false;
+  const cannotEnable =
+    !isInstalled || (compatibility === "incompatible" && !enabled);
 
   const setSelection = (patch: Partial<SelectedLora>) => {
     actions.setImageForm({
@@ -106,13 +108,18 @@ function InstalledLoraRow({
         <Checkbox
           checked={enabled}
           disabled={cannotEnable}
-          onCheckedChange={(checked) => setSelection({ enabled: checked === true })}
+          onCheckedChange={(checked) =>
+            setSelection({ enabled: checked === true })
+          }
           aria-label={`${enabled ? "Disable" : "Enable"} ${lora.name || lora.id}`}
           className="mt-0.5 h-3.5 w-3.5"
         />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <p className="min-w-0 truncate text-xs font-medium" title={lora.name ?? lora.repo_id}>
+            <p
+              className="min-w-0 truncate text-xs font-medium"
+              title={lora.name ?? lora.repo_id}
+            >
               {lora.name || lora.id}
             </p>
             <FamilyBadge lora={lora} ctl={ctl} />
@@ -120,23 +127,28 @@ function InstalledLoraRow({
           </div>
           <p className="truncate text-[10px] text-muted-foreground">
             {lora.repo_id}
-            {lora.size_bytes > 0 ? ` · ${formatGb(lora.size_bytes / 1024 ** 3)}` : ""}
+            {lora.size_bytes > 0
+              ? ` · ${formatGb(lora.size_bytes / 1024 ** 3)}`
+              : ""}
             {lora.source ? ` · ${lora.source}` : ""}
           </p>
           {compatibility === "incompatible" && (
             <p className="mt-1 flex items-start gap-1 text-[10px] text-amber-600 dark:text-amber-400">
               <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
-              Built for {lora.base_family}; activation is disabled for {ctl.model?.name ?? "this model"}.
+              Built for {lora.base_family}; activation is disabled for{" "}
+              {ctl.model?.name ?? "this model"}.
             </p>
           )}
           {compatibility === "unknown" && (
             <p className="mt-1 text-[10px] text-muted-foreground">
-              Family unclassified — the engine will attempt it and report any real incompatibility.
+              Family unclassified — the engine will attempt it and report any
+              real incompatibility.
             </p>
           )}
           {!lora.installed && (
             <p className="mt-1 text-[10px] text-muted-foreground">
-              Activation becomes available after the download passes integrity checks.
+              Activation becomes available after the download passes integrity
+              checks.
             </p>
           )}
         </div>
@@ -157,13 +169,17 @@ function InstalledLoraRow({
       </div>
       {enabled && (
         <div className="flex items-center gap-2 pl-5">
-          <span className="w-14 shrink-0 text-[10px] text-muted-foreground">Strength</span>
+          <span className="w-14 shrink-0 text-[10px] text-muted-foreground">
+            Strength
+          </span>
           <Slider
             min={0}
             max={1.5}
             step={0.05}
             value={[scale]}
-            onValueChange={([value]) => value !== undefined && setSelection({ scale: value })}
+            onValueChange={([value]) =>
+              value !== undefined && setSelection({ scale: value })
+            }
             className="flex-1"
           />
           <span className="w-9 text-right text-[10px] tabular-nums text-muted-foreground">
@@ -186,14 +202,17 @@ function AvailableLoraRow({
   download: { status: string; percent: number } | undefined;
   onDownload: () => void;
 }) {
-  const downloading = download?.status === "active" || download?.status === "queued";
+  const downloading =
+    download?.status === "active" || download?.status === "queued";
   const compatibility = classifyLoraCompatibility(lora.base_family, ctl.model);
   return (
     <div className="space-y-2 rounded-lg border px-3 py-2.5">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <p className="min-w-0 truncate text-xs font-medium">{lora.name || lora.repo_id}</p>
+            <p className="min-w-0 truncate text-xs font-medium">
+              {lora.name || lora.repo_id}
+            </p>
             <FamilyBadge lora={lora} ctl={ctl} />
             {lora.unverified && <Badge variant="outline">Unverified</Badge>}
           </div>
@@ -207,7 +226,8 @@ function AvailableLoraRow({
           </p>
           {compatibility === "incompatible" && (
             <p className="mt-1 text-[10px] text-amber-600 dark:text-amber-400">
-              You can download and manage this family, but it cannot be activated for the selected model.
+              You can download and manage this family, but it cannot be
+              activated for the selected model.
             </p>
           )}
         </div>
@@ -217,7 +237,12 @@ function AvailableLoraRow({
             {Math.round(download.percent)}%
           </span>
         ) : (
-          <Button size="sm" variant="outline" className="h-7 shrink-0 px-2.5 text-xs" onClick={onDownload}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0 px-2.5 text-xs"
+            onClick={onDownload}
+          >
             <Download className="mr-1 h-3 w-3" />
             Get
           </Button>
@@ -227,7 +252,9 @@ function AvailableLoraRow({
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/60">
           <div
             className="h-full rounded-full bg-violet-500 transition-[width] duration-300"
-            style={{ width: `${Math.min(100, Math.max(0, download.percent))}%` }}
+            style={{
+              width: `${Math.min(100, Math.max(0, download.percent))}%`,
+            }}
           />
         </div>
       )}
@@ -256,7 +283,9 @@ function LoraManagerDialog({
   const installed = state.loraList?.installed ?? [];
   const catalog = state.loraList?.catalog ?? [];
   const activeIds = new Set(
-    ctl.form.loras.filter((selection) => selection.enabled).map((selection) => selection.id),
+    ctl.form.loras
+      .filter((selection) => selection.enabled)
+      .map((selection) => selection.id),
   );
   const installedRepoIds = new Set(installed.map((lora) => lora.repo_id));
   const activeInstalled = installed.filter((lora) => activeIds.has(lora.id));
@@ -275,7 +304,9 @@ function LoraManagerDialog({
   }, [downloads, state.loraDownloads]);
 
   const completedTracked = useMemo(
-    () => Object.values(entryByRepo).filter((entry) => entry.status === "completed").length,
+    () =>
+      Object.values(entryByRepo).filter((entry) => entry.status === "completed")
+        .length,
     [entryByRepo],
   );
   useEffect(() => {
@@ -318,19 +349,29 @@ function LoraManagerDialog({
         <DialogHeader className="border-b px-5 pb-4 pt-5">
           <DialogTitle>Manage LoRA styles</DialogTitle>
           <DialogDescription>
-            Search, install, activate, and tune adapters. Results default to {ctl.model?.name ?? "the selected model"}.
+            Search, install, activate, and tune adapters. Results default to{" "}
+            {ctl.model?.name ?? "the selected model"}.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 px-5 pt-4">
-          {state.loraError && <ErrorNote message={`LoRA styles unavailable — ${state.loraError}`} />}
+          {state.loraError && (
+            <ErrorNote
+              message={`LoRA styles unavailable — ${state.loraError}`}
+            />
+          )}
           {state.loraNeedsCivitaiKey && (
             <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2.5">
               <p className="flex items-start gap-2 text-[11px] text-amber-600 dark:text-amber-400">
                 <KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 Civitai downloads need your Civitai API key.
               </p>
-              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate("/settings?tab=api-keys") }>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                onClick={() => navigate("/settings?tab=api-keys")}
+              >
                 Set key
               </Button>
             </div>
@@ -346,9 +387,12 @@ function LoraManagerDialog({
           </div>
           <div className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-3 py-2">
             <div>
-              <Label htmlFor="show-all-lora-families" className="text-xs">Show all families</Label>
+              <Label htmlFor="show-all-lora-families" className="text-xs">
+                Show all families
+              </Label>
               <p className="text-[10px] text-muted-foreground">
-                Default filter: {currentFamily}. Incompatible entries remain management-only.
+                Default filter: {currentFamily}. Incompatible entries remain
+                management-only.
               </p>
             </div>
             <Switch
@@ -381,7 +425,11 @@ function LoraManagerDialog({
         </div>
 
         <div className="min-h-0 flex-1 px-5 pb-4 pt-3">
-          <Tabs value={tab} onValueChange={setTab} className="flex h-full min-h-0 flex-col">
+          <Tabs
+            value={tab}
+            onValueChange={setTab}
+            className="flex h-full min-h-0 flex-col"
+          >
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="installed" className="text-xs">
                 Installed ({visibleInstalled.length})
@@ -402,8 +450,14 @@ function LoraManagerDialog({
                     </p>
                   )}
                   {visibleInstalled.length > limit && (
-                    <Button variant="outline" className="w-full" onClick={() => setLimit((value) => value + PAGE_SIZE)}>
-                      Show {Math.min(PAGE_SIZE, visibleInstalled.length - limit)} more
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => setLimit((value) => value + PAGE_SIZE)}
+                    >
+                      Show{" "}
+                      {Math.min(PAGE_SIZE, visibleInstalled.length - limit)}{" "}
+                      more
                     </Button>
                   )}
                 </div>
@@ -418,7 +472,12 @@ function LoraManagerDialog({
                       lora={lora}
                       ctl={ctl}
                       download={entryByRepo[lora.repo_id]}
-                      onDownload={() => void actions.downloadLora(lora.repo_id, lora.weight_name ?? undefined)}
+                      onDownload={() =>
+                        void actions.downloadLora(
+                          lora.repo_id,
+                          lora.weight_name ?? undefined,
+                        )
+                      }
                     />
                   ))}
                   {visibleAvailable.length === 0 && (
@@ -427,8 +486,14 @@ function LoraManagerDialog({
                     </p>
                   )}
                   {visibleAvailable.length > limit && (
-                    <Button variant="outline" className="w-full" onClick={() => setLimit((value) => value + PAGE_SIZE)}>
-                      Show {Math.min(PAGE_SIZE, visibleAvailable.length - limit)} more
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => setLimit((value) => value + PAGE_SIZE)}
+                    >
+                      Show{" "}
+                      {Math.min(PAGE_SIZE, visibleAvailable.length - limit)}{" "}
+                      more
                     </Button>
                   )}
                 </div>
@@ -438,7 +503,9 @@ function LoraManagerDialog({
         </div>
 
         <div className="border-t px-5 py-4">
-          <Label className="text-xs">Install from Hugging Face or Civitai</Label>
+          <Label className="text-xs">
+            Install from Hugging Face or Civitai
+          </Label>
           <div className="mt-1.5 flex gap-2">
             <Input
               value={repoInput}
@@ -446,7 +513,11 @@ function LoraManagerDialog({
               onKeyDown={(event) => event.key === "Enter" && submitCustom()}
               placeholder="Repo, model id, or model/version link"
             />
-            <Button size="sm" disabled={!repoInput.trim()} onClick={submitCustom}>
+            <Button
+              size="sm"
+              disabled={!repoInput.trim()}
+              onClick={submitCustom}
+            >
               <Download className="mr-1.5 h-3.5 w-3.5" />
               Install
             </Button>
@@ -465,11 +536,16 @@ export function LoraStylesSection({ ctl }: { ctl: ImageGenController }) {
     (state.loraList?.installed ?? []).map((lora) => [lora.id, lora]),
   );
   const active = ctl.form.loras.filter((selection) => selection.enabled);
-  const missingActive = active.filter((selection) => !installedById.has(selection.id));
+  const missingActive = active.filter(
+    (selection) => !installedById.has(selection.id),
+  );
   const disabledForModel = ctl.form.loras.filter((selection) => {
     if (selection.enabled) return false;
     const installed = installedById.get(selection.id);
-    return classifyLoraCompatibility(installed?.base_family, ctl.model) === "incompatible";
+    return (
+      classifyLoraCompatibility(installed?.base_family, ctl.model) ===
+      "incompatible"
+    );
   });
 
   return (
@@ -480,14 +556,23 @@ export function LoraStylesSection({ ctl }: { ctl: ImageGenController }) {
             <Sparkles className="h-3.5 w-3.5 text-violet-500" />
             LoRA styles
             {active.length > 0 && (
-              <Badge variant="secondary" className="ml-1">{active.length} active</Badge>
+              <Badge variant="secondary" className="ml-1">
+                {active.length} active
+              </Badge>
             )}
           </div>
           {active.length === 0 && (
-            <p className="mt-0.5 text-[10px] text-muted-foreground">No active adapters</p>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">
+              No active adapters
+            </p>
           )}
         </div>
-        <Button size="sm" variant="outline" className="h-7 shrink-0 text-xs" onClick={() => setManagerOpen(true)}>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 shrink-0 text-xs"
+          onClick={() => setManagerOpen(true)}
+        >
           <Settings2 className="mr-1.5 h-3.5 w-3.5" />
           {active.length > 0 ? "Manage" : "Add / Manage"}
         </Button>
@@ -497,25 +582,39 @@ export function LoraStylesSection({ ctl }: { ctl: ImageGenController }) {
         <div className="flex flex-wrap gap-1.5">
           {active.map((selection) => {
             const installed = installedById.get(selection.id);
-            const compatibility = classifyLoraCompatibility(installed?.base_family, ctl.model);
+            const compatibility = classifyLoraCompatibility(
+              installed?.base_family,
+              ctl.model,
+            );
             return (
               <span
                 key={selection.id}
                 className={`inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-1 text-[11px] ${
-                  compatibility === "incompatible" ? "border-amber-500/50 bg-amber-500/5" : "bg-muted/40"
+                  compatibility === "incompatible"
+                    ? "border-amber-500/50 bg-amber-500/5"
+                    : "bg-muted/40"
                 }`}
               >
-                {compatibility === "incompatible" && <AlertCircle className="h-3 w-3 shrink-0 text-amber-500" />}
-                <span className="max-w-48 truncate" title={installed?.name || selection.id}>
+                {compatibility === "incompatible" && (
+                  <AlertCircle className="h-3 w-3 shrink-0 text-amber-500" />
+                )}
+                <span
+                  className="max-w-48 truncate"
+                  title={installed?.name || selection.id}
+                >
                   {installed?.name || selection.id}
                 </span>
-                <span className="tabular-nums text-muted-foreground">{selection.scale.toFixed(2)}</span>
+                <span className="tabular-nums text-muted-foreground">
+                  {selection.scale.toFixed(2)}
+                </span>
                 <button
                   type="button"
                   className="ml-0.5 rounded-sm text-muted-foreground hover:text-foreground"
                   onClick={() =>
                     actions.setImageForm({
-                      loras: updateLoraSelection(ctl.form.loras, selection.id, { enabled: false }),
+                      loras: updateLoraSelection(ctl.form.loras, selection.id, {
+                        enabled: false,
+                      }),
                     })
                   }
                   aria-label={`Disable ${installed?.name || selection.id}`}
@@ -536,7 +635,9 @@ export function LoraStylesSection({ ctl }: { ctl: ImageGenController }) {
           onClick={() => setManagerOpen(true)}
         >
           <AlertCircle className="h-3 w-3 shrink-0" />
-          {disabledForModel.length} incompatible selection{disabledForModel.length === 1 ? " was" : "s were"} kept but disabled for this model
+          {disabledForModel.length} incompatible selection
+          {disabledForModel.length === 1 ? " was" : "s were"} kept but disabled
+          for this model
         </button>
       )}
       {missingActive.length > 0 && (
@@ -544,8 +645,14 @@ export function LoraStylesSection({ ctl }: { ctl: ImageGenController }) {
           message={`Active style${missingActive.length === 1 ? "" : "s"} missing from disk: ${missingActive.map((selection) => selection.id).join(", ")}. Remove or reinstall before generating.`}
         />
       )}
-      {state.loraError && <ErrorNote message={`LoRA styles unavailable — ${state.loraError}`} />}
-      <LoraManagerDialog open={managerOpen} onOpenChange={setManagerOpen} ctl={ctl} />
+      {state.loraError && (
+        <ErrorNote message={`LoRA styles unavailable — ${state.loraError}`} />
+      )}
+      <LoraManagerDialog
+        open={managerOpen}
+        onOpenChange={setManagerOpen}
+        ctl={ctl}
+      />
     </div>
   );
 }

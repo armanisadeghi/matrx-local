@@ -98,7 +98,11 @@ import type {
 } from "@/lib/api";
 import { emitClientLog } from "@/hooks/use-unified-log";
 import { VAULT_UNLOCKED_EVENT } from "@/hooks/use-media-vault";
-import { onMediaItemsRemoved, onVaultLocked } from "@/lib/media-events";
+import {
+  announceMediaItemsAdded,
+  onMediaItemsRemoved,
+  onVaultLocked,
+} from "@/lib/media-events";
 import {
   acceptsRuntimeSnapshot,
   isRuntimeActive,
@@ -829,6 +833,10 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
   const imageJobsRefreshRef = useRef(0);
   /** Latest job completion already shown in the preview pane. */
   const lastPromotedFinishedSequenceRef = useRef(0);
+  /** Latest finished_sequence already announced to the media library. */
+  const lastAnnouncedLibrarySequenceRef = useRef(0);
+  const libraryAnnounceInitializedRef = useRef(false);
+  const lastAnnouncedVideoLibraryItemRef = useRef<string | null>(null);
   /** Cancels in-flight preview fetches when a newer completion arrives. */
   const imageResultPromoteRef = useRef(0);
   /** Prevent a slow older queue poll from overwriting a newer mutation refresh. */
@@ -1359,6 +1367,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
             request,
           };
           setImageResult(nextResult);
+          if (nextResult.itemId) {
+            announceMediaItemsAdded([nextResult.itemId]);
+          }
           // Applying a revision advances the branch in one atomic state update:
           // the fresh result becomes the next parent, while the root remains
           // fixed. A stale response cannot advance a newer branch.
@@ -1493,6 +1504,9 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
             filePath: result.file_path ?? null,
             request,
           });
+          if (result.item_id) {
+            announceMediaItemsAdded([result.item_id]);
+          }
           return true;
         }
         setImageGenError(
@@ -2060,6 +2074,36 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
     })();
   }, [imageJobs, imageResult?.itemId, imageResult?.b64]);
 
+  // Completed image jobs persist into the media library — announce only NEW
+  // terminal completions so the library can prepend without replaying history
+  // on the first queue fetch.
+  useEffect(() => {
+    const completed = imageJobs.filter(
+      (j) => j.status === "completed" && j.item_id,
+    );
+    if (completed.length === 0) return;
+
+    const maxSeq = Math.max(...completed.map((j) => j.finished_sequence ?? 0));
+    if (!libraryAnnounceInitializedRef.current) {
+      lastAnnouncedLibrarySequenceRef.current = maxSeq;
+      libraryAnnounceInitializedRef.current = true;
+      return;
+    }
+
+    const fresh = completed.filter(
+      (j) =>
+        (j.finished_sequence ?? 0) >
+        lastAnnouncedLibrarySequenceRef.current,
+    );
+    if (fresh.length === 0) return;
+
+    lastAnnouncedLibrarySequenceRef.current = Math.max(
+      lastAnnouncedLibrarySequenceRef.current,
+      ...fresh.map((j) => j.finished_sequence ?? 0),
+    );
+    announceMediaItemsAdded(fresh.map((j) => j.item_id as string));
+  }, [imageJobs]);
+
   // One init fetch, so the paused flag is known before anything is queued (a
   // queue left paused last session must not silently swallow new work).
   // In the hook, NOT the page — a page-level init effect re-runs every render.
@@ -2525,6 +2569,13 @@ export function useMediaGen(): [MediaGenState, MediaGenActions] {
         setActiveJob(job);
         if (job.status === "completed") {
           await fetchVideoResult(jobId);
+          if (
+            job.item_id &&
+            job.item_id !== lastAnnouncedVideoLibraryItemRef.current
+          ) {
+            lastAnnouncedVideoLibraryItemRef.current = job.item_id;
+            announceMediaItemsAdded([job.item_id]);
+          }
           void refreshVideoRef.current?.();
         } else if (job.status === "failed") {
           setVideoGenError(job.error ?? "Video generation failed");

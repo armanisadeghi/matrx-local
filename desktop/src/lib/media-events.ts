@@ -64,24 +64,37 @@ export function onVaultLocked(handler: () => void): () => void {
   return () => window.removeEventListener(MEDIA_VAULT_LOCKED_EVENT, handler);
 }
 
-/** Item ids that just entered the plaintext media library (vault restore). */
+/** Item ids that just entered the plaintext media library. */
 export const MEDIA_ITEMS_ADDED_EVENT = "matrx:media-items-added";
 
-export function announceMediaItemsAdded(itemIds: string[]): void {
+export interface MediaItemsAddedDetail {
+  itemIds: string[];
+  /**
+   * Reload page 0 — vault restore can surface items that are not on the
+   * newest-first head page. Generation announcements omit this so the library
+   * can prepend without resetting filter, scroll, or load-more pages.
+   */
+  fullRefresh?: boolean;
+}
+
+export function announceMediaItemsAdded(
+  itemIds: string[],
+  opts?: Pick<MediaItemsAddedDetail, "fullRefresh">,
+): void {
   if (itemIds.length === 0) return;
   window.dispatchEvent(
-    new CustomEvent<{ itemIds: string[] }>(MEDIA_ITEMS_ADDED_EVENT, {
-      detail: { itemIds },
+    new CustomEvent<MediaItemsAddedDetail>(MEDIA_ITEMS_ADDED_EVENT, {
+      detail: { itemIds, fullRefresh: opts?.fullRefresh },
     }),
   );
 }
 
 export function onMediaItemsAdded(
-  handler: (itemIds: string[]) => void,
+  handler: (detail: MediaItemsAddedDetail) => void,
 ): () => void {
   const listener = (e: Event) => {
-    const detail = (e as CustomEvent<{ itemIds: string[] }>).detail;
-    if (detail?.itemIds?.length) handler(detail.itemIds);
+    const detail = (e as CustomEvent<MediaItemsAddedDetail>).detail;
+    if (detail?.itemIds?.length) handler(detail);
   };
   window.addEventListener(MEDIA_ITEMS_ADDED_EVENT, listener);
   return () => window.removeEventListener(MEDIA_ITEMS_ADDED_EVENT, listener);

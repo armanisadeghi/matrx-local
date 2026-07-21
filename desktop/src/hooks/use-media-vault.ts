@@ -364,7 +364,7 @@ export function useMediaVault(): [MediaVaultState, MediaVaultActions] {
         });
         // Restored items are plaintext library items again — pull them back
         // into the library grid instead of leaving it stale until a refresh.
-        announceMediaItemsAdded([...restored]);
+        announceMediaItemsAdded([...restored], { fullRefresh: true });
         await fetchStatus();
         return resp.results;
       } catch (e) {

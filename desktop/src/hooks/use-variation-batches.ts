@@ -6,6 +6,7 @@ import {
 } from "@/lib/api";
 import {
   expandPromptVariations,
+  type ExpandPromptVariationsOptions,
   type VariableOptionMap,
   type VariationGenerateOrder,
 } from "@/lib/variation-batches/expand";
@@ -305,11 +306,18 @@ export function useVariationBatches(): [
     }): Promise<{ ok: boolean; errors: string[] }> => {
       let expanded;
       try {
+        const expandOptions: ExpandPromptVariationsOptions = {};
+        if (params.maxCount !== undefined) {
+          expandOptions.maxCount = params.maxCount;
+        }
+        if (params.order !== undefined) {
+          expandOptions.order = params.order;
+        }
         expanded = expandPromptVariations(
           params.templatePrompt,
           params.templateNegative,
           params.variables,
-          { maxCount: params.maxCount, order: params.order },
+          expandOptions,
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

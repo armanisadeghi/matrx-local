@@ -88,6 +88,8 @@ export function VariationItemsManager({
   useEffect(() => {
     setConfirmClearAll(false);
   }, [batch.id]);
+
+  const updateVariationItem = actions.updateVariationItem;
   const saveVariation = useCallback(
     async ({
       batchId,

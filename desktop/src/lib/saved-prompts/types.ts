@@ -25,9 +25,9 @@ export function sanitizeSavedPrompts(raw: unknown[]): SavedPrompt[] {
     .filter(isSavedPrompt)
     .map((row) => ({
       ...row,
-      name: row.name.trim() || "Untitled",
+      name: row.name.trim().length > 0 ? row.name : "Untitled",
       prompt: row.prompt,
-      negativePrompt: row.negativePrompt.trim(),
+      negativePrompt: row.negativePrompt,
     }))
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }

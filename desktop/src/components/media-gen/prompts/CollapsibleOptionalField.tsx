@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { LabelWithInfo } from "./LabelWithInfo";
+import type { NamedList } from "@/lib/list-library/types";
+import { FieldInfoButton } from "./LabelWithInfo";
+import { VariablePromptTextarea } from "./VariablePromptTools";
 
 export function CollapsibleOptionalField({
   storageKey,
@@ -12,6 +14,8 @@ export function CollapsibleOptionalField({
   onChange,
   placeholder,
   rows = 3,
+  enableVariables = false,
+  onVariableInsert,
 }: {
   storageKey: string;
   label: string;
@@ -20,6 +24,8 @@ export function CollapsibleOptionalField({
   onChange: (value: string) => void;
   placeholder?: string;
   rows?: number;
+  enableVariables?: boolean;
+  onVariableInsert?: (list: NamedList, value: string) => void;
 }) {
   const [open, setOpen] = useState(() => readOpen(storageKey));
 
@@ -33,29 +39,43 @@ export function CollapsibleOptionalField({
 
   return (
     <div className="space-y-1.5">
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-7 gap-1 px-1 text-xs text-muted-foreground hover:text-foreground"
-        onClick={() => setOpen((v) => !v)}
-      >
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5" />
+      <div className="flex items-center gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1 px-1 text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+        >
+          {open ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
+          )}
+          {label}
+        </Button>
+        <FieldInfoButton label={label} info={info} />
+      </div>
+      {open &&
+        (enableVariables ? (
+          <VariablePromptTextarea
+            value={value}
+            onChange={onChange}
+            {...(onVariableInsert ? { onVariableInsert } : {})}
+            rows={rows}
+            className="text-sm"
+            placeholder={placeholder}
+          />
         ) : (
-          <ChevronRight className="h-3.5 w-3.5" />
-        )}
-        <LabelWithInfo label={label} info={info} />
-      </Button>
-      {open && (
-        <Textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          rows={rows}
-          className="text-sm"
-          placeholder={placeholder}
-        />
-      )}
+          <Textarea
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            rows={rows}
+            className="text-sm"
+            placeholder={placeholder}
+          />
+        ))}
     </div>
   );
 }

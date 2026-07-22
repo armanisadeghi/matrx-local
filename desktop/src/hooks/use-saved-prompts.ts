@@ -43,7 +43,20 @@ export function useSavedPrompts(): [SavedPromptsState, SavedPromptsActions] {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const promptsRef = useRef(prompts);
+  const writeChainRef = useRef<Promise<void>>(Promise.resolve());
   promptsRef.current = prompts;
+
+  const enqueueWrite = useCallback(
+    <T,>(operation: () => Promise<T>): Promise<T> => {
+      const result = writeChainRef.current.then(operation, operation);
+      writeChainRef.current = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    },
+    [],
+  );
 
   const persist = useCallback(async (next: SavedPrompt[]): Promise<boolean> => {
     const baseUrl = engine.engineUrl;
@@ -55,6 +68,9 @@ export function useSavedPrompts(): [SavedPromptsState, SavedPromptsActions] {
     try {
       const saved = await putPromptMatrixPrompts(baseUrl, next);
       const sanitized = sanitizeSavedPrompts(saved.prompts);
+      // Keep imperative writers current before React commits the state update.
+      // A serialized autosave may start its next write in the same microtask.
+      promptsRef.current = sanitized;
       setPrompts(sanitized);
       setError(null);
       return true;
@@ -81,7 +97,9 @@ export function useSavedPrompts(): [SavedPromptsState, SavedPromptsActions] {
         getPromptMatrixPrompts(baseUrl),
         getPromptMatrixPaths(baseUrl),
       ]);
-      setPrompts(sanitizeSavedPrompts(payload.prompts));
+      const sanitized = sanitizeSavedPrompts(payload.prompts);
+      promptsRef.current = sanitized;
+      setPrompts(sanitized);
       setPromptsPath(paths.prompts ?? null);
       setError(null);
     } catch (err) {
@@ -108,10 +126,12 @@ export function useSavedPrompts(): [SavedPromptsState, SavedPromptsActions] {
   const createPrompt = useCallback(
     async (name?: string): Promise<SavedPrompt | null> => {
       const row = emptySavedPrompt(name?.trim() || "New prompt");
-      const ok = await persist([row, ...promptsRef.current]);
+      const ok = await enqueueWrite(() =>
+        persist([row, ...promptsRef.current]),
+      );
       return ok ? row : null;
     },
-    [persist],
+    [enqueueWrite, persist],
   );
 
   const updatePrompt = useCallback(
@@ -119,53 +139,55 @@ export function useSavedPrompts(): [SavedPromptsState, SavedPromptsActions] {
       id: string,
       patch: Partial<Pick<SavedPrompt, "name" | "prompt" | "negativePrompt">>,
     ): Promise<boolean> => {
-      const now = Date.now();
-      const next = promptsRef.current.map((row) => {
-        if (row.id !== id) return row;
-        return {
-          ...row,
-          ...patch,
-          name:
-            patch.name !== undefined
-              ? patch.name.trim() || "Untitled"
-              : row.name,
-          negativePrompt:
-            patch.negativePrompt !== undefined
-              ? patch.negativePrompt
-              : row.negativePrompt,
-          updatedAt: now,
-        };
+      return enqueueWrite(() => {
+        const now = Date.now();
+        const next = promptsRef.current.map((row) => {
+          if (row.id !== id) return row;
+          return {
+            ...row,
+            ...patch,
+            name: patch.name !== undefined ? patch.name : row.name,
+            negativePrompt:
+              patch.negativePrompt !== undefined
+                ? patch.negativePrompt
+                : row.negativePrompt,
+            updatedAt: now,
+          };
+        });
+        return persist(next);
       });
-      return persist(next);
     },
-    [persist],
+    [enqueueWrite, persist],
   );
 
   const deletePrompt = useCallback(
     async (id: string): Promise<boolean> => {
-      const next = promptsRef.current.filter((row) => row.id !== id);
-      return persist(next);
+      return enqueueWrite(() =>
+        persist(promptsRef.current.filter((row) => row.id !== id)),
+      );
     },
-    [persist],
+    [enqueueWrite, persist],
   );
 
   const duplicatePrompt = useCallback(
     async (id: string): Promise<SavedPrompt | null> => {
-      const source = promptsRef.current.find((row) => row.id === id);
-      if (!source) return null;
-      const now = Date.now();
-      const copy: SavedPrompt = {
-        id: makePromptId(),
-        name: `${source.name} (copy)`,
-        prompt: source.prompt,
-        negativePrompt: source.negativePrompt,
-        createdAt: now,
-        updatedAt: now,
-      };
-      const ok = await persist([copy, ...promptsRef.current]);
-      return ok ? copy : null;
+      return enqueueWrite(async () => {
+        const source = promptsRef.current.find((row) => row.id === id);
+        if (!source) return null;
+        const now = Date.now();
+        const copy: SavedPrompt = {
+          id: makePromptId(),
+          name: `${source.name} (copy)`,
+          prompt: source.prompt,
+          negativePrompt: source.negativePrompt,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const ok = await persist([copy, ...promptsRef.current]);
+        return ok ? copy : null;
+      });
     },
-    [persist],
+    [enqueueWrite, persist],
   );
 
   const clearError = useCallback(() => setError(null), []);

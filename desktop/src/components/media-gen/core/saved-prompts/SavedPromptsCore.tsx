@@ -14,11 +14,15 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { useSavedPromptsApp } from "@/contexts/SavedPromptsContext";
+import { useDebouncedSave } from "@/hooks/use-debounced-save";
 import type { SavedPrompt } from "@/lib/saved-prompts/types";
 import { CollapsibleOptionalField } from "../../prompts/CollapsibleOptionalField";
 import { LabelWithInfo } from "../../prompts/LabelWithInfo";
+import {
+  PromptVariablePreview,
+  VariablePromptTextarea,
+} from "../../prompts/VariablePromptTools";
 import { ErrorNote } from "../../shared";
 import { FeedbackIconButton } from "../../surfaces/FeedbackIconButton";
 
@@ -51,8 +55,24 @@ export function SavedPromptsCore({
   const [draft, setDraft] = useState<SavedPrompt | null>(null);
   const [feedbackKey, setFeedbackKey] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const saveTimer = useRef<number | null>(null);
+  const loadedPromptIdRef = useRef<string | null>(null);
   const isPick = intent === "pick";
+
+  const updatePrompt = actions.updatePrompt;
+  const savePrompt = useCallback(
+    async (next: SavedPrompt) => {
+      await updatePrompt(next.id, {
+        name: next.name,
+        prompt: next.prompt,
+        negativePrompt: next.negativePrompt,
+      });
+    },
+    [updatePrompt],
+  );
+  const {
+    schedule: scheduleSave,
+    flush: flushSave,
+  } = useDebouncedSave(savePrompt);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -73,14 +93,20 @@ export function SavedPromptsCore({
     setSelectedId(first?.id ?? null);
   }, [filtered, selectedId, state.prompts, isPick]);
 
+  // Hydrate only when selection changes. A persistence response updates the
+  // shared store, but must never replace the live draft under the cursor.
   useEffect(() => {
     if (isPick || !selectedId) {
+      loadedPromptIdRef.current = null;
       if (!isPick && !selectedId) setDraft(null);
       return;
     }
+    if (loadedPromptIdRef.current === selectedId) return;
+    void flushSave();
     const row = state.prompts.find((item) => item.id === selectedId) ?? null;
+    loadedPromptIdRef.current = row?.id ?? null;
     setDraft(row ? { ...row } : null);
-  }, [selectedId, state.prompts, isPick]);
+  }, [selectedId, state.prompts, isPick, flushSave]);
 
   const flash = useCallback((key: string) => {
     setFeedbackKey(key);
@@ -89,22 +115,6 @@ export function SavedPromptsCore({
       1200,
     );
   }, []);
-
-  const scheduleSave = useCallback(
-    (next: SavedPrompt) => {
-      if (saveTimer.current !== null) {
-        window.clearTimeout(saveTimer.current);
-      }
-      saveTimer.current = window.setTimeout(() => {
-        void actions.updatePrompt(next.id, {
-          name: next.name,
-          prompt: next.prompt,
-          negativePrompt: next.negativePrompt,
-        });
-      }, 400);
-    },
-    [actions],
-  );
 
   const patchDraft = useCallback(
     (
@@ -121,6 +131,7 @@ export function SavedPromptsCore({
   );
 
   const handleCreate = async () => {
+    await flushSave();
     const row = await actions.createPrompt();
     if (row) {
       setSelectedId(row.id);
@@ -129,6 +140,7 @@ export function SavedPromptsCore({
   };
 
   const handleDuplicate = async (id: string) => {
+    await flushSave();
     const row = await actions.duplicatePrompt(id);
     if (row) {
       setSelectedId(row.id);
@@ -141,6 +153,7 @@ export function SavedPromptsCore({
       onPick?.(row);
       return;
     }
+    void flushSave();
     setSelectedId(row.id);
   };
 
@@ -168,7 +181,9 @@ export function SavedPromptsCore({
               size="icon"
               className="h-8 w-8 shrink-0"
               onClick={() =>
-                void actions.refresh().then(() => flash("refresh"))
+                void flushSave()
+                  .then(() => actions.refresh())
+                  .then(() => flash("refresh"))
               }
               disabled={state.loading}
               aria-label="Refresh"
@@ -239,9 +254,11 @@ export function SavedPromptsCore({
                             size="icon"
                             className="h-7 w-7"
                             onClick={() => {
-                              void actions.deletePrompt(row.id);
-                              setConfirmDeleteId(null);
-                              flash(`${key}:del`);
+                              void flushSave().then(async () => {
+                                await actions.deletePrompt(row.id);
+                                setConfirmDeleteId(null);
+                                flash(`${key}:del`);
+                              });
                             }}
                             aria-label="Confirm delete"
                           >
@@ -277,7 +294,7 @@ export function SavedPromptsCore({
                 </Button>
               </div>
             ) : (
-              <div className="grid min-h-0 flex-1 grid-rows-[auto_1fr_auto] gap-3">
+              <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(180px,1fr)_auto_auto_auto] gap-3 overflow-y-auto pr-1">
                 <div className="space-y-1.5">
                   <LabelWithInfo
                     htmlFor="prompt-name"
@@ -298,10 +315,10 @@ export function SavedPromptsCore({
                     label="Prompt"
                     info="The main generation prompt text."
                   />
-                  <Textarea
+                  <VariablePromptTextarea
                     id="prompt-text"
                     value={draft.prompt}
-                    onChange={(e) => patchDraft({ prompt: e.target.value })}
+                    onChange={(prompt) => patchDraft({ prompt })}
                     className="min-h-0 flex-1 resize-none text-sm"
                   />
                 </div>
@@ -314,11 +331,25 @@ export function SavedPromptsCore({
                   onChange={(negativePrompt) => patchDraft({ negativePrompt })}
                   placeholder="Optional…"
                   rows={2}
+                  enableVariables
                 />
 
-                {state.saving && (
-                  <p className="text-[10px] text-muted-foreground">Saving…</p>
-                )}
+                <PromptVariablePreview
+                  fields={[
+                    { label: "Prompt", text: draft.prompt },
+                    {
+                      label: "Negative prompt",
+                      text: draft.negativePrompt,
+                    },
+                  ]}
+                />
+
+                <p
+                  className="h-3 text-[10px] text-muted-foreground"
+                  aria-live="polite"
+                >
+                  {state.saving ? "Saving…" : ""}
+                </p>
               </div>
             )}
           </div>

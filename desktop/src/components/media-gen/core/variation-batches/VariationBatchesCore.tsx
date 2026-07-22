@@ -21,7 +21,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -31,7 +30,9 @@ import {
 } from "@/components/ui/select";
 import { useListLibraryApp } from "@/contexts/ListLibraryContext";
 import { useVariationBatchesApp } from "@/contexts/VariationBatchesContext";
+import { useDebouncedSave } from "@/hooks/use-debounced-save";
 import { readyVariationItems } from "@/lib/media-gen/enqueue-variation-batch";
+import type { NamedList } from "@/lib/list-library/types";
 import type {
   VariationQueueOptions,
   VariationQueueOrder,
@@ -39,8 +40,17 @@ import type {
 import type { SavedPrompt } from "@/lib/saved-prompts/types";
 import type { VariationBatch } from "@/lib/variation-batches/types";
 import { extractTemplateVariableNames } from "@/lib/variation-batches/expand";
+import {
+  listsMatchingVariableName,
+  variableNameForList,
+} from "@/lib/list-variables";
+import { variableKey } from "@/lib/prompt-matrix";
 import { CollapsibleOptionalField } from "../../prompts/CollapsibleOptionalField";
 import { LabelWithInfo } from "../../prompts/LabelWithInfo";
+import {
+  PromptVariablePreview,
+  VariablePromptTextarea,
+} from "../../prompts/VariablePromptTools";
 import { ErrorNote } from "../../shared";
 import { FeedbackIconButton } from "../../surfaces/FeedbackIconButton";
 import { NO_LIST_ID, NO_SAVED_PROMPT_ID } from "../../pickers/constants";
@@ -102,10 +112,20 @@ function listOptionsFromLibrary(
 function syncListByVariableForTokens(
   tokenNames: readonly string[],
   prev: Record<string, string>,
+  lists: readonly NamedList[] = [],
 ): Record<string, string> {
   const next: Record<string, string> = {};
   for (const name of tokenNames) {
-    next[name] = prev[name] ?? NO_LIST_ID;
+    const priorMapping = Object.entries(prev).find(
+      ([priorName]) => variableKey(priorName) === variableKey(name),
+    );
+    if (priorMapping !== undefined) {
+      next[name] = priorMapping[1] ?? NO_LIST_ID;
+      continue;
+    }
+    const matches = listsMatchingVariableName(lists, name);
+    next[name] =
+      matches.length === 1 ? (matches[0]?.id ?? NO_LIST_ID) : NO_LIST_ID;
   }
   return next;
 }
@@ -160,7 +180,28 @@ export function VariationBatchesCore({
   const [queueCount, setQueueCount] = useState(1);
   const [queueOrder, setQueueOrder] = useState<VariationQueueOrder>("start");
   const [generatorOpen, setGeneratorOpen] = useState(true);
-  const saveTimer = useRef<number | null>(null);
+  const loadedBatchIdRef = useRef<string | null>(null);
+  const updateBatch = batchActions.updateBatch;
+  const saveBatch = useCallback(
+    async (next: BatchDraft) => {
+      await updateBatch(next.batchId, {
+        name: next.name,
+        sourcePromptId:
+          next.sourcePromptId === NO_SAVED_PROMPT_ID
+            ? null
+            : next.sourcePromptId,
+        templatePrompt: next.templatePrompt,
+        templateNegative: next.templateNegative,
+        variableListByName: next.listByVariable,
+      });
+    },
+    [updateBatch],
+  );
+  const {
+    schedule: scheduleSave,
+    flush: flushSave,
+    cancel: cancelSave,
+  } = useDebouncedSave(saveBatch);
 
   const selectedBatch = useMemo(
     () => batchState.batches.find((row) => row.id === selectedId) ?? null,
@@ -203,29 +244,30 @@ export function VariationBatchesCore({
   // Never reload while editing the same batch — store updates after generate must not wipe the draft.
   useEffect(() => {
     if (!selectedId) {
+      loadedBatchIdRef.current = null;
       setDraft(null);
       return;
     }
+    if (loadedBatchIdRef.current === selectedId) return;
+    void flushSave();
     const batch = batchState.batches.find((row) => row.id === selectedId);
     if (!batch) return;
-    setDraft((prev) => {
-      if (prev?.batchId === selectedId) return prev;
-      return batchToDraft(batch);
-    });
-  }, [selectedId, batchState.batches]);
+    loadedBatchIdRef.current = selectedId;
+    setDraft(batchToDraft(batch));
+  }, [selectedId, batchState.batches, flushSave]);
 
   useEffect(() => {
     if (!draft) return;
-    setDraft((prev) => {
-      if (!prev) return prev;
-      const nextLists = syncListByVariableForTokens(
-        tokenNames,
-        prev.listByVariable,
-      );
-      if (listMappingsEqual(nextLists, prev.listByVariable)) return prev;
-      return { ...prev, listByVariable: nextLists };
-    });
-  }, [tokenNames, draft?.batchId]);
+    const nextLists = syncListByVariableForTokens(
+      tokenNames,
+      draft.listByVariable,
+      listState.lists,
+    );
+    if (listMappingsEqual(nextLists, draft.listByVariable)) return;
+    const next = { ...draft, listByVariable: nextLists };
+    setDraft(next);
+    scheduleSave(next);
+  }, [draft, tokenNames, listState.lists, scheduleSave]);
 
   useEffect(() => {
     if (!selectedBatch) return;
@@ -247,37 +289,28 @@ export function VariationBatchesCore({
     );
   }, []);
 
-  const scheduleSave = useCallback(
-    (next: BatchDraft) => {
-      if (saveTimer.current !== null) {
-        window.clearTimeout(saveTimer.current);
-      }
-      saveTimer.current = window.setTimeout(() => {
-        void batchActions.updateBatch(next.batchId, {
-          name: next.name,
-          sourcePromptId:
-            next.sourcePromptId === NO_SAVED_PROMPT_ID
-              ? null
-              : next.sourcePromptId,
-          templatePrompt: next.templatePrompt,
-          templateNegative: next.templateNegative,
-          variableListByName: next.listByVariable,
-        });
-      }, 400);
-    },
-    [batchActions],
-  );
-
   const patchDraft = useCallback(
     (patch: Partial<Omit<BatchDraft, "batchId">>) => {
       setDraft((prev) => {
         if (!prev) return prev;
-        const next = { ...prev, ...patch };
+        const nextBase = { ...prev, ...patch };
+        const nextTokenNames = extractTemplateVariableNames(
+          nextBase.templatePrompt,
+          nextBase.templateNegative,
+        );
+        const next = {
+          ...nextBase,
+          listByVariable: syncListByVariableForTokens(
+            nextTokenNames,
+            nextBase.listByVariable,
+            listState.lists,
+          ),
+        };
         scheduleSave(next);
         return next;
       });
     },
-    [scheduleSave],
+    [listState.lists, scheduleSave],
   );
 
   const handleSavedPromptChange = useCallback(
@@ -316,7 +349,51 @@ export function VariationBatchesCore({
     [scheduleSave],
   );
 
+  const patchTemplateWithList = useCallback(
+    (
+      field: "templatePrompt" | "templateNegative",
+      list: NamedList,
+      value: string,
+    ) => {
+      const variableName = variableNameForList(list.name);
+      if (variableName === null) return;
+      setDraft((prev) => {
+        if (!prev) return prev;
+        const nextBase = {
+          ...prev,
+          [field]: value,
+        };
+        const nextTokenNames = extractTemplateVariableNames(
+          nextBase.templatePrompt,
+          nextBase.templateNegative,
+        );
+        const canonicalName =
+          nextTokenNames.find(
+            (name) => variableKey(name) === variableKey(variableName),
+          ) ?? variableName;
+        const listByVariable = Object.fromEntries(
+          Object.entries(prev.listByVariable).filter(
+            ([name]) => variableKey(name) !== variableKey(canonicalName),
+          ),
+        );
+        listByVariable[canonicalName] = list.id;
+        const next = {
+          ...nextBase,
+          listByVariable: syncListByVariableForTokens(
+            nextTokenNames,
+            listByVariable,
+            listState.lists,
+          ),
+        };
+        scheduleSave(next);
+        return next;
+      });
+    },
+    [listState.lists, scheduleSave],
+  );
+
   const handleCreateBatch = async () => {
+    await flushSave();
     const row = await batchActions.createBatch();
     if (row) {
       setSelectedId(row.id);
@@ -324,12 +401,18 @@ export function VariationBatchesCore({
     }
   };
 
+  const handleSelectBatch = useCallback(
+    (id: string) => {
+      void flushSave();
+      setSelectedId(id);
+    },
+    [flushSave],
+  );
+
   const handleGenerate = async () => {
     if (!draft) return;
-    if (saveTimer.current !== null) {
-      window.clearTimeout(saveTimer.current);
-      saveTimer.current = null;
-    }
+    // generateVariations persists the complete current draft itself.
+    cancelSave();
     setGenerateErrors([]);
     try {
       const variables = tokenNames.map((name) => {
@@ -411,7 +494,7 @@ export function VariationBatchesCore({
                   className={`flex w-full items-start gap-2 border-b px-3 py-2.5 text-left last:border-b-0 ${
                     active ? "bg-muted/60" : "hover:bg-muted/30"
                   }`}
-                  onClick={() => setSelectedId(row.id)}
+                  onClick={() => handleSelectBatch(row.id)}
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-xs font-medium">{row.name}</p>
@@ -561,7 +644,9 @@ export function VariationBatchesCore({
               size="icon"
               className="h-8 w-8 shrink-0"
               onClick={() =>
-                void batchActions.refresh().then(() => flash("refresh"))
+                void flushSave()
+                  .then(() => batchActions.refresh())
+                  .then(() => flash("refresh"))
               }
               disabled={batchState.loading}
               aria-label="Refresh"
@@ -611,7 +696,7 @@ export function VariationBatchesCore({
                     <button
                       type="button"
                       className="min-w-0 flex-1 text-left"
-                      onClick={() => setSelectedId(row.id)}
+                      onClick={() => handleSelectBatch(row.id)}
                     >
                       <p className="truncate text-xs font-medium">{row.name}</p>
                       <p className="mt-0.5 text-[10px] text-muted-foreground">
@@ -626,9 +711,11 @@ export function VariationBatchesCore({
                         size="icon"
                         className="h-7 w-7 shrink-0"
                         onClick={() => {
-                          void batchActions.deleteBatch(row.id);
-                          setConfirmDeleteId(null);
-                          flash(`${key}:del`);
+                          void flushSave().then(async () => {
+                            await batchActions.deleteBatch(row.id);
+                            setConfirmDeleteId(null);
+                            flash(`${key}:del`);
+                          });
                         }}
                         aria-label="Confirm delete"
                       >
@@ -716,11 +803,14 @@ export function VariationBatchesCore({
                         label="Template prompt"
                         info="Use {{variable}} tokens to sweep options from lists. Without tokens, one variation is created."
                       />
-                      <Textarea
+                      <VariablePromptTextarea
                         id="template-prompt"
                         value={draft.templatePrompt}
-                        onChange={(e) =>
-                          patchDraft({ templatePrompt: e.target.value })
+                        onChange={(templatePrompt) =>
+                          patchDraft({ templatePrompt })
+                        }
+                        onVariableInsert={(list, value) =>
+                          patchTemplateWithList("templatePrompt", list, value)
                         }
                         rows={3}
                         className="resize-none text-sm"
@@ -738,8 +828,28 @@ export function VariationBatchesCore({
                         }
                         placeholder="Optional…"
                         rows={2}
+                        enableVariables
+                        onVariableInsert={(list, value) =>
+                          patchTemplateWithList(
+                            "templateNegative",
+                            list,
+                            value,
+                          )
+                        }
                       />
                     </div>
+
+                    <PromptVariablePreview
+                      fields={[
+                        { label: "Prompt", text: draft.templatePrompt },
+                        {
+                          label: "Negative prompt",
+                          text: draft.templateNegative,
+                        },
+                      ]}
+                      listIdByVariable={draft.listByVariable}
+                      className="col-span-2 xl:col-span-4"
+                    />
 
                     <VariableListMappingTable
                       tokenNames={tokenNames}

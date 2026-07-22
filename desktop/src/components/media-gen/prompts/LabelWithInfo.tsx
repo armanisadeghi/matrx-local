@@ -20,20 +20,32 @@ export function LabelWithInfo({
       <Label htmlFor={htmlFor} className="text-xs">
         {label}
       </Label>
-      <Popover>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
-            aria-label={`About ${label}`}
-          >
-            <Info className="h-3 w-3" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent className="max-w-xs text-xs leading-relaxed">
-          {info}
-        </PopoverContent>
-      </Popover>
+      <FieldInfoButton label={label} info={info} />
     </div>
+  );
+}
+
+export function FieldInfoButton({
+  label,
+  info,
+}: {
+  label: string;
+  info: string;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+          aria-label={`About ${label}`}
+        >
+          <Info className="h-3 w-3" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[min(420px,calc(100vw-2rem))] max-w-none p-4 text-sm leading-relaxed">
+        {info}
+      </PopoverContent>
+    </Popover>
   );
 }

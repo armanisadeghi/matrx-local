@@ -91,7 +91,20 @@ export function useVariationBatches(): [
     null,
   );
   const batchesRef = useRef(batches);
+  const writeChainRef = useRef<Promise<void>>(Promise.resolve());
   batchesRef.current = batches;
+
+  const enqueueWrite = useCallback(
+    <T,>(operation: () => Promise<T>): Promise<T> => {
+      const result = writeChainRef.current.then(operation, operation);
+      writeChainRef.current = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    },
+    [],
+  );
 
   const persist = useCallback(
     async (next: VariationBatch[]): Promise<boolean> => {
@@ -102,9 +115,12 @@ export function useVariationBatches(): [
       }
       setSaving(true);
       try {
-        const saved = await putPromptMatrixVariationBatches(baseUrl, next);
-        const sanitized = sanitizeVariationBatches(saved.batches);
-        setBatches(sanitized);
+      const saved = await putPromptMatrixVariationBatches(baseUrl, next);
+      const sanitized = sanitizeVariationBatches(saved.batches);
+      // Keep imperative writers current before React commits the state update.
+      // A serialized autosave may start its next write in the same microtask.
+      batchesRef.current = sanitized;
+      setBatches(sanitized);
         setError(null);
         return true;
       } catch (err) {
@@ -132,7 +148,9 @@ export function useVariationBatches(): [
         getPromptMatrixVariationBatches(baseUrl),
         getPromptMatrixPaths(baseUrl),
       ]);
-      setBatches(sanitizeVariationBatches(payload.batches));
+      const sanitized = sanitizeVariationBatches(payload.batches);
+      batchesRef.current = sanitized;
+      setBatches(sanitized);
       setBatchesPath(paths.variationBatches ?? null);
       setError(null);
     } catch (err) {
@@ -159,10 +177,12 @@ export function useVariationBatches(): [
   const createBatch = useCallback(
     async (name?: string): Promise<VariationBatch | null> => {
       const row = emptyVariationBatch(name?.trim() || "New batch");
-      const ok = await persist([row, ...batchesRef.current]);
+      const ok = await enqueueWrite(() =>
+        persist([row, ...batchesRef.current]),
+      );
       return ok ? row : null;
     },
-    [persist],
+    [enqueueWrite, persist],
   );
 
   const updateBatch = useCallback(
@@ -180,30 +200,30 @@ export function useVariationBatches(): [
         >
       >,
     ): Promise<boolean> => {
-      const now = Date.now();
-      const next = batchesRef.current.map((row) => {
-        if (row.id !== id) return row;
-        return {
-          ...row,
-          ...patch,
-          name:
-            patch.name !== undefined
-              ? patch.name.trim() || "Untitled batch"
-              : row.name,
-          updatedAt: now,
-        };
+      return enqueueWrite(() => {
+        const now = Date.now();
+        const next = batchesRef.current.map((row) => {
+          if (row.id !== id) return row;
+          return {
+            ...row,
+            ...patch,
+            name: patch.name !== undefined ? patch.name : row.name,
+            updatedAt: now,
+          };
+        });
+        return persist(next);
       });
-      return persist(next);
     },
-    [persist],
+    [enqueueWrite, persist],
   );
 
   const deleteBatch = useCallback(
     async (id: string): Promise<boolean> => {
-      const next = batchesRef.current.filter((row) => row.id !== id);
-      return persist(next);
+      return enqueueWrite(() =>
+        persist(batchesRef.current.filter((row) => row.id !== id)),
+      );
     },
-    [persist],
+    [enqueueWrite, persist],
   );
 
   const updateItemStatus = useCallback(
@@ -213,26 +233,28 @@ export function useVariationBatches(): [
       status: VariationItemStatus,
       itemError = "",
     ): Promise<boolean> => {
-      const now = Date.now();
-      const next = batchesRef.current.map((batch) => {
-        if (batch.id !== batchId) return batch;
-        return {
-          ...batch,
-          updatedAt: now,
-          items: batch.items.map((item) => {
-            if (item.id !== itemId) return item;
-            return {
-              ...item,
-              status,
-              error: itemError,
-              updatedAt: now,
-            };
-          }),
-        };
+      return enqueueWrite(() => {
+        const now = Date.now();
+        const next = batchesRef.current.map((batch) => {
+          if (batch.id !== batchId) return batch;
+          return {
+            ...batch,
+            updatedAt: now,
+            items: batch.items.map((item) => {
+              if (item.id !== itemId) return item;
+              return {
+                ...item,
+                status,
+                error: itemError,
+                updatedAt: now,
+              };
+            }),
+          };
+        });
+        return persist(next);
       });
-      return persist(next);
     },
-    [persist],
+    [enqueueWrite, persist],
   );
 
   const generateVariations = useCallback(
@@ -260,64 +282,69 @@ export function useVariationBatches(): [
         return { ok: false, errors: expanded.errors };
       }
 
-      const now = Date.now();
-      const items: VariationItem[] = expanded.variations.map((row) => ({
-        ...emptyVariationItem(row.prompt, row.negativePrompt),
-        status: "done" as const,
-        updatedAt: now,
-      }));
-
-      let found = false;
-      const next = batchesRef.current.map((batch) => {
-        if (batch.id !== params.batchId) return batch;
-        found = true;
-        return {
-          ...batch,
-          name: params.name?.trim() || batch.name,
-          sourcePromptId: params.sourcePromptId,
-          templatePrompt: params.templatePrompt,
-          templateNegative: params.templateNegative,
-          variableListByName: { ...params.variableListByName },
-          items,
-          updatedAt: now,
-        };
-      });
-
-      if (!found) {
-        return {
-          ok: false,
-          errors: ["Batch not found — create or select a batch first."],
-        };
-      }
-
-      const previous = batchesRef.current;
       setGeneratingBatchId(params.batchId);
-      const saved = await persist(next);
-      setGeneratingBatchId(null);
-      if (!saved) {
-        setBatches(previous);
-        return { ok: false, errors: ["Failed to save batch"] };
-      }
+      try {
+        return await enqueueWrite(async () => {
+          const now = Date.now();
+          const items: VariationItem[] = expanded.variations.map((row) => ({
+            ...emptyVariationItem(row.prompt, row.negativePrompt),
+            status: "done" as const,
+            updatedAt: now,
+          }));
+          let found = false;
+          const next = batchesRef.current.map((batch) => {
+            if (batch.id !== params.batchId) return batch;
+            found = true;
+            return {
+              ...batch,
+              name:
+                params.name !== undefined && params.name.trim().length > 0
+                  ? params.name
+                  : batch.name,
+              sourcePromptId: params.sourcePromptId,
+              templatePrompt: params.templatePrompt,
+              templateNegative: params.templateNegative,
+              variableListByName: { ...params.variableListByName },
+              items,
+              updatedAt: now,
+            };
+          });
 
-      return { ok: true, errors: [] };
+          if (!found) {
+            return {
+              ok: false,
+              errors: ["Batch not found — create or select a batch first."],
+            };
+          }
+
+          const saved = await persist(next);
+          return saved
+            ? { ok: true, errors: [] }
+            : { ok: false, errors: ["Failed to save batch"] };
+        });
+      } finally {
+        setGeneratingBatchId(null);
+      }
     },
-    [persist],
+    [enqueueWrite, persist],
   );
 
   const deleteVariationItem = useCallback(
     async (batchId: string, itemId: string): Promise<boolean> => {
-      const now = Date.now();
-      const next = batchesRef.current.map((batch) => {
-        if (batch.id !== batchId) return batch;
-        return {
-          ...batch,
-          updatedAt: now,
-          items: batch.items.filter((item) => item.id !== itemId),
-        };
+      return enqueueWrite(() => {
+        const now = Date.now();
+        const next = batchesRef.current.map((batch) => {
+          if (batch.id !== batchId) return batch;
+          return {
+            ...batch,
+            updatedAt: now,
+            items: batch.items.filter((item) => item.id !== itemId),
+          };
+        });
+        return persist(next);
       });
-      return persist(next);
     },
-    [persist],
+    [enqueueWrite, persist],
   );
 
   const addVariationItem = useCallback(
@@ -326,24 +353,26 @@ export function useVariationBatches(): [
       prompt = "",
       negativePrompt = "",
     ): Promise<VariationItem | null> => {
-      const now = Date.now();
-      const item: VariationItem = {
-        ...emptyVariationItem(prompt, negativePrompt),
-        status: "done",
-        updatedAt: now,
-      };
-      const next = batchesRef.current.map((batch) => {
-        if (batch.id !== batchId) return batch;
-        return {
-          ...batch,
+      return enqueueWrite(async () => {
+        const now = Date.now();
+        const item: VariationItem = {
+          ...emptyVariationItem(prompt, negativePrompt),
+          status: "done",
           updatedAt: now,
-          items: [...batch.items, item],
         };
+        const next = batchesRef.current.map((batch) => {
+          if (batch.id !== batchId) return batch;
+          return {
+            ...batch,
+            updatedAt: now,
+            items: [...batch.items, item],
+          };
+        });
+        const ok = await persist(next);
+        return ok ? item : null;
       });
-      const ok = await persist(next);
-      return ok ? item : null;
     },
-    [persist],
+    [enqueueWrite, persist],
   );
 
   const updateVariationItem = useCallback(
@@ -354,21 +383,23 @@ export function useVariationBatches(): [
         Pick<VariationItem, "prompt" | "negativePrompt" | "status">
       >,
     ): Promise<boolean> => {
-      const now = Date.now();
-      const next = batchesRef.current.map((batch) => {
-        if (batch.id !== batchId) return batch;
-        return {
-          ...batch,
-          updatedAt: now,
-          items: batch.items.map((item) => {
-            if (item.id !== itemId) return item;
-            return { ...item, ...patch, updatedAt: now };
-          }),
-        };
+      return enqueueWrite(() => {
+        const now = Date.now();
+        const next = batchesRef.current.map((batch) => {
+          if (batch.id !== batchId) return batch;
+          return {
+            ...batch,
+            updatedAt: now,
+            items: batch.items.map((item) => {
+              if (item.id !== itemId) return item;
+              return { ...item, ...patch, updatedAt: now };
+            }),
+          };
+        });
+        return persist(next);
       });
-      return persist(next);
     },
-    [persist],
+    [enqueueWrite, persist],
   );
 
   const clearError = useCallback(() => setError(null), []);

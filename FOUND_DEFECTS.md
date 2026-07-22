@@ -389,6 +389,21 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   info, download, copy prompt) — still strictly better than today.
 - **Owner hint:** small; mirror what the image branch already does.
 
+### MXL-D-072 — Cloud chat options render an invalid nested button
+
+- **Area:** frontend / cloud chat composer
+- **Symptom:** React reports a hydration-invalid `<button>` inside `<button>`
+  every time the app renders the cloud-chat options control. This can produce
+  inconsistent focus/click behavior and pollutes browser error logs.
+- **Evidence:** `desktop/src/components/chat/PlusMenu.tsx:262-282` renders a
+  native `<button>` as the child of `PopoverTrigger` without `asChild`, so the
+  Radix trigger creates another button around it. Reproduced in the browser
+  console during Media Generation visual verification on 2026-07-21.
+- **Status:** open.
+- **Analysis stamp:** Analyzed 2026-07-21 — verified in code and browser logs.
+- **Owner hint:** Add `asChild` to `PopoverTrigger`; verify keyboard focus and
+  popover open/close behavior in cloud chat.
+
 ## Engine lifecycle / loud-failure doctrine (root-caused 2026-07-13 from Arman's "image system freezes" report)
 
 > Investigation summary: the packaged engine NEVER wedges while alive (every

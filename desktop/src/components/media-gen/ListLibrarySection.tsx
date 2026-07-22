@@ -40,6 +40,7 @@ import { useListLibraryApp } from "@/contexts/ListLibraryContext";
 import type { NamedList } from "@/lib/list-library/types";
 import type { MatrixOption } from "@/lib/prompt-matrix/types";
 import { enabledOptionCountForList } from "@/lib/list-library/display";
+import { variableTokenForList } from "@/lib/list-variables";
 import { makeId } from "@/lib/prompt-matrix/storage";
 import { ErrorNote } from "./shared";
 
@@ -56,12 +57,55 @@ function readViewMode(): ViewMode {
   return "cards";
 }
 
-function previewText(list: NamedList, max = 6): string {
+function enabledOptionValues(list: NamedList): string[] {
   return list.options
     .filter((o) => o.enabled && o.value.trim().length > 0)
-    .slice(0, max)
-    .map((o) => o.value.trim())
-    .join(", ");
+    .map((o) => o.value.trim());
+}
+
+function ListOptionItems({
+  list,
+  compact,
+}: {
+  list: NamedList;
+  compact?: boolean;
+}) {
+  const options = enabledOptionValues(list);
+
+  if (options.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+        No enabled options
+      </div>
+    );
+  }
+
+  return (
+    <ol
+      className={`divide-y divide-border overflow-hidden rounded-md border bg-background/60 ${
+        compact ? "max-h-48" : "max-h-64"
+      } overflow-y-auto`}
+    >
+      {options.map((option, index) => (
+        <li
+          key={`${index}:${option}`}
+          className={`grid grid-cols-[2rem_minmax(0,1fr)] gap-2 text-foreground ${
+            compact ? "px-2 py-1.5 text-xs" : "px-3 py-2 text-sm"
+          }`}
+        >
+          <span
+            aria-hidden="true"
+            className="font-mono text-[11px] leading-relaxed text-foreground"
+          >
+            {index + 1}.
+          </span>
+          <span className="whitespace-pre-wrap break-words leading-relaxed">
+            {option}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 function FeedbackIconButton({
@@ -108,6 +152,54 @@ function FeedbackIconButton({
         {active ? (activeLabel ?? "Done") : label}
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+function ListTokenCopyButton({
+  list,
+  feedbackKey,
+  activeKey,
+  onCopy,
+}: {
+  list: NamedList;
+  feedbackKey: string;
+  activeKey: string | null;
+  onCopy: (token: string) => Promise<void>;
+}) {
+  const token = variableTokenForList(list.name);
+  if (token === null) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              disabled
+              aria-label="Rename this list before using it as a variable"
+            >
+              <Copy className="h-3 w-3" />
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          Rename this list before using it as a variable
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+  return (
+    <FeedbackIconButton
+      feedbackKey={feedbackKey}
+      activeKey={activeKey}
+      icon={Copy}
+      label={`Copy ${token}`}
+      activeLabel="Variable copied"
+      onClick={() => onCopy(token)}
+      className="h-6 w-6"
+    />
   );
 }
 
@@ -162,14 +254,14 @@ function ListEditorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="flex h-[min(760px,88vh)] w-[min(900px,94vw)] max-w-none flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>Edit list</DialogTitle>
           <DialogDescription>
             One option per line. Empty lines are ignored on save.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="flex min-h-0 flex-1 flex-col gap-3">
           <div className="space-y-1.5">
             <Label htmlFor="list-name">Name</Label>
             <Input
@@ -179,14 +271,13 @@ function ListEditorDialog({
               placeholder="Colors"
             />
           </div>
-          <div className="space-y-1.5">
+          <div className="flex min-h-0 flex-1 flex-col gap-1.5">
             <Label htmlFor="list-options">Options</Label>
             <Textarea
               id="list-options"
               value={optionsText}
               onChange={(e) => setOptionsText(e.target.value)}
-              rows={12}
-              className="font-mono text-xs"
+              className="min-h-0 flex-1 resize-none font-mono text-sm leading-6 text-foreground"
               placeholder={"Blue\nRed\nGreen\nPurple\nYellow"}
             />
           </div>
@@ -352,9 +443,9 @@ export function ListLibraryCore() {
     if (copy) flash(`list:${id}:dup`);
   };
 
-  const copyAi = async (key: string, text: string) => {
+  const copyText = async (key: string, text: string) => {
     await navigator.clipboard.writeText(text);
-    flash(`${key}:copy`);
+    flash(key);
   };
 
   const handleExportAi = (id: string) => {
@@ -405,42 +496,54 @@ export function ListLibraryCore() {
 
   const renderRow = (list: NamedList, compact: boolean) => {
     const count = enabledOptionCountForList(list);
-    const preview = previewText(list, compact ? 3 : 6);
     const key = `list:${list.id}`;
 
     if (compact) {
       return (
         <div
           key={list.id}
-          className="flex items-center gap-2 border-b px-2 py-1.5 last:border-b-0 hover:bg-muted/40"
+          className="space-y-2 border-b p-2.5 last:border-b-0"
         >
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium">{list.name}</p>
-            <p className="truncate text-[10px] text-muted-foreground">
-              {count} · {preview || "—"}
-            </p>
+          <div className="flex items-start gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-1">
+                <p className="truncate text-sm font-medium text-foreground">
+                  {list.name}
+                </p>
+                <ListTokenCopyButton
+                  list={list}
+                  feedbackKey={`${key}:token`}
+                  activeKey={feedbackKey}
+                  onCopy={(token) => copyText(`${key}:token`, token)}
+                />
+              </div>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                {count} option{count === 1 ? "" : "s"}
+              </p>
+            </div>
+            <ListActions
+              list={list}
+              feedbackKey={key}
+              activeKey={feedbackKey}
+              confirmDeleteId={confirmDeleteId}
+              onEdit={() => setEditing(list)}
+              onDuplicate={() => handleDuplicate(list.id)}
+              onCopyAi={() => {
+                const json = actions.exportOneForAi(list.id);
+                if (json) return copyText(`${key}:copy`, json);
+                return Promise.resolve();
+              }}
+              onExportAi={() => handleExportAi(list.id)}
+              onDeleteRequest={() => setConfirmDeleteId(list.id)}
+              onDeleteConfirm={() => {
+                void actions.deleteList(list.id);
+                setConfirmDeleteId(null);
+                flash(`${key}:del`);
+              }}
+              compact
+            />
           </div>
-          <ListActions
-            list={list}
-            feedbackKey={key}
-            activeKey={feedbackKey}
-            confirmDeleteId={confirmDeleteId}
-            onEdit={() => setEditing(list)}
-            onDuplicate={() => handleDuplicate(list.id)}
-            onCopyAi={() => {
-              const json = actions.exportOneForAi(list.id);
-              if (json) return copyAi(key, json);
-              return Promise.resolve();
-            }}
-            onExportAi={() => handleExportAi(list.id)}
-            onDeleteRequest={() => setConfirmDeleteId(list.id)}
-            onDeleteConfirm={() => {
-              void actions.deleteList(list.id);
-              setConfirmDeleteId(null);
-              flash(`${key}:del`);
-            }}
-            compact
-          />
+          <ListOptionItems list={list} compact />
         </div>
       );
     }
@@ -452,10 +555,17 @@ export function ListLibraryCore() {
       >
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
-            <p className="truncate font-medium">{list.name}</p>
+            <div className="flex min-w-0 items-center gap-1">
+              <p className="truncate font-medium text-foreground">{list.name}</p>
+              <ListTokenCopyButton
+                list={list}
+                feedbackKey={`${key}:token`}
+                activeKey={feedbackKey}
+                onCopy={(token) => copyText(`${key}:token`, token)}
+              />
+            </div>
             <p className="mt-1 text-[11px] text-muted-foreground">
               {count} option{count === 1 ? "" : "s"}
-              {preview ? ` — ${preview}${count > 6 ? "…" : ""}` : ""}
             </p>
           </div>
           <ListActions
@@ -467,7 +577,7 @@ export function ListLibraryCore() {
             onDuplicate={() => handleDuplicate(list.id)}
             onCopyAi={() => {
               const json = actions.exportOneForAi(list.id);
-              if (json) return copyAi(key, json);
+              if (json) return copyText(`${key}:copy`, json);
               return Promise.resolve();
             }}
             onExportAi={() => handleExportAi(list.id)}
@@ -478,6 +588,9 @@ export function ListLibraryCore() {
               flash(`${key}:del`);
             }}
           />
+        </div>
+        <div className="mt-3 min-h-0 flex-1">
+          <ListOptionItems list={list} />
         </div>
       </div>
     );
@@ -564,9 +677,7 @@ export function ListLibraryCore() {
           size="sm"
           className="h-8 gap-1.5"
           onClick={() =>
-            void copyAi("all", actions.exportAllForAi()).then(() =>
-              flash("all:copy"),
-            )
+            void copyText("all:copy", actions.exportAllForAi())
           }
           disabled={state.lists.length === 0}
         >
@@ -630,7 +741,7 @@ export function ListLibraryCore() {
             {filtered.map((list) => renderRow(list, true))}
           </div>
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid items-start gap-3 lg:grid-cols-2">
             {filtered.map((list) => renderRow(list, false))}
           </div>
         )}

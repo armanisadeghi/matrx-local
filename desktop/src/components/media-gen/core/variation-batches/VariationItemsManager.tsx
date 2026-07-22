@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { useDebouncedSave } from "@/hooks/use-debounced-save";
 import type { VariationBatchesActions } from "@/hooks/use-variation-batches";
 import type {
   VariationBatch,
@@ -79,8 +80,30 @@ export function VariationItemsManager({
   const [showNegative, setShowNegative] = useState(readShowNegative);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [feedbackKey, setFeedbackKey] = useState<string | null>(null);
-  const saveTimer = useRef<number | null>(null);
-  const loadedItemIdRef = useRef<string | null>(null);
+  const loadedItemKeyRef = useRef<string | null>(null);
+
+  const updateVariationItem = actions.updateVariationItem;
+  const saveVariation = useCallback(
+    async ({
+      batchId,
+      itemId,
+      next,
+    }: {
+      batchId: string;
+      itemId: string;
+      next: Pick<VariationItem, "prompt" | "negativePrompt">;
+    }) => {
+      await updateVariationItem(batchId, itemId, {
+        prompt: next.prompt,
+        negativePrompt: next.negativePrompt,
+      });
+    },
+    [updateVariationItem],
+  );
+  const {
+    schedule: scheduleSave,
+    flush: flushSave,
+  } = useDebouncedSave(saveVariation);
 
   const selectedItem =
     batch.items.find((item) => item.id === selectedId) ?? null;
@@ -94,19 +117,21 @@ export function VariationItemsManager({
 
   useEffect(() => {
     if (!selectedId) {
-      loadedItemIdRef.current = null;
+      loadedItemKeyRef.current = null;
       setDraft(null);
       return;
     }
-    if (loadedItemIdRef.current === selectedId) return;
+    const itemKey = `${batch.id}:${selectedId}`;
+    if (loadedItemKeyRef.current === itemKey) return;
+    void flushSave();
     const item = batch.items.find((row) => row.id === selectedId);
     if (!item) return;
-    loadedItemIdRef.current = selectedId;
+    loadedItemKeyRef.current = itemKey;
     setDraft({
       prompt: item.prompt,
       negativePrompt: item.negativePrompt,
     });
-  }, [selectedId, batch.items]);
+  }, [batch.id, selectedId, batch.items, flushSave]);
 
   useEffect(() => {
     try {
@@ -124,47 +149,31 @@ export function VariationItemsManager({
     );
   }, []);
 
-  const scheduleSave = useCallback(
-    (
-      itemId: string,
-      next: Pick<VariationItem, "prompt" | "negativePrompt">,
-    ) => {
-      if (saveTimer.current !== null) {
-        window.clearTimeout(saveTimer.current);
-      }
-      saveTimer.current = window.setTimeout(() => {
-        void actions.updateVariationItem(batch.id, itemId, {
-          prompt: next.prompt,
-          negativePrompt: next.negativePrompt,
-        });
-      }, 400);
-    },
-    [actions, batch.id],
-  );
-
   const patchDraft = useCallback(
     (patch: Partial<Pick<VariationItem, "prompt" | "negativePrompt">>) => {
       if (!selectedId) return;
       setDraft((prev) => {
         if (!prev) return prev;
         const next = { ...prev, ...patch };
-        scheduleSave(selectedId, next);
+        scheduleSave({ batchId: batch.id, itemId: selectedId, next });
         return next;
       });
     },
-    [scheduleSave, selectedId],
+    [batch.id, scheduleSave, selectedId],
   );
 
   const handleAdd = async () => {
+    await flushSave();
     const item = await actions.addVariationItem(batch.id);
     if (item) {
-      loadedItemIdRef.current = null;
+      loadedItemKeyRef.current = null;
       setSelectedId(item.id);
       flash("add");
     }
   };
 
   const handleDelete = async (itemId: string) => {
+    await flushSave();
     const ok = await actions.deleteVariationItem(batch.id, itemId);
     if (ok) {
       setConfirmDeleteId(null);
@@ -251,7 +260,10 @@ export function VariationItemsManager({
                 className={`flex w-full items-start gap-2 border-b px-3 py-2 text-left last:border-b-0 ${
                   active ? "bg-muted/60" : "hover:bg-muted/30"
                 }`}
-                onClick={() => setSelectedId(item.id)}
+                onClick={() => {
+                  void flushSave();
+                  setSelectedId(item.id);
+                }}
               >
                 <span className="mt-0.5 w-5 shrink-0 text-[10px] tabular-nums text-muted-foreground">
                   {index + 1}

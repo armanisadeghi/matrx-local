@@ -27,6 +27,7 @@ export function ListLibrarySurface({
       trigger={trigger}
       title={title}
       description={description}
+      className="h-[min(760px,88vh)] max-w-[min(1180px,94vw)]"
       contentClassName="p-3"
     >
       <ListLibraryCore />

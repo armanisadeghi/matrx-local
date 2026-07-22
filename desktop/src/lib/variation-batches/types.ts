@@ -68,7 +68,7 @@ export function sanitizeVariationBatches(raw: unknown[]): VariationBatch[] {
     .filter(isVariationBatch)
     .map((row) => ({
       ...row,
-      name: row.name.trim() || "Untitled batch",
+      name: row.name.trim().length > 0 ? row.name : "Untitled batch",
       variableListByName: normalizeVariableListByName(
         (row as VariationBatch).variableListByName,
       ),

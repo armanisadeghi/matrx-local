@@ -24,7 +24,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -345,8 +344,8 @@ function LoraManagerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[88vh] w-[min(96vw,48rem)] max-w-3xl flex-col overflow-hidden p-0">
-        <DialogHeader className="border-b px-5 pb-4 pt-5">
+      <DialogContent className="flex max-h-[88vh] w-[min(96vw,48rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="shrink-0 border-b px-5 pb-4 pt-5">
           <DialogTitle>Manage LoRA styles</DialogTitle>
           <DialogDescription>
             Search, install, activate, and tune adapters. Results default to{" "}
@@ -354,7 +353,7 @@ function LoraManagerDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3 px-5 pt-4">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
           {state.loraError && (
             <ErrorNote
               message={`LoRA styles unavailable — ${state.loraError}`}
@@ -412,24 +411,16 @@ function LoraManagerDialog({
                 />
               )}
               {activeInstalled.length > 0 && (
-                <ScrollArea className="max-h-36 pr-3">
-                  <div className="space-y-2">
-                    {activeInstalled.map((lora) => (
-                      <InstalledLoraRow key={lora.id} lora={lora} ctl={ctl} />
-                    ))}
-                  </div>
-                </ScrollArea>
+                <div className="max-h-36 space-y-2 overflow-y-auto pr-1">
+                  {activeInstalled.map((lora) => (
+                    <InstalledLoraRow key={lora.id} lora={lora} ctl={ctl} />
+                  ))}
+                </div>
               )}
             </div>
           )}
-        </div>
 
-        <div className="min-h-0 flex-1 px-5 pb-4 pt-3">
-          <Tabs
-            value={tab}
-            onValueChange={setTab}
-            className="flex h-full min-h-0 flex-col"
-          >
+          <Tabs value={tab} onValueChange={setTab} className="space-y-3">
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="installed" className="text-xs">
                 Installed ({visibleInstalled.length})
@@ -438,71 +429,61 @@ function LoraManagerDialog({
                 Available ({visibleAvailable.length})
               </TabsTrigger>
             </TabsList>
-            <TabsContent value="installed" className="min-h-0 flex-1">
-              <ScrollArea className="h-full max-h-[42vh] pr-3">
-                <div className="space-y-2 pb-1">
-                  {visibleInstalled.slice(0, limit).map((lora) => (
-                    <InstalledLoraRow key={lora.id} lora={lora} ctl={ctl} />
-                  ))}
-                  {visibleInstalled.length === 0 && (
-                    <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
-                      No installed LoRAs match this model and search.
-                    </p>
-                  )}
-                  {visibleInstalled.length > limit && (
-                    <Button
-                      variant="outline"
-                      className="w-full"
-                      onClick={() => setLimit((value) => value + PAGE_SIZE)}
-                    >
-                      Show{" "}
-                      {Math.min(PAGE_SIZE, visibleInstalled.length - limit)}{" "}
-                      more
-                    </Button>
-                  )}
-                </div>
-              </ScrollArea>
+            <TabsContent value="installed" className="mt-0 space-y-2">
+              {visibleInstalled.slice(0, limit).map((lora) => (
+                <InstalledLoraRow key={lora.id} lora={lora} ctl={ctl} />
+              ))}
+              {visibleInstalled.length === 0 && (
+                <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+                  No installed LoRAs match this model and search.
+                </p>
+              )}
+              {visibleInstalled.length > limit && (
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setLimit((value) => value + PAGE_SIZE)}
+                >
+                  Show {Math.min(PAGE_SIZE, visibleInstalled.length - limit)}{" "}
+                  more
+                </Button>
+              )}
             </TabsContent>
-            <TabsContent value="available" className="min-h-0 flex-1">
-              <ScrollArea className="h-full max-h-[42vh] pr-3">
-                <div className="space-y-2 pb-1">
-                  {visibleAvailable.slice(0, limit).map((lora) => (
-                    <AvailableLoraRow
-                      key={lora.repo_id}
-                      lora={lora}
-                      ctl={ctl}
-                      download={entryByRepo[lora.repo_id]}
-                      onDownload={() =>
-                        void actions.downloadLora(
-                          lora.repo_id,
-                          lora.weight_name ?? undefined,
-                        )
-                      }
-                    />
-                  ))}
-                  {visibleAvailable.length === 0 && (
-                    <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
-                      No available LoRAs match this model and search.
-                    </p>
-                  )}
-                  {visibleAvailable.length > limit && (
-                    <Button
-                      variant="outline"
-                      className="w-full"
-                      onClick={() => setLimit((value) => value + PAGE_SIZE)}
-                    >
-                      Show{" "}
-                      {Math.min(PAGE_SIZE, visibleAvailable.length - limit)}{" "}
-                      more
-                    </Button>
-                  )}
-                </div>
-              </ScrollArea>
+            <TabsContent value="available" className="mt-0 space-y-2">
+              {visibleAvailable.slice(0, limit).map((lora) => (
+                <AvailableLoraRow
+                  key={lora.repo_id}
+                  lora={lora}
+                  ctl={ctl}
+                  download={entryByRepo[lora.repo_id]}
+                  onDownload={() =>
+                    void actions.downloadLora(
+                      lora.repo_id,
+                      lora.weight_name ?? undefined,
+                    )
+                  }
+                />
+              ))}
+              {visibleAvailable.length === 0 && (
+                <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+                  No available LoRAs match this model and search.
+                </p>
+              )}
+              {visibleAvailable.length > limit && (
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setLimit((value) => value + PAGE_SIZE)}
+                >
+                  Show {Math.min(PAGE_SIZE, visibleAvailable.length - limit)}{" "}
+                  more
+                </Button>
+              )}
             </TabsContent>
           </Tabs>
         </div>
 
-        <div className="border-t px-5 py-4">
+        <div className="shrink-0 border-t px-5 py-4">
           <Label className="text-xs">
             Install from Hugging Face or Civitai
           </Label>

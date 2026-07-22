@@ -26,7 +26,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { LARGE_BATCH_THRESHOLD, type MatrixPlan } from "@/lib/prompt-matrix";
 import { cn } from "@/lib/utils";
 
@@ -67,8 +66,8 @@ export function BatchConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[88vh] w-[min(96vw,42rem)] max-w-2xl flex-col overflow-hidden">
-        <DialogHeader className="min-w-0">
+      <DialogContent className="flex max-h-[88vh] w-[min(96vw,42rem)] max-w-2xl flex-col gap-0 overflow-hidden">
+        <DialogHeader className="min-w-0 shrink-0">
           <DialogTitle className="flex min-w-0 items-center gap-2 pr-6 leading-snug">
             <Layers className="h-4 w-4 shrink-0" />
             <span className="min-w-0 break-words">
@@ -78,16 +77,19 @@ export function BatchConfirmDialog({
           </DialogTitle>
           <DialogDescription className="min-w-0 break-words leading-relaxed [overflow-wrap:anywhere]">
             This is a fresh randomized batch snapshot. It runs one at a time in
-            the order shown; a new batch gets a new random order and seeds.
-            You can pause, reorder, or cancel at any point.
+            the order shown; a new batch gets a new random order and seeds. You
+            can pause, reorder, or cancel at any point.
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="min-h-0 flex-1 pr-3">
-          <div className="space-y-3">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto py-3 pr-1">
           {/* ── the numbers ────────────────────────────────────────────── */}
           <div className="grid grid-cols-3 gap-2">
-            <Stat label="Runs" value={total.toLocaleString()} emphasize={large} />
+            <Stat
+              label="Runs"
+              value={total.toLocaleString()}
+              emphasize={large}
+            />
             <Stat
               label="Est. time"
               value={estimate ?? "—"}
@@ -117,20 +119,18 @@ export function BatchConfirmDialog({
           )}
 
           {plan.warnings.length > 0 && (
-            <ScrollArea className="max-h-48 rounded-md border bg-muted/40">
-              <ul className="space-y-1 p-2.5 text-xs text-muted-foreground">
-                {plan.warnings.map((w) => (
-                  <li key={w} className="flex min-w-0 gap-1.5">
-                    <span aria-hidden className="shrink-0">
-                      •
-                    </span>
-                    <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-                      {w}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </ScrollArea>
+            <ul className="max-h-48 space-y-1 overflow-y-auto rounded-md border bg-muted/40 p-2.5 text-xs text-muted-foreground">
+              {plan.warnings.map((w) => (
+                <li key={w} className="flex min-w-0 gap-1.5">
+                  <span aria-hidden className="shrink-0">
+                    •
+                  </span>
+                  <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+                    {w}
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
 
           {/* ── what actually gets generated ───────────────────────────── */}
@@ -164,8 +164,7 @@ export function BatchConfirmDialog({
               )}
             </div>
           )}
-          </div>
-        </ScrollArea>
+        </div>
 
         <DialogFooter className="shrink-0 border-t pt-3">
           <Button
@@ -249,11 +248,9 @@ function RunPreview({
           seed {seed}
         </span>
       </div>
-      <ScrollArea className="max-h-16">
-        <p className="whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]">
-          {prompt}
-        </p>
-      </ScrollArea>
+      <p className="max-h-16 overflow-y-auto whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]">
+        {prompt}
+      </p>
     </div>
   );
 }

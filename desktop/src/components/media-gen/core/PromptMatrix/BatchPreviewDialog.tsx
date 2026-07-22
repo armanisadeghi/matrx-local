@@ -21,7 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ImageGenBatchJobSpec } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -131,8 +130,8 @@ export function BatchPreviewDialog({
           </DialogTitle>
           <DialogDescription className="min-w-0 break-words leading-relaxed [overflow-wrap:anywhere]">
             A fresh randomized batch snapshot — Queue uses these exact jobs,
-            order, seeds, and prompts. Nothing has been sent yet. Reopen
-            Preview or start a new batch to draw a different variation set.
+            order, seeds, and prompts. Nothing has been sent yet. Reopen Preview
+            or start a new batch to draw a different variation set.
           </DialogDescription>
         </DialogHeader>
 
@@ -197,71 +196,67 @@ export function BatchPreviewDialog({
           <p className="shrink-0 text-[11px] text-muted-foreground">{copyOk}</p>
         )}
 
-        <ScrollArea className="min-h-0 flex-1 rounded-md border">
-          <ul className="min-w-0 divide-y">
-            {runs.map((run) => {
-              const checked = selected.has(run.index);
-              return (
-                <li
-                  key={run.index}
-                  className={cn(
-                    "flex min-w-0 gap-2 px-2.5 py-2",
-                    !checked && "opacity-50",
-                  )}
-                >
-                  <label className="flex cursor-pointer items-start gap-2 pt-0.5">
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={() => toggle(run.index)}
-                      className="mt-0.5 h-3.5 w-3.5"
-                      aria-label={`Include run ${run.index + 1}`}
-                    />
-                    <span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
-                      {run.index + 1}
-                    </span>
-                  </label>
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex min-w-0 items-start gap-1.5">
-                      <code className="min-w-0 flex-1 whitespace-normal break-words text-[11px] leading-snug text-primary [overflow-wrap:anywhere]">
-                        {run.label || "—"}
-                      </code>
-                      <Badge
-                        variant="outline"
-                        className="h-4 shrink-0 px-1 text-[10px] tabular-nums"
-                      >
-                        seed {run.seed}
-                      </Badge>
-                    </div>
-                    <p className="whitespace-pre-wrap break-words text-xs leading-relaxed [overflow-wrap:anywhere]">
-                      {run.prompt}
-                    </p>
-                    {run.negativePrompt.trim().length > 0 && (
-                      <p className="whitespace-pre-wrap break-words text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
-                        <span className="font-medium">Neg: </span>
-                        {run.negativePrompt}
-                      </p>
-                    )}
+        <ul className="min-h-0 min-w-0 flex-1 divide-y overflow-y-auto rounded-md border">
+          {runs.map((run) => {
+            const checked = selected.has(run.index);
+            return (
+              <li
+                key={run.index}
+                className={cn(
+                  "flex min-w-0 gap-2 px-2.5 py-2",
+                  !checked && "opacity-50",
+                )}
+              >
+                <label className="flex cursor-pointer items-start gap-2 pt-0.5">
+                  <Checkbox
+                    checked={checked}
+                    onCheckedChange={() => toggle(run.index)}
+                    className="mt-0.5 h-3.5 w-3.5"
+                    aria-label={`Include run ${run.index + 1}`}
+                  />
+                  <span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
+                    {run.index + 1}
+                  </span>
+                </label>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex min-w-0 items-start gap-1.5">
+                    <code className="min-w-0 flex-1 whitespace-normal break-words text-[11px] leading-snug text-primary [overflow-wrap:anywhere]">
+                      {run.label || "—"}
+                    </code>
+                    <Badge
+                      variant="outline"
+                      className="h-4 shrink-0 px-1 text-[10px] tabular-nums"
+                    >
+                      seed {run.seed}
+                    </Badge>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 shrink-0 text-muted-foreground"
-                    aria-label={`Copy run ${run.index + 1}`}
-                    onClick={() => {
-                      void navigator.clipboard
-                        .writeText(run.prompt)
-                        .then(() => {
-                          setCopyOk(`Copied run #${run.index + 1}.`);
-                        });
-                    }}
-                  >
-                    <Copy className="h-3.5 w-3.5" />
-                  </Button>
-                </li>
-              );
-            })}
-          </ul>
-        </ScrollArea>
+                  <p className="whitespace-pre-wrap break-words text-xs leading-relaxed [overflow-wrap:anywhere]">
+                    {run.prompt}
+                  </p>
+                  {run.negativePrompt.trim().length > 0 && (
+                    <p className="whitespace-pre-wrap break-words text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
+                      <span className="font-medium">Neg: </span>
+                      {run.negativePrompt}
+                    </p>
+                  )}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0 text-muted-foreground"
+                  aria-label={`Copy run ${run.index + 1}`}
+                  onClick={() => {
+                    void navigator.clipboard.writeText(run.prompt).then(() => {
+                      setCopyOk(`Copied run #${run.index + 1}.`);
+                    });
+                  }}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
 
         <DialogFooter className="shrink-0 sm:justify-between">
           <Button

@@ -24,10 +24,69 @@ export function listsMatchingVariableName(
   const key = variableKey(variableName);
   return lists.filter((list) => {
     const listVariableName = variableNameForList(list.name);
+    return listVariableName !== null && variableKey(listVariableName) === key;
+  });
+}
+
+/** Loose identity for conservative near matching (spaces, `_`, and `-` equivalent). */
+function looseVariableKey(name: string): string {
+  return variableKey(name.replace(/[_-]+/g, " "));
+}
+
+/**
+ * Pick at most one saved list for a prompt variable.
+ * Exact normalized matches win; otherwise a small near-match pass (prefix / whole-word).
+ * Returns null when ambiguous or nothing close enough.
+ */
+export function resolveListForVariableName(
+  lists: readonly NamedList[],
+  variableName: string,
+): NamedList | null {
+  const exact = listsMatchingVariableName(lists, variableName);
+  if (exact.length === 1) return exact[0] ?? null;
+  if (exact.length > 1) return null;
+
+  const varKey = looseVariableKey(variableName);
+  if (varKey.length === 0) return null;
+
+  const looseExact = lists.filter((list) => {
+    const listVariableName = variableNameForList(list.name);
     return (
-      listVariableName !== null && variableKey(listVariableName) === key
+      listVariableName !== null && looseVariableKey(listVariableName) === varKey
     );
   });
+  if (looseExact.length === 1) return looseExact[0] ?? null;
+  if (looseExact.length > 1) return null;
+
+  type Scored = { list: NamedList; score: number };
+  const scored: Scored[] = [];
+
+  for (const list of lists) {
+    const listVariableName = variableNameForList(list.name);
+    if (listVariableName === null) continue;
+    const listKey = looseVariableKey(listVariableName);
+    if (listKey.length === 0) continue;
+
+    let score = 0;
+    if (listKey.startsWith(`${varKey} `)) {
+      // {{camera}} → "Camera angles"
+      score = 90;
+    } else if (listKey.split(" ")[0] === varKey) {
+      // {{people}} → "People celebrities"
+      score = 85;
+    } else if (listKey.split(" ").includes(varKey)) {
+      // {{angles}} → "Camera angles"
+      score = 80;
+    }
+
+    if (score > 0) scored.push({ list, score });
+  }
+
+  if (scored.length === 0) return null;
+
+  const topScore = Math.max(...scored.map((row) => row.score));
+  const best = scored.filter((row) => row.score === topScore);
+  return best.length === 1 ? (best[0]?.list ?? null) : null;
 }
 
 export interface VariableTokenInsertion {

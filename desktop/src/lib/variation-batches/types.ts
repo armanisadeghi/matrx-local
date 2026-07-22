@@ -100,6 +100,25 @@ export function emptyVariationBatch(name = "New batch"): VariationBatch {
   };
 }
 
+/** Copy template + list mappings only — no generated variation rows. */
+export function cloneVariationBatchTemplate(
+  source: VariationBatch,
+  name = `${source.name} (copy)`,
+): VariationBatch {
+  const now = Date.now();
+  return {
+    id: makeBatchId(),
+    name,
+    sourcePromptId: source.sourcePromptId,
+    templatePrompt: source.templatePrompt,
+    templateNegative: source.templateNegative,
+    variableListByName: { ...source.variableListByName },
+    items: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 export function emptyVariationItem(
   prompt = "",
   negativePrompt = "",

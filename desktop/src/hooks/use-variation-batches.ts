@@ -7,8 +7,10 @@ import {
 import {
   expandPromptVariations,
   type VariableOptionMap,
+  type VariationGenerateOrder,
 } from "@/lib/variation-batches/expand";
 import {
+  cloneVariationBatchTemplate,
   emptyVariationBatch,
   emptyVariationItem,
   sanitizeVariationBatches,
@@ -48,6 +50,8 @@ export interface VariationBatchesActions {
     >,
   ) => Promise<boolean>;
   deleteBatch: (id: string) => Promise<boolean>;
+  duplicateBatch: (id: string) => Promise<VariationBatch | null>;
+  clearVariationItems: (batchId: string) => Promise<boolean>;
   generateVariations: (params: {
     batchId: string;
     name?: string;
@@ -56,6 +60,8 @@ export interface VariationBatchesActions {
     templateNegative: string;
     variableListByName: Record<string, string>;
     variables: VariableOptionMap[];
+    maxCount?: number;
+    order?: VariationGenerateOrder;
   }) => Promise<{ ok: boolean; errors: string[] }>;
   updateItemStatus: (
     batchId: string,
@@ -95,7 +101,7 @@ export function useVariationBatches(): [
   batchesRef.current = batches;
 
   const enqueueWrite = useCallback(
-    <T,>(operation: () => Promise<T>): Promise<T> => {
+    <T>(operation: () => Promise<T>): Promise<T> => {
       const result = writeChainRef.current.then(operation, operation);
       writeChainRef.current = result.then(
         () => undefined,
@@ -115,12 +121,12 @@ export function useVariationBatches(): [
       }
       setSaving(true);
       try {
-      const saved = await putPromptMatrixVariationBatches(baseUrl, next);
-      const sanitized = sanitizeVariationBatches(saved.batches);
-      // Keep imperative writers current before React commits the state update.
-      // A serialized autosave may start its next write in the same microtask.
-      batchesRef.current = sanitized;
-      setBatches(sanitized);
+        const saved = await putPromptMatrixVariationBatches(baseUrl, next);
+        const sanitized = sanitizeVariationBatches(saved.batches);
+        // Keep imperative writers current before React commits the state update.
+        // A serialized autosave may start its next write in the same microtask.
+        batchesRef.current = sanitized;
+        setBatches(sanitized);
         setError(null);
         return true;
       } catch (err) {
@@ -226,6 +232,34 @@ export function useVariationBatches(): [
     [enqueueWrite, persist],
   );
 
+  const duplicateBatch = useCallback(
+    async (id: string): Promise<VariationBatch | null> => {
+      return enqueueWrite(async () => {
+        const source = batchesRef.current.find((row) => row.id === id);
+        if (!source) return null;
+        const copy = cloneVariationBatchTemplate(source);
+        const ok = await persist([copy, ...batchesRef.current]);
+        return ok ? copy : null;
+      });
+    },
+    [enqueueWrite, persist],
+  );
+
+  const clearVariationItems = useCallback(
+    async (batchId: string): Promise<boolean> => {
+      return enqueueWrite(() => {
+        const batch = batchesRef.current.find((row) => row.id === batchId);
+        if (!batch || batch.items.length === 0) return Promise.resolve(true);
+        const now = Date.now();
+        const next = batchesRef.current.map((row) =>
+          row.id === batchId ? { ...row, items: [], updatedAt: now } : row,
+        );
+        return persist(next);
+      });
+    },
+    [enqueueWrite, persist],
+  );
+
   const updateItemStatus = useCallback(
     async (
       batchId: string,
@@ -266,6 +300,8 @@ export function useVariationBatches(): [
       templateNegative: string;
       variableListByName: Record<string, string>;
       variables: VariableOptionMap[];
+      maxCount?: number;
+      order?: VariationGenerateOrder;
     }): Promise<{ ok: boolean; errors: string[] }> => {
       let expanded;
       try {
@@ -273,6 +309,7 @@ export function useVariationBatches(): [
           params.templatePrompt,
           params.templateNegative,
           params.variables,
+          { maxCount: params.maxCount, order: params.order },
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -423,6 +460,8 @@ export function useVariationBatches(): [
       createBatch,
       updateBatch,
       deleteBatch,
+      duplicateBatch,
+      clearVariationItems,
       generateVariations,
       updateItemStatus,
       addVariationItem,
@@ -435,6 +474,8 @@ export function useVariationBatches(): [
       createBatch,
       updateBatch,
       deleteBatch,
+      duplicateBatch,
+      clearVariationItems,
       generateVariations,
       updateItemStatus,
       addVariationItem,

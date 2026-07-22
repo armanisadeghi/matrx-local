@@ -21,6 +21,7 @@ export interface VariationItemsManagerProps {
   generating: boolean;
   saving: boolean;
   actions: VariationBatchesActions;
+  onBeforeBatchMutation?: () => Promise<void>;
 }
 
 function previewText(text: string, max = 72): string {
@@ -71,6 +72,7 @@ export function VariationItemsManager({
   generating,
   saving,
   actions,
+  onBeforeBatchMutation,
 }: VariationItemsManagerProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Pick<
@@ -79,10 +81,13 @@ export function VariationItemsManager({
   > | null>(null);
   const [showNegative, setShowNegative] = useState(readShowNegative);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [feedbackKey, setFeedbackKey] = useState<string | null>(null);
   const loadedItemKeyRef = useRef<string | null>(null);
 
-  const updateVariationItem = actions.updateVariationItem;
+  useEffect(() => {
+    setConfirmClearAll(false);
+  }, [batch.id]);
   const saveVariation = useCallback(
     async ({
       batchId,
@@ -100,10 +105,8 @@ export function VariationItemsManager({
     },
     [updateVariationItem],
   );
-  const {
-    schedule: scheduleSave,
-    flush: flushSave,
-  } = useDebouncedSave(saveVariation);
+  const { schedule: scheduleSave, flush: flushSave } =
+    useDebouncedSave(saveVariation);
 
   const selectedItem =
     batch.items.find((item) => item.id === selectedId) ?? null;
@@ -181,6 +184,19 @@ export function VariationItemsManager({
     }
   };
 
+  const handleClearAll = async () => {
+    await flushSave();
+    await onBeforeBatchMutation?.();
+    const ok = await actions.clearVariationItems(batch.id);
+    if (ok) {
+      setConfirmClearAll(false);
+      setSelectedId(null);
+      setDraft(null);
+      loadedItemKeyRef.current = null;
+      flash("clear-all");
+    }
+  };
+
   if (batch.items.length === 0) {
     return (
       <div className="flex min-h-0 flex-1 flex-col rounded-lg border bg-card">
@@ -217,6 +233,35 @@ export function VariationItemsManager({
           </span>
         </p>
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          {confirmClearAll ? (
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs"
+              disabled={generating || saving}
+              onClick={() => void handleClearAll()}
+            >
+              <Check className="h-3.5 w-3.5" />
+              Clear all
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
+              disabled={generating || saving}
+              onClick={() => setConfirmClearAll(true)}
+            >
+              {feedbackKey === "clear-all" ? (
+                <Check className="h-3.5 w-3.5 text-green-600" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
+              Clear all
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"

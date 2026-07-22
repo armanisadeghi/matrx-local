@@ -3,6 +3,7 @@ import type { NamedList } from "@/lib/list-library/types";
 import {
   insertListVariableToken,
   listsMatchingVariableName,
+  resolveListForVariableName,
   sampleListValues,
   variableNameForList,
   variableTokenForList,
@@ -56,6 +57,24 @@ describe("list variables", () => {
     expect(
       listsMatchingVariableName(lists, "camera angles").map((item) => item.id),
     ).toEqual(["one", "two"]);
+  });
+
+  it("resolves a unique exact or near list match for auto-mapping", () => {
+    const lists = [
+      list("camera", "Camera angles", [{ value: "wide" }]),
+      list("people", "People / celebrities", [{ value: "actor" }]),
+      list("light", "Lighting setup", [{ value: "soft" }]),
+      list("style-a", "Style A", [{ value: "a" }]),
+      list("style-b", "Style B", [{ value: "b" }]),
+    ];
+
+    expect(resolveListForVariableName(lists, "camera")?.id).toBe("camera");
+    expect(resolveListForVariableName(lists, "people")?.id).toBe("people");
+    expect(resolveListForVariableName(lists, "light")).toBeNull();
+    expect(resolveListForVariableName(lists, "style")).toBeNull();
+    expect(resolveListForVariableName(lists, "camera_angles")?.id).toBe(
+      "camera",
+    );
   });
 
   it("replaces only the selected range and clamps stale selections", () => {

@@ -1,15 +1,24 @@
 /**
  * Expand a prompt template + variable option map into concrete prompt lines.
+ *
+ * Random mode uses the prompt-matrix sample engine (`sampleIndices` +
+ * `createBatchSnapshot(secureRandom)`) so each generate pass draws distinct
+ * combinations uniformly from the full cartesian product — never a cyclic walk.
  */
 
 import {
   buildJobs,
+  countPlan,
   createBatchSnapshot,
   createEmptyPromptJob,
   createPromptTarget,
+  expandMatrix,
   extractVariableNames,
   PROMPT_TEMPLATE_FIELDS,
+  secureRandom,
   type MatrixOption,
+  type MatrixPlan,
+  type MatrixSpec,
   type MatrixVariable,
 } from "@/lib/prompt-matrix";
 import { makeId } from "@/lib/prompt-matrix/storage";
@@ -25,6 +34,14 @@ export interface ExpandedVariation {
   label: string;
 }
 
+/** How generated rows are chosen from the cartesian product. */
+export type VariationGenerateOrder = "random" | "sequence" | "reverse";
+
+export interface ExpandPromptVariationsOptions {
+  maxCount?: number;
+  order?: VariationGenerateOrder;
+}
+
 export function extractTemplateVariableNames(
   prompt: string,
   negativePrompt: string,
@@ -32,29 +49,10 @@ export function extractTemplateVariableNames(
   return extractVariableNames([prompt, negativePrompt]);
 }
 
-export function expandPromptVariations(
-  templatePrompt: string,
-  templateNegative: string,
+function buildMatrixVariables(
+  tokenNames: readonly string[],
   variables: readonly VariableOptionMap[],
-): { variations: ExpandedVariation[]; errors: string[] } {
-  const tokenNames = extractTemplateVariableNames(
-    templatePrompt,
-    templateNegative,
-  );
-
-  if (tokenNames.length === 0) {
-    return {
-      variations: [
-        {
-          prompt: templatePrompt.trim(),
-          negativePrompt: templateNegative.trim(),
-          label: "single",
-        },
-      ],
-      errors: [],
-    };
-  }
-
+): { variables: MatrixVariable[]; errors: string[] } {
   const byName = new Map(
     variables.map((v) => [v.name.trim().toLowerCase(), v]),
   );
@@ -82,7 +80,7 @@ export function expandPromptVariations(
   const missing = matrixVariables.filter((v) => v.options.length === 0);
   if (missing.length > 0) {
     return {
-      variations: [],
+      variables: matrixVariables,
       errors: missing.map(
         (v) =>
           `Variable "{{${v.name}}}" has no options — map a list or add values.`,
@@ -90,14 +88,23 @@ export function expandPromptVariations(
     };
   }
 
-  const spec = {
+  return { variables: matrixVariables, errors: [] };
+}
+
+function buildVariationSpec(
+  templatePrompt: string,
+  templateNegative: string,
+  matrixVariables: readonly MatrixVariable[],
+  strategy: MatrixSpec["strategy"],
+): MatrixSpec {
+  return {
     fields: PROMPT_TEMPLATE_FIELDS.map((f) => ({
       ...f,
       text: f.id === "prompt" ? templatePrompt : templateNegative,
     })),
-    variables: matrixVariables,
+    variables: [...matrixVariables],
     pools: [],
-    strategy: { kind: "cartesian" as const },
+    strategy,
     seed: {
       mode: "fixed" as const,
       baseSeed: 1,
@@ -105,29 +112,200 @@ export function expandPromptVariations(
       rngSeed: 1,
     },
   };
+}
 
-  const snapshot = createBatchSnapshot(spec);
-  if (snapshot.errors.length > 0) {
-    return { variations: [], errors: snapshot.errors };
+function resolveWantCount(total: number, maxCount?: number): number {
+  if (maxCount === undefined) return total;
+  return Math.min(total, Math.max(1, Math.trunc(maxCount)));
+}
+
+/** Exact cartesian total — null when any mapped variable has no options. */
+export function countPromptVariations(
+  templatePrompt: string,
+  templateNegative: string,
+  variables: readonly VariableOptionMap[],
+): number | null {
+  const tokenNames = extractTemplateVariableNames(
+    templatePrompt,
+    templateNegative,
+  );
+  if (tokenNames.length === 0) return 1;
+
+  const built = buildMatrixVariables(tokenNames, variables);
+  if (built.errors.length > 0) return null;
+
+  return countPlan(
+    buildVariationSpec(templatePrompt, templateNegative, built.variables, {
+      kind: "cartesian",
+    }),
+  );
+}
+
+function expandRandomSnapshot(
+  templatePrompt: string,
+  templateNegative: string,
+  matrixVariables: readonly MatrixVariable[],
+  want: number,
+): MatrixPlan {
+  const sampleSpec = buildVariationSpec(
+    templatePrompt,
+    templateNegative,
+    matrixVariables,
+    { kind: "sample", count: want, seed: 1 },
+  );
+  return createBatchSnapshot(sampleSpec, secureRandom);
+}
+
+function expandSequentialSnapshot(
+  templatePrompt: string,
+  templateNegative: string,
+  matrixVariables: readonly MatrixVariable[],
+  want: number,
+  order: "sequence" | "reverse",
+  total: number,
+): { plan: MatrixPlan | null; errors: string[] } {
+  const cartSpec = buildVariationSpec(
+    templatePrompt,
+    templateNegative,
+    matrixVariables,
+    { kind: "cartesian" },
+  );
+  const analysed = expandMatrix(cartSpec);
+  if (analysed.errors.length > 0) {
+    return { plan: null, errors: analysed.errors };
   }
 
+  if (order === "reverse" && total > analysed.combinations.length) {
+    return {
+      plan: null,
+      errors: [
+        `Reverse order only works when total options are at most ${analysed.combinations.length.toLocaleString()}. Use Random or Sequence, or shorten your lists.`,
+      ],
+    };
+  }
+
+  const picked =
+    order === "reverse"
+      ? analysed.combinations.slice(-want)
+      : analysed.combinations.slice(0, want);
+
+  return {
+    plan: {
+      ...analysed,
+      combinations: picked,
+      truncated: want < total,
+    },
+    errors: [],
+  };
+}
+
+export function expandPromptVariations(
+  templatePrompt: string,
+  templateNegative: string,
+  variables: readonly VariableOptionMap[],
+  options?: ExpandPromptVariationsOptions,
+): {
+  variations: ExpandedVariation[];
+  errors: string[];
+  total: number;
+  truncated: boolean;
+} {
+  const tokenNames = extractTemplateVariableNames(
+    templatePrompt,
+    templateNegative,
+  );
+
+  if (tokenNames.length === 0) {
+    return {
+      variations: [
+        {
+          prompt: templatePrompt.trim(),
+          negativePrompt: templateNegative.trim(),
+          label: "single",
+        },
+      ],
+      errors: [],
+      total: 1,
+      truncated: false,
+    };
+  }
+
+  const built = buildMatrixVariables(tokenNames, variables);
+  if (built.errors.length > 0) {
+    return { variations: [], errors: built.errors, total: 0, truncated: false };
+  }
+
+  const cartesianSpec = buildVariationSpec(
+    templatePrompt,
+    templateNegative,
+    built.variables,
+    { kind: "cartesian" },
+  );
+  const total = countPlan(cartesianSpec);
+  const order = options?.order ?? "random";
+  const want = resolveWantCount(total, options?.maxCount);
+  const truncated = want < total;
+
+  let snapshot: MatrixPlan;
+  if (order === "random") {
+    snapshot = expandRandomSnapshot(
+      templatePrompt,
+      templateNegative,
+      built.variables,
+      want,
+    );
+  } else {
+    const sequential = expandSequentialSnapshot(
+      templatePrompt,
+      templateNegative,
+      built.variables,
+      want,
+      order,
+      total,
+    );
+    if (sequential.errors.length > 0 || sequential.plan === null) {
+      return {
+        variations: [],
+        errors: sequential.errors,
+        total,
+        truncated,
+      };
+    }
+    snapshot = sequential.plan;
+  }
+
+  if (snapshot.errors.length > 0) {
+    return { variations: [], errors: snapshot.errors, total, truncated };
+  }
+
+  const spec = buildVariationSpec(
+    templatePrompt,
+    templateNegative,
+    built.variables,
+    order === "random"
+      ? { kind: "sample", count: want, seed: 1 }
+      : { kind: "cartesian" },
+  );
+
   const target = createPromptTarget();
-  const built = buildJobs(
+  const jobs = buildJobs(
     target,
     createEmptyPromptJob(),
     snapshot.combinations,
     spec.variables,
   );
-  if (built.errors.length > 0) {
-    return { variations: [], errors: built.errors };
+  if (jobs.errors.length > 0) {
+    return { variations: [], errors: jobs.errors, total, truncated };
   }
 
   return {
-    variations: built.jobs.map((b) => ({
+    variations: jobs.jobs.map((b) => ({
       prompt: b.job.prompt,
       negativePrompt: b.job.negativePrompt,
       label: b.label,
     })),
     errors: [],
+    total,
+    truncated,
   };
 }

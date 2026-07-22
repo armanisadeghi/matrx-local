@@ -12,6 +12,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  CopyPlus,
   FolderOpen,
   Loader2,
   Plus,
@@ -39,9 +40,13 @@ import type {
 } from "@/lib/media-gen/enqueue-variation-batch";
 import type { SavedPrompt } from "@/lib/saved-prompts/types";
 import type { VariationBatch } from "@/lib/variation-batches/types";
-import { extractTemplateVariableNames } from "@/lib/variation-batches/expand";
 import {
-  listsMatchingVariableName,
+  countPromptVariations,
+  extractTemplateVariableNames,
+  type VariationGenerateOrder,
+} from "@/lib/variation-batches/expand";
+import {
+  resolveListForVariableName,
   variableNameForList,
 } from "@/lib/list-variables";
 import { variableKey } from "@/lib/prompt-matrix";
@@ -64,6 +69,18 @@ import {
 
 const SHOW_NEGATIVE_KEY = "matrx-variations-show-negative";
 const GENERATOR_OPEN_KEY = "matrx-variations-generator-open";
+const GENERATE_MAX_COUNT_KEY = "matrx-variations-generate-max-count";
+const GENERATE_ORDER_KEY = "matrx-variations-generate-order";
+const DEFAULT_GENERATE_MAX_COUNT = 100;
+
+const GENERATE_ORDERS: ReadonlyArray<{
+  value: VariationGenerateOrder;
+  label: string;
+}> = [
+  { value: "random", label: "Random" },
+  { value: "sequence", label: "Sequence" },
+  { value: "reverse", label: "Reverse" },
+];
 
 export type VariationBatchesIntent = "manage" | "pick";
 
@@ -123,9 +140,8 @@ function syncListByVariableForTokens(
       next[name] = priorMapping[1] ?? NO_LIST_ID;
       continue;
     }
-    const matches = listsMatchingVariableName(lists, name);
-    next[name] =
-      matches.length === 1 ? (matches[0]?.id ?? NO_LIST_ID) : NO_LIST_ID;
+    const matched = resolveListForVariableName(lists, name);
+    next[name] = matched?.id ?? NO_LIST_ID;
   }
   return next;
 }
@@ -158,6 +174,45 @@ function listMappingsEqual(
   return aKeys.every((key) => a[key] === b[key]);
 }
 
+function readStoredNumber(key: string, fallback: number): number {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed >= 1 ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredNumber(key: string, value: number): void {
+  try {
+    localStorage.setItem(key, String(Math.max(1, Math.trunc(value))));
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+function readStoredOrder(): VariationGenerateOrder {
+  try {
+    const raw = localStorage.getItem(GENERATE_ORDER_KEY);
+    if (raw === "random" || raw === "sequence" || raw === "reverse") {
+      return raw;
+    }
+  } catch {
+    // ignore
+  }
+  return "random";
+}
+
+function writeStoredOrder(value: VariationGenerateOrder): void {
+  try {
+    localStorage.setItem(GENERATE_ORDER_KEY, value);
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
 export function VariationBatchesCore({
   intent = "manage",
   onQueueBatch,
@@ -180,6 +235,11 @@ export function VariationBatchesCore({
   const [queueCount, setQueueCount] = useState(1);
   const [queueOrder, setQueueOrder] = useState<VariationQueueOrder>("start");
   const [generatorOpen, setGeneratorOpen] = useState(true);
+  const [generateMaxCount, setGenerateMaxCount] = useState(() =>
+    readStoredNumber(GENERATE_MAX_COUNT_KEY, DEFAULT_GENERATE_MAX_COUNT),
+  );
+  const [generateOrder, setGenerateOrder] =
+    useState<VariationGenerateOrder>(readStoredOrder);
   const loadedBatchIdRef = useRef<string | null>(null);
   const updateBatch = batchActions.updateBatch;
   const saveBatch = useCallback(
@@ -230,6 +290,31 @@ export function VariationBatchesCore({
           )
         : [],
     [draft?.templatePrompt, draft?.templateNegative],
+  );
+
+  const mappedVariables = useMemo(() => {
+    if (!draft) return [];
+    return tokenNames.map((name) => {
+      const listId = draft.listByVariable[name] ?? NO_LIST_ID;
+      const mapped = listOptionsFromLibrary(listState.lists, listId);
+      return { name, options: mapped?.options ?? [] };
+    });
+  }, [draft, tokenNames, listState.lists]);
+
+  const totalOptions = useMemo(() => {
+    if (!draft) return null;
+    return countPromptVariations(
+      draft.templatePrompt,
+      draft.templateNegative,
+      mappedVariables,
+    );
+  }, [draft, mappedVariables]);
+
+  const generateMaxCountClamped = Math.max(
+    1,
+    Number.isFinite(generateMaxCount)
+      ? Math.floor(generateMaxCount)
+      : DEFAULT_GENERATE_MAX_COUNT,
   );
 
   useEffect(() => {
@@ -401,6 +486,18 @@ export function VariationBatchesCore({
     }
   };
 
+  const handleDuplicateBatch = useCallback(
+    async (id: string) => {
+      await flushSave();
+      const row = await batchActions.duplicateBatch(id);
+      if (row) {
+        setSelectedId(row.id);
+        flash(`batch:${row.id}:dup`);
+      }
+    },
+    [batchActions, flushSave, flash],
+  );
+
   const handleSelectBatch = useCallback(
     (id: string) => {
       void flushSave();
@@ -415,11 +512,7 @@ export function VariationBatchesCore({
     cancelSave();
     setGenerateErrors([]);
     try {
-      const variables = tokenNames.map((name) => {
-        const listId = draft.listByVariable[name] ?? NO_LIST_ID;
-        const mapped = listOptionsFromLibrary(listState.lists, listId);
-        return { name, options: mapped?.options ?? [] };
-      });
+      const variables = mappedVariables;
       const result = await batchActions.generateVariations({
         batchId: draft.batchId,
         name: draft.name,
@@ -431,6 +524,8 @@ export function VariationBatchesCore({
         templateNegative: draft.templateNegative,
         variableListByName: draft.listByVariable,
         variables,
+        maxCount: generateMaxCountClamped,
+        order: generateOrder,
       });
       if (!result.ok) {
         setGenerateErrors(result.errors);
@@ -705,6 +800,13 @@ export function VariationBatchesCore({
                           : `${done}/${row.items.length} done`}
                       </p>
                     </button>
+                    <FeedbackIconButton
+                      feedbackKey={`${key}:dup`}
+                      activeKey={feedbackKey}
+                      icon={CopyPlus}
+                      label="Duplicate batch"
+                      onClick={() => void handleDuplicateBatch(row.id)}
+                    />
                     {confirmDeleteId === row.id ? (
                       <Button
                         variant="destructive"
@@ -830,11 +932,7 @@ export function VariationBatchesCore({
                         rows={2}
                         enableVariables
                         onVariableInsert={(list, value) =>
-                          patchTemplateWithList(
-                            "templateNegative",
-                            list,
-                            value,
-                          )
+                          patchTemplateWithList("templateNegative", list, value)
                         }
                       />
                     </div>
@@ -857,7 +955,7 @@ export function VariationBatchesCore({
                       onListChange={handleListChange}
                     />
 
-                    <div className="col-span-2 flex items-center gap-2 xl:col-span-4">
+                    <div className="col-span-2 flex flex-wrap items-center gap-3 xl:col-span-4">
                       <Button
                         type="button"
                         onClick={() => void handleGenerate()}
@@ -877,6 +975,81 @@ export function VariationBatchesCore({
                         )}
                         Generate variations
                       </Button>
+                      <div className="flex items-center gap-2">
+                        <label
+                          htmlFor="generate-order"
+                          className="shrink-0 text-xs text-muted-foreground"
+                        >
+                          Order
+                        </label>
+                        <Select
+                          value={generateOrder}
+                          onValueChange={(value) => {
+                            const next = value as VariationGenerateOrder;
+                            setGenerateOrder(next);
+                            writeStoredOrder(next);
+                          }}
+                        >
+                          <SelectTrigger
+                            id="generate-order"
+                            className="h-8 w-[6.75rem] text-xs"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {GENERATE_ORDERS.map((row) => (
+                              <SelectItem
+                                key={row.value}
+                                value={row.value}
+                                className="text-xs"
+                              >
+                                {row.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label
+                          htmlFor="generate-max-count"
+                          className="shrink-0 text-xs text-muted-foreground"
+                        >
+                          Max count
+                        </label>
+                        <Input
+                          id="generate-max-count"
+                          type="number"
+                          min={1}
+                          max={
+                            totalOptions !== null
+                              ? Math.max(1, totalOptions)
+                              : undefined
+                          }
+                          value={generateMaxCount}
+                          onChange={(e) => {
+                            const next = Number.parseInt(e.target.value, 10);
+                            setGenerateMaxCount(
+                              Number.isFinite(next) ? next : 1,
+                            );
+                          }}
+                          onBlur={() => {
+                            const clamped = Math.max(
+                              1,
+                              Number.isFinite(generateMaxCount)
+                                ? Math.floor(generateMaxCount)
+                                : DEFAULT_GENERATE_MAX_COUNT,
+                            );
+                            setGenerateMaxCount(clamped);
+                            writeStoredNumber(GENERATE_MAX_COUNT_KEY, clamped);
+                          }}
+                          className="h-8 w-24 text-xs tabular-nums"
+                        />
+                      </div>
+                      <span className="text-xs text-muted-foreground">
+                        {totalOptions === null
+                          ? "Map all variables to see total options"
+                          : `${totalOptions.toLocaleString()} total options`}
+                      </span>
                       {totalCount > 0 && (
                         <span className="text-xs text-muted-foreground">
                           Replaces existing {totalCount} variation
@@ -893,6 +1066,7 @@ export function VariationBatchesCore({
                 generating={generating}
                 saving={batchState.saving}
                 actions={batchActions}
+                onBeforeBatchMutation={flushSave}
               />
             </>
           )}

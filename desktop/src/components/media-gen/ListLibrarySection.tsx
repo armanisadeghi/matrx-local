@@ -2,10 +2,18 @@
  * ListLibrarySection — named option lists (compact toolbar, cards or table view).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+} from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   Check,
+  ClipboardPaste,
   Copy,
   CopyPlus,
   Download,
@@ -42,7 +50,9 @@ import type { MatrixOption } from "@/lib/prompt-matrix/types";
 import { enabledOptionCountForList } from "@/lib/list-library/display";
 import { variableTokenForList } from "@/lib/list-variables";
 import { makeId } from "@/lib/prompt-matrix/storage";
+import { parsePastedListContent } from "@/lib/list-library/parse-pasted-content";
 import { ErrorNote } from "./shared";
+import { QuickPasteDialog } from "./QuickPasteDialog";
 
 const VIEW_KEY = "matrx-list-library-view";
 type ViewMode = "cards" | "compact";
@@ -250,6 +260,69 @@ function ListEditorDialog({
     else setLocalError("Could not save — check engine connection.");
   };
 
+  const mergePastedOptions = (raw: string, replace = false) => {
+    const parsed = parsePastedListContent(raw);
+    const values =
+      parsed.kind === "options"
+        ? parsed.options
+        : parsed.kind === "single-list"
+          ? parsed.list.options
+          : parsed.lists.flatMap((row) => row.options);
+    if (values.length === 0) {
+      setLocalError("No options found in pasted content.");
+      return;
+    }
+    if (parsed.kind === "single-list" && name.trim().length === 0) {
+      setName(parsed.list.name);
+    }
+    setOptionsText((prev) => {
+      const existing = replace
+        ? []
+        : prev.split("\n").filter((line) => line.trim());
+      return [...existing, ...values].join("\n");
+    });
+    setLocalError(null);
+  };
+
+  const handleSmartPaste = async () => {
+    try {
+      const clip = await navigator.clipboard.readText();
+      if (!clip.trim()) {
+        setLocalError("Clipboard is empty.");
+        return;
+      }
+      mergePastedOptions(clip);
+    } catch {
+      setLocalError("Could not read clipboard — paste into the field with ⌘V.");
+    }
+  };
+
+  const handleOptionsPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = event.clipboardData.getData("text");
+    if (!pasted.trim()) return;
+    const parsed = parsePastedListContent(pasted);
+    const isPlainMultiLine =
+      parsed.kind === "options" &&
+      parsed.format === "lines" &&
+      pasted.includes("\n");
+    if (isPlainMultiLine) return;
+    if (
+      parsed.kind === "options" &&
+      (parsed.format === "comma-separated" ||
+        parsed.format === "semicolon-separated" ||
+        parsed.format === "json-array" ||
+        parsed.format === "single-value")
+    ) {
+      event.preventDefault();
+      mergePastedOptions(pasted);
+      return;
+    }
+    if (parsed.kind === "single-list" || parsed.kind === "multi-list") {
+      event.preventDefault();
+      mergePastedOptions(pasted);
+    }
+  };
+
   if (!list) return null;
 
   return (
@@ -258,7 +331,8 @@ function ListEditorDialog({
         <DialogHeader>
           <DialogTitle>Edit list</DialogTitle>
           <DialogDescription>
-            One option per line. Empty lines are ignored on save.
+            One option per line — or paste comma-separated / JSON and it will
+            split automatically.
           </DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -272,13 +346,26 @@ function ListEditorDialog({
             />
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-1.5">
-            <Label htmlFor="list-options">Options</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="list-options">Options</Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1.5 text-xs"
+                onClick={() => void handleSmartPaste()}
+              >
+                <ClipboardPaste className="h-3.5 w-3.5" />
+                Smart paste
+              </Button>
+            </div>
             <Textarea
               id="list-options"
               value={optionsText}
               onChange={(e) => setOptionsText(e.target.value)}
+              onPaste={handleOptionsPaste}
               className="min-h-0 flex-1 resize-none font-mono text-sm leading-6 text-foreground"
-              placeholder={"Blue\nRed\nGreen\nPurple\nYellow"}
+              placeholder={"Blue\nRed\nGreen\n\nor paste: Red, Green, Blue"}
             />
           </div>
           {localError && <ErrorNote message={localError} />}
@@ -312,6 +399,7 @@ function ListActions({
   onDuplicate,
   onCopyAi,
   onExportAi,
+  onPaste,
   onDeleteRequest,
   onDeleteConfirm,
   compact,
@@ -324,6 +412,7 @@ function ListActions({
   onDuplicate: () => Promise<void>;
   onCopyAi: () => Promise<void>;
   onExportAi: () => void;
+  onPaste: () => void;
   onDeleteRequest: () => void;
   onDeleteConfirm: () => void;
   compact?: boolean;
@@ -338,6 +427,13 @@ function ListActions({
         icon={Pencil}
         label="Edit"
         onClick={onEdit}
+      />
+      <FeedbackIconButton
+        feedbackKey={`${feedbackKey}:paste`}
+        activeKey={activeKey}
+        icon={ClipboardPaste}
+        label="Quick paste into this list"
+        onClick={onPaste}
       />
       <FeedbackIconButton
         feedbackKey={`${feedbackKey}:dup`}
@@ -393,6 +489,8 @@ export function ListLibraryCore() {
   const [editing, setEditing] = useState<NamedList | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteTargetId, setPasteTargetId] = useState<string | null>(null);
   const [importText, setImportText] = useState("");
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const [importError, setImportError] = useState<string | null>(null);
@@ -500,10 +598,7 @@ export function ListLibraryCore() {
 
     if (compact) {
       return (
-        <div
-          key={list.id}
-          className="space-y-2 border-b p-2.5 last:border-b-0"
-        >
+        <div key={list.id} className="space-y-2 border-b p-2.5 last:border-b-0">
           <div className="flex items-start gap-2">
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-1">
@@ -527,6 +622,10 @@ export function ListLibraryCore() {
               activeKey={feedbackKey}
               confirmDeleteId={confirmDeleteId}
               onEdit={() => setEditing(list)}
+              onPaste={() => {
+                setPasteTargetId(list.id);
+                setPasteOpen(true);
+              }}
               onDuplicate={() => handleDuplicate(list.id)}
               onCopyAi={() => {
                 const json = actions.exportOneForAi(list.id);
@@ -556,7 +655,9 @@ export function ListLibraryCore() {
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-1">
-              <p className="truncate font-medium text-foreground">{list.name}</p>
+              <p className="truncate font-medium text-foreground">
+                {list.name}
+              </p>
               <ListTokenCopyButton
                 list={list}
                 feedbackKey={`${key}:token`}
@@ -574,6 +675,10 @@ export function ListLibraryCore() {
             activeKey={feedbackKey}
             confirmDeleteId={confirmDeleteId}
             onEdit={() => setEditing(list)}
+            onPaste={() => {
+              setPasteTargetId(list.id);
+              setPasteOpen(true);
+            }}
             onDuplicate={() => handleDuplicate(list.id)}
             onCopyAi={() => {
               const json = actions.exportOneForAi(list.id);
@@ -647,6 +752,18 @@ export function ListLibraryCore() {
           variant="outline"
           size="sm"
           className="h-8 gap-1.5"
+          onClick={() => {
+            setPasteTargetId(null);
+            setPasteOpen(true);
+          }}
+        >
+          <ClipboardPaste className="h-3.5 w-3.5" />
+          Paste
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 gap-1.5"
           onClick={() => fileInputRef.current?.click()}
         >
           {feedbackKey === "import-open" ? (
@@ -676,9 +793,7 @@ export function ListLibraryCore() {
           variant="outline"
           size="sm"
           className="h-8 gap-1.5"
-          onClick={() =>
-            void copyText("all:copy", actions.exportAllForAi())
-          }
+          onClick={() => void copyText("all:copy", actions.exportAllForAi())}
           disabled={state.lists.length === 0}
         >
           {feedbackKey === "all:copy" ? (
@@ -783,6 +898,19 @@ export function ListLibraryCore() {
             ? actions.updateList(editing.id, patch)
             : Promise.resolve(false)
         }
+      />
+
+      <QuickPasteDialog
+        open={pasteOpen}
+        onOpenChange={(open) => {
+          setPasteOpen(open);
+          if (!open) setPasteTargetId(null);
+        }}
+        lists={state.lists}
+        saving={state.saving}
+        actions={actions}
+        initialTargetListId={pasteTargetId}
+        onApplied={() => flash("paste")}
       />
 
       <Dialog open={importOpen} onOpenChange={setImportOpen}>

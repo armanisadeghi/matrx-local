@@ -13,6 +13,7 @@ import type {
   VariationItem,
 } from "@/lib/variation-batches/types";
 import { FeedbackIconButton } from "../../surfaces/FeedbackIconButton";
+import { QueuePlacementButtons } from "../QueuePlacementButtons";
 
 const SHOW_ITEM_NEGATIVE_KEY = "matrx-variations-items-show-negative";
 
@@ -301,38 +302,53 @@ export function VariationItemsManager({
           {batch.items.map((item, index) => {
             const active = item.id === selectedId;
             return (
-              <button
+              <div
                 key={item.id}
-                type="button"
-                className={`flex w-full items-start gap-2 border-b px-3 py-2 text-left last:border-b-0 ${
+                className={`flex items-start gap-1 border-b px-2 py-2 last:border-b-0 ${
                   active ? "bg-muted/60" : "hover:bg-muted/30"
                 }`}
-                onClick={() => {
-                  void flushSave();
-                  setSelectedId(item.id);
-                }}
               >
-                <span className="mt-0.5 w-5 shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                  {index + 1}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs">{previewText(item.prompt)}</p>
-                  {showNegative && item.negativePrompt.trim() && (
-                    <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
-                      − {previewText(item.negativePrompt, 48)}
-                    </p>
-                  )}
-                </div>
-                <span
-                  className={`mt-0.5 shrink-0 rounded px-1 py-0.5 text-[9px] font-medium ${statusClass(item)}`}
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-start gap-2 text-left"
+                  onClick={() => {
+                    void flushSave();
+                    setSelectedId(item.id);
+                  }}
                 >
-                  {item.status === "generating" ? (
-                    <Loader2 className="inline h-2.5 w-2.5 animate-spin" />
-                  ) : (
-                    statusLabel(item)
-                  )}
-                </span>
-              </button>
+                  <span className="mt-0.5 w-5 shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                    {index + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs">
+                      {previewText(item.prompt)}
+                    </p>
+                    {showNegative && item.negativePrompt.trim() && (
+                      <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                        − {previewText(item.negativePrompt, 48)}
+                      </p>
+                    )}
+                  </div>
+                  <span
+                    className={`mt-0.5 shrink-0 rounded px-1 py-0.5 text-[9px] font-medium ${statusClass(item)}`}
+                  >
+                    {item.status === "generating" ? (
+                      <Loader2 className="inline h-2.5 w-2.5 animate-spin" />
+                    ) : (
+                      statusLabel(item)
+                    )}
+                  </span>
+                </button>
+                <QueuePlacementButtons
+                  prompt={item.prompt}
+                  negativePrompt={item.negativePrompt}
+                  disabled={
+                    generating || saving || item.prompt.trim().length === 0
+                  }
+                  feedbackKeyPrefix={`item:${item.id}`}
+                  className="mt-0.5 shrink-0"
+                />
+              </div>
             );
           })}
         </div>
@@ -344,31 +360,41 @@ export function VariationItemsManager({
             </div>
           ) : (
             <>
-              <div className="flex items-center justify-between border-b px-3 py-2">
+              <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
                 <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                   Edit variation
                 </p>
-                {confirmDeleteId === selectedItem.id ? (
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="sm"
-                    className="h-7 gap-1 text-xs"
-                    onClick={() => void handleDelete(selectedItem.id)}
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                    Confirm delete
-                  </Button>
-                ) : (
-                  <FeedbackIconButton
-                    feedbackKey={`del:${selectedItem.id}`}
-                    activeKey={feedbackKey}
-                    icon={Trash2}
-                    label="Delete variation"
-                    destructive
-                    onClick={() => setConfirmDeleteId(selectedItem.id)}
+                <div className="flex items-center gap-1.5">
+                  <QueuePlacementButtons
+                    prompt={draft.prompt}
+                    negativePrompt={draft.negativePrompt}
+                    disabled={
+                      generating || saving || draft.prompt.trim().length === 0
+                    }
+                    feedbackKeyPrefix={`edit:${selectedItem.id}`}
                   />
-                )}
+                  {confirmDeleteId === selectedItem.id ? (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      className="h-7 gap-1 text-xs"
+                      onClick={() => void handleDelete(selectedItem.id)}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      Confirm delete
+                    </Button>
+                  ) : (
+                    <FeedbackIconButton
+                      feedbackKey={`del:${selectedItem.id}`}
+                      activeKey={feedbackKey}
+                      icon={Trash2}
+                      label="Delete variation"
+                      destructive
+                      onClick={() => setConfirmDeleteId(selectedItem.id)}
+                    />
+                  )}
+                </div>
               </div>
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
                 <div className="space-y-1.5">

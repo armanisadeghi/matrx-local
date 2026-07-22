@@ -17,6 +17,7 @@ import {
   buildAiExportForList,
   LIST_LIBRARY_AI_KIND,
 } from "@/lib/list-library/ai-export";
+import { parsePastedListContent } from "@/lib/list-library/parse-pasted-content";
 import type { MatrixOption } from "@/lib/prompt-matrix/types";
 import { makeId } from "@/lib/prompt-matrix/storage";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -48,7 +49,39 @@ export interface ListLibraryActions {
   exportAllForAi: () => string;
   exportOneForAi: (id: string) => string | null;
   addOptionsFromText: (id: string, text: string) => Promise<boolean>;
+  applyPastedContent: (
+    text: string,
+    opts?: {
+      targetListId?: string;
+      newListName?: string;
+      replaceOptions?: boolean;
+      importMode?: "merge" | "replace";
+    },
+  ) => Promise<{ ok: boolean; summary: string }>;
   clearError: () => void;
+}
+
+function optionsFromStrings(values: readonly string[]): MatrixOption[] {
+  return values.map((value) => ({
+    id: makeId(),
+    value,
+    enabled: true,
+  }));
+}
+
+function shapeToNamedList(
+  shape: { name: string; description?: string; options: string[] },
+  existing?: NamedList,
+): NamedList {
+  const now = Date.now();
+  return {
+    id: existing?.id ?? makeListId(),
+    name: shape.name.trim() || existing?.name || "Pasted list",
+    description: shape.description?.trim() ?? existing?.description ?? "",
+    options: optionsFromStrings(shape.options),
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
 }
 
 function cloneOptions(options: readonly MatrixOption[]): MatrixOption[] {
@@ -250,19 +283,141 @@ export function useListLibrary(): [ListLibraryState, ListLibraryActions] {
     async (id: string, text: string): Promise<boolean> => {
       const row = listsRef.current.find((item) => item.id === id);
       if (!row) return false;
-      const lines = text
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
-      if (lines.length === 0) return false;
-      const added: MatrixOption[] = lines.map((value) => ({
-        id: makeId(),
-        value,
-        enabled: true,
-      }));
+      const parsed = parsePastedListContent(text);
+      if (parsed.kind !== "options" || parsed.options.length === 0) {
+        return false;
+      }
+      const added = optionsFromStrings(parsed.options);
       return updateList(id, { options: [...row.options, ...added] });
     },
     [updateList],
+  );
+
+  const applyPastedContent = useCallback(
+    async (
+      text: string,
+      opts?: {
+        targetListId?: string;
+        newListName?: string;
+        replaceOptions?: boolean;
+        importMode?: "merge" | "replace";
+      },
+    ): Promise<{ ok: boolean; summary: string }> => {
+      const parsed = parsePastedListContent(text);
+      const importMode = opts?.importMode ?? "merge";
+
+      if (parsed.kind === "multi-list") {
+        if (
+          parsed.format === "ai-envelope" ||
+          parsed.format === "json-lists-bundle"
+        ) {
+          try {
+            const count = await importFromJson(text, importMode);
+            return {
+              ok: count > 0,
+              summary:
+                count > 0
+                  ? `Imported ${count} list${count === 1 ? "" : "s"}`
+                  : "Nothing to import",
+            };
+          } catch {
+            // Fall through to manual merge below.
+          }
+        }
+        const incoming = parsed.lists.map((shape) => shapeToNamedList(shape));
+        const next =
+          importMode === "replace"
+            ? incoming
+            : [
+                ...incoming,
+                ...listsRef.current.filter(
+                  (existing) =>
+                    !incoming.some(
+                      (row) =>
+                        row.name.trim().toLowerCase() ===
+                        existing.name.trim().toLowerCase(),
+                    ),
+                ),
+              ];
+        const ok = await persist(next);
+        return {
+          ok,
+          summary: ok
+            ? `Added ${incoming.length} list${incoming.length === 1 ? "" : "s"}`
+            : "Could not save pasted lists",
+        };
+      }
+
+      if (parsed.kind === "single-list") {
+        const shape = {
+          ...parsed.list,
+          name: opts?.newListName?.trim() || parsed.list.name,
+        };
+        if (opts?.targetListId) {
+          const existing = listsRef.current.find(
+            (row) => row.id === opts.targetListId,
+          );
+          if (!existing) {
+            return { ok: false, summary: "Target list not found" };
+          }
+          const next = shapeToNamedList(shape, existing);
+          const ok = await updateList(existing.id, {
+            name: next.name,
+            description: next.description,
+            options: next.options,
+          });
+          return {
+            ok,
+            summary: ok
+              ? `Updated "${next.name}" with ${next.options.length} options`
+              : "Could not update list",
+          };
+        }
+        const created = shapeToNamedList(shape);
+        const ok = await persist([created, ...listsRef.current]);
+        return {
+          ok,
+          summary: ok
+            ? `Created "${created.name}" with ${created.options.length} options`
+            : "Could not create list",
+        };
+      }
+
+      if (parsed.options.length === 0) {
+        return { ok: false, summary: "No options found in pasted content" };
+      }
+
+      if (opts?.targetListId) {
+        const existing = listsRef.current.find(
+          (row) => row.id === opts.targetListId,
+        );
+        if (!existing) {
+          return { ok: false, summary: "Target list not found" };
+        }
+        const added = optionsFromStrings(parsed.options);
+        const options = opts.replaceOptions
+          ? added
+          : [...existing.options, ...added];
+        const ok = await updateList(existing.id, { options });
+        return {
+          ok,
+          summary: ok
+            ? `${opts.replaceOptions ? "Replaced with" : "Added"} ${parsed.options.length} option${parsed.options.length === 1 ? "" : "s"}`
+            : "Could not update list",
+        };
+      }
+
+      const name = opts?.newListName?.trim() || "Pasted list";
+      const created = shapeToNamedList({ name, options: parsed.options });
+      const ok = await persist([created, ...listsRef.current]);
+      return {
+        ok,
+        summary: ok
+          ? `Created "${created.name}" with ${created.options.length} options`
+          : "Could not create list",
+      };
+    },
+    [importFromJson, persist, updateList],
   );
 
   const clearError = useCallback(() => setError(null), []);
@@ -292,6 +447,7 @@ export function useListLibrary(): [ListLibraryState, ListLibraryActions] {
       exportAllForAi,
       exportOneForAi,
       addOptionsFromText,
+      applyPastedContent,
       clearError,
     }),
     [
@@ -306,6 +462,7 @@ export function useListLibrary(): [ListLibraryState, ListLibraryActions] {
       exportAllForAi,
       exportOneForAi,
       addOptionsFromText,
+      applyPastedContent,
       clearError,
     ],
   );

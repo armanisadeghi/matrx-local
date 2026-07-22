@@ -46,6 +46,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -765,7 +766,9 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
                             className="px-3 py-2 font-mono"
                             title={s.session_id}
                           >
-                            <div>{s.extension_name ?? "Unidentified client"}</div>
+                            <div>
+                              {s.extension_name ?? "Unidentified client"}
+                            </div>
                             <div className="text-[10px] text-muted-foreground">
                               {s.extension_id
                                 ? `${shortId(s.extension_id)}${s.extension_version ? ` · v${s.extension_version}` : ""}`
@@ -868,21 +871,22 @@ export function BridgeTest({ engineStatus, engineUrl, user }: BridgeTestProps) {
                   placeholder="{}"
                 />
                 {invokeArgsError && (
-                  <p className="text-xs text-red-700 dark:text-red-400">{invokeArgsError}</p>
+                  <p className="text-xs text-red-700 dark:text-red-400">
+                    {invokeArgsError}
+                  </p>
                 )}
               </div>
 
               <div className="flex items-end justify-between gap-3">
                 <div className="space-y-1.5">
                   <Label className="text-xs">Timeout (s)</Label>
-                  <Input
-                    type="number"
+                  <NumberInput
                     min={1}
                     max={120}
+                    integer
                     value={invokeTimeout}
-                    onChange={(e) =>
-                      setInvokeTimeout(Number(e.target.value) || 30)
-                    }
+                    onChange={setInvokeTimeout}
+                    emptyValue={30}
                     className="w-24"
                   />
                 </div>
@@ -1686,8 +1690,10 @@ interface BootCheckSectionProps {
 }
 
 function bootCheckStatusClass(status: "ok" | "warn" | "fail"): string {
-  if (status === "ok") return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
-  if (status === "warn") return "bg-amber-500/15 text-amber-700 dark:text-amber-300";
+  if (status === "ok")
+    return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
+  if (status === "warn")
+    return "bg-amber-500/15 text-amber-700 dark:text-amber-300";
   return "bg-red-500/15 text-red-700 dark:text-red-300";
 }
 

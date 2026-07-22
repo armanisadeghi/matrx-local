@@ -18,6 +18,7 @@ import { useLlmApp } from "@/contexts/LlmContext";
 import { findLlmModelInfo } from "@/lib/llm/catalog";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import {
   Download,
@@ -88,6 +89,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -416,9 +418,9 @@ function SetupTab() {
             Desktop app required
           </CardTitle>
           <CardDescription>
-            On-device model downloads and confidential chat use the native
-            Matrx Local runtime. Open this page in the Matrx Local desktop app
-            to download and start a model.
+            On-device model downloads and confidential chat use the native Matrx
+            Local runtime. Open this page in the Matrx Local desktop app to
+            download and start a model.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -3716,7 +3718,9 @@ function InferenceTab() {
       systemPrompt: "",
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      ...(serverStatus?.model_name ? { modelName: serverStatus.model_name } : {}),
+      ...(serverStatus?.model_name
+        ? { modelName: serverStatus.model_name }
+        : {}),
     };
     const updated = [conv, ...conversations];
     persistConvs(updated);
@@ -4202,7 +4206,9 @@ function InferenceTab() {
         systemPrompt,
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        ...(serverStatus?.model_name ? { modelName: serverStatus.model_name } : {}),
+        ...(serverStatus?.model_name
+          ? { modelName: serverStatus.model_name }
+          : {}),
       };
       persistConvs([conv, ...conversations]);
       convId = conv.id;
@@ -4319,7 +4325,9 @@ function InferenceTab() {
         systemPrompt,
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        ...(serverStatus?.model_name ? { modelName: serverStatus.model_name } : {}),
+        ...(serverStatus?.model_name
+          ? { modelName: serverStatus.model_name }
+          : {}),
       };
       persistConvs([conv, ...conversations]);
       convId = conv.id;
@@ -4844,7 +4852,7 @@ function InferenceTab() {
                                 }}
                               >
                                 <ReactMarkdown
-                                  remarkPlugins={[remarkGfm]}
+                                  remarkPlugins={[remarkGfm, remarkBreaks]}
                                   components={{
                                     pre: ({ children }) => (
                                       <pre className="overflow-x-auto rounded-md bg-muted p-3 text-[0.8125rem] font-mono">
@@ -5498,15 +5506,13 @@ function InferenceTab() {
                 <Label className="text-xs text-muted-foreground whitespace-nowrap">
                   Max steps
                 </Label>
-                <Input
-                  type="number"
+                <NumberInput
                   min={1}
                   max={50}
+                  integer
                   value={maxAgentSteps}
-                  onChange={(e) => {
-                    const n = parseInt(e.target.value);
-                    if (!isNaN(n) && n >= 1) setMaxAgentSteps(Math.min(n, 50));
-                  }}
+                  onChange={setMaxAgentSteps}
+                  emptyValue={1}
                   className="h-6 text-xs w-16"
                 />
               </div>
@@ -5757,7 +5763,9 @@ function InferenceTab() {
                                 fontSize: "0.9375rem",
                               }}
                             >
-                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              <ReactMarkdown
+                                remarkPlugins={[remarkGfm, remarkBreaks]}
+                              >
                                 {msg.content}
                               </ReactMarkdown>
                               {msg.isStreaming && (
@@ -5968,13 +5976,12 @@ function InferenceTab() {
                   <Label className="text-xs text-muted-foreground">
                     Max Tokens
                   </Label>
-                  <Input
-                    type="number"
+                  <NumberInput
+                    min={1}
+                    integer
                     value={maxTokens}
-                    onChange={(e) => {
-                      const n = parseInt(e.target.value);
-                      if (!isNaN(n) && n > 0) setMaxTokens(n);
-                    }}
+                    onChange={setMaxTokens}
+                    emptyValue={maxTokens}
                     className="h-8 text-xs"
                   />
                 </div>

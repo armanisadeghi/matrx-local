@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import {
   Select,
   SelectContent,
@@ -54,7 +55,9 @@ import { CollapsibleOptionalField } from "../../prompts/CollapsibleOptionalField
 import { LabelWithInfo } from "../../prompts/LabelWithInfo";
 import {
   PromptVariablePreview,
-  VariablePromptTextarea,
+  VariableInsertButton,
+  VariablePromptField,
+  VariablePromptInput,
 } from "../../prompts/VariablePromptTools";
 import { ErrorNote } from "../../shared";
 import { FeedbackIconButton } from "../../surfaces/FeedbackIconButton";
@@ -622,27 +625,14 @@ export function VariationBatchesCore({
                   Count
                 </label>
                 <div className="flex items-center gap-2">
-                  <Input
+                  <NumberInput
                     id="queue-count"
-                    type="number"
                     min={1}
-                    max={readyCount}
+                    max={readyCount || 1}
+                    integer
                     value={queueCount}
-                    onChange={(e) => {
-                      const next = Number.parseInt(e.target.value, 10);
-                      setQueueCount(Number.isFinite(next) ? next : 1);
-                    }}
-                    onBlur={() => {
-                      setQueueCount((prev) =>
-                        Math.min(
-                          readyCount || 1,
-                          Math.max(
-                            1,
-                            Number.isFinite(prev) ? Math.floor(prev) : 1,
-                          ),
-                        ),
-                      );
-                    }}
+                    onChange={setQueueCount}
+                    emptyValue={1}
                     className="h-8"
                   />
                   <span className="shrink-0 text-xs text-muted-foreground">
@@ -840,7 +830,7 @@ export function VariationBatchesCore({
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-col gap-3">
+        <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
           {!draft || !selectedBatch ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 rounded-lg border bg-card text-center text-muted-foreground">
               <p className="text-sm">Create a batch to generate variations.</p>
@@ -873,53 +863,60 @@ export function VariationBatchesCore({
                 </button>
 
                 {generatorOpen && (
-                  <div className="grid grid-cols-2 gap-3 border-t p-4 xl:grid-cols-4">
-                    <div className="col-span-2 space-y-1.5 xl:col-span-1">
-                      <LabelWithInfo
-                        htmlFor="batch-name"
-                        label="Batch name"
-                        info="Label for this variation run."
-                      />
-                      <Input
-                        id="batch-name"
-                        value={draft.name}
-                        onChange={(e) => patchDraft({ name: e.target.value })}
-                        className="h-9"
-                      />
-                    </div>
+                  <VariablePromptField
+                    value={draft.templatePrompt}
+                    onChange={(templatePrompt) =>
+                      patchDraft({ templatePrompt })
+                    }
+                    onVariableInsert={(list, value) =>
+                      patchTemplateWithList("templatePrompt", list, value)
+                    }
+                  >
+                    <div className="space-y-3 border-t p-4">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+                        <div className="space-y-1.5">
+                          <LabelWithInfo
+                            htmlFor="batch-name"
+                            label="Batch name"
+                            info="Label for this variation run."
+                          />
+                          <Input
+                            id="batch-name"
+                            value={draft.name}
+                            onChange={(e) =>
+                              patchDraft({ name: e.target.value })
+                            }
+                            className="h-9"
+                          />
+                        </div>
 
-                    <div className="col-span-2 space-y-1.5 xl:col-span-1">
-                      <LabelWithInfo
-                        label="From saved prompt"
-                        info="Pick a saved prompt to fill the template fields, or type your own."
-                      />
-                      <SavedPromptPicker
-                        value={draft.sourcePromptId}
-                        onChange={handleSavedPromptChange}
-                      />
-                    </div>
+                        <div className="space-y-1.5">
+                          <LabelWithInfo
+                            label="From saved prompt"
+                            info="Pick a saved prompt to fill the template fields, or type your own."
+                          />
+                          <SavedPromptPicker
+                            value={draft.sourcePromptId}
+                            onChange={handleSavedPromptChange}
+                          />
+                        </div>
 
-                    <div className="col-span-2 space-y-1.5">
-                      <LabelWithInfo
-                        htmlFor="template-prompt"
-                        label="Template prompt"
-                        info="Use {{variable}} tokens to sweep options from lists. Without tokens, one variation is created."
-                      />
-                      <VariablePromptTextarea
-                        id="template-prompt"
-                        value={draft.templatePrompt}
-                        onChange={(templatePrompt) =>
-                          patchDraft({ templatePrompt })
-                        }
-                        onVariableInsert={(list, value) =>
-                          patchTemplateWithList("templatePrompt", list, value)
-                        }
-                        rows={3}
-                        className="resize-none text-sm"
-                      />
-                    </div>
+                        <VariableInsertButton className="w-full sm:w-auto" />
+                      </div>
 
-                    <div className="col-span-2">
+                      <div className="space-y-1.5">
+                        <LabelWithInfo
+                          htmlFor="template-prompt"
+                          label="Template prompt"
+                          info="Use {{variable}} tokens to sweep options from lists. Without tokens, one variation is created."
+                        />
+                        <VariablePromptInput
+                          id="template-prompt"
+                          rows={4}
+                          className="min-h-[6rem] resize-y text-sm"
+                        />
+                      </div>
+
                       <CollapsibleOptionalField
                         storageKey={SHOW_NEGATIVE_KEY}
                         label="Template negative"
@@ -935,129 +932,115 @@ export function VariationBatchesCore({
                           patchTemplateWithList("templateNegative", list, value)
                         }
                       />
-                    </div>
 
-                    <PromptVariablePreview
-                      fields={[
-                        { label: "Prompt", text: draft.templatePrompt },
-                        {
-                          label: "Negative prompt",
-                          text: draft.templateNegative,
-                        },
-                      ]}
-                      listIdByVariable={draft.listByVariable}
-                      className="col-span-2 xl:col-span-4"
-                    />
+                      <PromptVariablePreview
+                        fields={[
+                          { label: "Prompt", text: draft.templatePrompt },
+                          {
+                            label: "Negative prompt",
+                            text: draft.templateNegative,
+                          },
+                        ]}
+                        listIdByVariable={draft.listByVariable}
+                      />
 
-                    <VariableListMappingTable
-                      tokenNames={tokenNames}
-                      listByVariable={draft.listByVariable}
-                      onListChange={handleListChange}
-                    />
+                      <VariableListMappingTable
+                        tokenNames={tokenNames}
+                        listByVariable={draft.listByVariable}
+                        onListChange={handleListChange}
+                      />
 
-                    <div className="col-span-2 flex flex-wrap items-center gap-3 xl:col-span-4">
-                      <Button
-                        type="button"
-                        onClick={() => void handleGenerate()}
-                        disabled={
-                          generating ||
-                          batchState.saving ||
-                          !draft.templatePrompt.trim()
-                        }
-                        className="gap-1.5"
-                      >
-                        {generating ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : feedbackKey === "generate" ? (
-                          <Check className="h-3.5 w-3.5" />
-                        ) : (
-                          <Sparkles className="h-3.5 w-3.5" />
-                        )}
-                        Generate variations
-                      </Button>
-                      <div className="flex items-center gap-2">
-                        <label
-                          htmlFor="generate-order"
-                          className="shrink-0 text-xs text-muted-foreground"
-                        >
-                          Order
-                        </label>
-                        <Select
-                          value={generateOrder}
-                          onValueChange={(value) => {
-                            const next = value as VariationGenerateOrder;
-                            setGenerateOrder(next);
-                            writeStoredOrder(next);
-                          }}
-                        >
-                          <SelectTrigger
-                            id="generate-order"
-                            className="h-8 w-[6.75rem] text-xs"
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {GENERATE_ORDERS.map((row) => (
-                              <SelectItem
-                                key={row.value}
-                                value={row.value}
-                                className="text-xs"
-                              >
-                                {row.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <label
-                          htmlFor="generate-max-count"
-                          className="shrink-0 text-xs text-muted-foreground"
-                        >
-                          Max count
-                        </label>
-                        <Input
-                          id="generate-max-count"
-                          type="number"
-                          min={1}
-                          max={
-                            totalOptions !== null
-                              ? Math.max(1, totalOptions)
-                              : undefined
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Button
+                          type="button"
+                          onClick={() => void handleGenerate()}
+                          disabled={
+                            generating ||
+                            batchState.saving ||
+                            !draft.templatePrompt.trim()
                           }
-                          value={generateMaxCount}
-                          onChange={(e) => {
-                            const next = Number.parseInt(e.target.value, 10);
-                            setGenerateMaxCount(
-                              Number.isFinite(next) ? next : 1,
-                            );
-                          }}
-                          onBlur={() => {
-                            const clamped = Math.max(
-                              1,
-                              Number.isFinite(generateMaxCount)
-                                ? Math.floor(generateMaxCount)
-                                : DEFAULT_GENERATE_MAX_COUNT,
-                            );
-                            setGenerateMaxCount(clamped);
-                            writeStoredNumber(GENERATE_MAX_COUNT_KEY, clamped);
-                          }}
-                          className="h-8 w-24 text-xs tabular-nums"
-                        />
-                      </div>
-                      <span className="text-xs text-muted-foreground">
-                        {totalOptions === null
-                          ? "Map all variables to see total options"
-                          : `${totalOptions.toLocaleString()} total options`}
-                      </span>
-                      {totalCount > 0 && (
+                          className="gap-1.5"
+                        >
+                          {generating ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : feedbackKey === "generate" ? (
+                            <Check className="h-3.5 w-3.5" />
+                          ) : (
+                            <Sparkles className="h-3.5 w-3.5" />
+                          )}
+                          Generate variations
+                        </Button>
+                        <div className="flex items-center gap-2">
+                          <label
+                            htmlFor="generate-order"
+                            className="shrink-0 text-xs text-muted-foreground"
+                          >
+                            Order
+                          </label>
+                          <Select
+                            value={generateOrder}
+                            onValueChange={(value) => {
+                              const next = value as VariationGenerateOrder;
+                              setGenerateOrder(next);
+                              writeStoredOrder(next);
+                            }}
+                          >
+                            <SelectTrigger
+                              id="generate-order"
+                              className="h-8 w-[6.75rem] text-xs"
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {GENERATE_ORDERS.map((row) => (
+                                <SelectItem
+                                  key={row.value}
+                                  value={row.value}
+                                  className="text-xs"
+                                >
+                                  {row.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label
+                            htmlFor="generate-max-count"
+                            className="shrink-0 text-xs text-muted-foreground"
+                          >
+                            Max count
+                          </label>
+                          <NumberInput
+                            id="generate-max-count"
+                            min={1}
+                            {...(totalOptions !== null
+                              ? { max: Math.max(1, totalOptions) }
+                              : {})}
+                            integer
+                            value={generateMaxCount}
+                            onChange={(next) => {
+                              setGenerateMaxCount(next);
+                              writeStoredNumber(GENERATE_MAX_COUNT_KEY, next);
+                            }}
+                            emptyValue={DEFAULT_GENERATE_MAX_COUNT}
+                            className="h-8 w-24 text-xs tabular-nums"
+                          />
+                        </div>
                         <span className="text-xs text-muted-foreground">
-                          Replaces existing {totalCount} variation
-                          {totalCount === 1 ? "" : "s"}
+                          {totalOptions === null
+                            ? "Map all variables to see total options"
+                            : `${totalOptions.toLocaleString()} total options`}
                         </span>
-                      )}
+                        {totalCount > 0 && (
+                          <span className="text-xs text-muted-foreground">
+                            Replaces existing {totalCount} variation
+                            {totalCount === 1 ? "" : "s"}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  </VariablePromptField>
                 )}
               </div>
 

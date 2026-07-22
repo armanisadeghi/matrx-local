@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Label } from "@/components/ui/label";
 import {
   Popover,
@@ -247,17 +248,15 @@ export function QueuePlacementButtons({
               >
                 Steps
               </Label>
-              <Input
+              <NumberInput
                 id={`${feedbackKeyPrefix}-steps`}
-                type="number"
                 min={1}
+                integer
                 value={customSettings.steps}
-                onChange={(e) =>
-                  setCustomSettings((prev) => ({
-                    ...prev,
-                    steps: Number.parseInt(e.target.value, 10) || prev.steps,
-                  }))
+                onChange={(steps) =>
+                  setCustomSettings((prev) => ({ ...prev, steps }))
                 }
+                emptyValue={customSettings.steps}
                 className="h-8 text-xs"
               />
             </div>
@@ -268,18 +267,15 @@ export function QueuePlacementButtons({
               >
                 Guidance
               </Label>
-              <Input
+              <NumberInput
                 id={`${feedbackKeyPrefix}-guidance`}
-                type="number"
-                step="0.1"
+                step={0.1}
+                integer={false}
                 value={customSettings.guidance}
-                onChange={(e) =>
-                  setCustomSettings((prev) => ({
-                    ...prev,
-                    guidance:
-                      Number.parseFloat(e.target.value) || prev.guidance,
-                  }))
+                onChange={(guidance) =>
+                  setCustomSettings((prev) => ({ ...prev, guidance }))
                 }
+                emptyValue={customSettings.guidance}
                 className="h-8 text-xs"
               />
             </div>
@@ -290,17 +286,15 @@ export function QueuePlacementButtons({
               >
                 Width
               </Label>
-              <Input
+              <NumberInput
                 id={`${feedbackKeyPrefix}-width`}
-                type="number"
                 min={64}
+                integer
                 value={customSettings.width}
-                onChange={(e) =>
-                  setCustomSettings((prev) => ({
-                    ...prev,
-                    width: Number.parseInt(e.target.value, 10) || prev.width,
-                  }))
+                onChange={(width) =>
+                  setCustomSettings((prev) => ({ ...prev, width }))
                 }
+                emptyValue={customSettings.width}
                 className="h-8 text-xs"
               />
             </div>
@@ -311,17 +305,15 @@ export function QueuePlacementButtons({
               >
                 Height
               </Label>
-              <Input
+              <NumberInput
                 id={`${feedbackKeyPrefix}-height`}
-                type="number"
                 min={64}
+                integer
                 value={customSettings.height}
-                onChange={(e) =>
-                  setCustomSettings((prev) => ({
-                    ...prev,
-                    height: Number.parseInt(e.target.value, 10) || prev.height,
-                  }))
+                onChange={(height) =>
+                  setCustomSettings((prev) => ({ ...prev, height }))
                 }
+                emptyValue={customSettings.height}
                 className="h-8 text-xs"
               />
             </div>

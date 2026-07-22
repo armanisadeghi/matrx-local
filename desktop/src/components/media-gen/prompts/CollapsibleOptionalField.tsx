@@ -64,7 +64,7 @@ export function CollapsibleOptionalField({
             onChange={onChange}
             {...(onVariableInsert ? { onVariableInsert } : {})}
             rows={rows}
-            className="text-sm"
+            className="min-h-[4.5rem] resize-y text-sm"
             placeholder={placeholder}
           />
         ) : (
@@ -72,7 +72,7 @@ export function CollapsibleOptionalField({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             rows={rows}
-            className="text-sm"
+            className="min-h-[4.5rem] resize-y text-sm"
             placeholder={placeholder}
           />
         ))}

@@ -21,7 +21,7 @@ export function VariableListMappingTable({
   if (tokenNames.length === 0) return null;
 
   return (
-    <div className="col-span-2 xl:col-span-4">
+    <div>
       <LabelWithInfo
         label="Variable lists"
         info="Map each {{token}} to a saved list. Option count updates when a list is selected."

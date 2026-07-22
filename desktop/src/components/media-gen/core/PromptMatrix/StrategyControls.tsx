@@ -10,7 +10,7 @@
  * a deterministic escape hatch here would recreate ordered-looking batches.
  */
 
-import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -35,8 +35,7 @@ const STRATEGIES: {
   {
     kind: "cartesian",
     label: "Every combination",
-    blurb:
-      "Runs the full product of every variable in a fresh random order.",
+    blurb: "Runs the full product of every variable in a fresh random order.",
   },
   {
     kind: "baseline",
@@ -100,12 +99,13 @@ export function StrategyControls({
         {strategy.kind === "sample" && (
           <div className="flex items-center gap-2 pt-1">
             <Label className="shrink-0 text-xs">Sample size</Label>
-            <Input
-              type="number"
+            <NumberInput
               min={1}
               max={Math.max(1, cartesianTotal)}
+              integer
               value={strategy.count}
-              onChange={(e) => actions.setSampleCount(Number(e.target.value))}
+              onChange={(count) => actions.setSampleCount(count)}
+              emptyValue={1}
               className="h-7 w-24 text-xs"
             />
             <span className="text-[11px] text-muted-foreground">
@@ -120,23 +120,21 @@ export function StrategyControls({
         <Label className="text-xs">Batch randomness</Label>
         <p className="text-[11px] leading-snug text-muted-foreground">
           Every Preview or Queue action draws a fresh random order and a unique
-          seed for every image. Preview freezes that one draw until you queue it.
+          seed for every image. Preview freezes that one draw until you queue
+          it.
         </p>
 
         <div className="flex items-center gap-2 pt-1">
           <Label className="shrink-0 text-xs">Runs each</Label>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Input
-                type="number"
+              <NumberInput
                 min={1}
                 max={50}
+                integer
                 value={spec.seed.repeats}
-                onChange={(e) =>
-                  actions.setSeedPolicy({
-                    repeats: Math.max(1, Number(e.target.value)),
-                  })
-                }
+                onChange={(repeats) => actions.setSeedPolicy({ repeats })}
+                emptyValue={1}
                 className="h-7 w-16 text-xs tabular-nums"
               />
             </TooltipTrigger>

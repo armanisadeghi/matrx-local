@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import {
   Copy,
@@ -135,7 +136,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
 function MessageMarkdown({ text }: { text: string }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkBreaks]}
       components={{
         pre: ({ children }) => (
           <pre className="overflow-x-auto rounded-md bg-muted p-3 text-[0.8125rem]">
@@ -213,7 +214,10 @@ function MessageBlocks({
         switch (block.type) {
           case "text":
             return (
-              <div key={key} className="chat-prose text-[0.9375rem] leading-[1.7]">
+              <div
+                key={key}
+                className="chat-prose text-[0.9375rem] leading-[1.7]"
+              >
                 <MessageMarkdown text={block.content} />
               </div>
             );
@@ -237,7 +241,11 @@ function MessageBlocks({
             return (
               <ChatToolCall
                 key={block.callId}
-                toolCall={{ id: block.callId, name: block.toolName, input: block.input }}
+                toolCall={{
+                  id: block.callId,
+                  name: block.toolName,
+                  input: block.input,
+                }}
                 {...(result ? { result } : {})}
                 {...(statusMessage ? { statusMessage } : {})}
                 isDelegated={block.phase === "delegated"}
@@ -323,7 +331,9 @@ function AssistantMessage({
             {message.content ? (
               <MessageMarkdown text={message.content} />
             ) : message.streamStatus ? (
-              <p className="text-sm text-muted-foreground">{message.streamStatus}</p>
+              <p className="text-sm text-muted-foreground">
+                {message.streamStatus}
+              </p>
             ) : null}
 
             {/* Streaming cursor */}
@@ -333,9 +343,14 @@ function AssistantMessage({
           </div>
         )}
 
-        {hasBlocks && !message.content && message.isStreaming && message.streamStatus && (
-          <p className="mt-1 text-sm text-muted-foreground">{message.streamStatus}</p>
-        )}
+        {hasBlocks &&
+          !message.content &&
+          message.isStreaming &&
+          message.streamStatus && (
+            <p className="mt-1 text-sm text-muted-foreground">
+              {message.streamStatus}
+            </p>
+          )}
 
         {!hasBlocks && message.reasoning && (
           <details className="mt-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
@@ -465,7 +480,9 @@ export function ChatMessages({
           <AssistantMessage
             key={msg.id}
             message={msg}
-            {...(ttsReadAloudEnabled !== undefined ? { ttsEnabled: ttsReadAloudEnabled } : {})}
+            {...(ttsReadAloudEnabled !== undefined
+              ? { ttsEnabled: ttsReadAloudEnabled }
+              : {})}
             isReading={readingMessageId === msg.id}
             {...(onReadAloud !== undefined ? { onReadAloud } : {})}
             {...(onStopReadAloud !== undefined ? { onStopReadAloud } : {})}

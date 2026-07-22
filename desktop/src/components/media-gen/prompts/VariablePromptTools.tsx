@@ -1,11 +1,14 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
   type ComponentProps,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { ChevronDown, Eye, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -30,50 +33,58 @@ import {
 import { findTokens, variableKey } from "@/lib/prompt-matrix";
 import { cn } from "@/lib/utils";
 
-type TextareaProps = Omit<
-  ComponentProps<"textarea">,
-  "value" | "onChange"
->;
-
-export interface VariablePromptTextareaProps extends TextareaProps {
-  value: string;
-  onChange: (value: string) => void;
-  onVariableInsert?: (list: NamedList, value: string) => void;
-}
+type TextareaProps = Omit<ComponentProps<"textarea">, "value" | "onChange">;
 
 interface SavedSelection {
   start: number;
   end: number;
 }
 
-/** A textarea with a searchable, saved-list-backed variable inserter. */
-export function VariablePromptTextarea({
+interface VariablePromptFieldContextValue {
+  value: string;
+  onChange: (value: string) => void;
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  rememberSelection: () => void;
+  saveSelection: (start: number, end: number) => void;
+  insertList: (list: NamedList) => void;
+  lists: readonly NamedList[];
+}
+
+const VariablePromptFieldContext =
+  createContext<VariablePromptFieldContextValue | null>(null);
+
+function useVariablePromptFieldContext(): VariablePromptFieldContextValue {
+  const ctx = useContext(VariablePromptFieldContext);
+  if (!ctx) {
+    throw new Error(
+      "Variable prompt controls must be used inside VariablePromptField",
+    );
+  }
+  return ctx;
+}
+
+/** Shared state for a prompt textarea + its Insert variable control. */
+export function VariablePromptField({
   value,
   onChange,
   onVariableInsert,
-  className,
-  ...props
-}: VariablePromptTextareaProps) {
+  children,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onVariableInsert?: (list: NamedList, value: string) => void;
+  children: ReactNode;
+}) {
   const [listState] = useListLibraryApp();
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const selectionRef = useRef<SavedSelection>({
     start: value.length,
     end: value.length,
   });
 
-  const filteredLists = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return listState.lists;
-    return listState.lists.filter((list) => {
-      const variableName = variableNameForList(list.name) ?? "";
-      return (
-        list.name.toLowerCase().includes(needle) ||
-        variableName.toLowerCase().includes(needle)
-      );
-    });
-  }, [listState.lists, query]);
+  const saveSelection = useCallback((start: number, end: number) => {
+    selectionRef.current = { start, end };
+  }, []);
 
   const rememberSelection = useCallback(() => {
     const textarea = textareaRef.current;
@@ -101,8 +112,6 @@ export function VariablePromptTextarea({
         start: insertion.cursor,
         end: insertion.cursor,
       };
-      setOpen(false);
-      setQuery("");
 
       window.requestAnimationFrame(() => {
         const textarea = textareaRef.current;
@@ -114,104 +123,185 @@ export function VariablePromptTextarea({
     [onChange, onVariableInsert, value],
   );
 
+  const contextValue = useMemo(
+    (): VariablePromptFieldContextValue => ({
+      value,
+      onChange,
+      textareaRef,
+      rememberSelection,
+      saveSelection,
+      insertList,
+      lists: listState.lists,
+    }),
+    [
+      insertList,
+      listState.lists,
+      onChange,
+      rememberSelection,
+      saveSelection,
+      value,
+    ],
+  );
+
   return (
-    <div className="flex min-h-0 flex-col gap-1.5">
-      <div className="flex items-center justify-end">
-        <Popover
-          open={open}
-          onOpenChange={(next) => {
-            setOpen(next);
-            if (!next) setQuery("");
-          }}
+    <VariablePromptFieldContext.Provider value={contextValue}>
+      {children}
+    </VariablePromptFieldContext.Provider>
+  );
+}
+
+/** Searchable saved-list variable inserter (place anywhere beside its field). */
+export function VariableInsertButton({ className }: { className?: string }) {
+  const { lists, rememberSelection, insertList } =
+    useVariablePromptFieldContext();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const filteredLists = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return lists;
+    return lists.filter((list) => {
+      const variableName = variableNameForList(list.name) ?? "";
+      return (
+        list.name.toLowerCase().includes(needle) ||
+        variableName.toLowerCase().includes(needle)
+      );
+    });
+  }, [lists, query]);
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setQuery("");
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className={cn("h-9 gap-1.5 px-2.5 text-xs", className)}
+          disabled={lists.length === 0}
+          onMouseDown={rememberSelection}
         >
-          <PopoverTrigger asChild>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 gap-1.5 px-2 text-xs"
-              disabled={listState.lists.length === 0}
-              onMouseDown={rememberSelection}
-            >
-              <span className="font-mono text-[11px]">{"{{ }}"}</span>
-              Insert variable
-              <ChevronDown className="h-3 w-3 text-muted-foreground" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent
-            align="end"
-            className="w-[min(420px,calc(100vw-2rem))] p-0"
-            onCloseAutoFocus={(event) => event.preventDefault()}
-          >
-            <div className="border-b p-2">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search saved lists…"
-                  className="h-8 pl-8 text-xs"
-                  autoFocus
-                />
-              </div>
-            </div>
-            <div className="max-h-72 overflow-y-auto p-1.5">
-              {filteredLists.length === 0 ? (
-                <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-                  No matching lists.
-                </p>
-              ) : (
-                filteredLists.map((list) => {
-                  const token = variableTokenForList(list.name);
-                  const optionCount = list.options.filter(
-                    (option) =>
-                      option.enabled && option.value.trim().length > 0,
-                  ).length;
-                  return (
-                    <button
-                      key={list.id}
-                      type="button"
-                      className="flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={token === null}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => insertList(list)}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-foreground">
-                          {list.name}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">
-                          {optionCount} option{optionCount === 1 ? "" : "s"}
-                        </p>
-                      </div>
-                      <code className="shrink-0 rounded bg-violet-500/10 px-1.5 py-1 text-[11px] text-violet-700 dark:text-violet-300">
-                        {token ?? "Rename to use"}
-                      </code>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </PopoverContent>
-        </Popover>
+          <span className="font-mono text-[11px]">{"{{ }}"}</span>
+          Insert variable
+          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="w-[min(420px,calc(100vw-2rem))] p-0"
+        onCloseAutoFocus={(event) => event.preventDefault()}
+      >
+        <div className="border-b p-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search saved lists…"
+              className="h-8 pl-8 text-xs"
+              autoFocus
+            />
+          </div>
+        </div>
+        <div className="max-h-72 overflow-y-auto p-1.5">
+          {filteredLists.length === 0 ? (
+            <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+              No matching lists.
+            </p>
+          ) : (
+            filteredLists.map((list) => {
+              const token = variableTokenForList(list.name);
+              const optionCount = list.options.filter(
+                (option) => option.enabled && option.value.trim().length > 0,
+              ).length;
+              return (
+                <button
+                  key={list.id}
+                  type="button"
+                  className="flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={token === null}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    insertList(list);
+                    setOpen(false);
+                    setQuery("");
+                  }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {list.name}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {optionCount} option{optionCount === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  <code className="shrink-0 rounded bg-violet-500/10 px-1.5 py-1 text-[11px] text-violet-700 dark:text-violet-300">
+                    {token ?? "Rename to use"}
+                  </code>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Textarea bound to the surrounding VariablePromptField. */
+export function VariablePromptInput({ className, ...props }: TextareaProps) {
+  const { value, onChange, textareaRef, rememberSelection, saveSelection } =
+    useVariablePromptFieldContext();
+
+  return (
+    <Textarea
+      ref={textareaRef}
+      value={value}
+      onChange={(event) => {
+        onChange(event.target.value);
+        saveSelection(event.target.selectionStart, event.target.selectionEnd);
+      }}
+      onSelect={rememberSelection}
+      onKeyUp={rememberSelection}
+      onClick={rememberSelection}
+      className={className}
+      {...props}
+    />
+  );
+}
+
+export interface VariablePromptTextareaProps extends TextareaProps {
+  value: string;
+  onChange: (value: string) => void;
+  onVariableInsert?: (list: NamedList, value: string) => void;
+}
+
+/** A textarea with a searchable, saved-list-backed variable inserter above it. */
+export function VariablePromptTextarea({
+  value,
+  onChange,
+  onVariableInsert,
+  className,
+  ...props
+}: VariablePromptTextareaProps) {
+  return (
+    <VariablePromptField
+      value={value}
+      onChange={onChange}
+      {...(onVariableInsert ? { onVariableInsert } : {})}
+    >
+      <div className="flex min-h-0 flex-col gap-1.5">
+        <div className="flex shrink-0 items-center justify-end">
+          <VariableInsertButton className="h-7 px-2" />
+        </div>
+        <VariablePromptInput className={className} {...props} />
       </div>
-      <Textarea
-        ref={textareaRef}
-        value={value}
-        onChange={(event) => {
-          onChange(event.target.value);
-          selectionRef.current = {
-            start: event.target.selectionStart,
-            end: event.target.selectionEnd,
-          };
-        }}
-        onSelect={rememberSelection}
-        onKeyUp={rememberSelection}
-        onClick={rememberSelection}
-        className={className}
-        {...props}
-      />
-    </div>
+    </VariablePromptField>
   );
 }
 
@@ -336,8 +426,9 @@ export function PromptVariablePreview({
           [
             list.id,
             list.name,
-            ...list.options.map((option) =>
-              `${option.id}:${option.enabled ? 1 : 0}:${option.value}`,
+            ...list.options.map(
+              (option) =>
+                `${option.id}:${option.enabled ? 1 : 0}:${option.value}`,
             ),
           ].join("\u0000"),
         )
@@ -348,7 +439,7 @@ export function PromptVariablePreview({
   useEffect(() => {
     if (!open) return;
     setSamples((previous) => sampleListValues(listState.lists, previous));
-  }, [open, listSignature]);
+  }, [open, listSignature, listState.lists]);
 
   const hasText = fields.some((field) => field.text.length > 0);
   const renderedFields = fields

@@ -40,6 +40,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
@@ -61,7 +62,6 @@ import {
 import { useConfigCatalogs } from "@/hooks/use-config-catalogs";
 import { FileSyncPanel } from "@/components/files/FileSyncPanel";
 import type { AppSettings, SyncResult } from "@/lib/settings";
-import { cn } from "@/lib/utils";
 
 // ── Section save/cancel bar ──────────────────────────────────────────────────
 
@@ -265,34 +265,6 @@ function SettingRow({
   );
 }
 
-function NumberInput({
-  value,
-  onChange,
-  min,
-  max,
-  step,
-  className,
-}: {
-  value: number;
-  onChange: (v: number) => void;
-  min?: number;
-  max?: number;
-  step?: number;
-  className?: string;
-}) {
-  return (
-    <Input
-      type="number"
-      value={value}
-      onChange={(e) => onChange(Number(e.target.value))}
-      min={min}
-      max={max}
-      step={step}
-      className={cn("w-24 text-right", className)}
-    />
-  );
-}
-
 function SliderRow({
   label,
   description,
@@ -313,7 +285,10 @@ function SliderRow({
   decimals?: number;
 }) {
   return (
-    <SettingRow label={label} {...(description !== undefined ? { description } : {})}>
+    <SettingRow
+      label={label}
+      {...(description !== undefined ? { description } : {})}
+    >
       <div className="flex items-center gap-2">
         <Slider
           value={[value]}
@@ -397,13 +372,12 @@ function CompactNumber({
   return (
     <div className="space-y-1.5">
       <Label className="text-xs font-medium">{label}</Label>
-      <Input
-        type="number"
+      <NumberInput
         value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        min={min}
-        max={max}
-        step={step}
+        onChange={onChange}
+        {...(min !== undefined ? { min } : {})}
+        {...(max !== undefined ? { max } : {})}
+        {...(step !== undefined ? { step } : {})}
         className="h-9 text-right"
       />
     </div>
@@ -1044,11 +1018,11 @@ export function Configurations() {
                 >
                   <NumberInput
                     value={draft.chatMaxConversations}
-                    onChange={(v) =>
-                      set("chatMaxConversations", Math.max(1, v))
-                    }
+                    onChange={(v) => set("chatMaxConversations", v)}
                     min={1}
                     max={500}
+                    integer
+                    className="w-24 text-right"
                   />
                 </SettingRow>
                 <SettingRow
@@ -1542,6 +1516,8 @@ export function Configurations() {
                     onChange={(v) => set("proxyPort", v)}
                     min={1024}
                     max={65535}
+                    integer
+                    className="w-24 text-right"
                   />
                 </SettingRow>
                 <Separator className="my-2" />

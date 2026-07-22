@@ -35,6 +35,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -574,13 +575,13 @@ export function NumberSliderField({
   const isDecimal = step < 1;
   const clamped = Math.min(max, Math.max(min, value));
   const numberInput = (
-    <Input
-      value={String(value)}
-      onChange={(e) => {
-        const n = Number(e.target.value);
-        if (Number.isFinite(n)) onChange(n);
-      }}
-      inputMode={isDecimal ? "decimal" : "numeric"}
+    <NumberInput
+      value={value}
+      onChange={onChange}
+      min={min}
+      max={max}
+      step={step}
+      integer={!isDecimal}
       disabled={disabled}
       className="h-7 w-14 shrink-0 px-1.5 text-xs text-right tabular-nums"
       aria-label={`${label} value`}
@@ -621,13 +622,13 @@ export function NumberSliderField({
             </span>
           )}
         </Label>
-        <Input
-          value={String(value)}
-          onChange={(e) => {
-            const n = Number(e.target.value);
-            if (Number.isFinite(n)) onChange(n);
-          }}
-          inputMode={isDecimal ? "decimal" : "numeric"}
+        <NumberInput
+          value={value}
+          onChange={onChange}
+          min={min}
+          max={max}
+          step={step}
+          integer={!isDecimal}
           disabled={disabled}
           className="h-6 w-16 px-1.5 text-right text-xs tabular-nums"
           aria-label={`${label} value`}
@@ -690,25 +691,23 @@ export function DimensionPicker({
 
   const dimensionInputs = (
     <div className="flex items-center gap-1.5">
-      <Input
-        value={String(width)}
-        onChange={(e) => {
-          const n = Number(e.target.value);
-          if (Number.isFinite(n)) onChange(Math.floor(n), height);
-        }}
-        inputMode="numeric"
+      <NumberInput
+        value={width}
+        onChange={(n) => onChange(n, height)}
+        min={8}
+        integer
+        emptyValue={width}
         disabled={disabled}
         className="h-7 w-[4.5rem] px-2 text-xs tabular-nums"
         aria-label="Width"
       />
       <span className="text-xs text-muted-foreground">×</span>
-      <Input
-        value={String(height)}
-        onChange={(e) => {
-          const n = Number(e.target.value);
-          if (Number.isFinite(n)) onChange(width, Math.floor(n));
-        }}
-        inputMode="numeric"
+      <NumberInput
+        value={height}
+        onChange={(n) => onChange(width, n)}
+        min={8}
+        integer
+        emptyValue={height}
         disabled={disabled}
         className="h-7 w-[4.5rem] px-2 text-xs tabular-nums"
         aria-label="Height"

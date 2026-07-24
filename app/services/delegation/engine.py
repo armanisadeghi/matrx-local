@@ -182,6 +182,7 @@ class DelegationEngine:
         self._last_visible_pending_tools: list[str] = []
         self._last_unresolved_tools: list[str] = []
         self._last_visible_pending: list[dict[str, Any]] = []
+        self._last_visible_probe_signature: tuple[str, ...] | None = None
         self._events: deque[dict[str, Any]] = deque(maxlen=_DIAGNOSTIC_EVENTS_MAX)
         # conversation_id → claim expiry (time.time()). While a local UI
         # stream claim is live the engine still executes + delivers, but
@@ -761,9 +762,7 @@ class DelegationEngine:
             return {
                 "call_id": call_id,
                 "tool_name": tool_name,
-                "output": result.artifact.model_dump(
-                    mode="json", exclude_none=True
-                ),
+                "output": result.artifact.model_dump(mode="json", exclude_none=True),
                 "is_error": False,
                 "error_message": None,
                 "duration_ms": duration_ms,
@@ -1198,9 +1197,16 @@ class DelegationEngine:
         is targeted/claimed elsewhere." Rows from this method are NEVER
         executed.
         """
-        should_probe = not claimed or bool(self._last_unresolved_tools)
-        if not should_probe:
+        if claimed and not self._last_unresolved_tools:
+            self._last_visible_probe_signature = None
             self._record_pending_snapshot("visible", [])
+            return
+        signature = (
+            ("unresolved", *self._last_unresolved_tools)
+            if self._last_unresolved_tools
+            else ("idle",)
+        )
+        if signature == self._last_visible_probe_signature:
             return
         try:
             visible = await self._client.list_pending_calls(
@@ -1210,6 +1216,7 @@ class DelegationEngine:
             self._last_error = str(exc)
             self._event("visible_pending_probe_failed", error=str(exc))
             return
+        self._last_visible_probe_signature = signature
         self._record_pending_snapshot("visible", visible)
         if not claimed and visible:
             logger.warning(

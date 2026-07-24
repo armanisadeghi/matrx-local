@@ -8,10 +8,10 @@ history read delegate here.
 
 Storage is the CANONICAL LOCAL MIRROR of the cloud chat schema
 (``chat.conversation`` / ``chat.message`` / ``chat.user_request`` /
-``chat.tool_call`` — see app/services/local_db/mirror.py). Local ids ARE the
-canonical cloud ids; every write enqueues an outbox row so the chat sync
-engine pushes the turn to the cloud (docs/SYNC_CONTRACT.md — contract gap #1
-is closed by this pipeline).
+``chat.request`` / ``chat.tool_call`` — see app/services/local_db/mirror.py).
+Local ids ARE the canonical cloud ids; every write enqueues an outbox row so
+the chat sync engine pushes the turn to the cloud (docs/SYNC_CONTRACT.md —
+contract gap #1 is closed by this pipeline).
 
 Contract notes (matrx_ai/client_host/store.py is the source of truth):
   - The STORE owns idempotency: ``ensure_conversation_exists`` and
@@ -25,11 +25,10 @@ Contract notes (matrx_ai/client_host/store.py is the source of truth):
     exist (the resolver treats that as "no local state").
 
 Canonical-mapping notes:
-  - ``chat.user_request`` has no conversation_id column in the cloud schema
-    (the link lives in ``chat.request`` rows, which a client host does not
-    produce). We keep the linkage in ``user_request.metadata.conversation_id``
-    so local reads can group requests per conversation; the cloud accepts the
-    metadata untouched.
+  - ``chat.user_request`` has no conversation_id column in the cloud schema.
+    The canonical linkage lives in the per-iteration ``chat.request`` rows; a
+    metadata copy remains for local pending-request lookup before iteration 1
+    has been persisted.
   - matrx-ai's tool-log ``data`` dict is already shaped like a
     ``chat.tool_call`` row (it was written for the cx ORM this table came
     from), so tool logging maps keys straight onto canonical columns and
@@ -76,6 +75,13 @@ get_conversation_handler = get_conversation_store
 # metadata extras.
 _TOOL_CALL_COLUMNS: dict[str, str] = MIRROR_TABLES["chat"]["tool_call"]["columns"]
 
+# System model-definition row installed by aidream migration
+# ai_066_local_runtime_request_model.sql. Arbitrary local GGUF names are kept
+# verbatim in chat.request.metadata.runtime_model_name; this sentinel satisfies
+# the canonical model FK without pretending each user-owned file is a globally
+# catalogued model.
+LOCAL_RUNTIME_MODEL_DEFINITION_ID = "b1e1738a-c585-4e20-846e-2e78b03153cd"
+
 
 def _to_sql_value(value: Any, sqlite_type: str) -> Any:
     """Serialize a python value for a mirror column."""
@@ -90,6 +96,42 @@ def _to_sql_value(value: Any, sqlite_type: str) -> Any:
     if sqlite_type == "TEXT" and not isinstance(value, str):
         return str(value)
     return value
+
+
+_CREDENTIAL_METADATA_KEYS = frozenset(
+    {
+        "access_token",
+        "refresh_token",
+        "authorization",
+        "bearer_token",
+        "id_token",
+        "jwt",
+    }
+)
+
+
+def _remove_credential_metadata(value: Any) -> tuple[Any, int]:
+    """Return a deep copy without credential-bearing metadata keys."""
+    if isinstance(value, dict):
+        cleaned: dict[Any, Any] = {}
+        removed = 0
+        for key, item in value.items():
+            if str(key).lower() in _CREDENTIAL_METADATA_KEYS:
+                removed += 1
+                continue
+            cleaned_item, child_removed = _remove_credential_metadata(item)
+            cleaned[key] = cleaned_item
+            removed += child_removed
+        return cleaned, removed
+    if isinstance(value, list):
+        cleaned_list: list[Any] = []
+        removed = 0
+        for item in value:
+            cleaned_item, child_removed = _remove_credential_metadata(item)
+            cleaned_list.append(cleaned_item)
+            removed += child_removed
+        return cleaned_list, removed
+    return value, 0
 
 
 class SQLiteConversationStore:
@@ -118,6 +160,14 @@ class SQLiteConversationStore:
             from matrx_connect.context.app_context import try_get_app_context
 
             ctx = try_get_app_context()
+            source_app = (
+                (ctx.source_app or "matrx-local") if ctx is not None else "matrx-local"
+            )
+            if source_app == "matrx_local":
+                source_app = "matrx-local"
+            source_feature = (
+                (ctx.source_feature or "chat") if ctx is not None else "chat"
+            )
             config = {
                 "mode": "chat",
                 "route_mode": overrides.get("route_mode", "chat"),
@@ -130,22 +180,28 @@ class SQLiteConversationStore:
             cursor = await db.execute(
                 """INSERT OR IGNORE INTO chat.conversation
                    (id, title, config, status, parent_conversation_id, variables,
-                    overrides, initial_agent_id, initial_agent_version_id,
-                    source_app, created_by,
+                    overrides, organization_id, project_id, task_id,
+                    initial_agent_id, initial_agent_version_id,
+                    source_app, source_feature, created_by,
                     created_at, updated_at, message_count, is_favorite,
                     is_ephemeral, conversation_type, visibility, version,
-                    metadata, cache_state, source_feature, exclude_from_kg)
-                   VALUES (?, 'New conversation', ?, 'active', ?, ?, ?, ?, ?,
-                           'matrx_local', ?, ?, ?, 0, 0, 0, 'standard',
-                           'private', 1, '{}', '{}', '', 0)""",
+                    metadata, cache_state, exclude_from_kg)
+                   VALUES (?, 'New conversation', ?, 'active', ?, ?, ?, ?, ?, ?,
+                           ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'standard',
+                           'personal', 1, '{}', '{}', 0)""",
                 (
                     conversation_id,
                     json.dumps(config, ensure_ascii=False),
                     parent_conversation_id,
                     json.dumps(variables or {}, ensure_ascii=False, default=str),
                     json.dumps(overrides, ensure_ascii=False, default=str),
+                    ctx.organization_id if ctx is not None else None,
+                    ctx.project_id if ctx is not None else None,
+                    ctx.task_id if ctx is not None else None,
                     ctx.agent_id if ctx is not None else None,
                     ctx.agent_version_id if ctx is not None else None,
+                    source_app,
+                    source_feature,
                     user_id,
                     _now(),
                     _now(),
@@ -194,9 +250,9 @@ class SQLiteConversationStore:
                    (id, user_id, status, source_app, metadata, created_by,
                     created_at, updated_at, last_activity_at,
                     total_input_tokens, total_output_tokens, total_cached_tokens,
-                    total_tokens, iterations, total_tool_calls, version)
+                   total_tokens, iterations, total_tool_calls, version)
                    VALUES (?, ?, 'pending', 'matrx_local', ?, ?, ?, ?, ?,
-                           0, 0, 0, 0, 1, 0, 1)""",
+                           0, 0, 0, 0, 0, 0, 1)""",
                 (
                     request_id,
                     user_id,
@@ -394,7 +450,9 @@ class SQLiteConversationStore:
             )
             raw_messages = completed.get("messages") or []
             completed_metadata = dict(completed.get("metadata") or {})
-            user_request_storage: dict[str, Any] = {}
+            user_request_storage = dict(completed.get("user_request") or {})
+            request_storage_rows = list(completed.get("requests") or [])
+            primary_model_name = completed.get("model")
         else:
             conv_id = (
                 conversation_id
@@ -406,11 +464,19 @@ class SQLiteConversationStore:
             raw_messages = list(getattr(completed, "messages", None) or [])
             completed_metadata = dict(getattr(completed, "metadata", None) or {})
             user_request_storage = {}
+            request_storage_rows: list[dict[str, Any]] = []
+            primary_model_name: str | None = None
             to_storage_dict = getattr(completed, "to_storage_dict", None)
             if callable(to_storage_dict):
                 try:
                     storage = to_storage_dict()
                     user_request_storage = dict(storage.get("user_request") or {})
+                    request_storage_rows = [
+                        dict(row) for row in storage.get("requests") or []
+                    ]
+                    primary_model_name = (storage.get("conversation") or {}).get(
+                        "ai_model"
+                    )
                 except Exception:
                     logger.warning(
                         "[conv_store] could not serialize completed request summary",
@@ -418,7 +484,7 @@ class SQLiteConversationStore:
                     )
 
         message_ids: list[str] = []
-        request_ids: list[str] = [user_request_id]
+        request_ids: list[str] = []
         assistant_rows_to_announce: list[tuple[str, int]] = []
         tool_call_links: list[tuple[str, str]] = []
 
@@ -574,6 +640,15 @@ class SQLiteConversationStore:
                     "chat", "tool_call", str(tool_row["id"]), db, commit=False
                 )
 
+        request_ids = await self._persist_iteration_requests(
+            db,
+            request_storage_rows,
+            user_request_id=user_request_id,
+            conversation_id=conv_id,
+            primary_model_name=primary_model_name,
+            now=now,
+        )
+
         # Complete the user_request and touch the conversation rollups.
         request_status = _canonical_request_status(
             user_request_storage.get("status") or completed_metadata.get("status")
@@ -595,6 +670,16 @@ class SQLiteConversationStore:
                 getattr(raw_request_status, "value", raw_request_status)
             )
         request_metadata.setdefault("conversation_id", conv_id)
+        request_metadata, removed_credentials = _remove_credential_metadata(
+            request_metadata
+        )
+        if removed_credentials:
+            logger.warning(
+                "[conv_store] removed %d credential field(s) from persisted "
+                "request metadata for %s",
+                removed_credentials,
+                user_request_id,
+            )
         request_error = user_request_storage.get("error") or completed_metadata.get(
             "error"
         )
@@ -602,10 +687,30 @@ class SQLiteConversationStore:
             request_error = json.dumps(request_error, ensure_ascii=False, default=str)
         elif request_error is not None:
             request_error = str(request_error)
+
+        ledger_tool_calls = await db.fetchone(
+            "SELECT COUNT(*) AS count FROM chat.tool_call "
+            "WHERE user_request_id = ? AND deleted_at IS NULL",
+            (user_request_id,),
+        )
+        ledger_tool_call_count = int(ledger_tool_calls["count"] or 0)
+        persisted_iterations = len(request_storage_rows)
+        summary_iterations = max(
+            int(user_request_storage.get("iterations") or 0),
+            persisted_iterations,
+        )
+        summary_tool_calls = max(
+            int(user_request_storage.get("total_tool_calls") or 0),
+            ledger_tool_call_count,
+        )
         await db.execute(
             """UPDATE chat.user_request
                SET status=?, completed_at=?, updated_at=?, last_activity_at=?,
-                   metadata=?, error=?
+                   metadata=?, error=?, finish_reason=?,
+                   api_duration_ms=?, tool_duration_ms=?, total_duration_ms=?,
+                   total_input_tokens=?, total_output_tokens=?,
+                   total_cached_tokens=?, total_tokens=?, total_cost=?,
+                   iterations=?, total_tool_calls=?
                WHERE id = ?""",
             (
                 request_status,
@@ -614,6 +719,17 @@ class SQLiteConversationStore:
                 now,
                 json.dumps(request_metadata, ensure_ascii=False, default=str),
                 request_error,
+                user_request_storage.get("finish_reason"),
+                user_request_storage.get("api_duration_ms"),
+                user_request_storage.get("tool_duration_ms"),
+                user_request_storage.get("total_duration_ms"),
+                user_request_storage.get("total_input_tokens", 0) or 0,
+                user_request_storage.get("total_output_tokens", 0) or 0,
+                user_request_storage.get("total_cached_tokens", 0) or 0,
+                user_request_storage.get("total_tokens", 0) or 0,
+                user_request_storage.get("total_cost"),
+                summary_iterations,
+                summary_tool_calls,
                 user_request_id,
             ),
         )
@@ -663,6 +779,143 @@ class SQLiteConversationStore:
             "message_ids": message_ids,
             "request_ids": request_ids,
         }
+
+    async def _persist_iteration_requests(
+        self,
+        db: Any,
+        rows: list[dict[str, Any]],
+        *,
+        user_request_id: str,
+        conversation_id: str,
+        primary_model_name: str | None,
+        now: str,
+    ) -> list[str]:
+        """Upsert one canonical ``chat.request`` row per provider iteration."""
+        if not rows:
+            return []
+
+        reserved_request_ids: dict[int, str] = {}
+        try:
+            from matrx_ai.orchestrator.execution_state import try_get_execution_state
+
+            state = try_get_execution_state()
+            if state is not None:
+                reserved_request_ids = dict(state.reserved_request_ids)
+        except Exception:
+            logger.warning(
+                "[conv_store] could not read reserved request ids; deterministic "
+                "iteration ids will be used",
+                exc_info=True,
+            )
+
+        request_ids: list[str] = []
+        for index, raw_row in enumerate(rows, start=1):
+            row = dict(raw_row)
+            iteration = int(row.get("iteration") or index)
+            request_id = reserved_request_ids.get(iteration) or str(
+                uuid.uuid5(
+                    _REQUEST_NAMESPACE,
+                    f"{user_request_id}:{iteration}",
+                )
+            )
+            model_name = row.get("ai_model") or primary_model_name
+            ai_model_id, is_local_runtime = await _resolve_request_model_id(
+                row.get("ai_model_id"),
+                model_name,
+                row.get("provider"),
+            )
+            metadata = dict(row.get("metadata") or {})
+            if model_name:
+                metadata.setdefault("model_name", str(model_name))
+            if is_local_runtime:
+                metadata["model_source"] = "local_runtime"
+                metadata["runtime_model_name"] = str(model_name)
+
+            error = row.get("error")
+            if isinstance(error, str):
+                error = {"message": error}
+
+            await db.execute(
+                """INSERT INTO chat.request
+                   (id, user_request_id, conversation_id, provider, iteration,
+                    input_tokens, output_tokens, cached_tokens, total_tokens,
+                    cost, api_duration_ms, tool_duration_ms, total_duration_ms,
+                    tool_calls_count, tool_calls_details, finish_reason,
+                    response_id, created_at, metadata, ai_model_id, raw_usage,
+                    trim_summary, status, error, updated_at, execution_kind,
+                    execution_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                     provider=excluded.provider,
+                     input_tokens=excluded.input_tokens,
+                     output_tokens=excluded.output_tokens,
+                     cached_tokens=excluded.cached_tokens,
+                     total_tokens=excluded.total_tokens,
+                     cost=excluded.cost,
+                     api_duration_ms=excluded.api_duration_ms,
+                     tool_duration_ms=excluded.tool_duration_ms,
+                     total_duration_ms=excluded.total_duration_ms,
+                     tool_calls_count=excluded.tool_calls_count,
+                     tool_calls_details=excluded.tool_calls_details,
+                     finish_reason=excluded.finish_reason,
+                     response_id=excluded.response_id,
+                     metadata=excluded.metadata,
+                     ai_model_id=excluded.ai_model_id,
+                     raw_usage=excluded.raw_usage,
+                     trim_summary=excluded.trim_summary,
+                     status=excluded.status,
+                     error=excluded.error,
+                     updated_at=excluded.updated_at,
+                     execution_kind=excluded.execution_kind,
+                     execution_id=excluded.execution_id""",
+                (
+                    request_id,
+                    user_request_id,
+                    conversation_id,
+                    row.get("provider"),
+                    iteration,
+                    row.get("input_tokens"),
+                    row.get("output_tokens"),
+                    row.get("cached_tokens"),
+                    row.get("total_tokens"),
+                    row.get("cost"),
+                    row.get("api_duration_ms"),
+                    row.get("tool_duration_ms"),
+                    row.get("total_duration_ms"),
+                    int(row.get("tool_calls_count") or 0),
+                    _json_column(row.get("tool_calls_details")),
+                    row.get("finish_reason"),
+                    row.get("response_id"),
+                    now,
+                    _json_column(metadata) or "{}",
+                    ai_model_id,
+                    _json_column(row.get("raw_usage")),
+                    _json_column(row.get("trim_summary")),
+                    _canonical_iteration_request_status(
+                        row.get("status") or "completed"
+                    ),
+                    _json_column(error),
+                    now,
+                    row.get("execution_kind"),
+                    row.get("execution_id"),
+                ),
+            )
+            await enqueue_change(
+                "chat",
+                "request",
+                request_id,
+                db,
+                commit=False,
+            )
+            request_ids.append(request_id)
+
+        logger.info(
+            "[conv_store] persisted %d iteration request row(s) for %s",
+            len(request_ids),
+            user_request_id,
+        )
+        return request_ids
 
     # ------------------------------------------------------------------
     # ConversationStore protocol — tool logging
@@ -933,6 +1186,50 @@ LocalConversationHandler = SQLiteConversationStore
 # Stable namespace for deriving deterministic message ids from
 # (conversation_id, position) so repeated full-history persists are idempotent.
 _MSG_NAMESPACE = uuid.UUID("7df1aa44-43e5-4dca-9c4f-3f2f6f8a1b9e")
+_REQUEST_NAMESPACE = uuid.UUID("a9eaab92-afc5-44e2-927f-b8412341213d")
+
+
+def _json_column(value: Any) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+async def _resolve_request_model_id(
+    explicit_model_id: Any,
+    model_name: Any,
+    provider: Any,
+) -> tuple[str, bool]:
+    """Resolve a catalog FK or the explicit local-runtime sentinel."""
+    candidate_id = str(explicit_model_id or "")
+    try:
+        uuid.UUID(candidate_id)
+        return candidate_id, False
+    except ValueError:
+        pass
+
+    candidate_name = str(model_name or "")
+    provider_name = str(provider or "").lower()
+    if candidate_name and (
+        candidate_name.startswith("local/") or provider_name == "local"
+    ):
+        return LOCAL_RUNTIME_MODEL_DEFINITION_ID, True
+
+    if candidate_name:
+        from app.services.ai.model_catalog import get_model_catalog
+
+        model = await get_model_catalog().get_model(candidate_name)
+        catalog_id = str((model or {}).get("id") or "")
+        try:
+            uuid.UUID(catalog_id)
+            return catalog_id, False
+        except ValueError:
+            pass
+
+    raise RuntimeError(
+        "Cannot persist chat.request: model is not a catalog UUID and is not "
+        f"a local runtime model (model={candidate_name!r}, provider={provider_name!r})"
+    )
 
 _MESSAGE_STATUSES = {
     "active",
@@ -1044,6 +1341,20 @@ def _canonical_request_status(value: Any) -> str:
         return status
     if status in _PAUSED_REQUEST_STATUSES:
         return "paused"
+    return "completed"
+
+
+def _canonical_iteration_request_status(value: Any) -> str:
+    status = str(getattr(value, "value", value) or "completed")
+    if status in {
+        "pending",
+        "processing",
+        "completed",
+        "failed",
+        "cancelled",
+        "abandoned",
+    }:
+        return status
     return "completed"
 
 

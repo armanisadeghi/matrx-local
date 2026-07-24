@@ -99,6 +99,10 @@ def _register_runtime_model(model_name: str) -> None:
         "provider": "local",
         "is_active": True,
         "endpoints": ["generic_openai_chat"],
+        # llama-server only emits the terminal usage block when explicitly
+        # requested. Without this every successful streaming iteration is
+        # persisted as zero tokens / unknown cost.
+        "request_defaults": {"stream_options": {"include_usage": True}},
     })
     logger.info(
         "[local_llm_registry] Registered runtime model '%s' in matrx-ai catalog ✓",

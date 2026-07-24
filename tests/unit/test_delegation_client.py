@@ -518,7 +518,6 @@ def test_cancelled_resume_stream_keeps_retry_obligation(
     assert "call_1" in engine._undelivered
 
 
-
 def test_restart_redelivers_saved_result_without_reexecution(tmp_path: Path) -> None:
     server = FakeServer()
     server.continuation_needed = False
@@ -850,6 +849,25 @@ def test_visible_pending_diagnostics_explain_target_mismatch() -> None:
         status["pending"]["visible_sample"][0]["target_instance_id"] == "other-desktop"
     )
     assert any(e["event"] == "visible_but_not_claimed" for e in status["recent_events"])
+
+
+def test_idle_visible_pending_diagnostic_does_not_repeat_every_poll() -> None:
+    server = FakeServer()
+    server.pending = []
+    server.visible_pending = []
+    engine = _engine(server)
+
+    async def run() -> None:
+        assert await engine.sweep_once() == 0
+        assert await engine.sweep_once() == 0
+        assert await engine.sweep_once() == 0
+
+    asyncio.run(run())
+
+    scoped = [r for r in server.requests if "instance_id" in dict(r.url.params)]
+    unscoped = [r for r in server.requests if "instance_id" not in dict(r.url.params)]
+    assert len(scoped) == 3
+    assert len(unscoped) == 1
 
 
 # ---------------------------------------------------------------------------

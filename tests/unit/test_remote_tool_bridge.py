@@ -210,6 +210,7 @@ async def test_remote_execution_forwards_identity_and_injection(
     assert payload["task_id"] == "task-1"
     assert payload["scope_ids"] == ["scope-1"]
     assert payload["source_app"] == "matrx-local"
+    assert payload["store"] is False
 
 
 @pytest.mark.anyio

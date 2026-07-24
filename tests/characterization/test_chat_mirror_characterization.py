@@ -234,7 +234,12 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
         from matrx_connect.emitters.stream_emitter import StreamEmitter
 
         ctx = AppContext(emitter=StreamEmitter(), user_id="u1").with_overrides(
-            agent_id="ag1"
+            agent_id="ag1",
+            organization_id="11111111-1111-4111-8111-111111111111",
+            project_id="22222222-2222-4222-8222-222222222222",
+            task_id="33333333-3333-4333-8333-333333333333",
+            source_app="matrx_local",
+            source_feature="chat-route",
         )
         ctx_token = set_app_context(ctx)
         try:
@@ -283,7 +288,12 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
         )
         assert conv["created_by"] == "u1"
         assert conv["initial_agent_id"] == "ag1"
-        assert conv["source_app"] == "matrx_local"
+        assert conv["source_app"] == "matrx-local"
+        assert conv["source_feature"] == "chat-route"
+        assert conv["visibility"] == "personal"
+        assert conv["organization_id"] == "11111111-1111-4111-8111-111111111111"
+        assert conv["project_id"] == "22222222-2222-4222-8222-222222222222"
+        assert conv["task_id"] == "33333333-3333-4333-8333-333333333333"
         assert conv["message_count"] == 2
 
         ur = dict(
@@ -545,7 +555,26 @@ def test_store_merges_completed_request_and_storage_metadata(tmp_path: Path) -> 
                         "metadata": {
                             "storage_only": "kept",
                             "shared": "storage",
+                            "remote_tool_request": {
+                                "client": {
+                                    "state": {
+                                        "access_token": "must-not-persist",
+                                        "surface": "matrx-user/chat",
+                                    }
+                                }
+                            },
                         },
+                        "finish_reason": "stop",
+                        "api_duration_ms": 120,
+                        "tool_duration_ms": 30,
+                        "total_duration_ms": 150,
+                        "total_input_tokens": 100,
+                        "total_output_tokens": 20,
+                        "total_cached_tokens": 40,
+                        "total_tokens": 120,
+                        "total_cost": 0.25,
+                        "iterations": 3,
+                        "total_tool_calls": 2,
                     }
                 }
 
@@ -555,7 +584,10 @@ def test_store_merges_completed_request_and_storage_metadata(tmp_path: Path) -> 
         )
 
         row = await db.fetchone(
-            "SELECT status, metadata FROM chat.user_request WHERE id = ?",
+            "SELECT status, metadata, finish_reason, api_duration_ms, "
+            "tool_duration_ms, total_duration_ms, total_input_tokens, "
+            "total_output_tokens, total_cached_tokens, total_tokens, total_cost, "
+            "iterations, total_tool_calls FROM chat.user_request WHERE id = ?",
             (request_id,),
         )
         assert row is not None
@@ -565,6 +597,19 @@ def test_store_merges_completed_request_and_storage_metadata(tmp_path: Path) -> 
         assert metadata["storage_only"] == "kept"
         assert metadata["shared"] == "completion"
         assert metadata["engine_status"] == "suspended_awaiting_client"
+        state = metadata["remote_tool_request"]["client"]["state"]
+        assert state == {"surface": "matrx-user/chat"}
+        assert row["finish_reason"] == "stop"
+        assert row["api_duration_ms"] == 120
+        assert row["tool_duration_ms"] == 30
+        assert row["total_duration_ms"] == 150
+        assert row["total_input_tokens"] == 100
+        assert row["total_output_tokens"] == 20
+        assert row["total_cached_tokens"] == 40
+        assert row["total_tokens"] == 120
+        assert row["total_cost"] == 0.25
+        assert row["iterations"] == 3
+        assert row["total_tool_calls"] == 2
 
         message = await db.fetchone(
             "SELECT status, content, metadata FROM chat.message WHERE id = ?",
@@ -574,6 +619,128 @@ def test_store_merges_completed_request_and_storage_metadata(tmp_path: Path) -> 
         assert message["status"] == "failed"
         assert json.loads(message["content"])[0]["text"] == "corrected final answer"
         assert json.loads(message["metadata"])["phase"] == "final"
+
+    _run(tmp_path, scenario)
+
+
+def test_store_persists_every_local_model_iteration_and_reconciles_rollup(
+    tmp_path: Path,
+) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        from types import SimpleNamespace
+
+        from app.services.ai.conversation_handler import (
+            LOCAL_RUNTIME_MODEL_DEFINITION_ID,
+            SQLiteConversationStore,
+        )
+        from app.services.chat_sync.engine import _PUSH_COLUMNS, _PUSH_ORDER
+
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa51"
+        user_request_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa52"
+        store = SQLiteConversationStore()
+        await store.ensure_conversation_exists(conversation_id, "u1")
+        await store.create_pending_user_request(
+            user_request_id,
+            conversation_id,
+            "u1",
+        )
+        for index in range(2):
+            await db.execute(
+                """INSERT INTO chat.tool_call
+                   (id, conversation_id, user_request_id, call_id, tool_name,
+                    status, success, is_error, created_at)
+                   VALUES (?, ?, ?, ?, 'sql', 'completed', 1, 0, ?)""",
+                (
+                    f"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa6{index}",
+                    conversation_id,
+                    user_request_id,
+                    f"call-{index}",
+                    "2026-07-23T00:00:00+00:00",
+                ),
+            )
+        await db.commit()
+
+        class CompletedRequest:
+            request = SimpleNamespace(request_id=user_request_id)
+            messages = [
+                {"role": "user", "content": "inspect"},
+                {"role": "assistant", "content": "done"},
+            ]
+            metadata = {"status": "completed", "finish_reason": "stop"}
+
+            def to_storage_dict(self) -> dict[str, Any]:
+                return {
+                    "conversation": {"ai_model": "local/test-model.gguf"},
+                    "user_request": {
+                        "status": "completed",
+                        "iterations": 3,
+                        # Deliberately wrong: the child ledger must win.
+                        "total_tool_calls": 0,
+                        "total_input_tokens": 60,
+                        "total_output_tokens": 15,
+                        "total_tokens": 75,
+                    },
+                    "requests": [
+                        {
+                            "iteration": iteration,
+                            "provider": "local",
+                            "ai_model": "local/test-model.gguf",
+                            "input_tokens": 20,
+                            "output_tokens": 5,
+                            "total_tokens": 25,
+                            "tool_calls_count": 1 if iteration < 3 else 0,
+                            "finish_reason": "stop" if iteration == 3 else None,
+                        }
+                        for iteration in range(1, 4)
+                    ],
+                }
+
+        result = await store.persist_completed_request(
+            CompletedRequest(),
+            conversation_id=conversation_id,
+        )
+
+        rows = [
+            dict(row)
+            for row in await db.fetchall(
+                "SELECT id, iteration, provider, input_tokens, output_tokens, "
+                "total_tokens, tool_calls_count, finish_reason, ai_model_id, "
+                "metadata, status FROM chat.request "
+                "WHERE user_request_id = ? ORDER BY iteration",
+                (user_request_id,),
+            )
+        ]
+        assert len(rows) == 3
+        assert len(result["request_ids"]) == 3
+        assert [row["iteration"] for row in rows] == [1, 2, 3]
+        assert all(
+            row["ai_model_id"] == LOCAL_RUNTIME_MODEL_DEFINITION_ID for row in rows
+        )
+        assert all(
+            json.loads(row["metadata"])["runtime_model_name"]
+            == "local/test-model.gguf"
+            for row in rows
+        )
+        assert rows[-1]["finish_reason"] == "stop"
+
+        summary = await db.fetchone(
+            "SELECT iterations, total_tool_calls, total_tokens "
+            "FROM chat.user_request WHERE id = ?",
+            (user_request_id,),
+        )
+        assert summary is not None
+        assert summary["iterations"] == 3
+        assert summary["total_tool_calls"] == 2
+        assert summary["total_tokens"] == 75
+
+        queued = await db.fetchone(
+            "SELECT COUNT(*) AS count FROM sync_queue "
+            "WHERE entity_type = 'chat.request' AND action = 'upsert'",
+        )
+        assert queued is not None and queued["count"] == 3
+        assert "request" in _PUSH_COLUMNS
+        assert _PUSH_ORDER.index("user_request") < _PUSH_ORDER.index("request")
+        assert _PUSH_ORDER.index("request") < _PUSH_ORDER.index("tool_call")
 
     _run(tmp_path, scenario)
 
@@ -1092,6 +1259,34 @@ def test_postgrest_batches_only_contain_rows_with_matching_keys() -> None:
         len({tuple(sorted(payload)) for _, payload, _ in batch}) == 1
         for batch in batches
     )
+
+
+def test_outbound_payload_repairs_legacy_visibility_and_strips_credentials() -> None:
+    from app.services.chat_sync.engine import _normalize_outbound_payload
+
+    normalized = _normalize_outbound_payload(
+        "conversation",
+        {
+            "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+            "visibility": "private",
+            "source_app": "matrx_local",
+            "metadata": {
+                "remote_tool_request": {
+                    "client": {
+                        "state": {
+                            "access_token": "must-not-sync",
+                            "surface": "matrx-user/chat",
+                        }
+                    }
+                }
+            },
+        },
+    )
+
+    assert normalized["visibility"] == "personal"
+    assert normalized["source_app"] == "matrx-local"
+    state = normalized["metadata"]["remote_tool_request"]["client"]["state"]
+    assert state == {"surface": "matrx-user/chat"}
 
 
 def test_push_drains_outbox_parent_first_and_applies_echo(tmp_path: Path) -> None:

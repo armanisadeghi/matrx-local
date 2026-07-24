@@ -43,7 +43,15 @@ _SCHEMA = "chat"
 
 # Parents before children — RLS on child tables authorizes through the
 # conversation row, so it must exist in the cloud first.
-_PUSH_ORDER = ["conversation", "user_request", "message", "tool_call", "media", "artifact"]
+_PUSH_ORDER = [
+    "conversation",
+    "user_request",
+    "message",
+    "request",
+    "tool_call",
+    "media",
+    "artifact",
+]
 
 # Explicit desktop-authoring boundary.  Pulling a column into SQLite does not
 # grant the desktop permission to publish it back.  This is deliberately an
@@ -57,6 +65,7 @@ _PUSH_COLUMNS: dict[str, frozenset[str]] = {
             "created_at", "deleted_at", "metadata", "last_model_id",
             "parent_conversation_id", "variables", "overrides", "description",
             "keywords", "project_id", "task_id", "source_app", "source_feature",
+            "organization_id",
             "is_ephemeral", "initial_agent_id", "initial_agent_version_id",
             "is_favorite", "cache_state", "last_context_breakdown",
             "last_request_status", "last_request_id", "exclude_from_kg",
@@ -79,6 +88,17 @@ _PUSH_COLUMNS: dict[str, frozenset[str]] = {
             "content_history", "user_content", "metadata", "model_context",
             "error", "source", "is_visible_to_user", "is_visible_to_model",
             "content_chars", "tool_results_chars", "agent_id", "voice",
+            "created_at", "deleted_at",
+        }
+    ),
+    "request": frozenset(
+        {
+            "id", "user_request_id", "conversation_id", "provider", "iteration",
+            "input_tokens", "output_tokens", "cached_tokens", "total_tokens",
+            "cost", "api_duration_ms", "tool_duration_ms", "total_duration_ms",
+            "tool_calls_count", "tool_calls_details", "finish_reason",
+            "response_id", "metadata", "ai_model_id", "raw_usage",
+            "trim_summary", "status", "error", "execution_kind", "execution_id",
             "created_at", "deleted_at",
         }
     ),
@@ -141,6 +161,70 @@ def _parse_ts(value: Any) -> datetime | None:
         return dt
     except ValueError:
         return None
+
+
+_CREDENTIAL_METADATA_KEYS = frozenset(
+    {
+        "access_token",
+        "refresh_token",
+        "authorization",
+        "bearer_token",
+        "id_token",
+        "jwt",
+    }
+)
+
+
+def _scrub_credentials(value: Any) -> tuple[Any, int]:
+    if isinstance(value, dict):
+        cleaned: dict[Any, Any] = {}
+        removed = 0
+        for key, item in value.items():
+            if str(key).lower() in _CREDENTIAL_METADATA_KEYS:
+                removed += 1
+                continue
+            cleaned_item, child_removed = _scrub_credentials(item)
+            cleaned[key] = cleaned_item
+            removed += child_removed
+        return cleaned, removed
+    if isinstance(value, list):
+        cleaned_list: list[Any] = []
+        removed = 0
+        for item in value:
+            cleaned_item, child_removed = _scrub_credentials(item)
+            cleaned_list.append(cleaned_item)
+            removed += child_removed
+        return cleaned_list, removed
+    return value, 0
+
+
+def _normalize_outbound_payload(
+    table: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Repair legacy local vocabulary and enforce the cloud metadata boundary."""
+    normalized = dict(payload)
+    if table == "conversation":
+        if normalized.get("visibility") == "private":
+            logger.warning(
+                "[chat_sync] normalized legacy conversation visibility "
+                "'private' -> 'personal' before cloud push"
+            )
+            normalized["visibility"] = "personal"
+        if normalized.get("source_app") == "matrx_local":
+            normalized["source_app"] = "matrx-local"
+
+    if "metadata" in normalized:
+        cleaned, removed = _scrub_credentials(normalized["metadata"])
+        normalized["metadata"] = cleaned
+        if removed:
+            logger.warning(
+                "[chat_sync] removed %d credential field(s) from outbound "
+                "chat.%s metadata",
+                removed,
+                table,
+            )
+    return normalized
 
 
 def _shape_compatible_batches(
@@ -414,6 +498,7 @@ class ChatSyncEngine:
                 continue
             strip = frozenset(spec["columns"]) - allowed
             payload = encode_local_row(_SCHEMA, table, local_row, strip=strip)
+            payload = _normalize_outbound_payload(table, payload)
             if not payload.get(pk):
                 logger.error(
                     "[chat_sync] chat.%s %s projection omitted its primary key — "

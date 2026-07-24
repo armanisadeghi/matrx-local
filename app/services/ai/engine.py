@@ -39,9 +39,9 @@ working store, never a competing server.
     local_db sync engine from the AIDream REST API; matrx-ai reads models
     back through the injected SqliteModelCatalog.
   - Conversation persistence is handled by SQLiteConversationStore, which
-    writes to local SQLite. NOTE: these conversations/messages are currently
-    LOCAL-ONLY — no reconnect push pipeline exists yet (contract gap #1 in
-    docs/SYNC_CONTRACT.md).
+    writes to local SQLite first. ``app/services/chat_sync`` mirrors those
+    canonical chat rows to Supabase immediately after a turn and retries from
+    the outbox on reconnect.
   - The user JWT is read from an in-memory cache (warmed from the auth_tokens
     SQLite table, updated on every token push) at call time so it
     automatically picks up token refreshes without re-initializing.
@@ -136,6 +136,7 @@ def install_client_host_queue_guard() -> None:
         from matrx_ai._ext import has_ext
         from matrx_ai.db._registry import get_base, get_model
         from matrx_ai.db import persistence as db_persistence
+        from matrx_ai.orchestrator import executor as orchestrator_executor
         from matrx_ai.persistence import queue_helpers
         from matrx_ai.tools import dynamic_drain
         from matrx_ai.tools.logger import ToolExecutionLogger
@@ -202,6 +203,16 @@ def install_client_host_queue_guard() -> None:
             return None
         return await original_rollup(user_request_id)
 
+    def _guarded_schedule_labeling_if_new(exec_ctx, config) -> None:
+        # Older embedded matrx-ai builds schedule the ORM-backed labeler even
+        # when a ConversationStore client host is active. The desktop has no
+        # AgentMemoryBase by design, so that path can only emit a noisy
+        # DBNotConfiguredError. Current matrx-ai has the same guard upstream;
+        # keep it here until the packaged floor includes that release.
+        if _client_host_without_orm():
+            return
+        original_schedule_labeling(exec_ctx, config)
+
     # The tool-lifecycle background sweep (started unconditionally by matrx-ai's
     # handle_tool_calls, every 5 min) reaps stale/expired cx_tool_call rows via
     # abandon_stale_running_rows() / expire_delegated_calls(). Both go straight
@@ -226,10 +237,14 @@ def install_client_host_queue_guard() -> None:
 
     original_drain = dynamic_drain.drain_pending_injections
     original_rollup = db_persistence.apply_authoritative_user_request_rollup
+    original_schedule_labeling = orchestrator_executor._schedule_labeling_if_new
     queue_helpers.get_coordinator = _guarded_get_coordinator
     dynamic_drain.drain_pending_injections = _guarded_drain_pending_injections
     db_persistence.apply_authoritative_user_request_rollup = (
         _guarded_apply_authoritative_user_request_rollup
+    )
+    orchestrator_executor._schedule_labeling_if_new = (
+        _guarded_schedule_labeling_if_new
     )
     ToolExecutionLogger.abandon_stale_running_rows = _guarded_abandon_stale_running_rows
     ToolExecutionLogger.expire_delegated_calls = _guarded_expire_delegated_calls

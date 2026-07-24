@@ -318,6 +318,9 @@ def test_runtime_model_registration(seam_sandbox, monkeypatch):
     entry = get_runtime_model("local/qwen-test")
     assert entry is not None
     assert entry.api_class == "generic_openai_standard"
+    assert entry.request_defaults == {
+        "stream_options": {"include_usage": True}
+    }
     assert reg.is_local_llm_available()
 
     # get_local_llm_status() health-probes the registered port without taking

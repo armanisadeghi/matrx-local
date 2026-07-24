@@ -18,12 +18,12 @@ headless/poll variant.
 
 ## Coordination participation gate (`MATRX_CLOUD_PARTICIPATION`)
 
-Delegation is **USER-scoped, not instance-scoped**: `GET /ai/user/pending_calls`
-returns every delegated call for the account and the ledger has no executor
-column, so a call is claimed by whichever `matrx-local` engine recognizes the
-tool name. Two engines on one account (the installed app + a source-run dev
-engine) therefore **race for the same call** — double-execution and 409 resume
-races that hand back false pass/fail signals during live testing.
+Delegation is user-authenticated and **instance-claimed**:
+`GET /ai/user/pending_calls?instance_id=...` atomically leases only delegated
+calls whose tool is explicitly bound to executor `matrx-local`, and only when
+the row is untargeted or targets that instance. The desktop's catalog lookup is
+a second independent ownership check; browser/UI tools must never reach local
+dispatch.
 
 Guard: `app.config.CLOUD_PARTICIPATION_ENABLED` (env `MATRX_CLOUD_PARTICIPATION`,
 default `1`). When `0`, this engine is **coordination-silent** — Phase 2f
@@ -32,21 +32,18 @@ attach to the per-user bridge channel, so it never claims cloud-dispatched work.
 `run.py`'s dev isolation defaults source-run engines to `0`; the packaged app
 leaves it `1`. A dev engine is still fully usable over its own loopback (a dev
 frontend on the same machine reaches it directly). Deliberately opting a dev
-engine INTO the shared channel (`MATRX_CLOUD_PARTICIPATION=1`) currently makes
-it race the installed app — instance-scoped targeting (so the frontend can pick
-which desktop drives) is the planned Tier 2 follow-up.
+engine into the shared channel is safe when the conversation targets one
+instance; untargeted legacy calls remain first-claim-wins.
 
-Tier 2 (instance-scoped targeting so a dev desktop and the installed app never
-claim each other's work — reusing `cx_conversation.app_instance_id` from the
-compute-target picker): design in
+Tier 2 instance-scoped targeting is implemented from the design in
 [docs/TIER2_DESKTOP_INSTANCE_TARGETING.md](../../../docs/TIER2_DESKTOP_INSTANCE_TARGETING.md).
-The client already sends `?instance_id=` on the poll (forward-compatible).
 
 ## The pipeline
 
 ```
-GET /ai/user/pending_calls  (user JWT, every MATRX_DELEGATION_POLL_INTERVAL s)
-  → filter: tool_name resolves in app.tools.catalog.get_by_cloud_name
+GET /ai/user/pending_calls?instance_id=...  (user JWT, every poll interval)
+  → aidream atomically leases only matrx-local-bound tools for this instance
+  → defense: tool_name resolves in app.tools.catalog.get_by_cloud_name
   → execute via app.tools.dispatcher.dispatch(entry.dispatcher_name, args)
   → POST /ai/conversations/{id}/tool_results  (duration_ms always sent)
   → continuation_needed=true
@@ -60,7 +57,10 @@ GET /ai/user/pending_calls  (user JWT, every MATRX_DELEGATION_POLL_INTERVAL s)
 1. **Poll (correctness).** `GET /ai/user/pending_calls` on an interval
    (default 15 s, env `MATRX_DELEGATION_POLL_INTERVAL`). The ledger row is
    durable (30-day server expiry) so nothing is ever lost. Works with zero
-   new server surface.
+   new server surface. The normal request includes this app's `instance_id`.
+   An unscoped, read-only diagnostic request may run once on entry to an idle
+   state (or once for a new unresolved-tool signature) so status can explain a
+   target mismatch; it does not repeat every poll.
 2. **Broadcast wake (latency).** aidream publishes `kind:"wake"`,
    `action:"tool_call.delegated"` on `matrx-local-bridge:<user_id>` when a
    turn suspends. `app/api/cross_component_router.py::_handle_wake` routes
@@ -102,10 +102,11 @@ execution path. Do not add one.
   run twice. Authentication, permission, and malformed-acknowledgement failures
   retain the durable result for retry; only a validated server acknowledgement
   clears it.
-- **Ownership by tool name.** `chat.tool_call` has NO executor column; a
-  pending call is ours iff `get_by_cloud_name(tool_name)` resolves. Foreign
-  calls (browser/ui-first tools) are silently left for their owner — never
-  post an error for a tool that isn't ours.
+- **Ownership is enforced twice.** Aidream's claim query admits only tools
+  bound to executor `matrx-local`; this client independently requires
+  `get_by_cloud_name(tool_name)` to resolve before dispatch. Foreign calls
+  (browser/UI-first tools) are never claimed or executed here, and this client
+  never posts an error for a tool that is not ours.
 - **States, not errors.** No/expired JWT → idle with one INFO line per state
   transition (the app refreshes tokens; see MXL-D-046 — `TokenRepo.is_expired`
   decodes the JWT `exp` itself). Unreachable server → one WARN per

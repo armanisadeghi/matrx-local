@@ -33,6 +33,7 @@ single definition -> AgentConfig -> UnifiedConfig conversion.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import uuid
 from typing import Any
@@ -813,93 +814,224 @@ async def run_local_ai_task(
     from matrx_ai.orchestrator.executor import execute_ai_request
     from matrx_connect.context.app_context import get_app_context
 
+    from app.services.ai.runtime_spine import (
+        meters_from_completed,
+        open_runtime_execution,
+        settle_runtime_execution,
+        start_heartbeat,
+    )
+
     ctx = get_app_context()
 
     operation_id = str(uuid.uuid4())
     ctx = ctx.with_overrides(operation_id=operation_id)
     set_app_context(ctx)
 
-    await emitter.send_phase("processing")
-    await emitter.send_init(
-        InitPayload(operation="user_request", operation_id=operation_id)
+    # Cloud runtime spine: open BEFORE the loop (best-effort, offline-safe —
+    # a failed open means this run simply isn't cloud-tracked). The execution
+    # id is stamped in-place on the INSTALLED ctx's metadata dict under BOTH
+    # keys: the vendored matrx-ai reads "runtime_root_execution_id"
+    # (resolve_runtime_root_execution_id) and chat_sync mirrors it into
+    # chat.request.execution_id.
+    lease = await open_runtime_execution(
+        jwt=ctx.token,
+        conversation_id=ctx.conversation_id,
+        idempotency_key=operation_id,
     )
+    if lease is not None:
+        ctx.metadata["runtime_execution_id"] = lease.execution_id
+        ctx.metadata["runtime_root_execution_id"] = lease.root_execution_id
+        start_heartbeat(lease)
 
-    if ctx.store and ctx.conversation_id:
-        try:
-            from app.services.ai.conversation_handler import get_conversation_store
-
-            await get_conversation_store().reserve_stream_messages(
-                config,
-                ctx.conversation_id,
-                ctx.user_id or "local-user",
-                emitter,
-            )
-        except Exception:
-            logger.error(
-                "[local_ai_task] durable stream message reservation failed",
-                exc_info=True,
-            )
-
-    unrecognized = getattr(config, "_unrecognized_keys", [])
-    if unrecognized:
-        await emitter.send_warning(
-            WarningPayload(
-                code="unrecognized_config",
-                system_message=f"Unrecognized config keys ignored: {unrecognized}",
-                user_message=(
-                    "Some configuration options sent by the client are not "
-                    "recognized by the local engine. They have been ignored."
-                ),
-                level="low",
-                recoverable=True,
-                metadata={"unrecognized_keys": list(unrecognized)},
-            )
+    settle_status = "failed"
+    settle_error: str | None = None
+    completed: CompletedRequest | None = None
+    try:
+        await emitter.send_phase("processing")
+        await emitter.send_init(
+            InitPayload(operation="user_request", operation_id=operation_id)
         )
 
-    completed = await execute_ai_request(
-        config,
-        max_iterations=max_iterations,
-        max_retries_per_iteration=max_retries_per_iteration,
-    )
-
-    _update_agent_cache(completed)
-
-    if ctx.store:
-        try:
-            from app.services.chat_sync import get_chat_sync_engine
-
-            pushed = await get_chat_sync_engine().flush_pending()
-            if pushed.get("failed"):
-                raise RuntimeError(
-                    f"{pushed['failed']} chat mirror row(s) failed to push"
+        if ctx.store and ctx.conversation_id:
+            try:
+                from app.services.ai.conversation_handler import (
+                    get_conversation_store,
                 )
-            logger.info(
-                "[local_ai_task] flushed persisted turn to cloud (sent=%s)",
-                pushed.get("sent", 0),
-            )
-        except Exception as exc:
-            logger.error(
-                "[local_ai_task] immediate chat mirror flush failed; the local "
-                "turn completed but web route promotion may be delayed: %s",
-                exc,
-                exc_info=True,
-            )
+
+                await get_conversation_store().reserve_stream_messages(
+                    config,
+                    ctx.conversation_id,
+                    ctx.user_id or "local-user",
+                    emitter,
+                )
+            except Exception:
+                logger.error(
+                    "[local_ai_task] durable stream message reservation failed",
+                    exc_info=True,
+                )
+
+        unrecognized = getattr(config, "_unrecognized_keys", [])
+        if unrecognized:
             await emitter.send_warning(
                 WarningPayload(
-                    code="chat_mirror_flush_failed",
-                    system_message=str(exc),
+                    code="unrecognized_config",
+                    system_message=f"Unrecognized config keys ignored: {unrecognized}",
                     user_message=(
-                        "The response completed locally, but conversation sync "
-                        "to the web is delayed. Matrx Local will retry automatically."
+                        "Some configuration options sent by the client are not "
+                        "recognized by the local engine. They have been ignored."
                     ),
-                    level="high",
+                    level="low",
                     recoverable=True,
+                    metadata={"unrecognized_keys": list(unrecognized)},
                 )
             )
 
-    await _emit_completion(emitter, completed, operation_id)
-    await emitter.send_end()
-    return completed
+        completed = await execute_ai_request(
+            config,
+            max_iterations=max_iterations,
+            max_retries_per_iteration=max_retries_per_iteration,
+        )
+
+        await _enforce_visible_terminal_output(completed, ctx)
+        _update_agent_cache(completed)
+
+        if ctx.store:
+            try:
+                from app.services.chat_sync import get_chat_sync_engine
+
+                pushed = await get_chat_sync_engine().flush_pending()
+                if pushed.get("failed"):
+                    raise RuntimeError(
+                        f"{pushed['failed']} chat mirror row(s) failed to push"
+                    )
+                logger.info(
+                    "[local_ai_task] flushed persisted turn to cloud (sent=%s)",
+                    pushed.get("sent", 0),
+                )
+            except Exception as exc:
+                logger.error(
+                    "[local_ai_task] immediate chat mirror flush failed; the local "
+                    "turn completed but web route promotion may be delayed: %s",
+                    exc,
+                    exc_info=True,
+                )
+                await emitter.send_warning(
+                    WarningPayload(
+                        code="chat_mirror_flush_failed",
+                        system_message=str(exc),
+                        user_message=(
+                            "The response completed locally, but conversation sync "
+                            "to the web is delayed. Matrx Local will retry automatically."
+                        ),
+                        level="high",
+                        recoverable=True,
+                    )
+                )
+
+        await _emit_completion(emitter, completed, operation_id)
+        await emitter.send_end()
+        settle_status = "completed"
+        return completed
+    except asyncio.CancelledError:
+        settle_status = "cancelled"
+        raise
+    except BaseException as exc:
+        settle_error = str(exc) or type(exc).__name__
+        raise
+    finally:
+        # Settle EXACTLY ONCE on every exit path (completed / failed /
+        # cancelled). Best-effort — a failed settle only warns; the server
+        # reaper cleans up an un-settled run.
+        if lease is not None:
+            await settle_runtime_execution(
+                lease,
+                status=settle_status,
+                error=settle_error,
+                meters=(
+                    meters_from_completed(completed)
+                    if completed is not None
+                    else None
+                ),
+            )
+
+
+async def _enforce_visible_terminal_output(
+    completed: CompletedRequest,
+    ctx: Any,
+) -> None:
+    """Client-host backstop for older matrx-ai builds.
+
+    A provider may return ``finish_reason=stop`` with reasoning only. The
+    frontend intentionally hides reasoning, so a nominally successful
+    completion with an empty public output is a user-visible silent stop.
+    Current matrx-ai rejects this in the orchestrator; this host-side check
+    keeps packaged desktops safe while their embedded package rolls forward.
+    """
+    status = completed.metadata.get("status")
+    nonterminal_success = {
+        "failed",
+        "cancelled",
+        *CompletedRequest.RESUMABLE_SUSPEND_STATUSES,
+    }
+    if status in nonterminal_success:
+        return
+
+    output = completed.request.config.get_last_output() if completed.request else ""
+    if isinstance(output, str) and output.strip():
+        return
+
+    saw_pseudo_tool_syntax = False
+    final_response = getattr(completed, "final_response", None)
+    for message in getattr(final_response, "messages", None) or []:
+        for content in getattr(message, "content", None) or []:
+            content_type = getattr(content, "type", None)
+            if content_type == "text":
+                if str(getattr(content, "text", "") or "").strip():
+                    return
+                continue
+            if content_type == "thinking":
+                thought = str(getattr(content, "text", "") or "")
+                if "<tool_call" in thought or "<function=" in thought:
+                    saw_pseudo_tool_syntax = True
+                continue
+            if content_type not in {"tool_call", "function_call", "tool_result"}:
+                # Media and other typed result blocks are user-visible.
+                return
+
+    error_type = (
+        "unparsed_tool_call"
+        if saw_pseudo_tool_syntax
+        else "empty_assistant_response"
+    )
+    user_message = (
+        "The model attempted a tool call in an unsupported format and did not "
+        "produce an answer. Please retry or use another model."
+        if saw_pseudo_tool_syntax
+        else "The model ended without producing a visible answer. Please retry "
+        "or use another model."
+    )
+    completed.metadata.update(
+        {
+            "status": "failed",
+            "error": user_message,
+            "error_type": error_type,
+        }
+    )
+    last_assistant = completed.request.config.messages.get_last_by_role("assistant")
+    if last_assistant is not None:
+        last_assistant.status = "failed"
+
+    logger.error(
+        "[local_ai_task] converted terminal reasoning-only success to %s",
+        error_type,
+    )
+    if ctx.store:
+        from app.services.ai.conversation_handler import get_conversation_store
+
+        await get_conversation_store().persist_completed_request(
+            completed,
+            ctx.conversation_id,
+        )
 
 
 def _update_agent_cache(completed: CompletedRequest) -> None:

@@ -84,8 +84,10 @@ Four sync subsystems, deliberately separate:
    pending-outbox protection, engine-owned background loop with credentials
    from the persisted `auth_tokens` row, managed service `chat_sync`),
    `client.py` (PostgREST wire client for the `chat` schema profile —
-   pushes strip the cloud-trigger-owned columns `organization_id` /
-   `created_by` / `updated_by` / `version`). Status:
+   conversation pushes preserve the request's `organization_id` while
+   `created_by` / `updated_by` / `version` remain cloud-owned. The outbound
+   boundary maps legacy visibility `private` → live enum value `personal` and
+   recursively removes credential fields from metadata). Status:
    `GET /chat/mirror/status`; manual cycle: `POST /chat/mirror/sync`.
 
 Related local-first stores that ride their own queues: `scrape_pages`

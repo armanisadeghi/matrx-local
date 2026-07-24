@@ -193,7 +193,11 @@ class RemoteToolBridge:
                 "scope_ids": request_context.get("scope_ids"),
                 "source_app": source_app,
                 "source_feature": app_ctx.source_feature,
-                "store": app_ctx.store,
+                # The outer local ToolExecutor owns the canonical tool-call
+                # row in SQLite and mirrors it with the rest of the turn.
+                # Suppress the bridge's server-side ledger write or every
+                # remote call is recorded twice under the same call_id.
+                "store": False,
             }
             client = get_aidream_client()
             if client is None:

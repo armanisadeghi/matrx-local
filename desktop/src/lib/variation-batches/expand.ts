@@ -170,28 +170,28 @@ function expandSequentialSnapshot(
     matrixVariables,
     { kind: "cartesian" },
   );
-  const analysed = expandMatrix(cartSpec);
-  if (analysed.errors.length > 0) {
-    return { plan: null, errors: analysed.errors };
+  const analyzed = expandMatrix(cartSpec);
+  if (analyzed.errors.length > 0) {
+    return { plan: null, errors: analyzed.errors };
   }
 
-  if (order === "reverse" && total > analysed.combinations.length) {
+  if (order === "reverse" && total > analyzed.combinations.length) {
     return {
       plan: null,
       errors: [
-        `Reverse order only works when total options are at most ${analysed.combinations.length.toLocaleString()}. Use Random or Sequence, or shorten your lists.`,
+        `Reverse order only works when total options are at most ${analyzed.combinations.length.toLocaleString()}. Use Random or Sequence, or shorten your lists.`,
       ],
     };
   }
 
   const picked =
     order === "reverse"
-      ? analysed.combinations.slice(-want)
-      : analysed.combinations.slice(0, want);
+      ? analyzed.combinations.slice(-want)
+      : analyzed.combinations.slice(0, want);
 
   return {
     plan: {
-      ...analysed,
+      ...analyzed,
       combinations: picked,
       truncated: want < total,
     },

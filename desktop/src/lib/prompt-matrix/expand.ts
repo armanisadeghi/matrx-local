@@ -536,8 +536,8 @@ export function createBatchSnapshot(
           strategy: { ...spec.strategy, seed: random.seed() },
         }
       : spec;
-  const analysed = expandMatrix(attemptSpec);
-  const combinations = shuffled(analysed.combinations, random).map(
+  const analyzed = expandMatrix(attemptSpec);
+  const combinations = shuffled(analyzed.combinations, random).map(
     (combination, index) => ({
       ...combination,
       // A batch attempt owns fresh, independent diffusion noise for every run.
@@ -550,5 +550,5 @@ export function createBatchSnapshot(
       rendered: { ...combination.rendered },
     }),
   );
-  return { ...analysed, combinations };
+  return { ...analyzed, combinations };
 }

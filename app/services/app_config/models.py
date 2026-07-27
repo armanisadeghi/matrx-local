@@ -1,7 +1,7 @@
 """Typed models for the remote App Config system.
 
 Schema v1 contract (system-of-record:
-/Users/armanisadeghi/code/common-docs/app-config/FEATURE.md): one anon-readable
+/Users/armanisadeghi/code/common-docs/systems/app-config/FEATURE.md): one anon-readable
 Supabase row per app carrying non-secret runtime values — server URLs, feature
 flags, an operator notice, and a minimum supported app version.
 

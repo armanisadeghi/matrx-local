@@ -13,9 +13,9 @@
 | App settings keys (`AppSettings`) | [docs/official/settings-catalog.md](docs/official/settings-catalog.md) |
 | Settings audit / known gaps | [docs/official/settings-audit.md](docs/official/settings-audit.md) |
 | CI, PyInstaller, Tauri build gotchas | [docs/official/build-lessons.md](docs/official/build-lessons.md) |
-| App config — remote runtime config for shipped clients (env vars are dev-only; consumer BUILT here 2026-07-14) | [app/services/app_config/FEATURE.md](app/services/app_config/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/app-config/FEATURE.md` — read it before touching this feature in ANY repo |
-| Remote catalogs — LIVE (consumer BUILT here 2026-07-14): every compiled-in catalog (LLM GGUF list, LoRAs, image/video/TTS/NER models, presets, prompts, key patterns) now reads from DB-backed `catalog_entries` through `app/services/catalogs`; the in-code lists are demoted fallback data — NEVER grow them or import them directly, edit the DB rows and read via the accessors | [app/services/catalogs/FEATURE.md](app/services/catalogs/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/remote-catalogs/FEATURE.md` — read it before touching this feature in ANY repo |
-| Token broker — scoped short-lived credentials (client primitive this repo must build + `token-broker-client` repo skill) | `/Users/armanisadeghi/code/common-docs/token-broker/FEATURE.md` — read before touching this feature in ANY repo |
+| App config — remote runtime config for shipped clients (env vars are dev-only; consumer BUILT here 2026-07-14) | [app/services/app_config/FEATURE.md](app/services/app_config/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/systems/app-config/FEATURE.md` — read it before touching this feature in ANY repo |
+| Remote catalogs — LIVE (consumer BUILT here 2026-07-14): every compiled-in catalog (LLM GGUF list, LoRAs, image/video/TTS/NER models, presets, prompts, key patterns) now reads from DB-backed `catalog_entries` through `app/services/catalogs`; the in-code lists are demoted fallback data — NEVER grow them or import them directly, edit the DB rows and read via the accessors | [app/services/catalogs/FEATURE.md](app/services/catalogs/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/systems/remote-catalogs/FEATURE.md` — read it before touching this feature in ANY repo |
+| Token broker — scoped short-lived credentials (client primitive this repo must build + `token-broker-client` repo skill) | `/Users/armanisadeghi/code/common-docs/systems/token-broker/FEATURE.md` — read before touching this feature in ANY repo |
 | Download pipeline (audit / defects) | [docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md](docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md) |
 | Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |
 | File sync — the cloud-files replica (`@files/`, pointer/full modes, hydration) | [app/services/file_sync/FEATURE.md](app/services/file_sync/FEATURE.md) |
@@ -57,7 +57,7 @@ or URL, identify which one it is:
    **remote app config**: one anon-readable Supabase row per app, fetched at
    startup, cached to disk, with compiled-in public defaults as last-resort
    fallback. System-of-record + build spec:
-   `/Users/armanisadeghi/code/common-docs/app-config/FEATURE.md` — read it
+   `/Users/armanisadeghi/code/common-docs/systems/app-config/FEATURE.md` — read it
    before touching this feature in ANY repo.
 3. **The user's own secrets** (their Anthropic key, HF token, Civit key…) =
    the existing in-app key store (`ApiKeysRepo`, `/settings/api-keys/*`). The
@@ -68,7 +68,7 @@ or URL, identify which one it is:
    A capability needing privileged access is either (a) built into aidream and
    consumed as an authenticated API call, or (b) reached via aidream's **token
    broker** (scoped, short-lived credentials — built for matrx-local:
-   `/Users/armanisadeghi/code/common-docs/token-broker/FEATURE.md`).
+   `/Users/armanisadeghi/code/common-docs/systems/token-broker/FEATURE.md`).
 
 The core runs on public creds only: the Supabase **publishable** key
 (RLS-scoped) + the user's own OAuth session; RLS + `SECURITY DEFINER` RPCs

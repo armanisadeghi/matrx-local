@@ -27,4 +27,4 @@ origin / user-agent. Your **`ready` tier must go silent** once you've cut over. 
 proof. (The guard is observe-only — it never blocks you; it just tells us who's still calling.)
 
 Full contract + region confirmation: `aidream/docs/handoffs/matrx-files-cutover.md` and
-`/Users/armanisadeghi/code/common-docs/matrx-files-service/FEATURE.md`.
+`/Users/armanisadeghi/code/common-docs/systems/matrx-files-service/FEATURE.md`.

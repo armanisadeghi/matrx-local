@@ -5,7 +5,7 @@ matrx-files is the ONLY file backend (docs/handoffs/file-sync-system.md
 with the user's Supabase JWT. URLs come from the service's four-flavour
 envelope — never hand-constructed. Wire contract:
 packages/matrx-files/matrx_files/api/router_files.py (aidream repo) and
-common-docs/matrx-files-service/FEATURE.md.
+common-docs/systems/matrx-files-service/FEATURE.md.
 """
 
 from __future__ import annotations

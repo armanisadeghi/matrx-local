@@ -1,6 +1,6 @@
 """Release validation: the LIVE catalog_entries rows are fetchable and sane.
 
-Per the cross-repo spec (common-docs/remote-catalogs/FEATURE.md), the
+Per the cross-repo spec (common-docs/systems/remote-catalogs/FEATURE.md), the
 matrx-local release pipeline must verify:
 
   (a) the live `matrx-local` catalog is fetchable through the PostgREST

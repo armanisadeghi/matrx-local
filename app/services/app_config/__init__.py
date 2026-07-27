@@ -3,7 +3,7 @@
 One anon-readable Supabase row (`public.app_config`, app='matrx-local')
 carrying server URLs, feature flags, min supported version, and an operator
 notice — fetched at startup, cached to disk, compiled defaults as last resort.
-System-of-record: /Users/armanisadeghi/code/common-docs/app-config/FEATURE.md.
+System-of-record: /Users/armanisadeghi/code/common-docs/systems/app-config/FEATURE.md.
 """
 
 from app.services.app_config.models import (

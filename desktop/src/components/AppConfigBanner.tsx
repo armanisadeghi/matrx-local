@@ -4,7 +4,7 @@
  *
  * Two independent strips driven by GET /health `app_config` (see
  * app/services/app_config/FEATURE.md and the cross-repo spec at
- * common-docs/app-config/FEATURE.md, matrx-local item 6):
+ * common-docs/systems/app-config/FEATURE.md, matrx-local item 6):
  *
  * 1. Update required — persistent (not dismissable) while the installed
  *    version is below `min_supported_app_version`. A STATE with a prompt,

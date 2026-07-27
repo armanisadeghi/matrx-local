@@ -1,6 +1,6 @@
 """Characterization: total network failure still yields a working app config.
 
-Pins spec acceptance criterion 1 (common-docs/app-config/FEATURE.md): a fresh
+Pins spec acceptance criterion 1 (common-docs/systems/app-config/FEATURE.md): a fresh
 install with NO network and NO disk cache boots on compiled defaults, every
 accessor answers, refresh attempts degrade loudly but never raise, and the
 version gate stays open.

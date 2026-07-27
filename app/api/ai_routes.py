@@ -108,10 +108,13 @@ class LocalAgentStartRequest(LocalScopedRequest):
     tools_replace: list[ToolSpec] | None = None
     client: ClientContext | None = None
 
-    conversation_id: str | None = None
-    is_new: bool | None = None
+    # REQUIRED, mirroring aidream's ConversationStartRequest: the client mints
+    # conversation_id (its correlation handle), is_new asserts what to do with
+    # it, and store is the ONE ephemeral signal.
+    conversation_id: str
+    is_new: bool
+    store: bool
     is_version: bool = False
-    store: bool = True
 
     max_iterations: int = 100
     max_retries_per_iteration: int = 2
@@ -159,9 +162,10 @@ class LocalChatRequest(LocalScopedRequest):
     agent_id: str | None = None
     agent_version_id: str | None = None
 
-    conversation_id: str | None = None
-    is_new: bool | None = None
-    store: bool = True
+    # REQUIRED — see LocalAgentStartRequest above.
+    conversation_id: str
+    is_new: bool
+    store: bool
 
     system_instruction: str | dict[str, Any] | None = None
     variables: dict[str, Any] | None = None

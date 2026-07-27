@@ -563,6 +563,7 @@ def test_chat_stream_with_local_tool_round_trip(ai_app, local_db):
                     "messages": [{"role": "user", "content": "use the tool please"}],
                     "conversation_id": conversation_id,
                     "is_new": True,
+                    "store": True,
                     "stream": True,
                     "tools": [{"kind": "registered", "name": "local_system"}],
                     "metadata": {
@@ -662,6 +663,7 @@ def test_conversation_continue_and_agent_start(ai_app, local_db):
                     "user_input": "hello from turn one",
                     "conversation_id": conversation_id,
                     "is_new": True,
+                    "store": True,
                 },
             ) as resp:
                 assert resp.status_code == 200
@@ -777,13 +779,23 @@ def test_error_semantics_match_aidream(ai_app, monkeypatch):
             async with client.stream(
                 "POST",
                 f"/agents/{_AGENT_ID}",
-                json={"user_input": "seed", "conversation_id": cid, "is_new": True},
+                json={
+                    "user_input": "seed",
+                    "conversation_id": cid,
+                    "is_new": True,
+                    "store": True,
+                },
             ) as resp:
                 assert resp.status_code == 200
                 await _read_stream(resp)
             r = await client.post(
                 f"/agents/{_AGENT_ID}",
-                json={"user_input": "again", "conversation_id": cid, "is_new": True},
+                json={
+                    "user_input": "again",
+                    "conversation_id": cid,
+                    "is_new": True,
+                    "store": True,
+                },
             )
             assert r.status_code == 409
             assert r.json()["error"] == "conversation_already_exists"
@@ -795,6 +807,7 @@ def test_error_semantics_match_aidream(ai_app, monkeypatch):
                     "user_input": "x",
                     "conversation_id": str(uuid.uuid4()),
                     "is_new": True,
+                    "store": True,
                 },
             )
             assert r.status_code == 404

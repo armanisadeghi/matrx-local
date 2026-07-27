@@ -117,7 +117,7 @@ def bind_active_local_model(config: UnifiedConfig) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _validate_uuid(value: str, field: str = "conversation_id") -> None:
+def _validate_uuid(value: str, field: str = "conversation_id") -> str:
     try:
         uuid.UUID(value)
     except (ValueError, TypeError, AttributeError):
@@ -128,6 +128,7 @@ def _validate_uuid(value: str, field: str = "conversation_id") -> None:
                 "message": f"{field} must be a valid UUID, got {value!r}.",
             },
         ) from None
+    return value
 
 
 async def conversation_exists(conversation_id: str) -> bool:
@@ -137,29 +138,33 @@ async def conversation_exists(conversation_id: str) -> bool:
 
 
 async def resolve_conversation_gate(
-    conversation_id: str | None,
-    is_new: bool | None,
+    conversation_id: str,
+    is_new: bool,
+    store: bool,
 ) -> tuple[str, bool]:
     """Local mirror of aidream's ``resolve_conversation`` behavior matrix.
+
+    All three inputs are REQUIRED, exactly as on the server: the CLIENT mints
+    ``conversation_id`` (its correlation handle), ``is_new`` asserts what to do
+    with it, and ``store`` is the ONE ephemeral signal. The old
+    ``conversation_id=None`` + ``is_new=False`` shape — "this is not a new
+    conversation, and I won't tell you which one" — is rejected at the request
+    model and cannot reach here.
 
     Returns ``(effective_conversation_id, skip_persistence)``. Raises the
     same 409/404/422 HTTPExceptions (same ``code`` strings) aidream raises,
     so the frontend's error handling is transport-identical.
     """
-    has_id = conversation_id is not None
-    if has_id:
-        _validate_uuid(conversation_id)  # type: ignore[arg-type]
+    effective_id = _validate_uuid(conversation_id)
 
-    # no ID + is_new=False → ephemeral run (skip persistence).
-    if not has_id and is_new is False:
-        return str(uuid.uuid4()), True
+    # store=False → ephemeral. Nothing is read, nothing is written; the
+    # caller's id is echoed back for correlation only.
+    if not store:
+        return effective_id, True
 
-    effective_id: str = conversation_id if has_id else str(uuid.uuid4())  # type: ignore[assignment]
-    must_create = is_new is True or (is_new is None and not has_id)
+    exists = await conversation_exists(effective_id)
 
-    exists = await conversation_exists(effective_id) if has_id else False
-
-    if must_create:
+    if is_new:
         if exists:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -167,8 +172,8 @@ async def resolve_conversation_gate(
                     "code": "conversation_already_exists",
                     "message": (
                         f"A conversation with id={effective_id!r} already exists. "
-                        "Pass is_new=False to continue it, or omit conversation_id "
-                        "to let the server generate a new one."
+                        "Pass is_new=false to continue it, or mint a new "
+                        "conversation_id."
                     ),
                 },
             )
@@ -176,7 +181,7 @@ async def resolve_conversation_gate(
         # (store.ensure_conversation_exists) — single-writer, idempotent.
         return effective_id, False
 
-    # id + is_new in (False, None) → the conversation must exist locally.
+    # is_new=False → the conversation must exist locally.
     if not exists:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -184,8 +189,7 @@ async def resolve_conversation_gate(
                 "code": "conversation_not_found",
                 "message": (
                     f"No conversation found with id={effective_id!r}. "
-                    "Pass is_new=True to create a new conversation with this ID, "
-                    "or omit conversation_id to let the server generate one."
+                    "Pass is_new=true to create a new conversation with this id."
                 ),
             },
         )
@@ -526,9 +530,11 @@ async def prepare_agent_start(
             },
         )
 
+    # Continue only a REAL, persisted conversation. An ephemeral run
+    # (store=false) has no row by design and must never be routed here.
     if (
-        request.conversation_id
-        and request.is_new is not True
+        not request.is_new
+        and request.store
         and await conversation_exists(request.conversation_id)
     ):
         return await prepare_conversation_continue(
@@ -536,7 +542,7 @@ async def prepare_agent_start(
         )
 
     conversation_id, skip_persistence = await resolve_conversation_gate(
-        request.conversation_id, request.is_new
+        request.conversation_id, request.is_new, request.store
     )
 
     from matrx_ai.db.agx_manager import agx
@@ -748,7 +754,7 @@ async def prepare_chat(
         ctx = ctx.with_overrides(agent_id=agent_id)
 
     conversation_id, skip_persistence = await resolve_conversation_gate(
-        request.conversation_id, request.is_new
+        request.conversation_id, request.is_new, request.store
     )
 
     config_dict: dict[str, Any] = {

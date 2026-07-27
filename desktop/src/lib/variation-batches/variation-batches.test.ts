@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { countPromptVariations, expandPromptVariations } from "./expand";
+import {
+  countPromptVariations,
+  expandPromptVariations,
+  extractTemplateVariableNames,
+} from "./expand";
 import {
   cloneVariationBatchTemplate,
   emptyVariationItem,
@@ -72,6 +76,67 @@ describe("variation batches", () => {
         { name: "missing", options: [] },
       ]),
     ).toBeNull();
+  });
+
+  it("declares a numbered list once and expands independent slots with replacement", () => {
+    expect(
+      extractTemplateVariableNames(
+        "{{color#1}} jacket, {{color#1}} shoes, {{color#2}} hat",
+        "",
+      ),
+    ).toEqual(["color"]);
+    expect(
+      countPromptVariations("{{color#1}} / {{color#2}}", "", [
+        { name: "color", options: ["red", "blue"] },
+      ]),
+    ).toBe(4);
+
+    const expanded = expandPromptVariations(
+      "{{color#1}} jacket, {{color#1}} shoes, {{color#2}} hat",
+      "",
+      [{ name: "color", options: ["red", "blue"] }],
+      { order: "sequence" },
+    );
+    expect(expanded.errors).toEqual([]);
+    expect(expanded.variations.map((row) => row.prompt)).toEqual([
+      "red jacket, red shoes, red hat",
+      "red jacket, red shoes, blue hat",
+      "blue jacket, blue shoes, red hat",
+      "blue jacket, blue shoes, blue hat",
+    ]);
+  });
+
+  it("counts five numbered uses of a 50-value list as 50^5 assignments", () => {
+    const colors = Array.from({ length: 50 }, (_, index) => `color-${index}`);
+    expect(
+      countPromptVariations(
+        "{{color#1}} {{color#2}} {{color#3}} {{color#4}} {{color#5}}",
+        "",
+        [{ name: "color", options: colors }],
+      ),
+    ).toBe(312_500_000);
+  });
+
+  it("uses the injected uniform random source for numbered-slot selection", () => {
+    const maxima: number[] = [];
+    const expanded = expandPromptVariations(
+      "{{color#1}} / {{color#2}}",
+      "",
+      [{ name: "color", options: ["red", "blue"] }],
+      {
+        maxCount: 1,
+        order: "random",
+        random: {
+          int: (maxExclusive) => {
+            maxima.push(maxExclusive);
+            return 1;
+          },
+          seed: () => 7,
+        },
+      },
+    );
+    expect(maxima[0]).toBe(4);
+    expect(expanded.variations[0]?.prompt).toBe("red / blue");
   });
 
   it("samples down to maxCount when the cartesian total is larger", () => {

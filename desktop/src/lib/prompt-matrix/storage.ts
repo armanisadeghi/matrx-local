@@ -55,9 +55,21 @@ export function emptySpec(fields: TemplateField[]): MatrixSpec {
   };
 }
 
-/** Older saved specs predate pools — fill the field so the rest of the engine can assume it. */
+/**
+ * Older saved specs either predate pools or persisted the removed rotate/same
+ * assignment mode. Fill the field and strip that legacy mode: numbered slots
+ * now always draw independently with replacement.
+ */
 export function coerceSpec(spec: MatrixSpec): MatrixSpec {
-  return { ...spec, pools: Array.isArray(spec.pools) ? spec.pools : [] };
+  const pools = Array.isArray(spec.pools)
+    ? spec.pools.map((pool) => {
+        const { assign: _legacyAssign, ...current } = pool as MatrixPool & {
+          assign?: unknown;
+        };
+        return current;
+      })
+    : [];
+  return { ...spec, pools };
 }
 
 /**
@@ -88,8 +100,7 @@ export function isMatrixSpec(value: unknown): value is MatrixSpec {
       (p: Partial<MatrixPool>) =>
         typeof p?.id === "string" &&
         typeof p?.name === "string" &&
-        Array.isArray(p?.options) &&
-        (p.assign === "rotate" || p.assign === "same"),
+        Array.isArray(p?.options),
     );
   return okFields && okVars && okPools;
 }

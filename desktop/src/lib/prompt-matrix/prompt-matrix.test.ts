@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   countPlan,
@@ -14,7 +14,7 @@ import {
   tidyPrompt,
   variableKey,
 } from "./parse";
-import { Rng, sampleIndices } from "./rng";
+import { Rng, sampleIndices, secureRandom } from "./rng";
 import {
   buildJobs,
   syncPoolsWithTokens,
@@ -74,7 +74,6 @@ function pool(
     id: nextId(),
     name,
     options: opts(...values),
-    assign: "rotate",
     baselineOptionId: null,
     enabled: true,
     ...over,
@@ -468,7 +467,7 @@ describe("pools", () => {
   const colors = pool("color", ["red", "blue", "green"]);
   const pose = variable("pose", ["standing", "driving"]);
 
-  it("rotate assigns different slots from one list — axis length is n, not n^k", () => {
+  it("declares one list while each numbered slot is an independent axis", () => {
     const sp = spec(
       "man in {{color#1}} shirt, woman in {{color#2}} skirt, {{color#3}} car",
       [],
@@ -476,62 +475,56 @@ describe("pools", () => {
       {},
       [colors],
     );
-    expect(countPlan(sp)).toBe(3);
+    expect(countPlan(sp)).toBe(27);
     const plan = expandMatrix(sp);
-    expect(plan.combinations).toHaveLength(3);
+    expect(plan.combinations).toHaveLength(27);
     expect(plan.combinations[0]?.values).toEqual({
       "color#1": "red",
-      "color#2": "blue",
-      "color#3": "green",
-    });
-    expect(plan.combinations[1]?.values).toEqual({
-      "color#1": "blue",
-      "color#2": "green",
+      "color#2": "red",
       "color#3": "red",
     });
+    expect(plan.combinations[1]?.values).toEqual({
+      "color#1": "red",
+      "color#2": "red",
+      "color#3": "blue",
+    });
     expect(plan.combinations[0]?.rendered["prompt"]).toBe(
-      "man in red shirt, woman in blue skirt, green car",
+      "man in red shirt, woman in red skirt, red car",
     );
   });
 
-  it("rotate reuses options when slots outnumber values", () => {
-    const small = pool("color", ["red", "blue", "green"]);
+  it("draws with replacement, so different slots may intentionally match", () => {
+    const small = pool("color", ["red", "blue"]);
     const sp = spec(
-      "{{color#1}} {{color#2}} {{color#3}} {{color#4}} {{color#5}} {{color#6}} {{color#7}} {{color#8}}",
+      "{{color#1}} {{color#2}}",
       [],
       { kind: "cartesian" },
       {},
       [small],
     );
-    expect(countPlan(sp)).toBe(3);
-    const plan = expandMatrix(sp);
-    expect(plan.warnings.join(" ")).toContain("will repeat");
-    expect(plan.combinations[0]?.values).toEqual({
-      "color#1": "red",
-      "color#2": "blue",
-      "color#3": "green",
-      "color#4": "red",
-      "color#5": "blue",
-      "color#6": "green",
-      "color#7": "red",
-      "color#8": "blue",
-    });
-  });
-
-  it("same assign puts the identical value in every slot", () => {
-    const samePool = pool("color", ["red", "blue"], { assign: "same" });
-    const sp = spec(
-      "{{color#1}} / {{color#2}}",
-      [],
-      { kind: "cartesian" },
-      {},
-      [samePool],
-    );
+    expect(countPlan(sp)).toBe(4);
     const plan = expandMatrix(sp);
     expect(plan.combinations.map((c) => c.values)).toEqual([
       { "color#1": "red", "color#2": "red" },
+      { "color#1": "red", "color#2": "blue" },
+      { "color#1": "blue", "color#2": "red" },
       { "color#1": "blue", "color#2": "blue" },
     ]);
+  });
+
+  it("reuses one draw everywhere the exact same numbered token appears", () => {
+    const sp = spec(
+      "{{color#1}} jacket, {{color#1}} shoes, {{color#2}} hat",
+      [],
+      { kind: "cartesian" },
+      {},
+      [pool("color", ["red", "blue"])],
+    );
+    const prompts = expandMatrix(sp).combinations.map(
+      (combination) => combination.rendered["prompt"],
+    );
+    expect(prompts).toContain("red jacket, red shoes, blue hat");
+    expect(prompts).not.toContain("red jacket, blue shoes, blue hat");
   });
 
   it("multiplies with normal variables via existing cartesian", () => {
@@ -542,10 +535,10 @@ describe("pools", () => {
       {},
       [colors],
     );
-    // pose (3? no — 2) × color pool (3) = 6. Variable axes first, then pools.
+    // pose (2) × one color slot (3) = 6. Variable axes first, then pools.
     expect(countPlan(sp)).toBe(6);
     const plan = expandMatrix(sp);
-    // pose is outer (first variable axis); color rotates innermost.
+    // pose is outer (first variable axis); color is innermost.
     expect(plan.combinations.slice(0, 3).map((c) => c.values["pose"])).toEqual([
       "standing",
       "standing",
@@ -628,7 +621,7 @@ describe("syncPoolsWithTokens", () => {
     const out = syncPoolsWithTokens([], refs, nextId);
     expect(out).toHaveLength(1);
     expect(out[0]?.name).toBe("color");
-    expect(out[0]?.assign).toBe("rotate");
+    expect(out[0]?.options).toHaveLength(1);
   });
 
   it("keeps typed pool options when slots are momentarily deleted", () => {
@@ -843,6 +836,22 @@ describe("rng", () => {
 
   it("survives a zero seed", () => {
     expect(new Rng(0).next()).toBeGreaterThanOrEqual(0);
+  });
+
+  it("draws uniformly beyond the uint32 range instead of truncating it", () => {
+    const getRandomValues = vi
+      .spyOn(globalThis.crypto, "getRandomValues")
+      .mockImplementation((array) => {
+        const values = array as Uint32Array;
+        values[0] = 1;
+        values[1] = 0;
+        return array;
+      });
+    try {
+      expect(secureRandom.int(4_294_967_297)).toBe(4_294_967_296);
+    } finally {
+      getRandomValues.mockRestore();
+    }
   });
 });
 

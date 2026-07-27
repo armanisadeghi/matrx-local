@@ -25,12 +25,17 @@ import {
   insertListVariableToken,
   listsMatchingVariableName,
   sampleListValues,
+  type ListSampleBinding,
   variableNameForList,
   variableTokenForList,
   type SampledListValue,
   type SampledListValues,
 } from "@/lib/list-variables";
-import { findTokens, variableKey } from "@/lib/prompt-matrix";
+import {
+  findTokens,
+  tokenDeclarationName,
+  variableKey,
+} from "@/lib/prompt-matrix";
 import { cn } from "@/lib/utils";
 
 type TextareaProps = Omit<ComponentProps<"textarea">, "value" | "onChange">;
@@ -366,8 +371,13 @@ function renderPreviewText({
   let cursor = 0;
   tokens.forEach((token, index) => {
     parts.push(text.slice(cursor, token.start));
-    const resolved = findMappedList(token.name, lists, listIdByVariable);
-    const sample = resolved.list ? samples.get(resolved.list.id) : undefined;
+    const declarationName = tokenDeclarationName(token);
+    const resolved = findMappedList(
+      declarationName,
+      lists,
+      listIdByVariable,
+    );
+    const sample = resolved.list ? samples.get(token.key) : undefined;
     if (sample) {
       parts.push(
         <span
@@ -415,9 +425,29 @@ export function PromptVariablePreview({
     new Map(),
   );
 
+  const sampleBindingsRef = useRef<ListSampleBinding[]>([]);
+  const bindingsByKey = new Map<string, ListSampleBinding>();
+  for (const field of fields) {
+    for (const token of findTokens(field.text)) {
+      if (bindingsByKey.has(token.key)) continue;
+      const resolved = findMappedList(
+        tokenDeclarationName(token),
+        listState.lists,
+        listIdByVariable,
+      );
+      if (resolved.list !== null) {
+        bindingsByKey.set(token.key, {
+          key: token.key,
+          list: resolved.list,
+        });
+      }
+    }
+  }
+  sampleBindingsRef.current = [...bindingsByKey.values()];
+
   const reroll = useCallback(() => {
-    setSamples((previous) => sampleListValues(listState.lists, previous));
-  }, [listState.lists]);
+    setSamples(sampleListValues(sampleBindingsRef.current));
+  }, []);
 
   const listSignature = useMemo(
     () =>
@@ -435,11 +465,18 @@ export function PromptVariablePreview({
         .join("\u0001"),
     [listState.lists],
   );
+  const fieldSignature = fields
+    .map((field) => `${field.label}\u0000${field.text}`)
+    .join("\u0001");
+  const mappingSignature = Object.entries(listIdByVariable ?? {})
+    .sort(([a], [b]) => variableKey(a).localeCompare(variableKey(b)))
+    .map(([name, listId]) => `${variableKey(name)}:${listId}`)
+    .join("\u0001");
 
   useEffect(() => {
     if (!open) return;
-    setSamples((previous) => sampleListValues(listState.lists, previous));
-  }, [open, listSignature, listState.lists]);
+    setSamples(sampleListValues(sampleBindingsRef.current));
+  }, [fieldSignature, listSignature, mappingSignature, open]);
 
   const hasText = fields.some((field) => field.text.length > 0);
   const renderedFields = fields

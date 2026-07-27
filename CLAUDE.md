@@ -13,9 +13,16 @@
 | App settings keys (`AppSettings`) | [docs/official/settings-catalog.md](docs/official/settings-catalog.md) |
 | Settings audit / known gaps | [docs/official/settings-audit.md](docs/official/settings-audit.md) |
 | CI, PyInstaller, Tauri build gotchas | [docs/official/build-lessons.md](docs/official/build-lessons.md) |
+<<<<<<< Updated upstream
 | App config — remote runtime config for shipped clients (env vars are dev-only; consumer BUILT here 2026-07-14) | [app/services/app_config/FEATURE.md](app/services/app_config/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/systems/app-config/FEATURE.md` — read it before touching this feature in ANY repo |
 | Remote catalogs — LIVE (consumer BUILT here 2026-07-14): every compiled-in catalog (LLM GGUF list, LoRAs, image/video/TTS/NER models, presets, prompts, key patterns) now reads from DB-backed `catalog_entries` through `app/services/catalogs`; the in-code lists are demoted fallback data — NEVER grow them or import them directly, edit the DB rows and read via the accessors | [app/services/catalogs/FEATURE.md](app/services/catalogs/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/systems/remote-catalogs/FEATURE.md` — read it before touching this feature in ANY repo |
 | Token broker — scoped short-lived credentials (client primitive this repo must build + `token-broker-client` repo skill) | `/Users/armanisadeghi/code/common-docs/systems/token-broker/FEATURE.md` — read before touching this feature in ANY repo |
+=======
+| App config — remote runtime config for shipped clients (env vars are dev-only; consumer BUILT here 2026-07-14) | [app/services/app_config/FEATURE.md](app/services/app_config/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/app-config/FEATURE.md` — read it before touching this feature in ANY repo |
+| Remote catalogs — LIVE (consumer BUILT here 2026-07-14): every compiled-in catalog (LLM GGUF list, LoRAs, image/video/TTS/NER models, presets, prompts, key patterns) now reads from DB-backed `catalog_entries` through `app/services/catalogs`; the in-code lists are demoted fallback data — NEVER grow them or import them directly, edit the DB rows and read via the accessors | [app/services/catalogs/FEATURE.md](app/services/catalogs/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/remote-catalogs/FEATURE.md` — read it before touching this feature in ANY repo |
+| Token broker — scoped short-lived credentials (client primitive this repo must build + `token-broker-client` repo skill) | `/Users/armanisadeghi/code/common-docs/token-broker/FEATURE.md` — read before touching this feature in ANY repo |
+| Credential Vault — the user's own provider keys; local store FIRST, platform vault second (consumer BUILT here 2026-07-26). Read before touching `ApiKeysRepo`, `key_manager`, or `/settings/api-keys/*` | [app/services/credential_vault/FEATURE.md](app/services/credential_vault/FEATURE.md); cross-repo plan: `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/PLAN.md` |
+>>>>>>> Stashed changes
 | Download pipeline (audit / defects) | [docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md](docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md) |
 | Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |
 | File sync — the cloud-files replica (`@files/`, pointer/full modes, hydration) | [app/services/file_sync/FEATURE.md](app/services/file_sync/FEATURE.md) |
@@ -60,9 +67,15 @@ or URL, identify which one it is:
    `/Users/armanisadeghi/code/common-docs/systems/app-config/FEATURE.md` — read it
    before touching this feature in ANY repo.
 3. **The user's own secrets** (their Anthropic key, HF token, Civit key…) =
-   the existing in-app key store (`ApiKeysRepo`, `/settings/api-keys/*`). The
-   user supplies them in-app; a missing key is a STATE with a prompt UI, never
-   an error, never an env var.
+   the in-app key store (`ApiKeysRepo`, `/settings/api-keys/*`) FIRST, then the
+   platform **Credential Vault** (aidream `/api/vault/*` with the user's own
+   JWT) as an additive second tier so a key saved once anywhere is usable
+   here. One resolution order, decided only in `app/services/ai/key_manager.py`
+   — local store → Vault → `.env`; a Vault value never shadows a local key, and
+   the local store stays the offline path. A missing key, and an unavailable
+   Vault, are each a STATE with a prompt UI — never an error, never an env var.
+   Read [app/services/credential_vault/FEATURE.md](app/services/credential_vault/FEATURE.md)
+   before touching either tier.
 4. **Our secrets never exist on the client — no exceptions.** No service-role
    key, signing secret, or dev-owned provider key; anything shipped is public.
    A capability needing privileged access is either (a) built into aidream and
@@ -178,6 +191,17 @@ cd desktop && pnpm tauri:dev
    `~/.matrx/local.json` and every client routed to uncommitted code
    (MXL-D-043) — that class of bug must stay dead. Full model:
    [docs/TESTING_LADDER.md](docs/TESTING_LADDER.md).
+
+## Conversation-start contract (mirrors aidream exactly)
+
+`/agents/{id}` and `/chat` REQUIRE `conversation_id` (client-minted, always) +
+`is_new` + `store` — no defaults, same as aidream. `store=false` is the ONLY
+ephemeral signal; a missing id is a 422, never "run stateless". This sidecar
+keeps its own copy of the gate in
+[`app/services/ai/local_ai_task.py::resolve_conversation_gate`](app/services/ai/local_ai_task.py) —
+change one, change both, or the two surfaces drift. Server contract:
+`/Users/armanisadeghi/code/aidream/aidream/services/conversation_context/FEATURE.md`
+§ "Starting a conversation".
 
 ## External Connections
 

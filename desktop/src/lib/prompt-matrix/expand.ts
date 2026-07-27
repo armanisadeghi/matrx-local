@@ -12,9 +12,9 @@
  *    batch goes through createBatchSnapshot(), which shuffles full valid rows
  *    and assigns fresh seeds immediately before Preview or Queue.
  *
- * Pools (`{{color#1}}` …) are additive: each pool is ONE axis of length n
- * (option count). Strategies / seed policy / RNG never special-case them —
- * only `buildAxes` knows how to turn a pool + slots into steps.
+ * Pools (`{{color#1}}` …) are additive: every DISTINCT slot is one independent
+ * axis backed by the pool's once-declared option list. Repeating a slot token
+ * reuses its axis; different slots draw with replacement and may match.
  */
 
 import {
@@ -47,13 +47,12 @@ import {
 
 /**
  * An axis is ONE independent dimension of the product. Usually one variable;
- * several when they are link-grouped (zipped); or one pool writing many slot
- * substitution keys at each step.
+ * several when they are link-grouped (zipped); or one numbered pool slot.
  */
 interface Axis {
   variables: MatrixVariable[];
   pool: MatrixPool | null;
-  /** Sorted slot ids when this is a pool axis; empty otherwise. */
+  /** The single slot id when this is a pool axis; empty otherwise. */
   slots: string[];
   /** steps[i] = the option each member (variable or slot) takes at position i. */
   steps: MatrixOption[][];
@@ -79,8 +78,8 @@ function slotsByPoolKey(spec: MatrixSpec): Map<string, string[]> {
 /**
  * Build the axes, preserving user order. Linked variables collapse into one
  * axis at the position of the FIRST member, so dragging any member of a link
- * group moves the group. Active pools append after variables (each pool is
- * one axis — strategies never need to know).
+ * group moves the group. Active pool slots append after variables, one
+ * independent axis per distinct slot.
  */
 function buildAxes(spec: MatrixSpec): { axes: Axis[]; warnings: string[] } {
   const warnings: string[] = [];
@@ -136,42 +135,29 @@ function buildAxes(spec: MatrixSpec): { axes: Axis[]; warnings: string[] } {
       .map((step, i) => [...step, opts[i] as MatrixOption]);
   }
 
-  // Pools: one axis each. Length = option count. Slot assignment is baked
-  // into steps so cartesian / baseline / zip / sample stay untouched.
+  // Pools: one independent axis per distinct slot. Every slot uses the same
+  // once-declared option list, so n options across k slots produces n^k valid
+  // assignments. Repeated occurrences of a slot are still one axis because
+  // extractPoolRefs de-duplicates the slot id.
   const slotMap = slotsByPoolKey(spec);
   for (const pool of activePools(spec)) {
     const slots = slotMap.get(variableKey(pool.name));
     if (slots === undefined || slots.length === 0) continue; // unused — warned in validate
 
     const opts = enabledOptions(pool);
-    const n = opts.length;
-    const steps: MatrixOption[][] = Array.from({ length: n }, (_, s) => {
-      if (pool.assign === "same") {
-        const opt = opts[s] as MatrixOption;
-        return slots.map(() => opt);
-      }
-      // rotate — reuse via modulo when slots outnumber options
-      return slots.map((_, i) => opts[(s + i) % n] as MatrixOption);
-    });
-
-    if (pool.assign === "rotate" && slots.length > n) {
-      warnings.push(
-        `Pool "${pool.name}" has ${slots.length} slots and ${n} option` +
-          `${n === 1 ? "" : "s"} — values will repeat within each prompt.`,
-      );
-    }
-
     const baselineStep = Math.max(
       0,
       opts.findIndex((o) => o.id === pool.baselineOptionId),
     );
-    axes.push({
-      variables: [],
-      pool,
-      slots,
-      steps,
-      baselineStep,
-    });
+    for (const slot of slots) {
+      axes.push({
+        variables: [],
+        pool,
+        slots: [slot],
+        steps: opts.map((option) => [option]),
+        baselineStep,
+      });
+    }
   }
 
   return { axes, warnings };
@@ -213,7 +199,11 @@ function decodeCartesian(index: number, axes: Axis[]): number[] {
 }
 
 /** The per-axis step indices for each run, in emission order. */
-function stepIndicesForPlan(axes: Axis[], spec: MatrixSpec): number[][] {
+function stepIndicesForPlan(
+  axes: Axis[],
+  spec: MatrixSpec,
+  sampleRandom?: Pick<RandomSource, "int">,
+): number[][] {
   if (axes.length === 0) return [[]];
 
   switch (spec.strategy.kind) {
@@ -248,8 +238,8 @@ function stepIndicesForPlan(axes: Axis[], spec: MatrixSpec): number[][] {
         full,
         MAX_MATERIALIZED,
       );
-      const rng = new Rng(spec.strategy.seed);
-      return sampleIndices(full, want, rng).map((i) =>
+      const random = sampleRandom ?? new Rng(spec.strategy.seed);
+      return sampleIndices(full, want, random).map((i) =>
         decodeCartesian(i, axes),
       );
     }
@@ -428,7 +418,10 @@ export function countPlan(spec: MatrixSpec): number {
  * combination land together, so the queue reads as a sequence of comparable
  * groups rather than an interleaved smear.
  */
-export function expandMatrix(spec: MatrixSpec): MatrixPlan {
+export function expandMatrix(
+  spec: MatrixSpec,
+  sampleRandom?: Pick<RandomSource, "int">,
+): MatrixPlan {
   const { errors, warnings: specWarnings } = validateSpec(spec);
   const { axes, warnings: axisWarnings } = buildAxes(spec);
   const warnings = [...specWarnings, ...axisWarnings];
@@ -441,7 +434,7 @@ export function expandMatrix(spec: MatrixSpec): MatrixPlan {
   }
 
   const rng = new Rng(spec.seed.rngSeed);
-  const rows = stepIndicesForPlan(axes, spec);
+  const rows = stepIndicesForPlan(axes, spec, sampleRandom);
   const combinations: MatrixCombination[] = [];
 
   outer: for (const [rowIdx, picks] of rows.entries()) {
@@ -526,17 +519,13 @@ export function createBatchSnapshot(
   spec: MatrixSpec,
   random: RandomSource = secureRandom,
 ): MatrixPlan {
-  // A sampled strategy must draw a new subset for every attempt as well as a
-  // new execution order. Other strategies use the same selected set but are
-  // still fully shuffled below.
-  const attemptSpec: MatrixSpec =
-    spec.strategy.kind === "sample"
-      ? {
-          ...spec,
-          strategy: { ...spec.strategy, seed: random.seed() },
-        }
-      : spec;
-  const analyzed = expandMatrix(attemptSpec);
+  // Sampled strategies draw their subset directly from this attempt's random
+  // source. Production uses secureRandom.int (rejection sampled), so selection
+  // is uniform without reducing the attempt to a deterministic 32-bit stream.
+  const analyzed = expandMatrix(
+    spec,
+    spec.strategy.kind === "sample" ? random : undefined,
+  );
   const combinations = shuffled(analyzed.combinations, random).map(
     (combination, index) => ({
       ...combination,

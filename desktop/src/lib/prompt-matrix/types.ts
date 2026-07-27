@@ -102,28 +102,18 @@ export interface TemplateField {
 }
 
 /**
- * How pool slots draw from a shared option list.
- *
- * - `rotate` — slot i at step s gets options[(s + i) % n]. Reuses when there
- *              are more slots than options (8 slots / 3 colors is fine).
- * - `same`   — every slot gets options[s] (all slots identical per run).
- *
- * A pool is ONE axis of length n. Strategies never special-case pools.
- */
-export type PoolAssign = "rotate" | "same";
-
-/**
  * A shared option list referenced by `{{name#slot}}` tokens.
  *
- * Declared once; every slot pulls from it. Slots themselves are NOT stored
- * here — they are derived from the template at sync/expand time.
+ * Declared once; every distinct slot is an independent draw from it. Repeating
+ * the same slot token reuses that draw, while different slots draw with
+ * replacement and may therefore choose the same value. Slots themselves are
+ * NOT stored here — they are derived from the template at sync/expand time.
  */
 export interface MatrixPool {
   id: string;
   /** Pool name as written in the template, e.g. `color` for {{color#1}}. */
   name: string;
   options: MatrixOption[];
-  assign: PoolAssign;
   /**
    * Option used as the fixed value under the `baseline` strategy.
    * Null → the first enabled option.

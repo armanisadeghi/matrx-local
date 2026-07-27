@@ -129,7 +129,6 @@ export function insertLibraryEntryInSpec(
       next[idx] = {
         ...existing,
         options: pool.options,
-        assign: pool.assign,
         enabled: true,
       };
       return { ...spec, pools: next };

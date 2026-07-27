@@ -179,6 +179,37 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## API keys / credentials
 
+### MXL-D-073 — Live `api_key_provider` catalog is missing the `brave` row, so Brave keys are silently unrecognised
+- **Area:** `public.catalog_entries` kind `api_key_provider`, app `matrx-local`
+  (live rows) vs `app/services/catalogs/compiled_data.py`
+  (`COMPILED_API_KEY_PROVIDER_ENTRIES`) / `desktop/src/lib/api-key-patterns.ts`
+- **Symptom:** The compiled fallback has **13** rows including `brave`; the live
+  catalog serves **12** and has no `brave` row. Because the live catalog
+  *replaces* the compiled list once fetched (`refreshApiKeyPatterns()` /
+  `get_catalog("api_key_provider")`), the shipped app silently ignores
+  `BRAVE_API_KEY` / `BRAVE_SEARCH_API_KEY` in a pasted .env — the exact bug the
+  in-file comment at `desktop/src/lib/api-key-patterns.ts:126-128` records as
+  having already happened once with Civitai. It also stops the Credential Vault
+  tier from matching a Brave key stored under an alias (Arman's own vault has
+  one, saved as `BRAVE_SEARCH_API_KEY`).
+- **Evidence:** 2026-07-26, live cached catalog (176 entries,
+  `fetched_at=2026-07-27T03:52:37Z`): `get_catalog("api_key_provider")` → keys
+  `openai, anthropic, google, huggingface, civitai, groq, together, xai,
+  cerebras, elevenlabs, fastino, global-strip-lists` — **no `brave`**.
+  `COMPILED_API_KEY_PROVIDER_ENTRIES` has 13 including `brave`.
+  `tests/characterization/test_catalogs_offline.py:47` asserts 13 against the
+  COMPILED set, so no existing test can see this drift.
+- **Status:** blocked-external (needs a Supabase write; the MCP identity in the
+  discovering session was unauthenticated)
+- **Analysis stamp:** Analyzed 2026-07-26 — verified against the live catalog
+  cache and the compiled fallback in the same session.
+- **Owner hint:** Insert the missing `brave` row into `catalog_entries`
+  (`app='matrx-local'`, `kind='api_key_provider'`, key `brave`, payload copied
+  from `COMPILED_API_KEY_PROVIDER_ENTRIES`). Then add a LIVE drift check —
+  `tests/parity/test_catalogs_live.py` should compare live keys against compiled
+  keys per kind and fail on a missing row: "the DB replaces the fallback" makes
+  a *smaller* live set a silent feature regression, not a harmless difference.
+
 ### MXL-D-066 — `test_api_key_set_and_delete_roundtrip` times out on macOS (pre-existing)
 - **Area:** `tests/smoke/test_api_keys.py::test_api_key_set_and_delete_roundtrip`
 - **Symptom:** `httpx.ReadTimeout` after ~25s on `PUT /settings/api-keys/{provider}`.

@@ -130,9 +130,46 @@ interface ApiKeyProviderStatus {
   provider: string;
   label: string;
   description: string;
+  /** A key saved on THIS machine (the local store). Drives Remove. */
   configured: boolean;
   /** Provider exposes a free auth-only endpoint we can check the key against. */
   testable: boolean;
+  /** Where the key a request would ACTUALLY use comes from. The engine's
+   *  resolution order is local → Credential Vault → .env, decided in one
+   *  place (app/services/ai/key_manager.py). */
+  source: "local" | "vault" | "none";
+  /** Name of the Vault item behind a `vault` source — a value from the Vault
+   *  is never shown unattributed. */
+  vault_item_name: string | null;
+}
+
+/** One credential in the user's platform Vault that maps to a local provider.
+ *  Metadata only — the engine never sends a plaintext value to this UI. */
+interface VaultCredentialEntry {
+  provider: string;
+  label: string;
+  item_id: string;
+  item_name: string;
+  field_key: string;
+  handling: string;
+  /** False for sealed values and revealable ones this user cannot reveal. */
+  available: boolean;
+  local_key_present: boolean;
+  in_use: boolean;
+}
+
+/** The Vault key source. Not signed in / offline is a STATE with a prompt,
+ *  never an error — see CLAUDE.md § Security & configuration posture. */
+interface VaultSourceStatus {
+  state:
+    | "ready"
+    | "no_session"
+    | "unconfigured"
+    | "offline"
+    | "denied"
+    | "error";
+  message: string;
+  entries: VaultCredentialEntry[];
 }
 
 /** How each verdict renders. `unknown` is deliberately neutral-amber, not red:
@@ -312,6 +349,18 @@ export function Settings({
   >({});
   const [testingAllKeys, setTestingAllKeys] = useState(false);
 
+  // Credential Vault as a second key source (additive — the local store above
+  // is untouched and stays the offline path).
+  const [vaultSource, setVaultSource] = useState<VaultSourceStatus | null>(null);
+  const [vaultRefreshing, setVaultRefreshing] = useState(false);
+  const [vaultImporting, setVaultImporting] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [vaultMessage, setVaultMessage] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+
   // Hardware profile state
   const [hardwareProfile, setHardwareProfile] =
     useState<HardwareProfile | null>(null);
@@ -385,6 +434,17 @@ export function Settings({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
+
+  // Read the Credential Vault key source when the API Keys tab becomes active.
+  // Deliberately not part of the connect effect: it is a network call through
+  // the engine to AI Matrx, so it happens when the user actually looks at the
+  // panel, not on every engine connect.
+  useEffect(() => {
+    if (activeTab === "api-keys" && engineStatus === "connected") {
+      void loadVaultSource();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, engineStatus]);
 
   // Load hardware profile when the system tab becomes active.
   useEffect(() => {
@@ -785,6 +845,69 @@ export function Settings({
     }
   }, [engineStatus]);
 
+  /** Read which Vault credentials map to AI providers. The engine answers 200
+   *  with a `state` even when there is no session — unavailable is a state we
+   *  render as a prompt, never an error toast. */
+  const loadVaultSource = useCallback(async () => {
+    if (engineStatus !== "connected") return;
+    try {
+      const data = (await engine.get(
+        "/settings/api-keys/vault",
+      )) as VaultSourceStatus;
+      setVaultSource(data);
+    } catch {
+      // Engine unreachable — the Vault card simply stays hidden; local keys
+      // are unaffected.
+    }
+  }, [engineStatus]);
+
+  const handleVaultRefresh = useCallback(async () => {
+    setVaultRefreshing(true);
+    setVaultMessage(null);
+    try {
+      const data = (await engine.post(
+        "/settings/api-keys/vault/refresh",
+        {},
+      )) as VaultSourceStatus;
+      setVaultSource(data);
+      await loadApiKeyStatus();
+    } catch (err) {
+      setVaultMessage({
+        ok: false,
+        text: err instanceof Error ? err.message : "Vault refresh failed",
+      });
+    } finally {
+      setVaultRefreshing(false);
+    }
+  }, [loadApiKeyStatus]);
+
+  /** Copy one Vault credential down into the local store so it keeps working
+   *  offline and without a session. */
+  const handleVaultImport = useCallback(
+    async (provider: string) => {
+      setVaultImporting((prev) => ({ ...prev, [provider]: true }));
+      setVaultMessage(null);
+      try {
+        const result = (await engine.post("/settings/api-keys/vault/import", {
+          provider,
+        })) as { state: string; message: string; configured: boolean };
+        setVaultMessage({ ok: result.state === "ready", text: result.message });
+        if (result.state === "ready") {
+          await loadApiKeyStatus();
+          await loadVaultSource();
+        }
+      } catch (err) {
+        setVaultMessage({
+          ok: false,
+          text: err instanceof Error ? err.message : "Import failed",
+        });
+      } finally {
+        setVaultImporting((prev) => ({ ...prev, [provider]: false }));
+      }
+    },
+    [loadApiKeyStatus, loadVaultSource],
+  );
+
   /** Ask the engine to check a key against the provider's free auth endpoint.
    *  Costs nothing — these are whoami / model-list calls, never inference.
    *  Pass a `key` to test a typed-but-unsaved value; omit it to test the
@@ -853,7 +976,9 @@ export function Settings({
         await engine.put(`/settings/api-keys/${provider}`, { key });
         setApiKeyProviders((prev) =>
           prev.map((p) =>
-            p.provider === provider ? { ...p, configured: true } : p,
+            p.provider === provider
+              ? { ...p, configured: true, source: "local" as const }
+              : p,
           ),
         );
         setApiKeyInputs((prev) => ({ ...prev, [provider]: "" }));
@@ -928,6 +1053,9 @@ export function Settings({
           }),
         3000,
       );
+      // Removing the local copy can hand the provider back to the Vault tier,
+      // so re-read the authoritative source rather than assuming "none".
+      void loadApiKeyStatus();
     } catch (err) {
       setApiKeyMessages((prev) => ({
         ...prev,
@@ -939,7 +1067,7 @@ export function Settings({
     } finally {
       setApiKeyDeleting((prev) => ({ ...prev, [provider]: false }));
     }
-  }, []);
+  }, [loadApiKeyStatus]);
 
   // Keep the provider patterns fresh from the remote catalog so a new
   // provider row in the DB is recognised without an app update.
@@ -1975,16 +2103,161 @@ export function Settings({
                     this device. The Hugging Face entry is also used for local
                     GGUF downloads (including XET-hosted models) and gated image
                     checkpoints; the Civitai entry is used for downloading
-                    custom image models and LoRA styles. Keys are stored locally
-                    on this machine only and are never sent to AI Matrx servers.
-                    Leave a key blank if you don't have one — that provider will
-                    be unavailable.
+                    custom image models and LoRA styles. Keys you enter here are
+                    stored on this machine only and are never uploaded to AI
+                    Matrx. Leave a key blank if you don't have one — that
+                    provider will be unavailable, unless your AI Matrx Vault
+                    holds one (see below).
                   </p>
                   <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
                     Keys are base64-encoded in local storage. Do not enter keys
                     you cannot afford to rotate. A cloud relay (no user keys
                     required) is planned for a future release.
                   </div>
+                </CardContent>
+              </Card>
+
+              {/* ── AI Matrx Vault as a key source ─────────────── */}
+              {/* Additive: the local store above is unchanged and remains the
+                  offline path. The engine resolves local first, Vault second —
+                  a Vault value can never shadow a key saved on this machine. */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                      <Cloud className="h-4 w-4 text-primary" />
+                      AI Matrx Vault
+                    </CardTitle>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs shrink-0"
+                      disabled={vaultRefreshing || engineStatus !== "connected"}
+                      onClick={() => void handleVaultRefresh()}
+                      title="Re-read your Vault and re-activate the keys it supplies"
+                    >
+                      {vaultRefreshing ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      )}
+                      Refresh
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Keys you saved once in AI Matrx — on the web, in the browser
+                    extension, or here — are used automatically when this device
+                    has none of its own. A key saved on this machine always
+                    wins.
+                  </p>
+                </CardHeader>
+                <CardContent className="pt-0 space-y-2">
+                  {vaultSource === null ? (
+                    <div className="py-3 text-center">
+                      <Loader2 className="mx-auto h-4 w-4 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : vaultSource.state === "no_session" ? (
+                    <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2">
+                      <span className="text-xs text-muted-foreground">
+                        {vaultSource.message}
+                      </span>
+                      <Button
+                        size="sm"
+                        className="h-7 px-2 text-xs shrink-0"
+                        onClick={() => void auth.signInWithOAuth()}
+                      >
+                        Sign in
+                      </Button>
+                    </div>
+                  ) : vaultSource.state !== "ready" ? (
+                    <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                      <CloudOff className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <span>
+                        {vaultSource.message} Keys saved on this machine keep
+                        working.
+                      </span>
+                    </div>
+                  ) : vaultSource.entries.length === 0 ? (
+                    <p className="py-2 text-xs text-muted-foreground">
+                      Your Vault has no credentials for the AI providers below.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {vaultSource.entries.map((entry) => {
+                        const importing =
+                          vaultImporting[entry.provider] ?? false;
+                        return (
+                          <div
+                            key={`${entry.item_id}:${entry.field_key}`}
+                            className="flex items-center gap-2 rounded-lg border border-border px-3 py-2"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-medium">
+                                  {entry.label}
+                                </span>
+                                {entry.in_use ? (
+                                  <Badge
+                                    variant="success"
+                                    className="text-[10px]"
+                                  >
+                                    In use here
+                                  </Badge>
+                                ) : entry.local_key_present ? (
+                                  <Badge
+                                    variant="secondary"
+                                    className="text-[10px]"
+                                  >
+                                    Local key wins
+                                  </Badge>
+                                ) : !entry.available ? (
+                                  <Badge
+                                    variant="secondary"
+                                    className="text-[10px]"
+                                  >
+                                    Not releasable
+                                  </Badge>
+                                ) : null}
+                              </div>
+                              <p className="truncate text-[11px] text-muted-foreground">
+                                {entry.item_name}
+                              </p>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-xs shrink-0"
+                              disabled={importing || !entry.available}
+                              onClick={() =>
+                                void handleVaultImport(entry.provider)
+                              }
+                              title={
+                                entry.available
+                                  ? "Copy this Vault key into local storage so it also works offline"
+                                  : "This credential is sealed or not revealable to you — AI Matrx will not release its value"
+                              }
+                            >
+                              {importing ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Download className="h-3.5 w-3.5" />
+                              )}
+                              {entry.local_key_present
+                                ? "Replace local"
+                                : "Save locally"}
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {vaultMessage && (
+                    <p
+                      className={`text-xs ${vaultMessage.ok ? "text-green-500" : "text-destructive"}`}
+                    >
+                      {vaultMessage.text}
+                    </p>
+                  )}
                 </CardContent>
               </Card>
 
@@ -2509,9 +2782,25 @@ export function Settings({
                                 <span className="text-sm font-medium">
                                   {p.label}
                                 </span>
-                                {p.configured ? (
+                                {p.source === "local" ? (
                                   <Badge variant="success" className="text-xs">
                                     Configured
+                                  </Badge>
+                                ) : p.source === "vault" ? (
+                                  // A Vault-sourced value is never shown
+                                  // unattributed — the user must be able to
+                                  // tell where the key came from.
+                                  <Badge
+                                    variant="success"
+                                    className="text-xs flex items-center gap-1"
+                                    title={
+                                      p.vault_item_name
+                                        ? `Supplied by your AI Matrx Vault ("${p.vault_item_name}")`
+                                        : "Supplied by your AI Matrx Vault"
+                                    }
+                                  >
+                                    <Cloud className="h-3 w-3" />
+                                    From Vault
                                   </Badge>
                                 ) : (
                                   <Badge
@@ -2535,6 +2824,16 @@ export function Settings({
                               <p className="text-xs text-muted-foreground">
                                 {p.description}
                               </p>
+                              {p.source === "vault" && (
+                                <p className="text-xs text-muted-foreground">
+                                  Using your AI Matrx Vault credential
+                                  {p.vault_item_name
+                                    ? ` "${p.vault_item_name}"`
+                                    : ""}
+                                  . Save a key here to use this provider offline
+                                  or signed out.
+                                </p>
+                              )}
                               <div className="flex items-center gap-2">
                                 <div className="relative flex-1">
                                   <Input

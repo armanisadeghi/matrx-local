@@ -22,7 +22,6 @@ export {
   type MatrixSpec,
   type MatrixStrategy,
   type MatrixVariable,
-  type PoolAssign,
   type SeedMode,
   type SeedPolicy,
   type StrategyKind,
@@ -32,6 +31,7 @@ export {
 
 export {
   extractPoolRefs,
+  extractTokenDeclarationNames,
   extractVariableNames,
   findTokens,
   hasTokens,
@@ -41,6 +41,7 @@ export {
   renderTemplate,
   sortSlots,
   tidyPrompt,
+  tokenDeclarationName,
   variableKey,
   type PoolRef,
   type TokenMatch,

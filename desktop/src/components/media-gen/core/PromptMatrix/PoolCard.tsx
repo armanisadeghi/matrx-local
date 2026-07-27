@@ -1,10 +1,9 @@
 /**
  * PoolCard — one shared option pool for {{name#slot}} tokens.
  *
- * Options are declared once; every slot in the prompt draws from this list.
- * Assign mode (rotate / same) controls how slots share values within a run.
- * Unlike VariableCard, pools are not drag-reordered against variables — each
- * pool is one axis appended after the variable axes.
+ * Options are declared once; every distinct slot in the prompt draws
+ * independently from this list with replacement. Repeated uses of the same
+ * slot stay bound to the same draw.
  */
 
 import { useCallback, useState } from "react";
@@ -27,7 +26,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { MatrixPool, PoolAssign, StrategyKind } from "@/lib/prompt-matrix";
+import type { MatrixPool, StrategyKind } from "@/lib/prompt-matrix";
 import type { PromptMatrixActions } from "@/hooks/use-prompt-matrix";
 import { cn } from "@/lib/utils";
 
@@ -147,18 +146,11 @@ export function PoolCard({
 
       {!collapsed && (
         <div className="space-y-2 border-t px-2 py-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] text-muted-foreground">Assign</span>
-            <AssignToggle
-              value={pool.assign}
-              onChange={(assign) => actions.setPoolAssign(pool.id, assign)}
-            />
-            <span className="text-[11px] text-muted-foreground">
-              {pool.assign === "rotate"
-                ? "— slots step through the list (reuse when slots > options)"
-                : "— every slot gets the same value each run"}
-            </span>
-          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Each numbered slot draws independently from this list. Repeating
+            the same slot reuses its value; different slots may match by
+            chance.
+          </p>
 
           {pool.options.map((option, i) => {
             const isBaseline = pool.baselineOptionId === option.id;
@@ -259,34 +251,6 @@ export function PoolCard({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function AssignToggle({
-  value,
-  onChange,
-}: {
-  value: PoolAssign;
-  onChange: (assign: PoolAssign) => void;
-}) {
-  return (
-    <div className="inline-flex rounded-md border p-0.5">
-      {(["rotate", "same"] as const).map((kind) => (
-        <button
-          key={kind}
-          type="button"
-          className={cn(
-            "rounded px-2 py-0.5 text-[11px] capitalize",
-            value === kind
-              ? "bg-primary/15 font-medium text-primary"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-          onClick={() => onChange(kind)}
-        >
-          {kind}
-        </button>
-      ))}
     </div>
   );
 }

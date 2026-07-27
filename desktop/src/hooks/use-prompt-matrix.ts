@@ -44,7 +44,6 @@ import {
   type MatrixStrategy,
   type MatrixTarget,
   type MatrixVariable,
-  type PoolAssign,
   type SeedPolicy,
   type StrategyKind,
 } from "@/lib/prompt-matrix";
@@ -110,7 +109,6 @@ export interface PromptMatrixActions {
 
   removePool: (poolId: string) => void;
   togglePool: (poolId: string, enabled: boolean) => void;
-  setPoolAssign: (poolId: string, assign: PoolAssign) => void;
   setPoolBaselineOption: (poolId: string, optionId: string | null) => void;
   addPoolOption: (poolId: string, value?: string) => void;
   addPoolOptions: (poolId: string, values: string[]) => void;
@@ -493,13 +491,6 @@ export function usePromptMatrix<TJob>(
     [patchPool],
   );
 
-  const setPoolAssign = useCallback(
-    (poolId: string, assign: PoolAssign) => {
-      patchPool(poolId, (p) => ({ ...p, assign }));
-    },
-    [patchPool],
-  );
-
   const setPoolBaselineOption = useCallback(
     (poolId: string, optionId: string | null) => {
       patchPool(poolId, (p) => ({ ...p, baselineOptionId: optionId }));
@@ -853,7 +844,6 @@ export function usePromptMatrix<TJob>(
       removeOption,
       removePool,
       togglePool,
-      setPoolAssign,
       setPoolBaselineOption,
       addPoolOption,
       addPoolOptions,
@@ -890,7 +880,6 @@ export function usePromptMatrix<TJob>(
       removeOption,
       removePool,
       togglePool,
-      setPoolAssign,
       setPoolBaselineOption,
       addPoolOption,
       addPoolOptions,

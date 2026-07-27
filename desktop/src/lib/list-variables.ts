@@ -1,5 +1,5 @@
 import type { NamedList } from "@/lib/list-library/types";
-import { normalizeName, variableKey } from "@/lib/prompt-matrix";
+import { normalizeName, secureRandom, variableKey } from "@/lib/prompt-matrix";
 
 /**
  * Turn a human-facing list label into a token name accepted by prompt-matrix.
@@ -126,41 +126,39 @@ export interface SampledListValue {
 
 export type SampledListValues = ReadonlyMap<string, SampledListValue>;
 
+export interface ListSampleBinding {
+  /** Full token identity (`color`, `color#1`, `color#2`). */
+  key: string;
+  /** The once-declared list backing this token identity. */
+  list: NamedList;
+}
+
 /**
- * Pick one enabled, non-empty option from every list. A reroll avoids the
- * previous option whenever a list has more than one choice.
+ * Pick one enabled, non-empty option for every distinct token identity.
+ *
+ * Draws are uniform, independent, and with replacement. The map is keyed by
+ * full token identity rather than list id: two numbered slots backed by the
+ * same list draw independently, while repeated uses of one slot reuse its
+ * single sampled value.
  */
 export function sampleListValues(
-  lists: readonly NamedList[],
-  previous: SampledListValues | null = null,
-  random: () => number = Math.random,
+  bindings: readonly ListSampleBinding[],
+  randomInt: (maxExclusive: number) => number = secureRandom.int,
 ): Map<string, SampledListValue> {
   const sampled = new Map<string, SampledListValue>();
-  for (const list of lists) {
+  for (const { key, list } of bindings) {
+    if (sampled.has(key)) continue;
     const options = list.options
       .filter((option) => option.enabled && option.value.trim().length > 0)
       .map((option) => option.value.trim());
     if (options.length === 0) continue;
 
-    const priorIndex = previous?.get(list.id)?.optionIndex;
-    let optionIndex: number;
-    if (
-      options.length > 1 &&
-      priorIndex !== undefined &&
-      priorIndex >= 0 &&
-      priorIndex < options.length
-    ) {
-      const alternate = Math.floor(
-        Math.max(0, Math.min(0.999999999, random())) * (options.length - 1),
-      );
-      optionIndex = alternate >= priorIndex ? alternate + 1 : alternate;
-    } else {
-      optionIndex = Math.floor(
-        Math.max(0, Math.min(0.999999999, random())) * options.length,
-      );
-    }
+    const rawIndex = randomInt(options.length);
+    const optionIndex = Number.isFinite(rawIndex)
+      ? Math.max(0, Math.min(options.length - 1, Math.trunc(rawIndex)))
+      : 0;
 
-    sampled.set(list.id, {
+    sampled.set(key, {
       listId: list.id,
       listName: list.name,
       optionIndex,

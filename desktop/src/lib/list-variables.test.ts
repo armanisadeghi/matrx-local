@@ -86,19 +86,41 @@ describe("list variables", () => {
     );
   });
 
-  it("samples enabled values and avoids repeating on reroll", () => {
-    const lists = [
-      list("colors", "Colors", [
-        { value: "red" },
-        { value: "disabled", enabled: false },
-        { value: "blue" },
-        { value: "   " },
-      ]),
-    ];
-    const first = sampleListValues(lists, null, () => 0);
-    expect(first.get("colors")?.value).toBe("red");
+  it("samples each token identity independently with replacement", () => {
+    const colors = list("colors", "Colors", [
+      { value: "red" },
+      { value: "disabled", enabled: false },
+      { value: "blue" },
+      { value: "   " },
+    ]);
+    const draws = [0, 0, 1];
+    const sampled = sampleListValues(
+      [
+        { key: "color#1", list: colors },
+        { key: "color#1", list: colors },
+        { key: "color#2", list: colors },
+        { key: "color#3", list: colors },
+      ],
+      () => draws.shift() ?? 0,
+    );
 
-    const next = sampleListValues(lists, first, () => 0);
-    expect(next.get("colors")?.value).toBe("blue");
+    expect(sampled.get("color#1")?.value).toBe("red");
+    expect(sampled.get("color#2")?.value).toBe("red");
+    expect(sampled.get("color#3")?.value).toBe("blue");
+    expect(sampled).toHaveLength(3);
+  });
+
+  it("allows a fresh reroll to return the same value", () => {
+    const colors = list("colors", "Colors", [
+      { value: "red" },
+      { value: "blue" },
+    ]);
+    const binding = [{ key: "color#1", list: colors }];
+    expect(sampleListValues(binding, () => 0).get("color#1")?.value).toBe(
+      "red",
+    );
+    expect(sampleListValues(binding, () => 0).get("color#1")?.value).toBe(
+      "red",
+    );
   });
 });

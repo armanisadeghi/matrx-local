@@ -59,6 +59,7 @@ from app.config import (
     ALLOWED_ORIGIN_REGEX,
     MATRX_HOME_DIR,
 )
+from app.common.background_tasks import fire_and_forget
 from app.common.system_logger import get_logger
 from app.common.process_shutdown import ShutdownCancellationMiddleware
 import app.common.access_log as access_log
@@ -443,6 +444,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "[app/main.py] Phase 0a: User API key load failed (non-fatal)",
             exc_info=True,
         )
+
+    # Phase 0a (post3): Credential Vault — tier 2 of the provider-key
+    # resolution order (see app/services/ai/key_manager.py). Fills in keys the
+    # user saved once in the web app or the extension. Deliberately
+    # fire-and-forget: it makes a network call with the user's session, and
+    # startup must never wait on (or fail from) the network. Local keys are
+    # already loaded above, so nothing downstream depends on this landing.
+    async def _warm_vault_keys() -> None:
+        try:
+            from app.services.ai.key_manager import refresh_vault_keys
+
+            snapshot = await refresh_vault_keys()
+            if not snapshot.ok:
+                logger.info(
+                    "[app/main.py] Credential Vault key source unavailable (%s) — "
+                    "local API keys are unaffected",
+                    snapshot.state,
+                )
+        except Exception:
+            logger.warning(
+                "[app/main.py] Credential Vault key refresh failed (non-fatal)",
+                exc_info=True,
+            )
+
+    fire_and_forget(_warm_vault_keys(), name="credential-vault-key-warm")
 
     # Phase 0a (image-gen): If the user has previously installed image-gen packages
     # via the in-app installer, inject the packages directory into sys.path now so

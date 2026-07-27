@@ -19,13 +19,12 @@ how to combine them, see **exactly** how many runs that is, and queue them all.
 ### Pools — shared option lists via `{{name#slot}}`
 
 `{{color#1}}` / `{{color#2}}` / `{{color#3}}` declare **one pool** (`color`) with
-many slots. Options are typed once; each pool is **one axis** of length n
-(option count). Strategies / seed policy / RNG never special-case pools.
-
-| Assign | Within one run |
-|---|---|
-| `rotate` (default) | slot i at step s → `options[(s + i) % n]` — reuse when slots > options |
-| `same` | every slot gets `options[s]` |
+many slots. Options are typed or mapped once. Every **distinct full token** is
+one independent axis backed by that list: `color#1` and `color#2` each draw
+uniformly with replacement, so they may choose the same value by chance.
+Repeating `{{color#1}}` anywhere else in the prompt or negative prompt reuses
+the exact same draw. With n options and k distinct numbered slots, the complete
+cartesian space is n^k—not n, and not k separately declared variables.
 
 Bare `{{color}}` remains a normal variable. A name cannot be both a variable and
 a pool — `validateSpec` hard-errors on the collision. `syncPoolsWithTokens`
@@ -74,10 +73,12 @@ stay paired because combinations—not individual axes—are shuffled.
 - Linked variables of unequal length truncate to the shortest **with a warning**.
 
 **4. Every new batch attempt is random.** `createBatchSnapshot()` uses Web Crypto
-entropy for its subset (when sampled), execution order, and one independent
-diffusion seed per image. Stopping and starting a new batch therefore cannot
-return the same leading run sequence. Preview freezes one such snapshot, so the
-jobs a user approves are precisely the jobs that are queued.
+entropy directly for its subset (when sampled), execution order, and one
+independent diffusion seed per image. Random integer draws use rejection
+sampling, so non-power-of-two list/product sizes are not modulo-biased. Stopping
+and starting a new batch therefore cannot return the same leading run sequence.
+Preview freezes one such snapshot, so the jobs a user approves are precisely the
+jobs that are queued.
 
 **5. Recovery is not a new batch.** Retry and restart-resume retain the original
 job's durable seed; they recover an existing attempt. Creating another batch is
@@ -124,6 +125,9 @@ the run-count + Queue button **below** them.
   create many options at once. Text-variable names are editable in-place and
   rename the matching `{{token}}` everywhere in the template; parameter-variable
   names are label-only.
+- `PoolCard` — one option editor for all `{{name#slot}}` uses. It states the
+  invariant directly: distinct slots draw independently with replacement, while
+  repeated uses of one slot stay bound.
 - `BatchConfirmDialog` — the count, a time estimate from **this machine's own**
   median generation time, and the actual first/last prompts from a fresh random
   snapshot. Nothing is queued without it.
@@ -144,7 +148,10 @@ the run-count + Queue button **below** them.
 
 ## Tests
 
-`prompt-matrix.test.ts` (`pnpm test:unit`) pins counting, validation, pool/link
-integrity, and injected-entropy snapshots—including the regression contract that
-two new attempts have different leading runs and seeds. The test source is
-deterministic only to make assertions stable; production snapshots use Web Crypto.
+`prompt-matrix.test.ts`, `variation-batches.test.ts`, and
+`list-variables.test.ts` (`pnpm test:unit`) pin counting, validation, repeated
+slot identity, independent with-replacement slot assignments, preview sampling,
+pool/link integrity, and injected-entropy snapshots—including the regression
+contract that two new attempts have different leading runs and seeds. Test
+sources are deterministic only to make assertions stable; production snapshots
+use Web Crypto.

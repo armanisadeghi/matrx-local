@@ -17,6 +17,11 @@ Files (always under `MATRX_HOME_DIR`, so `~/.matrx` or `~/.matrx-dev`):
 | `lists.json` | Named option lists (v2 — no pool/variable kind) |
 | `templates.json` | Named full `MatrixSpec` templates |
 
+List declarations are intentionally independent from token instances. A prompt
+may map the `color` list once and use `{{color#1}}`, `{{color#2}}`, and so on;
+the renderer owns those independent with-replacement draws and persists only
+the once-declared list/mapping here.
+
 Writes are atomic (temp file + `replace`). Corrupt / missing files reset to an
 empty valid document and log loudly — never crash the engine, never silently
 invent options.

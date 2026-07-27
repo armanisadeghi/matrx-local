@@ -55,6 +55,11 @@ export function poolSlotName(poolName: string, slot: string): string {
   return `${normalizeName(poolName)}#${slot}`;
 }
 
+/** The once-declared list name used by a token (`color#1` → `color`). */
+export function tokenDeclarationName(token: TokenMatch): string {
+  return token.poolName ?? token.name;
+}
+
 /** Every token occurrence in `text`, in source order (duplicates included). */
 export function findTokens(text: string): TokenMatch[] {
   const out: TokenMatch[] = [];
@@ -97,8 +102,27 @@ export function extractVariableNames(texts: readonly string[]): string[] {
 }
 
 /**
+ * Distinct list declarations across several fields, in first-seen order.
+ * Numbered slots collapse to their shared base declaration, so
+ * `{{color#1}}` + `{{color#2}}` produces one `color` mapping row.
+ */
+export function extractTokenDeclarationNames(
+  texts: readonly string[],
+): string[] {
+  const seen = new Map<string, string>();
+  for (const text of texts) {
+    for (const token of findTokens(text)) {
+      const name = tokenDeclarationName(token);
+      const key = variableKey(name);
+      if (!seen.has(key)) seen.set(key, name);
+    }
+  }
+  return [...seen.values()];
+}
+
+/**
  * Distinct pools and their slots across several fields, in first-seen order.
- * Slot lists preserve first-seen order; expand sorts them for rotation.
+ * Slot lists preserve first-seen order; expand sorts them for stable axis order.
  */
 export function extractPoolRefs(texts: readonly string[]): PoolRef[] {
   const byKey = new Map<string, PoolRef>();

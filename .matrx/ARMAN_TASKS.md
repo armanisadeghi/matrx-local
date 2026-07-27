@@ -30,6 +30,36 @@ _Last updated: 2026-07-14 (step-7 pass: both official-docs asks APPROVED + appli
 
 ## Active (ranked — quickest wins first within priority)
 
+- [ ] **Add the missing `brave` row to the live `api_key_provider` catalog** (MXL-D-073, 30 seconds) —
+  the live catalog serves 12 rows and has no `brave`; the compiled fallback has
+  13. Because the live rows *replace* the fallback, the shipped app silently
+  ignores `BRAVE_API_KEY` in a pasted .env, and the new Credential Vault key
+  tier cannot match your own Brave key (stored as `BRAVE_SEARCH_API_KEY`).
+  Fix: in the Catalogs admin (`/administration/applications` → Catalogs, app
+  `matrx-local`, kind `api_key_provider`), add key `brave` with payload
+  `{"label":"Brave Search","names":["brave","brave_search","bravesearch"],
+  "env_var_names":["BRAVE_API_KEY","BRAVE_SEARCH_API_KEY","BRAVE_SEARCH_KEY"]}`.
+  An agent cannot write it — the writes go through `admin_upsert_catalog_entry`
+  and the available MCP identity is not a Super Admin.
+- [ ] **DECISION — four AI providers have no vault `credential_definition`** —
+  `brave`, `cerebras`, `civitai`, `fastino` exist in matrx-local but have no
+  definition in aidream's credential catalog, so a user cannot store them in the
+  Vault at all and they can never reach the desktop through the new Vault tier.
+  The eight overlapping providers already agree exactly on slug AND env alias —
+  nothing needs renaming. Adding the four is an aidream change
+  (`aidream/services/catalogs/seeds/credential_definitions.json` +
+  `load_credential_definitions.py --apply`). Say the word and an aidream agent
+  can add them; matrx-local needs no change either way.
+- [ ] **DECISION — Vault reveals will go quiet when the recent-auth ceiling is
+  switched on** — the vault plan sets `REVEAL_RECENT_AUTH_MAX_SESSION_AGE_SECONDS`
+  to 900 at public launch. aidream then refuses any `revealable` resolve on a
+  session older than 15 minutes. A desktop app cannot silently re-authenticate,
+  so the matrx-local Vault key tier would stop supplying keys for any
+  long-running session (the loud per-field fallback WARN would fire on every
+  refresh). Options: exempt non-browser clients, treat provider API keys as
+  `visible` rather than `revealable`, or accept that the desktop must import
+  Vault keys locally once ("Save locally" is already built for exactly this).
+  Local keys are unaffected either way, so this is not a launch blocker.
 - [ ] **Add `web_app_origin` to the `matrx-local` app-config row** — the desktop
   hotfix already reads and caches this public value with the safe existing
   fallback `https://www.aimatrx.com`; adding it makes the value fully

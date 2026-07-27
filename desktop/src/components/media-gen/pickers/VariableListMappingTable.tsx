@@ -24,7 +24,7 @@ export function VariableListMappingTable({
     <div>
       <LabelWithInfo
         label="Variable lists"
-        info="Map each {{token}} to a saved list. Option count updates when a list is selected."
+        info="Map each base variable once. Numbered uses such as {{color#1}} and {{color#2}} share the color list, draw independently with replacement, and reuse a draw wherever the exact same numbered token repeats."
       />
       <div className="mt-2 overflow-hidden rounded-lg border bg-card">
         <table className="w-full table-fixed text-xs">

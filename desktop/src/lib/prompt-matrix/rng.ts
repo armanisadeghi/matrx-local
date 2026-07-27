@@ -57,16 +57,40 @@ function secureUint32(): number {
   return Math.floor(Math.random() * (MAX_SEED + 1));
 }
 
+/** Uniform integer in [0, 2^53), the full exact-integer range of a JS number. */
+function secureUint53(): number {
+  const values = new Uint32Array(2);
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi?.getRandomValues !== undefined) {
+    cryptoApi.getRandomValues(values);
+    const high21 = (values[0] as number) & 0x1fffff;
+    return high21 * (MAX_SEED + 1) + (values[1] as number);
+  }
+  return Math.floor(Math.random() * (Number.MAX_SAFE_INTEGER + 1));
+}
+
 /** OS-backed entropy used for every newly created batch snapshot. */
 export const secureRandom: RandomSource = {
   int(maxExclusive: number): number {
-    if (maxExclusive <= 0) return 0;
-    if (maxExclusive >= MAX_SEED + 1) return secureUint32();
-    // Rejection sampling avoids modulo bias for non-power-of-two ranges.
-    const ceiling = MAX_SEED + 1 - ((MAX_SEED + 1) % maxExclusive);
-    let value = secureUint32();
-    while (value >= ceiling) value = secureUint32();
-    return value % maxExclusive;
+    const max = Math.trunc(maxExclusive);
+    if (!Number.isFinite(max) || max <= 0) return 0;
+    if (max > Number.MAX_SAFE_INTEGER) {
+      throw new RangeError(
+        `Cannot draw uniformly from ${maxExclusive}; the range exceeds Number.MAX_SAFE_INTEGER.`,
+      );
+    }
+
+    // Use the smallest native entropy range that contains the target. Both
+    // branches rejection-sample, so modulo never makes low indices likelier.
+    const range =
+      max <= MAX_SEED + 1 ? MAX_SEED + 1 : Number.MAX_SAFE_INTEGER + 1;
+    const ceiling = range - (range % max);
+    let value =
+      range === MAX_SEED + 1 ? secureUint32() : secureUint53();
+    while (value >= ceiling) {
+      value = range === MAX_SEED + 1 ? secureUint32() : secureUint53();
+    }
+    return value % max;
   },
   seed: secureUint32,
 };
@@ -101,7 +125,7 @@ export function shuffled<T>(
 export function sampleIndices(
   total: number,
   count: number,
-  rng: Rng,
+  random: Pick<RandomSource, "int">,
 ): number[] {
   if (count >= total) return Array.from({ length: total }, (_, i) => i);
   if (count <= 0) return [];
@@ -110,14 +134,14 @@ export function sampleIndices(
   // count < total/2, and the set lookup keeps it cheap.
   if (count < total / 2) {
     const picked = new Set<number>();
-    while (picked.size < count) picked.add(rng.int(total));
+    while (picked.size < count) picked.add(random.int(total));
     return [...picked].sort((a, b) => a - b);
   }
 
   // Dense: partial shuffle of an index array — bounded work, no rejection.
   const pool = Array.from({ length: total }, (_, i) => i);
   for (let i = 0; i < count; i += 1) {
-    const j = i + rng.int(total - i);
+    const j = i + random.int(total - i);
     const a = pool[i] as number;
     const b = pool[j] as number;
     pool[i] = b;

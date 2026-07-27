@@ -11,7 +11,6 @@ import type {
   MatrixOption,
   MatrixPool,
   MatrixVariable,
-  PoolAssign,
 } from "./types";
 import { makeId } from "./storage";
 
@@ -22,8 +21,6 @@ export interface LibraryEntry {
   name: string;
   kind: LibraryEntryKind;
   options: MatrixOption[];
-  /** Only for kind === "pool". */
-  assign?: PoolAssign;
   updatedAt: number;
 }
 
@@ -40,7 +37,16 @@ export function isLibraryEntry(value: unknown): value is LibraryEntry {
 }
 
 export function sanitizeLibraryEntries(raw: unknown[]): LibraryEntry[] {
-  return raw.filter(isLibraryEntry).sort((a, b) => b.updatedAt - a.updatedAt);
+  return raw
+    .filter(isLibraryEntry)
+    .map(({ id, name, kind, options, updatedAt }) => ({
+      id,
+      name,
+      kind,
+      options,
+      updatedAt,
+    }))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export function libraryEntryFromPool(
@@ -52,7 +58,6 @@ export function libraryEntryFromPool(
     name: (name ?? pool.name).trim() || pool.name,
     kind: "pool",
     options: pool.options.map((o) => ({ ...o, id: makeId() })),
-    assign: pool.assign,
     updatedAt: Date.now(),
   };
 }
@@ -76,7 +81,6 @@ export function poolFromLibraryEntry(entry: LibraryEntry): MatrixPool {
     id: makeId(),
     name: entry.name,
     options: entry.options.map((o) => ({ ...o, id: makeId() })),
-    assign: entry.assign ?? "rotate",
     baselineOptionId: null,
     enabled: true,
   };

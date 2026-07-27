@@ -224,7 +224,6 @@ export function syncPoolsWithTokens(
       id: makeId(),
       name: ref.name,
       options: [{ id: makeId(), value: "", enabled: true }],
-      assign: "rotate",
       baselineOptionId: null,
       enabled: true,
     });

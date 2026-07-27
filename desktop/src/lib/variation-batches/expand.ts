@@ -13,13 +13,18 @@ import {
   createEmptyPromptJob,
   createPromptTarget,
   expandMatrix,
+  extractPoolRefs,
+  extractTokenDeclarationNames,
   extractVariableNames,
   PROMPT_TEMPLATE_FIELDS,
   secureRandom,
   type MatrixOption,
   type MatrixPlan,
+  type MatrixPool,
   type MatrixSpec,
   type MatrixVariable,
+  type RandomSource,
+  variableKey,
 } from "@/lib/prompt-matrix";
 import { makeId } from "@/lib/prompt-matrix/storage";
 
@@ -40,25 +45,37 @@ export type VariationGenerateOrder = "random" | "sequence" | "reverse";
 export interface ExpandPromptVariationsOptions {
   maxCount?: number;
   order?: VariationGenerateOrder;
+  /** Injectable only for deterministic tests; production uses Web Crypto. */
+  random?: RandomSource;
 }
 
 export function extractTemplateVariableNames(
   prompt: string,
   negativePrompt: string,
 ): string[] {
-  return extractVariableNames([prompt, negativePrompt]);
+  return extractTokenDeclarationNames([prompt, negativePrompt]);
 }
 
-function buildMatrixVariables(
-  tokenNames: readonly string[],
+interface MatrixInputs {
+  variables: MatrixVariable[];
+  pools: MatrixPool[];
+  errors: string[];
+}
+
+function buildMatrixInputs(
+  templatePrompt: string,
+  templateNegative: string,
   variables: readonly VariableOptionMap[],
-): { variables: MatrixVariable[]; errors: string[] } {
+): MatrixInputs {
+  const texts = [templatePrompt, templateNegative];
   const byName = new Map(
-    variables.map((v) => [v.name.trim().toLowerCase(), v]),
+    variables.map((v) => [variableKey(v.name), v]),
   );
-  const matrixVariables: MatrixVariable[] = tokenNames.map((name) => {
-    const row = byName.get(name.toLowerCase());
-    const options: MatrixOption[] = (row?.options ?? [])
+  const declarations = extractTokenDeclarationNames(texts);
+
+  const optionsFor = (name: string): MatrixOption[] => {
+    const row = byName.get(variableKey(name));
+    return (row?.options ?? [])
       .map((value) => value.trim())
       .filter((value) => value.length > 0)
       .map((value) => ({
@@ -66,35 +83,59 @@ function buildMatrixVariables(
         value,
         enabled: true,
       }));
-    return {
+  };
+
+  const optionsByDeclaration = new Map(
+    declarations.map((name) => [variableKey(name), optionsFor(name)]),
+  );
+  const missing = declarations.filter(
+    (name) => (optionsByDeclaration.get(variableKey(name)) ?? []).length === 0,
+  );
+
+  const matrixVariables: MatrixVariable[] = extractVariableNames(texts).map(
+    (name) => ({
       id: makeId(),
       name,
       binding: { kind: "text" as const },
-      options,
+      options: (optionsByDeclaration.get(variableKey(name)) ?? []).map(
+        (option) => ({ ...option, id: makeId() }),
+      ),
       baselineOptionId: null,
       linkGroup: null,
+      enabled: true,
+    }),
+  );
+
+  const pools: MatrixPool[] = extractPoolRefs(texts).map((ref) => {
+    return {
+      id: makeId(),
+      name: ref.name,
+      options: (
+        optionsByDeclaration.get(variableKey(ref.name)) ?? []
+      ).map((option) => ({ ...option, id: makeId() })),
+      baselineOptionId: null,
       enabled: true,
     };
   });
 
-  const missing = matrixVariables.filter((v) => v.options.length === 0);
   if (missing.length > 0) {
     return {
       variables: matrixVariables,
+      pools,
       errors: missing.map(
-        (v) =>
-          `Variable "{{${v.name}}}" has no options — map a list or add values.`,
+        (name) =>
+          `Variable "{{${name}}}" has no options — map a list or add values.`,
       ),
     };
   }
 
-  return { variables: matrixVariables, errors: [] };
+  return { variables: matrixVariables, pools, errors: [] };
 }
 
 function buildVariationSpec(
   templatePrompt: string,
   templateNegative: string,
-  matrixVariables: readonly MatrixVariable[],
+  inputs: Pick<MatrixInputs, "variables" | "pools">,
   strategy: MatrixSpec["strategy"],
 ): MatrixSpec {
   return {
@@ -102,8 +143,8 @@ function buildVariationSpec(
       ...f,
       text: f.id === "prompt" ? templatePrompt : templateNegative,
     })),
-    variables: [...matrixVariables],
-    pools: [],
+    variables: [...inputs.variables],
+    pools: [...inputs.pools],
     strategy,
     seed: {
       mode: "fixed" as const,
@@ -131,11 +172,15 @@ export function countPromptVariations(
   );
   if (tokenNames.length === 0) return 1;
 
-  const built = buildMatrixVariables(tokenNames, variables);
+  const built = buildMatrixInputs(
+    templatePrompt,
+    templateNegative,
+    variables,
+  );
   if (built.errors.length > 0) return null;
 
   return countPlan(
-    buildVariationSpec(templatePrompt, templateNegative, built.variables, {
+    buildVariationSpec(templatePrompt, templateNegative, built, {
       kind: "cartesian",
     }),
   );
@@ -144,22 +189,23 @@ export function countPromptVariations(
 function expandRandomSnapshot(
   templatePrompt: string,
   templateNegative: string,
-  matrixVariables: readonly MatrixVariable[],
+  inputs: Pick<MatrixInputs, "variables" | "pools">,
   want: number,
+  random: RandomSource,
 ): MatrixPlan {
   const sampleSpec = buildVariationSpec(
     templatePrompt,
     templateNegative,
-    matrixVariables,
+    inputs,
     { kind: "sample", count: want, seed: 1 },
   );
-  return createBatchSnapshot(sampleSpec, secureRandom);
+  return createBatchSnapshot(sampleSpec, random);
 }
 
 function expandSequentialSnapshot(
   templatePrompt: string,
   templateNegative: string,
-  matrixVariables: readonly MatrixVariable[],
+  inputs: Pick<MatrixInputs, "variables" | "pools">,
   want: number,
   order: "sequence" | "reverse",
   total: number,
@@ -167,7 +213,7 @@ function expandSequentialSnapshot(
   const cartSpec = buildVariationSpec(
     templatePrompt,
     templateNegative,
-    matrixVariables,
+    inputs,
     { kind: "cartesian" },
   );
   const analyzed = expandMatrix(cartSpec);
@@ -230,7 +276,11 @@ export function expandPromptVariations(
     };
   }
 
-  const built = buildMatrixVariables(tokenNames, variables);
+  const built = buildMatrixInputs(
+    templatePrompt,
+    templateNegative,
+    variables,
+  );
   if (built.errors.length > 0) {
     return { variations: [], errors: built.errors, total: 0, truncated: false };
   }
@@ -238,7 +288,7 @@ export function expandPromptVariations(
   const cartesianSpec = buildVariationSpec(
     templatePrompt,
     templateNegative,
-    built.variables,
+    built,
     { kind: "cartesian" },
   );
   const total = countPlan(cartesianSpec);
@@ -251,14 +301,15 @@ export function expandPromptVariations(
     snapshot = expandRandomSnapshot(
       templatePrompt,
       templateNegative,
-      built.variables,
+      built,
       want,
+      options?.random ?? secureRandom,
     );
   } else {
     const sequential = expandSequentialSnapshot(
       templatePrompt,
       templateNegative,
-      built.variables,
+      built,
       want,
       order,
       total,
@@ -281,7 +332,7 @@ export function expandPromptVariations(
   const spec = buildVariationSpec(
     templatePrompt,
     templateNegative,
-    built.variables,
+    built,
     order === "random"
       ? { kind: "sample", count: want, seed: 1 }
       : { kind: "cartesian" },

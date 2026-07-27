@@ -175,3 +175,74 @@ def test_huggingface_value_endpoint_404_when_not_set(http: httpx.Client) -> None
     assert r.status_code == 404, (
         f"Expected 404 when HF token not set, got {r.status_code}: {r.text}"
     )
+
+
+# ── Credential Vault as a second key source ──────────────────────────────────
+#
+# The vault tier is ADDITIVE: these tests assert the surface answers with a
+# STATE (never an error) and that it never leaks a plaintext value. They pass
+# whether or not the test engine has a signed-in session.
+
+_VAULT_STATES = {
+    "ready",
+    "no_session",
+    "unconfigured",
+    "offline",
+    "denied",
+    "error",
+}
+
+
+def test_api_key_status_declares_its_source(http: httpx.Client) -> None:
+    """Every provider says where the key a request would use comes from."""
+    r = http.get("/settings/api-keys")
+    assert r.status_code == 200
+
+    for entry in r.json()["providers"]:
+        assert entry["source"] in {"local", "vault", "none"}, entry
+        # `configured` keeps its original meaning: saved on THIS machine.
+        if entry["configured"]:
+            assert entry["source"] == "local", entry
+        if entry["source"] == "none":
+            assert entry["vault_item_name"] is None, entry
+
+
+def test_vault_source_is_a_state_never_an_error(http: httpx.Client) -> None:
+    """No session / offline must render as a prompt, not a failed request."""
+    r = http.get("/settings/api-keys/vault")
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+
+    data = r.json()
+    assert data["state"] in _VAULT_STATES, data
+    assert isinstance(data["entries"], list)
+    if data["state"] != "ready":
+        assert data["message"], "a non-ready state must explain itself"
+        assert data["entries"] == []
+
+
+def test_vault_source_never_returns_a_plaintext_value(http: httpx.Client) -> None:
+    """The listing is metadata only — values are resolved server-side."""
+    r = http.get("/settings/api-keys/vault")
+    assert r.status_code == 200
+
+    allowed = {
+        "provider",
+        "label",
+        "item_id",
+        "item_name",
+        "field_key",
+        "handling",
+        "available",
+        "local_key_present",
+        "in_use",
+    }
+    for entry in r.json()["entries"]:
+        extra = set(entry.keys()) - allowed
+        assert not extra, f"unexpected field(s) in a Vault entry: {extra}"
+
+
+def test_vault_import_rejects_an_unknown_provider(http: httpx.Client) -> None:
+    r = http.post(
+        "/settings/api-keys/vault/import", json={"provider": "not-a-provider"}
+    )
+    assert r.status_code == 422, f"Expected 422, got {r.status_code}: {r.text}"

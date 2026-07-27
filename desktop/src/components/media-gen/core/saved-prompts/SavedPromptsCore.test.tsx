@@ -209,4 +209,42 @@ describe("SavedPromptsCore autosave", () => {
     );
     expect(dynamic?.className).toContain("text-violet");
   });
+
+  it("resolves numbered uses through one base list declaration", async () => {
+    prompts = [
+      {
+        id: "prompt-numbered",
+        name: "Numbered",
+        prompt:
+          "{{Camera angles#1}} then {{Camera angles#1}} beside {{Camera angles#2}}",
+        negativePrompt: "{{Camera angles#2}}",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+
+    await act(async () => {
+      root.render(
+        <TooltipProvider>
+          <SavedPromptsCore showStoragePath={false} />
+        </TooltipProvider>,
+      );
+    });
+
+    const previewButton = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent?.includes("Test with list values"),
+    );
+    expect(previewButton).toBeDefined();
+    await act(async () => previewButton!.click());
+
+    expect(container.textContent).toContain(
+      "wide shot then wide shot beside wide shot",
+    );
+    expect(container.textContent).not.toContain(
+      "{{Camera angles#1}} has no matching saved list",
+    );
+    expect(container.textContent).not.toContain(
+      "{{Camera angles#2}} has no matching saved list",
+    );
+  });
 });

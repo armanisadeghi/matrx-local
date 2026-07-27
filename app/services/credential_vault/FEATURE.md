@@ -20,6 +20,10 @@ one). Cross-repo plan:
 `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/PLAN.md`;
 foundation: `.../projects/unified-credential-vault/PLAN.md`.
 
+**Picking this up cold?**
+`/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/HANDOFF.md` —
+vision, gap analysis, cross-repo architecture, next steps, and landmines. Start there.
+
 ## THE RESOLUTION ORDER
 
 Decided in exactly one place — `app/services/ai/key_manager.py`. When any part

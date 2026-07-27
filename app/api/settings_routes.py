@@ -266,11 +266,21 @@ class ApiKeyStatus(BaseModel):
     provider: str
     label: str
     description: str
+    # A key saved on THIS machine. Unchanged meaning — `configured` has always
+    # been "the local store has one", and the Remove button still keys on it.
     configured: bool
     # Whether this provider's key can be checked against a free auth-only
     # endpoint. False → the UI hides the Test button instead of offering one
     # that can only ever answer "unsupported".
     testable: bool = False
+    # Where the key a request would ACTUALLY use comes from — the resolution
+    # order in key_manager (local over Vault). `vault` means the user saved it
+    # once elsewhere and this signed-in session is supplying it here.
+    source: Literal["local", "vault", "none"] = "none"
+    # The Vault item's display name when source == "vault" (or when a Vault
+    # copy exists behind a local key), so the UI never shows an unattributed
+    # value.
+    vault_item_name: str | None = None
 
 
 class ApiKeyStatusList(BaseModel):
@@ -285,21 +295,33 @@ class ApiKeySetRequest(BaseModel):
 async def list_api_key_status() -> ApiKeyStatusList:
     """Return configuration status for every AI provider.
 
-    Never returns actual key values — only whether a key is set.
+    Never returns actual key values — only whether a key is set and where the
+    effective one comes from.
     """
+    from app.services.ai.key_manager import get_vault_key_origins, get_vault_keys
     from app.services.ai.key_validation import PROVIDER_SPECS
 
     repo = ApiKeysRepo()
+    vault_keys = get_vault_keys()
+    vault_origins = get_vault_key_origins()
     statuses = []
     for provider in sorted(VALID_PROVIDERS):
         meta = PROVIDER_GRANTS[provider]
         configured = await repo.is_configured(provider)
+        if configured:
+            source: Literal["local", "vault", "none"] = "local"
+        elif provider in vault_keys:
+            source = "vault"
+        else:
+            source = "none"
         statuses.append(ApiKeyStatus(
             provider=provider,
             label=meta.label,
             description=meta.description,
             configured=configured,
             testable=provider in PROVIDER_SPECS,
+            source=source,
+            vault_item_name=vault_origins.get(provider),
         ))
     return ApiKeyStatusList(providers=statuses)
 
@@ -511,4 +533,166 @@ async def validate_all_api_keys() -> ValidateAllResult:
             )
             for r in results
         ]
+    )
+
+
+# ── Credential Vault as a key source ───────────────────────────────────────────
+#
+# The platform has ONE credential system (users.credential_items +
+# users.user_secrets, served by aidream at /api/vault/*). matrx-local is a
+# CONSUMER of it: a key the user saved once in the web app, the extension, or
+# here is available in all three.
+#
+# Resolution order (owned by key_manager, documented in its module docstring):
+#   1. local ApiKeysRepo  — offline-first, behaviour unchanged
+#   2. Credential Vault   — fills gaps only, never shadows a local key
+#
+# The local store is NOT replaced. These routes only expose the Vault as an
+# additional source and let the user copy one value down into the local store.
+#
+# No session → the Vault source is a STATE with a prompt, never an error
+# (CLAUDE.md § Security & configuration posture, rule 3), so every route here
+# returns 200 with a `state` discriminator.
+
+
+class VaultCredentialEntry(BaseModel):
+    """One Vault-held credential that maps to a local AI provider. Metadata
+    only — a plaintext value is never part of this payload."""
+
+    provider: str
+    label: str
+    item_id: str
+    item_name: str
+    field_key: str
+    handling: str
+    # False for `sealed` values and for `revealable` ones this user cannot
+    # reveal: the value can never be released to this client.
+    available: bool
+    # A local key already exists for this provider, so it wins resolution.
+    local_key_present: bool
+    # This Vault value is currently supplying the provider's key.
+    in_use: bool
+
+
+class VaultSourceStatus(BaseModel):
+    # ready | no_session | unconfigured | offline | denied | error
+    state: str
+    message: str = ""
+    entries: list[VaultCredentialEntry] = Field(default_factory=list)
+
+
+async def _vault_source_status(*, refresh: bool) -> VaultSourceStatus:
+    from app.services.ai.key_manager import (
+        get_local_user_keys,
+        get_vault_keys,
+        refresh_vault_keys,
+    )
+    from app.services.credential_vault.provider_keys import fetch_provider_snapshot
+
+    if refresh:
+        snapshot = await refresh_vault_keys()
+    else:
+        # Listing is a masked, non-plaintext read — cheap and safe to do on
+        # every panel open. Values stay in whatever state the last refresh
+        # left them.
+        snapshot = await fetch_provider_snapshot(resolve_providers=set())
+
+    if snapshot.state != "ready":
+        return VaultSourceStatus(state=snapshot.state, message=snapshot.message)
+
+    local = get_local_user_keys()
+    in_use = get_vault_keys()
+    entries = [
+        VaultCredentialEntry(
+            provider=c.provider,
+            label=PROVIDER_GRANTS[c.provider].label,
+            item_id=c.item_id,
+            item_name=c.item_name,
+            field_key=c.field_key,
+            handling=c.handling,
+            available=c.resolvable,
+            local_key_present=c.provider in local,
+            in_use=c.provider in in_use,
+        )
+        for c in snapshot.candidates
+        if c.provider in PROVIDER_GRANTS
+    ]
+    return VaultSourceStatus(state="ready", entries=entries)
+
+
+@router.get("/api-keys/vault", response_model=VaultSourceStatus)
+async def get_vault_key_source() -> VaultSourceStatus:
+    """Which of the signed-in user's Vault credentials map to AI providers."""
+    return await _vault_source_status(refresh=False)
+
+
+@router.post("/api-keys/vault/refresh", response_model=VaultSourceStatus)
+async def refresh_vault_key_source() -> VaultSourceStatus:
+    """Re-read the Vault and re-activate the keys it supplies, right now."""
+    return await _vault_source_status(refresh=True)
+
+
+class VaultImportRequest(BaseModel):
+    provider: str
+
+
+class VaultImportResult(BaseModel):
+    state: str
+    message: str
+    provider: str
+    configured: bool = False
+
+
+@router.post("/api-keys/vault/import", response_model=VaultImportResult)
+async def import_vault_key(req: VaultImportRequest) -> VaultImportResult:
+    """Copy one Vault credential into the local key store.
+
+    Additive on purpose: the Vault tier already supplies the value at runtime,
+    but a user who wants the key to keep working with no session and no network
+    pulls it down here. After this the provider's source becomes `local`.
+    """
+    provider = req.provider.strip().lower()
+    if provider not in VALID_PROVIDERS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown provider '{provider}'. Valid: {sorted(VALID_PROVIDERS)}",
+        )
+
+    from app.services.ai.key_manager import set_user_key
+    from app.services.credential_vault.client import VaultUnavailable
+    from app.services.credential_vault.provider_keys import (
+        fetch_provider_snapshot,
+        resolve_one,
+    )
+
+    snapshot = await fetch_provider_snapshot(resolve_providers=set())
+    if snapshot.state != "ready":
+        return VaultImportResult(
+            state=snapshot.state, message=snapshot.message, provider=provider
+        )
+
+    candidate = snapshot.candidate_for(provider)
+    if candidate is None:
+        return VaultImportResult(
+            state="not_found",
+            message=f"Your Vault has no credential for {PROVIDER_GRANTS[provider].label}.",
+            provider=provider,
+        )
+
+    try:
+        value = await resolve_one(candidate)
+    except VaultUnavailable as exc:
+        return VaultImportResult(
+            state=exc.state, message=exc.message, provider=provider
+        )
+
+    await set_user_key(provider, value)
+    await get_action_needed_registry().resolve_matching(
+        lambda item, p=provider: item.action.provider == p
+    )
+    return VaultImportResult(
+        state="ready",
+        message=f"Saved '{candidate.item_name}' from your Vault to this device.",
+        provider=provider,
+        configured=True,
     )

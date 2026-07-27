@@ -43,3 +43,10 @@ and tool turns; `SQLiteConversationStore` owns local-first chat persistence.
   breaks or delays the local run; a lost/terminal lease never kills the local
   run (the server reaper settles abandoned executions). Anonymous
   (JWT-less) runs are intentionally not spine-tracked.
+- Provider API keys resolve in ONE place — `key_manager` — in ONE order:
+  local `ApiKeysRepo` store, then the platform Credential Vault, then
+  `.env`/shell. The two stores are additive: the local one is offline-first
+  and unchanged, and a Vault value never shadows it. `get_cached_user_keys()`
+  is therefore the EFFECTIVE snapshot (what a request would actually use);
+  `get_local_user_keys()` is the "saved on this machine" view. Read
+  `app/services/credential_vault/FEATURE.md` before touching either tier.

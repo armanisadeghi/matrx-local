@@ -135,6 +135,23 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
         except Exception as exc:
             logger.warning("[token_routes] Post-login agent sync failed: %s", exc)
 
+        # Credential Vault — tier 2 of the provider-key resolution order
+        # (app/services/ai/key_manager.py). A key the user saved once in the
+        # web app or the extension becomes usable here the moment they sign
+        # in. Never blocks or fails login: an unreachable vault leaves the
+        # local key store exactly as it was.
+        try:
+            from app.services.ai.key_manager import refresh_vault_keys
+
+            snapshot = await refresh_vault_keys()
+            if not snapshot.ok:
+                logger.info(
+                    "[token_routes] Credential Vault unavailable after sign-in (%s)",
+                    snapshot.state,
+                )
+        except Exception as exc:
+            logger.warning("[token_routes] Credential Vault refresh failed: %s", exc)
+
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -186,6 +203,11 @@ async def clear_token() -> dict[str, Any]:
 
     await repo.clear()
     clear_jwt_cache()
+    # Drop every Credential-Vault-supplied provider key with the session that
+    # authorized it. Keys the user saved on THIS machine survive sign-out.
+    from app.services.ai.key_manager import clear_vault_keys
+
+    clear_vault_keys()
     logger.info("[token_routes] JWT cleared (logout) user_id=%s", outgoing_user_id)
 
     # Cross-component broadcast disconnect — Case B of the lifecycle wiring.

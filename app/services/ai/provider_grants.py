@@ -47,3 +47,14 @@ ENDPOINT_TO_PROVIDER: dict[str, str] = {
     for key, spec in PROVIDER_GRANTS.items()
     for endpoint in spec.chat_endpoints
 }
+
+# Reverse index: env var name (UPPERCASE) → provider. The ONE place this
+# derivation lives. ``key_manager`` resolves matrx-ai's env-var lookups
+# through it, and the credential-vault consumer matches a vault field's
+# ``env_key`` alias back to a local provider with the same map. Deriving it
+# twice is how the two sides drift.
+ENV_VAR_TO_PROVIDER: dict[str, str] = {
+    env_var.upper(): key
+    for key, spec in PROVIDER_GRANTS.items()
+    for env_var in spec.env_vars
+}

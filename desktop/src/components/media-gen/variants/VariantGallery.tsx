@@ -27,7 +27,10 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import {
+  PROMPT_TEXTAREA_KEYS,
+  ResizablePromptTextarea,
+} from "../prompts/ResizablePromptTextarea";
 import {
   Popover,
   PopoverContent,
@@ -324,7 +327,7 @@ export function VariantGallery() {
 
                 {isImage && <ImagePromptToolbar ctl={imageCtl} compact />}
 
-                <Textarea
+                <ResizablePromptTextarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder={
@@ -335,8 +338,13 @@ export function VariantGallery() {
                         : "Describe the image you want to create…"
                       : "Describe the video you want to create…"
                   }
-                  rows={1}
-                  className="min-h-[38px] max-h-40 flex-1 resize-y text-sm"
+                  resizeStorageKey={
+                    isImage
+                      ? PROMPT_TEXTAREA_KEYS.galleryImageMain
+                      : PROMPT_TEXTAREA_KEYS.galleryVideoMain
+                  }
+                  containerClassName="min-w-0 flex-1"
+                  className="text-sm"
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();

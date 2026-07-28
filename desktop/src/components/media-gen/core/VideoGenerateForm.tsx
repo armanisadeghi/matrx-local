@@ -10,8 +10,11 @@ import { Film, ImagePlus, Loader2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
+import {
+  PROMPT_TEXTAREA_KEYS,
+  ResizablePromptTextarea,
+} from "@/components/media-gen/prompts/ResizablePromptTextarea";
 import {
   AdvancedParamsEditor,
   CancelableGenerateButton,
@@ -30,7 +33,7 @@ import { descriptorFromInputImage } from "@/components/media/types";
 export function VideoPromptField({
   ctl,
   placeholder = "Describe the video you want to generate…",
-  textareaClassName = "text-sm min-h-[80px] max-h-[320px] resize-y",
+  textareaClassName = "text-sm",
   showLabel = true,
 }: {
   ctl: VideoGenController;
@@ -42,11 +45,12 @@ export function VideoPromptField({
   return (
     <div className="space-y-1.5">
       {showLabel && <Label className="text-xs">Prompt</Label>}
-      <Textarea
+      <ResizablePromptTextarea
         value={ctl.form.prompt}
         onChange={(e) => actions.setVideoForm({ prompt: e.target.value })}
         placeholder={placeholder}
         className={textareaClassName}
+        resizeStorageKey={PROMPT_TEXTAREA_KEYS.videoMain}
       />
     </div>
   );
@@ -76,6 +80,7 @@ export function VideoCommonSettings({
           value={ctl.form.negativePrompt}
           onChange={(v) => setVideoForm({ negativePrompt: v })}
           disabled={disabled}
+          resizeStorageKey={PROMPT_TEXTAREA_KEYS.videoNegative}
         />
       )}
       <div className="grid grid-cols-2 gap-3">

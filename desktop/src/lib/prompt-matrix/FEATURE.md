@@ -120,7 +120,10 @@ the run-count + Queue button **below** them.
 - `TemplateEditor` — highlights `{{tokens}}` via a mirror div under a native
   textarea. The textarea draws the real text and caret; the mirror paints only
   token backgrounds. Unknown tokens are flagged in red. The mirror's typography
-  MUST match the textarea exactly (`SHARED_BOX`) or highlights drift.
+  MUST match the textarea exactly (`SHARED_BOX`) or highlights drift. Its
+  10-row default, five-row floor, persistent height, and full-width resize grip
+  come from the canonical media prompt editor contract in
+  `desktop/src/components/media-gen/prompts/FEATURE.md`.
 - `VariableCard` — sortable; paste a newline-separated list into any option row to
   create many options at once. Text-variable names are editable in-place and
   rename the matching `{{token}}` everywhere in the template; parameter-variable

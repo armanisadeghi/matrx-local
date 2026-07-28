@@ -38,7 +38,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
   TooltipContent,
@@ -53,6 +52,10 @@ import { makeId } from "@/lib/prompt-matrix/storage";
 import { parsePastedListContent } from "@/lib/list-library/parse-pasted-content";
 import { ErrorNote } from "./shared";
 import { QuickPasteDialog } from "./QuickPasteDialog";
+import {
+  PROMPT_TEXTAREA_KEYS,
+  ResizablePromptTextarea,
+} from "./prompts/ResizablePromptTextarea";
 
 const VIEW_KEY = "matrx-list-library-view";
 type ViewMode = "cards" | "compact";
@@ -345,7 +348,7 @@ function ListEditorDialog({
               placeholder="Colors"
             />
           </div>
-          <div className="flex min-h-0 flex-1 flex-col gap-1.5">
+          <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
             <div className="flex items-center justify-between gap-2">
               <Label htmlFor="list-options">Options</Label>
               <Button
@@ -359,12 +362,13 @@ function ListEditorDialog({
                 Smart paste
               </Button>
             </div>
-            <Textarea
+            <ResizablePromptTextarea
               id="list-options"
               value={optionsText}
               onChange={(e) => setOptionsText(e.target.value)}
               onPaste={handleOptionsPaste}
-              className="min-h-0 flex-1 resize-none font-mono text-sm leading-6 text-foreground"
+              resizeStorageKey={PROMPT_TEXTAREA_KEYS.listOptions}
+              className="font-mono text-sm leading-6 text-foreground"
               placeholder={"Blue\nRed\nGreen\n\nor paste: Red, Green, Blue"}
             />
           </div>
@@ -941,10 +945,10 @@ export function ListLibraryCore() {
                 Replace all
               </Button>
             </div>
-            <Textarea
+            <ResizablePromptTextarea
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
-              rows={10}
+              resizeStorageKey={PROMPT_TEXTAREA_KEYS.listImport}
               className="font-mono text-xs"
             />
             {importError && <ErrorNote message={importError} />}

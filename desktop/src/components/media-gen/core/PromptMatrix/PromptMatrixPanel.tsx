@@ -96,6 +96,10 @@ import { PoolCard } from "./PoolCard";
 import { StrategyControls } from "./StrategyControls";
 import { TemplateEditor } from "./TemplateEditor";
 import { VariableCard } from "./VariableCard";
+import {
+  NEGATIVE_PROMPT_DEFAULT_ROWS,
+  PROMPT_TEXTAREA_KEYS,
+} from "../../prompts/ResizablePromptTextarea";
 
 const EMPTY_ERRORS: ReadonlyMap<string, string> = new Map();
 const MAX_BATCH_LABEL_LENGTH = 120;
@@ -236,6 +240,7 @@ export function PromptMatrixEditor<TJob>({
             value={promptField.text}
             onChange={(text) => actions.setFieldText("prompt", text)}
             knownVariables={knownVariables}
+            resizeStorageKey={PROMPT_TEXTAREA_KEYS.matrixMain}
             placeholder="a portrait of a {{subject}}, {{style}} style, dramatic lighting"
             hint={
               <p className="text-[11px] text-muted-foreground">
@@ -262,8 +267,9 @@ export function PromptMatrixEditor<TJob>({
             value={negativeField.text}
             onChange={(text) => actions.setFieldText("negative_prompt", text)}
             knownVariables={knownVariables}
+            resizeStorageKey={PROMPT_TEXTAREA_KEYS.matrixNegative}
+            defaultRows={NEGATIVE_PROMPT_DEFAULT_ROWS}
             placeholder="blurry, low quality"
-            minHeightClass="min-h-[60px]"
           />
         )}
       </div>

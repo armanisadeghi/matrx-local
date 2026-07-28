@@ -16,6 +16,12 @@ import { useCallback, useLayoutEffect, useRef } from "react";
 import { Label } from "@/components/ui/label";
 import { findTokens } from "@/lib/prompt-matrix";
 import { cn } from "@/lib/utils";
+import {
+  PROMPT_TEXTAREA_DEFAULT_ROWS,
+  PROMPT_TEXTAREA_MIN_ROWS,
+  TextareaResizeHandle,
+  usePersistentTextareaResize,
+} from "../../prompts/ResizablePromptTextarea";
 
 /** Typography + box model shared by the textarea and its highlight mirror.
  *  Any change here MUST apply to both, or the highlights will drift. */
@@ -30,7 +36,9 @@ export function TemplateEditor({
   placeholder,
   /** Names that have at least one option — used to flag unknown tokens. */
   knownVariables,
-  minHeightClass = "min-h-[120px]",
+  resizeStorageKey,
+  defaultRows = PROMPT_TEXTAREA_DEFAULT_ROWS,
+  minRows = PROMPT_TEXTAREA_MIN_ROWS,
   hint,
 }: {
   label: string;
@@ -38,11 +46,18 @@ export function TemplateEditor({
   onChange: (text: string) => void;
   placeholder?: string;
   knownVariables: ReadonlySet<string>;
-  minHeightClass?: string;
+  resizeStorageKey: string;
+  defaultRows?: number;
+  minRows?: number;
   hint?: React.ReactNode;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
+  const resize = usePersistentTextareaResize({
+    storageKey: resizeStorageKey,
+    defaultRows,
+    minRows,
+  });
 
   // Keep the mirror scrolled with the textarea, or long prompts desync.
   const syncScroll = useCallback(() => {
@@ -60,55 +75,56 @@ export function TemplateEditor({
   return (
     <div className="space-y-1.5">
       <Label className="text-xs">{label}</Label>
-      <div className="relative">
-        <div
-          ref={mirrorRef}
-          aria-hidden="true"
-          className={cn(
-            SHARED_BOX,
-            minHeightClass,
-            "pointer-events-none absolute inset-0 overflow-hidden border-transparent text-transparent",
-          )}
-        >
-          {segments.map((seg, i) =>
-            seg.kind === "text" ? (
-              <span key={i}>{seg.text}</span>
-            ) : (
-              <span
-                key={i}
-                className={cn(
-                  "rounded-[3px]",
-                  seg.known
-                    ? "bg-primary/15 text-transparent"
-                    : // An unknown token would generate a literal "{{style}}"
-                      // into the image. Make it impossible to miss.
-                      "bg-destructive/15 text-transparent shadow-[inset_0_-1px_0_hsl(var(--destructive))]",
-                )}
-              >
-                {seg.text}
-              </span>
-            ),
-          )}
-          {/* A trailing newline needs a character or the mirror loses a line. */}
-          {value.endsWith("\n") ? "​" : null}
+      <div>
+        <div className="relative" style={{ height: `${resize.height}px` }}>
+          <div
+            ref={mirrorRef}
+            aria-hidden="true"
+            className={cn(
+              SHARED_BOX,
+              "pointer-events-none absolute inset-0 h-full overflow-hidden rounded-b-none border-transparent text-transparent",
+            )}
+          >
+            {segments.map((seg, i) =>
+              seg.kind === "text" ? (
+                <span key={i}>{seg.text}</span>
+              ) : (
+                <span
+                  key={i}
+                  className={cn(
+                    "rounded-[3px]",
+                    seg.known
+                      ? "bg-primary/15 text-transparent"
+                      : // An unknown token would generate a literal "{{style}}"
+                        // into the image. Make it impossible to miss.
+                        "bg-destructive/15 text-transparent shadow-[inset_0_-1px_0_hsl(var(--destructive))]",
+                  )}
+                >
+                  {seg.text}
+                </span>
+              ),
+            )}
+            {/* A trailing newline needs a character or the mirror loses a line. */}
+            {value.endsWith("\n") ? "​" : null}
+          </div>
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onScroll={syncScroll}
+            placeholder={placeholder}
+            spellCheck
+            className={cn(
+              SHARED_BOX,
+              "relative h-full resize-none rounded-b-none bg-transparent text-foreground caret-foreground",
+              "ring-offset-background placeholder:text-muted-foreground",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+              "selection:bg-primary/30",
+            )}
+          />
         </div>
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onScroll={syncScroll}
-          placeholder={placeholder}
-          spellCheck
-          className={cn(
-            SHARED_BOX,
-            minHeightClass,
-            "relative resize-y bg-transparent text-foreground caret-foreground",
-            "ring-offset-background placeholder:text-muted-foreground",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-            "disabled:cursor-not-allowed disabled:opacity-50",
-            "selection:bg-primary/30",
-          )}
-        />
+        <TextareaResizeHandle resize={resize} />
       </div>
       {hint}
     </div>

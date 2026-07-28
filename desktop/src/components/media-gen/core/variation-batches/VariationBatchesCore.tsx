@@ -59,6 +59,7 @@ import {
   VariablePromptField,
   VariablePromptInput,
 } from "../../prompts/VariablePromptTools";
+import { PROMPT_TEXTAREA_KEYS } from "../../prompts/ResizablePromptTextarea";
 import { ErrorNote } from "../../shared";
 import { FeedbackIconButton } from "../../surfaces/FeedbackIconButton";
 import { NO_LIST_ID, NO_SAVED_PROMPT_ID } from "../../pickers/constants";
@@ -912,8 +913,10 @@ export function VariationBatchesCore({
                         />
                         <VariablePromptInput
                           id="template-prompt"
-                          rows={4}
-                          className="min-h-[6rem] resize-y text-sm"
+                          resizeStorageKey={
+                            PROMPT_TEXTAREA_KEYS.variationTemplateMain
+                          }
+                          className="text-sm"
                         />
                       </div>
 
@@ -926,7 +929,6 @@ export function VariationBatchesCore({
                           patchDraft({ templateNegative: value })
                         }
                         placeholder="Optional…"
-                        rows={2}
                         enableVariables
                         onVariableInsert={(list, value) =>
                           patchTemplateWithList("templateNegative", list, value)

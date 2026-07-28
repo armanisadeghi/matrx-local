@@ -22,7 +22,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import type { ListLibraryActions } from "@/hooks/use-list-library";
 import type { NamedList } from "@/lib/list-library/types";
 import {
@@ -32,6 +31,10 @@ import {
   parsePastedListContent,
 } from "@/lib/list-library/parse-pasted-content";
 import { ErrorNote } from "./shared";
+import {
+  PROMPT_TEXTAREA_KEYS,
+  ResizablePromptTextarea,
+} from "./prompts/ResizablePromptTextarea";
 
 const NEW_LIST_TARGET = "__new__";
 
@@ -206,14 +209,15 @@ export function QuickPasteDialog({
               From clipboard
             </Button>
           </div>
-          <Textarea
+          <ResizablePromptTextarea
             id="quick-paste-text"
             value={text}
             onChange={(e) => setText(e.target.value)}
+            resizeStorageKey={PROMPT_TEXTAREA_KEYS.listQuickPaste}
             placeholder={
               'Red, Green, Blue\n\nor\n\n["Red","Green","Blue"]\n\nor\n\n{"name":"Colors","options":["Red","Blue"]}'
             }
-            className="min-h-[140px] resize-none font-mono text-sm leading-6"
+            className="font-mono text-sm leading-6"
           />
 
           <PastePreview parsed={parsed} />

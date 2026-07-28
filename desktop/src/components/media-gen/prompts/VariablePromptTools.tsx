@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ComponentProps,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -18,7 +17,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Textarea } from "@/components/ui/textarea";
 import { useListLibraryApp } from "@/contexts/ListLibraryContext";
 import type { NamedList } from "@/lib/list-library/types";
 import {
@@ -37,8 +35,10 @@ import {
   variableKey,
 } from "@/lib/prompt-matrix";
 import { cn } from "@/lib/utils";
-
-type TextareaProps = Omit<ComponentProps<"textarea">, "value" | "onChange">;
+import {
+  ResizablePromptTextarea,
+  type ResizablePromptTextareaProps,
+} from "./ResizablePromptTextarea";
 
 interface SavedSelection {
   start: number;
@@ -258,13 +258,26 @@ export function VariableInsertButton({ className }: { className?: string }) {
   );
 }
 
-/** Textarea bound to the surrounding VariablePromptField. */
-export function VariablePromptInput({ className, ...props }: TextareaProps) {
+export type VariablePromptInputProps = Omit<
+  ResizablePromptTextareaProps,
+  "value" | "onChange"
+>;
+
+/** Resizable textarea bound to the surrounding VariablePromptField. */
+export function VariablePromptInput({
+  className,
+  resizeStorageKey,
+  defaultRows,
+  minRows,
+  containerClassName,
+  handleClassName,
+  ...props
+}: VariablePromptInputProps) {
   const { value, onChange, textareaRef, rememberSelection, saveSelection } =
     useVariablePromptFieldContext();
 
   return (
-    <Textarea
+    <ResizablePromptTextarea
       ref={textareaRef}
       value={value}
       onChange={(event) => {
@@ -274,13 +287,19 @@ export function VariablePromptInput({ className, ...props }: TextareaProps) {
       onSelect={rememberSelection}
       onKeyUp={rememberSelection}
       onClick={rememberSelection}
+      resizeStorageKey={resizeStorageKey}
+      {...(defaultRows !== undefined ? { defaultRows } : {})}
+      {...(minRows !== undefined ? { minRows } : {})}
+      {...(containerClassName !== undefined ? { containerClassName } : {})}
+      {...(handleClassName !== undefined ? { handleClassName } : {})}
       className={className}
       {...props}
     />
   );
 }
 
-export interface VariablePromptTextareaProps extends TextareaProps {
+export interface VariablePromptTextareaProps
+  extends Omit<ResizablePromptTextareaProps, "value" | "onChange"> {
   value: string;
   onChange: (value: string) => void;
   onVariableInsert?: (list: NamedList, value: string) => void;

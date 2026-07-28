@@ -23,6 +23,7 @@ import {
   PromptVariablePreview,
   VariablePromptTextarea,
 } from "../../prompts/VariablePromptTools";
+import { PROMPT_TEXTAREA_KEYS } from "../../prompts/ResizablePromptTextarea";
 import { ErrorNote } from "../../shared";
 import { FeedbackIconButton } from "../../surfaces/FeedbackIconButton";
 
@@ -294,7 +295,7 @@ export function SavedPromptsCore({
                 </Button>
               </div>
             ) : (
-              <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(180px,1fr)_auto_auto_auto] gap-3 overflow-y-auto pr-1">
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                 <div className="space-y-1.5">
                   <LabelWithInfo
                     htmlFor="prompt-name"
@@ -319,7 +320,8 @@ export function SavedPromptsCore({
                     id="prompt-text"
                     value={draft.prompt}
                     onChange={(prompt) => patchDraft({ prompt })}
-                    className="min-h-0 flex-1 resize-none text-sm"
+                    resizeStorageKey={PROMPT_TEXTAREA_KEYS.savedPromptMain}
+                    className="text-sm"
                   />
                 </div>
 
@@ -330,7 +332,6 @@ export function SavedPromptsCore({
                   value={draft.negativePrompt}
                   onChange={(negativePrompt) => patchDraft({ negativePrompt })}
                   placeholder="Optional…"
-                  rows={2}
                   enableVariables
                 />
 

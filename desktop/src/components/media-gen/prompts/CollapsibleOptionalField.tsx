@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import type { NamedList } from "@/lib/list-library/types";
 import { FieldInfoButton } from "./LabelWithInfo";
 import { VariablePromptTextarea } from "./VariablePromptTools";
+import {
+  NEGATIVE_PROMPT_DEFAULT_ROWS,
+  ResizablePromptTextarea,
+} from "./ResizablePromptTextarea";
 
 export function CollapsibleOptionalField({
   storageKey,
@@ -13,7 +16,6 @@ export function CollapsibleOptionalField({
   value,
   onChange,
   placeholder,
-  rows = 3,
   enableVariables = false,
   onVariableInsert,
 }: {
@@ -23,7 +25,6 @@ export function CollapsibleOptionalField({
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
-  rows?: number;
   enableVariables?: boolean;
   onVariableInsert?: (list: NamedList, value: string) => void;
 }) {
@@ -63,16 +64,18 @@ export function CollapsibleOptionalField({
             value={value}
             onChange={onChange}
             {...(onVariableInsert ? { onVariableInsert } : {})}
-            rows={rows}
-            className="min-h-[4.5rem] resize-y text-sm"
+            resizeStorageKey={`${storageKey}:editor`}
+            defaultRows={NEGATIVE_PROMPT_DEFAULT_ROWS}
+            className="text-sm"
             placeholder={placeholder}
           />
         ) : (
-          <Textarea
+          <ResizablePromptTextarea
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            rows={rows}
-            className="min-h-[4.5rem] resize-y text-sm"
+            resizeStorageKey={`${storageKey}:editor`}
+            defaultRows={NEGATIVE_PROMPT_DEFAULT_ROWS}
+            className="text-sm"
             placeholder={placeholder}
           />
         ))}

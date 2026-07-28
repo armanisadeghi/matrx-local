@@ -38,7 +38,6 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { IMG2IMG_DEFAULT_STRENGTH } from "@/hooks/use-media-gen";
@@ -72,6 +71,10 @@ import { LoraStylesSection } from "./LoraManager";
 export { LoraStylesSection };
 import { MediaThumb } from "@/components/media/MediaThumb";
 import { descriptorFromInputImage } from "@/components/media/types";
+import {
+  PROMPT_TEXTAREA_KEYS,
+  ResizablePromptTextarea,
+} from "@/components/media-gen/prompts/ResizablePromptTextarea";
 
 // ── Prompt ───────────────────────────────────────────────────────────────────
 
@@ -109,7 +112,7 @@ export function ImageRevisionBanner({ ctl }: { ctl: ImageGenController }) {
 export function ImagePromptField({
   ctl,
   placeholder = "Describe the image you want to generate…",
-  textareaClassName = "min-h-[100px] resize-y text-sm",
+  textareaClassName = "text-sm",
   showLabel = true,
   showToolbar = true,
   showActions = false,
@@ -152,9 +155,10 @@ export function ImagePromptField({
           )}
         </div>
       )}
-      <Textarea
+      <ResizablePromptTextarea
         value={ctl.form.prompt}
         onChange={(e) => actions.setImageForm({ prompt: e.target.value })}
+        resizeStorageKey={PROMPT_TEXTAREA_KEYS.imageMain}
         placeholder={
           ctl.isRevision && ctl.model?.pipeline_type === "flux2-klein"
             ? "Describe what to change while preserving everything else…"

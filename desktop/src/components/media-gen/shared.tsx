@@ -61,6 +61,11 @@ import {
   descriptorFromResult,
   type MediaDescriptor,
 } from "@/components/media/types";
+import {
+  NEGATIVE_PROMPT_DEFAULT_ROWS,
+  PROMPT_TEXTAREA_KEYS,
+  ResizablePromptTextarea,
+} from "@/components/media-gen/prompts/ResizablePromptTextarea";
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
 
@@ -876,23 +881,27 @@ export function NegativePromptField({
   onChange,
   disabled = false,
   hideLabel = false,
+  resizeStorageKey = PROMPT_TEXTAREA_KEYS.imageNegative,
 }: {
   supported: boolean;
   value: string;
   onChange: (v: string) => void;
   disabled?: boolean;
   hideLabel?: boolean;
+  resizeStorageKey?: string;
 }) {
   return (
     <div className="space-y-1.5">
       {!hideLabel && <Label className="text-xs">Negative prompt</Label>}
       {supported ? (
-        <Textarea
+        <ResizablePromptTextarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          resizeStorageKey={resizeStorageKey}
+          defaultRows={NEGATIVE_PROMPT_DEFAULT_ROWS}
           placeholder="blurry, low quality, deformed…"
           disabled={disabled}
-          className="min-h-[60px] resize-y text-sm"
+          className="text-sm"
         />
       ) : (
         <p className="rounded-md border border-dashed px-3 py-2 text-[11px] text-muted-foreground">

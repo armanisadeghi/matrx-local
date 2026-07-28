@@ -64,6 +64,7 @@ import {
   LoraStylesSection,
 } from "@/components/media-gen/core/ImageGenerateForm";
 import { ImagePromptToolbar } from "@/components/media-gen/core/ImagePromptToolbar";
+import { PROMPT_TEXTAREA_KEYS } from "@/components/media-gen/prompts/ResizablePromptTextarea";
 import {
   SourceImageControl,
   VideoAdvancedSection,
@@ -200,10 +201,12 @@ function NegativePromptReveal({
   supported,
   value,
   onChange,
+  resizeStorageKey,
 }: {
   supported: boolean;
   value: string;
   onChange: (v: string) => void;
+  resizeStorageKey?: string;
 }) {
   // Starts open when a value already exists so context work is never hidden.
   const [open, setOpen] = useState(() => value.trim().length > 0);
@@ -237,6 +240,7 @@ function NegativePromptReveal({
         supported={supported}
         value={value}
         onChange={onChange}
+        {...(resizeStorageKey !== undefined ? { resizeStorageKey } : {})}
       />
     </div>
   );
@@ -331,7 +335,7 @@ function ImageFocusFlow() {
             showLabel={false}
             showToolbar={false}
             placeholder="Describe the image you want to see…"
-            textareaClassName="min-h-[110px] resize-y rounded-xl bg-card px-4 py-3 text-[15px] leading-relaxed shadow-sm"
+            textareaClassName="rounded-xl bg-card px-4 py-3 text-[15px] leading-relaxed shadow-sm"
           />
           <NegativePromptReveal
             supported={ctl.defaults?.supportsNegativePrompt ?? true}
@@ -494,12 +498,13 @@ function VideoFocusFlow() {
             ctl={ctl}
             showLabel={false}
             placeholder="Describe the video you want to see…"
-            textareaClassName="min-h-[110px] resize-y rounded-xl bg-card px-4 py-3 text-[15px] leading-relaxed shadow-sm"
+            textareaClassName="rounded-xl bg-card px-4 py-3 text-[15px] leading-relaxed shadow-sm"
           />
           <NegativePromptReveal
             supported={ctl.defaults?.supportsNegativePrompt ?? true}
             value={videoForm.negativePrompt}
             onChange={(negativePrompt) => setVideoForm({ negativePrompt })}
+            resizeStorageKey={PROMPT_TEXTAREA_KEYS.videoNegative}
           />
           <SourceImageControl ctl={ctl} />
         </section>

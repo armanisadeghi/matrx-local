@@ -5,7 +5,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import {
+  NEGATIVE_PROMPT_DEFAULT_ROWS,
+  PROMPT_TEXTAREA_KEYS,
+  ResizablePromptTextarea,
+} from "../../prompts/ResizablePromptTextarea";
 import { useDebouncedSave } from "@/hooks/use-debounced-save";
 import type { VariationBatchesActions } from "@/hooks/use-variation-batches";
 import type {
@@ -404,12 +408,12 @@ export function VariationItemsManager({
                   >
                     Prompt
                   </label>
-                  <Textarea
+                  <ResizablePromptTextarea
                     id="variation-prompt"
                     value={draft.prompt}
                     onChange={(e) => patchDraft({ prompt: e.target.value })}
-                    rows={5}
-                    className="resize-y text-sm"
+                    resizeStorageKey={PROMPT_TEXTAREA_KEYS.variationItemMain}
+                    className="text-sm"
                     placeholder="Prompt text…"
                   />
                 </div>
@@ -421,14 +425,17 @@ export function VariationItemsManager({
                     >
                       Negative prompt
                     </label>
-                    <Textarea
+                    <ResizablePromptTextarea
                       id="variation-negative"
                       value={draft.negativePrompt}
                       onChange={(e) =>
                         patchDraft({ negativePrompt: e.target.value })
                       }
-                      rows={3}
-                      className="resize-y text-sm"
+                      resizeStorageKey={
+                        PROMPT_TEXTAREA_KEYS.variationItemNegative
+                      }
+                      defaultRows={NEGATIVE_PROMPT_DEFAULT_ROWS}
+                      className="text-sm"
                       placeholder="Optional…"
                     />
                   </div>

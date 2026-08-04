@@ -204,3 +204,6 @@ bg.pid
 
 # Smoke-run artifacts (scripts/smoke.sh) — logs and packaged-app output
 .smoke/
+
+# Nested local clone (own repository)
+matrx-extend/

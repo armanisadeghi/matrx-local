@@ -37,7 +37,12 @@ from app.services.access_health.models import (
     is_permission_error,
     now,
 )
-from app.services.access_health.probes import capability_probe, diagnose_fda
+from app.services.access_health.probes import (
+    capability_probe,
+    diagnose_fda,
+    posix_owner_can_read,
+    tcc_protected_folder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -449,6 +454,24 @@ class AccessHealthService:
                 "Matrx in System Settings > Privacy & Security."
             )
         if fda["status"] == "granted":
+            # FDA is exonerated. If the path sits under a Files & Folders
+            # TCC location (Documents/Desktop/Downloads) and POSIX positively
+            # allows owner reads, the denial is macOS's PER-FOLDER privacy
+            # control — a different switch than Full Disk Access, and one
+            # macOS applies silently when consent was never granted to this
+            # process. Naming "folder permissions/ownership" here sent users
+            # chasing chmod ghosts (2026-08 notes-folder bug).
+            folder = tcc_protected_folder(where)
+            if folder is not None and posix_owner_can_read(where) is True:
+                return (
+                    f"{detail} Full Disk Access IS granted and the folder's "
+                    "own permissions allow reading, so macOS's separate "
+                    f"Files & Folders privacy control is blocking the "
+                    f"{folder} folder for this app. Open System Settings > "
+                    "Privacy & Security > Files & Folders, allow the "
+                    f"{folder} folder for AI Matrx (toggle it off and on if "
+                    "it is already enabled), then quit and reopen the app."
+                )
             return (
                 f"{detail} Full Disk Access IS granted, so this is the "
                 "folder's own permissions, ownership, or volume state — not "

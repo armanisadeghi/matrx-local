@@ -259,5 +259,27 @@ app = BUNDLE(
         'NSBluetoothAlwaysUsageDescription':
             'AI Matrx needs Bluetooth access to discover and interact with nearby '
             'devices.',
+        # Files & Folders (Documents/Desktop/Downloads/volumes): these TCC
+        # services are gated per app SEPARATELY from Full Disk Access, and a
+        # missing usage string means macOS denies readdir SILENTLY with
+        # EPERM — no prompt. The engine is the process that enumerates
+        # ~/Documents/Matrx/Notes and ~/Documents/Matrx/Files, so these keys
+        # must live HERE, not only on the parent (2026-08 notes-folder bug:
+        # every capability worked except enumerate, on every launch).
+        'NSDocumentsFolderUsageDescription':
+            'AI Matrx stores your synced notes and files in Documents/Matrx '
+            'and needs access to read and sync them.',
+        'NSDesktopFolderUsageDescription':
+            'AI Matrx can access your Desktop when you use file tools or '
+            'point a synced folder there.',
+        'NSDownloadsFolderUsageDescription':
+            'AI Matrx can access your Downloads folder to manage files you '
+            'download through the app and to run file tools you invoke.',
+        'NSNetworkVolumesUsageDescription':
+            'AI Matrx can access files on network volumes when you point a '
+            'synced or mapped folder at one.',
+        'NSRemovableVolumesUsageDescription':
+            'AI Matrx can access files on removable drives when you point a '
+            'synced or mapped folder at one.',
     },
 )

@@ -23,6 +23,30 @@
     <key>NSScreenCaptureUsageDescription</key>
     <string>AI Matrx uses screen recording to capture screenshots for the Screenshot tool and to enable AI-assisted automation workflows. Captured content is only used when you invoke a screenshot or automation tool.</string>
 
+    <!-- ── Files & Folders (Documents / Desktop / Downloads / volumes) ─────── -->
+    <!--
+        These folders are gated per-app by macOS TCC, SEPARATELY from Full
+        Disk Access. Without the matching usage string, macOS DENIES access
+        silently (EPERM, no prompt) — the 2026-08 bug where the engine could
+        not enumerate ~/Documents/Matrx/Notes on every launch. The same keys
+        must also exist on the nested Matrx Engine helper (specs/*.spec),
+        because the helper performs the actual file I/O.
+    -->
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>AI Matrx stores your synced notes and files in Documents/Matrx and needs access to read and sync them.</string>
+
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>AI Matrx can access your Desktop when you use file tools or point a synced folder there.</string>
+
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>AI Matrx can access your Downloads folder to manage files you download through the app and to run file tools you invoke.</string>
+
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>AI Matrx can access files on network volumes when you point a synced or mapped folder at one.</string>
+
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>AI Matrx can access files on removable drives when you point a synced or mapped folder at one.</string>
+
     <!-- ── Contacts ────────────────────────────────────────────────────────── -->
     <key>NSContactsUsageDescription</key>
     <string>AI Matrx can read your contacts when you use contact-related AI tools. Contact data is processed locally and is not sent to external servers unless you explicitly invoke a cloud AI tool.</string>

@@ -329,6 +329,60 @@ def test_message_never_asserts_fda_without_positive_evidence(
     assert "Full Disk Access is not granted" in msg
 
 
+def test_message_names_files_and_folders_for_tcc_folder_denial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FDA granted + denial under ~/Documents (POSIX-readable) must name the
+    Files & Folders per-folder control — NOT 'folder permissions, ownership,
+    or volume state', which sent users chasing chmod ghosts while the actual
+    cause was macOS's silent per-folder TCC denial (2026-08 notes bug)."""
+    import app.services.access_health.service as service_mod
+
+    svc = _svc_with(tmp_path, "a")
+    _deny(svc, "a")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(service_mod.sys, "platform", "darwin", raising=False)
+    monkeypatch.setattr(
+        service_mod, "diagnose_fda", lambda **kw: {"status": "granted"}
+    )
+
+    # Path outside any TCC folder → the generic exoneration wording stands.
+    msg = svc.message("a")
+    assert "Files & Folders" not in msg
+
+    # Same evidence, but the failing path sits under ~/Documents and POSIX
+    # positively allows owner reads → the message names the real control.
+    monkeypatch.setattr(
+        service_mod, "tcc_protected_folder", lambda where: "Documents"
+    )
+    monkeypatch.setattr(
+        service_mod, "posix_owner_can_read", lambda where: True
+    )
+    msg = svc.message("a")
+    assert "Files & Folders" in msg
+    assert "Documents folder" in msg
+    assert "IS granted" in msg  # FDA stays exonerated, never re-accused
+    assert "ownership" not in msg
+
+    # Without positive POSIX evidence the claim is not made.
+    monkeypatch.setattr(
+        service_mod, "posix_owner_can_read", lambda where: None
+    )
+    assert "Files & Folders" not in svc.message("a")
+
+
+def test_tcc_protected_folder_path_logic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.access_health.probes import tcc_protected_folder
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert tcc_protected_folder(tmp_path / "Documents") == "Documents"
+    assert tcc_protected_folder(tmp_path / "Documents" / "Matrx" / "Notes") == "Documents"
+    assert tcc_protected_folder(tmp_path / "Desktop" / "x.md") == "Desktop"
+    assert tcc_protected_folder(tmp_path / "Downloads") == "Downloads"
+    assert tcc_protected_folder(tmp_path / "Library" / "Mail") is None
+    assert tcc_protected_folder(tmp_path / "DocumentsBackup") is None  # no prefix trap
+
+
 def test_message_non_darwin_never_mentions_fda(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

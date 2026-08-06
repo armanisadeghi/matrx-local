@@ -172,6 +172,51 @@ def capability_probe(
     return results
 
 
+# ── macOS per-folder (Files & Folders) diagnosis ─────────────────────────────
+
+# The TCC services kTCCServiceSystemPolicy{Documents,Desktop,Downloads}Folder
+# gate these locations PER APP, separately from Full Disk Access. A process
+# whose bundle lacks the matching NS*FolderUsageDescription key is denied
+# EPERM on readdir *silently* — no prompt, no Console hint (shipped bug
+# 2026-08: the engine helper had no NSDocumentsFolderUsageDescription, so
+# enumerating ~/Documents/Matrx/Notes failed with errno 1 on every launch
+# while FDA was granted and every other capability worked).
+_TCC_FOLDER_SERVICES = ("Documents", "Desktop", "Downloads")
+
+
+def tcc_protected_folder(path: str | Path) -> str | None:
+    """Name of the macOS Files & Folders service governing *path*, or None.
+
+    Returns "Documents" / "Desktop" / "Downloads" when the path is that
+    folder or lives beneath it. Pure path logic — safe on any platform.
+    """
+    try:
+        p = Path(path).expanduser()
+        home = Path.home()
+    except Exception:
+        return None
+    for name in _TCC_FOLDER_SERVICES:
+        root = home / name
+        if p == root or root in p.parents:
+            return name
+    return None
+
+
+def posix_owner_can_read(path: str | Path) -> bool | None:
+    """Positive evidence that classic POSIX permissions allow reading *path*.
+
+    True → the current user owns the directory and its mode grants owner
+    read+execute, so a directory-listing denial is NOT explained by POSIX —
+    it is coming from a MAC layer (TCC / sandbox). None when the stat itself
+    fails (no evidence either way).
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_uid == os.getuid() and (st.st_mode & 0o500) == 0o500
+
+
 # ── macOS Full Disk Access diagnosis ─────────────────────────────────────────
 
 _FDA_CACHE_TTL_S = 30.0

@@ -58,6 +58,28 @@ Access" claim. Do not reintroduce any global access flag, anywhere.
 - `POST /access/reset` — clear all evidence, bump generation, re-probe.
   Every user-facing "reset" that could affect access state must call this.
 
+## macOS Files & Folders (per-folder TCC) — separate from FDA
+
+Documents/Desktop/Downloads (and network/removable volumes) are gated per
+app by their own TCC services, independently of Full Disk Access. Two facts
+matter here:
+
+- **A bundle without the matching `NS*FolderUsageDescription` key is denied
+  SILENTLY** — EPERM on readdir, no prompt, while create/read/write/delete
+  inside the folder can still succeed. The 2026-08 notes bug was exactly
+  this: the engine helper shipped without `NSDocumentsFolderUsageDescription`
+  and could not enumerate `~/Documents/Matrx/Notes` on any launch, with FDA
+  granted and every other capability green. The keys now live on BOTH
+  bundles (engine helper via `specs/matrx-engine-*-apple-darwin.spec`,
+  parent via `desktop/src-tauri/Info.plist`) and are pinned by
+  `tests/unit/test_folder_usage_descriptions.py`.
+- **Diagnosis:** `probes.tcc_protected_folder(path)` names the governing
+  folder service; `probes.posix_owner_can_read(path)` positively exonerates
+  classic POSIX permissions. Only when FDA is granted AND POSIX is
+  exonerated AND the path is under a TCC folder does `_build_message` name
+  the Files & Folders control (evidence-based, same doctrine as FDA:
+  never assert what wasn't established).
+
 ## Hard rules
 
 1. No global access boolean. No cross-resource clearing. Ever.

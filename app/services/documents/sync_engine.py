@@ -555,7 +555,30 @@ class SyncEngine:
             owner = await repo.get_by_file_path(file_path)
             if owner and owner["id"] != note_id and not owner.get("is_deleted"):
                 # Two distinct notes claim one path (duplicate labels across
-                # clients). Reroute this one instead of clobbering.
+                # clients). If the incoming note is BYTE-IDENTICAL to the
+                # path's current owner, it is a cloud-side duplicate row —
+                # materializing it locally (allocating label_2.md) is what
+                # seeded the 2026-07 duplicate factory. Leave it untouched;
+                # it carries nothing the replica doesn't already have.
+                if (
+                    note.get("content_hash")
+                    and note.get("content_hash") == owner.get("content_hash")
+                ):
+                    logger.warning(
+                        "Note %s duplicates note %s (identical content, both "
+                        "claim %s) — not materializing locally; cloud-side "
+                        "dedup needed",
+                        note_id,
+                        owner["id"],
+                        file_path,
+                    )
+                    return {**note, "_skipped_duplicate_content": True}
+                # Genuinely different content: reroute to a fresh path AND
+                # converge the cloud row on it (CAS on the contested path).
+                # Without the write-back, every subsequent pull re-detects
+                # this same collision and allocates yet another _2 suffix —
+                # the escalating label_2_2_2.md chain.
+                note["_reroute_from"] = file_path
                 file_path = self.fm.unique_file_path(folder_name, label)
                 note["_allocated_path"] = True
 
@@ -630,13 +653,22 @@ class SyncEngine:
 
         if note.get("_allocated_path"):
             # Write the allocated path back so every device converges on one
-            # canonical location. Conditional (file_path still NULL) so two
+            # canonical location. Conditional (file_path still NULL for fresh
+            # allocations, CAS on the contested path for reroutes) so two
             # devices cannot ping-pong allocations, and device-stamped so the
             # resulting realtime UPDATE reads as our own echo.
             try:
-                won = await self.sb.set_file_path_if_null(
-                    note_id, file_path, self.device_id
-                )
+                if note.get("_reroute_from"):
+                    won = await self.sb.set_file_path_if_matches(
+                        note_id,
+                        note["_reroute_from"],
+                        file_path,
+                        self.device_id,
+                    )
+                else:
+                    won = await self.sb.set_file_path_if_null(
+                        note_id, file_path, self.device_id
+                    )
                 if not won:
                     logger.debug(
                         "file_path write-back for %s lost to another device — "
@@ -866,10 +898,13 @@ class SyncEngine:
 
             remote_by_path: dict[str, dict] = {}
             remote_by_id: dict[str, dict] = {}
+            remote_by_hash: dict[str, list[dict]] = {}
             for n in remote_notes:
                 if n.get("file_path"):
                     remote_by_path[n["file_path"]] = n
                 remote_by_id[n["id"]] = n
+                if n.get("content_hash"):
+                    remote_by_hash.setdefault(n["content_hash"], []).append(n)
 
             local_files = self.fm.scan_all()
             local_by_path: dict[str, dict] = {f["file_path"]: f for f in local_files}
@@ -981,21 +1016,108 @@ class SyncEngine:
                         continue
 
                     content = self.fm.read_note(fp)
-                    if content is not None:
-                        parts = Path(fp).parts
-                        folder = parts[0] if len(parts) > 1 else "General"
-                        push_id = (
-                            local_note["id"] if local_note else _note_id_for_path(fp)
-                        )
-                        await self._push_note(
-                            note_id=push_id,
-                            label=local["label"],
-                            content=content,
-                            folder_name=(local_note or {}).get("folder_name") or folder,
-                            folder_id=(local_note or {}).get("folder_id"),
-                            file_path=fp,
-                        )
-                        stats["pushed"] += 1
+                    if content is None:
+                        continue
+                    parts = Path(fp).parts
+                    folder = parts[0] if len(parts) > 1 else "General"
+
+                    if local_note is None:
+                        # Identity loss (fresh SQLite, a second engine on the
+                        # same notes dir, a lost path write-back): this file
+                        # has no local row and no path match in the cloud.
+                        # NEVER mint a new cloud note when its exact bytes
+                        # already exist remotely — that is the 2026-07
+                        # duplicate factory (764 corpus clones on 07-14,
+                        # ~2,100 suffix-chained notes on 07-29/30). Adopt a
+                        # pathless remote twin, or skip a bound one.
+                        twins = remote_by_hash.get(local["content_hash"], [])
+                        adopted = False
+                        for twin in twins:
+                            if twin.get("file_path"):
+                                continue
+                            # Pathless remote note with identical bytes:
+                            # BIND the local file to it instead of creating.
+                            await repo.upsert({
+                                "id": twin["id"],
+                                "user_id": self._user_id or "",
+                                "folder_id": twin.get("folder_id"),
+                                "title": local["label"],
+                                "label": twin.get("label") or local["label"],
+                                "content": content,
+                                "content_hash": local["content_hash"],
+                                "file_path": fp,
+                                "folder_name": twin.get("folder_name") or folder,
+                                "sync_status": "synced",
+                                "last_synced_at": _now(),
+                                "sync_enabled": True,
+                                "remote_content_hash": local["content_hash"],
+                                "sync_version": twin.get("sync_version", 0),
+                            })
+                            st = self.fm.load_sync_state()
+                            st["note_hashes"][fp] = local["content_hash"]
+                            self.fm.save_sync_state(st)
+                            self._last_push_hashes[fp] = local["content_hash"]
+                            try:
+                                await self.sb.set_file_path_if_null(
+                                    twin["id"], fp, self.device_id
+                                )
+                            except Exception:
+                                logger.debug(
+                                    "Could not write adopted file_path back "
+                                    "for %s", twin["id"],
+                                )
+                            twin["file_path"] = fp
+                            stats["adopted"] = stats.get("adopted", 0) + 1
+                            adopted = True
+                            break
+                        if adopted:
+                            continue
+                        if twins:
+                            # Identical bytes already live in the cloud under
+                            # another path — this local file is a redundant
+                            # copy. Do not push it as a new note; leave the
+                            # file alone (if the user edits it, its hash
+                            # diverges and it syncs as a new note then).
+                            stats["skipped_duplicate"] = (
+                                stats.get("skipped_duplicate", 0) + 1
+                            )
+                            continue
+
+                    push_id = (
+                        local_note["id"] if local_note else _note_id_for_path(fp)
+                    )
+
+                    # Remote-tombstone check before pushing a local-only file
+                    # under an existing id: the cloud snapshot excludes
+                    # soft-deleted rows, so a note deleted remotely (another
+                    # device, or a cloud-side dedup) looks "local-only" here —
+                    # and upsert_note deliberately resurrects (deleted_at:
+                    # None). Resurrection is correct ONLY for a local EDIT;
+                    # for unchanged content the deletion wins and propagates.
+                    if local_note is not None:
+                        try:
+                            remote_row = await self.sb.get_note(push_id)
+                        except Exception:
+                            remote_row = None
+                        if (
+                            remote_row is not None
+                            and remote_row.get("is_deleted")
+                            and remote_row.get("content_hash")
+                            == local["content_hash"]
+                        ):
+                            await self._pull_note(push_id, note=remote_row)
+                            stats["deleted_local"] += 1
+                            continue
+
+                    await self._push_note(
+                        note_id=push_id,
+                        label=local["label"],
+                        content=content,
+                        folder_name=(local_note or {}).get("folder_name") or folder,
+                        folder_id=(local_note or {}).get("folder_id"),
+                        file_path=fp,
+                    )
+                    stats["pushed"] += 1
 
             # Remote notes WITHOUT a file_path — created by other clients (the
             # web app writes no file_path). remote_by_path walks right past
@@ -1031,6 +1153,19 @@ class SyncEngine:
                                 "full_sync: imported %d pathless cloud notes so far…",
                                 imported,
                             )
+
+            if stats.get("skipped_duplicate") or stats.get("adopted"):
+                # A firing here means note identity was lost somewhere (fresh
+                # SQLite, second engine, lost path write-back) and the old code
+                # would have minted duplicate cloud notes. Recovery worked, but
+                # the underlying identity loss deserves eyes — scream.
+                logger.warning(
+                    "full_sync duplicate guard fired: adopted=%d "
+                    "skipped_duplicate=%d — local files whose bytes already "
+                    "exist in the cloud were NOT re-minted as new notes",
+                    stats.get("adopted", 0),
+                    stats.get("skipped_duplicate", 0),
+                )
 
             # Reload — the pull/push calls above rewrote sync state.
             state = self.fm.load_sync_state()
@@ -1416,6 +1551,22 @@ class SyncEngine:
                             file_path=file_path,
                         )
                     else:
+                        # Same anti-duplicate guard as full_sync: if these
+                        # exact bytes already live in the cloud under another
+                        # note, this "new" file is a redundant copy (usually a
+                        # sync artifact) — pushing it would mint a duplicate
+                        # cloud note. full_sync's adoption pass will bind it
+                        # if a pathless twin exists.
+                        if any(
+                            n.get("content_hash") == c_hash for n in all_notes
+                        ):
+                            logger.warning(
+                                "Not pushing %s as a new note — identical "
+                                "content already exists in the cloud "
+                                "(duplicate guard)",
+                                file_path,
+                            )
+                            return
                         # Push under the SAME id as the SQLite row created
                         # above — a fresh uuid4 here split the identity and
                         # made the post-push set_sync_status a no-op.

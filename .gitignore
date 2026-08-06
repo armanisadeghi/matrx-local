@@ -207,3 +207,6 @@ bg.pid
 
 # Nested local clone (own repository)
 matrx-extend/
+
+# Runtime log artifacts — never track (accidentally committed rotated logs kept dirtying the tree and blocking release.sh)
+system/logs/

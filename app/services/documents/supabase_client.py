@@ -378,6 +378,39 @@ class SupabaseDocClient:
         )
         return bool(rows)
 
+    async def set_file_path_if_matches(
+        self,
+        note_id: str,
+        expected_file_path: str,
+        new_file_path: str,
+        device_id: str | None = None,
+    ) -> bool:
+        """Repoint a cloud row from a contested file_path to a freshly
+        allocated one (CAS on the old path value).
+
+        Used when a pull finds two distinct notes claiming one local path and
+        reroutes the incoming note: without converging the cloud row on the
+        new path, every subsequent pull re-detects the same collision and
+        allocates yet another ``_2`` suffix — the escalating
+        ``label_2_2_2.md`` chain of the 2026-07 duplicate factory. Conditional
+        on the old value so a concurrent repoint from another device cannot be
+        clobbered. Returns True if this device won the write.
+        """
+        body: dict[str, Any] = {"file_path": new_file_path}
+        if device_id:
+            body["last_device_id"] = device_id
+        rows = await self._request(
+            "PATCH",
+            "notes",
+            params={
+                "id": f"eq.{note_id}",
+                "file_path": f"eq.{expected_file_path}",
+            },
+            json_body=body,
+            schema=_WORKBENCH,
+        )
+        return bool(rows)
+
     async def soft_delete_note(self, note_id: str, device_id: str | None = None) -> None:
         body: dict[str, Any] = {"deleted_at": _utcnow_iso()}
         # Stamp the deleting device so realtime consumers can classify the

@@ -195,7 +195,9 @@ keeps its own copy of the gate in
 [`app/services/ai/local_ai_task.py::resolve_conversation_gate`](app/services/ai/local_ai_task.py) —
 change one, change both, or the two surfaces drift. Server contract:
 `/Users/armanisadeghi/code/aidream/aidream/services/conversation_context/FEATURE.md`
-§ "Starting a conversation".
+§ "Starting a conversation". Cross-repo system-of-record (names this repo's gate as an
+independent duplicate implementation):
+`/Users/armanisadeghi/code/common-docs/systems/conversation-start-contract/FEATURE.md`.
 
 ## External Connections
 
@@ -307,7 +309,7 @@ Never let a discovered issue go untracked. Prefer the right file; do not invent 
 
 ## Cross-Repo Integration with matrx-extend
 
-The matrx-extend Chrome extension is a primary client of this engine. Integration map and protocols:
+The matrx-extend Chrome extension is a primary client of this engine. Cross-repo channel map (system-of-record): `/Users/armanisadeghi/code/common-docs/systems/matrx-extend-integration/FEATURE.md`. Integration map and protocols:
 - Connection details: [docs/MATRX_EXTEND_CONNECTION.md](./docs/MATRX_EXTEND_CONNECTION.md)
 - Skill for working on this connection: `.cursor/skills/connect-matrx-extend/SKILL.md`
 - Master cross-repo doc (in matrx-extend): `/Users/armanisadeghi/code/matrx-extend/docs/CROSS_REPO_INTEGRATION.md`

@@ -177,16 +177,31 @@ Legacy **Settings** page still exposes overlapping controls (e.g. theme with `se
 | Forbidden URL patterns | `/settings/forbidden-urls` | No |
 | Provider API keys (Anthropic, OpenAI, …) | `/settings/api-keys` | No |
 | Hugging Face token (GGUF / gated downloads) | `/settings/api-keys/huggingface` (+ Tauri `llm.json` fallback) | No |
-| API-key validation verdicts | `POST /settings/api-keys/{provider}/validate` \| `/validate-all`; persisted by `ApiKeysRepo.record_validation()` under the `api_key_validation` AppSettings blob key | Yes (verdicts only) |
+| API-key validation verdicts | `POST /settings/api-keys/{provider}/validate` \| `/validate-all`; session-only, never persisted | No |
 
-**`api_key_validation`** — shape `{provider: {verdict, account, checked_at}}`,
-where `verdict ∈ valid | invalid | unknown | unsupported`. It records **verdicts
-only for keys the USER supplied** — never a key value, and never a key the core
-system needs. (Core requires only the public Supabase publishable key — see
-[CLAUDE.md](../../CLAUDE.md); any private provider key is user-set.)
-`VALID_PROVIDERS` currently includes `anthropic`, `openai`, `google`, `cerebras`,
-`xai`, `huggingface`, `civitai`, **`elevenlabs`**, **`fastino`** (the last two
-were previously in `PROVIDER_ENV_MAP` only, so PUT/bulk saves 422'd for them).
+**Validation is explicit and session-only — deliberately not persisted.**
+`POST /settings/api-keys/{provider}/validate` and `/validate-all`
+(`app/api/settings_routes.py`) return a live `ApiKeyValidation`
+(`provider`, `verdict ∈ valid | invalid | unknown | unsupported`, `message`,
+`account`, `status_code`) for the CURRENT request only — validating either the
+key the user just typed (unsaved) or the currently-stored key. Nothing writes
+it to `AppSettings`. The frontend (`desktop/src/pages/Settings.tsx`) keeps the
+verdict only in React state (`apiKeyVerdicts`), so it resets on reload —
+a past response is not proof about the current provider, network, account
+grant, or credential status, and rendering a stale verdict as though it were
+current truth was the exact bug this replaced. Schema migration V17
+(`app/services/local_db/schema.py`) drops any historical `api_key_validation`
+blob left over from before this change. `ApiKeysRepo` has no
+`record_validation()` method — a validation call site referencing one is
+stale code, not a doc describing an unfinished feature.
+
+It validates **only keys the USER supplied** — never a key value is returned,
+and never a key the core system needs. (Core requires only the public
+Supabase publishable key — see [CLAUDE.md](../../CLAUDE.md); any private
+provider key is user-set.) `VALID_PROVIDERS` currently includes `anthropic`,
+`openai`, `google`, `cerebras`, `xai`, `huggingface`, `civitai`,
+**`elevenlabs`**, **`fastino`** (the last two were previously in
+`PROVIDER_ENV_MAP` only, so PUT/bulk saves 422'd for them).
 
 Detail for env vars: [configuration.md](./configuration.md).
 

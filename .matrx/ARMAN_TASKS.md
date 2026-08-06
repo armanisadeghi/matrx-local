@@ -117,8 +117,8 @@ _Skim and check off or delete. Agents: do not open `.arman/` — leave that to A
 | Doc-hygiene leftovers from deleted root AGENT_TASKS | Confirm whether private drafts under `.arman/` still matter; whether `PLATFORM_AUDIT.md` should stay gone |
 | `PLATFORM_AUDIT.md` (repo root, if present) | Historically wrong about `initPlatformCtx`; delete or rewrite if it returns |
 | Private drafts (Arman only): `.arman/pending/ui-overhaul/`, `.arman/in-progress/proxy/` | UI overhaul draft / proxy research — Arman decides keep vs delete |
-| [`local-llm-inference-integration.md`](../local-llm-inference-integration.md) | Long operational doc — keep; update when LLM packaging changes |
-| [`whisper-transcription-integration.md`](../whisper-transcription-integration.md) | Same for voice |
+| [`local-llm-inference-integration.md`](../docs/local-llm-inference-integration.md) | Long operational doc — keep; update when LLM packaging changes |
+| [`whisper-transcription-integration.md`](../docs/whisper-transcription-integration.md) | Same for voice |
 | [`docs/react-migration-notes-api.md`](../docs/react-migration-notes-api.md) | Still valid for external clients (`/documents` → `/notes`) |
 
 **Suggested tickets to spawn (your call):**

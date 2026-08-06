@@ -30,6 +30,19 @@ _Last updated: 2026-07-14 (step-7 pass: both official-docs asks APPROVED + appli
 
 ## Active (ranked — quickest wins first within priority)
 
+- [ ] **Decide: soft-delete the 176 residual duplicate note pairs in the cloud**
+  (decision, 1 minute; added 2026-08-06) — after the duplicate-factory fix and
+  the 3,491→892 cleanup, `workbench.notes` still holds 176 pairs where two live
+  rows claim the SAME `file_path` (175 byte-identical, 1 divergent). The sync
+  engine now tolerates them (identical contested pulls are skipped, logged as
+  "cloud-side dedup needed"), but the web app shows doubles. Agents did NOT
+  auto-delete because picking which row of each pair to tombstone interacts
+  with each device's local SQLite binding (tombstoning the bound row deletes
+  the local file via tombstone propagation). Prepped ask: approve "keep the row
+  each device is bound to where known, else keep the OLDER row; soft-delete the
+  other" and an agent will run it with the same soft-delete pattern as the
+  2026-08-06 cleanup — or say "leave them" and we close this.
+
 - [ ] **Add the missing `brave` row to the live `api_key_provider` catalog** (MXL-D-073, 30 seconds) —
   the live catalog serves 12 rows and has no `brave`; the compiled fallback has
   13. Because the live rows *replace* the fallback, the shipped app silently

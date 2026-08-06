@@ -1086,6 +1086,29 @@ class SyncEngine:
                     push_id = (
                         local_note["id"] if local_note else _note_id_for_path(fp)
                     )
+
+                    # Remote-tombstone check before pushing a local-only file
+                    # under an existing id: the cloud snapshot excludes
+                    # soft-deleted rows, so a note deleted remotely (another
+                    # device, or a cloud-side dedup) looks "local-only" here —
+                    # and upsert_note deliberately resurrects (deleted_at:
+                    # None). Resurrection is correct ONLY for a local EDIT;
+                    # for unchanged content the deletion wins and propagates.
+                    if local_note is not None:
+                        try:
+                            remote_row = await self.sb.get_note(push_id)
+                        except Exception:
+                            remote_row = None
+                        if (
+                            remote_row is not None
+                            and remote_row.get("is_deleted")
+                            and remote_row.get("content_hash")
+                            == local["content_hash"]
+                        ):
+                            await self._pull_note(push_id, note=remote_row)
+                            stats["deleted_local"] += 1
+                            continue
+
                     await self._push_note(
                         note_id=push_id,
                         label=local["label"],

@@ -33,13 +33,10 @@ API directly from the start (no aidream detour).
 
 ## Remaining work
 
-1. **Deploy matrx-files 0.1.4** — the ONLY blocker for going live; filed in
-   `.matrx/ARMAN_TASKS.md`. aidream commits `40893249f` (feed) +
-   `fd4053cc7` (review fixes) hold the code; local tag `matrx-files/v0.1.4`
-   points at `fd4053cc7` (pushing it triggers the PyPI OIDC publish), then
-   bump the container per `packages/matrx-files/DEPLOY.md`. Until then every
-   engine pull against `files.matrxserver.com` 404s loudly each tick (by
-   design).
+1. ~~**Deploy matrx-files 0.1.4**~~ — DONE: matrx-files **0.1.5** deployed to
+   `files.matrxserver.com` 2026-07-14 (Arman ran deploy.sh; verified health
+   green + `/files/sync/*` returning 401 = live — see
+   `00-INTEGRATION-TRACKER.md` W3 row / progress log).
 2. **Verification remaining** (not yet EXERCISED):
    - The engine's own background loop against the PROD service with the real
      desktop sign-in (drill used an isolated engine + locally-run service —

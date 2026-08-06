@@ -7,6 +7,12 @@ owner-context: MASTER TRACKER for the 2026-07 full-integration push — every wo
 
 # Integration push — master tracker
 
+> ⚠️ **STALE SNAPSHOT (flagged 2026-08-06, docs-hygiene sweep).** Last updated
+> 2026-07-18/19 and not maintained since — work landed after that date (e.g. the
+> Credential Vault consumer, built 2026-07-26) is not reflected in any row. Treat
+> rows as historical claims; verify against the per-workstream handoffs and live
+> code before acting. Either re-adopt this tracker (update every row) or retire it.
+
 **The goal (Arman, verbatim):** "It's our portal to the user's computer for
 everything — private, confidential data such as chat they don't want leaving
 their computer, private files, private data, disk access, desktop access,

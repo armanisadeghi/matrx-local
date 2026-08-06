@@ -13,16 +13,10 @@
 | App settings keys (`AppSettings`) | [docs/official/settings-catalog.md](docs/official/settings-catalog.md) |
 | Settings audit / known gaps | [docs/official/settings-audit.md](docs/official/settings-audit.md) |
 | CI, PyInstaller, Tauri build gotchas | [docs/official/build-lessons.md](docs/official/build-lessons.md) |
-<<<<<<< Updated upstream
 | App config — remote runtime config for shipped clients (env vars are dev-only; consumer BUILT here 2026-07-14) | [app/services/app_config/FEATURE.md](app/services/app_config/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/systems/app-config/FEATURE.md` — read it before touching this feature in ANY repo |
 | Remote catalogs — LIVE (consumer BUILT here 2026-07-14): every compiled-in catalog (LLM GGUF list, LoRAs, image/video/TTS/NER models, presets, prompts, key patterns) now reads from DB-backed `catalog_entries` through `app/services/catalogs`; the in-code lists are demoted fallback data — NEVER grow them or import them directly, edit the DB rows and read via the accessors | [app/services/catalogs/FEATURE.md](app/services/catalogs/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/systems/remote-catalogs/FEATURE.md` — read it before touching this feature in ANY repo |
 | Token broker — scoped short-lived credentials (client primitive this repo must build + `token-broker-client` repo skill) | `/Users/armanisadeghi/code/common-docs/systems/token-broker/FEATURE.md` — read before touching this feature in ANY repo |
-=======
-| App config — remote runtime config for shipped clients (env vars are dev-only; consumer BUILT here 2026-07-14) | [app/services/app_config/FEATURE.md](app/services/app_config/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/app-config/FEATURE.md` — read it before touching this feature in ANY repo |
-| Remote catalogs — LIVE (consumer BUILT here 2026-07-14): every compiled-in catalog (LLM GGUF list, LoRAs, image/video/TTS/NER models, presets, prompts, key patterns) now reads from DB-backed `catalog_entries` through `app/services/catalogs`; the in-code lists are demoted fallback data — NEVER grow them or import them directly, edit the DB rows and read via the accessors | [app/services/catalogs/FEATURE.md](app/services/catalogs/FEATURE.md); cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/remote-catalogs/FEATURE.md` — read it before touching this feature in ANY repo |
-| Token broker — scoped short-lived credentials (client primitive this repo must build + `token-broker-client` repo skill) | `/Users/armanisadeghi/code/common-docs/token-broker/FEATURE.md` — read before touching this feature in ANY repo |
 | Credential Vault — the user's own provider keys; local store FIRST, platform vault second (consumer BUILT here 2026-07-26). Read before touching `ApiKeysRepo`, `key_manager`, or `/settings/api-keys/*` | [app/services/credential_vault/FEATURE.md](app/services/credential_vault/FEATURE.md); cross-repo plan: `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/PLAN.md` |
->>>>>>> Stashed changes
 | Download pipeline (audit / defects) | [docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md](docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md) |
 | Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |
 | File sync — the cloud-files replica (`@files/`, pointer/full modes, hydration) | [app/services/file_sync/FEATURE.md](app/services/file_sync/FEATURE.md) |
@@ -201,7 +195,9 @@ keeps its own copy of the gate in
 [`app/services/ai/local_ai_task.py::resolve_conversation_gate`](app/services/ai/local_ai_task.py) —
 change one, change both, or the two surfaces drift. Server contract:
 `/Users/armanisadeghi/code/aidream/aidream/services/conversation_context/FEATURE.md`
-§ "Starting a conversation".
+§ "Starting a conversation". Cross-repo system-of-record (names this repo's gate as an
+independent duplicate implementation):
+`/Users/armanisadeghi/code/common-docs/systems/conversation-start-contract/FEATURE.md`.
 
 ## External Connections
 
@@ -313,7 +309,7 @@ Never let a discovered issue go untracked. Prefer the right file; do not invent 
 
 ## Cross-Repo Integration with matrx-extend
 
-The matrx-extend Chrome extension is a primary client of this engine. Integration map and protocols:
+The matrx-extend Chrome extension is a primary client of this engine. Cross-repo channel map (system-of-record): `/Users/armanisadeghi/code/common-docs/systems/matrx-extend-integration/FEATURE.md`. Integration map and protocols:
 - Connection details: [docs/MATRX_EXTEND_CONNECTION.md](./docs/MATRX_EXTEND_CONNECTION.md)
 - Skill for working on this connection: `.cursor/skills/connect-matrx-extend/SKILL.md`
 - Master cross-repo doc (in matrx-extend): `/Users/armanisadeghi/code/matrx-extend/docs/CROSS_REPO_INTEGRATION.md`

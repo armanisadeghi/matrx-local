@@ -31,18 +31,18 @@ looking like new multi-gigabyte downloads were attempted during launch.
 
 | # | Location | Downloads | Writes file? | Manager? | Progress style |
 |---|----------|-----------|--------------|----------|----------------|
-| 1 | [`desktop/src-tauri/src/downloads/manager.rs:download_part:993`](desktop/src-tauri/src/downloads/manager.rs) | Any URL via `enqueue` | **❌ NO — bytes vanish** | Is the manager | Tauri `dm-progress` |
-| 2 | [`desktop/src-tauri/src/llm/commands.rs:cmd_download_model:330`](desktop/src-tauri/src/llm/commands.rs) | LLM models (multi-part GGUF) | ✅ via `dm.register_external` + caller writes | Manager-as-progress, NOT downloader | `dm-progress` + legacy `llm-download-progress` |
-| 3 | [`desktop/src-tauri/src/transcription/downloader.rs:download_model:42`](desktop/src-tauri/src/transcription/downloader.rs) | Whisper from HF | ✅ `tokio::fs::File::create` + `write_all` per chunk | ❌ standalone | callback only |
-| 4 | [`desktop/src-tauri/src/transcription/wake_word.rs`](desktop/src-tauri/src/transcription/wake_word.rs) | (reuses Whisper models) | n/a | n/a | n/a |
-| 5 | [`app/services/downloads/manager.py:_download_part:643`](app/services/downloads/manager.py) | Any URL via `enqueue` | **❌ NO — bytes vanish** | Is the manager | SSE `/downloads/stream` |
-| 6 | [`app/services/tts/service.py:download_model:212`](app/services/tts/service.py) | Kokoro TTS ONNX + voices | ✅ `with open(.tmp,"wb")` + atomic rename | partial — emits `dm-progress`-like events | Custom emitter + SSE |
-| 7 | [`app/services/wake_word/models.py:download_model:129`](app/services/wake_word/models.py) | openWakeWord ONNX | ✅ inline write | ❌ standalone | callback only |
-| 8 | [`app/api/setup_routes.py:_download_transcription_model:833`](app/api/setup_routes.py) | GGML Whisper from HF | ✅ inline write + atomic rename | ❌ runs inside SSE stream | Custom SSE |
-| 9 | [`app/api/setup_routes.py:_download_tts_model:925`](app/api/setup_routes.py) | TTS (delegates to #6) | ✅ via #6 | partial | Custom SSE |
-| 10 | [`app/api/setup_routes.py:_download_cloudflared:1028`](app/api/setup_routes.py) | cloudflared binary | ✅ inline write | ❌ standalone | Custom SSE |
-| 11 | [`app/api/wake_word_routes.py:download_model_with_progress:251`](app/api/wake_word_routes.py) | OWW (delegates to #7) | ✅ via #7 | ❌ | Custom SSE |
-| 12 | [`app/tools/tools/transfer.py:tool_download_file:16`](app/tools/tools/transfer.py) | Arbitrary user URLs | ✅ inline write | ❌ standalone | **silent — no progress at all** |
+| 1 | [`desktop/src-tauri/src/downloads/manager.rs:download_part:993`](../desktop/src-tauri/src/downloads/manager.rs) | Any URL via `enqueue` | **❌ NO — bytes vanish** | Is the manager | Tauri `dm-progress` |
+| 2 | [`desktop/src-tauri/src/llm/commands.rs:cmd_download_model:330`](../desktop/src-tauri/src/llm/commands.rs) | LLM models (multi-part GGUF) | ✅ via `dm.register_external` + caller writes | Manager-as-progress, NOT downloader | `dm-progress` + legacy `llm-download-progress` |
+| 3 | [`desktop/src-tauri/src/transcription/downloader.rs:download_model:42`](../desktop/src-tauri/src/transcription/downloader.rs) | Whisper from HF | ✅ `tokio::fs::File::create` + `write_all` per chunk | ❌ standalone | callback only |
+| 4 | [`desktop/src-tauri/src/transcription/wake_word.rs`](../desktop/src-tauri/src/transcription/wake_word.rs) | (reuses Whisper models) | n/a | n/a | n/a |
+| 5 | [`app/services/downloads/manager.py:_download_part:643`](../app/services/downloads/manager.py) | Any URL via `enqueue` | **❌ NO — bytes vanish** | Is the manager | SSE `/downloads/stream` |
+| 6 | [`app/services/tts/service.py:download_model:212`](../app/services/tts/service.py) | Kokoro TTS ONNX + voices | ✅ `with open(.tmp,"wb")` + atomic rename | partial — emits `dm-progress`-like events | Custom emitter + SSE |
+| 7 | [`app/services/wake_word/models.py:download_model:129`](../app/services/wake_word/models.py) | openWakeWord ONNX | ✅ inline write | ❌ standalone | callback only |
+| 8 | [`app/api/setup_routes.py:_download_transcription_model:833`](../app/api/setup_routes.py) | GGML Whisper from HF | ✅ inline write + atomic rename | ❌ runs inside SSE stream | Custom SSE |
+| 9 | [`app/api/setup_routes.py:_download_tts_model:925`](../app/api/setup_routes.py) | TTS (delegates to #6) | ✅ via #6 | partial | Custom SSE |
+| 10 | [`app/api/setup_routes.py:_download_cloudflared:1028`](../app/api/setup_routes.py) | cloudflared binary | ✅ inline write | ❌ standalone | Custom SSE |
+| 11 | [`app/api/wake_word_routes.py:download_model_with_progress:251`](../app/api/wake_word_routes.py) | OWW (delegates to #7) | ✅ via #7 | ❌ | Custom SSE |
+| 12 | [`app/tools/tools/transfer.py:tool_download_file:16`](../app/tools/tools/transfer.py) | Arbitrary user URLs | ✅ inline write | ❌ standalone | **silent — no progress at all** |
 
 ### Bug clusters
 
@@ -76,7 +76,7 @@ Sites #1 and #5 are independent managers with independent SQLite stores (`~/.mat
 - SSE `/setup/install` (#8, #9, #10) — entirely separate stream
 - `on_progress` callback (#3, #7) — never reaches the UI
 
-The frontend listens to two of these ([`DownloadManagerContext.tsx:230-313`](desktop/src/contexts/DownloadManagerContext.tsx)) but the other two bypass it. Users see partial state.
+The frontend listens to two of these ([`DownloadManagerContext.tsx:230-313`](../desktop/src/contexts/DownloadManagerContext.tsx)) but the other two bypass it. Users see partial state.
 
 **Cluster E — false 0% percent**
 Multiple sites do `content_length().unwrap_or(0)` then divide by it for percent. HF, Cloudfront, and other CDNs frequently send chunked transfer encoding with no Content-Length, so percent stays at 0.0 forever even as bytes accumulate.
@@ -156,7 +156,7 @@ The user's intuition is right that source-side rate limits make parallel downloa
 - 1 **primary slot** — always runs the highest-priority queued item.
 - 0–N **secondary slots** — run the next items in priority order, gated by bandwidth.
 
-**Slot expansion algorithm** (already partially in [`manager.rs:should_expand_slots:267`](desktop/src-tauri/src/downloads/manager.rs) — reuse and fix):
+**Slot expansion algorithm** (already partially in [`manager.rs:should_expand_slots:267`](../desktop/src-tauri/src/downloads/manager.rs) — reuse and fix):
 
 ```
 Every 5 s, after at least 30 s of measured throughput:
@@ -209,7 +209,7 @@ The `transfer` tool's silent download (#12) starts emitting events through the o
 
 ### Heartbeat decoupling
 
-In addition to byte-threshold-driven `progress` events, the orchestrator emits a `progress` event **every 2 seconds** for every active download — same `bytes_done` value as the last emit if nothing has moved. This is what makes stalls visible. The frontend's `last_event_at` watcher already exists in `DownloadManagerContext.tsx` ([line 58 — `LOG_INTERVAL_MS = 15_000`](desktop/src/contexts/DownloadManagerContext.tsx) — different purpose but same shape) — extend to flip a download to `stalled` after 2× heartbeat with no `bytes_done` change.
+In addition to byte-threshold-driven `progress` events, the orchestrator emits a `progress` event **every 2 seconds** for every active download — same `bytes_done` value as the last emit if nothing has moved. This is what makes stalls visible. The frontend's `last_event_at` watcher already exists in `DownloadManagerContext.tsx` ([line 58 — `LOG_INTERVAL_MS = 15_000`](../desktop/src/contexts/DownloadManagerContext.tsx) — different purpose but same shape) — extend to flip a download to `stalled` after 2× heartbeat with no `bytes_done` change.
 
 ---
 
@@ -272,14 +272,14 @@ Each phase is independently shippable. Phase 1 alone unblocks the user-visible b
 
 Just fix the data-loss bug in both managers. Keep the existing manager-as-progress vs. external-downloader split for now. This is the smallest change that makes downloads actually work.
 
-**Rust:** [`desktop/src-tauri/src/downloads/manager.rs:download_part`](desktop/src-tauri/src/downloads/manager.rs)
+**Rust:** [`desktop/src-tauri/src/downloads/manager.rs:download_part`](../desktop/src-tauri/src/downloads/manager.rs)
 - Add `target_path: PathBuf` to `DownloadEntry` struct.
 - Open `tokio::fs::File::create(target_path)` before the chunk loop.
 - Replace `buf.extend_from_slice(&chunk); if buf.len() < chunk_size { continue }; buf.clear()` with `file.write_all(&chunk).await?` per chunk.
 - Drop the threshold buffer entirely — count and emit per chunk, with the existing time/byte throttle on emits.
 - `file.flush().await?` after the loop.
 
-**Python:** [`app/services/downloads/manager.py:_download_part`](app/services/downloads/manager.py) — mirror the same change. Use `aiofiles.open(target_path, "wb")` + `await f.write(chunk)`.
+**Python:** [`app/services/downloads/manager.py:_download_part`](../app/services/downloads/manager.py) — mirror the same change. Use `aiofiles.open(target_path, "wb")` + `await f.write(chunk)`.
 
 **Validation:** sha256 the resulting file against `expected_checksum` if the spec carries one. Surface a `failed` event with `error: "checksum mismatch"` rather than letting downstream silently load garbage.
 
@@ -299,10 +299,10 @@ Handle missing `Content-Length`:
 
 Make every download flow through the orchestrator. Each orphan site gets the same treatment:
 
-- [#3 transcription downloader](desktop/src-tauri/src/transcription/downloader.rs) → call `dm.enqueue` + `dm.register_external` (the LLM commands pattern, site #2). Keep the actual file write where it is, but report progress to the manager.
-- [#7 OWW downloader](app/services/wake_word/models.py) → same.
-- [#8/#9/#10 setup_routes inline downloads](app/api/setup_routes.py) → hand off to the Python manager. The setup wizard subscribes to `/downloads/stream` filtered by `category == "setup"`.
-- [#12 transfer tool](app/tools/tools/transfer.py) → enqueue with category `"tool"`. The user sees tool-driven downloads in the same panel as everything else.
+- [#3 transcription downloader](../desktop/src-tauri/src/transcription/downloader.rs) → call `dm.enqueue` + `dm.register_external` (the LLM commands pattern, site #2). Keep the actual file write where it is, but report progress to the manager.
+- [#7 OWW downloader](../app/services/wake_word/models.py) → same.
+- [#8/#9/#10 setup_routes inline downloads](../app/api/setup_routes.py) → hand off to the Python manager. The setup wizard subscribes to `/downloads/stream` filtered by `category == "setup"`.
+- [#12 transfer tool](../app/tools/tools/transfer.py) → enqueue with category `"tool"`. The user sees tool-driven downloads in the same panel as everything else.
 
 Result: every download in the system fires `dm-progress` / `/downloads/stream` events. The frontend panel becomes the actual single source of truth.
 
@@ -333,7 +333,7 @@ Add **same-source backoff** as a follow-up: track host of each active download; 
 
 ### Phase 6 — Frontend queue panel (P2, 2 days)
 
-[`DownloadManagerModal.tsx`](desktop/src/components/downloads/DownloadManagerModal.tsx) — re-render with three sections: active / pending / history, as in the mockup above. Add stage badge (`downloading / verifying / extracting / moving`), aggregate-speed strip at the top, "promote to primary" + "pause queue" controls. Stall detection per-download (amber after 5s no progress, red after 30s).
+[`DownloadManagerModal.tsx`](../desktop/src/components/downloads/DownloadManagerModal.tsx) — re-render with three sections: active / pending / history, as in the mockup above. Add stage badge (`downloading / verifying / extracting / moving`), aggregate-speed strip at the top, "promote to primary" + "pause queue" controls. Stall detection per-download (amber after 5s no progress, red after 30s).
 
 ---
 

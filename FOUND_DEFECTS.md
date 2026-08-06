@@ -272,7 +272,11 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 - **Evidence:** Runtime contract changed 2026-07-19 in
   `app/api/settings_routes.py`, `app/services/local_db/schema.py`, and
   `desktop/src/pages/Settings.tsx`; official docs are protected from agent edits.
-- **Status:** open
+- **Status:** open. Re-verified 2026-08-06 — drift has WORSENED: the doc still
+  says verdicts persist "by `ApiKeysRepo.record_validation()`" but that method
+  no longer exists (`app/services/local_db/repositories.py`) and schema V17
+  drops the historical blob ("Validation is now explicit and session-only").
+  Needs Arman (docs/official is Arman-only).
 - **Analysis stamp:** Analyzed 2026-07-19 — verified directly against the new
   route, migration, and UI state ownership.
 - **Owner hint:** With Arman's explicit approval, remove the persisted-verdict
@@ -340,18 +344,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 - **Owner hint:** downloads
 
 ## UI / UX correctness
-
-### MXL-D-016 — Chat: "Agent not found" silent failure after agent pick
-- **Area:** desktop / chat
-- **Symptom:** agent pick before sync completes silently nulls `activeAgent`;
-  next send proceeds agentless with no toast.
-- **Evidence:** `desktop/src/components/chat/ChatPanel.tsx:372-384` —
-  `all.find(...)` miss → `setActiveAgent(found ?? null)`, no warning path; send
-  at `:227` only includes `agentId` when `activeAgent?.id` is truthy.
-- **Status:** open. Analyzed 2026-07-12 — verified in code: on miss for a
-  non-empty agentId, toast + block/retry against sync completion instead of
-  falling through to null.
-- **Owner hint:** chat
 
 ### MXL-D-017 — `transcription_auto_init` setting has no effect
 - **Area:** desktop / transcription
@@ -757,12 +749,9 @@ _(promotion proposals prepared by non-interactive `/task-hygiene` runs land here
 
 **Batch 2026-07-12 — proposed promotions to `.matrx/AGENT_TASKS.md`:**
 
-1. **Fix chat silent agent-null on pick-before-sync** — P1 — replaces
-   MXL-D-016 — Analyzed 2026-07-12, verified in code
-   (`ChatPanel.tsx:372-384`). A user picks an agent, the pick silently
-   evaporates, and the next message runs agentless with zero feedback —
-   classic silent-failure the doctrine forbids. Small fix: toast + don't
-   null on miss.
+1. ~~**Fix chat silent agent-null on pick-before-sync**~~ — DONE (verified
+   2026-08-06): `ChatPanel.tsx:383-403` now sets `pendingAgentId` +
+   `agentSelectionError` banner and blocks send on a miss. MXL-D-016 closed.
 2. **Point engine health probes at `/health` + cold-start grace** — P1 —
    replaces MXL-D-018 — Analyzed 2026-07-12, verified in code. Both TS and
    Rust probes hit heavyweight `/tools/list` with 2s timeouts; the cheap

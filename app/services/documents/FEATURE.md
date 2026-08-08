@@ -98,6 +98,20 @@ bound by the same contract).
   optimistically makes offline edits look synced and lets pulls clobber them.
 - Cloud is durable truth; local is the first-access replica the user actually
   touches. Never invert that.
+- **Cloud-delete propagation is budgeted — the mass-delete circuit breaker
+  (2026-08-08).** Every cloud soft-delete this engine emits (full_sync
+  tombstone branch, the watcher's `_handle_external_delete`, folder deletes,
+  the `DELETE /notes/{id}` route) MUST pass
+  `SyncEngine.allow_cloud_delete(note_id)`. Budget: max(25, 10% of the live
+  remote corpus) per rolling 24h; exceeding it TRIPS the breaker — further
+  cloud deletes are blocked (local tombstones are preserved and propagate
+  later), the tripped state persists in `.sync/state.json` across restarts,
+  and ONLY the explicit `POST /documents/sync/delete-breaker/reset` clears
+  it. Written after 2026-08-06..08, when local tombstone propagation
+  soft-deleted 2,600+ cloud notes on one account in four device-stamped
+  waves (MXL-D-074). Never add a cloud-delete call site without the gate,
+  and never auto-reset the breaker from any loop. Pinned:
+  `tests/unit/test_mass_delete_breaker.py`.
 - **Never push the local `folder_id` verbatim.** `document_routes._folder_id_for_name`
   mints a deterministic uuid5-of-name; the cloud's `workbench.note_folders.id`
   is a random uuid4, so the local id is (almost) never a real folder row and

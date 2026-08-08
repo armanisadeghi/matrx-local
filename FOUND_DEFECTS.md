@@ -30,6 +30,36 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ---
 
+## Notes sync / data safety
+
+### MXL-D-074 — Notes sync mass-deleted 2,600+ cloud notes across four waves; local trigger unidentified
+- **Area:** `app/services/documents/sync_engine.py` (tombstone propagation:
+  `full_sync` local-file-gone branch, `_handle_external_delete` watcher path),
+  `app/api/document_routes.py` (`_delete_folder_locked`, `DELETE /notes/{id}`)
+- **Symptom:** Cloud `workbench.notes` for `arman@armansadeghi.com`
+  (4cf62e4e-…) received sequential device-stamped soft-deletes in four waves:
+  2026-08-06 19:54–19:55 (464), 2026-08-07 21:47–22:32 (2,135), 2026-08-08
+  08:07–08:12 (176) — devices `921d9676-75d` (primary) and `5bc17b18-13e`.
+  Verified in `history.row_versions` / `workbench.notes` on 2026-08-08. The
+  user's "recent notes" list became months-old notes; deletions were only
+  noticed by accident. All rows are SOFT-deleted (recoverable); restore
+  decision is with Arman (SQL in the incident PR description).
+- **Status:** open (root cause of the LOCAL mass file disappearance).
+  Analyzed 2026-08-08 — cloud-side mechanism verified in code: local
+  tombstones (watcher `_handle_external_delete`, or folder deletes) propagate
+  one cloud soft-delete per row with NO upper bound. **Mitigation shipped
+  same day:** mass-delete circuit breaker (`allow_cloud_delete`, budget
+  max(25, 10% of live corpus)/24h, persisted trip state, explicit
+  `POST /documents/sync/delete-breaker/reset`). What remains: identify what
+  deleted/moved thousands of local `.md` files on Arman's machine on those
+  three days — needs `~/.matrx/logs` + `.sync/state.json` from the live
+  install; agents cannot reach them from a cloud session. **Ask Arman for
+  the logs.**
+- **Owner hint:** whoever gets engine logs from the live machine; the
+  breaker keeps the blast radius capped meanwhile.
+
+---
+
 ## Updater / packaged runtime
 
 ### MXL-D-067 — Background updater replaces the live PyInstaller sidecar and corrupts all later lazy imports

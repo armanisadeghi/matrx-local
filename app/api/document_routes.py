@@ -494,7 +494,14 @@ async def _delete_folder_locked(folder_id: str, repo: NotesRepo) -> None:
                         "Could not tombstone note %s during folder delete",
                         nf["file_path"], exc_info=True,
                     )
-                if sync_engine.is_configured:
+                # Breaker-gated: a folder delete is a legitimate bulk action,
+                # but it still spends the delete budget — an agent (or bug)
+                # looping folder deletes must trip the breaker, not wipe the
+                # cloud. Blocked deletes keep their SQLite tombstone and
+                # propagate after explicit confirmation.
+                if sync_engine.is_configured and sync_engine.allow_cloud_delete(
+                    del_id
+                ):
                     _fire_and_forget(
                         supabase_docs.soft_delete_note(del_id, sync_engine.device_id)
                     )
@@ -848,7 +855,11 @@ async def delete_note(note_id: str, request: Request) -> dict[str, str]:
 
         await repo.soft_delete(note_id)
 
-    if sync_engine.is_configured:
+    # Breaker-gated: single deletes are normal, but a caller looping this
+    # endpoint is indistinguishable from a mass wipe — every cloud delete
+    # spends the same budget. A blocked delete keeps its SQLite tombstone
+    # and propagates after explicit confirmation.
+    if sync_engine.is_configured and sync_engine.allow_cloud_delete(note_id):
         _fire_and_forget(
             supabase_docs.soft_delete_note(note_id, sync_engine.device_id)
         )
@@ -987,6 +998,21 @@ async def sync_status(request: Request) -> dict[str, Any]:
     base["pending_push_count"] = len(pending)
     base["excluded_count"] = len(excluded)
     return base
+
+
+@router.post("/sync/delete-breaker/reset")
+async def reset_delete_breaker(request: Request) -> dict[str, Any]:
+    """Explicit human confirmation of a halted mass deletion.
+
+    The mass-delete circuit breaker trips when this device tries to
+    propagate an abnormal number of cloud note deletions (see
+    SyncEngine.allow_cloud_delete). While tripped, cloud deletes are
+    blocked and local tombstones wait. This endpoint is the ONLY way to
+    clear it — deliberately a separate, explicit call so no background
+    loop or retry can un-trip the breaker.
+    """
+    _configure_sync(request)
+    return sync_engine.reset_delete_breaker()
 
 
 @router.post("/sync/trigger")

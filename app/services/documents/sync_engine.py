@@ -58,6 +58,28 @@ def _note_id_for_path(file_path: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"matrx-note:{file_path}"))
 
 
+# ── Mass-delete circuit breaker ──────────────────────────────────────────────
+# A sync client must NEVER be able to silently erase a user's cloud corpus.
+# 2026-08-06 → 08-08: this engine propagated local tombstones as sequential
+# cloud soft-deletes in four waves totalling 2,600+ notes on one account
+# (device-stamped, ~1/sec) — including notes the user was actively working
+# with. Whatever emptied the local files, the CLOUD must not follow a
+# mass-disappearance without explicit human confirmation.
+#
+# Policy: cloud-delete propagation is budgeted per rolling window. The budget
+# is max(MASS_DELETE_MIN_ALLOWANCE, MASS_DELETE_MAX_FRACTION × live remote
+# corpus). Exceeding it TRIPS the breaker: further cloud deletes are blocked
+# (local tombstones are preserved — nothing is lost, propagation just waits),
+# the tripped state persists across restarts in .sync/state.json, and it
+# clears only via reset_delete_breaker() (an explicit user action), never
+# silently. Every block is logged CRITICAL — a tripped breaker means either a
+# real mass deletion (user must confirm) or a sync bug (must be fixed), and
+# both deserve eyes.
+MASS_DELETE_MIN_ALLOWANCE = 25
+MASS_DELETE_MAX_FRACTION = 0.10
+MASS_DELETE_WINDOW_SECONDS = 24 * 3600
+
+
 class SyncEngine:
     """Coordinates sync between local documents and Supabase."""
 
@@ -1021,6 +1043,11 @@ class SyncEngine:
                             await self._pull_note(note_id)
                             stats["pulled"] += 1
                             continue
+                        if not self.allow_cloud_delete(note_id):
+                            stats["deletes_blocked"] = (
+                                stats.get("deletes_blocked", 0) + 1
+                            )
+                            continue
                         try:
                             await self.sb.soft_delete_note(note_id, self.device_id)
                             stats["deleted_local"] += 1
@@ -1258,7 +1285,17 @@ class SyncEngine:
             # Reload — the pull/push calls above rewrote sync state.
             state = self.fm.load_sync_state()
             state["last_full_sync"] = time.time()
+            # Live remote corpus size — scales the mass-delete breaker budget.
+            state["remote_live_count"] = len(remote_notes)
             self.fm.save_sync_state(state)
+
+            if stats.get("deletes_blocked"):
+                logger.critical(
+                    "full_sync: %d cloud deletions BLOCKED by the mass-delete "
+                    "circuit breaker — local tombstones preserved, awaiting "
+                    "explicit confirmation (reset_delete_breaker).",
+                    stats["deletes_blocked"],
+                )
 
             return stats
 
@@ -1568,6 +1605,11 @@ class SyncEngine:
                 return
 
             if self.is_configured and self._user_id:
+                if not self.allow_cloud_delete(row["id"]):
+                    # Breaker tripped (mass local file disappearance) — the
+                    # local tombstone above is kept; cloud propagation waits
+                    # for explicit confirmation.
+                    return
                 try:
                     await self.sb.soft_delete_note(row["id"], self.device_id)
                 except Exception:
@@ -1854,6 +1896,99 @@ class SyncEngine:
             logger.info("Pruned %d stale identical-content conflicts", pruned)
         return pruned
 
+    # ── Mass-delete circuit breaker ──────────────────────────────────────────
+
+    def _delete_budget(self) -> int:
+        """Cloud-deletes allowed per rolling window on this device.
+
+        Scales with the last observed live remote corpus (recorded by
+        full_sync) so a 30-note user and a 4,000-note user both get sane
+        limits; falls back to the flat minimum before the first full_sync.
+        """
+        state = self.fm.load_sync_state()
+        remote_count = int(state.get("remote_live_count") or 0)
+        return max(
+            MASS_DELETE_MIN_ALLOWANCE,
+            int(remote_count * MASS_DELETE_MAX_FRACTION),
+        )
+
+    @property
+    def delete_breaker_tripped(self) -> bool:
+        return bool(self.fm.load_sync_state().get("delete_breaker"))
+
+    def allow_cloud_delete(self, note_id: str) -> bool:
+        """Gate EVERY cloud-delete propagation through the circuit breaker.
+
+        Returns True and records the delete when within budget. Returns False
+        when the breaker is (or just became) tripped — the caller must skip
+        the cloud delete and leave the local tombstone in place for a later,
+        human-confirmed propagation. Never raises.
+        """
+        state = self.fm.load_sync_state()
+        if state.get("delete_breaker"):
+            logger.critical(
+                "[delete-breaker] BLOCKED cloud delete of note %s — breaker "
+                "tripped at %s after %s deletes. Local tombstone kept; "
+                "propagation resumes only after explicit reset "
+                "(reset_delete_breaker).",
+                note_id,
+                state["delete_breaker"].get("tripped_at"),
+                state["delete_breaker"].get("count"),
+            )
+            return False
+
+        now = time.time()
+        window: list[float] = [
+            t
+            for t in state.get("delete_window", [])
+            if now - t < MASS_DELETE_WINDOW_SECONDS
+        ]
+        budget = self._delete_budget()
+        if len(window) >= budget:
+            state["delete_breaker"] = {
+                "tripped_at": _now(),
+                "count": len(window),
+                "budget": budget,
+                "device_id": self.device_id,
+            }
+            state["delete_window"] = window
+            self.fm.save_sync_state(state)
+            logger.critical(
+                "[delete-breaker] TRIPPED: this device attempted to propagate "
+                "more than %d cloud note deletions inside %d hours. Cloud "
+                "deletes are now HALTED (local tombstones preserved) until "
+                "the user explicitly confirms via reset_delete_breaker(). If "
+                "you did not intentionally delete this many notes, this is a "
+                "sync defect — report it before resetting.",
+                budget,
+                MASS_DELETE_WINDOW_SECONDS // 3600,
+            )
+            return False
+
+        window.append(now)
+        state["delete_window"] = window
+        self.fm.save_sync_state(state)
+        return True
+
+    def reset_delete_breaker(self) -> dict[str, Any]:
+        """Explicit human confirmation that pending mass deletion is intended.
+
+        Clears the tripped state AND the rolling window so confirmed bulk
+        cleanups can proceed. Returns the state that was cleared.
+        """
+        state = self.fm.load_sync_state()
+        cleared = state.pop("delete_breaker", None)
+        state["delete_window"] = []
+        self.fm.save_sync_state(state)
+        if cleared:
+            # NB: str() — a lone dict arg would hit logging's mapping
+            # special-case and raise "not all arguments converted".
+            logger.warning(
+                "[delete-breaker] reset by explicit request — cleared %s",
+                str(cleared),
+            )
+        return {"cleared": cleared}
+
     # ── Status ───────────────────────────────────────────────────────────────
 
     def get_status(self) -> dict[str, Any]:
@@ -1877,6 +2012,7 @@ class SyncEngine:
             "notes_access_degraded": degraded,
             "notes_access_reason": notes_health.get("message") if degraded else None,
             "notes_access_kind": notes_health.get("kind"),
+            "delete_breaker": state.get("delete_breaker"),
         }
 
 

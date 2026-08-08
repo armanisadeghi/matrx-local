@@ -868,8 +868,20 @@ class SyncEngine:
                                 full_row = await self.sb.get_note(note["id"])
                             except Exception:
                                 full_row = None
-                            if full_row is not None and full_row.get(
-                                "is_deleted"
+                            # Same rule as full_sync's tombstone branch: the
+                            # REMOTE tombstone's content_hash must also match
+                            # the local file. After a remote edit-then-delete
+                            # this device never pulled, the local hash still
+                            # equals the stale remote_content_hash while the
+                            # tombstone carries the newer hash — deleting then
+                            # would diverge from full_sync (which pushes and
+                            # resurrects). Only delete what the cloud provably
+                            # held when it was deleted; anything else falls
+                            # through to the push (resurrect) path.
+                            if (
+                                full_row is not None
+                                and full_row.get("is_deleted")
+                                and full_row.get("content_hash") == c_hash
                             ):
                                 await self._pull_note(
                                     note["id"], note=full_row

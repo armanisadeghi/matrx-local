@@ -431,3 +431,36 @@ def test_push_all_edited_pending_with_remote_tombstone_still_resurrects(
     stats = _run(engine.push_all())
     assert stats["pushed"] == 1
     assert engine.sb.upsert_count() == 1
+
+
+def test_push_all_stale_pending_with_edited_then_deleted_remote_resurrects(
+    engine: SyncEngine,
+) -> None:
+    """Remote was edited on another device and THEN deleted, and this device
+    never pulled the edit: the local file still matches its stale
+    remote_content_hash, but the tombstone carries the newer hash. push_all
+    must NOT delete the local file — it falls through to push (resurrect),
+    matching full_sync's tombstone rule (only delete what the cloud provably
+    held when it was deleted)."""
+    old_body = "old synced body"
+    engine.sb.notes["stale-id"] = {
+        "id": "stale-id",
+        "file_path": "Draft/stale.md",
+        "content": "newer edited body",
+        "content_hash": content_hash("newer edited body"),
+        "label": "stale",
+        "folder_name": "Draft",
+        "is_deleted": True,
+    }
+    _seed_pending_file(
+        engine,
+        "Draft/stale.md",
+        old_body,
+        "stale-id",
+        sync_status="pending_push",
+        remote_content_hash=content_hash(old_body),
+    )
+    stats = _run(engine.push_all())
+    assert stats.get("deleted_local") is None
+    assert stats["pushed"] == 1
+    assert "Draft/stale.md" in engine.fm.notes  # local file NOT deleted

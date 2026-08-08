@@ -44,19 +44,21 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   user's "recent notes" list became months-old notes; deletions were only
   noticed by accident. All rows are SOFT-deleted (recoverable); restore
   decision is with Arman (SQL in the incident PR description).
-- **Status:** open (root cause of the LOCAL mass file disappearance).
-  Analyzed 2026-08-08 — cloud-side mechanism verified in code: local
-  tombstones (watcher `_handle_external_delete`, or folder deletes) propagate
-  one cloud soft-delete per row with NO upper bound. **Mitigation shipped
-  same day:** mass-delete circuit breaker (`allow_cloud_delete`, budget
-  max(25, 10% of live corpus)/24h, persisted trip state, explicit
-  `POST /documents/sync/delete-breaker/reset`). What remains: identify what
-  deleted/moved thousands of local `.md` files on Arman's machine on those
-  three days — needs `~/.matrx/logs` + `.sync/state.json` from the live
-  install; agents cannot reach them from a cloud session. **Ask Arman for
-  the logs.**
-- **Owner hint:** whoever gets engine logs from the live machine; the
-  breaker keeps the blast radius capped meanwhile.
+- **Status:** open, NARROWED (2026-08-08 second pass). Content-verified in
+  the DB: **every wave-deleted note has a live byte-identical copy — zero
+  unique content was lost**; the waves were the intentional duplicate-factory
+  cleanup (times correlate exactly with the dup-investigation commits
+  `e02846d`/`24a7e65` Aug 6 19:56Z and `34e2b31`/`9c8c95b` Aug 8 08:09–08:13Z;
+  PR #6 → v1.4.14). The factory itself was still minting `_2` copies on Aug 7
+  22:16–22:39Z (pre-fix engine live); two leftover identical dups were removed
+  Aug 8. **Mitigation shipped:** mass-delete circuit breaker (PR #7 —
+  `allow_cloud_delete`, budget max(25, 10% of live corpus)/24h, persisted trip
+  state, explicit `POST /documents/sync/delete-breaker/reset`). **Remaining
+  (on-machine only):** confirm the deletion driver in `~/.matrx/logs`, check
+  which device id was a DEV engine (possible MXL-D-043-class breach), verify
+  the installed app is ≥ v1.4.14, and factory-dead verification — full recipe
+  in [docs/handoffs/notes-sync-on-machine-verification.md](docs/handoffs/notes-sync-on-machine-verification.md).
+- **Owner hint:** an agent on Arman's machine, per the handoff doc.
 
 ---
 

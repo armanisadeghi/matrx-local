@@ -23,6 +23,7 @@ from app.api.remote_auth import (
     is_instance_owner,
     verify_supabase_token,
 )
+from app.services.pairing import matches_pair_token
 from app.services.catalogs.models import KNOWN_KINDS as _CATALOG_KINDS
 
 logger = get_logger()
@@ -51,10 +52,10 @@ _PUBLIC_PATHS = frozenset(
         "/chat/tools",
         "/chat/tools/by-category",
         "/chat/tools/anthropic",
-        "/chat/models",         # read-only model list, no user data
-        "/chat/agents",         # read-only agent/prompt list, no user data — frontend calls this before auth
-        "/chat/sync/status",    # read-only sync status — useful for diagnostics before auth
-        "/chat/ai-status",      # read-only provider availability — needed before auth to show warnings
+        "/chat/models",  # read-only model list, no user data
+        "/chat/agents",  # read-only agent/prompt list, no user data — frontend calls this before auth
+        "/chat/sync/status",  # read-only sync status — useful for diagnostics before auth
+        "/chat/ai-status",  # read-only provider availability — needed before auth to show warnings
         "/remote-scraper/queue/poller-stats",
         "/docs",
         "/openapi.json",
@@ -90,7 +91,7 @@ _LOCAL_BOOTSTRAP_PATHS = frozenset(
     {
         "/cloud/configure",
         "/cloud/reconfigure",
-        "/settings",          # PUT /settings runs in parallel with /cloud/configure
+        "/settings",  # PUT /settings runs in parallel with /cloud/configure
         "/chat/sync/trigger",  # force sync — used from setup/diagnostics
         # Local llama-server bridge. The desktop UI/Rust shell may need to
         # register a just-started local model before Supabase auth has fully
@@ -99,11 +100,7 @@ _LOCAL_BOOTSTRAP_PATHS = frozenset(
         "/chat/local-llm/disconnect",
         "/chat/local-llm/status",
         "/chat/delegation/status",  # read-only local diagnostics; tunnel requires auth
-        "/auth/token",        # JWT is the credential being *given* to the engine
-        # Extension pairing bootstrap — the pairing token IS the credential
-        # being handed out, so the caller cannot present one yet. The route
-        # itself additionally hard-rejects tunnel-originated requests.
-        "/extension/pair",
+        "/auth/token",  # JWT is the credential being *given* to the engine
         "/admin/status",
         "/admin/shutdown",
         "/admin/diagnose",
@@ -117,9 +114,9 @@ _LOCAL_BOOTSTRAP_PATHS = frozenset(
 # direct loopback, verified-auth required over the tunnel.
 _LOCAL_BOOTSTRAP_PREFIXES = (
     "/admin/recovery/",
-    "/devices/",     # device status polling — local UI
+    "/devices/",  # device status polling — local UI
     "/fetch-proxy",  # in-app browser iframe navigation (also an SSRF vector)
-    "/setup/",       # setup wizard — system probing, installs
+    "/setup/",  # setup wizard — system probing, installs
     # Process-local media bytes for the desktop webview. Tunnel callers still
     # fall through to verified auth; direct <img> requests cannot attach the
     # API's bearer header.
@@ -272,7 +269,9 @@ async def oauth_callback(request: Request):
         try:
             await websocket_manager._send(conn, payload)
         except Exception:
-            logger.warning("OAuth credential broadcast to one client failed", exc_info=True)
+            logger.warning(
+                "OAuth credential broadcast to one client failed", exc_info=True
+            )
 
     return HTMLResponse(_SUCCESS_HTML)
 
@@ -295,6 +294,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Always-public routes (health/discovery/read-only) — allowed on any path.
         if path in _PUBLIC_PATHS:
+            return await call_next(request)
+
+        # Pairing bootstrap owns its tunnel rejection. Let the route return
+        # the documented hard 403 instead of allowing this outer middleware
+        # to turn the missing credential into a misleading 401 first.
+        if path == "/extension/pair":
             return await call_next(request)
 
         # Local-bootstrap routes — permissive on direct loopback (the Rust
@@ -333,7 +338,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # accepted over the tunnel — it's a loopback-only credential.
         # Direct-loopback traffic keeps the presence-only boundary — the
         # loopback socket itself is the trust boundary there.
-        if via_tunnel:
+        if via_tunnel and not (
+            path.startswith("/extension/") and matches_pair_token(token)
+        ):
             user = await verify_supabase_token(token)
             if user is None:
                 logger.warning(

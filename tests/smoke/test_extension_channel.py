@@ -40,7 +40,11 @@ def _mint_local_jwt() -> str:
     import jwt as _jwt
 
     return _jwt.encode(
-        {"sub": "smoke-test-user", "role": "authenticated", "exp": int(time.time()) + 3600},
+        {
+            "sub": "smoke-test-user",
+            "role": "authenticated",
+            "exp": int(time.time()) + 3600,
+        },
         "matrx-local-smoke-secret-0123456789abcdef",
         algorithm="HS256",
     )
@@ -67,7 +71,9 @@ def ext_http(engine_url: str, ext_token: str):
 
 
 def test_rpc_requires_bearer(engine_url: str) -> None:
-    r = httpx.post(f"{engine_url}/extension/rpc", json={"command": "health"}, timeout=10)
+    r = httpx.post(
+        f"{engine_url}/extension/rpc", json={"command": "health"}, timeout=10
+    )
     assert r.status_code == 401
 
 
@@ -100,11 +106,13 @@ def test_pair_rejected_over_tunnel_headers(engine_url: str) -> None:
         headers={"Cf-Connecting-Ip": "203.0.113.7"},
         timeout=10,
     )
-    assert r.status_code in (401, 403), r.text[:200]
+    assert r.status_code == 403, r.text[:200]
 
 
 def test_pair_token_authenticates_rpc_and_ws(engine_url: str) -> None:
-    pair_token = httpx.post(f"{engine_url}/extension/pair", timeout=10).json()["pair_token"]
+    pair_token = httpx.post(f"{engine_url}/extension/pair", timeout=10).json()[
+        "pair_token"
+    ]
 
     # HTTP RPC with the pair token as bearer.
     r = httpx.post(
@@ -126,11 +134,61 @@ def test_pair_token_authenticates_rpc_and_ws(engine_url: str) -> None:
         assert hello["session_id"]
 
 
+def test_pair_token_authenticates_rpc_over_tunnel(engine_url: str) -> None:
+    """Remote extension traffic reaches extension-scoped pair-token auth."""
+    pair_token = httpx.post(f"{engine_url}/extension/pair", timeout=10).json()[
+        "pair_token"
+    ]
+    r = httpx.post(
+        f"{engine_url}/extension/rpc",
+        json={"command": "health"},
+        headers={
+            "Authorization": f"Bearer {pair_token}",
+            "Cf-Connecting-Ip": "203.0.113.7",
+        },
+        timeout=10,
+    )
+    assert r.status_code == 200, r.text[:200]
+    assert r.json()["ok"] is True
+
+
+def test_pair_token_cannot_authenticate_non_extension_route_over_tunnel(
+    engine_url: str,
+) -> None:
+    """The pair-token exception must stay scoped to /extension/* routes."""
+    pair_token = httpx.post(f"{engine_url}/extension/pair", timeout=10).json()[
+        "pair_token"
+    ]
+    r = httpx.post(
+        f"{engine_url}/tools/invoke",
+        json={"tool": "SystemInfo", "input": {}},
+        headers={
+            "Authorization": f"Bearer {pair_token}",
+            "Cf-Connecting-Ip": "203.0.113.7",
+        },
+        timeout=10,
+    )
+    assert r.status_code == 401, r.text[:200]
+
+
 def test_wrong_pair_token_is_rejected(engine_url: str) -> None:
     r = httpx.post(
         f"{engine_url}/extension/rpc",
         json={"command": "health"},
         headers={"Authorization": "Bearer mxl_pair_definitely-not-the-real-one"},
+        timeout=10,
+    )
+    assert r.status_code == 401
+
+
+def test_wrong_pair_token_is_rejected_over_tunnel(engine_url: str) -> None:
+    r = httpx.post(
+        f"{engine_url}/extension/rpc",
+        json={"command": "health"},
+        headers={
+            "Authorization": "Bearer mxl_pair_definitely-not-the-real-one",
+            "Cf-Connecting-Ip": "203.0.113.7",
+        },
         timeout=10,
     )
     assert r.status_code == 401
@@ -246,7 +304,10 @@ def test_ws_reverse_invoke_round_trip(ext_token: str) -> None:
                     "type": "extension.result",
                     "callId": call_id,
                     "ok": True,
-                    "result": {"text": "simulated page text", "url": "https://example.com"},
+                    "result": {
+                        "text": "simulated page text",
+                        "url": "https://example.com",
+                    },
                 }
             )
         )

@@ -2,7 +2,7 @@
 
 > Where the Chrome extension meets the desktop engine. Living doc; update on
 > every protocol change. Everything below is SHIPPED unless explicitly marked
-> pending — verified against live code 2026-07-10.
+> pending — verified against live code and installed packages 2026-08-08.
 
 ## Role
 
@@ -32,7 +32,8 @@ channel.
 | `app/api/cross_component_router.py` | The inbound Broadcast dispatcher. `kind:"rpc"` envelopes are invoked against the SAME `HANDLERS` registry as `/extension/rpc` and answered with a reply envelope (`action: "<action>.result"`, same `requestId`, `direction: "local->extension"`). `wake` (Phase 3c) and `presence` remain log-only. | extension → local |
 
 Extension-side counterparts (in matrx-extend): `src/lib/desktop/discovery.ts`
-(port probe 22140–22159 + cache), `src/lib/desktop/http.ts` (`rpcHttp` →
+(local port probe 22140–22159 plus owner-RLS `app_instances.tunnel_url`
+discovery), `src/lib/desktop/http.ts` (`rpcHttp` →
 `POST /extension/rpc`, pairing token), `src/lib/desktop/ws-client.ts` +
 `ws-offscreen.ts` (MV3 offscreen-document WebSocket), and the reverse-invoke
 consumer in `src/lib/background/bootstrap.ts`
@@ -101,8 +102,8 @@ The engine is reachable via **three** paths:
   3. **Supabase Broadcast (cross-machine fallback)** — per-user channel
      `matrx-local-bridge:<userId>`; rpc envelopes dispatch into the same
      `HANDLERS` registry. Gated by the `extension_broadcast_enabled` setting
-     (default ON). The engine subscribes when the C-bridge orchestrator calls
-     `connect_broadcast(user_id)` — subscription is NOT automatic on boot.
+     (default ON). The engine subscribes on authenticated boot/token
+     configuration and disconnects during sign-out/shutdown.
 
 ### Discovery primitives
 
@@ -129,6 +130,11 @@ The engine is reachable via **three** paths:
 - `extension_auth` accepts the pair token as a bearer BEFORE the JWT paths
   (constant-time compare, `app/services/pairing.py`); pair-token principals
   carry `via_pairing=True` and skip the tunnel owner check.
+- The app-wide `AuthMiddleware` recognizes a valid pair token only for
+  `/extension/*`, allowing the request to reach the extension-specific
+  validator. The same token on every unrelated remote route still fails
+  normal Supabase verification. `/extension/pair` owns its tunnel-origin
+  rejection and always returns the contractual 403 remotely.
 - **`/extension/*` validation** (`app/api/extension_auth.py::validate_extension_principal`):
   a malformed bearer (not a JWT) fails closed with 401. Well-formed tokens:
   1. **JWKS / asymmetric (RS256/ES256)** — verified locally against
@@ -191,7 +197,7 @@ result = await invoke_extension_tool("read_page", {"mode": "text"}, session_id, 
 - No retries on the channel; callers own retry + dedup.
 - HTTP driver for testing: `POST /extension/invoke {session_id, tool_name, args, timeout_seconds}`.
 
-## Verification status (2026-07-10)
+## Verification status (2026-08-08)
 
 - **Engine-side round trip: VERIFIED in CI-grade tests.**
   `tests/smoke/test_extension_channel.py` runs the real engine (port 22199)
@@ -204,17 +210,20 @@ result = await invoke_extension_tool("read_page", {"mode": "text"}, session_id, 
   rpc dispatcher (reply shape, filtering, unknown command, tool routing).
 - **Extension-side units:** matrx-extend `tests/unit/ws-invoke.test.ts`
   (reverse-invoke consumer) + existing dispatch tests; `pnpm test`.
-- **Pending: true in-browser E2E.** Manual steps:
-  1. Start the engine (`uv run python run.py`), load the extension unpacked,
-     pair it (Settings → Pair desktop).
-  2. Extension side: confirm `transport: 'http'` in the Bridges debug panel;
-     the WS auto-connects (`ws state: … → open` in the debug log).
-  3. Browser → engine: in a Pilot chat with privileged tools, call
-     `desktop_run_command` with `{"command":"tool","args":{"tool_name":"SystemInfo","tool_input":{}}}`.
-  4. Engine → browser: `GET /extension/sessions` for the session_id, then
-     `curl -X POST /extension/invoke -d '{"session_id":"…","tool_name":"read_page","args":{"mode":"text"}}'`
-     with the pair token; confirm page text returns.
-  5. Watch `GET /extension/metrics` for `tool`, `bridge:invoke`, `ws:*` rows.
+- **Installed/package E2E: VERIFIED.** Installed matrx-local v1.4.14 and the
+  real Chrome profile (matrx-extend v0.1.68) completed discovery, pairing,
+  health/version/capabilities, real `SystemInfo`, and WS connection. A clean
+  temporary Chrome-for-Testing profile loaded from the v0.1.69 packaged build
+  auto-paired independently. The engine listed both sessions simultaneously,
+  and targeted `read_page` reverse invokes returned independently from both.
+- **Production frontend bridge: VERIFIED.** `demos.aimatrx.com` completed
+  direct and Supabase Broadcast ping/capabilities/`get_active_tab` calls
+  against the installed extension; the append-message route returned its
+  expected authenticated 404 health probe.
+- **Remote HTTP regression:** the real-engine suite pins valid pair token →
+  `/extension/rpc` 200 over tunnel headers, wrong pair → 401, pair bootstrap →
+  403, and pair token on non-extension route → 401. Repeat against the released
+  tunnel after any auth middleware change.
 
 ---
 
@@ -283,12 +292,9 @@ curl -s -X POST https://<frontend>/api/compute-targets/resolve \
 **Step 6 — SandboxPanel:** pick the device in the frontend SandboxPanel; fs
 listings/exec should flow. Errors here with steps 1–5 green = client-side.
 
-**Current state on this Mac (2026-07-10):** links 1, 3 healthy (heartbeat
-fresh); tunnel intentionally OFF (`tunnel_enabled=false`,
-`tunnel_active=false` since 2026-05-10). Flipping it on is ONE user action:
-`POST /tunnel/start` or the desktop Settings → Remote Access toggle — the
-rest of the chain re-lights automatically (row updated on start; heartbeat
-keeps it fresh).
+The tunnel's enabled/active state is user configuration, not a documentation
+constant. Inspect `/tunnel/status` and the matching `app_instances` row; never
+toggle it merely to make a test pass.
 
 ---
 

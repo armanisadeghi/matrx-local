@@ -48,6 +48,15 @@ log). Rejection logging is rate-limited (first miss WARNs, quiet-gap re-WARNs,
 periodic INFO rate summary; state dict bounded at 256 keys). Full rationale in
 the module docstring + `docs/MATRX_EXTEND_CONNECTION.md`.
 
+The engine-issued `mxl_pair_…` token is accepted over both direct loopback and
+the Cloudflare tunnel, but only for `/extension/*`. `AuthMiddleware` performs
+that narrow outer-gate exception so the request can reach
+`validate_extension_principal`, which repeats the constant-time pair-token
+check. The same token on `/tools/*`, `/settings`, or any unrelated route still
+goes through remote Supabase verification and fails closed. `/extension/pair`
+always reaches its route-owned origin check so tunnel callers receive the
+contractual hard 403; the token itself is never remotely issuable.
+
 ## Diagnostics
 
 - `/extension/boot-check` (+ boot self-check at engine startup)
@@ -56,6 +65,9 @@ the module docstring + `docs/MATRX_EXTEND_CONNECTION.md`.
 - `extension_bridge_routes.py` backs the desktop Bridge Test panel — test-only
   surface; product features do not belong there.
 
-Status: `health`/`version`/`capabilities`/`tool` handlers live; browser→engine
-round-trips beyond `health` still pending end-to-end verification (see root
-CLAUDE.md "Channel B status").
+Status: `health`/`version`/`capabilities`/`tool` handlers live. On 2026-08-08,
+the installed v1.4.14 app completed live browser→engine RPCs, two simultaneous
+Chrome-profile WS sessions, and independent engine→browser `read_page`
+reverse invokes. Remote pair-token HTTP auth is covered by the real-engine
+smoke suite and must be re-proved against the released build whenever this
+middleware contract changes.

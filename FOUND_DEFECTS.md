@@ -30,6 +30,38 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ---
 
+## Notes sync / data safety
+
+### MXL-D-074 — Notes sync mass-deleted 2,600+ cloud notes across four waves; local trigger unidentified
+- **Area:** `app/services/documents/sync_engine.py` (tombstone propagation:
+  `full_sync` local-file-gone branch, `_handle_external_delete` watcher path),
+  `app/api/document_routes.py` (`_delete_folder_locked`, `DELETE /notes/{id}`)
+- **Symptom:** Cloud `workbench.notes` for `arman@armansadeghi.com`
+  (4cf62e4e-…) received sequential device-stamped soft-deletes in four waves:
+  2026-08-06 19:54–19:55 (464), 2026-08-07 21:47–22:32 (2,135), 2026-08-08
+  08:07–08:12 (176) — devices `921d9676-75d` (primary) and `5bc17b18-13e`.
+  Verified in `history.row_versions` / `workbench.notes` on 2026-08-08. The
+  user's "recent notes" list became months-old notes; deletions were only
+  noticed by accident. All rows are SOFT-deleted (recoverable); restore
+  decision is with Arman (SQL in the incident PR description).
+- **Status:** open, NARROWED (2026-08-08 second pass). Content-verified in
+  the DB: **every wave-deleted note has a live byte-identical copy — zero
+  unique content was lost**; the waves were the intentional duplicate-factory
+  cleanup (times correlate exactly with the dup-investigation commits
+  `e02846d`/`24a7e65` Aug 6 19:56Z and `34e2b31`/`9c8c95b` Aug 8 08:09–08:13Z;
+  PR #6 → v1.4.14). The factory itself was still minting `_2` copies on Aug 7
+  22:16–22:39Z (pre-fix engine live); two leftover identical dups were removed
+  Aug 8. **Mitigation shipped:** mass-delete circuit breaker (PR #7 —
+  `allow_cloud_delete`, budget max(25, 10% of live corpus)/24h, persisted trip
+  state, explicit `POST /documents/sync/delete-breaker/reset`). **Remaining
+  (on-machine only):** confirm the deletion driver in `~/.matrx/logs`, check
+  which device id was a DEV engine (possible MXL-D-043-class breach), verify
+  the installed app is ≥ v1.4.14, and factory-dead verification — full recipe
+  in [docs/handoffs/notes-sync-on-machine-verification.md](docs/handoffs/notes-sync-on-machine-verification.md).
+- **Owner hint:** an agent on Arman's machine, per the handoff doc.
+
+---
+
 ## Updater / packaged runtime
 
 ### MXL-D-067 — Background updater replaces the live PyInstaller sidecar and corrupts all later lazy imports

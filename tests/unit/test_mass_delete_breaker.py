@@ -100,6 +100,42 @@ def test_budget_scales_with_remote_corpus() -> None:
     assert eng.delete_breaker_tripped is True
 
 
+def test_retries_of_same_note_do_not_burn_budget() -> None:
+    # A failed propagation retried by full_sync/the watcher re-charges the
+    # SAME window slot — a flaky network must not trip the breaker on a
+    # handful of pending tombstones.
+    eng = _engine()
+    for _ in range(MASS_DELETE_MIN_ALLOWANCE * 3):
+        assert eng.allow_cloud_delete("same-note") is True
+    assert eng.delete_breaker_tripped is False
+    # Distinct notes still spend real budget on top of the retried one.
+    for i in range(MASS_DELETE_MIN_ALLOWANCE - 1):
+        assert eng.allow_cloud_delete(f"note-{i}") is True
+    assert eng.allow_cloud_delete("one-too-many") is False
+    assert eng.delete_breaker_tripped is True
+
+
+def test_already_charged_note_passes_even_at_budget() -> None:
+    # Retrying a note that already holds a window slot is allowed even when
+    # the window is full — only NEW ids trip the breaker.
+    eng = _engine()
+    for i in range(MASS_DELETE_MIN_ALLOWANCE):
+        assert eng.allow_cloud_delete(f"note-{i}") is True
+    assert eng.allow_cloud_delete("note-0") is True
+    assert eng.delete_breaker_tripped is False
+
+
+def test_legacy_list_window_is_adopted() -> None:
+    eng = _engine()
+    import time as _time
+
+    state = eng.fm.load_sync_state()
+    state["delete_window"] = [_time.time()] * MASS_DELETE_MIN_ALLOWANCE
+    eng.fm.save_sync_state(state)
+    assert eng.allow_cloud_delete("fresh-note") is False
+    assert eng.delete_breaker_tripped is True
+
+
 def test_small_corpus_keeps_flat_minimum() -> None:
     eng = _engine()
     state = eng.fm.load_sync_state()

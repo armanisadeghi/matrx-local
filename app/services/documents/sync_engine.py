@@ -1282,7 +1282,10 @@ class SyncEngine:
                     stats.get("skipped_duplicate", 0),
                 )
 
-            # Reload — the pull/push calls above rewrote sync state.
+            # Reload — the pull/push calls above rewrote sync state. Keep
+            # this reload→save free of awaits: it must stay atomic on the
+            # event loop so a concurrent reset_delete_breaker can never be
+            # overwritten by a stale snapshot (see allow_cloud_delete).
             state = self.fm.load_sync_state()
             state["last_full_sync"] = time.time()
             # Live remote corpus size — scales the mass-delete breaker budget.
@@ -1923,6 +1926,18 @@ class SyncEngine:
         when the breaker is (or just became) tripped — the caller must skip
         the cloud delete and leave the local tombstone in place for a later,
         human-confirmed propagation. Never raises.
+
+        The window is keyed by NOTE ID, not by attempt: a failed propagation
+        retried by full_sync or the watcher re-charges the same slot instead
+        of burning fresh budget (a flaky network must not trip the breaker on
+        25 pending tombstones), while 25 DISTINCT deletions always count as
+        25 no matter how they interleave with retries.
+
+        CONCURRENCY INVARIANT: this method (and reset_delete_breaker, and
+        full_sync's final reload-and-save) performs its load→modify→save with
+        NO await in between, so on the single asyncio loop each call is
+        atomic — no lock is needed and none is taken. Do not introduce an
+        await between load_sync_state and save_sync_state here.
         """
         state = self.fm.load_sync_state()
         if state.get("delete_breaker"):
@@ -1938,13 +1953,18 @@ class SyncEngine:
             return False
 
         now = time.time()
-        window: list[float] = [
-            t
-            for t in state.get("delete_window", [])
+        raw_window = state.get("delete_window", {})
+        if isinstance(raw_window, list):
+            # Legacy shape (pre note-id keying): timestamps only. Adopt them
+            # under synthetic keys so recent spend is not forgotten.
+            raw_window = {f"_legacy_{i}": t for i, t in enumerate(raw_window)}
+        window: dict[str, float] = {
+            nid: t
+            for nid, t in raw_window.items()
             if now - t < MASS_DELETE_WINDOW_SECONDS
-        ]
+        }
         budget = self._delete_budget()
-        if len(window) >= budget:
+        if note_id not in window and len(window) >= budget:
             state["delete_breaker"] = {
                 "tripped_at": _now(),
                 "count": len(window),
@@ -1965,7 +1985,7 @@ class SyncEngine:
             )
             return False
 
-        window.append(now)
+        window[note_id] = now
         state["delete_window"] = window
         self.fm.save_sync_state(state)
         return True
@@ -1975,10 +1995,16 @@ class SyncEngine:
 
         Clears the tripped state AND the rolling window so confirmed bulk
         cleanups can proceed. Returns the state that was cleared.
+
+        CONCURRENCY INVARIANT: load→modify→save with no await in between —
+        atomic on the asyncio loop (see allow_cloud_delete). A reset issued
+        while a full_sync is mid-run cannot be clobbered: every breaker
+        reader reloads state fresh, and full_sync's final save also reloads
+        immediately before writing.
         """
         state = self.fm.load_sync_state()
         cleared = state.pop("delete_breaker", None)
-        state["delete_window"] = []
+        state["delete_window"] = {}
         self.fm.save_sync_state(state)
         if cleared:
             # NB: str() — a lone dict arg would hit logging's mapping

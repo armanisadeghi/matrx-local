@@ -793,6 +793,33 @@ class SyncEngine:
             stats = {"pushed": 0, "failed": 0, "skipped": 0, "conflicts": 0}
             open_conflicts = set(self.fm.list_conflicts())
 
+            # Duplicate/resurrection guard (the push_all funnel). full_sync
+            # got this guard in the 2026-08 duplicate-factory fix, but the
+            # watcher → never_synced SQLite row → push_all path still minted
+            # new cloud notes with NO content check — 34 Finder-style
+            # "label 2.md" copies became 34 duplicate cloud notes on
+            # 2026-08-07 through exactly this funnel. When any pending row
+            # would CREATE (never synced) or might RESURRECT (synced before,
+            # remote row now absent from the live snapshot), fetch the live
+            # snapshot once and check bytes first.
+            remote_by_id: dict[str, dict] = {}
+            remote_hashes: set[str] = set()
+            if pending:
+                try:
+                    for r in await self.sb.get_all_notes_with_hashes(
+                        self._user_id
+                    ):
+                        remote_by_id[r["id"]] = r
+                        if r.get("content_hash"):
+                            remote_hashes.add(r["content_hash"])
+                except Exception:
+                    logger.warning(
+                        "push_all: could not fetch remote snapshot for the "
+                        "duplicate guard — deferring pending pushes this tick",
+                        exc_info=True,
+                    )
+                    return {**stats, "error": "network_error"}
+
             for note in pending:
                 if not note.get("sync_enabled", True):
                     stats["skipped"] += 1
@@ -814,6 +841,44 @@ class SyncEngine:
                     stats["skipped"] += 1
                     continue
 
+                c_hash = content_hash(content)
+                remote_row = remote_by_id.get(note["id"])
+
+                if remote_row is None:
+                    ever_synced = bool(note.get("remote_content_hash"))
+                    if not ever_synced and c_hash in remote_hashes:
+                        # This push would CREATE a cloud note whose exact
+                        # bytes already exist remotely — a duplicate copy
+                        # (Finder "name 2.md", restored file, second engine).
+                        # Never mint it; full_sync's adoption pass binds it
+                        # to a pathless twin if one exists, and an edit
+                        # (diverged hash) syncs it as a new note then.
+                        stats["skipped_duplicate"] = (
+                            stats.get("skipped_duplicate", 0) + 1
+                        )
+                        continue
+                    if ever_synced:
+                        # Synced before but absent from the LIVE snapshot →
+                        # the remote row was soft-deleted. upsert_note would
+                        # resurrect it; that is correct only for a local
+                        # EDIT. For byte-unchanged content the deletion
+                        # wins — propagate it locally.
+                        if c_hash == note.get("remote_content_hash"):
+                            try:
+                                full_row = await self.sb.get_note(note["id"])
+                            except Exception:
+                                full_row = None
+                            if full_row is not None and full_row.get(
+                                "is_deleted"
+                            ):
+                                await self._pull_note(
+                                    note["id"], note=full_row
+                                )
+                                stats["deleted_local"] = (
+                                    stats.get("deleted_local", 0) + 1
+                                )
+                                continue
+
                 try:
                     result = await self._push_note(
                         note_id=note["id"],
@@ -831,6 +896,17 @@ class SyncEngine:
                         stats["pushed"] += 1
                 except Exception:
                     stats["failed"] += 1
+
+            if stats.get("skipped_duplicate") or stats.get("deleted_local"):
+                # Same doctrine as full_sync: recovery worked, but a firing
+                # means identity was lost or a deletion raced a push — scream.
+                logger.warning(
+                    "push_all duplicate guard fired: skipped_duplicate=%d "
+                    "deleted_local=%d — pending local files were NOT minted "
+                    "as duplicate cloud notes / did not resurrect deletions",
+                    stats.get("skipped_duplicate", 0),
+                    stats.get("deleted_local", 0),
+                )
 
             return stats
 

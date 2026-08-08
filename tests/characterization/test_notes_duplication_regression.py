@@ -314,3 +314,120 @@ def test_external_change_unique_bytes_still_pushes(engine: SyncEngine) -> None:
     engine.fm.notes["Draft/fresh.md"] = "unique fresh body"
     _run(engine._handle_external_change("Draft/fresh.md"))
     assert engine.sb.upsert_count() == 1
+
+
+# ---------------------------------------------------------------------------
+# push_all — the remaining unguarded funnel (2026-08-07 " 2" copies incident)
+# ---------------------------------------------------------------------------
+#
+# 34 Finder-style "label 2.md" duplicate files (made visible by the TCC fix)
+# went watcher → never_synced SQLite row → push_all → 34 duplicate cloud
+# notes, AFTER the full_sync/_pull_note guards shipped. push_all must apply
+# the same never-mint-identical-bytes and never-resurrect-unchanged rules.
+
+
+def _seed_pending_file(
+    engine: SyncEngine,
+    fp: str,
+    content: str,
+    note_id: str,
+    sync_status: str = "never_synced",
+    remote_content_hash: str | None = None,
+) -> None:
+    engine.fm.notes[fp] = content
+    engine._repo.rows[note_id] = {
+        "id": note_id,
+        "file_path": fp,
+        "label": Path(fp).stem,
+        "content_hash": content_hash(content),
+        "sync_status": sync_status,
+        "sync_enabled": True,
+        "remote_content_hash": remote_content_hash,
+        "is_deleted": False,
+    }
+
+
+def test_push_all_never_synced_duplicate_bytes_not_minted(engine: SyncEngine) -> None:
+    """A never-synced pending row whose file bytes already exist in the cloud
+    under another note must NOT be pushed as a new cloud note."""
+    engine.sb.notes["cloud-orig"] = {
+        "id": "cloud-orig",
+        "file_path": "Draft/original.md",
+        "content": "same body",
+        "content_hash": content_hash("same body"),
+        "label": "original",
+        "folder_name": "Draft",
+    }
+    _seed_pending_file(engine, "Draft/original 2.md", "same body", "finder-copy-id")
+    stats = _run(engine.push_all())
+    assert stats.get("skipped_duplicate") == 1
+    assert stats["pushed"] == 0
+    assert engine.sb.upsert_count() == 0
+    assert "finder-copy-id" not in engine.sb.notes
+
+
+def test_push_all_never_synced_unique_bytes_still_pushes(engine: SyncEngine) -> None:
+    """The guard must not over-block genuinely new content."""
+    _seed_pending_file(engine, "Draft/fresh.md", "unique body", "fresh-id")
+    stats = _run(engine.push_all())
+    assert stats["pushed"] == 1
+    assert engine.sb.upsert_count() == 1
+
+
+def test_push_all_unchanged_pending_with_remote_tombstone_propagates_delete(
+    engine: SyncEngine,
+) -> None:
+    """A previously-synced pending row whose remote twin was soft-deleted and
+    whose local bytes are UNCHANGED must propagate the deletion, not
+    resurrect the cloud row (upsert_note clears deleted_at by design)."""
+    body = "kept body"
+    engine.sb.notes["dead-id"] = {
+        "id": "dead-id",
+        "file_path": "Draft/dead.md",
+        "content": body,
+        "content_hash": content_hash(body),
+        "label": "dead",
+        "folder_name": "Draft",
+        "is_deleted": True,
+    }
+    _seed_pending_file(
+        engine,
+        "Draft/dead.md",
+        body,
+        "dead-id",
+        sync_status="pending_push",
+        remote_content_hash=content_hash(body),
+    )
+    stats = _run(engine.push_all())
+    assert stats.get("deleted_local") == 1
+    assert stats["pushed"] == 0
+    assert engine.sb.upsert_count() == 0
+    assert engine.sb.notes["dead-id"].get("is_deleted") is True  # not resurrected
+    assert "Draft/dead.md" not in engine.fm.notes  # local file removed
+
+
+def test_push_all_edited_pending_with_remote_tombstone_still_resurrects(
+    engine: SyncEngine,
+) -> None:
+    """Edit-vs-delete resolves to keep-the-edit: a pending row with LOCAL
+    EDITS whose remote twin was deleted must still push (resurrect)."""
+    engine.sb.notes["edited-id"] = {
+        "id": "edited-id",
+        "file_path": "Draft/edited.md",
+        "content": "old body",
+        "content_hash": content_hash("old body"),
+        "label": "edited",
+        "folder_name": "Draft",
+        "is_deleted": True,
+    }
+    _seed_pending_file(
+        engine,
+        "Draft/edited.md",
+        "new edited body",
+        "edited-id",
+        sync_status="pending_push",
+        remote_content_hash=content_hash("old body"),
+    )
+    stats = _run(engine.push_all())
+    assert stats["pushed"] == 1
+    assert engine.sb.upsert_count() == 1

@@ -514,13 +514,27 @@ for _pkg in managed_runtime_shared_packages(target):
 # fatal on a missing package or a missing default.docx/default.pptx template.
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
-from _office_bundle import OFFICE_PACKAGES, collect_office_datas, collect_office_modules
+from _office_bundle import (
+    DIR_MARKER,
+    OFFICE_PACKAGES,
+    collect_office_datas,
+    collect_office_modules,
+    office_parent_relative_dirs,
+)
 
 collect_office_datas(collect_data_files)  # assert the templates are reachable
 collect_office_modules(collect_submodules)  # assert every package is present
 for _pkg in OFFICE_PACKAGES:
     args += ["--collect-submodules", _pkg, "--collect-data", _pkg,
              "--hidden-import", _pkg]
+# --collect-data ships each package's OWN data, which is not enough: python-docx
+# and python-pptx read templates through "<subpackage>/../templates/…", and that
+# literal path resolves only when <subpackage> physically exists under
+# sys._MEIPASS. The specs get these directories from collect_office_datas'
+# return value; this path has to add them explicitly or it would rebuild the
+# exact frozen-only FileNotFoundError the gate now rejects.
+for _dir in office_parent_relative_dirs():
+    args += ["--add-data", f"{DIR_MARKER}{os.pathsep}{_dir}"]
 
 args.append("run.py")
 

@@ -56,6 +56,23 @@ def test_build_sidecar_fallback_shares_the_office_source_of_truth() -> None:
     )
     assert "from _office_bundle import" in fallback
     assert "OFFICE_PACKAGES" in fallback
+    # The specs get the marker entries from collect_office_datas' RETURN value;
+    # the flag-based builder has to add them explicitly. Asserting the templates
+    # are collectable and then not shipping the directories would rebuild the
+    # exact frozen-only failure this module exists to prevent.
+    assert "office_parent_relative_dirs()" in fallback
+    assert "--add-data" in fallback and "DIR_MARKER" in fallback
+
+
+def test_build_sidecar_fallback_python_block_is_valid() -> None:
+    """The inline builder is a heredoc, so nothing else compiles it."""
+    fallback = (_REPO_ROOT / "scripts" / "build-sidecar.sh").read_text(
+        encoding="utf-8"
+    )
+    _, _, rest = fallback.partition("cat > \"$CMD_FILE\" << 'PYINSTALLER_EOF'\n")
+    block, _, _ = rest.partition("\nPYINSTALLER_EOF")
+    assert block.strip(), "inline PyInstaller builder block not found"
+    compile(block, "build-sidecar.sh::PYINSTALLER_EOF", "exec")
 
 
 def test_missing_office_package_is_fatal_not_skipped() -> None:

@@ -746,6 +746,66 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   outcome alongside 500 with a message naming the device as the cause.
 - **Status:** open — low priority, test-only.
 
+### MXL-D-076 — retry-queue `/queue/submit` discards the scraped content the desktop just produced
+- **Area:** `app/services/scraper/remote_client.py::submit_result` (~line 284);
+  server side `packages/matrx-scraper/matrx_scraper/api/ext_router.py::queue_submit`
+  in `/Users/armanisadeghi/code/aidream`.
+- **Symptom:** The whole point of the retry queue is that the server hands a URL
+  it could not scrape to a desktop on a residential IP, and the desktop hands
+  the CONTENT back. `submit_result` posts `url`, `content`, `content_type` and
+  `char_count` — but the server's `RetrySubmitRequest` declares only
+  `queue_item_id`, so pydantic drops every other field, and `queue_submit` just
+  flips the row to `status='completed'`. The content is never written anywhere.
+  The queue reports success while delivering nothing.
+- **Analyzed 2026-08-09 — verified in code:** read both sides.
+  `RetrySubmitRequest(BaseModel)` has exactly one field; the handler body is a
+  single `ScrapeRetryQueue.update_where(...)` with no cache/content write —
+  contrast `content_save`, which does call `cache.set(...)`.
+- **Same failure class as the 422 fixed in this commit** (`save_content` omitted
+  the required `page_name`): a client/server payload contract that nothing
+  validates, so it fails silently. The fix in `tests/unit/test_scrape_cloud_sync.py`
+  (validating the real outgoing body against the server's own pydantic model,
+  which is importable from the shared `matrx_scraper` package) is the pattern to
+  reuse here.
+- **Fix is server-side and belongs to aidream** — either accept and persist the
+  content on `/queue/submit`, or have the desktop call `content/save` first and
+  keep `/queue/submit` as pure bookkeeping. Needs Arman's call on which.
+- **Status:** open. Owner hint: aidream (`matrx-scraper` package) + this repo's
+  `retry_queue.py` consumer.
+
+### MXL-D-075 — matrx-utils/matrx-connect floors permit an ImportError-ing pair; the broken pair is what's installed today
+- **Area:** `pyproject.toml:73,76` (`matrx-utils>=2.0.0`, `matrx-connect>=0.1.10`)
+- **Symptom:** matrx-connect has imported `matrx_utils.AsyncSingleFlight` in
+  `middleware/auth.py` since 0.1.8, but matrx-utils first exported that symbol in
+  **2.0.1** (and `LEGACY_VISIBILITY_MAP` / `VisibilityLiteral` in **2.0.7**). Our
+  floors allow matrx-utils 2.0.0, and that is exactly what resolved into
+  `.venv` (matrx-utils 2.0.0 + matrx-connect 0.1.10), so `matrx_connect.middleware`
+  raises at import:
+  `ImportError: cannot import name 'AsyncSingleFlight' from 'matrx_utils'`.
+- **Currently LATENT, not broken:** verified 2026-08-09 that `matrx_connect/__init__.py`
+  does **not** eagerly import `middleware`, and every path this repo actually uses
+  imports clean — `matrx_connect.streaming`, `.context.app_context`, `.reservations`,
+  `.emitters.stream_emitter` (all OK). Only `matrx_connect.middleware` fails, and
+  nothing here imports it (`grep -rn matrx_connect app/`). The day someone adds an
+  auth-middleware import, the AI streaming surface dies at first request instead.
+- **Evidence:**
+  - Surfaced as the PyInstaller warning "Failed to collect submodules for
+    `matrx_scraper.server` … ImportError: cannot import name 'AsyncSingleFlight'"
+    while collecting matrx_scraper into the frozen sidecar (commit 5189719b1).
+  - `.venv/bin/python -c "import matrx_connect.middleware"` → ImportError.
+  - Root cause fixed upstream 2026-08-09: matrx-connect **0.1.25** now floors
+    `matrx-utils>=2.0.7` (aidream `packages/matrx-connect/pyproject.toml`, published
+    to PyPI). Nothing was removed from matrx-utils — the symbols were *added* and
+    consumers never raised their floors.
+- **Fix:** raise this repo's floors to `matrx-utils>=2.0.7` and
+  `matrx-connect>=0.1.25`, then `uv sync --all-extras` (plain `uv sync` strips the
+  installed extras — Hard Rule 5). One-line change per floor; the upstream release it
+  depends on is already live.
+- **Status:** open — **Analyzed 2026-08-09 — verified in code and against the
+  installed venv** (import matrix run per-module, not inferred).
+- **Owner hint:** whoever next touches `pyproject.toml` deps or the sidecar spec —
+  cheap to land alongside.
+
 ## Cross-repo
 
 ### MXL-D-059 — ✅ chat_sync BLIND-UPSERTS server-owned cloud rows (already corrupted production data)

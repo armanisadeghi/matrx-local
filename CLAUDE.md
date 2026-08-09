@@ -20,6 +20,7 @@
 | Download pipeline (audit / defects) | [docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md](docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md) |
 | **Browser-rendered scraping availability** (Playwright Chromium is downloaded, never bundled) — the missing browser is a STATE with a one-click install, surfaced on `/browser-runtime/status`, the `scraper` service record, and the Scraping page | [app/services/scraper/browser_runtime.py](app/services/scraper/browser_runtime.py) — never re-add a bare log-and-continue; the path is always `MATRX_HOME_DIR`-derived (Hard Rule 9) |
 | Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |
+| **Scraper lane + the scrape dual write** (local SQLite → cloud; why "cannot push yet" must never become `failed`, and why server payload models are the judge in tests) | [app/services/scraper/FEATURE.md](app/services/scraper/FEATURE.md) |
 | File sync — the cloud-files replica (`@files/`, pointer/full modes, hydration) | [app/services/file_sync/FEATURE.md](app/services/file_sync/FEATURE.md) |
 | matrx-extend ↔ engine | [docs/MATRX_EXTEND_CONNECTION.md](docs/MATRX_EXTEND_CONNECTION.md) |
 | **Content IR consumer work** (displaying or passing through structured content; not authoring kinds) | [docs/CONTENT_IR_CONSUMER_GUIDE.md](docs/CONTENT_IR_CONSUMER_GUIDE.md) — read before adding a Content IR consumer |

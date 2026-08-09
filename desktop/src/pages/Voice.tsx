@@ -1745,7 +1745,10 @@ function TranscribeTab({
                             )}
                           </button>
                           {/* Right: dropdown chevron */}
-                          <PopoverTrigger>
+                          {/* asChild — without it PopoverTrigger wraps this button
+                              in its own <button> (invalid HTML, breaks keyboard/AT
+                              activation). Same defect as MXL-D-021. */}
+                          <PopoverTrigger asChild>
                             <button
                               className={cn(
                                 "inline-flex items-center justify-center rounded-r-md h-7 w-5",

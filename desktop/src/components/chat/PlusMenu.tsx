@@ -259,7 +259,11 @@ export function CloudChatPlusMenu({
         if (!disabled) setOpen(next);
       }}
     >
-      <PopoverTrigger>
+      {/* asChild: PopoverTrigger renders its own <button> by default, which put a
+          button inside a button — invalid HTML that breaks keyboard/AT activation
+          of the inner control (MXL-D-021). asChild merges the trigger's behavior
+          onto the button below instead of wrapping it. */}
+      <PopoverTrigger asChild>
         <button
           type="button"
           disabled={disabled}

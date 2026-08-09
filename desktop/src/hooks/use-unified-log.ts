@@ -109,12 +109,40 @@ function _makeTime(): string {
   });
 }
 
+// Subscriber notification is deferred to a microtask; the buffer append below
+// stays synchronous so getClientLogBuffer() is never behind.
+//
+// Why: dispatching inline meant a log emitted DURING a React render synchronously
+// setState'd every mounted subscriber (LogPanel, DevTerminalPanel, Activity),
+// which React reports as "Cannot update a component while rendering a different
+// component" and which risks tearing/stale state — not just log noise. Logging is
+// something any code may do at any time, including render, so the fix belongs
+// here at the one chokepoint rather than at each call site (MXL-D-020).
+//
+// A microtask runs after the current synchronous task — so after React finishes
+// rendering and committing — and preserves emit order, since all flushes queue
+// through this same FIFO.
+const _pendingNotify: ClientLogLine[] = [];
+let _notifyScheduled = false;
+
+function _flushNotify(): void {
+  _notifyScheduled = false;
+  const batch = _pendingNotify.splice(0, _pendingNotify.length);
+  for (const line of batch) {
+    _bus.dispatchEvent(new CustomEvent(_EVENT, { detail: line }));
+  }
+}
+
 function _push(line: ClientLogLine): void {
   _buffer.push(line);
   if (_buffer.length > MAX_TEXT_BUFFERED) {
     _buffer.splice(0, _buffer.length - MAX_TEXT_BUFFERED);
   }
-  _bus.dispatchEvent(new CustomEvent(_EVENT, { detail: line }));
+  _pendingNotify.push(line);
+  if (!_notifyScheduled) {
+    _notifyScheduled = true;
+    queueMicrotask(_flushNotify);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -359,28 +359,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## UI / UX correctness
 
-### MXL-D-020 — `LogPanel` sets state during `AppInner`'s render
-- **Area:** desktop / app shell
-- **Symptom:** every boot logs React's setState-in-render error:
-  `Cannot update a component (LogPanel) while rendering a different component (AppInner)`.
-  Fails BOTH `boot.spec.ts` boot assertions (unauthenticated and authenticated).
-- **Evidence:** surfaced by `pnpm test:boot` on 2026-08-09, the first run after the
-  E2E harness was provisioned on this machine. Trace + screenshot under
-  `desktop/test-results/boot-boot-app-boots-to-the-*/`.
-- **Why it matters:** it is the ONLY thing failing the unauthenticated boot test, so
-  the boot smoke gate cannot go green — and a render-phase setState is a real
-  double-render/stale-state hazard, not just log noise.
-
-### MXL-D-021 — `<button>` nested inside `<button>` in `CloudChatPlusMenu`
-- **Area:** desktop / chat composer
-- **Symptom:** `In HTML, <button> cannot be a descendant of <button>. This will cause
-  a hydration error.` Logged on every authenticated boot.
-- **Evidence:** same 2026-08-09 `pnpm test:boot` run; the Popover trigger inside
-  `CloudChatPlusMenu` renders a button within a button. Trace under
-  `desktop/test-results/boot-boot-authenticated-sh-*/`.
-- **Why it matters:** invalid nesting breaks keyboard/AT activation of the inner
-  control and is the second blocker on the authenticated boot assertion.
-
 ### MXL-D-017 — `transcription_auto_init` setting has no effect
 - **Area:** desktop / transcription
 - **Symptom:** toggle exists and syncs to cloud, but nothing reads it — auto-init

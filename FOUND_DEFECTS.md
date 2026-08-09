@@ -584,6 +584,54 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Testing infrastructure
 
+### MXL-D-076 — `Scrape` tool's `get_links` / `get_overview` flags are inert; every scrape always returns the full payload
+- **Area:** `app/services/scraper/engine.py:372` (`ScraperEngine.scrape_one`),
+  `app/tools/tools/network.py:415` (`tool_scrape` building `LocalScrapeOptions`)
+- **Symptom:** `tool_scrape` carefully constructs
+  `LocalScrapeOptions(fields=ScrapeOptions(get_links=…, get_overview=…))` and
+  `scrape_one` then **ignores `opts.fields` entirely** — it passes only
+  `use_proxy` / `request_type` / `cache` / `domain_config` / `browser_pool` to the
+  package's `scrape()`, which takes no field options and always computes
+  everything. Field selection in the package is a POST-HOC dict filter
+  (`apply_field_flags`), and the tool never calls it — only
+  `ScraperEngine.result_dict` does. So `get_links=False, get_overview=False` still
+  returns `metadata.links` (all 8 buckets) and `metadata.overview`.
+- **Evidence:** verified 2026-08-09 by mutation. Forcing
+  `get_links=False, get_overview=False` in `tool_scrape` and re-running
+  `tests/smoke/test_scraper.py` left both bucket/overview assertions **green** —
+  the payload was unchanged. `grep -n apply_field_flags app/` shows its only call
+  site is `ScraperEngine.result_dict`, which `tool_scrape` does not use.
+- **Impact:** low/correctness-only today — the extra fields are computed anyway by
+  the package, so this wastes response bytes rather than breaking a caller. It
+  matters because the flags are advertised in the tool schema: a cloud agent that
+  sets `get_links=false` to keep a context window small does not get what it asked
+  for, and `output_mode="research"` (which routes through the same dead flags to
+  mean "prose only") silently does not trim either.
+- **Fix:** either route the tool's result through `apply_field_flags` before
+  building the metadata dict, or drop the flags from the tool schema and stop
+  pretending. One of the two — the current state advertises a knob that does
+  nothing.
+- **Status:** open — found while adding local-lane smoke coverage
+  (`tests/smoke/test_scraper.py`). Those two tests deliberately pin the ORGANIZER's
+  output contract rather than the flags, and their docstrings name this defect, so
+  fixing it will not silently invalidate them.
+- **Owner hint:** whoever next touches `tool_scrape` or `output_mode="research"`.
+
+### MXL-D-077 — `test_wake_word_start_without_device` can exceed the 15s client read timeout under full-suite load
+- **Area:** `tests/smoke/test_wake_word.py:91`
+- **Symptom:** `POST /wake-word/start` opens a REAL microphone stream; on a busy
+  machine macOS device acquisition occasionally takes longer than the session
+  client's 15s timeout, and the test dies with `httpx.ReadTimeout: timed out`
+  rather than the 200-or-500 it is written to accept.
+- **Evidence:** observed once on 2026-08-09 in a full `tests/smoke` run; the same
+  file passed in isolation and the full suite passed on the next 3 consecutive
+  runs. Same class as MXL-D-044 (load/ordering-sensitive smoke flake), not a
+  product bug — the endpoint's own contract already allows a graceful failure.
+- **Fix:** give this one test a longer explicit timeout (it is the only smoke test
+  that waits on real audio hardware), or treat `ReadTimeout` as an accepted
+  outcome alongside 500 with a message naming the device as the cause.
+- **Status:** open — low priority, test-only.
+
 ## Cross-repo
 
 ### MXL-D-075 — matrx-utils/matrx-connect floors permit an ImportError-ing pair; the broken pair is what's installed today

@@ -19,6 +19,7 @@
 | Credential Vault — the user's own provider keys; local store FIRST, platform vault second (consumer BUILT here 2026-07-26). Read before touching `ApiKeysRepo`, `key_manager`, or `/settings/api-keys/*` | [app/services/credential_vault/FEATURE.md](app/services/credential_vault/FEATURE.md); cross-repo plan: `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/PLAN.md` |
 | Download pipeline (audit / defects) | [docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md](docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md) |
 | Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |
+| **Scraper lane + the scrape dual write** (local SQLite → cloud; why "cannot push yet" must never become `failed`, and why server payload models are the judge in tests) | [app/services/scraper/FEATURE.md](app/services/scraper/FEATURE.md) |
 | File sync — the cloud-files replica (`@files/`, pointer/full modes, hydration) | [app/services/file_sync/FEATURE.md](app/services/file_sync/FEATURE.md) |
 | matrx-extend ↔ engine | [docs/MATRX_EXTEND_CONNECTION.md](docs/MATRX_EXTEND_CONNECTION.md) |
 | **Content IR consumer work** (displaying or passing through structured content; not authoring kinds) | [docs/CONTENT_IR_CONSUMER_GUIDE.md](docs/CONTENT_IR_CONSUMER_GUIDE.md) — read before adding a Content IR consumer |

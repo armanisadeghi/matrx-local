@@ -199,6 +199,38 @@ export interface RemoteScrapeResult {
   scraped_at: string | null;
 }
 
+/** The one state the scrape cloud-sync surface renders. Mirrors
+ *  `app/services/scraper/scrape_store.py::_summary_state`. */
+export type ScrapeSyncState =
+  | "synced"      // nothing outstanding
+  | "signed_out"  // engine has no usable JWT — one click fixes it
+  | "offline"     // cloud unreachable — resolves itself
+  | "rejected"    // the server refused the content; retry is safe
+  | "queued";     // waiting on the next background pass
+
+export interface ScrapeSyncStatus {
+  total: number;
+  synced: number;
+  pending: number;
+  failed: number;
+  deleted: number;
+  blocked_auth: number;
+  blocked_offline: number;
+  unsynced: number;
+  healthy: boolean;
+  state: ScrapeSyncState;
+  message: string;
+  action: "sign_in" | "retry" | "none";
+}
+
+export interface ScrapeSyncResult {
+  reset_to_pending: number;
+  pushed: number;
+  deferred: number;
+  failed: number;
+  status: ScrapeSyncStatus;
+}
+
 export interface RemoteScrapeResponse {
   status: string;
   execution_time_ms: number;
@@ -1304,6 +1336,26 @@ class EngineAPI {
   /** Scrape URLs using the engine's multi-strategy scraper. */
   async scrape(urls: string[], useCache = true): Promise<ToolResult> {
     return this.invokeTool("Scrape", { urls, use_cache: useCache });
+  }
+
+  /**
+   * Cloud-sync state of locally stored scrapes.
+   *
+   * Render `state` / `message` / `action` — never `cloud_sync_error`, which is
+   * a raw httpx string for diagnostics. `signed_out` and `offline` are STATES:
+   * the scrapes are safe locally and upload themselves once the blocker
+   * clears, so they must never read as data loss.
+   */
+  async getScrapeSyncStatus(): Promise<ScrapeSyncStatus> {
+    return (await this.get("/scrapes/sync-status")) as ScrapeSyncStatus;
+  }
+
+  /**
+   * Push every unsynced scrape now. Revives rows that exhausted their
+   * automatic retry budget — pressing retry is asking for exactly that.
+   */
+  async triggerScrapeSync(): Promise<ScrapeSyncResult> {
+    return (await this.post("/scrapes/sync", {})) as ScrapeSyncResult;
   }
 
   /** Search the web via the engine. */

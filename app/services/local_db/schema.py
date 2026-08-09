@@ -781,6 +781,33 @@ WHERE key = 'settings'
   AND json_type(settings, '$.api_key_validation') IS NOT NULL
 """
 
+# Cloud scrape sync: separate "cannot push YET" from "push REJECTED".
+#
+# Before this migration every unsuccessful push — no signed-in user, a dead
+# gateway, an expired token — burned one of five retries and then parked the
+# row in terminal 'failed'. Two whole classes of blocker resolve themselves
+# (sign in / the server comes back), so a retry budget was the wrong tool for
+# them; `cloud_sync_blocked_reason` names the blocker instead and leaves the
+# row queued.
+#
+# The UPDATE is one-time recovery for rows stranded by the client-side bug this
+# migration ships with: `save_content` never sent the `page_name` the server
+# marks required, so EVERY push since the 2026-04-29 /api/v1 → /api/scraper
+# migration answered 422 and every affected row ran itself out to terminal.
+# Those rows are only "permanently rejected" in the sense that a fixed client
+# never got to ask again — so clear the counter and let them re-push.
+_V18_SCRAPE_SYNC_BLOCK_REASON = """
+ALTER TABLE scrape_pages ADD COLUMN cloud_sync_blocked_reason TEXT;
+
+UPDATE scrape_pages
+SET cloud_sync_status = 'pending',
+    cloud_sync_attempts = 0,
+    cloud_sync_error = NULL,
+    cloud_sync_blocked_reason = NULL
+WHERE cloud_sync_status = 'failed'
+  AND is_deleted = 0
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -799,4 +826,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (15, _V15_DELEGATION_OUTBOX),
     (16, _V16_LOCAL_ARTIFACTS),
     (17, _V17_DROP_STALE_API_KEY_VALIDATION),
+    (18, _V18_SCRAPE_SYNC_BLOCK_REASON),
 ]

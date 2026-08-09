@@ -152,6 +152,23 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
         except Exception as exc:
             logger.warning("[token_routes] Credential Vault refresh failed: %s", exc)
 
+        # Scrapes saved while signed out are queued, not failed — signing in is
+        # the blocker clearing, so drain the backlog now instead of leaving the
+        # user to wonder why their scrapes aren't in the web app.
+        try:
+            from app.services.scraper.scrape_store import sync_after_sign_in
+
+            result = await sync_after_sign_in()
+            if result["pushed"] or result["revived"]:
+                logger.info(
+                    "[token_routes] Post-login scrape sync: revived=%d pushed=%d "
+                    "deferred=%d failed=%d",
+                    result["revived"], result["pushed"],
+                    result["deferred"], result["failed"],
+                )
+        except Exception as exc:
+            logger.warning("[token_routes] Post-login scrape sync failed: %s", exc)
+
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():

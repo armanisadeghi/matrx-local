@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrapeResultViewer } from "@/components/scraping/ScrapeResultViewer";
 import { ScrapeUrlList } from "@/components/scraping/ScrapeUrlList";
 import { MethodSelector } from "@/components/scraping/MethodSelector";
+import { ScrapeSyncBanner } from "@/components/scraping/ScrapeSyncBanner";
 import {
   useScrapeOne,
   useScrapeMany,
@@ -532,6 +533,10 @@ export function Scraping({ engineStatus }: ScrapingProps) {
         title="Scraping"
         description="Extract content from websites using multiple strategies"
       />
+
+      {/* Scrapes are a dual write — local first, then the cloud. This is the
+          surface that says so when the second half hasn't happened yet. */}
+      <ScrapeSyncBanner />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-0">
         <Tabs

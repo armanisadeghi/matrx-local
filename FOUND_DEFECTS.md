@@ -586,6 +586,33 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Cross-repo
 
+### MXL-D-076 — retry-queue `/queue/submit` discards the scraped content the desktop just produced
+- **Area:** `app/services/scraper/remote_client.py::submit_result` (~line 284);
+  server side `packages/matrx-scraper/matrx_scraper/api/ext_router.py::queue_submit`
+  in `/Users/armanisadeghi/code/aidream`.
+- **Symptom:** The whole point of the retry queue is that the server hands a URL
+  it could not scrape to a desktop on a residential IP, and the desktop hands
+  the CONTENT back. `submit_result` posts `url`, `content`, `content_type` and
+  `char_count` — but the server's `RetrySubmitRequest` declares only
+  `queue_item_id`, so pydantic drops every other field, and `queue_submit` just
+  flips the row to `status='completed'`. The content is never written anywhere.
+  The queue reports success while delivering nothing.
+- **Analyzed 2026-08-09 — verified in code:** read both sides.
+  `RetrySubmitRequest(BaseModel)` has exactly one field; the handler body is a
+  single `ScrapeRetryQueue.update_where(...)` with no cache/content write —
+  contrast `content_save`, which does call `cache.set(...)`.
+- **Same failure class as the 422 fixed in this commit** (`save_content` omitted
+  the required `page_name`): a client/server payload contract that nothing
+  validates, so it fails silently. The fix in `tests/unit/test_scrape_cloud_sync.py`
+  (validating the real outgoing body against the server's own pydantic model,
+  which is importable from the shared `matrx_scraper` package) is the pattern to
+  reuse here.
+- **Fix is server-side and belongs to aidream** — either accept and persist the
+  content on `/queue/submit`, or have the desktop call `content/save` first and
+  keep `/queue/submit` as pure bookkeeping. Needs Arman's call on which.
+- **Status:** open. Owner hint: aidream (`matrx-scraper` package) + this repo's
+  `retry_queue.py` consumer.
+
 ### MXL-D-075 — matrx-utils/matrx-connect floors permit an ImportError-ing pair; the broken pair is what's installed today
 - **Area:** `pyproject.toml:73,76` (`matrx-utils>=2.0.0`, `matrx-connect>=0.1.10`)
 - **Symptom:** matrx-connect has imported `matrx_utils.AsyncSingleFlight` in

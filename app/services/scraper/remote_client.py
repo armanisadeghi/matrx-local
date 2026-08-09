@@ -210,10 +210,10 @@ class RemoteScraperClient:
     async def save_content(
         self,
         url: str,
+        page_name: str,
         content: dict[str, Any],
         content_type: str = "html",
         char_count: int | None = None,
-        ttl_days: int = 30,
         auth_token: str | None = None,
     ) -> dict[str, Any]:
         """Push locally-scraped content to the server's central database.
@@ -224,12 +224,20 @@ class RemoteScraperClient:
         ``content`` should include at least ``text_data`` or
         ``ai_research_content``.  Optional keys: ``overview``, ``links``,
         ``hashes``, ``main_image``.
+
+        ``page_name`` is REQUIRED by the server's ``ContentSaveRequest`` and is
+        the package's ``unique_page_name`` for the URL. Omitting it answers 422
+        on every single call — which is exactly what this client did from the
+        2026-04-29 ``/api/v1`` → ``/api/scraper`` migration until 2026-08-09,
+        silently killing the dual write. There is no ``ttl_days`` on the server
+        model either; sending one only advertised a retention guarantee the
+        server never made.
         """
         body: dict[str, Any] = {
             "url": url,
+            "page_name": page_name,
             "content": content,
             "content_type": content_type,
-            "ttl_days": ttl_days,
         }
         if char_count is not None:
             body["char_count"] = char_count

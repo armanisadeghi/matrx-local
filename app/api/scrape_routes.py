@@ -49,32 +49,16 @@ async def list_scrapes(
 
 @router.get("/sync-status")
 async def sync_status() -> dict[str, Any]:
-    """Returns a summary of local scrape storage vs cloud sync state.
+    """Returns the cloud-sync state of local scrape storage.
 
-    If `failed` > 0 the cloud sync has errors — the UI should surface a warning
-    to the user explaining which scrapes are not yet in the cloud.
+    `state` is the one thing the UI should render — `synced`, `signed_out`,
+    `offline`, `rejected`, or `queued` — paired with a plain-language `message`
+    and the `action` that clears it (`sign_in` / `retry` / `none`). The raw
+    `cloud_sync_error` on each row is a diagnostic for us, never user-facing.
     """
     from app.services.scraper.scrape_store import get_sync_summary
 
-    summary = await get_sync_summary()
-    # The keys exist with value None on an empty table (SUM over zero rows)
-    # — .get's default doesn't apply, so guard with `or 0`.
-    has_sync_error = (summary.get("failed") or 0) > 0 or (summary.get("pending") or 0) > 0
-
-    return {
-        **summary,
-        "healthy": not has_sync_error,
-        "message": (
-            "All scrapes are synced to the cloud."
-            if not has_sync_error
-            else (
-                f"{summary.get('failed', 0)} scrape(s) failed to sync and "
-                f"{summary.get('pending', 0)} scrape(s) are queued. "
-                "The engine will retry automatically. If this persists, check your "
-                "internet connection or the scraper server status."
-            )
-        ),
-    }
+    return await get_sync_summary()
 
 
 # ---------------------------------------------------------------------------
@@ -82,17 +66,26 @@ async def sync_status() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @router.post("/sync")
-async def trigger_sync() -> dict[str, Any]:
+async def trigger_sync(
+    include_terminal: bool = Query(
+        default=True,
+        description=(
+            "Also revive scrapes that exhausted their automatic retry budget, "
+            "resetting their attempt counter. Default true: a user pressing "
+            "retry is explicitly asking for exactly that."
+        ),
+    ),
+) -> dict[str, Any]:
     """Manually trigger a cloud-push pass for all pending/failed scrapes."""
-    from app.services.scraper.scrape_store import push_pending_to_cloud, reset_pending_failed
+    from app.services.scraper.scrape_store import (
+        get_sync_summary,
+        push_pending_to_cloud,
+        reset_pending_failed,
+    )
 
-    reset_count = await reset_pending_failed()
+    reset_count = await reset_pending_failed(include_terminal=include_terminal)
     result = await push_pending_to_cloud(limit=100)
-    return {
-        "reset_to_pending": reset_count,
-        "pushed": result["pushed"],
-        "failed": result["failed"],
-    }
+    return {"reset_to_pending": reset_count, **result, "status": await get_sync_summary()}
 
 
 # ---------------------------------------------------------------------------

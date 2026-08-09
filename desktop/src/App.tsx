@@ -60,6 +60,7 @@ import {
   useSessionsContext,
 } from "@/contexts/TranscriptionSessionsContext";
 import { DownloadManagerProvider } from "@/contexts/DownloadManagerContext";
+import { BrowserRuntimeProvider } from "@/contexts/BrowserRuntimeContext";
 import { MediaGenProvider } from "@/contexts/MediaGenContext";
 import { PromptMatrixProvider } from "@/contexts/PromptMatrixContext";
 import { MediaLibraryProvider } from "@/contexts/MediaLibraryContext";
@@ -132,7 +133,13 @@ export default function App() {
                                   <PermissionsProvider>
                                     <AudioDevicesProvider>
                                       <TranscriptionProvider>
-                                        <AppInner />
+                                        {/* Owns "is the built-in browser
+                                            installed" + its one-click install,
+                                            and the install_browser_engine
+                                            ActionNeeded handler. */}
+                                        <BrowserRuntimeProvider>
+                                          <AppInner />
+                                        </BrowserRuntimeProvider>
                                       </TranscriptionProvider>
                                     </AudioDevicesProvider>
                                   </PermissionsProvider>

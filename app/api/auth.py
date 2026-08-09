@@ -117,6 +117,12 @@ _LOCAL_BOOTSTRAP_PREFIXES = (
     "/devices/",  # device status polling — local UI
     "/fetch-proxy",  # in-app browser iframe navigation (also an SSRF vector)
     "/setup/",  # setup wizard — system probing, installs
+    # Browser-runtime probe + the one-click Chromium install it offers. Same
+    # class as /setup/ (it IS the same installer): the Scraping page must be
+    # able to say "the browser isn't installed" before Supabase auth has
+    # hydrated in the webview. Tunnel callers still fall through to verified
+    # auth, so no remote caller can trigger a download.
+    "/browser-runtime/",
     # Process-local media bytes for the desktop webview. Tunnel callers still
     # fall through to verified auth; direct <img> requests cannot attach the
     # API's bearer header.

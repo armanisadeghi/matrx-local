@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrapeResultViewer } from "@/components/scraping/ScrapeResultViewer";
 import { ScrapeUrlList } from "@/components/scraping/ScrapeUrlList";
 import { MethodSelector } from "@/components/scraping/MethodSelector";
+import { BrowserRuntimeNotice } from "@/components/scraping/BrowserRuntimeNotice";
 import {
   useScrapeOne,
   useScrapeMany,
@@ -102,6 +103,8 @@ function SingleTab({ engineStatus }: { engineStatus: EngineStatus }) {
             </Label>
           </div>
         </div>
+
+        <BrowserRuntimeNotice />
 
         {!isConnected && (
           <p className="text-xs text-amber-400">
@@ -359,6 +362,7 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
               className="ml-auto"
             />
           </div>
+          <BrowserRuntimeNotice />
           <div className="flex items-center gap-2">
             <Switch
               id="bulk-cache"

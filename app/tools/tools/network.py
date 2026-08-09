@@ -176,6 +176,16 @@ async def tool_fetch_with_browser(
     """
     if blocked := _check_forbidden(url):
         return blocked
+    # A missing browser is a STATE the user can fix in one click, not a
+    # developer error telling them to run a shell command they will never run.
+    from app.services.scraper import browser_runtime
+
+    if (needed := browser_runtime.browser_action_needed("browser page fetching")) is not None:
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=f"{needed.title}. {needed.message}",
+            action_needed=needed,
+        )
 
     # Read headless setting from engine settings
     try:

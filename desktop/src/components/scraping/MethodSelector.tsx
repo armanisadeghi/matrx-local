@@ -1,6 +1,11 @@
 /**
  * MethodSelector — pill-style selector for scrape method with tooltip
  * explaining what each option does and what the selector controls.
+ *
+ * The "Browser" method needs a Chromium build that is downloaded, not bundled.
+ * When it is missing the pill is disabled and says so in plain language rather
+ * than letting the user pick a method that can only fail
+ * (BrowserRuntimeContext owns that state and the install that fixes it).
  */
 
 import {
@@ -10,6 +15,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { ScrapeMethod } from "@/hooks/use-scrape";
+import { useOptionalBrowserRuntimeContext } from "@/contexts/BrowserRuntimeContext";
 
 interface MethodSelectorProps {
   value: ScrapeMethod;
@@ -39,6 +45,15 @@ const METHODS: { id: ScrapeMethod; label: string; description: string }[] = [
 ];
 
 export function MethodSelector({ value, onChange, className }: MethodSelectorProps) {
+  const browserRuntime = useOptionalBrowserRuntimeContext();
+  // Optimistic until the probe answers — never grey out a working control
+  // because a status call is still in flight.
+  const browserAvailable = browserRuntime ? browserRuntime.available : true;
+  const browserInstalling = browserRuntime?.installing ?? false;
+  const unavailableNote = browserInstalling
+    ? "Downloading the built-in browser — available when it finishes."
+    : "The built-in browser isn't installed yet. Install it on this page to use this method.";
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -48,20 +63,33 @@ export function MethodSelector({ value, onChange, className }: MethodSelectorPro
             className,
           )}
         >
-          {METHODS.map((m) => (
-            <button
-              key={m.id}
-              onClick={() => onChange(m.id)}
-              className={cn(
-                "rounded px-2.5 py-1 text-xs font-medium transition-all",
-                value === m.id
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {m.label}
-            </button>
-          ))}
+          {METHODS.map((m) => {
+            const disabled = m.id === "local-browser" && !browserAvailable;
+            return (
+              <button
+                key={m.id}
+                onClick={() => onChange(m.id)}
+                disabled={disabled}
+                aria-disabled={disabled}
+                title={disabled ? unavailableNote : undefined}
+                className={cn(
+                  "rounded px-2.5 py-1 text-xs font-medium transition-all",
+                  value === m.id
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                  disabled &&
+                    "cursor-not-allowed opacity-40 hover:text-muted-foreground",
+                )}
+              >
+                {m.label}
+                {disabled && (
+                  <span className="ml-1 text-[10px] font-normal">
+                    {browserInstalling ? "(downloading)" : "(not installed)"}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-xs">
@@ -71,6 +99,11 @@ export function MethodSelector({ value, onChange, className }: MethodSelectorPro
             <span className="font-medium">{m.label}:</span> {m.description}
           </p>
         ))}
+        {!browserAvailable && (
+          <p className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400">
+            {unavailableNote}
+          </p>
+        )}
       </TooltipContent>
     </Tooltip>
   );

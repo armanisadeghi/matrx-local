@@ -18,7 +18,9 @@ module and still fail at document creation.
 from __future__ import annotations
 
 import pathlib
+import importlib.util
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -36,6 +38,35 @@ from _office_bundle import (  # noqa: E402
 )
 
 _SPEC_FILES = sorted(_SPECS_DIR.glob("matrx-engine-*.spec"))
+
+
+def test_archive_payload_paths_include_windows_binary_classification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows classifies ZIP-based Office templates as binary payloads."""
+    verifier_path = _REPO_ROOT / "scripts" / "verify-frozen-runtime.py"
+    module_spec = importlib.util.spec_from_file_location(
+        "verify_frozen_runtime", verifier_path
+    )
+    assert module_spec is not None and module_spec.loader is not None
+    verifier = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(verifier)
+
+    archive = SimpleNamespace(
+        toc={
+            r"docx\templates\default.docx": (0, 0, 0, 0, "b"),
+            r"pptx\templates\default.pptx": (0, 0, 0, 0, "b"),
+            r"pptx\oxml\_bundle_dir_marker.txt": (0, 0, 0, 0, "x"),
+            "PYZ.pyz": (0, 0, 0, 0, "z"),
+        }
+    )
+    monkeypatch.setattr(verifier, "_open_archive", lambda _binary: archive)
+
+    assert verifier.archive_data_files(pathlib.Path("engine.exe")) == {
+        "docx/templates/default.docx",
+        "pptx/templates/default.pptx",
+        "pptx/oxml/_bundle_dir_marker.txt",
+    }
 
 
 def test_every_spec_uses_the_shared_office_collector() -> None:

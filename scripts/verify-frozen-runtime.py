@@ -71,18 +71,21 @@ def archive_modules(binary: Path) -> set[str]:
 
 
 def archive_data_files(binary: Path) -> set[str]:
-    """Return the archive-relative paths of every bundled DATA entry.
+    """Return archive-relative paths of every extractable payload entry.
 
     Data files never appear in the PYZ module table, so a module-only check
     passes on an artifact whose python-docx/python-pptx default templates never
     shipped — the exact failure that only surfaces when a user creates a
-    document.
+    document. PyInstaller may classify ZIP-based Office templates as binary
+    entries (``b``) on Windows and data entries (``x``) on Unix, even though
+    both are extracted payload files. Exact path checks below distinguish the
+    required templates from extension modules.
     """
     archive = _open_archive(binary)
     return {
         name.replace("\\", "/")
         for name, entry in archive.toc.items()
-        if entry[-1] == "x"
+        if entry[-1] in {"b", "x"}
     }
 
 

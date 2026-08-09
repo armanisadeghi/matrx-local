@@ -69,8 +69,10 @@ export function ScrapeSyncBanner() {
     }
   }, []);
 
-  // Init fetch lives in the hook body with an empty dep list, and the poll is
-  // gated on a primitive — both per the React rules in CLAUDE.md.
+  // `refresh` is useCallback([]) — stable forever — so this effect runs once
+  // and the interval is never torn down and recreated by a re-render. That is
+  // the shape CLAUDE.md § React Patterns requires; an unstable dep here is the
+  // bug class that flooded the production engine.
   useEffect(() => {
     void refresh();
     const id = setInterval(() => void refresh(), POLL_MS);

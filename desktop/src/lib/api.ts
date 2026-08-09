@@ -208,6 +208,10 @@ export interface RemoteScrapeResponse {
 export interface EngineSettings {
   headless_scraping: boolean;
   scrape_delay: number;
+  /** Pages fetched at the same time during a bulk scrape (1-20). */
+  scrape_concurrency: number;
+  /** Pages fetched at the same time during a research run (1-20). */
+  research_concurrency: number;
 }
 
 /** A configurable storage path entry from GET /settings/paths */

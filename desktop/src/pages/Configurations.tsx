@@ -62,6 +62,11 @@ import {
 import { useConfigCatalogs } from "@/hooks/use-config-catalogs";
 import { FileSyncPanel } from "@/components/files/FileSyncPanel";
 import type { AppSettings, SyncResult } from "@/lib/settings";
+import {
+  MAX_CONCURRENCY,
+  MIN_CONCURRENCY,
+  clampConcurrency,
+} from "@/lib/settings";
 
 // ── Section save/cancel bar ──────────────────────────────────────────────────
 
@@ -302,6 +307,53 @@ function SliderRow({
         />
         <span className="text-xs text-muted-foreground w-8 text-right tabular-nums">
           {value.toFixed(decimals)}
+        </span>
+      </div>
+    </SettingRow>
+  );
+}
+
+/**
+ * Plain-language name for a "pages at a time" value.
+ *
+ * A bare number means nothing to someone who has never thought about network
+ * concurrency — the word is what they actually choose by.
+ */
+function concurrencyLabel(value: number): string {
+  if (value <= 2) return "Gentle";
+  if (value <= 6) return "Balanced";
+  if (value <= 12) return "Fast";
+  return "Very fast";
+}
+
+/** One "how many pages at a time" control. */
+function ConcurrencyRow({
+  label,
+  description,
+  value,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <SettingRow label={label} description={description}>
+      <div className="flex items-center gap-2">
+        <Slider
+          value={[value]}
+          onValueChange={([v]) => {
+            if (v !== undefined) onChange(clampConcurrency(v));
+          }}
+          min={MIN_CONCURRENCY}
+          max={MAX_CONCURRENCY}
+          step={1}
+          className="w-24"
+        />
+        <span className="text-xs text-muted-foreground w-24 text-right">
+          {concurrencyLabel(value)}{" "}
+          <span className="tabular-nums opacity-70">({value})</span>
         </span>
       </div>
     </SettingRow>
@@ -1483,6 +1535,18 @@ export function Configurations() {
                 <ScrapeDelayRow
                   value={draft.scrapeDelay}
                   onChange={(v) => set("scrapeDelay", v)}
+                />
+                <ConcurrencyRow
+                  label="Pages at a time"
+                  description="Higher = faster when reading lots of pages, but uses more of your internet connection while it runs"
+                  value={draft.scrapeConcurrency}
+                  onChange={(v) => set("scrapeConcurrency", v)}
+                />
+                <ConcurrencyRow
+                  label="Pages at a time while researching"
+                  description="Same idea, for research — a research run can open a hundred pages, so this is what makes it quick or gentle"
+                  value={draft.researchConcurrency}
+                  onChange={(v) => set("researchConcurrency", v)}
                 />
                 <SectionActions
                   section="scraping"

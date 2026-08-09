@@ -105,7 +105,12 @@ const SECTION_KEYS: Record<ConfigSection, (keyof AppSettings)[]> = {
     "wakeWordOwwThreshold",
     "wakeWordCustomKeyword",
   ],
-  scraping: ["headlessScraping", "scrapeDelay"],
+  scraping: [
+    "headlessScraping",
+    "scrapeDelay",
+    "scrapeConcurrency",
+    "researchConcurrency",
+  ],
   proxy: ["proxyEnabled", "proxyPort", "tunnelEnabled"],
   // File Sync's mode selector applies immediately (via useFileSync.setMode →
   // saveSetting) rather than through draft/save — the key lives here so the

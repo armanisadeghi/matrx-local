@@ -70,6 +70,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Scraping
     "headless_scraping": True,
     "scrape_delay": 1.0,
+    # How many pages the local scrape lane fetches at once (1-20). Read fresh
+    # on every call by app/services/scraper/engine.py — no engine restart.
+    "scrape_concurrency": 5,
+    "research_concurrency": 5,
     # Proxy — port-base offset +40: live 22140 → 22180, dev 22240 → 22280
     # (MXL-D-043 dev/live isolation; same formula as proxy/server.py
     # DEFAULT_PROXY_PORT and desktop settings.ts DEFAULTS.proxyPort).
@@ -161,7 +165,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 
 RESET_SCOPES: dict[str, tuple[str, ...]] = {
     "application": ("launch_", "minimize_", "theme", "auto_check_", "update_check_", "sidebar_", "notification_"),
-    "network": ("headless_", "scrape_", "proxy_", "tunnel_", "file_sync_", "extension_"),
+    "network": ("headless_", "scrape_", "research_", "proxy_", "tunnel_", "file_sync_", "extension_"),
     "ai": ("chat_", "llm_", "transcription_", "tts_", "wake_word_", "voice_", "cloud_tools"),
     "identity": ("instance_name",),
 }

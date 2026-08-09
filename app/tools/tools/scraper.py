@@ -18,19 +18,6 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def _extract_content(page: dict[str, Any]) -> dict[str, Any]:
-    """Normalise a ScraperEngine result page into the server's content schema."""
-    raw = page.get("content", {})
-    return {
-        "text_data": raw.get("text_data") or raw.get("text") or "",
-        "ai_research_content": raw.get("ai_research_content") or "",
-        "overview": raw.get("overview"),
-        "links": raw.get("links"),
-        "hashes": raw.get("hashes"),
-        "main_image": raw.get("main_image"),
-    }
-
-
 async def _save_to_server(
     url: str,
     content: dict[str, Any],
@@ -71,7 +58,10 @@ async def local_scrape(
           - saved: number of pages successfully saved to the server
           - failed: list of URLs that could not be scraped
     """
-    from app.services.scraper.engine import get_scraper_engine
+    from matrx_scraper.scrape_options import ScrapeOptions
+
+    from app.services.scraper.engine import LocalScrapeOptions, get_scraper_engine
+    from app.services.scraper.scrape_store import content_from_result
 
     engine = get_scraper_engine()
     if not engine.is_ready:
@@ -83,15 +73,17 @@ async def local_scrape(
         }
 
     try:
-        raw = await engine.orchestrator.scrape(
-            urls=urls,
-            use_cache=use_cache,
-            output_mode="rich",
-            get_links=True,
-            get_overview=True,
+        pages = await engine.scrape(
+            urls,
+            LocalScrapeOptions(
+                fields=ScrapeOptions(
+                    get_text_data=True, get_links=True, get_overview=True
+                ),
+                use_cache=use_cache,
+            ),
         )
     except Exception as exc:
-        logger.error("[scraper.py] Orchestrator scrape failed: %s", exc)
+        logger.error("[scraper.py] Local scrape failed: %s", exc, exc_info=True)
         return {
             "results": [],
             "saved": 0,
@@ -99,15 +91,14 @@ async def local_scrape(
             "error": str(exc),
         }
 
-    pages: list[dict[str, Any]] = raw.get("results", []) if isinstance(raw, dict) else []
     results = []
     saved = 0
     failed = []
 
     for page in pages:
-        url = page.get("url", "")
-        if page.get("status") == "success":
-            content = _extract_content(page)
+        url = page.url
+        if page.success:
+            content = content_from_result(page)
             char_count = len(
                 (content.get("text_data") or "") + (content.get("ai_research_content") or "")
             )
@@ -125,7 +116,7 @@ async def local_scrape(
             results.append({
                 "url": url,
                 "status": "failed",
-                "error": page.get("error") or "Scrape returned no content",
+                "error": page.failure_reason or "Scrape returned no content",
                 "saved_to_server": False,
             })
 

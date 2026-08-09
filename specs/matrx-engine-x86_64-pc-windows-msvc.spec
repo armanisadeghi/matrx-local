@@ -142,7 +142,6 @@ a = Analysis(
     binaries=_espeakng_libs + _soundfile_libs,
     datas=[
         (os.path.join(_ROOT, 'app'), 'app'),
-        (os.path.join(_ROOT, 'scraper-service/app'), 'scraper-service/app'),
         (os.path.join(_ROOT, 'pyproject.toml'), '.'),
         (os.path.join(_ROOT, 'config/runtime-manifests'), 'config/runtime-manifests'),
     ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data + _pkg_metadata + _office_datas,

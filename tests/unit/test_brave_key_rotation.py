@@ -1,4 +1,10 @@
-"""Saved Brave grants take effect immediately and failures stay actionable."""
+"""Saved Brave grants take effect immediately and failures stay actionable.
+
+The Brave key is the USER's, held in the in-app key store — never an env var
+(§ Security & configuration posture). So saving one in Settings must work on
+the very next search with no engine restart, and clearing one must actually
+disable search rather than keep answering from a stale client.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +14,6 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.ai import key_manager
-from app.services.scraper import engine as scraper_module
 from app.services.scraper.engine import ScraperEngine
 from app.tools.session import ToolSession
 from app.tools.tools import network
@@ -18,52 +23,63 @@ def test_search_client_rotates_and_disables_without_restart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     keys = {"brave": "first"}
-    created: list[str] = []
-
-    class FakeClient:
-        def __init__(self, settings: object) -> None:
-            created.append(str(getattr(settings, "BRAVE_API_KEY")))
+    configured: list[str | None] = []
 
     monkeypatch.setattr(key_manager, "get_cached_user_keys", lambda: keys)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+
+    # The package owns the process-wide client; the desktop just tells it which
+    # key to use. Patch at that seam so no network client is ever built.
+    import matrx_scraper.search as scraper_search
+
     monkeypatch.setattr(
-        scraper_module,
-        "_import_scraper",
-        lambda _name: SimpleNamespace(BraveSearchClient=FakeClient),
+        scraper_search, "configure_client", lambda key: configured.append(key)
     )
 
     engine = ScraperEngine()
-    engine._settings = SimpleNamespace(BRAVE_API_KEY="")
-    engine._orchestrator = SimpleNamespace(search_client=None)
-    first = engine.ensure_search_client()
-    assert first is engine._orchestrator.search_client
+
+    assert engine.ensure_search_client() is True
+    assert configured == ["first"]
+
+    # Same key again must NOT rebuild the client (it would drop the rate limiter).
+    assert engine.ensure_search_client() is True
+    assert configured == ["first"]
 
     keys["brave"] = "second"
-    second = engine.ensure_search_client()
-    assert second is not first
-    assert created == ["first", "second"]
+    assert engine.ensure_search_client() is True
+    assert configured == ["first", "second"]
 
+    # Key removed → search reports unavailable AND the package client is cleared.
     keys["brave"] = ""
-    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
-    assert engine.ensure_search_client() is None
-    assert engine._orchestrator.search_client is None
+    assert engine.ensure_search_client() is False
+    assert configured == ["first", "second", None]
 
 
 def test_brave_auth_rejection_returns_update_key_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class RejectedClient:
-        async def search_with_retry(self, **_kwargs: object) -> object:
-            raise RuntimeError("HTTP 401 Unauthorized")
+    """A 401 from Brave is the user's key being wrong — prompt, don't just fail."""
 
-    fake_engine = SimpleNamespace(
-        is_ready=True,
-        ensure_search_client=lambda: True,
-        search_client=RejectedClient(),
-    )
-    monkeypatch.setattr(network, "_get_engine", lambda: fake_engine)
+    async def _reject(**_kwargs: object) -> object:
+        raise RuntimeError("HTTP 401 Unauthorized")
+
+    monkeypatch.setattr(network, "_get_engine", lambda: SimpleNamespace(
+        is_ready=True, ensure_search_client=lambda: True,
+    ))
+    monkeypatch.setattr("matrx_scraper.search.async_brave_search", _reject)
 
     result = asyncio.run(network.tool_search(ToolSession(), ["test"]))
     assert result.action_needed is not None
     assert result.action_needed.code == "api_key_invalid"
     assert result.action_needed.action.provider == "brave"
 
+
+def test_missing_key_is_a_prompt_not_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No key at all is a STATE with a prompt UI, never a bare failure."""
+    monkeypatch.setattr(network, "_get_engine", lambda: SimpleNamespace(
+        is_ready=True, ensure_search_client=lambda: False,
+    ))
+
+    result = asyncio.run(network.tool_search(ToolSession(), ["test"]))
+    assert result.action_needed is not None
+    assert result.action_needed.action.provider == "brave"

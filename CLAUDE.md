@@ -156,9 +156,31 @@ cd desktop && pnpm tauri:dev
      is a no-op. Do not extend it as a substitute for fixing a real
      ownership bug.
 
-1. **scraper-service/ is read-only** — Git subtree from `aidream` repo. Never edit directly. Use `./scripts/update-scraper.sh`. Source repo: `/Users/armanisadeghi/Code/aidream-current/scraper-service` (editable there).
+1. **There is ONE scraper: the `matrx-scraper` package. Never fork it.** Every
+   BeautifulSoup rule, fetcher, parser and orchestrator lives in
+   `matrx-scraper` (PyPI; source at
+   `/Users/armanisadeghi/code/aidream/packages/matrx-scraper`). What lives HERE
+   is the local **execution lane** — `app/services/scraper/` — which runs that
+   one engine from the user's own machine and residential IP
+   (`use_proxy=False`, always; that is the entire reason this lane exists),
+   plus the retry-queue poller and remote client that hand work between this
+   machine and the server.
 
-2. **Module isolation** — Scraper's `app/` aliased as `scraper_app/` via `sys.modules` in `app/services/scraper/engine.py`. No naming conflicts.
+   Until 2026-08-09 a `scraper-service/` git subtree shipped a complete SECOND
+   engine here — its own parser suite, fetcher, browser pool, Postgres schema
+   and alembic migrations — loaded through a `sys.modules` aliasing hack. It is
+   deleted. **If the package is missing something you need, add it to the
+   package** (with tests) and consume it; every fork-only behaviour was ported
+   that way first — see matrx-scraper's `FEATURE.md` change log and
+   `tests/test_desktop_consumer_ports.py`. A local copy of engine logic is a
+   defect, not a shortcut.
+
+2. **The result shape is the package's `ScrapeResult`.** Consumers read
+   `success` / `failure_reason` (never a `status` string or an `error` field),
+   and anything persisted or pushed to the server goes through
+   `scrape_store.content_from_result` — the ONE place a result becomes a
+   content dict. `STORED_FIELDS` there names real `ScrapeResult` fields and
+   crashes at call time if one is renamed away.
 
 3. **Graceful degradation** — Engine works without PostgreSQL (memory cache) or Brave API (search disabled). Never add hard dependencies on these. Playwright, psutil, zeroconf are always-available core deps.
 

@@ -60,42 +60,38 @@ async def _scrape_locally(url: str) -> dict[str, Any] | None:
     or None if scraping failed.
     """
     try:
+        from matrx_scraper.scrape_options import ScrapeOptions
+
         # Import here to avoid circular imports; engine is already running
-        from app.services.scraper.engine import get_scraper_engine, _import_scraper
+        from app.services.scraper.engine import LocalScrapeOptions, get_scraper_engine
+        from app.services.scraper.scrape_store import content_from_result
+
         engine = get_scraper_engine()
         if not engine.is_ready:
             logger.debug("RetryQueue: engine not ready, skipping local scrape of %s", url)
             return None
 
-        options_mod = _import_scraper("app.models.options")
-        FetchOptions = options_mod.FetchOptions
-        options = FetchOptions(
-            use_cache=False,
-            get_links=True,
-            get_overview=True,
+        # No cache: the server queued this URL precisely because ITS attempt
+        # failed, so answering from our own recent copy would defeat the point
+        # of the hand-off.
+        page = await engine.scrape_one(
+            url,
+            LocalScrapeOptions(
+                fields=ScrapeOptions(
+                    get_text_data=True, get_links=True, get_overview=True
+                ),
+                use_cache=False,
+            ),
         )
 
-        results = await engine.orchestrator.scrape(urls=[url], options=options)
-
-        if not results:
-            logger.debug("RetryQueue: local scrape of %s returned empty results list", url)
-            return None
-
-        page = results[0]
-        if page.status != "success":
+        if not page.success:
             logger.debug(
-                "RetryQueue: local scrape of %s returned status=%s error=%s",
-                url, page.status, getattr(page, "error", None),
+                "RetryQueue: local scrape of %s failed: %s (status=%s firewall=%s)",
+                url, page.failure_reason, page.status_code, page.firewall,
             )
             return None
 
-        # Normalise to the server's expected content schema
-        return {
-            "text_data": page.text_data or "",
-            "ai_research_content": page.ai_research_content or "",
-            "overview": page.overview,
-            "links": page.links,
-        }
+        return content_from_result(page)
     except Exception as exc:
         logger.error(
             "RetryQueue: local scrape of %s raised unexpected error: %s",

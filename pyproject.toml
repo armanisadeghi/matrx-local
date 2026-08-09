@@ -84,6 +84,20 @@ dependencies = [
     # 0.1.10, so we pin the floor here explicitly (Hard Rule 5). Its pure-python
     # Office deps (python-docx/pptx/openpyxl/xlsxwriter) come in with it.
     "matrx-files>=0.1.11",
+    # THE scraper. There is exactly one scraping/parsing engine in the platform
+    # and this is it — matrx-local runs it in a LOCAL lane (the user's own
+    # machine and residential IP, never a proxy), it does not own a copy. Until
+    # 2026-08-09 a forked `scraper-service/` subtree shipped a second
+    # BeautifulSoup/fetcher/orchestrator here; that fork is deleted and every
+    # behaviour it had that the package lacked was ported upstream first
+    # (matrx-scraper 0.1.99 — see its FEATURE.md change log). Extras are named
+    # explicitly even though matrx-local already declares playwright /
+    # curl-cffi / pymupdf / pytesseract itself: "present transitively" is not a
+    # dependency declaration (Hard Rule 5). Deliberately NOT installed:
+    # [db] (no Postgres here — durable storage is SQLite + the server),
+    # [dedup] (datasketch pulls numpy, which the single-ML-stack doctrine
+    # reserves for the managed media runtime slot).
+    "matrx-scraper[browser,pdf,ocr]>=0.1.100",
     # matrx-scheduler — see the optional [scheduler] extra below. Kept OUT of
     # core on purpose: the Phase 8 host that uses it is gated off by default
     # (MATRX_LOCAL_SCHEDULER_ENABLED) and imports it lazily, so the engine runs

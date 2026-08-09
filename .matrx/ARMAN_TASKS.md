@@ -30,6 +30,18 @@ _Last updated: 2026-07-14 (step-7 pass: both official-docs asks APPROVED + appli
 
 ## Active (ranked — quickest wins first within priority)
 
+- [ ] **APPROVE: rewrite `docs/official/scraper-engine.md` (10 seconds — just say yes)** —
+  the whole file now describes deleted code. It documents `scraper-service/` as
+  a read-only git subtree, the `scraper_app` sys.modules aliasing trick, and
+  `./scripts/update-scraper.sh` as the update workflow. All three were deleted
+  on 2026-08-09 when matrx-local became a consumer of the `matrx-scraper`
+  package (your one-scraper ruling). Its "graceful degradation" table is also
+  wrong now: there is no `DATABASE_URL` page cache here at all. I can't touch
+  `docs/official/**` without your say-so, so it currently misdirects every
+  agent that reads it. Say "yes, rewrite it" and it becomes a short accurate
+  page: the package is the engine, `app/services/scraper/` is the local
+  no-proxy execution lane, degradation is Playwright-present / Brave-key-present.
+
 - [ ] **Add the missing `brave` row to the live `api_key_provider` catalog** (MXL-D-073, 30 seconds) —
   the live catalog serves 12 rows and has no `brave`; the compiled fallback has
   13. Because the live rows *replace* the fallback, the shipped app silently

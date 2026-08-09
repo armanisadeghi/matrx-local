@@ -2112,6 +2112,7 @@ dependencies = [
     { name = "matrx-graph" },
     { name = "matrx-orm" },
     { name = "matrx-runtime" },
+    { name = "matrx-scraper", extra = ["browser", "ocr", "pdf"] },
     { name = "matrx-utils" },
     { name = "mss" },
     { name = "numpy" },
@@ -2226,6 +2227,7 @@ requires-dist = [
     { name = "matrx-orm", specifier = ">=3.1.16" },
     { name = "matrx-runtime", specifier = ">=0.0.6" },
     { name = "matrx-scheduler", marker = "extra == 'scheduler'", specifier = ">=0.3.5" },
+    { name = "matrx-scraper", extras = ["browser", "pdf", "ocr"], specifier = ">=0.1.100" },
     { name = "matrx-utils", specifier = ">=2.0.0" },
     { name = "mss", specifier = ">=9.0.1" },
     { name = "numpy", specifier = ">=2.4.2" },
@@ -2333,7 +2335,7 @@ wheels = [
 
 [[package]]
 name = "matrx-scraper"
-version = "0.1.31"
+version = "0.1.100"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -2347,15 +2349,23 @@ dependencies = [
     { name = "tabulate" },
     { name = "tldextract" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/22/db/18657d8f2e64fab9bc6ef2c5f279acbd6e49f294bbbf4107a93f28177352/matrx_scraper-0.1.31.tar.gz", hash = "sha256:9dde6c4897db4872b51bad5cfeb2f8074bfbcf955fe4f987a84402871a0ae2ef", size = 237667, upload-time = "2026-07-17T03:29:28.788Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/77/2e/393295b6cb15fd6f6140ede86bd75c568c7bbbddb3c309ddc02ebd97488d/matrx_scraper-0.1.100.tar.gz", hash = "sha256:84889abb52aa764181bf54cc40362076396047762c7bab7f909a151b7187597b", size = 466717, upload-time = "2026-08-09T19:01:21.014Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/26/3eb513c6a9ce64bba9a5e7871f4ec32345d97e96b329b27610746fc2669e/matrx_scraper-0.1.31-py3-none-any.whl", hash = "sha256:4689880e5f4a5c5093d14330c1de631fae2d84ba05a84f841622f15cb8813652", size = 208612, upload-time = "2026-07-17T03:29:27.422Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/8f/122120b49e50e4f7b7165241ddcca1c6929d4d206766ec12ffa7bf623d74/matrx_scraper-0.1.100-py3-none-any.whl", hash = "sha256:4db6b500a4fca79c089d2bc2a3a548f144d87a237ed51670bdcadf54f47f0e20", size = 411797, upload-time = "2026-08-09T19:01:18.837Z" },
 ]
 
 [package.optional-dependencies]
 browser = [
     { name = "curl-cffi" },
     { name = "playwright" },
+]
+ocr = [
+    { name = "pillow" },
+    { name = "pytesseract" },
+]
+pdf = [
+    { name = "pymupdf" },
+    { name = "pymupdfb" },
 ]
 
 [[package]]
@@ -3804,6 +3814,21 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2b/29/690202b38b93cf77b73a29c25a63a2b6f3fcb36b1f75006e50b8dee7c108/pymupdf-1.27.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:4f1837554134fb45d390a44de8844b2ca9b6c901c82ccc90b340e3b7f3b126ca", size = 25167965, upload-time = "2026-02-11T22:36:35.478Z" },
     { url = "https://files.pythonhosted.org/packages/8a/81/f937e6aa606fd263c3a45d0ff0f0bbdbf3fb779933091fc0f6179513cc93/pymupdf-1.27.1-cp310-abi3-win32.whl", hash = "sha256:fa33b512d82c6c4852edadf57f22d5f27d16243bb33dac0fbe4eb0f281c5b17e", size = 18006253, upload-time = "2026-02-12T13:48:07.129Z" },
     { url = "https://files.pythonhosted.org/packages/3e/99/fe4a7752990bf65277718fffbead4478de9afd1c7288d7a6d643f79a6fa7/pymupdf-1.27.1-cp310-abi3-win_amd64.whl", hash = "sha256:4b6268dff3a9d713034eba5c2ffce0da37c62443578941ac5df433adcde57b2f", size = 19236703, upload-time = "2026-02-11T15:04:19.607Z" },
+]
+
+[[package]]
+name = "pymupdfb"
+version = "1.24.10"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/ff/ecfcb41414b51976974d74c8e35fef0a0e5b47c7046a11c860553f5dccf0/PyMuPDFb-1.24.10.tar.gz", hash = "sha256:007b91fa9b528c5c0eecea2e49c486ac02e878274f9e31522bdd948adc5f8327", size = 37502, upload-time = "2024-09-02T16:28:48.343Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/94/b217dc987b4ac0e3793984427112d6032563b741e27763f7761c2231d022/PyMuPDFb-1.24.10-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:cd6b24630d90dce9ab3e59d06c5e616686f8d7ec626be1311721fcb062aa0078", size = 15536229, upload-time = "2024-09-02T16:25:19.4Z" },
+    { url = "https://files.pythonhosted.org/packages/16/7a/f634c76d8331cb8dedcfaced17424cc469ee20b7f53cf29c9ef17a01b461/PyMuPDFb-1.24.10-py3-none-macosx_11_0_arm64.whl", hash = "sha256:fda2c34b206f724b1b5685b67188e2a57bcaa5c99bc40a0a5bc62057514c5cdf", size = 15149482, upload-time = "2024-09-02T16:25:34.352Z" },
+    { url = "https://files.pythonhosted.org/packages/62/97/67b5da2edd034e66dadd0ec530e277afb14fe866a3b3b01d9fad154bc6f8/PyMuPDFb-1.24.10-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:4f50a7472f9bb10cbc7a1cd589ee4626ca030b8a4a02749f9a29eb6f00c0e0db", size = 15711338, upload-time = "2024-09-02T22:17:01.592Z" },
+    { url = "https://files.pythonhosted.org/packages/62/b9/ad3f076e86328880797fe7e98c43b2879df56cf6cb75ac3058da06d6e6cb/PyMuPDFb-1.24.10-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:409f1270ef2e70d845e80149ff3db9cfed578274042316cba55cc3e3882421ea", size = 15921939, upload-time = "2024-09-02T16:26:00.118Z" },
+    { url = "https://files.pythonhosted.org/packages/15/e7/02160ea905a7ba16d6e1ca51759ae1c1045785ebebae57ba30e82617f934/PyMuPDFb-1.24.10-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:aca96b6e9ee3096a26810592f4d899f4d3cf3cf0c902ae7e8cca09bce4d946c4", size = 17076991, upload-time = "2024-09-02T16:25:46.703Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/c0/e1ed840440131f71b068cdb3b620a69ec27543b1012a6bd855d8d05f1629/PyMuPDFb-1.24.10-py3-none-win32.whl", hash = "sha256:2d231b42fe3bf79837df235e7fbdf7ff8b46bf4ca1346d0f0124fb1cdd343ce8", size = 11731706, upload-time = "2024-09-02T16:26:19.131Z" },
+    { url = "https://files.pythonhosted.org/packages/70/cb/8459d6c179befd7c6eee555334f054e9a6dcdd9f8671891e1da19e0ce526/PyMuPDFb-1.24.10-py3-none-win_amd64.whl", hash = "sha256:27ea65c701608b6b7632703339ca33ea6d513843b26dbe9bdefb2f56f7b9b196", size = 13186168, upload-time = "2024-09-02T16:26:10.503Z" },
 ]
 
 [[package]]

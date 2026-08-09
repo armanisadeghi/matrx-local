@@ -837,11 +837,10 @@ step "Starting engine..."
 cd "$ROOT"
 
 # Unset DATABASE_URL from the environment before starting the engine.
-# If the user's shell has a DATABASE_URL env var (e.g. sourced from ~/.env.global),
-# the scraper-service Settings will pick it up over the project's .env and attempt
-# to connect to whatever remote DB it points to — hanging the lifespan startup
-# indefinitely when that server is unreachable.
-# The project's own .env is the correct source; let uv/dotenv load it from there.
+# If the developer's shell exports one (e.g. sourced from ~/.env.global), a
+# component that reads it would try to reach whatever remote DB it names and
+# hang lifespan startup when that server is unreachable. The project's own .env
+# is the correct source; let uv/dotenv load it from there.
 unset DATABASE_URL
 
 nohup uv run python run.py > "$ENGINE_LOG" 2>&1 &

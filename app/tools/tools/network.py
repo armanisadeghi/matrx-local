@@ -3,9 +3,11 @@
 Simple tools (FetchUrl, FetchWithBrowser) use httpx/Playwright directly for
 quick requests from the user's residential IP.
 
-Advanced tools (Scrape, Search, Research) delegate to the scraper-service
-engine for sophisticated scraping with retry logic, Cloudflare handling,
-domain configs, caching, and content extraction.
+Advanced tools (Scrape, Search, Research) run the canonical `matrx_scraper`
+engine through the local lane (`app/services/scraper/engine.py`): browser
+impersonation with a Playwright fallback, Cloudflare/firewall detection,
+HTML/PDF/image/JSON extraction, and a session cache — all from this machine's
+own IP, never a proxy.
 """
 
 from __future__ import annotations
@@ -246,11 +248,14 @@ async def _persist_research_pages(events: list[Any], user_id: str = "") -> None:
             scraped = getattr(event, "scraped_content", None)
             if not scraped:
                 continue
+            # `scraped_content` is the page's prose, a plain string. It used to
+            # be read with getattr(scraped, "text_data") — attribute access on
+            # a str, which always fell through to "" and persisted every
+            # research page EMPTY.
             content: dict[str, Any] = {
-                "text_data": getattr(scraped, "text_data", "") or "",
-                "ai_research_content": getattr(scraped, "ai_research_content", "") or "",
-                "overview": getattr(scraped, "overview", None),
-                "links": getattr(scraped, "links", None),
+                "text_data": scraped,
+                "ai_research_content": scraped,
+                "title": getattr(event, "title", "") or "",
             }
             try:
                 await save_scrape(url=url, content=content, content_type="html", user_id=user_id)
@@ -267,24 +272,22 @@ async def _persist_scrape_results(results: list[Any], user_id: str = "") -> None
     logged but never raise — the caller already has the results it needs.
     """
     try:
-        from app.services.scraper.scrape_store import save_scrape
+        from app.services.scraper.scrape_store import content_from_result, save_scrape
+
         for r in results:
-            if getattr(r, "status", None) != "success":
+            if not getattr(r, "success", False):
                 continue
             url: str = getattr(r, "url", "") or ""
             if not url:
                 continue
-            content: dict[str, Any] = {
-                "text_data": getattr(r, "text_data", "") or "",
-                "ai_research_content": getattr(r, "ai_research_content", "") or "",
-                "overview": getattr(r, "overview", None),
-                "links": getattr(r, "links", None),
-                "cms": getattr(r, "cms", None),
-                "firewall": getattr(r, "firewall", None),
-            }
             content_type: str = getattr(r, "content_type", "html") or "html"
             try:
-                await save_scrape(url=url, content=content, content_type=content_type, user_id=user_id)
+                await save_scrape(
+                    url=url,
+                    content=content_from_result(r),
+                    content_type=content_type,
+                    user_id=user_id,
+                )
             except Exception as inner_exc:
                 logger.error("[network] Failed to persist scrape for %s: %s", url, inner_exc)
     except Exception as exc:
@@ -292,11 +295,11 @@ async def _persist_scrape_results(results: list[Any], user_id: str = "") -> None
 
 
 def _scrape_result_to_output(result: Any) -> str:
-    """Format a ScrapeResult into a readable string."""
+    """Format a matrx_scraper ScrapeResult into a readable string."""
     parts: list[str] = []
 
-    if result.status == "error":
-        parts.append(f"SCRAPE ERROR: {result.error}")
+    if not result.success:
+        parts.append(f"SCRAPE ERROR: {result.failure_reason or 'unknown'}")
         parts.append(f"URL: {result.url}")
         if result.status_code:
             parts.append(f"Status: {result.status_code}")
@@ -309,10 +312,10 @@ def _scrape_result_to_output(result: Any) -> str:
         parts.append(f"Status: {result.status_code}")
     if result.content_type:
         parts.append(f"Content-Type: {result.content_type}")
-    if result.from_cache:
-        parts.append("(from cache)")
     if result.scraped_at:
         parts.append(f"Scraped: {result.scraped_at}")
+    if result.title:
+        parts.append(f"Title: {result.title}")
     if result.cms:
         parts.append(f"CMS: {result.cms}")
     if result.firewall and result.firewall != "none":
@@ -320,12 +323,15 @@ def _scrape_result_to_output(result: Any) -> str:
 
     parts.append("")
 
-    if result.ai_research_content:
-        text = result.ai_research_content
-    elif result.text_data:
-        text = result.text_data
-    else:
-        text = "(no text content extracted)"
+    # `raw_text` carries PDF/image/JSON extractions — a non-HTML scrape has no
+    # text_data at all, and printing "(no text content extracted)" for a PDF we
+    # successfully OCR'd is a lie the fork used to tell.
+    text = (
+        result.ai_research_content
+        or result.text_data
+        or result.raw_text
+        or "(no text content extracted)"
+    )
 
     if len(text) > MAX_RESPONSE_SIZE:
         text = text[:MAX_RESPONSE_SIZE] + "\n\n... [truncated at 500KB]"
@@ -335,17 +341,19 @@ def _scrape_result_to_output(result: Any) -> str:
 
 
 def _scrape_result_to_metadata(result: Any) -> dict[str, Any]:
-    """Extract metadata from a ScrapeResult."""
+    """Extract metadata from a matrx_scraper ScrapeResult."""
     meta: dict[str, Any] = {
-        "status": result.status,
+        # The UI reads `status`; the package reports success as a bool. Map it
+        # here, in ONE place, rather than teaching every consumer both shapes.
+        "status": "success" if result.success else "error",
         "url": result.url,
     }
     if result.status_code is not None:
         meta["status_code"] = result.status_code
     if result.content_type:
         meta["content_type"] = result.content_type
-    if result.from_cache:
-        meta["from_cache"] = True
+    if result.title:
+        meta["title"] = result.title
     if result.cms:
         meta["cms"] = result.cms
     if result.firewall:
@@ -354,8 +362,8 @@ def _scrape_result_to_metadata(result: Any) -> dict[str, Any]:
         meta["overview"] = result.overview
     if result.links:
         meta["links"] = result.links
-    if result.error:
-        meta["error"] = result.error
+    if result.failure_reason:
+        meta["error"] = result.failure_reason
     return meta
 
 
@@ -367,11 +375,16 @@ async def tool_scrape(
     get_links: bool = False,
     get_overview: bool = False,
 ) -> ToolResult:
-    """Scrape one or more URLs using the full scraper engine.
+    """Scrape one or more URLs from THIS machine, on the user's own IP.
 
-    Features: multi-strategy fetching (HTTP → curl-cffi → Playwright fallback),
-    Cloudflare detection, proxy rotation, content extraction (HTML, PDF, images),
-    domain-specific parsing rules, and two-tier caching.
+    Runs the canonical `matrx_scraper` engine in the local lane: curl_cffi
+    browser impersonation with a Playwright fallback, Cloudflare/firewall
+    detection, HTML/PDF/image/JSON extraction, and a session cache. Never uses
+    a proxy — the point of scraping here rather than on the server is the
+    user's residential IP.
+
+    `output_mode="research"` trims the payload to prose only (no links,
+    overview or organized data), which is what a research pass consumes.
     """
     call_start = time.monotonic()
     logger.info(
@@ -391,36 +404,36 @@ async def tool_scrape(
     if not engine.is_ready:
         logger.error(
             "[tool_scrape] FAILED — scraper engine not ready. "
-            "Check engine startup logs for initialization errors. "
-            "is_started=%s, orchestrator=%s",
+            "Check engine startup logs for initialization errors. is_started=%s",
             getattr(engine, "_started", "?"),
-            getattr(engine, "_orchestrator", None) is not None,
         )
         return ToolResult(
             type=ToolResultType.ERROR,
             output="Scraper engine not initialized. Check logs for startup errors.",
         )
 
-    logger.info("[tool_scrape] Engine ready — importing FetchOptions")
-    from app.services.scraper.engine import _import_scraper
-    options_mod = _import_scraper("app.models.options")
-    FetchOptions = options_mod.FetchOptions
+    from matrx_scraper.scrape_options import ScrapeOptions
 
-    options = FetchOptions(
+    from app.services.scraper.engine import LocalScrapeOptions
+
+    research_mode = output_mode == "research"
+    options = LocalScrapeOptions(
+        fields=ScrapeOptions(
+            get_text_data=True,
+            get_links=get_links and not research_mode,
+            get_overview=get_overview and not research_mode,
+        ),
         use_cache=use_cache,
-        output_mode=output_mode,
-        get_links=get_links,
-        get_overview=get_overview,
     )
-    logger.info("[tool_scrape] FetchOptions built: %s", options.model_dump())
+    logger.info("[tool_scrape] Options: %s", options)
 
     start = time.monotonic()
-    logger.info("[tool_scrape] Calling orchestrator.scrape() for %d URL(s)...", len(urls))
+    logger.info("[tool_scrape] Scraping %d URL(s) locally...", len(urls))
     try:
-        results = await engine.orchestrator.scrape(urls, options)
+        results = await engine.scrape(urls, options)
     except Exception as e:
         logger.error(
-            "[tool_scrape] orchestrator.scrape() RAISED after %.1fs — %s: %s",
+            "[tool_scrape] engine.scrape() RAISED after %.1fs — %s: %s",
             time.monotonic() - start, type(e).__name__, e,
             exc_info=True,
             extra={
@@ -433,17 +446,16 @@ async def tool_scrape(
         return ToolResult(type=ToolResultType.ERROR, output=f"Scrape failed: {type(e).__name__}: {e}")
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
-    success_statuses = [getattr(r, "status", "?") for r in results]
     logger.info(
-        "[tool_scrape] orchestrator.scrape() returned %d result(s) in %dms — statuses=%s",
-        len(results), elapsed_ms, success_statuses,
+        "[tool_scrape] engine.scrape() returned %d result(s) in %dms — ok=%d",
+        len(results), elapsed_ms, sum(1 for r in results if r.success),
     )
     for i, r in enumerate(results):
-        if getattr(r, "status", None) == "error":
+        if not r.success:
             logger.warning(
                 "[tool_scrape] result[%d] ERROR: url=%s status_code=%s firewall=%s error=%s",
                 i, getattr(r, "url", "?"), getattr(r, "status_code", "?"),
-                getattr(r, "firewall", "?"), getattr(r, "error", "?"),
+                getattr(r, "firewall", "?"), getattr(r, "failure_reason", "?"),
             )
         else:
             logger.info(
@@ -465,12 +477,12 @@ async def tool_scrape(
         output = _scrape_result_to_output(r)
         return ToolResult(
             output=output,
-            type=ToolResultType.SUCCESS if r.status == "success" else ToolResultType.ERROR,
+            type=ToolResultType.SUCCESS if r.success else ToolResultType.ERROR,
             metadata={**_scrape_result_to_metadata(r), "elapsed_ms": elapsed_ms},
         )
 
     output_parts = [f"Scraped {len(results)} URLs in {elapsed_ms}ms\n"]
-    success_count = sum(1 for r in results if r.status == "success")
+    success_count = sum(1 for r in results if r.success)
     output_parts.append(f"Success: {success_count}/{len(results)}\n")
 
     for i, r in enumerate(results, 1):
@@ -500,8 +512,10 @@ async def tool_search(
 ) -> ToolResult:
     """Search the web using Brave Search API.
 
-    Returns structured search results with titles, URLs, descriptions, and snippets.
-    Requires BRAVE_API_KEY to be set.
+    Returns structured search results with titles, URLs, descriptions, and
+    snippets. Requires the user's own Brave key in the in-app key store
+    (Settings → API Keys) — a missing key is a STATE with a prompt, not an
+    error, so this returns an `action_needed` the UI can act on.
     """
     engine = _get_engine()
     if not engine.is_ready:
@@ -520,9 +534,13 @@ async def tool_search(
     start = time.monotonic()
     all_results: list[dict[str, Any]] = []
 
+    from matrx_scraper.search import async_brave_search
+
     try:
         for keyword in keywords:
-            search_results = await engine.search_client.search_with_retry(
+            # async_brave_search owns the 429 back-off ladder and the per-key
+            # rate limiter; going straight to the client would skip both.
+            search_results = await async_brave_search(
                 query=keyword,
                 count=min(count, 20),
                 country=country,
@@ -609,22 +627,22 @@ async def tool_research(
     all_content: list[str] = []
     scraped_pages: list[Any] = []
 
+    from app.services.scraper.engine import ResearchDoneEvent, ResearchPageEvent
+
     try:
-        async for event in engine.orchestrator.research(
+        async for event in engine.research(
             query=query,
             country=country,
             effort=effort,
             freshness=freshness,
         ):
-            event_type = type(event).__name__
-
-            if event_type == "ResearchPageEvent":
+            if isinstance(event, ResearchPageEvent):
                 if event.scraped_content:
                     pages_scraped += 1
                     scraped_pages.append(event)
                 else:
                     pages_failed += 1
-            elif event_type == "ResearchDoneEvent":
+            elif isinstance(event, ResearchDoneEvent):
                 all_content.append(event.text_content)
 
     except Exception as e:

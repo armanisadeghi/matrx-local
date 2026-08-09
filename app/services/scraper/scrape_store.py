@@ -33,11 +33,16 @@ def _now_iso() -> str:
 
 
 def _page_name_for_url(url: str) -> str:
-    """Derive a stable page_name key from a URL (mirrors the scraper-service logic)."""
+    """The engine's own page key, so a local row matches the server's row.
+
+    `unique_page_name` is the cache/dedupe identity the whole platform uses;
+    deriving our own would make the same page two different pages depending on
+    which side scraped it.
+    """
     try:
-        from app.services.scraper.engine import _import_scraper
-        url_utils = _import_scraper("app.utils.url")
-        return url_utils.get_url_info(url).unique_page_name
+        from matrx_scraper.utils.url import get_url_info
+
+        return get_url_info(url).unique_page_name
     except Exception:
         import hashlib
         return hashlib.sha256(url.encode()).hexdigest()[:40]
@@ -45,15 +50,74 @@ def _page_name_for_url(url: str) -> str:
 
 def _domain_for_url(url: str) -> str:
     try:
-        from app.services.scraper.engine import _import_scraper
-        url_utils = _import_scraper("app.utils.url")
-        return url_utils.get_url_info(url).full_domain
+        from matrx_scraper.utils.url import get_url_info
+
+        return get_url_info(url).full_domain
     except Exception:
         try:
             from urllib.parse import urlparse
             return urlparse(url).netloc or url
         except Exception:
             return ""
+
+
+# What a stored/pushed scrape carries.
+#
+# These are field names on the package's `ScrapeResult` — NOT a parallel schema
+# invented here. Serialisation goes through the package's own `to_dict()`, so
+# there is exactly one definition of what each field means and one place a
+# rename can happen; `_assert_known_fields` below turns a drifted name into an
+# import-time crash instead of a column that silently stores null forever.
+#
+# We store a SUBSET rather than the whole result on purpose: `ScrapeResult` also
+# carries organized_data, tables, code_blocks, per-header markdown and the full
+# element inventory. Those are large, they are re-derivable from the page, and
+# writing them into every user's SQLite (and pushing them to the server on every
+# scrape) is real cost for content nothing reads today. Add a field here the day
+# something reads it.
+STORED_FIELDS: tuple[str, ...] = (
+    "text_data",
+    "ai_research_content",
+    "title",
+    "overview",
+    "links",
+    "main_image",
+    "hashes",
+    "cms",
+    "firewall",
+    "status_code",
+    "scraped_at",
+)
+
+
+def _assert_known_fields() -> None:
+    from dataclasses import fields as dataclass_fields
+
+    from matrx_scraper.orchestrator import ScrapeResult
+
+    known = {f.name for f in dataclass_fields(ScrapeResult)}
+    unknown = [name for name in STORED_FIELDS if name not in known]
+    if unknown:
+        raise RuntimeError(
+            f"scrape_store.STORED_FIELDS names fields that no longer exist on "
+            f"matrx_scraper ScrapeResult: {unknown}. Fix the names — do not "
+            f"drop them silently."
+        )
+
+
+def content_from_result(result: Any) -> dict[str, Any]:
+    """Turn a matrx_scraper `ScrapeResult` into the stored/pushed content dict."""
+    _assert_known_fields()
+    payload = result.to_dict()
+    content = {name: payload.get(name) for name in STORED_FIELDS}
+    # Both the local reader and the server's content schema key on these two,
+    # so they are always present as strings. Non-HTML scrapes (PDF, image,
+    # JSON) carry their extraction in `raw_text`.
+    content["text_data"] = content.get("text_data") or result.raw_text or ""
+    content["ai_research_content"] = (
+        content.get("ai_research_content") or content["text_data"]
+    )
+    return content
 
 
 # ---------------------------------------------------------------------------

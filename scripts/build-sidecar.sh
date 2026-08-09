@@ -469,7 +469,6 @@ args = [
     "--hidden-import", "selectors",
     "--hidden-import", "faulthandler",
     "--add-data", "app:app",
-    "--add-data", "scraper-service/app:scraper-service/app",
     "--add-data", "config/runtime-manifests:config/runtime-manifests",
 ]
 

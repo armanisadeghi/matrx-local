@@ -1,138 +1,132 @@
-"""ScraperEngine — bridge between matrx_local and the scraper-service package.
+"""The LOCAL scrape lane — the user's own machine, the user's own IP.
 
-The scraper-service uses `app.*` imports internally, which collide with
-matrx_local's own `app/` package.  We solve this by temporarily swapping
-sys.modules and sys.path during import so the scraper-service's `app`
-package loads under `scraper_app.*` in the module registry.
+There is ONE scraper in the platform: `matrx_scraper`. This module is not a
+second engine, it is the local *execution lane* for that one engine: it holds
+the desktop-shaped pieces (an in-process cache, a browser pool the Rust host
+must be able to reap, the user's Brave key out of the in-app key store) and
+then calls the package.
+
+**No proxies, ever.** `use_proxy=False` on every call is the entire reason this
+lane exists — the value of scraping from a downloaded desktop app is that the
+request leaves the user's residential IP. Routing it through the datacenter
+pool would make this identical to the server and worth nothing.
+
+Until 2026-08-09 this file bootstrapped a forked COPY of the engine out of
+`scraper-service/` via a sys.modules aliasing trick. The fork is gone; anything
+it did that the package did not now lives in the package (see its FEATURE.md
+change log).
 
 Lifecycle:
-    engine = ScraperEngine()
-    await engine.start()     # called once during app lifespan
+    engine = get_scraper_engine()
+    await engine.start()     # once, during app lifespan
     ...
-    await engine.stop()      # called on shutdown
+    await engine.stop()      # on shutdown
 """
 
 from __future__ import annotations
 
-import importlib
+import asyncio
 import logging
 import os
-import sys
-from pathlib import Path
-from types import ModuleType
-from typing import Any, Optional
+import time
+from dataclasses import dataclass, field
+from typing import Any, AsyncGenerator, Optional
+
+from matrx_scraper.orchestrator import ScrapeResult, scrape, scrape_many_stream
+from matrx_scraper.scrape_options import ScrapeOptions, apply_field_flags
+from matrx_scraper.scraper import RequestType
+from matrx_scraper.utils.url import validate_and_correct_url
 
 logger = logging.getLogger(__name__)
 
-SCRAPER_SERVICE_ROOT = Path(__file__).resolve().parent.parent.parent.parent / "scraper-service"
+# How many URLs the local lane fetches at once. Deliberately far below the
+# server's 20: this runs on the user's own laptop and their own home
+# connection, both of which they are also USING. A desktop app that saturates
+# someone's uplink to finish a bulk scrape 3 seconds sooner is a bad neighbour.
+MAX_SCRAPE_CONCURRENCY = 5
+MAX_RESEARCH_CONCURRENCY = 5
 
-_scraper_modules: dict[str, Any] = {}
-_bootstrap_done = False
+# Session-scoped dedupe only. Durable storage is scrape_store.py (SQLite) plus
+# the server; this exists so re-scraping the same URL inside one sitting is free.
+CACHE_MAX_SIZE = 1000
+CACHE_TTL_SECONDS = 1800
+
+# Pages per research effort level.
+RESEARCH_EFFORT_LIMITS = {"low": 10, "medium": 25, "high": 50, "extreme": 100}
 
 
-def _bootstrap_scraper_package() -> None:
-    """One-time setup: register scraper-service/app as 'scraper_app' in sys.modules.
+@dataclass
+class ResearchPageEvent:
+    """One page finished during a research run."""
 
-    This lets all internal `from app.xxx import yyy` inside the scraper-service
-    resolve correctly by aliasing every `app.*` sub-module to `scraper_app.*`.
+    url: str
+    title: str = ""
+    scraped_content: Optional[str] = None
+    scrape_failure_reason: Optional[str] = None
+
+
+@dataclass
+class ResearchDoneEvent:
+    """A research run finished; carries the compiled text."""
+
+    total_urls: int
+    scraped: int
+    text_content: str
+    execution_time_ms: float
+
+
+@dataclass
+class LocalScrapeOptions:
+    """What the desktop asks for from one scrape call.
+
+    Field selection itself is the package's `ScrapeOptions` — the shape of a
+    result is defined once, there. This adds only the two knobs that belong to
+    the LOCAL lane: whether to use the session cache, and whether to render in
+    a real browser.
     """
-    global _bootstrap_done
-    if _bootstrap_done:
-        return
 
-    scraper_root = str(SCRAPER_SERVICE_ROOT)
-
-    matrx_app_children = {
-        k: v for k, v in sys.modules.items()
-        if k == "app" or k.startswith("app.")
-    }
-
-    for k in matrx_app_children:
-        del sys.modules[k]
-
-    sys.path.insert(0, scraper_root)
-    try:
-        scraper_app = importlib.import_module("app")
-
-        snapshot: dict[str, ModuleType] = {}
-        for k, v in list(sys.modules.items()):
-            if k == "app" or k.startswith("app."):
-                snapshot[k] = v
-
-        for k, v in snapshot.items():
-            alias = "scraper_app" + k[3:]  # "app.foo" → "scraper_app.foo"
-            sys.modules[alias] = v
-
-        sys.modules["scraper_app"] = scraper_app
-    finally:
-        sys.path.remove(scraper_root)
-
-        for k in list(sys.modules.keys()):
-            if k == "app" or k.startswith("app."):
-                if k not in matrx_app_children:
-                    del sys.modules[k]
-
-        sys.modules.update(matrx_app_children)
-
-    _bootstrap_done = True
+    fields: ScrapeOptions = field(default_factory=ScrapeOptions)
+    use_cache: bool = True
+    use_browser: bool = False
 
 
-def _import_scraper(module_path: str) -> Any:
-    """Import a module from the scraper-service package.
+def _configure_matrx_settings() -> None:
+    """Give the matrx_* packages a home directory before the parser runs.
 
-    Translates `app.foo.bar` → `scraper_app.foo.bar` and loads it
-    with proper sys.path/sys.modules isolation.
+    `matrx_scraper`'s `DomainFilter` caches the EasyList adblock rules through
+    `matrx_files.FileManager`, which reads `settings.BASE_DIR` — so an
+    unconfigured host raises `NotConfiguredError` on the FIRST HTML parse, not
+    at import, which is the worst possible place to find out. Point it at the
+    matrx home so the cache lands in the right world (Hard Rule 9: the dev
+    engine must never write into `~/.matrx`).
+
+    Idempotent, and never fatal: `configure_settings` refuses a second call, and
+    another matrx package may legitimately have configured it first.
     """
-    aliased = "scraper_app" + module_path[3:] if module_path.startswith("app.") else module_path
-
-    if aliased in _scraper_modules:
-        return _scraper_modules[aliased]
-
-    _bootstrap_scraper_package()
-
-    if aliased in sys.modules:
-        _scraper_modules[aliased] = sys.modules[aliased]
-        return sys.modules[aliased]
-
-    scraper_root = str(SCRAPER_SERVICE_ROOT)
-
-    matrx_app_children = {
-        k: v for k, v in sys.modules.items()
-        if k == "app" or k.startswith("app.")
-    }
-
-    scraper_app_children = {
-        k: v for k, v in sys.modules.items()
-        if k == "scraper_app" or k.startswith("scraper_app.")
-    }
-    for k, v in scraper_app_children.items():
-        original = "app" + k[11:]  # "scraper_app.foo" → "app.foo"
-        sys.modules[original] = v
-    for k in matrx_app_children:
-        if k not in {("app" + sk[11:]) for sk in scraper_app_children}:
-            if k in sys.modules:
-                del sys.modules[k]
-
-    sys.path.insert(0, scraper_root)
     try:
-        original_path = "app" + module_path[3:] if module_path.startswith("app.") else module_path
-        mod = importlib.import_module(original_path)
+        from matrx_utils.conf import configure_settings, settings
 
-        for k, v in list(sys.modules.items()):
-            if k == "app" or k.startswith("app."):
-                alias = "scraper_app" + k[3:]
-                sys.modules[alias] = v
-    finally:
-        sys.path.remove(scraper_root)
+        if getattr(settings, "_configured", False):
+            return
 
-        for k in list(sys.modules.keys()):
-            if k == "app" or k.startswith("app."):
-                if k not in matrx_app_children:
-                    del sys.modules[k]
-        sys.modules.update(matrx_app_children)
+        from app.config import MATRX_HOME_DIR
 
-    _scraper_modules[aliased] = mod
-    return mod
+        class _MatrxLocalSettings:
+            BASE_DIR = str(MATRX_HOME_DIR)
+
+        configure_settings(_MatrxLocalSettings(), env_first=True)
+        logger.info(
+            "[scraper/engine.py] matrx_utils settings configured (BASE_DIR=%s)",
+            MATRX_HOME_DIR,
+        )
+    except RuntimeError:
+        # Already configured by another package — exactly what we wanted.
+        pass
+    except Exception:
+        logger.exception(
+            "[scraper/engine.py] Could not configure matrx_utils settings — HTML "
+            "parsing may fail on its adblock-list cache"
+        )
 
 
 def _extract_driver_pid(browser_pool: Any) -> int | None:
@@ -146,16 +140,14 @@ def _extract_driver_pid(browser_pool: Any) -> int | None:
     # 1) Internal transport (async_playwright().start() → driver subprocess).
     try:
         pw = getattr(browser_pool, "_playwright", None)
-        proc = (
+        proc = getattr(
             getattr(
-                getattr(
-                    getattr(getattr(pw, "_impl_obj", None), "_connection", None),
-                    "_transport",
-                    None,
-                ),
-                "_proc",
+                getattr(getattr(pw, "_impl_obj", None), "_connection", None),
+                "_transport",
                 None,
-            )
+            ),
+            "_proc",
+            None,
         )
         pid = getattr(proc, "pid", None)
         if isinstance(pid, int) and pid > 0:
@@ -166,6 +158,7 @@ def _extract_driver_pid(browser_pool: Any) -> int | None:
     # 2) Fallback: find a `run-driver` node among our own descendants.
     try:
         import os as _os
+
         import psutil
 
         me = psutil.Process(_os.getpid())
@@ -221,224 +214,130 @@ def terminate_playwright_tree(driver_pid: int | None) -> None:
             pass
     logger.info(
         "[scraper/engine.py] terminate_playwright_tree: reaped driver_pid=%s (+%d children)",
-        driver_pid, len(targets) - 1,
+        driver_pid,
+        len(targets) - 1,
     )
 
 
 class ScraperEngine:
-    """Manages the scraper-service orchestrator and its dependencies.
+    """Owns the local lane's long-lived pieces and runs scrapes through them.
 
-    No direct database connection. All scrape results are pushed to the
-    server via POST /api/v1/content/save after every successful scrape.
-    In-memory TTLCache is used for deduplication within a session only.
+    No database. Durable persistence is scrape_store.py (local SQLite) and the
+    server (remote_client.py); the cache here is session-scoped dedupe only.
     """
 
     def __init__(self) -> None:
-        self._orchestrator: Any = None
-        self._fetcher: Any = None
         self._browser_pool: Any = None
-        self._page_cache: Any = None
-        self._domain_config_store: Any = None
-        self._search_client: Any = None
+        self._cache: Any = None
+        self._domain_config: Any = None
         self._search_key: str | None = None
-        self._settings: Any = None
         self._started = False
         # PID of the Playwright driver node process (parent of the
         # chrome-headless-shell tree). Captured at start() so the force-exit
         # path in run.py can reap the whole browser tree we own if the graceful
-        # lifespan teardown never runs (crash / hung shutdown). See
-        # `driver_pid` and app/preflight.py's playwright orphan reclamation.
+        # lifespan teardown never runs (crash / hung shutdown).
         self._driver_pid: int | None = None
 
     @property
     def is_ready(self) -> bool:
-        return self._started and self._orchestrator is not None
+        return self._started
 
     @property
     def driver_pid(self) -> int | None:
-        """PID of the Playwright driver node we spawned, or None.
-
-        The driver owns the chrome-headless-shell processes, so terminating its
-        tree cleans up every browser this engine started.
-        """
+        """PID of the Playwright driver node we spawned, or None."""
         return self._driver_pid
 
     @property
-    def orchestrator(self) -> Any:
-        return self._orchestrator
+    def browser_pool(self) -> Any:
+        return self._browser_pool
 
     @property
-    def search_client(self) -> Any:
-        return self._search_client
+    def has_search(self) -> bool:
+        return bool(self._search_key)
 
-    def ensure_search_client(self) -> Any:
-        """Apply a newly saved Brave key without restarting the engine."""
-        if self._settings is None:
-            return self._search_client
+    # ------------------------------------------------------------------
+    # Brave key — the USER's key, from the in-app store, never an env var
+    # ------------------------------------------------------------------
+
+    def ensure_search_client(self) -> bool:
+        """Sync the package's Brave client with the user's current key.
+
+        Called before every search/research so a key the user just saved works
+        immediately — no engine restart. Returns whether search is available.
+        """
         try:
+            from matrx_scraper.search import configure_client
+
             from app.services.ai.key_manager import get_cached_user_keys
 
             key = (
                 get_cached_user_keys().get("brave", "").strip()
+                # Developer convenience only; a shipped build never has this.
                 or os.environ.get("BRAVE_API_KEY", "").strip()
             )
             if key == (self._search_key or ""):
-                return self._search_client
-            if not key:
-                self._search_client = None
-                self._search_key = None
-                if self._orchestrator is not None:
-                    self._orchestrator.search_client = None
-                return None
-            self._settings.BRAVE_API_KEY = key
-            search_mod = _import_scraper("app.core.search")
-            self._search_client = search_mod.BraveSearchClient(self._settings)
-            self._search_key = key
-            if self._orchestrator is not None:
-                self._orchestrator.search_client = self._search_client
-            logger.info("[scraper/engine.py] Brave Search enabled from user key store")
+                return bool(key)
+
+            configure_client(key or None)
+            self._search_key = key or None
+            if key:
+                logger.info("[scraper/engine.py] Brave Search enabled from user key store")
+            else:
+                logger.info("[scraper/engine.py] Brave Search key cleared")
+            return bool(key)
         except Exception:
-            logger.exception("[scraper/engine.py] Could not enable Brave Search")
-        return self._search_client
+            logger.exception("[scraper/engine.py] Could not configure Brave Search")
+            return False
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Initialize scraper-service components.
-
-        Order: settings → browser pool → fetcher → domain config (stub) →
-               page cache (in-memory) → search client → orchestrator.
-
-        No direct database connection. All persistence goes through the
-        scraper server API (scraper.app.matrxserver.com). Results are pushed
-        via POST /api/v1/content/save after every successful scrape.
-        """
         if self._started:
             return
 
         logger.info("[scraper/engine.py] ScraperEngine: starting")
 
-        config_mod = _import_scraper("app.config")
-        settings_cls = config_mod.Settings
+        _configure_matrx_settings()
 
-        # The scraper-service Settings requires API_KEY and DATABASE_URL.
-        # We supply stubs — the desktop engine never uses either directly.
-        os.environ.setdefault("API_KEY", "local-scraper")
-        os.environ.setdefault("DATABASE_URL", "postgresql://stub:stub@localhost/stub")
+        from matrx_scraper.cache import MemoryCache
+        from matrx_scraper.domain_config import StaticDomainConfigStore
 
-        try:
-            self._settings = settings_cls()  # type: ignore[call-arg]
-        except Exception as exc:
-            logger.exception(
-                "[scraper/engine.py] ScraperEngine: failed to load settings"
-            )
-            # Re-raise: a silent return here let app/main.py mark the registry
-            # READY for a scraper whose orchestrator was never created —
-            # every subsequent scrape call would hit None.scrape.
-            raise RuntimeError("Scraper settings failed to load") from exc
+        self._cache = MemoryCache(max_size=CACHE_MAX_SIZE, ttl_seconds=CACHE_TTL_SECONDS)
+        self._domain_config = StaticDomainConfigStore()
 
         try:
-            browser_pool_mod = _import_scraper("app.core.fetcher.browser_pool")
-            browser_pool = browser_pool_mod.PlaywrightBrowserPool(
-                pool_size=self._settings.PLAYWRIGHT_POOL_SIZE,
-            )
-            await browser_pool.start()
-            self._browser_pool = browser_pool
-            self._driver_pid = _extract_driver_pid(browser_pool)
+            from matrx_scraper.browser_pool import PlaywrightBrowserPool
+
+            # One browser. The server runs five because it crawls; a desktop
+            # app renders the occasional page and every extra Chromium is
+            # ~200 MB of the user's RAM.
+            pool = PlaywrightBrowserPool(pool_size=1)
+            await pool.start()
+            self._browser_pool = pool
+            self._driver_pid = _extract_driver_pid(pool)
             logger.info(
-                "[scraper/engine.py] ScraperEngine: browser pool started ✓ (size=%d, driver_pid=%s)",
-                self._settings.PLAYWRIGHT_POOL_SIZE,
+                "[scraper/engine.py] ScraperEngine: browser pool started ✓ (driver_pid=%s)",
                 self._driver_pid,
             )
         except Exception as pw_exc:
+            # A missing browser is a STATE, not a failure: every HTTP scrape
+            # still works, only browser-rendered fetches are unavailable.
             logger.warning(
-                "[scraper/engine.py] ScraperEngine: Playwright browser pool failed — "
-                "browser automation will be disabled. Error: %s",
+                "[scraper/engine.py] ScraperEngine: Playwright browser pool unavailable — "
+                "browser-rendered scrapes disabled. Error: %s",
                 pw_exc,
             )
             self._browser_pool = None
 
-            # fetcher.py imports browser_pool at module level. If Playwright is not
-            # installed, browser_pool.py never loaded into sys.modules, so fetcher.py
-            # would fail on its top-level import. Inject a stub module so fetcher.py
-            # can import successfully — the stub class is never instantiated.
-            import types as _types
-            _stub_mod = _types.ModuleType("app.core.fetcher.browser_pool")
-
-            class _StubBrowserPool:
-                def __init__(self, **kwargs: object) -> None: pass
-                async def start(self) -> None: pass
-                async def stop(self) -> None: pass
-
-            _stub_mod.PlaywrightBrowserPool = _StubBrowserPool  # type: ignore[attr-defined]
-            # Register under both the original and aliased names so _import_scraper finds it.
-            sys.modules["app.core.fetcher.browser_pool"] = _stub_mod
-            sys.modules["scraper_app.core.fetcher.browser_pool"] = _stub_mod
-
-        fetcher_mod = _import_scraper("app.core.fetcher.fetcher")
-        self._fetcher = fetcher_mod.UnifiedFetcher(
-            settings=self._settings,
-            browser_pool=self._browser_pool,
-        )
-
-        # Domain config: use no-DB stub — config is loaded from server API separately.
-        domain_config_mod = _import_scraper("app.domain_config.config_store")
-        self._domain_config_store = domain_config_mod.DomainConfigStore.__new__(
-            domain_config_mod.DomainConfigStore
-        )
-        self._domain_config_store._pool = None
-        self._domain_config_store._domains = {}
-        self._domain_config_store._base_config = []
-        self._domain_config_store._refresh_task = None
-
-        # Page cache: in-memory only. Persistence is the server's responsibility.
-        self._page_cache = _MemoryOnlyPageCache(
-            max_size=self._settings.PAGE_CACHE_MAX_SIZE,
-            ttl_seconds=self._settings.PAGE_CACHE_TTL_SECONDS,
-        )
-
-        search_mod = _import_scraper("app.core.search")
-        if self._settings.BRAVE_API_KEY:
-            self._search_client = search_mod.BraveSearchClient(self._settings)
-            self._search_key = str(self._settings.BRAVE_API_KEY)
-            logger.info("[scraper/engine.py] ScraperEngine: Brave Search configured ✓")
-        else:
-            logger.info("[scraper/engine.py] ScraperEngine: no BRAVE_API_KEY — search disabled")
-
-        orchestrator_mod = _import_scraper("app.core.orchestrator")
-
-        # Patch out the DB-write helpers so they silently no-op when a fetch
-        # fails instead of raising RuntimeError from _NullPool.  The desktop
-        # engine never has a real DB connection; failure logging is handled
-        # by the remote server after the retry-queue poller reports the result.
-        async def _noop_log_failure(*_args: Any, **_kwargs: Any) -> None:
-            logger.debug(
-                "[scraper/engine.py] log_failure suppressed (no-DB mode): url=%s reason=%s",
-                _kwargs.get("target_url", _args[1] if len(_args) > 1 else "?"),
-                _kwargs.get("failure_reason", _args[2] if len(_args) > 2 else "?"),
-            )
-
-        async def _noop_enqueue_retry(*_args: Any, **_kwargs: Any) -> None:
-            logger.debug(
-                "[scraper/engine.py] enqueue_retry suppressed (no-DB mode): url=%s",
-                _kwargs.get("target_url", _args[1] if len(_args) > 1 else "?"),
-            )
-
-        orchestrator_mod.log_failure = _noop_log_failure
-        orchestrator_mod.enqueue_retry = _noop_enqueue_retry
-
-        self._orchestrator = orchestrator_mod.ScrapeOrchestrator(
-            fetcher=self._fetcher,
-            settings=self._settings,
-            db_pool=_NullPool(),
-            page_cache=self._page_cache,
-            domain_config_store=self._domain_config_store,
-            search_client=self._search_client,
-        )
+        self.ensure_search_client()
 
         self._started = True
         logger.info(
             "[scraper/engine.py] ScraperEngine: ready ✓ (browser=%s, search=%s)",
             self._browser_pool is not None,
-            self._search_client is not None,
+            self.has_search,
         )
 
     async def stop(self) -> None:
@@ -448,111 +347,159 @@ class ScraperEngine:
         logger.info("[scraper/engine.py] ScraperEngine: stopping")
 
         if self._browser_pool:
-            # When SIGINT fires, Playwright's driver subprocess is killed before we
-            # reach shutdown. Subsequent browser.close() calls all raise
-            # "Connection closed while reading from the driver" — this is expected
-            # and harmless. Suppress the browser_pool logger temporarily so these
-            # known-benign errors don't flood the console as full tracebacks.
-            _bp_logger = logging.getLogger("scraper_app.core.fetcher.browser_pool")
-            _orig_level = _bp_logger.level
-            _bp_logger.setLevel(logging.CRITICAL)
             try:
-                import asyncio as _asyncio
-                await _asyncio.wait_for(self._browser_pool.stop(), timeout=5.0)
-            except _asyncio.TimeoutError:
-                logger.debug("[scraper/engine.py] ScraperEngine: browser pool stop timed out (expected on SIGINT)")
+                await asyncio.wait_for(self._browser_pool.stop(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.debug(
+                    "[scraper/engine.py] ScraperEngine: browser pool stop timed out "
+                    "(expected on SIGINT)"
+                )
             except Exception:
-                logger.debug("[scraper/engine.py] ScraperEngine: browser pool stop failed (expected on SIGINT)")
-            finally:
-                _bp_logger.setLevel(_orig_level)
+                logger.debug(
+                    "[scraper/engine.py] ScraperEngine: browser pool stop failed "
+                    "(expected on SIGINT)"
+                )
+            self._browser_pool = None
 
         self._started = False
         self._driver_pid = None
         logger.info("[scraper/engine.py] ScraperEngine: stopped")
 
+    # ------------------------------------------------------------------
+    # Scraping
+    # ------------------------------------------------------------------
 
-class _MemoryOnlyPageCache:
-    """Drop-in replacement for PageCache when no database is available.
+    async def scrape_one(
+        self, url: str, options: LocalScrapeOptions | None = None
+    ) -> ScrapeResult:
+        """Scrape a single URL from this machine. Never raises for a bad URL."""
+        opts = options or LocalScrapeOptions()
+        try:
+            corrected = validate_and_correct_url(url)
+        except ValueError as exc:
+            return ScrapeResult(
+                url=url,
+                response_url=url,
+                success=False,
+                content_type="unknown",
+                failure_reason=str(exc),
+            )
 
-    Uses only the in-memory TTLCache — no persistence.
-    """
+        return await scrape(
+            corrected,
+            use_proxy=False,  # the whole point: the user's own IP
+            request_type=RequestType.BROWSER if opts.use_browser else RequestType.NORMAL,
+            cache=self._cache if opts.use_cache else None,
+            domain_config=self._domain_config,
+            browser_pool=self._browser_pool,
+        )
 
-    def __init__(self, max_size: int = 1000, ttl_seconds: int = 1800) -> None:
-        from cachetools import TTLCache
+    async def scrape(
+        self, urls: list[str], options: LocalScrapeOptions | None = None
+    ) -> list[ScrapeResult]:
+        """Scrape many URLs concurrently, bounded for a home connection."""
+        opts = options or LocalScrapeOptions()
+        semaphore = asyncio.Semaphore(MAX_SCRAPE_CONCURRENCY)
 
-        self._memory: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=max_size, ttl=ttl_seconds)
+        async def _bounded(url: str) -> ScrapeResult:
+            async with semaphore:
+                return await self.scrape_one(url, opts)
 
-    async def get(self, page_name: str) -> Optional[dict[str, Any]]:
-        return self._memory.get(page_name)
+        return list(await asyncio.gather(*[_bounded(u) for u in urls]))
 
-    async def set(
+    async def scrape_stream(
+        self, urls: list[str], options: LocalScrapeOptions | None = None
+    ) -> AsyncGenerator[ScrapeResult, None]:
+        """Yield each result the moment it finishes, not in input order."""
+        opts = options or LocalScrapeOptions()
+        semaphore = asyncio.Semaphore(MAX_SCRAPE_CONCURRENCY)
+
+        async def _bounded(url: str) -> ScrapeResult:
+            async with semaphore:
+                return await self.scrape_one(url, opts)
+
+        for future in asyncio.as_completed([_bounded(u) for u in urls]):
+            yield await future
+
+    @staticmethod
+    def to_payload(result: ScrapeResult, options: ScrapeOptions) -> dict[str, Any]:
+        """The result as the wire/storage dict, honouring the caller's flags.
+
+        Both the shape and the filter come from the package, so what the
+        desktop stores and what the server stores are the same thing.
+        """
+        return apply_field_flags(result.to_dict(), options)
+
+    # ------------------------------------------------------------------
+    # Research — search, then scrape every hit locally
+    # ------------------------------------------------------------------
+
+    async def research(
         self,
-        page_name: str,
-        url: str,
-        domain: str,
-        content: dict[str, Any],
-        content_type: str,
-        char_count: int,
-        ttl_days: int = 30,
-    ) -> None:
-        from datetime import datetime, timezone
+        query: str,
+        country: str = "us",
+        effort: str = "extreme",
+        freshness: Optional[str] = None,
+        safe_search: str = "off",
+    ) -> AsyncGenerator[ResearchPageEvent | ResearchDoneEvent, None]:
+        if not self.ensure_search_client():
+            raise RuntimeError("Search client not configured")
 
-        self._memory[page_name] = {
-            "content": content,
-            "url": url,
-            "domain": domain,
-            "scraped_at": datetime.now(timezone.utc).isoformat(),
-            "content_type": content_type,
-            "char_count": char_count,
-        }
+        from matrx_scraper.search import (
+            async_brave_search,
+            extract_urls_from_search_results,
+        )
 
-    async def invalidate(self, page_name: str) -> None:
-        self._memory.pop(page_name, None)
+        start_time = time.monotonic()
+        max_urls = RESEARCH_EFFORT_LIMITS.get(effort, 100)
 
+        search_results = await async_brave_search(
+            query=query,
+            count=20,
+            country=country,
+            extra_snippets=True,
+            safe_search=safe_search,
+            freshness=freshness,
+        )
 
-class _NullConnection:
-    """Stub connection that raises on any DB operation."""
+        entries = extract_urls_from_search_results([(query, search_results)])
+        by_url = {e["url"]: e for e in entries}
+        urls_to_scrape = [e["url"] for e in entries[:max_urls]]
 
-    async def fetchrow(self, *args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("No database connection — scraper running in memory-only mode")
+        # Research wants readable prose per page, nothing else — no links, no
+        # overview, no organized_data. Those are the expensive fields.
+        options = LocalScrapeOptions(
+            fields=ScrapeOptions(get_text_data=True),
+            use_cache=True,
+        )
 
-    async def fetch(self, *args: Any, **kwargs: Any) -> list[Any]:
-        raise RuntimeError("No database connection — scraper running in memory-only mode")
+        scraped_count = 0
+        all_content: list[str] = []
+        semaphore = asyncio.Semaphore(MAX_RESEARCH_CONCURRENCY)
 
-    async def execute(self, *args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("No database connection — scraper running in memory-only mode")
+        async def _bounded(url: str) -> ScrapeResult:
+            async with semaphore:
+                return await self.scrape_one(url, options)
 
-    async def executemany(self, *args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("No database connection — scraper running in memory-only mode")
+        for future in asyncio.as_completed([_bounded(u) for u in urls_to_scrape]):
+            result = await future
+            content = result.ai_research_content or result.text_data or result.raw_text
+            yield ResearchPageEvent(
+                url=result.url,
+                title=result.title or by_url.get(result.url, {}).get("title", ""),
+                scraped_content=content or None,
+                scrape_failure_reason=result.failure_reason,
+            )
+            if content:
+                scraped_count += 1
+                all_content.append(f"--- {result.url} ---\n{content}")
 
-
-class _NullAcquireContext:
-    """Async context manager returned by _NullPool.acquire().
-
-    asyncpg Pool.acquire() is used as ``async with pool.acquire() as conn:``,
-    so it must return an async context manager, not a bare coroutine.
-    """
-
-    async def __aenter__(self) -> "_NullConnection":
-        return _NullConnection()
-
-    async def __aexit__(self, *args: Any) -> None:
-        pass
-
-
-class _NullPool:
-    """Stub that satisfies the asyncpg.Pool type hint when no DB is available.
-
-    Any actual DB operation will fail with a clear message.
-    acquire() returns an async context manager so callers can use
-    ``async with pool.acquire() as conn:`` without a TypeError.
-    """
-
-    def acquire(self) -> _NullAcquireContext:
-        return _NullAcquireContext()
-
-    async def close(self) -> None:
-        pass
+        yield ResearchDoneEvent(
+            total_urls=len(urls_to_scrape),
+            scraped=scraped_count,
+            text_content="\n\n".join(all_content),
+            execution_time_ms=(time.monotonic() - start_time) * 1000,
+        )
 
 
 _engine: Optional[ScraperEngine] = None

@@ -28,6 +28,7 @@
 | **Any image/video UI** (thumbnails, lightbox, info, delete/vault/remix) | **[desktop/src/components/media/FEATURE.md](desktop/src/components/media/FEATURE.md)** — one `MediaDescriptor`, one thumb, one action set. Never hand-roll an `<img>` for media. |
 | **Multi-window** (peer windows, panel windows, leader election, close policy, native menus, tray window list) | **[desktop/src/panels/FEATURE.md](desktop/src/panels/FEATURE.md)** — window labels are the taxonomy; leader runs the singletons; adding a panel is a 4-step checklist. |
 | **Any Python dependency that touches torch/transformers/numpy** (capabilities, recipes, ML consumers) | **[app/services/optional_packages/FEATURE.md](app/services/optional_packages/FEATURE.md)** — single-ML-stack doctrine: the managed media runtime slot is the ONLY torch provider; recipes declare `requires_ml_runtime`, never install their own. Guardrails + tripwire tests refuse violations. |
+| **`matrx_*` package host wiring** (`matrx_utils.conf.settings` — `BASE_DIR`/`TEMP_DIR` for matrx-files, matrx-scraper, matrx-orm) | **[app/package_integration.py](app/package_integration.py)** — configured ONCE, first thing in the lifespan. Process-global and refuses a second call, so never configure it inside a feature. `BASE_DIR` derives from `MATRX_HOME_DIR` (Hard Rule 9). |
 | Code-local rules | `app/tools/FEATURE.md`, `app/api/FEATURE.md`, `app/services/*/FEATURE.md` |
 | Defect holding area | [FOUND_DEFECTS.md](FOUND_DEFECTS.md) |
 | Approved agent work | [.matrx/AGENT_TASKS.md](.matrx/AGENT_TASKS.md) |

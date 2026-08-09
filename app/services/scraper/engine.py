@@ -90,45 +90,6 @@ class LocalScrapeOptions:
     use_browser: bool = False
 
 
-def _configure_matrx_settings() -> None:
-    """Give the matrx_* packages a home directory before the parser runs.
-
-    `matrx_scraper`'s `DomainFilter` caches the EasyList adblock rules through
-    `matrx_files.FileManager`, which reads `settings.BASE_DIR` — so an
-    unconfigured host raises `NotConfiguredError` on the FIRST HTML parse, not
-    at import, which is the worst possible place to find out. Point it at the
-    matrx home so the cache lands in the right world (Hard Rule 9: the dev
-    engine must never write into `~/.matrx`).
-
-    Idempotent, and never fatal: `configure_settings` refuses a second call, and
-    another matrx package may legitimately have configured it first.
-    """
-    try:
-        from matrx_utils.conf import configure_settings, settings
-
-        if getattr(settings, "_configured", False):
-            return
-
-        from app.config import MATRX_HOME_DIR
-
-        class _MatrxLocalSettings:
-            BASE_DIR = str(MATRX_HOME_DIR)
-
-        configure_settings(_MatrxLocalSettings(), env_first=True)
-        logger.info(
-            "[scraper/engine.py] matrx_utils settings configured (BASE_DIR=%s)",
-            MATRX_HOME_DIR,
-        )
-    except RuntimeError:
-        # Already configured by another package — exactly what we wanted.
-        pass
-    except Exception:
-        logger.exception(
-            "[scraper/engine.py] Could not configure matrx_utils settings — HTML "
-            "parsing may fail on its adblock-list cache"
-        )
-
-
 def _extract_driver_pid(browser_pool: Any) -> int | None:
     """Best-effort: return the PID of the Playwright driver node process.
 
@@ -298,8 +259,6 @@ class ScraperEngine:
             return
 
         logger.info("[scraper/engine.py] ScraperEngine: starting")
-
-        _configure_matrx_settings()
 
         from matrx_scraper.cache import MemoryCache
         from matrx_scraper.domain_config import StaticDomainConfigStore

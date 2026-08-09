@@ -455,6 +455,52 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 > media-library init-fetch/retry + sentinel normalization). Still open
 > below: MXL-D-039 trigger hunt, MXL-D-042.
 
+### MXL-D-076 — The browser-automation tool suite's Playwright driver is untracked and unreapable on the force-exit path
+- **Area:** `app/tools/tools/browser_automation.py:74-84` (`_get_playwright`),
+  `run.py:849-853` (`_kill_child_subprocesses`)
+- **Symptom:** `BrowserNavigate`/`Click`/`Type`/`Screenshot`/… start their own
+  module-level `async_playwright()` and keep it for the process lifetime. That
+  driver + browser tree has NO remembered PID, so the force-exit path — which
+  reaps only `get_scraper_engine().driver_pid` — cannot touch it. On a hung or
+  crashed shutdown its Chromium tree is orphaned: exactly the class of leak
+  behind "ended unexpectedly" reports (CLAUDE.md Hard Rule 0). Graceful
+  shutdown is fine (`Browser automation contexts closed ✓`); only the
+  watchdog/force path leaks.
+- **Not the same duplication as the scrape lane.** This suite is a genuinely
+  separate capability: a persistent, HEADED, multi-tab session the user drives
+  step by step, per browser type (chromium/firefox/webkit). It should not be
+  folded into the headless scraper pool — it should REGISTER its driver PID so
+  the same `terminate_playwright_tree` covers it (the cheapest fix: hand the
+  pid to the scraper engine's reaper list, or give run.py a second remembered
+  pid).
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-08-09 — verified in code while removing the
+  `FetchWithBrowser` second driver tree (that one is now fixed; this is the
+  remaining untracked one).
+- **Owner hint:** whoever next touches lifecycle or browser automation.
+
+### MXL-D-077 — `dev.sh --fresh` reports "Playwright browsers ready ✓" when the headless-shell binary was not installed
+- **Area:** `app/main.py` Phase 0b (Playwright browser install/probe)
+- **Symptom:** On a throwaway private home, Phase 0b installs into
+  `<home>/playwright-browsers`, logs `Phase 0b: Playwright browsers ready ✓`,
+  and then the scraper engine immediately fails to launch:
+  `BrowserType.launch: Executable doesn't exist at
+  <home>/playwright-browsers/chromium_headless_shell-1208/chrome-headless-shell-mac-arm64/chrome-headless-shell`.
+  The install put down `chromium` but not `chromium_headless_shell`, and the
+  readiness probe does not check the binary the pool actually launches — a
+  silent-success guard, against the loud-recovery doctrine.
+- **Evidence:** two consecutive `./scripts/dev.sh --fresh` runs, 2026-08-09,
+  homes `matrx-dev-home.7PXXP1` and `matrx-dev-home.4Pzwum`. Same run with
+  `PLAYWRIGHT_BROWSERS_PATH=~/.matrx-dev/playwright-browsers` starts the pool
+  fine, so it is the fresh-home install, not the launch code.
+- **Impact:** dev-world only today (the packaged app installs into `~/.matrx`
+  and works), but the probe lying is the general bug: any user whose install
+  half-completes gets "ready ✓" and a dead browser instead of the
+  install-capability prompt.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-08-09 — reproduced twice, verified in logs.
+- **Owner hint:** startup / capabilities.
+
 ### MXL-D-039 — Something SIGTERMs the engine mid-session without any Rust graceful path running (trigger still unidentified)
 - **Area:** desktop Rust / lifecycle
 - **Symptom:** ~12× on Jul 11–12 the engine received a shutdown signal while

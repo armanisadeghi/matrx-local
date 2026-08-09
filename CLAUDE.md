@@ -132,6 +132,18 @@ cd desktop && pnpm tauri:dev
      code path needs to reason about llama-server status, talk to it via
      `/connect-local-llm` (or `app/services/ai/local_llm_registry.py`) —
      never via process scanning or signals.
+   - **There is ONE browser pool for page fetches, owned by `ScraperEngine`.**
+     Both the scrape lane and `FetchWithBrowser` borrow it via
+     `ScraperEngine.borrow_browser()`; nothing else in a fetch path may call
+     `async_playwright()`. Two drivers means two ~200 MB Chromium trees on the
+     user's laptop AND a tree with no remembered PID — invisible to
+     `driver_pid` / `terminate_playwright_tree`, i.e. the orphan class behind
+     "ended unexpectedly". A borrower owns every context it opens (close it)
+     and never closes the shared browser. Pinned by
+     `tests/unit/test_single_browser_pool.py`. The interactive
+     `local_browser` suite (`browser_automation.py`) is a separate, headed,
+     user-driven session and is deliberately NOT folded in — but its driver is
+     still untracked today (MXL-D-076).
    - **The engine never expects Rust to clean up its children.** When the
      engine receives a shutdown signal, it stops every child it owns — and
      reports done only after the last one is stopped.

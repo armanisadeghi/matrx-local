@@ -70,10 +70,23 @@ dependencies = [
     # runs the same versions). matrx-connect/graph/runtime arrive transitively
     # via matrx-ai but are pinned explicitly so a future matrx-ai dependency
     # reshuffle can't silently downgrade them.
-    "matrx-utils>=2.0.0",
+    # matrx-utils 2.0.7 / matrx-connect 0.1.25 floors are LOAD-BEARING, not
+    # cosmetic. matrx-connect's middleware/auth.py has imported
+    # matrx_utils.AsyncSingleFlight since 0.1.8, but matrx-utils first exported
+    # that symbol in 2.0.1 (and LEGACY_VISIBILITY_MAP / VisibilityLiteral in
+    # 2.0.7). Nothing was removed upstream — the symbols were ADDED and the
+    # consumers' floors never moved, so `matrx-utils>=2.0.0` +
+    # `matrx-connect>=0.1.10` resolved a pair that raises on import:
+    #   ImportError: cannot import name 'AsyncSingleFlight' from 'matrx_utils'
+    # That pair is what actually resolved into .venv here (MXL-D-075). It stayed
+    # invisible only because matrx_connect/__init__.py does not eagerly import
+    # `middleware` and nothing here imports that submodule yet — the first
+    # auth-middleware import would have killed the AI streaming surface. Fixed
+    # upstream in matrx-connect 0.1.25; do not lower these floors.
+    "matrx-utils>=2.0.7",
     "matrx-orm>=3.1.16",
     "matrx-ai>=0.4.18",
-    "matrx-connect>=0.1.10",
+    "matrx-connect>=0.1.25",
     "matrx-graph>=0.1.5",
     "matrx-runtime>=0.0.6",
     # Canonical Office (docx/pptx/xlsx) codec — matrx_files.specific_handlers.office

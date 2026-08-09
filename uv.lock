@@ -2014,7 +2014,7 @@ wheels = [
 
 [[package]]
 name = "matrx-connect"
-version = "0.1.10"
+version = "0.1.25"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
@@ -2025,9 +2025,9 @@ dependencies = [
     { name = "pyjwt", extra = ["crypto"] },
     { name = "sse-starlette" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6c/59/a6c7ae651923c9651337990329b9cdd548232547ccd2604a63c5e4f6c334/matrx_connect-0.1.10.tar.gz", hash = "sha256:588a15394762ad7df64e9b947ceb8efd7fcdcc09bddce3a69931a6f96bf57b95", size = 133618, upload-time = "2026-07-18T07:22:52.301Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/bb/5167487bd39b101c5ae29841b319edb8b60d2a439d8b8c7d717f9d331fb8/matrx_connect-0.1.25.tar.gz", hash = "sha256:2eaeee23f6caf7319ba8be19334360e8b7d7e04301f5d3ce10cf0215729eeebb", size = 138113, upload-time = "2026-08-09T19:43:03.819Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/21/7e2f3874501021a0288b4dee0aa4b60105c2b294041546911ab8bd869032/matrx_connect-0.1.10-py3-none-any.whl", hash = "sha256:54f4697fdf2015f6826a544dc72ea319e2cbc071cc874202f4b005f4782bf754", size = 118289, upload-time = "2026-07-18T07:22:50.89Z" },
+    { url = "https://files.pythonhosted.org/packages/54/da/b702ed2073047f84ee166888681a784104071028f7765bf71ffd851658d9/matrx_connect-0.1.25-py3-none-any.whl", hash = "sha256:331a5e248aa1dd07d0db5abf22df09c71286b1bb2485ebb237cb458333efac4b", size = 122262, upload-time = "2026-08-09T19:43:02.647Z" },
 ]
 
 [[package]]
@@ -2221,14 +2221,14 @@ requires-dist = [
     { name = "lxml", specifier = ">=6.0.2" },
     { name = "markdownify", specifier = ">=0.14.1" },
     { name = "matrx-ai", specifier = ">=0.4.18" },
-    { name = "matrx-connect", specifier = ">=0.1.10" },
+    { name = "matrx-connect", specifier = ">=0.1.25" },
     { name = "matrx-files", specifier = ">=0.1.11" },
     { name = "matrx-graph", specifier = ">=0.1.5" },
     { name = "matrx-orm", specifier = ">=3.1.16" },
     { name = "matrx-runtime", specifier = ">=0.0.6" },
     { name = "matrx-scheduler", marker = "extra == 'scheduler'", specifier = ">=0.3.5" },
     { name = "matrx-scraper", extras = ["browser", "pdf", "ocr"], specifier = ">=0.1.100" },
-    { name = "matrx-utils", specifier = ">=2.0.0" },
+    { name = "matrx-utils", specifier = ">=2.0.7" },
     { name = "mss", specifier = ">=9.0.1" },
     { name = "numpy", specifier = ">=2.4.2" },
     { name = "onnxruntime", specifier = ">=1.18.0" },
@@ -2370,16 +2370,16 @@ pdf = [
 
 [[package]]
 name = "matrx-utils"
-version = "2.0.0"
+version = "2.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/68/12/a57453dcb4cd42a2e2b4eaeb58404cfa0adec15e8cb1e4067ef35c8fd503/matrx_utils-2.0.0.tar.gz", hash = "sha256:895bfdc437e70950895bf1ea09c4c65956eba9921f2733ae7d60f8cc7bc70ef3", size = 255542, upload-time = "2026-07-13T07:37:06.062Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/de/01d7e34c433ba3cd61f93fc83a052d67f43e0fb4538956b69997357cda18/matrx_utils-2.0.8.tar.gz", hash = "sha256:d3e3b379168e44400428cd58021df3d9bd0074cfe1cf4db07d982ae46bebe5d8", size = 260274, upload-time = "2026-08-06T22:35:53.239Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/0c/1df326094f824f95e2b174ce7de4747d5e05534f127f505f7013b455c093/matrx_utils-2.0.0-py3-none-any.whl", hash = "sha256:52330759cd9172f651711df0f182fbe8d54701c8a3e1fa6fc64fc45fb5e620d8", size = 280640, upload-time = "2026-07-13T07:37:04.559Z" },
+    { url = "https://files.pythonhosted.org/packages/11/d4/52322c6b8844fc8c8b9134c3f8b676195be59c67769d45a95c4aefd3edc3/matrx_utils-2.0.8-py3-none-any.whl", hash = "sha256:12015b8b265832bb8a7018e9c170aa7acce5f52cda00ebaba2ae7abe88824fd1", size = 284773, upload-time = "2026-08-06T22:35:51.7Z" },
 ]
 
 [[package]]

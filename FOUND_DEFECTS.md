@@ -64,6 +64,29 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Updater / packaged runtime
 
+### MXL-D-076 — First-boot browser download fetches Chromium + Firefox + WebKit (~800 MB) when only chromium-headless-shell is ever launched
+- **Area:** `app/main.py::_ensure_playwright_browsers` (Phase 0b),
+  `scripts/setup.sh:97` (`playwright install chromium`)
+- **Symptom:** Every fresh install kicks off a background
+  `playwright install chromium firefox webkit` into
+  `MATRX_HOME_DIR/playwright-browsers`. Nothing in this repo launches Firefox
+  or WebKit, and the scrape lane launches `chrome-headless-shell`, so the
+  user's first boot spends most of a very large download on browsers that are
+  never used.
+- **Evidence:** Measured 2026-08-09 on a clean temp home —
+  `playwright install chromium` alone lands 520 MB
+  (chromium-1208 330 MB + chromium_headless_shell-1208 187 MB + ffmpeg 2.5 MB);
+  `chromium-headless-shell` alone lands 190 MB (~90 MB download). Firefox and
+  WebKit are additional. `app/main.py:88-185` requests all three.
+- **Status:** open — **Analyzed 2026-08-09 — verified in code and by
+  measurement.** Fixing it means deciding what the first-run wizard should
+  promise (`_check_playwright_browsers` advertises "~280 MB"); the one-click
+  repair added the same day already installs only the headless shell
+  (`app/services/scraper/browser_runtime.py::INSTALL_BROWSER`).
+- **Owner hint:** whoever next touches first-run setup; coordinate with
+  `app/api/setup_routes.py::_install_playwright_browsers` (already
+  parameterised by browser name).
+
 ### MXL-D-067 — Background updater replaces the live PyInstaller sidecar and corrupts all later lazy imports
 - **Area:** `desktop/src/hooks/use-auto-update.ts:159-180`,
   `desktop/src-tauri/src/lib.rs:1470-1512`, packaged `Matrx Engine` one-file

@@ -3048,6 +3048,76 @@ class EngineAPI {
     );
   }
 
+  // ── Browser runtime (Playwright Chromium) ──────────────────────────────
+
+  /** Is browser-rendered scraping available on this machine, and if not, why. */
+  async getBrowserRuntimeStatus(): Promise<BrowserRuntimeStatus> {
+    return this.request<BrowserRuntimeStatus>("/browser-runtime/status");
+  }
+
+  /**
+   * Download the browser and bring the running engine's pool up, streaming
+   * progress via SSE. The engine installs into ITS OWN home
+   * (MATRX_HOME_DIR) — dev and packaged runs never share a browser folder.
+   */
+  async installBrowserRuntime(callbacks: {
+    onProgress: (data: SetupProgressEvent) => void;
+    onComplete: (data: { message: string; installed?: boolean }) => void;
+    onError: (error: string) => void;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    if (!this.baseUrl) throw new Error("Engine not discovered");
+    const headers = await this.authHeaders();
+    const resp = await fetch(`${this.baseUrl}/browser-runtime/install`, {
+      method: "POST",
+      headers,
+      signal: callbacks.signal ?? null,
+    });
+    if (!resp.ok) {
+      callbacks.onError(`Browser install failed: HTTP ${resp.status}`);
+      return;
+    }
+    const reader = resp.body?.getReader();
+    if (!reader) {
+      callbacks.onError("No response body");
+      return;
+    }
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let receivedComplete = false;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      let eventType = "";
+      for (const line of lines) {
+        if (line.startsWith("event: ")) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith("data: ")) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (eventType === "progress") {
+              callbacks.onProgress(data as SetupProgressEvent);
+            } else if (eventType === "complete") {
+              receivedComplete = true;
+              callbacks.onComplete(
+                data as { message: string; installed?: boolean },
+              );
+            }
+          } catch {
+            /* skip malformed */
+          }
+          eventType = "";
+        }
+      }
+    }
+    if (!receivedComplete) {
+      callbacks.onError("Browser install stream ended before it finished");
+    }
+  }
+
   // ── Setup / First-run ──────────────────────────────────────────────────
 
   async getSetupStatus(): Promise<SetupStatus> {
@@ -4078,6 +4148,20 @@ export interface SetupStatus {
   architecture: string;
   gpu_available: boolean;
   gpu_name: string | null;
+}
+
+/** Mirrors app/services/scraper/browser_runtime.py::BrowserRuntimeStatus. */
+export interface BrowserRuntimeStatus {
+  available: boolean;
+  code: string;
+  reason: string | null;
+  browsers_path: string;
+  installing: boolean;
+  install_percent: number | null;
+  install_message: string | null;
+  pool_restart_pending: boolean;
+  download_size_hint: string;
+  action_needed: import("@/features/action-needed/types").ActionNeeded | null;
 }
 
 export interface SetupProgressEvent {

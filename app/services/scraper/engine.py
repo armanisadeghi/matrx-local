@@ -37,6 +37,8 @@ from matrx_scraper.scrape_options import ScrapeOptions, apply_field_flags
 from matrx_scraper.scraper import RequestType
 from matrx_scraper.utils.url import validate_and_correct_url
 
+from app.services.scraper import browser_runtime
+
 logger = logging.getLogger(__name__)
 
 # How many URLs the local lane fetches at once. Deliberately far below the
@@ -252,6 +254,11 @@ class ScraperEngine:
         return self._browser_pool
 
     @property
+    def has_browser(self) -> bool:
+        """Is browser rendering live in THIS engine right now?"""
+        return self._browser_pool is not None
+
+    @property
     def has_search(self) -> bool:
         return bool(self._search_key)
 
@@ -307,6 +314,33 @@ class ScraperEngine:
         self._cache = MemoryCache(max_size=CACHE_MAX_SIZE, ttl_seconds=CACHE_TTL_SECONDS)
         self._domain_config = StaticDomainConfigStore()
 
+        await self.ensure_browser_pool()
+
+        self.ensure_search_client()
+
+        self._started = True
+        logger.info(
+            "[scraper/engine.py] ScraperEngine: ready ✓ (browser=%s, search=%s)",
+            self._browser_pool is not None,
+            self.has_search,
+        )
+
+    async def ensure_browser_pool(self) -> bool:
+        """Start the browser pool if it isn't running. Never raises.
+
+        Split out of ``start()`` so the one-click browser install can bring
+        rendering up in the RUNNING engine — the browser download finishes
+        minutes after Phase 3 has already given up on it, and telling the user
+        to restart the app would not be a fix.
+
+        A missing browser is a STATE, not a failure: every HTTP scrape still
+        works, only browser-rendered fetches are unavailable. The reason is
+        recorded on ``browser_runtime`` so status surfaces can say it out loud
+        instead of leaving it in a log line.
+        """
+        if self._browser_pool is not None:
+            return True
+
         try:
             from matrx_scraper.browser_pool import PlaywrightBrowserPool
 
@@ -317,28 +351,23 @@ class ScraperEngine:
             await pool.start()
             self._browser_pool = pool
             self._driver_pid = _extract_driver_pid(pool)
+            browser_runtime.record_pool_started()
             logger.info(
                 "[scraper/engine.py] ScraperEngine: browser pool started ✓ (driver_pid=%s)",
                 self._driver_pid,
             )
+            return True
         except Exception as pw_exc:
-            # A missing browser is a STATE, not a failure: every HTTP scrape
-            # still works, only browser-rendered fetches are unavailable.
+            browser_runtime.record_launch_failure(pw_exc)
             logger.warning(
                 "[scraper/engine.py] ScraperEngine: Playwright browser pool unavailable — "
-                "browser-rendered scrapes disabled. Error: %s",
+                "browser-rendered scrapes disabled (%s). The desktop surfaces this as a "
+                "one-click install; see app/services/scraper/browser_runtime.py. Error: %s",
+                browser_runtime.status().code,
                 pw_exc,
             )
             self._browser_pool = None
-
-        self.ensure_search_client()
-
-        self._started = True
-        logger.info(
-            "[scraper/engine.py] ScraperEngine: ready ✓ (browser=%s, search=%s)",
-            self._browser_pool is not None,
-            self.has_search,
-        )
+            return False
 
     async def stop(self) -> None:
         if not self._started:
@@ -360,6 +389,7 @@ class ScraperEngine:
                     "(expected on SIGINT)"
                 )
             self._browser_pool = None
+            browser_runtime.record_pool_stopped()
 
         self._started = False
         self._driver_pid = None

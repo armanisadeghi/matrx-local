@@ -18,6 +18,7 @@
 | Token broker — scoped short-lived credentials (client primitive this repo must build + `token-broker-client` repo skill) | `/Users/armanisadeghi/code/common-docs/systems/token-broker/FEATURE.md` — read before touching this feature in ANY repo |
 | Credential Vault — the user's own provider keys; local store FIRST, platform vault second (consumer BUILT here 2026-07-26). Read before touching `ApiKeysRepo`, `key_manager`, or `/settings/api-keys/*` | [app/services/credential_vault/FEATURE.md](app/services/credential_vault/FEATURE.md); cross-repo plan: `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/PLAN.md` |
 | Download pipeline (audit / defects) | [docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md](docs/DOWNLOAD_SYSTEM_AUDIT_AND_PLAN.md) |
+| **Browser-rendered scraping availability** (Playwright Chromium is downloaded, never bundled) — the missing browser is a STATE with a one-click install, surfaced on `/browser-runtime/status`, the `scraper` service record, and the Scraping page | [app/services/scraper/browser_runtime.py](app/services/scraper/browser_runtime.py) — never re-add a bare log-and-continue; the path is always `MATRX_HOME_DIR`-derived (Hard Rule 9) |
 | Sync doctrine (before sync code) | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) |
 | File sync — the cloud-files replica (`@files/`, pointer/full modes, hydration) | [app/services/file_sync/FEATURE.md](app/services/file_sync/FEATURE.md) |
 | matrx-extend ↔ engine | [docs/MATRX_EXTEND_CONNECTION.md](docs/MATRX_EXTEND_CONNECTION.md) |

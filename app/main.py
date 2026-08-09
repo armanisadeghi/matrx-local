@@ -14,6 +14,7 @@ from app.api.catalog_routes import router as catalog_router
 from app.api.routes import router as api_router
 from app.api.tool_routes import router as tool_router
 from app.api.action_needed_routes import router as action_needed_router
+from app.api.browser_runtime_routes import router as browser_runtime_router
 from app.api.sandbox_routes import router as sandbox_router
 from app.api.remote_scraper_routes import router as remote_scraper_router
 from app.api.settings_routes import router as settings_router
@@ -155,7 +156,17 @@ async def _ensure_playwright_browsers() -> None:
 
     env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": browsers_path}
 
+    from app.services.scraper import browser_runtime as _browser_runtime
+
     async def _install() -> None:
+        # Publish this background download as an install-in-progress: the UI
+        # then shows "downloading" instead of "not installed", and the
+        # one-click Install button cannot start a SECOND `playwright install`
+        # racing this one into the same directory.
+        _browser_runtime.install_started()
+        _browser_runtime.install_progress(
+            5, "Downloading the built-in browser (first run)…"
+        )
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -176,6 +187,22 @@ async def _ensure_playwright_browsers() -> None:
             logger.warning(
                 "[app/main.py] Playwright browser install task failed", exc_info=True
             )
+        finally:
+            _browser_runtime.install_finished()
+            # The download typically lands AFTER Phase 3 gave up on the pool.
+            # Bring rendering up now rather than making the user restart.
+            try:
+                from app.services.scraper.engine import get_scraper_engine
+
+                engine = get_scraper_engine()
+                if engine.is_ready and _browser_runtime.browser_binary_present():
+                    await engine.ensure_browser_pool()
+                    _browser_runtime.sync_service_registry()
+                await _browser_runtime.publish_action_needed()
+            except Exception:
+                logger.warning(
+                    "[app/main.py] Post-install browser pool start failed", exc_info=True
+                )
 
     # Run in background so the server starts immediately; keep a reference to
     # prevent the task from being garbage-collected before it finishes.
@@ -856,8 +883,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         await engine.start()
         logger.info("[app/main.py] Phase 3: Scraper engine started ✓")
-        print("[phase:scraper] Scraper engine ready", flush=True)
-        _registry.ready("scraper")
+
+        # A missing Playwright browser does NOT fail the scraper — HTTP scrapes
+        # work fine. But it is not a plain READY either: browser-rendered
+        # scraping is gone and the user has to be told, with the reason and a
+        # one-click fix (app/services/scraper/browser_runtime.py).
+        from app.services.scraper import browser_runtime as _browser_runtime
+
+        _registry.annotate("scraper", search_available=engine.has_search)
+        _browser_status = _browser_runtime.sync_service_registry()
+        print(
+            "[phase:scraper] Scraper engine ready"
+            + ("" if _browser_status.available else " — browser rendering unavailable"),
+            flush=True,
+        )
+        await _browser_runtime.publish_action_needed()
     except Exception as exc:
         logger.error(
             "[app/main.py] Phase 3: Scraper engine FAILED to start — scraping tools will be unavailable",
@@ -1734,6 +1774,7 @@ app.include_router(catalog_router)
 app.include_router(api_router)
 app.include_router(tool_router, prefix="/tools", tags=["tools"])
 app.include_router(action_needed_router)
+app.include_router(browser_runtime_router)
 # Orchestrator-shape sandbox dispatch — invoked by aidream's local-proxy
 # reverse-proxy on behalf of agents that bind to this PC as a compute target.
 # Auth happens per-route via validate_extension_principal (Supabase JWT from

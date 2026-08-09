@@ -425,8 +425,12 @@ async def _sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
-def _build_playwright_cmd() -> list[str]:
-    """Return the command list to run `playwright install chromium`.
+def _build_playwright_cmd(browser: str = "chromium") -> list[str]:
+    """Return the command list to run `playwright install <browser>`.
+
+    ``browser`` is a Playwright browser name — "chromium" for the full build
+    (first-run setup) or "chromium-headless-shell" for the ~90 MB shell the
+    scrape lane actually launches (the one-click repair on the Scraping page).
 
     compute_driver_executable() returns a (node_binary, cli.js) tuple.
     str()-ing it produces a broken path — we unpack it explicitly.
@@ -438,18 +442,19 @@ def _build_playwright_cmd() -> list[str]:
         node_exe, cli_js = compute_driver_executable()
         if not os.path.isfile(node_exe):
             raise FileNotFoundError(f"Playwright node binary not found: {node_exe}")
-        return [node_exe, cli_js, "install", "chromium"]
+        return [node_exe, cli_js, "install", browser]
     except Exception as exc:
         logger.info(
             "[setup_routes] Playwright driver binary unavailable (%s) — "
             "using `python -m playwright install` fallback",
             exc,
         )
-        return [sys.executable, "-m", "playwright", "install", "chromium"]
+        return [sys.executable, "-m", "playwright", "install", browser]
 
 
-async def _install_playwright_browsers(browsers_path: str):
-    """Install Playwright Python package (if missing) then Chromium binary, yielding SSE events."""
+async def _install_playwright_browsers(browsers_path: str, browser: str = "chromium"):
+    """Install Playwright Python package (if missing) then the browser binary,
+    yielding SSE events. ``browser`` picks which Playwright build to fetch."""
     os.makedirs(browsers_path, exist_ok=True)
 
     yield await _sse_event("progress", {
@@ -500,7 +505,7 @@ async def _install_playwright_browsers(browsers_path: str):
         })
 
     try:
-        cmd = _build_playwright_cmd()
+        cmd = _build_playwright_cmd(browser)
     except Exception as e:
         yield await _sse_event("progress", {
             "component": "browser_engine",
@@ -513,7 +518,7 @@ async def _install_playwright_browsers(browsers_path: str):
     yield await _sse_event("progress", {
         "component": "browser_engine",
         "status": "installing",
-        "message": f"Running: {' '.join(cmd[:3])} ... install chromium",
+        "message": f"Running: {' '.join(cmd[:3])} ... install {browser}",
         "percent": 20,
     })
 

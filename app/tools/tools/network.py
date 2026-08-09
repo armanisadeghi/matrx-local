@@ -340,8 +340,130 @@ def _scrape_result_to_output(result: Any) -> str:
     return "\n".join(parts)
 
 
-def _scrape_result_to_metadata(result: Any) -> dict[str, Any]:
-    """Extract metadata from a matrx_scraper ScrapeResult."""
+# ---------------------------------------------------------------------------
+# Scrape metadata payload budget
+# ---------------------------------------------------------------------------
+# Every scrape ALREADY extracts an outline, tables, media, code blocks and page
+# metadata — the cost is paid during the parse whether or not anyone reads it.
+# What is NOT free is shipping it: this metadata crosses the tool envelope into
+# the desktop UI (and into a cloud agent's context), so each list is capped and
+# any truncation is REPORTED rather than silently swallowed. The UI states
+# "showing N of M"; a cap that lies is worse than no cap.
+#
+# Deliberately NOT forwarded, and why:
+#   organized_data                — the whole parse tree; megabytes, and every
+#                                   consumable view of it is already forwarded.
+#   ai_content / ai_research_*    — prose variants of `output`; pure duplication.
+#   markdown_renderable_by_header — the same markdown a second time, re-sliced.
+#                                   The outline + `markdown_renderable` give the
+#                                   UI section navigation without paying twice.
+#   link_records                  — up to ~2000 anchor rows; the 8 URL buckets
+#                                   are what a link list renders.
+#   raw_html / raw_body           — the page source, never a UI surface here.
+MAX_OUTLINE_HEADERS = 400
+MAX_TABLES = 25
+MAX_TABLE_ROWS = 250
+MAX_IMAGES = 150
+MAX_AV_ITEMS = 50
+MAX_CODE_BLOCKS = 50
+MAX_CODE_BLOCK_CHARS = 20_000
+MAX_LINKS_PER_BUCKET = 500
+MAX_MARKDOWN_CHARS = 400_000
+
+
+def _cap(items: Any, limit: int) -> tuple[list[Any], bool]:
+    """Return (at most `limit` items, whether anything was dropped)."""
+    if not isinstance(items, list):
+        return [], False
+    if len(items) <= limit:
+        return items, False
+    return items[:limit], True
+
+
+def _cap_tables(tables: Any) -> tuple[list[Any], bool]:
+    """Cap the table count AND each table's row count.
+
+    A single 5000-row table is as expensive as fifty small ones, so both
+    dimensions are bounded. Row truncation is recorded on the table itself
+    (`rows_total`) so the UI can say which table is partial.
+    """
+    capped, truncated = _cap(tables, MAX_TABLES)
+    out: list[Any] = []
+    for table in capped:
+        if not isinstance(table, dict):
+            continue
+        rows = table.get("rows")
+        if isinstance(rows, list) and len(rows) > MAX_TABLE_ROWS:
+            out.append({**table, "rows": rows[:MAX_TABLE_ROWS], "rows_total": len(rows)})
+            truncated = True
+        else:
+            out.append(
+                {**table, "rows_total": len(rows) if isinstance(rows, list) else 0}
+            )
+    return out, truncated
+
+
+def _cap_code_blocks(blocks: Any) -> tuple[list[Any], bool]:
+    capped, truncated = _cap(blocks, MAX_CODE_BLOCKS)
+    out: list[Any] = []
+    for block in capped:
+        if not isinstance(block, dict):
+            continue
+        content = block.get("content")
+        if isinstance(content, str) and len(content) > MAX_CODE_BLOCK_CHARS:
+            out.append({**block, "content": content[:MAX_CODE_BLOCK_CHARS], "truncated": True})
+            truncated = True
+        else:
+            out.append(block)
+    return out, truncated
+
+
+def _cap_links(links: Any) -> tuple[dict[str, list[str]], dict[str, int], bool]:
+    """Cap each URL bucket, preserving the TRUE per-bucket totals.
+
+    The bucket shape (`{bucket: [url, ...]}`) is frozen — hosts across the
+    platform read it. Totals travel beside it in `link_counts` so a capped
+    bucket never reads as "this page has 500 internal links".
+    """
+    if not isinstance(links, dict):
+        return {}, {}, False
+    buckets: dict[str, list[str]] = {}
+    counts: dict[str, int] = {}
+    truncated = False
+    for bucket, urls in links.items():
+        if not isinstance(urls, list):
+            continue
+        counts[str(bucket)] = len(urls)
+        if len(urls) > MAX_LINKS_PER_BUCKET:
+            truncated = True
+        buckets[str(bucket)] = [str(u) for u in urls[:MAX_LINKS_PER_BUCKET]]
+    return buckets, counts, truncated
+
+
+def _scrape_result_to_metadata(
+    result: Any,
+    *,
+    include_extraction: bool = False,
+    include_links: bool = False,
+    include_overview: bool = False,
+) -> dict[str, Any]:
+    """Extract metadata from a matrx_scraper ScrapeResult.
+
+    Keys are additive and stable: `status`, `url`, `status_code`,
+    `content_type`, `title`, `cms`, `firewall`, `overview`, `links` and `error`
+    have carried the same meaning since the fork was deleted; everything under
+    `include_extraction` was added 2026-08-09 so the desktop can show what the
+    parse already found. A field absent from the result is absent from the
+    payload — a consumer must treat "missing" as "this page had none", which is
+    exactly how a PDF or JSON scrape (no outline, no tables) reports itself.
+
+    Every block is opt-in because this metadata is not UI-only: the local tool
+    bridge hands it to the model alongside the tool output, so an unconditional
+    table set and link graph would land in an agent's context on every scrape.
+    `include_links` / `include_overview` are the tool's long-standing
+    `get_links` / `get_overview` flags — which until now were declared and then
+    ignored here, so both blocks shipped on every call regardless.
+    """
     meta: dict[str, Any] = {
         # The UI reads `status`; the package reports success as a bool. Map it
         # here, in ONE place, rather than teaching every consumer both shapes.
@@ -358,12 +480,90 @@ def _scrape_result_to_metadata(result: Any) -> dict[str, Any]:
         meta["cms"] = result.cms
     if result.firewall:
         meta["firewall"] = result.firewall
-    if result.overview:
-        meta["overview"] = result.overview
-    if result.links:
-        meta["links"] = result.links
     if result.failure_reason:
         meta["error"] = result.failure_reason
+
+    if include_overview and result.overview:
+        meta["overview"] = result.overview
+
+    truncated: dict[str, bool] = {}
+
+    if include_links:
+        links, link_counts, links_truncated = _cap_links(getattr(result, "links", None))
+        if links:
+            meta["links"] = links
+            meta["link_counts"] = link_counts
+            truncated["links"] = links_truncated
+
+    if not include_extraction:
+        if any(truncated.values()):
+            meta["truncated"] = {k: v for k, v in truncated.items() if v}
+        return meta
+
+    # ── Added 2026-08-09: the extraction the UI renders ─────────────────────
+    if getattr(result, "response_url", None):
+        meta["response_url"] = result.response_url
+    for field_name in ("scraped_at", "published_at", "modified_at", "main_image"):
+        value = getattr(result, field_name, None)
+        if value:
+            meta[field_name] = value
+
+    outline, outline_truncated = _cap(
+        getattr(result, "document_outline", None), MAX_OUTLINE_HEADERS
+    )
+    if outline:
+        meta["document_outline"] = outline
+        truncated["document_outline"] = outline_truncated
+
+    tables, tables_truncated = _cap_tables(getattr(result, "tables", None))
+    if tables:
+        meta["tables"] = tables
+        truncated["tables"] = tables_truncated
+
+    images, images_truncated = _cap(getattr(result, "images", None), MAX_IMAGES)
+    if images:
+        meta["images"] = images
+        truncated["images"] = images_truncated
+
+    for field_name in ("videos", "audios"):
+        items, items_truncated = _cap(getattr(result, field_name, None), MAX_AV_ITEMS)
+        if items:
+            meta[field_name] = items
+            truncated[field_name] = items_truncated
+
+    code_blocks, code_truncated = _cap_code_blocks(getattr(result, "code_blocks", None))
+    if code_blocks:
+        meta["code_blocks"] = code_blocks
+        truncated["code_blocks"] = code_truncated
+
+    markdown = getattr(result, "markdown_renderable", None)
+    if isinstance(markdown, str) and markdown.strip():
+        if len(markdown) > MAX_MARKDOWN_CHARS:
+            meta["markdown_renderable"] = markdown[:MAX_MARKDOWN_CHARS]
+            truncated["markdown_renderable"] = True
+        else:
+            meta["markdown_renderable"] = markdown
+            truncated["markdown_renderable"] = False
+
+    # `metadata` is the page's own head metadata (json-ld / opengraph /
+    # meta_tags / canonical_url). It is also nested inside `overview`, but
+    # `overview` is only produced when the caller asks for it, so the UI's
+    # metadata panel must not depend on that flag.
+    page_metadata = getattr(result, "metadata", None)
+    if isinstance(page_metadata, dict) and page_metadata:
+        meta["page_metadata"] = page_metadata
+
+    redirect_chain = getattr(result, "redirect_chain", None)
+    if isinstance(redirect_chain, list) and redirect_chain:
+        meta["redirect_chain"] = redirect_chain
+
+    hashes = getattr(result, "hashes", None)
+    if isinstance(hashes, dict) and hashes:
+        meta["hashes"] = hashes
+
+    if any(truncated.values()):
+        meta["truncated"] = {k: v for k, v in truncated.items() if v}
+
     return meta
 
 
@@ -374,6 +574,7 @@ async def tool_scrape(
     output_mode: str = "rich",
     get_links: bool = False,
     get_overview: bool = False,
+    get_extraction: bool = False,
 ) -> ToolResult:
     """Scrape one or more URLs from THIS machine, on the user's own IP.
 
@@ -383,13 +584,18 @@ async def tool_scrape(
     a proxy — the point of scraping here rather than on the server is the
     user's residential IP.
 
+    `get_extraction=True` returns the structured extraction the parse already
+    produced — heading outline, tables as rows, images/videos/audios, code
+    blocks, renderable markdown, head metadata, redirect chain — in the result
+    metadata. The Scraping page asks for it; a prose consumer should not.
+
     `output_mode="research"` trims the payload to prose only (no links,
     overview or organized data), which is what a research pass consumes.
     """
     call_start = time.monotonic()
     logger.info(
-        "[tool_scrape] START — urls=%s use_cache=%s output_mode=%s",
-        urls, use_cache, output_mode,
+        "[tool_scrape] START — urls=%s use_cache=%s output_mode=%s get_extraction=%s",
+        urls, use_cache, output_mode, get_extraction,
     )
 
     blocked_urls = [u for u in urls if _check_forbidden(u)]
@@ -417,11 +623,14 @@ async def tool_scrape(
     from app.services.scraper.engine import LocalScrapeOptions
 
     research_mode = output_mode == "research"
+    want_links = get_links and not research_mode
+    want_overview = get_overview and not research_mode
+    want_extraction = get_extraction and not research_mode
     options = LocalScrapeOptions(
         fields=ScrapeOptions(
             get_text_data=True,
-            get_links=get_links and not research_mode,
-            get_overview=get_overview and not research_mode,
+            get_links=want_links,
+            get_overview=want_overview,
         ),
         use_cache=use_cache,
     )
@@ -478,7 +687,15 @@ async def tool_scrape(
         return ToolResult(
             output=output,
             type=ToolResultType.SUCCESS if r.success else ToolResultType.ERROR,
-            metadata={**_scrape_result_to_metadata(r), "elapsed_ms": elapsed_ms},
+            metadata={
+                **_scrape_result_to_metadata(
+                    r,
+                    include_extraction=want_extraction,
+                    include_links=want_links,
+                    include_overview=want_overview,
+                ),
+                "elapsed_ms": elapsed_ms,
+            },
         )
 
     output_parts = [f"Scraped {len(results)} URLs in {elapsed_ms}ms\n"]
@@ -490,7 +707,15 @@ async def tool_scrape(
         output_parts.append(_scrape_result_to_output(r))
         output_parts.append("")
 
-    all_meta = [_scrape_result_to_metadata(r) for r in results]
+    all_meta = [
+        _scrape_result_to_metadata(
+            r,
+            include_extraction=want_extraction,
+            include_links=want_links,
+            include_overview=want_overview,
+        )
+        for r in results
+    ]
 
     return ToolResult(
         output="\n".join(output_parts),

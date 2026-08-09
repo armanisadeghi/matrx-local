@@ -8,6 +8,7 @@
 import { emitClientLog } from "@/hooks/use-client-log";
 import { getOwnedEngineUrl, discoverEnginePort } from "@/lib/sidecar";
 import { enginePortList } from "@/lib/engine-ports";
+import type { ScrapeExtraction } from "@/lib/scrape-extraction";
 
 const DISCOVERY_PORTS = enginePortList();
 
@@ -185,6 +186,14 @@ export interface ScrapeResultData {
   response_url: string;
   error: string | null;
   elapsed_ms: number;
+  /**
+   * The structured extraction the parse already produced — outline, tables,
+   * media, links, head metadata. Null when this result cannot carry one: a
+   * `FetchWithBrowser` fetch, the remote scraper, or a history entry restored
+   * from localStorage. Never an empty object: the UI reads null as "show the
+   * text view alone", not "show empty panels".
+   */
+  extraction: ScrapeExtraction | null;
 }
 
 export interface RemoteScrapeResult {

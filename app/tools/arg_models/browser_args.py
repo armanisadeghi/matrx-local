@@ -183,6 +183,18 @@ class ScrapeArgs(BaseModel):
         default=False,
         description="Include a brief AI-generated overview of the page content.",
     )
+    get_extraction: bool = Field(
+        default=False,
+        description=(
+            "Also return the page's STRUCTURED extraction in the result "
+            "metadata: heading outline, tables as rows, images/videos/audios, "
+            "code blocks, renderable markdown, head metadata, redirect chain. "
+            "The parse produces all of this either way; this only controls "
+            "whether it is returned, and it can be large — ask for it when "
+            "something will actually read it (a UI, a table extraction), not "
+            "for prose."
+        ),
+    )
 
 
 class SearchArgs(BaseModel):

@@ -1,4 +1,19 @@
-import { useState, useCallback } from "react";
+/**
+ * Quick Scrape — the scraper in a dialog, from anywhere in the app.
+ *
+ * It runs the SAME scrape as the Scraping page (`useScrapeOne`) and renders
+ * the SAME result surface (`ScrapeResultViewer`), so an outline, tables,
+ * images and page metadata are here too. It only adds what is specific to the
+ * quick flow: copy the text, and save it as a note.
+ *
+ * Until 2026-08-09 this modal held a private copy of the scrape call, its own
+ * result normalisation (which JSON.parsed a text blob and mislabelled failures
+ * as successes) and its own history writer into the same localStorage key with
+ * a different row shape. All three are gone: one scrape path, one history, one
+ * viewer.
+ */
+
+import { useCallback, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -7,36 +22,12 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, FileText, Check, Copy } from "lucide-react";
+import { Check, Copy, FileText, Loader2 } from "lucide-react";
 import { engine } from "@/lib/api";
-import type { ScrapeResultData } from "@/lib/api";
+import { MethodSelector } from "@/components/scraping/MethodSelector";
+import { ScrapeResultViewer } from "@/components/scraping/ScrapeResultViewer";
+import { useScrapeOne, normalizeUrl, type ScrapeMethod } from "@/hooks/use-scrape";
 import { cn } from "@/lib/utils";
-
-type ScrapeMethod = "engine" | "browser";
-
-const HISTORY_KEY = "matrx:scrape-history";
-const MAX_HISTORY = 100;
-
-interface ScrapeHistoryEntry {
-  url: string;
-  success: boolean;
-  title: string;
-  elapsed_ms: number;
-  savedAt: string;
-  content?: string;
-}
-
-function saveToHistory(entry: ScrapeHistoryEntry) {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    const history: ScrapeHistoryEntry[] = raw ? JSON.parse(raw) : [];
-    history.unshift(entry);
-    if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-  } catch {
-    /* best-effort */
-  }
-}
 
 interface QuickScrapeModalProps {
   open: boolean;
@@ -44,111 +35,68 @@ interface QuickScrapeModalProps {
   userId?: string | null;
 }
 
-export function QuickScrapeModal({ open, onOpenChange, userId }: QuickScrapeModalProps) {
+export function QuickScrapeModal({
+  open,
+  onOpenChange,
+  userId,
+}: QuickScrapeModalProps) {
   const [url, setUrl] = useState("");
   const [method, setMethod] = useState<ScrapeMethod>("engine");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<ScrapeResultData | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [savedNote, setSavedNote] = useState(false);
   const [savingNote, setSavingNote] = useState(false);
+  const [noteError, setNoteError] = useState<string | null>(null);
 
-  const handleScrape = useCallback(async () => {
-    const trimmed = url.trim();
-    if (!trimmed) return;
-    setLoading(true);
-    setResult(null);
-    setError(null);
+  const { scrape, loading, result, error, reset } = useScrapeOne();
+
+  const handleScrape = useCallback(() => {
+    const normalized = normalizeUrl(url);
+    if (!normalized) return;
     setCopied(false);
     setSavedNote(false);
-    try {
-      const toolName = method === "browser" ? "FetchWithBrowser" : "Scrape";
-      const args =
-        method === "browser"
-          ? { url: trimmed, extract_text: true }
-          : { urls: [trimmed] };
-      const raw = await engine.invokeTool(toolName, args);
-
-      // invokeTool returns a ToolResult envelope { type, output, metadata } —
-      // the old Array/"content" checks never matched it, so every scrape
-      // (including failures) rendered the raw envelope JSON as a "Success".
-      if (raw.type === "error") {
-        throw new Error(raw.output || "Scrape failed");
-      }
-      let payload: unknown = raw.output;
-      try {
-        payload = JSON.parse(raw.output);
-      } catch {
-        // Plain text/markdown output — use as-is.
-      }
-
-      let parsed: ScrapeResultData;
-      if (Array.isArray(payload) && payload.length > 0) {
-        parsed = payload[0] as ScrapeResultData;
-      } else if (
-        typeof payload === "object" &&
-        payload !== null &&
-        "content" in (payload as Record<string, unknown>)
-      ) {
-        parsed = payload as ScrapeResultData;
-      } else {
-        parsed = {
-          url: trimmed,
-          success: true,
-          status_code: 200,
-          content:
-            typeof payload === "string" ? payload : JSON.stringify(payload, null, 2),
-          title: "",
-          content_type: "text/plain",
-          response_url: trimmed,
-          error: null,
-          elapsed_ms: 0,
-        };
-      }
-      setResult(parsed);
-
-      saveToHistory({
-        url: parsed.response_url || trimmed,
-        success: parsed.success,
-        title: parsed.title || "",
-        elapsed_ms: parsed.elapsed_ms,
-        savedAt: new Date().toISOString(),
-        content: parsed.content?.slice(0, 2000),
-      });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Scrape failed");
-    } finally {
-      setLoading(false);
-    }
-  }, [url, method]);
+    setNoteError(null);
+    void scrape(normalized, method, true);
+  }, [url, method, scrape]);
 
   const handleCopy = useCallback(() => {
     if (!result?.content) return;
-    navigator.clipboard.writeText(result.content).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    navigator.clipboard
+      .writeText(result.content)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => undefined);
   }, [result]);
 
   const handleSaveToNote = useCallback(async () => {
     if (!result?.content) return;
-    setError(null);
+    setNoteError(null);
     if (!engine.engineUrl) {
-      setError("Engine not connected — cannot save the note. Try again in a moment.");
+      setNoteError("Engine not connected — cannot save the note. Try again in a moment.");
       return;
     }
     setSavingNote(true);
     try {
-      const label = result.title || new URL(result.url || url).hostname;
+      let label = result.title;
+      if (!label) {
+        try {
+          label = new URL(result.url || normalizeUrl(url)).hostname;
+        } catch {
+          label = result.url || url;
+        }
+      }
       await engine.createNote(userId ?? "local", {
         label: `Scraped: ${label}`,
-        content: result.content,
+        // The markdown extraction keeps headings, tables and lists intact —
+        // a note made from the flat text blob loses all of that structure.
+        content: result.extraction?.markdown ?? result.content,
         folder_name: "Scraped Pages",
       });
       setSavedNote(true);
       setTimeout(() => setSavedNote(false), 3000);
     } catch (e) {
-      setError(
+      setNoteError(
         `Failed to save note: ${e instanceof Error ? e.message : String(e)}`,
       );
     } finally {
@@ -162,102 +110,82 @@ export function QuickScrapeModal({ open, onOpenChange, userId }: QuickScrapeModa
       onOpenChange={(v) => {
         if (!v) {
           setUrl("");
-          setResult(null);
-          setError(null);
+          reset();
           setCopied(false);
           setSavedNote(false);
+          setNoteError(null);
         }
         onOpenChange(v);
       }}
     >
-      <DialogContent className="flex max-h-[70vh] max-w-2xl flex-col gap-0 p-0">
-        <DialogHeader className="shrink-0 px-6 pt-6 pb-3">
+      <DialogContent className="flex h-[80vh] max-h-[80vh] max-w-4xl flex-col gap-0 p-0">
+        <DialogHeader className="shrink-0 px-6 pb-3 pt-6">
           <DialogTitle>Quick Scrape</DialogTitle>
         </DialogHeader>
-        <div className="flex shrink-0 items-center gap-2 border-b px-6 pb-3">
+
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-6 pb-3">
           <Input
             type="url"
             placeholder="https://example.com"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleScrape()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !loading) handleScrape();
+            }}
             autoFocus
             className="min-w-0 flex-1"
           />
-          <select
-            value={method}
-            onChange={(e) => setMethod(e.target.value as ScrapeMethod)}
-            className="flex h-9 rounded-md border border-input bg-transparent px-2 py-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <option value="engine">Engine</option>
-            <option value="browser">Browser</option>
-          </select>
+          <MethodSelector value={method} onChange={setMethod} />
           <Button onClick={handleScrape} disabled={loading || !url.trim()} size="sm">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Go"}
           </Button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto px-6 py-3">
-          {error && (
-            <p className="text-sm text-destructive">{error}</p>
-          )}
-          {result && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span className={result.success ? "text-emerald-500" : "text-destructive"}>
-                  {result.success ? "Success" : "Failed"}
-                </span>
-                {result.status_code > 0 && (
-                  <span>· {result.status_code}</span>
-                )}
-                {result.elapsed_ms > 0 && (
-                  <span>· {result.elapsed_ms}ms</span>
-                )}
-                {result.title && (
-                  <span className="truncate">· {result.title}</span>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={cn("gap-1.5 text-xs", copied && "text-emerald-500")}
-                  onClick={handleCopy}
-                  disabled={!result.content}
-                >
-                  {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                  {copied ? "Copied!" : "Copy"}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={cn("gap-1.5 text-xs", savedNote && "text-emerald-500")}
-                  onClick={handleSaveToNote}
-                  disabled={savingNote || !result.content}
-                >
-                  {savingNote ? <Loader2 className="h-3 w-3 animate-spin" /> : savedNote ? <Check className="h-3 w-3" /> : <FileText className="h-3 w-3" />}
-                  {savedNote ? "Saved!" : "Save as Note"}
-                </Button>
-              </div>
-
-              {result.content && (
-                <pre className="max-h-[40vh] whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 text-xs text-foreground overflow-auto">
-                  {result.content.slice(0, 8000)}
-                  {result.content.length > 8000 && "\n\n… (truncated)"}
-                </pre>
-              )}
-              {result.error && (
-                <p className="text-xs text-destructive">{result.error}</p>
-              )}
-            </div>
-          )}
-          {!result && !error && !loading && (
-            <p className="text-sm text-muted-foreground">
-              Enter a URL and click Go to scrape.
+        {(error || noteError) && (
+          <div className="shrink-0 px-6 py-2">
+            <p className="text-xs text-destructive" role="alert">
+              {noteError ?? `Scrape failed: ${error}`}
             </p>
-          )}
-        </div>
+          </div>
+        )}
+
+        {result && (
+          <div className="flex shrink-0 items-center gap-2 border-b px-6 py-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn("gap-1.5 text-xs", copied && "text-emerald-500")}
+              onClick={handleCopy}
+              disabled={!result.content}
+            >
+              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              {copied ? "Copied!" : "Copy text"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn("gap-1.5 text-xs", savedNote && "text-emerald-500")}
+              onClick={() => void handleSaveToNote()}
+              disabled={savingNote || !result.content}
+            >
+              {savingNote ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : savedNote ? (
+                <Check className="h-3 w-3" />
+              ) : (
+                <FileText className="h-3 w-3" />
+              )}
+              {savedNote ? "Saved!" : "Save as Note"}
+            </Button>
+          </div>
+        )}
+
+        <ScrapeResultViewer
+          {...(url ? { url: normalizeUrl(url) } : {})}
+          result={result}
+          loading={loading}
+          className="min-h-0 flex-1"
+        />
       </DialogContent>
     </Dialog>
   );

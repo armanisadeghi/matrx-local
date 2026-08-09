@@ -17,9 +17,20 @@ device capture) is described by it. Build one with a builder — never by hand:
 | `descriptorFromJob(job, url)` | completed image-queue jobs |
 | `descriptorFromVideoJob(job, url)` | completed video jobs |
 | `descriptorFromResult(result, opts)` | a fresh one-shot generation |
+| `descriptorFromWebImage(image, opts)` / `descriptorFromWebVideo(video, opts)` | media found on someone else's page (the scraper's image/video lists) |
 
 `capabilitiesOf(descriptor)` decides which actions apply. A menu never shows an
 action that cannot run (no dead clicks), and never hides one that can.
+
+**`source: "web"` — media that isn't ours.** A scraped image reaches the app
+only as a URL the webview loads from the origin server, which may hotlink-block
+or refuse CORS. So every action that must READ the bytes — download, copy
+image, use-as-input — is withheld (it would be a dead click), and the
+descriptor instead carries `sourceUrl` (+ `sourcePageUrl`), which unlocks
+**Open original URL** in the same canonical menu and a copyable row in the info
+dialog. Viewing full size, paging the lightbox and reading metadata all work
+unchanged. Nothing about generated media's capabilities changed — pinned by
+`components/scraping/ScrapeResultViewer.test.tsx`.
 
 **Multi-window:** the media library also ships as a standalone panel window
 (`panel-media-gallery` → `desktop/src/panels/pages/MediaGalleryPanel.tsx`),

@@ -11,6 +11,7 @@
 
 import { useState, useCallback, useRef, useMemo } from "react";
 import { engine, type ScrapeResultData } from "@/lib/api";
+import { parseScrapeExtraction } from "@/lib/scrape-extraction";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -124,6 +125,7 @@ function makeFallbackResult(url: string, error: string): ScrapeResultData {
     response_url: url,
     error,
     elapsed_ms: 0,
+    extraction: null,
   };
 }
 
@@ -170,6 +172,9 @@ async function executeScrape(
       response_url: (meta.url as string) ?? url,
       error: toolResult.type === "error" ? toolResult.output : null,
       elapsed_ms: (meta.elapsed_ms as number) ?? 0,
+      // FetchWithBrowser returns page text, not a parse — there is nothing
+      // structured to show, and empty panels would be a lie.
+      extraction: null,
     };
   }
 
@@ -180,6 +185,12 @@ async function executeScrape(
       toolResult = await engine.invokeTool("Scrape", {
         urls: [url],
         use_cache: useCache,
+        // The parse produces all of this either way; these flags only decide
+        // whether it comes back. A UI is exactly the consumer they exist for —
+        // see `_scrape_result_to_metadata` in app/tools/tools/network.py.
+        get_extraction: true,
+        get_links: true,
+        get_overview: true,
       });
     } catch (err) {
       console.error(`[use-scrape/executeScrape] Scrape tool THREW`, {
@@ -212,6 +223,9 @@ async function executeScrape(
       response_url: (r?.url as string) ?? url,
       error: r?.error ? String(r.error) : toolResult.type === "error" ? toolResult.output : null,
       elapsed_ms: (r?.elapsed_ms as number) ?? (meta.elapsed_ms as number) ?? 0,
+      // Null for a PDF/image/JSON scrape: those carry `raw_text` and no HTML
+      // extraction, so the viewer shows the text view alone.
+      extraction: parseScrapeExtraction(r),
     };
   }
 
@@ -276,6 +290,8 @@ export function useScrapeOne() {
             response_url: r.url,
             error: r.error,
             elapsed_ms: resp.execution_time_ms,
+            // The remote scraper's REST shape carries text only.
+            extraction: null,
           };
 
           if (mapped.success) {
@@ -398,6 +414,8 @@ export function useScrapeMany() {
           response_url: h.url,
           error: h.success ? null : "Restored from history (original error not saved)",
           elapsed_ms: h.elapsed_ms,
+          // History stores a text preview; the extraction is not persisted.
+          extraction: null,
         },
         startedAt: new Date(h.savedAt),
         completedAt: new Date(h.savedAt),
@@ -495,6 +513,7 @@ export function useScrapeMany() {
                 response_url: url,
                 error: d.error ? String(d.error) : null,
                 elapsed_ms: (d.elapsed_ms as number) ?? 0,
+                extraction: null,
               };
 
               if (result.success) {

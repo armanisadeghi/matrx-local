@@ -70,6 +70,42 @@ The ADVERTISED surface is **19 action-enum mega-tools** (`local_file`,
 5. **Platform gating is advertisement, not enforcement.** `platforms=("darwin",)`
    in `_META` describes; the handler itself must ALSO self-gate at runtime with
    a clear "only available on <OS>" error envelope.
+6. **`ToolResult.metadata` is NOT a UI-only channel.** `local_tool_bridge`
+   hands it to the model beside the tool output, so anything a handler puts
+   there is paid for in every agent's context. A bulk payload (a table set, a
+   link graph, a parse tree) must be **opt-in behind a flag** and **capped
+   with the truncation reported**, never returned by default. `Scrape` is the
+   worked example — see below.
+
+## `Scrape` result metadata — the opt-in extraction contract
+
+`_scrape_result_to_metadata` in `tools/network.py`. The parse produces the
+whole rich `ScrapeResult` either way; these flags only decide what travels.
+
+| Flag | Adds |
+|---|---|
+| *(none)* | `status`, `url`, `status_code`, `content_type`, `title`, `cms`, `firewall`, `error` — ~250 bytes |
+| `get_links` | `links` (8 URL buckets, capped per bucket) + `link_counts` (the TRUE totals) |
+| `get_overview` | `overview` |
+| `get_extraction` | `document_outline`, `tables` (rows + `rows_total`), `images`, `videos`, `audios`, `code_blocks`, `markdown_renderable`, `page_metadata`, `redirect_chain`, `hashes`, `main_image`, `response_url`, `scraped_at`/`published_at`/`modified_at` |
+
+`output_mode="research"` forces all three off. Deliberately never forwarded:
+`organized_data` (the whole parse tree), `ai_content`/`ai_research_*`
+(duplicates of `output`), `markdown_renderable_by_header` (the same markdown
+re-sliced), `link_records` (~2000 anchor rows), `raw_html`/`raw_body`.
+
+Two invariants, both pinned by `tests/unit/test_scrape_metadata_payload.py`:
+
+- **A cap never lies.** Anything dropped is reported — `truncated: {section:
+  true}`, `link_counts` (real totals beside a capped bucket), `rows_total` on
+  a row-capped table. A consumer must be able to say "500 of 12,431".
+- **Absent means "this page had none".** A PDF/image/JSON scrape carries its
+  text in `raw_text` and has no outline, tables or links; those keys are
+  omitted rather than sent empty, so a UI can tell "nothing here" from
+  "nothing extracted" and skip the panels entirely.
+
+Consumer: `desktop/src/lib/scrape-extraction.ts` (the ONE place this payload
+becomes typed data) → `desktop/src/components/scraping/`.
 
 ## Adding a tool
 

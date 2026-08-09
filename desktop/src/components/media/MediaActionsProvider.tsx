@@ -43,6 +43,7 @@ import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { useMediaLibraryApp } from "@/contexts/MediaLibraryContext";
 import { useMediaVaultApp } from "@/contexts/MediaVaultContext";
 import { onMediaItemsRemoved, onVaultLocked } from "@/lib/media-events";
+import { openExternal } from "@/lib/open-external";
 import type { PickedImage } from "@/hooks/use-media-gen";
 import { readPickedImage } from "@/components/media-gen/core/pickedImage";
 import { MediaLightbox } from "@/components/media-gen/MediaLightbox";
@@ -110,6 +111,8 @@ export interface MediaActions {
   /** Put this item's seed into the generate form. */
   reuseSeed: (item: MediaDescriptor) => void;
   showInFolder: (item: MediaDescriptor) => Promise<void>;
+  /** Open the media's own web address in the user's browser (`sourceUrl`). */
+  openSource: (item: MediaDescriptor) => Promise<void>;
   /** Show a transient success/failure line (used by the menus). */
   notify: (message: string, kind?: "ok" | "error") => void;
 }
@@ -412,6 +415,24 @@ export function MediaActionsProvider({
       } catch (e) {
         notify(
           `Download failed: ${e instanceof Error ? e.message : String(e)}`,
+          "error",
+        );
+      }
+    },
+    [notify],
+  );
+
+  const openSource = useCallback(
+    async (item: MediaDescriptor) => {
+      if (!item.sourceUrl) {
+        notify("This media has no web address", "error");
+        return;
+      }
+      try {
+        await openExternal(item.sourceUrl);
+      } catch (e) {
+        notify(
+          `Could not open the URL: ${e instanceof Error ? e.message : String(e)}`,
           "error",
         );
       }
@@ -912,6 +933,7 @@ export function MediaActionsProvider({
       remix,
       reuseSeed,
       showInFolder,
+      openSource,
       notify,
     }),
     [
@@ -931,6 +953,7 @@ export function MediaActionsProvider({
       remix,
       reuseSeed,
       showInFolder,
+      openSource,
       notify,
     ],
   );

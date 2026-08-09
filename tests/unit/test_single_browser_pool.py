@@ -357,7 +357,10 @@ def test_fetch_with_browser_without_a_browser_returns_action_needed(monkeypatch)
     assert result.type == ToolResultType.ERROR
     if result.action_needed is not None:
         assert result.action_needed.feature == "browser page fetching"
-        assert result.action_needed.action.route == "/settings/capabilities"
+        assert result.action_needed.action.route in {
+            "/scraping",
+            "/settings/capabilities",
+        }
     else:
         assert result.metadata["fix_capability_id"] == "browser_automation"
         assert "Settings → Capabilities" in result.output

@@ -84,7 +84,18 @@ dependencies = [
     # auth-middleware import would have killed the AI streaming surface. Fixed
     # upstream in matrx-connect 0.1.25; do not lower these floors.
     "matrx-utils>=2.0.7",
-    "matrx-orm>=3.1.16",
+    # 3.1.49 is LOAD-BEARING, not cosmetic — same defect class as MXL-D-075.
+    # matrx-scraper's `db/__init__.py` imports PLATFORM_DB_ENV_PREFIX /
+    # platform_connection_url / register_platform_db (the ONE-database
+    # resolver), which matrx-orm first exports in 3.1.49. With the old
+    # `>=3.1.16` floor, `uv sync` resolved matrx-scraper 0.1.107 + matrx-orm
+    # 3.1.16 — a pair that raises on the FIRST line of our local scrape lane:
+    #   from matrx_scraper.cache import MemoryCache
+    #   ImportError: cannot import name 'PLATFORM_DB_ENV_PREFIX' from 'matrx_orm'
+    # (matrx-scraper also stopped reaching its optional [db] extra from that
+    # core import, but the floor is what makes the pair resolvable at all.)
+    # Do not lower this.
+    "matrx-orm>=3.1.49",
     "matrx-ai>=0.4.18",
     "matrx-connect>=0.1.25",
     "matrx-graph>=0.1.5",

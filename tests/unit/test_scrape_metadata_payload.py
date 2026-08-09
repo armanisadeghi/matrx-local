@@ -3,8 +3,8 @@
 The desktop Scraping page renders this payload directly
 (`desktop/src/lib/scrape-extraction.ts`), so three things must stay true:
 
-  * the long-standing keys keep their names and meanings,
-  * every extraction block is opt-in — the same metadata is handed to the model
+  * the canonical ScrapeResult fields keep their names and meanings,
+  * rich extraction blocks are opt-in — the same metadata is handed to the model
     by `local_tool_bridge`, so an unconditional table set would land in an
     agent's context on every scrape,
   * a cap NEVER lies: what is dropped is reported in `truncated` /
@@ -59,10 +59,10 @@ def make_result(**overrides):
     return SimpleNamespace(**base)
 
 
-def test_defaults_carry_only_the_transport_facts():
+def test_defaults_carry_the_canonical_result_shape():
     meta = _scrape_result_to_metadata(make_result())
 
-    assert meta["status"] == "success"
+    assert meta["success"] is True
     assert meta["url"] == "https://example.com/a"
     assert meta["status_code"] == 200
     assert meta["content_type"] == "html"
@@ -70,10 +70,10 @@ def test_defaults_carry_only_the_transport_facts():
     assert meta["cms"] == "wordpress"
     assert meta["firewall"] == "none"
 
-    # Every extraction block is opt-in — this payload also reaches the model.
+    # Canonical links and overview are always present; richer extraction is opt-in.
+    assert meta["links"] == {"internal": ["https://example.com/b"], "external": []}
+    assert meta["overview"] == {"website": "example.com"}
     for key in (
-        "overview",
-        "links",
         "document_outline",
         "tables",
         "images",
@@ -94,7 +94,7 @@ def test_flags_open_exactly_their_own_block():
 
     overview_only = _scrape_result_to_metadata(make_result(), include_overview=True)
     assert overview_only["overview"] == {"website": "example.com"}
-    assert "links" not in overview_only
+    assert overview_only["links"] == {"internal": ["https://example.com/b"], "external": []}
 
     extraction = _scrape_result_to_metadata(make_result(), include_extraction=True)
     assert extraction["document_outline"][0]["content"] == "Top"
@@ -134,7 +134,7 @@ def test_a_non_html_result_reports_nothing_rather_than_empty_panels():
         pdf, include_extraction=True, include_links=True, include_overview=True
     )
 
-    assert meta["status"] == "success"
+    assert meta["success"] is True
     assert meta["content_type"] == "pdf"
     for key in (
         "document_outline",
@@ -143,21 +143,21 @@ def test_a_non_html_result_reports_nothing_rather_than_empty_panels():
         "videos",
         "audios",
         "code_blocks",
-        "links",
         "markdown_renderable",
         "page_metadata",
         "hashes",
-        "overview",
     ):
         assert key not in meta, f"{key} must be absent, not empty"
+    assert meta["links"] is None
+    assert meta["overview"] is None
 
 
 def test_failure_reports_the_reason_and_the_firewall():
     meta = _scrape_result_to_metadata(
         make_result(success=False, failure_reason="cloudflare_challenge", firewall="cloudflare")
     )
-    assert meta["status"] == "error"
-    assert meta["error"] == "cloudflare_challenge"
+    assert meta["success"] is False
+    assert meta["failure_reason"] == "cloudflare_challenge"
     assert meta["firewall"] == "cloudflare"
 
 
@@ -197,4 +197,4 @@ def test_missing_attributes_are_tolerated(flag):
         failure_reason=None,
     )
     meta = _scrape_result_to_metadata(bare, **{flag: True})
-    assert meta["status"] == "success"
+    assert meta["success"] is True

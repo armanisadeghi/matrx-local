@@ -161,7 +161,7 @@ def test_local_scrape_succeeds(example_com_scrape: dict[str, Any]) -> None:
     assert data["type"] == "success", f"Scrape reported failure: {data}"
 
     meta = data.get("metadata", {})
-    assert meta.get("status") == "success", f"metadata.status not success: {meta}"
+    assert meta.get("success") is True, f"metadata.success not true: {meta}"
     assert meta.get("status_code") == 200, f"Expected HTTP 200 from the target: {meta}"
     assert meta.get("content_type") == "html", f"Unexpected content_type: {meta}"
     assert meta.get("title"), f"No page title extracted: {meta}"
@@ -239,8 +239,8 @@ def test_local_scrape_unresolvable_domain_is_a_result_not_a_500(
 
     assert data["type"] == "error", f"Expected an error result, got: {data}"
     meta = data.get("metadata", {})
-    assert meta.get("status") == "error", f"metadata.status not error: {meta}"
-    assert meta.get("error"), f"No failure reason on a failed scrape: {meta}"
+    assert meta.get("success") is False, f"metadata.success not false: {meta}"
+    assert meta.get("failure_reason"), f"No failure reason on a failed scrape: {meta}"
     assert "SCRAPE ERROR" in (data.get("output") or ""), (
         f"Failure not rendered into the output body: {data.get('output')!r}"
     )

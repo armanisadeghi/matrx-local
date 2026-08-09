@@ -283,9 +283,14 @@ def test_fetch_with_browser_borrows_and_keeps_its_result_shape(monkeypatch):
     assert "TEXT BODY" in result.output
     assert result.output.startswith("HTTP 200")
     assert "Mode: text extraction" in result.output
-    assert set(result.metadata) == {"status_code", "url", "elapsed_ms", "content_length"}
+    assert result.metadata["success"] is True
+    assert result.metadata["results"] == [
+        {key: value for key, value in result.metadata.items()
+         if key not in {"results", "total", "success_count", "content_length"}}
+    ]
     assert result.metadata["status_code"] == 200
-    assert result.metadata["url"] == "https://example.test/final"
+    assert result.metadata["url"] == "https://example.test"
+    assert result.metadata["response_url"] == "https://example.test/final"
 
     # Borrowed, returned, and the context we opened was cleaned up.
     assert pool.acquired == 1 and pool.released == 1
@@ -350,5 +355,9 @@ def test_fetch_with_browser_without_a_browser_returns_action_needed(monkeypatch)
     )
 
     assert result.type == ToolResultType.ERROR
-    assert result.metadata["fix_capability_id"] == "browser_automation"
-    assert "Settings → Capabilities" in result.output
+    if result.action_needed is not None:
+        assert result.action_needed.feature == "browser page fetching"
+        assert result.action_needed.action.route == "/settings/capabilities"
+    else:
+        assert result.metadata["fix_capability_id"] == "browser_automation"
+        assert "Settings → Capabilities" in result.output

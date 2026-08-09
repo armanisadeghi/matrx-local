@@ -181,7 +181,11 @@ async def tool_fetch_with_browser(
     # developer error telling them to run a shell command they will never run.
     from app.services.scraper import browser_runtime
 
-    if (needed := browser_runtime.browser_action_needed("browser page fetching")) is not None:
+    engine = _get_engine()
+    if (
+        not engine.has_browser
+        and (needed := browser_runtime.browser_action_needed("browser page fetching")) is not None
+    ):
         return ToolResult(
             type=ToolResultType.ERROR,
             output=f"{needed.title}. {needed.message}",
@@ -203,7 +207,7 @@ async def tool_fetch_with_browser(
         # Wait at least as long as this fetch is itself allowed to take rather
         # than failing a healthy request on a fixed queue timeout.
         borrow_timeout = max(30.0, wait_timeout / 1000 + 15.0)
-        async with _get_engine().borrow_browser(
+        async with engine.borrow_browser(
             headless=_headless, timeout=borrow_timeout
         ) as browser:
             # The borrowed browser is shared and long-lived: close the context

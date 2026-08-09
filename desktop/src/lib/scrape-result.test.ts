@@ -25,8 +25,10 @@ const ENGINE_PAYLOAD = {
 };
 
 describe("toScrapeResult", () => {
-  it("reads the engine payload unchanged", () => {
-    expect(toScrapeResult(ENGINE_PAYLOAD)).toEqual(ENGINE_PAYLOAD);
+  it("preserves the engine payload and derives its rich extraction view", () => {
+    const result = toScrapeResult(ENGINE_PAYLOAD);
+    expect(result).toMatchObject(ENGINE_PAYLOAD);
+    expect(result.extraction?.responseUrl).toBe("https://example.com/");
   });
 
   it("gives local and remote the same result for the same page", () => {
@@ -72,6 +74,7 @@ describe("toScrapeResult", () => {
       links: null,
       overview: null,
       elapsed_ms: 0,
+      extraction: null,
     });
   });
 

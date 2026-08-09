@@ -29,7 +29,7 @@ from app.services.ai import key_manager
 from app.services.scraper import engine as engine_mod
 from app.services.scraper import retry_queue, scrape_store
 from app.services.scraper.engine import (
-    MAX_SCRAPE_CONCURRENCY,
+    DEFAULT_SCRAPE_CONCURRENCY,
     RESEARCH_EFFORT_LIMITS,
     LocalScrapeOptions,
     ResearchDoneEvent,
@@ -254,14 +254,14 @@ def test_use_cache_toggles_the_session_cache(monkeypatch: pytest.MonkeyPatch) ->
 # ---------------------------------------------------------------------------
 
 
-def test_local_lane_concurrency_stays_far_below_the_server() -> None:
-    """The value is pinned literally on purpose.
+def test_local_lane_default_concurrency_stays_far_below_the_server() -> None:
+    """The default is pinned literally on purpose.
 
-    Asserting only `peak <= MAX_SCRAPE_CONCURRENCY` would let someone raise the
+    Asserting only against the configured concurrency would let someone raise the
     constant to the server's 20 and keep a green suite; the doctrine is the
-    NUMBER — a desktop app shares the user's uplink with the user.
+    conservative DEFAULT — a desktop app shares the user's uplink with the user.
     """
-    assert MAX_SCRAPE_CONCURRENCY == 5
+    assert DEFAULT_SCRAPE_CONCURRENCY == 5
 
 
 def test_bulk_scrape_is_bounded_for_a_home_connection(
@@ -300,10 +300,10 @@ def test_scrape_stream_yields_by_completion_not_input_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The whole point of the stream is that a fast page shows up first."""
-    # Only MAX_SCRAPE_CONCURRENCY start at once, so keep the batch inside that
+    # Only the configured concurrency starts at once, so keep the batch inside
     # window and make the LAST url the fastest.
     urls = [
-        f"https://example.com/{i}" for i in range(min(MAX_SCRAPE_CONCURRENCY, 5))
+        f"https://example.com/{i}" for i in range(DEFAULT_SCRAPE_CONCURRENCY)
     ]
     delays = {url: 0.10 - (i * 0.02) for i, url in enumerate(urls)}
 

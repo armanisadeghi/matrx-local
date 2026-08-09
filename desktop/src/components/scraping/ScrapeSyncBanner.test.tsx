@@ -1,5 +1,16 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/supabase", () => ({
+  default: { auth: { getSession: vi.fn() } },
+}));
+vi.mock("@/lib/api", () => ({
+  engine: {
+    getScrapeSyncStatus: vi.fn(),
+    triggerScrapeSync: vi.fn(),
+    setAuthToken: vi.fn(),
+  },
+}));
 
 import type { ScrapeSyncStatus } from "@/lib/api";
 import { ScrapeSyncStrip } from "./ScrapeSyncBanner";

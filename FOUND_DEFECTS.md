@@ -357,6 +357,51 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 - **Status:** open. Unverified — from docs/logs only.
 - **Owner hint:** downloads
 
+## Scraper
+
+### MXL-D-076 — The scraper server rejects `SCRAPER_API_KEY` (401), so every unauthenticated remote-scraper path is dead
+- **Area:** `app/services/scraper/remote_client.py` (`_headers` API-key fallback),
+  `app/services/scraper/retry_queue.py` (the poller relies on that fallback)
+- **Symptom:** `scraper.app.matrxserver.com` returns **401 Unauthorized** for the
+  configured `SCRAPER_API_KEY` on both `/api/scraper/batch` and
+  `/api/scraper/quick-scrape`. The client's `is_configured` comment says the key
+  exists so "the retry poller runs for all users" — it can't; without a signed-in
+  user's Supabase JWT every remote call 401s.
+- **Evidence:** 2026-08-09, this repo's `.env` key, direct call via
+  `RemoteScraperClient.scrape(["https://example.com"])` → `HTTPStatusError 401` for
+  `/api/scraper/batch`; same for `/api/scraper/quick-scrape`. Reproduced through the
+  running engine: `POST /remote-scraper/scrape` returns
+  `502 Remote scraper error: … 401 Unauthorized`.
+- **Unknown:** whether the key is stale, revoked, or the server dropped API-key auth
+  entirely. Answering that is a scraper-server question, not a desktop one.
+- **Impact:** remote scraping works only while a user is signed in (the UI forwards
+  their JWT); the background retry-queue poller — which has no user token — cannot
+  claim or submit anything.
+- **Status:** open. **Analyzed 2026-08-09 — verified live against the server**, not
+  inferred.
+- **Owner hint:** whoever owns the scraper server's auth; then decide whether the
+  poller should require a signed-in user (a STATE with a prompt) instead of a key.
+
+### MXL-D-077 — `/remote-scraper/{search-and-scrape,research}/stream` forward NDJSON under `text/event-stream`; the client parses nothing
+- **Area:** `app/api/remote_scraper_routes.py` (`remote_search_and_scrape_stream`,
+  `remote_research_stream`), consumed by `desktop/src/lib/api.ts::streamSSE`
+- **Symptom:** the scraper server streams **NDJSON** (`matrx_connect.streaming`
+  `Event.to_jsonl()` → `{"event":"data","data":{…}}` per line), but these routes
+  declare `media_type="text/event-stream"` and forward the lines raw. `streamSSE`
+  only reads `event:` / `data:` prefixed lines, so every line is silently dropped —
+  the stream "succeeds" and delivers zero results.
+- **Evidence:** `matrx_connect.streaming.create_streaming_response` yields
+  `…to_jsonl()`; `desktop/src/lib/api.ts:1447-1458` parses SSE prefixes only.
+- **Fixed for scrape only (2026-08-09):** `/remote-scraper/scrape/stream` now
+  translates NDJSON → real SSE frames in `_scrape_sse` (`event: page_result` carrying
+  the client contract, plus `error` / `done`), pinned by
+  `tests/unit/test_remote_scrape_proxy.py`. The two remaining stream routes were out
+  of that change's scope and still forward raw.
+- **Fix:** give those routes the same translation — their payloads are search results,
+  not scrape pages, so they need their own event mapping, not a copy of `_scrape_sse`.
+- **Status:** open. **Analyzed 2026-08-09 — verified in code on both sides.**
+- **Owner hint:** whoever next touches remote search / research in the UI.
+
 ## UI / UX correctness
 
 ### MXL-D-017 — `transcription_auto_init` setting has no effect

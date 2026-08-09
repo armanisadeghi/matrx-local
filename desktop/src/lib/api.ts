@@ -175,34 +175,17 @@ export interface BrowserStatus {
   browser_running: boolean;
 }
 
-export interface ScrapeResultData {
-  url: string;
-  success: boolean;
-  status_code: number;
-  content: string;
-  title: string;
-  content_type: string;
-  response_url: string;
-  error: string | null;
+// The scrape result shape lives in ONE module — local, browser and remote
+// scrapes all speak it. Re-exported here so existing `@/lib/api` importers
+// keep working; new code should import from `@/lib/scrape-result`.
+export type { ScrapeResultData, ScrapeLinks } from "./scrape-result";
+
+/** Response of `/remote-scraper/scrape` — normalised by the engine proxy. */
+export interface ScrapeBatchResponse {
+  results: unknown[];
+  total: number;
+  success_count: number;
   elapsed_ms: number;
-}
-
-export interface RemoteScrapeResult {
-  status: "success" | "error";
-  url: string;
-  error: string | null;
-  status_code: number | null;
-  content_type: string | null;
-  text_data: string | null;
-  from_cache: boolean;
-  overview: Record<string, unknown> | null;
-  scraped_at: string | null;
-}
-
-export interface RemoteScrapeResponse {
-  status: string;
-  execution_time_ms: number;
-  results: RemoteScrapeResult[];
 }
 
 export interface EngineSettings {
@@ -1347,7 +1330,7 @@ class EngineAPI {
   async scrapeRemotely(
     urls: string[],
     options?: Record<string, unknown>,
-  ): Promise<RemoteScrapeResponse> {
+  ): Promise<ScrapeBatchResponse> {
     if (!this.baseUrl) throw new Error("Engine not discovered");
     console.info(`[api/scrapeRemotely] → ${urls.length} URL(s)`, {
       urls,

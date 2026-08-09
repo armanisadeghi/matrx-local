@@ -19,6 +19,7 @@ from typing import Any
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
 from app.services.action_needed import ActionNeeded, ActionNeededAction, ActionNeededKind
+from app.services.scraper.result_contract import from_page_dict, from_scrape_result
 
 logger = logging.getLogger(__name__)
 
@@ -217,12 +218,27 @@ async def tool_fetch_with_browser(
         content,
     ]
 
+    # Same client contract the Scrape tool emits — a browser fetch is just
+    # another lane, and a client must not need a second reader for it.
+    page = from_page_dict(
+        {
+            "url": url,
+            "response_url": final_url,
+            "success": True,
+            "status_code": status,
+            "content_type": "text/html",
+            "text_data": content,
+        },
+        elapsed_ms=elapsed_ms,
+    )
+
     return ToolResult(
         output="\n".join(output_parts),
         metadata={
-            "status_code": status,
-            "url": final_url,
-            "elapsed_ms": elapsed_ms,
+            **page,
+            "results": [page],
+            "total": 1,
+            "success_count": 1,
             "content_length": len(content),
         },
     )
@@ -340,31 +356,16 @@ def _scrape_result_to_output(result: Any) -> str:
     return "\n".join(parts)
 
 
-def _scrape_result_to_metadata(result: Any) -> dict[str, Any]:
-    """Extract metadata from a matrx_scraper ScrapeResult."""
-    meta: dict[str, Any] = {
-        # The UI reads `status`; the package reports success as a bool. Map it
-        # here, in ONE place, rather than teaching every consumer both shapes.
-        "status": "success" if result.success else "error",
-        "url": result.url,
-    }
-    if result.status_code is not None:
-        meta["status_code"] = result.status_code
-    if result.content_type:
-        meta["content_type"] = result.content_type
-    if result.title:
-        meta["title"] = result.title
-    if result.cms:
-        meta["cms"] = result.cms
-    if result.firewall:
-        meta["firewall"] = result.firewall
-    if result.overview:
-        meta["overview"] = result.overview
-    if result.links:
-        meta["links"] = result.links
-    if result.failure_reason:
-        meta["error"] = result.failure_reason
-    return meta
+def _scrape_result_to_metadata(result: Any, elapsed_ms: int | None = None) -> dict[str, Any]:
+    """Client-shaped metadata for one matrx_scraper ScrapeResult.
+
+    Thin delegate: the shape lives in `app/services/scraper/result_contract`,
+    which the remote proxy uses too, so local and remote results are the same
+    payload. The old `status`/`error` shim that translated the package's
+    `success`/`failure_reason` back down for a legacy UI is gone — the client
+    now speaks the package contract.
+    """
+    return from_scrape_result(result, elapsed_ms=elapsed_ms)
 
 
 async def tool_scrape(
@@ -472,25 +473,32 @@ async def tool_scrape(
     await _persist_scrape_results(results, user_id)
     logger.info("[tool_scrape] DONE — total elapsed %dms", int((time.monotonic() - call_start) * 1000))
 
+    all_meta = [_scrape_result_to_metadata(r, elapsed_ms=elapsed_ms) for r in results]
+    success_count = sum(1 for r in results if r.success)
+
+    # `results` is present for EVERY call, single or bulk — a client that had
+    # to branch on url count to find its result is a client that gets it wrong
+    # for one of the two shapes.
     if len(results) == 1:
         r = results[0]
-        output = _scrape_result_to_output(r)
         return ToolResult(
-            output=output,
+            output=_scrape_result_to_output(r),
             type=ToolResultType.SUCCESS if r.success else ToolResultType.ERROR,
-            metadata={**_scrape_result_to_metadata(r), "elapsed_ms": elapsed_ms},
+            metadata={
+                **all_meta[0],
+                "results": all_meta,
+                "total": 1,
+                "success_count": success_count,
+            },
         )
 
     output_parts = [f"Scraped {len(results)} URLs in {elapsed_ms}ms\n"]
-    success_count = sum(1 for r in results if r.success)
     output_parts.append(f"Success: {success_count}/{len(results)}\n")
 
     for i, r in enumerate(results, 1):
         output_parts.append(f"--- Result {i}/{len(results)} ---")
         output_parts.append(_scrape_result_to_output(r))
         output_parts.append("")
-
-    all_meta = [_scrape_result_to_metadata(r) for r in results]
 
     return ToolResult(
         output="\n".join(output_parts),

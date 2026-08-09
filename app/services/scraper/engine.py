@@ -39,12 +39,68 @@ from matrx_scraper.utils.url import validate_and_correct_url
 
 logger = logging.getLogger(__name__)
 
-# How many URLs the local lane fetches at once. Deliberately far below the
-# server's 20: this runs on the user's own laptop and their own home
+# How many URLs the local lane fetches at once. The DEFAULT is deliberately far
+# below the server's 20: this runs on the user's own laptop and their own home
 # connection, both of which they are also USING. A desktop app that saturates
 # someone's uplink to finish a bulk scrape 3 seconds sooner is a bad neighbour.
-MAX_SCRAPE_CONCURRENCY = 5
-MAX_RESEARCH_CONCURRENCY = 5
+#
+# But 5 is only a guess about someone else's hardware and line, so both values
+# are user preferences (settings keys `scrape_concurrency` /
+# `research_concurrency`, in the same synced blob as `scrape_delay`) and are
+# read at CALL time — a change applies to the next scrape with no engine
+# restart, exactly like `ensure_search_client()` picks up a newly saved Brave
+# key. The bounds exist so nobody can type 500 and melt their machine or get
+# themselves blocked by every site they touch.
+DEFAULT_SCRAPE_CONCURRENCY = 5
+DEFAULT_RESEARCH_CONCURRENCY = 5
+MIN_CONCURRENCY = 1
+MAX_CONCURRENCY = 20
+
+SCRAPE_CONCURRENCY_SETTING = "scrape_concurrency"
+RESEARCH_CONCURRENCY_SETTING = "research_concurrency"
+
+
+def clamp_concurrency(raw: Any, default: int) -> int:
+    """Coerce a stored/incoming concurrency value into the allowed range.
+
+    A garbage value (missing, non-numeric, out of range) is never fatal here —
+    the request-time path falls back to the default rather than refusing to
+    scrape. Rejection with a message is the job of the settings API
+    (`PUT /settings`), which is where the user actually types a number.
+    """
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "[scraper/engine.py] Ignoring non-numeric concurrency setting %r — using %d",
+            raw,
+            default,
+        )
+        return default
+    if value < MIN_CONCURRENCY or value > MAX_CONCURRENCY:
+        clamped = max(MIN_CONCURRENCY, min(MAX_CONCURRENCY, value))
+        logger.warning(
+            "[scraper/engine.py] Concurrency setting %d out of range %d-%d — using %d",
+            value,
+            MIN_CONCURRENCY,
+            MAX_CONCURRENCY,
+            clamped,
+        )
+        return clamped
+    return value
+
+
+def _concurrency_setting(key: str, default: int) -> int:
+    """Read the user's current value for ``key`` from the synced settings blob."""
+    try:
+        from app.services.cloud_sync.settings_sync import get_settings_sync
+
+        return clamp_concurrency(get_settings_sync().get(key, default), default)
+    except Exception:
+        logger.exception(
+            "[scraper/engine.py] Could not read %s — using default %d", key, default
+        )
+        return default
 
 # Session-scoped dedupe only. Durable storage is scrape_store.py (SQLite) plus
 # the server; this exists so re-scraping the same URL inside one sitting is free.
@@ -217,6 +273,26 @@ class ScraperEngine:
         return bool(self._search_key)
 
     # ------------------------------------------------------------------
+    # Concurrency — the USER's preference, read fresh on every call
+    # ------------------------------------------------------------------
+
+    @property
+    def scrape_concurrency(self) -> int:
+        """How many URLs a bulk scrape fetches at once, right now.
+
+        Never cached on the instance: a value saved in Settings must take
+        effect on the very next scrape without restarting the engine.
+        """
+        return _concurrency_setting(SCRAPE_CONCURRENCY_SETTING, DEFAULT_SCRAPE_CONCURRENCY)
+
+    @property
+    def research_concurrency(self) -> int:
+        """How many pages a research run fetches at once, right now."""
+        return _concurrency_setting(
+            RESEARCH_CONCURRENCY_SETTING, DEFAULT_RESEARCH_CONCURRENCY
+        )
+
+    # ------------------------------------------------------------------
     # Brave key — the USER's key, from the in-app store, never an env var
     # ------------------------------------------------------------------
 
@@ -358,7 +434,7 @@ class ScraperEngine:
     ) -> list[ScrapeResult]:
         """Scrape many URLs concurrently, bounded for a home connection."""
         opts = options or LocalScrapeOptions()
-        semaphore = asyncio.Semaphore(MAX_SCRAPE_CONCURRENCY)
+        semaphore = asyncio.Semaphore(self.scrape_concurrency)
 
         async def _bounded(url: str) -> ScrapeResult:
             async with semaphore:
@@ -371,7 +447,7 @@ class ScraperEngine:
     ) -> AsyncGenerator[ScrapeResult, None]:
         """Yield each result the moment it finishes, not in input order."""
         opts = options or LocalScrapeOptions()
-        semaphore = asyncio.Semaphore(MAX_SCRAPE_CONCURRENCY)
+        semaphore = asyncio.Semaphore(self.scrape_concurrency)
 
         async def _bounded(url: str) -> ScrapeResult:
             async with semaphore:
@@ -434,7 +510,7 @@ class ScraperEngine:
 
         scraped_count = 0
         all_content: list[str] = []
-        semaphore = asyncio.Semaphore(MAX_RESEARCH_CONCURRENCY)
+        semaphore = asyncio.Semaphore(self.research_concurrency)
 
         async def _bounded(url: str) -> ScrapeResult:
             async with semaphore:

@@ -30,6 +30,24 @@ _Last updated: 2026-07-14 (step-7 pass: both official-docs asks APPROVED + appli
 
 ## Active (ranked — quickest wins first within priority)
 
+- [ ] **APPROVE: add 2 rows to `docs/official/settings-catalog.md` (5 seconds — say yes)** —
+  scrape concurrency is now a user setting (was the hardcoded
+  `MAX_SCRAPE_CONCURRENCY = 5` / `MAX_RESEARCH_CONCURRENCY = 5` in
+  `app/services/scraper/engine.py`). Two new `AppSettings` keys shipped and the
+  catalog is edit-restricted, so it is already one release stale. Say yes and I
+  add exactly this to § 1 "Scraping, proxy, remote access, notifications",
+  directly under the `Scrape delay` row:
+
+  | Scrape concurrency | `scrapeConcurrency` | `scrape_concurrency` | number (1–20) | `5` | Yes |
+  | Research concurrency | `researchConcurrency` | `research_concurrency` | number (1–20) | `5` | Yes |
+
+  …plus two one-line corrections in the same file: **field count** `58 keys` →
+  `60 keys`, and the § 2 Configurations row `scraping` → `headlessScraping`,
+  `scrapeDelay`, `scrapeConcurrency`, `researchConcurrency`. Both values are
+  read at call time by `ScraperEngine.scrape_concurrency` /
+  `.research_concurrency`, bounded 1–20, rejected with a message by
+  `PUT /settings`.
+
 - [ ] **APPROVE: rewrite `docs/official/scraper-engine.md` (10 seconds — just say yes)** —
   the whole file now describes deleted code. It documents `scraper-service/` as
   a read-only git subtree, the `scraper_app` sys.modules aliasing trick, and

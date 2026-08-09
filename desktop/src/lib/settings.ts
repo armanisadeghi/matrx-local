@@ -3,6 +3,26 @@ import { engine } from "@/lib/api";
 
 const STORAGE_KEY = "matrx-settings";
 
+/**
+ * Scrape/research concurrency bounds — kept identical to the Python engine
+ * (`app/services/scraper/engine.py`: MIN_CONCURRENCY / MAX_CONCURRENCY /
+ * DEFAULT_SCRAPE_CONCURRENCY). The engine clamps whatever it is handed, so
+ * these exist to stop a bad value ever reaching it.
+ */
+export const MIN_CONCURRENCY = 1;
+export const MAX_CONCURRENCY = 20;
+export const DEFAULT_CONCURRENCY = 5;
+
+/** Coerce any stored/incoming value into the allowed concurrency range. */
+export function clampConcurrency(
+  raw: unknown,
+  fallback: number = DEFAULT_CONCURRENCY,
+): number {
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(MAX_CONCURRENCY, Math.max(MIN_CONCURRENCY, n));
+}
+
 export interface AppSettings {
   // ── Application ─────────────────────────────────────────────────────
   launchOnStartup: boolean;
@@ -16,6 +36,10 @@ export interface AppSettings {
   // ── Scraping ────────────────────────────────────────────────────────
   headlessScraping: boolean;
   scrapeDelay: string;
+  /** Pages fetched at the same time during a bulk scrape (1-20). */
+  scrapeConcurrency: number;
+  /** Pages fetched at the same time during a research run (1-20). */
+  researchConcurrency: number;
 
   // ── Proxy ───────────────────────────────────────────────────────────
   proxyEnabled: boolean;
@@ -143,6 +167,11 @@ const DEFAULTS: AppSettings = {
   // Scraping
   headlessScraping: true,
   scrapeDelay: "1.0",
+  // Deliberately modest by default — this runs on the user's own machine and
+  // home connection, which they are also using. Bounds mirror the Python side
+  // (app/services/scraper/engine.py MIN_CONCURRENCY / MAX_CONCURRENCY).
+  scrapeConcurrency: DEFAULT_CONCURRENCY,
+  researchConcurrency: DEFAULT_CONCURRENCY,
   // Proxy — port-base offset +40: live 22140 → 22180, dev 22240 → 22280
   // (MXL-D-043 dev/live isolation; same formula as the Python defaults in
   // app/services/proxy/server.py and cloud_sync/settings_sync.py).
@@ -271,10 +300,14 @@ async function syncSetting<K extends keyof AppSettings>(
 
       case "headlessScraping":
       case "scrapeDelay":
+      case "scrapeConcurrency":
+      case "researchConcurrency":
         if (engine.engineUrl) {
           await engine.updateSettings({
             headless_scraping: all.headlessScraping,
             scrape_delay: parseFloat(all.scrapeDelay) || 1.0,
+            scrape_concurrency: clampConcurrency(all.scrapeConcurrency),
+            research_concurrency: clampConcurrency(all.researchConcurrency),
           });
         }
         break;
@@ -396,6 +429,8 @@ export async function syncAllSettings(): Promise<SyncResult> {
     await engine.updateSettings({
       headless_scraping: settings.headlessScraping,
       scrape_delay: parseFloat(settings.scrapeDelay) || 1.0,
+      scrape_concurrency: clampConcurrency(settings.scrapeConcurrency),
+      research_concurrency: clampConcurrency(settings.researchConcurrency),
     });
   } catch (err) {
     console.warn("[settings] Failed to sync engine runtime settings:", err);
@@ -507,6 +542,14 @@ export function mergeCloudSettings(
                 : String(n);
           })()
         : local.scrapeDelay,
+    scrapeConcurrency:
+      cloud.scrape_concurrency !== undefined
+        ? clampConcurrency(cloud.scrape_concurrency, local.scrapeConcurrency)
+        : local.scrapeConcurrency,
+    researchConcurrency:
+      cloud.research_concurrency !== undefined
+        ? clampConcurrency(cloud.research_concurrency, local.researchConcurrency)
+        : local.researchConcurrency,
     // Proxy
     proxyEnabled: cloudBool(cloud, "proxy_enabled", local.proxyEnabled),
     proxyPort: cloudNum(cloud, "proxy_port", local.proxyPort),
@@ -773,6 +816,8 @@ export function settingsToCloud(
     // Scraping
     headless_scraping: settings.headlessScraping,
     scrape_delay: parseFloat(settings.scrapeDelay) || 1.0,
+    scrape_concurrency: clampConcurrency(settings.scrapeConcurrency),
+    research_concurrency: clampConcurrency(settings.researchConcurrency),
     // Proxy
     proxy_enabled: settings.proxyEnabled,
     proxy_port: settings.proxyPort,

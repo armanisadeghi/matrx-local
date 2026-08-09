@@ -97,6 +97,9 @@ import {
   broadcastSettingsChanged,
   settingsToCloud,
   mergeCloudSettings,
+  clampConcurrency,
+  MIN_CONCURRENCY,
+  MAX_CONCURRENCY,
   type AppSettings,
 } from "@/lib/settings";
 import type { StoragePath, StoragePathStats } from "@/lib/api";
@@ -3913,6 +3916,58 @@ export function Settings({
                       />
                       <span className="text-xs text-muted-foreground">sec</span>
                     </div>
+                  </div>
+
+                  <Separator />
+
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>Pages at a Time</Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Higher = faster when reading lots of pages, but uses
+                        more of your internet connection while it runs
+                      </p>
+                    </div>
+                    <Input
+                      value={settings.scrapeConcurrency}
+                      onChange={(e) =>
+                        updateSetting(
+                          "scrapeConcurrency",
+                          clampConcurrency(e.target.value),
+                        )
+                      }
+                      className="w-20 text-right font-mono text-sm"
+                      type="number"
+                      min={MIN_CONCURRENCY}
+                      max={MAX_CONCURRENCY}
+                      step={1}
+                    />
+                  </div>
+
+                  <Separator />
+
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>Pages at a Time While Researching</Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Same idea, for research — a research run can open a
+                        hundred pages, so this is what makes it quick or gentle
+                      </p>
+                    </div>
+                    <Input
+                      value={settings.researchConcurrency}
+                      onChange={(e) =>
+                        updateSetting(
+                          "researchConcurrency",
+                          clampConcurrency(e.target.value),
+                        )
+                      }
+                      className="w-20 text-right font-mono text-sm"
+                      type="number"
+                      min={MIN_CONCURRENCY}
+                      max={MAX_CONCURRENCY}
+                      step={1}
+                    />
                   </div>
                 </CardContent>
               </Card>

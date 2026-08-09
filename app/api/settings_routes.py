@@ -1,7 +1,8 @@
 """Engine runtime settings — configurable from the desktop UI.
 
 Includes:
-- Engine settings (headless_scraping, scrape_delay)
+- Engine settings (headless_scraping, scrape_delay, scrape_concurrency,
+  research_concurrency)
 - Wake word engine preference (whisper vs openWakeWord, model, threshold)
 - Forbidden URL list
 - Storage path overrides (GET /settings/paths, PUT /settings/paths/{name},
@@ -14,9 +15,18 @@ import re
 from typing import Any, List, Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.services.cloud_sync.settings_sync import get_settings_sync
+from app.services.scraper.engine import (
+    DEFAULT_RESEARCH_CONCURRENCY,
+    DEFAULT_SCRAPE_CONCURRENCY,
+    MAX_CONCURRENCY,
+    MIN_CONCURRENCY,
+    RESEARCH_CONCURRENCY_SETTING,
+    SCRAPE_CONCURRENCY_SETTING,
+    clamp_concurrency,
+)
 from app.services.local_db.repositories import AppSettingsRepo
 from app.services.paths.manager import all_paths, reset_path, set_path
 from app.services.action_needed.registry import get_action_needed_registry
@@ -27,6 +37,33 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 class EngineSettings(BaseModel):
     headless_scraping: bool = True
     scrape_delay: float = 1.0
+    # How many pages at once. Bounded so a typo cannot saturate the user's own
+    # connection or get them blocked by the sites they are reading.
+    scrape_concurrency: int = Field(
+        default=DEFAULT_SCRAPE_CONCURRENCY,
+        description=(
+            f"Pages fetched at the same time during a bulk scrape "
+            f"({MIN_CONCURRENCY}-{MAX_CONCURRENCY})."
+        ),
+    )
+    research_concurrency: int = Field(
+        default=DEFAULT_RESEARCH_CONCURRENCY,
+        description=(
+            f"Pages fetched at the same time during a research run "
+            f"({MIN_CONCURRENCY}-{MAX_CONCURRENCY})."
+        ),
+    )
+
+    @field_validator("scrape_concurrency", "research_concurrency")
+    @classmethod
+    def _validate_concurrency(cls, value: int) -> int:
+        """Reject out-of-range values with a message a human can act on."""
+        if value < MIN_CONCURRENCY or value > MAX_CONCURRENCY:
+            raise ValueError(
+                f"Pages at a time must be between {MIN_CONCURRENCY} and "
+                f"{MAX_CONCURRENCY} — got {value}."
+            )
+        return value
 
 
 class ForbiddenUrlsResponse(BaseModel):
@@ -69,6 +106,14 @@ async def get_settings() -> EngineSettings:
     return EngineSettings(
         headless_scraping=sync.get("headless_scraping", True),
         scrape_delay=sync.get("scrape_delay", 1.0),
+        scrape_concurrency=clamp_concurrency(
+            sync.get(SCRAPE_CONCURRENCY_SETTING, DEFAULT_SCRAPE_CONCURRENCY),
+            DEFAULT_SCRAPE_CONCURRENCY,
+        ),
+        research_concurrency=clamp_concurrency(
+            sync.get(RESEARCH_CONCURRENCY_SETTING, DEFAULT_RESEARCH_CONCURRENCY),
+            DEFAULT_RESEARCH_CONCURRENCY,
+        ),
     )
 
 
@@ -78,6 +123,8 @@ async def update_settings(req: EngineSettings) -> EngineSettings:
     sync.set_many({
         "headless_scraping": req.headless_scraping,
         "scrape_delay": req.scrape_delay,
+        SCRAPE_CONCURRENCY_SETTING: req.scrape_concurrency,
+        RESEARCH_CONCURRENCY_SETTING: req.research_concurrency,
     })
     return req
 

@@ -11,6 +11,7 @@ import type { JSX } from "react";
 import {
   Copy,
   Download,
+  ExternalLink,
   FolderOpen,
   ImageIcon,
   ImagePlus,
@@ -115,6 +116,12 @@ export function buildMediaMenu(
       run: wrap(() => actions.download(item)),
     },
     {
+      id: "open-source",
+      label: "Open original URL",
+      icon: <ExternalLink className={ICON} />,
+      run: wrap(() => actions.openSource(item)),
+    },
+    {
       id: "show-in-folder",
       label: "Show in folder",
       icon: <FolderOpen className={ICON} />,
@@ -154,6 +161,7 @@ export function buildMediaMenu(
     "copy-image": caps.canCopyImage,
     "copy-prompt": caps.canCopyPrompt,
     download: caps.canDownload,
+    "open-source": caps.canOpenSource,
     "show-in-folder": caps.canShowInFolder,
     vault: caps.canVault,
     restore: caps.canRestore,

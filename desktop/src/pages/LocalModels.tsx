@@ -75,6 +75,7 @@ import {
   ArrowDown,
 } from "lucide-react";
 import { isTauri } from "@/lib/sidecar";
+import { openExternal } from "@/lib/open-external";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -156,20 +157,6 @@ function formatBytes(bytes: number): string {
   if (gb >= 1) return `${gb.toFixed(2)} GB`;
   const mb = bytes / (1024 * 1024);
   return `${mb.toFixed(1)} MB`;
-}
-
-// ── Open external URL via Tauri shell ────────────────────────────────────
-
-async function openUrl(url: string) {
-  if (
-    typeof window !== "undefined" &&
-    (window as unknown as Record<string, unknown>).__TAURI__
-  ) {
-    const { open } = await import("@tauri-apps/plugin-shell");
-    await open(url);
-  } else {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
 }
 
 // ── Rating scale description ──────────────────────────────────────────────
@@ -1091,7 +1078,7 @@ function ModelRow({
             size="sm"
             variant="ghost"
             className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
-            onClick={() => openUrl(model.hf_model_card_url)}
+            onClick={() => void openExternal(model.hf_model_card_url)}
             title="View model card on HuggingFace"
           >
             <ExternalLink className="h-3.5 w-3.5" />

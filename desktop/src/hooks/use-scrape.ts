@@ -14,8 +14,10 @@ import { engine } from "@/lib/api";
 import {
   failedScrapeResult,
   toScrapeResult,
-  type ScrapeResultData,
+  type ScrapeResultViewData,
 } from "@/lib/scrape-result";
+
+type ScrapeResultData = ScrapeResultViewData;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -118,18 +120,10 @@ function logFailure(
   });
 }
 
-// ── Result reading ─────────────────────────────────────────────────────────
-// Every lane returns the engine's canonical payload; `toScrapeResult` (in
-// lib/scrape-result.ts) is the one reader. Nothing is mapped here.
+// ── Result normalisation ───────────────────────────────────────────────────
 
-/** Pull the first result out of a tool's metadata. */
-function firstToolResult(
-  metadata: Record<string, unknown> | undefined,
-  url: string,
-): ScrapeResultData | null {
-  const results = metadata?.results;
-  if (!Array.isArray(results) || results.length === 0) return null;
-  return toScrapeResult(results[0], url);
+function makeFallbackResult(url: string, error: string): ScrapeResultData {
+  return failedScrapeResult(url, error);
 }
 
 async function executeScrape(
@@ -164,10 +158,10 @@ async function executeScrape(
     console.info(`[use-scrape/executeScrape] FetchWithBrowser returned`, {
       url, type: toolResult.type, outputLength: toolResult.output?.length, elapsed_ms: Date.now() - t0,
     });
-    return (
-      firstToolResult(toolResult.metadata, url) ??
-      failedScrapeResult(url, toolResult.output || "Browser fetch failed")
-    );
+    const results = toolResult.metadata?.results;
+    return Array.isArray(results) && results.length > 0
+      ? toScrapeResult(results[0], url)
+      : failedScrapeResult(url, toolResult.output || "Browser fetch failed");
   }
 
   if (method === "engine") {
@@ -177,6 +171,12 @@ async function executeScrape(
       toolResult = await engine.invokeTool("Scrape", {
         urls: [url],
         use_cache: useCache,
+        // The parse produces all of this either way; these flags only decide
+        // whether it comes back. A UI is exactly the consumer they exist for —
+        // see `_scrape_result_to_metadata` in app/tools/tools/network.py.
+        get_extraction: true,
+        get_links: true,
+        get_overview: true,
       });
     } catch (err) {
       console.error(`[use-scrape/executeScrape] Scrape tool THREW`, {
@@ -191,16 +191,17 @@ async function executeScrape(
       metadataKeys: toolResult.metadata ? Object.keys(toolResult.metadata) : [],
       elapsed_ms: Date.now() - t0,
     });
-    const result =
-      firstToolResult(toolResult.metadata, url) ??
-      failedScrapeResult(url, toolResult.output || "Scrape failed");
-    console.info(`[use-scrape/executeScrape] first result metadata`, {
-      url,
-      success: result.success,
-      status_code: result.status_code,
-      failure_reason: result.failure_reason,
-    });
-    return result;
+    const results = toolResult.metadata?.results;
+    const r = Array.isArray(results) ? results[0] : undefined;
+    if (r) {
+      console.info(`[use-scrape/executeScrape] first result metadata`, {
+        url,
+        status_code: (r as Record<string, unknown>).status_code,
+      });
+    }
+    return r
+      ? toScrapeResult(r, url)
+      : failedScrapeResult(url, toolResult.output || "Scrape failed");
   }
 
   // remote — caller handles SSE streaming; this path is never called directly
@@ -249,7 +250,7 @@ export function useScrapeOne() {
           }
           console.info(`[use-scrape/useScrapeOne] scrapeRemotely() returned`, {
             url: normalized, resultCount: resp.results.length,
-            success_count: resp.success_count, elapsed_ms: resp.elapsed_ms,
+            successCount: resp.success_count, elapsed_ms: resp.elapsed_ms,
           });
           const r = resp.results[0];
           if (!r) throw new Error("No result returned from remote scraper");
@@ -404,7 +405,7 @@ export function useScrapeMany() {
           ? {
               ...e,
               status: "error",
-              result: failedScrapeResult(e.url, "Stopped by user"),
+              result: makeFallbackResult(e.url, "Stopped by user"),
               completedAt: new Date(),
             }
           : e,
@@ -449,20 +450,6 @@ export function useScrapeMany() {
           ),
         );
 
-      const markAllRunningFailed = (reason: string) =>
-        setEntries((prev) =>
-          prev.map((e) =>
-            e.status === "running"
-              ? {
-                  ...e,
-                  status: "error",
-                  result: failedScrapeResult(e.url, reason),
-                  completedAt: new Date(),
-                }
-              : e,
-          ),
-        );
-
       if (method === "remote") {
         const urls = toScrape.map((e) => e.url);
         urls.forEach((url) => markRunning(url));
@@ -480,8 +467,6 @@ export function useScrapeMany() {
             if (isStopped()) return;
             const d = data as Record<string, unknown>;
             if (event === "page_result") {
-              // The proxy already emitted the canonical contract — same
-              // converter the local lane runs. Read it, don't remap it.
               const result = toScrapeResult(d);
               const url = result.url;
 
@@ -505,7 +490,7 @@ export function useScrapeMany() {
               markDone(url, result);
             } else if (event === "error") {
               const url = String(d.url ?? "");
-              const errMsg = String(d.failure_reason ?? "Remote stream error");
+              const errMsg = String(d.error ?? d.message ?? "Remote stream error");
               console.error("[scrape] STREAM ERROR", {
                 url,
                 method,
@@ -513,13 +498,7 @@ export function useScrapeMany() {
                 data: d,
                 timestamp: new Date().toISOString(),
               });
-              if (url) {
-                markDone(url, failedScrapeResult(url, errMsg));
-              } else {
-                // Whole-stream failure: every URL still in flight is dead, and
-                // leaving them spinning forever was the old behaviour.
-                markAllRunningFailed(errMsg);
-              }
+              markDone(url, makeFallbackResult(url, errMsg));
             }
           },
           () => {
@@ -573,7 +552,7 @@ export function useScrapeMany() {
           if ((err as Error).name === "AbortError") break;
           const message = err instanceof Error ? err.message : String(err);
           logFailure(entry.url, method, useCache, err);
-          markDone(entry.url, failedScrapeResult(entry.url, message));
+          markDone(entry.url, makeFallbackResult(entry.url, message));
         }
       }
 

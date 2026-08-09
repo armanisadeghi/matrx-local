@@ -178,7 +178,11 @@ export interface BrowserStatus {
 // The scrape result shape lives in ONE module — local, browser and remote
 // scrapes all speak it. Re-exported here so existing `@/lib/api` importers
 // keep working; new code should import from `@/lib/scrape-result`.
-export type { ScrapeResultData, ScrapeLinks } from "./scrape-result";
+export type {
+  ScrapeResultData,
+  ScrapeResultViewData,
+  ScrapeLinks,
+} from "./scrape-result";
 
 /** Response of `/remote-scraper/scrape` — normalised by the engine proxy. */
 export interface ScrapeBatchResponse {

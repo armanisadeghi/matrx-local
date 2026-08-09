@@ -48,6 +48,11 @@ export interface ScrapeResultData {
   elapsed_ms: number;
 }
 
+/** Canonical result plus the optional rich extraction requested by UI lanes. */
+export type ScrapeResultViewData = ScrapeResultData & {
+  extraction: ScrapeExtraction | null;
+};
+
 function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -71,7 +76,7 @@ function num(value: unknown): number {
 export function toScrapeResult(
   raw: unknown,
   fallbackUrl = "",
-): ScrapeResultData {
+): ScrapeResultViewData {
   const r = (raw ?? {}) as Record<string, unknown>;
   const url = str(r.url) || fallbackUrl;
   return {
@@ -92,6 +97,7 @@ export function toScrapeResult(
     links: (r.links as ScrapeLinks | undefined) ?? null,
     overview: (r.overview as Record<string, unknown> | undefined) ?? null,
     elapsed_ms: num(r.elapsed_ms),
+    extraction: parseScrapeExtraction(r),
   };
 }
 
@@ -99,6 +105,10 @@ export function toScrapeResult(
 export function failedScrapeResult(
   url: string,
   failureReason: string,
-): ScrapeResultData {
+): ScrapeResultViewData {
   return toScrapeResult({ url, success: false, failure_reason: failureReason }, url);
 }
+import {
+  parseScrapeExtraction,
+  type ScrapeExtraction,
+} from "@/lib/scrape-extraction";

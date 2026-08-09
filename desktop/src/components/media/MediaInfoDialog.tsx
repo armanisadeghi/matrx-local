@@ -264,6 +264,36 @@ function InfoBody({ item }: { item: MediaDescriptor }) {
             </div>
           )}
 
+          {/* Web media has no file path — its address IS its identity, and it
+              must be copyable, not just clickable through the menu. */}
+          {item.sourceUrl && (
+            <div className="min-w-0 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Source URL
+                </p>
+                <CopyButton value={item.sourceUrl} label="Copy source URL" />
+              </div>
+              <p className="break-all font-mono text-[11px] text-muted-foreground">
+                {item.sourceUrl}
+              </p>
+            </div>
+          )}
+
+          {item.sourcePageUrl && (
+            <div className="min-w-0 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Found on
+                </p>
+                <CopyButton value={item.sourcePageUrl} label="Copy page URL" />
+              </div>
+              <p className="break-all font-mono text-[11px] text-muted-foreground">
+                {item.sourcePageUrl}
+              </p>
+            </div>
+          )}
+
           {item.filePath && (
             <div className="min-w-0 space-y-1">
               <div className="flex items-center justify-between gap-2">

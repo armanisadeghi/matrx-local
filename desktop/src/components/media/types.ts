@@ -36,7 +36,16 @@ export type MediaSource =
   /** A user-selected source image that has not been persisted by the engine. */
   | "input"
   /** A screenshot or other media value returned by a local tool. */
-  | "tool";
+  | "tool"
+  /**
+   * Media that lives on someone else's server — an image found by the scraper.
+   * The bytes are never ours: they are fetched by the webview from the origin,
+   * which may hotlink-block, redirect, or refuse CORS. Actions that need the
+   * bytes (copy, download, use-as-input) are therefore NOT offered — they
+   * would be dead clicks. Viewing it full size, reading its metadata, and
+   * opening the original URL all work.
+   */
+  | "web";
 
 export interface MediaDescriptor {
   /** Unique within its viewing set (library/vault item id, or job id). */
@@ -87,6 +96,14 @@ export interface MediaDescriptor {
    * and simply try.
    */
   initImageStored?: boolean;
+  /**
+   * The canonical web address of this media, when it has one (a scraped
+   * image's own URL). THE DOOR LAW: if the UI names something reachable, the
+   * user must be able to reach it — this is what "Open original URL" opens.
+   */
+  sourceUrl?: string;
+  /** Where it was found — shown in the info dialog for `web` media. */
+  sourcePageUrl?: string;
 }
 
 /**
@@ -166,6 +183,71 @@ export function descriptorFromInputImage(
     source: "input",
     fileName,
     prompt: `Input image: ${fileName}`,
+  };
+}
+
+/**
+ * An image the scraper found on a web page.
+ *
+ * The Scraping page renders these through the canonical stack like any other
+ * media, so a scraped thumbnail opens full size, right-clicks to the same
+ * menu, and reaches its own URL — no surface hand-rolls an `<img>` for it.
+ * `alt`/`caption` become the descriptor's prompt because that is what the info
+ * dialog and the copy action show: for web media the page's own words about
+ * the image are the only description that exists.
+ */
+export function descriptorFromWebImage(
+  image: {
+    src: string;
+    alt?: string;
+    caption?: string;
+    title?: string;
+    width?: number | null;
+    height?: number | null;
+  },
+  opts: { pageUrl?: string; label?: string } = {},
+): MediaDescriptor {
+  const described =
+    image.caption?.trim() || image.alt?.trim() || image.title?.trim() || "";
+  return {
+    id: `web:${image.src}`,
+    kind: "image",
+    url: image.src,
+    itemId: null,
+    source: "web",
+    sourceUrl: image.src,
+    ...(opts.pageUrl ? { sourcePageUrl: opts.pageUrl } : {}),
+    ...(described || opts.label ? { prompt: described || opts.label } : {}),
+    ...(image.width ? { width: image.width } : {}),
+    ...(image.height ? { height: image.height } : {}),
+    params: {
+      source_url: image.src,
+      ...(opts.pageUrl ? { found_on: opts.pageUrl } : {}),
+      ...(image.alt?.trim() ? { alt: image.alt.trim() } : {}),
+      ...(image.caption?.trim() ? { caption: image.caption.trim() } : {}),
+      ...(image.title?.trim() ? { title: image.title.trim() } : {}),
+    },
+  };
+}
+
+/** A video/audio file the scraper found on a web page. */
+export function descriptorFromWebVideo(
+  video: { src: string; title?: string },
+  opts: { pageUrl?: string } = {},
+): MediaDescriptor {
+  return {
+    id: `web:${video.src}`,
+    kind: "video",
+    url: video.src,
+    itemId: null,
+    source: "web",
+    sourceUrl: video.src,
+    ...(opts.pageUrl ? { sourcePageUrl: opts.pageUrl } : {}),
+    ...(video.title?.trim() ? { prompt: video.title.trim() } : {}),
+    params: {
+      source_url: video.src,
+      ...(opts.pageUrl ? { found_on: opts.pageUrl } : {}),
+    },
   };
 }
 
@@ -372,6 +454,9 @@ const PROMOTED_PARAM_KEYS = new Set([
   "height",
   "num_inference_steps",
   "guidance_scale",
+  // Web media: both have their own copyable row in the info dialog.
+  "source_url",
+  "found_on",
 ]);
 
 /** Params minus everything already shown as its own labeled row. */
@@ -408,6 +493,8 @@ export interface MediaCapabilities {
   canIterate: boolean;
   canShowInFolder: boolean;
   canReuseSeed: boolean;
+  /** The media has a web address of its own that can be opened in a browser. */
+  canOpenSource: boolean;
 }
 
 /** Z-Image and FLUX are the intentionally supported local revision families. */
@@ -427,18 +514,25 @@ export function descriptorSupportsRevision(d: MediaDescriptor): boolean {
 
 export function capabilitiesOf(d: MediaDescriptor): MediaCapabilities {
   const persisted = d.itemId !== null;
+  // Remote media: the bytes belong to someone else's server and reach the app
+  // only as an <img> the webview loaded. Anything that must READ those bytes
+  // (download, clipboard copy, use-as-input) fails on hotlink protection or a
+  // missing CORS header, so it is not offered — a menu never shows an action
+  // that cannot run. Opening it full size and reaching its URL both work.
+  const remote = d.source === "web";
   return {
-    canDownload: true,
-    canCopyImage: d.kind === "image",
+    canDownload: !remote,
+    canCopyImage: d.kind === "image" && !remote,
     canCopyPrompt: !!d.prompt?.trim(),
     canDelete: persisted,
     canVault: persisted && d.source !== "vault",
     canRestore: d.source === "vault",
-    canUseAsInput: d.kind === "image",
+    canUseAsInput: d.kind === "image" && !remote,
     canRemix: persisted && !!d.modelId,
     canIterate: descriptorSupportsRevision(d),
     // Vaulted items have no plaintext file on disk.
     canShowInFolder: !!d.filePath && d.source !== "vault",
     canReuseSeed: typeof d.seed === "number",
+    canOpenSource: !!d.sourceUrl,
   };
 }

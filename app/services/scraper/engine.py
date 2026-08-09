@@ -29,6 +29,7 @@ import asyncio
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Optional
 
@@ -53,6 +54,16 @@ CACHE_TTL_SECONDS = 1800
 
 # Pages per research effort level.
 RESEARCH_EFFORT_LIMITS = {"low": 10, "medium": 25, "high": 50, "extreme": 100}
+
+
+class BrowserUnavailable(RuntimeError):
+    """This machine has no usable Playwright browser right now.
+
+    A STATE, not a crash: the engine is READY and every HTTP scrape still
+    works — only browser-rendered fetches are unavailable, and the remedy is a
+    one-click capability install. Callers turn this into an `action_needed`,
+    never into a traceback.
+    """
 
 
 @dataclass
@@ -364,6 +375,77 @@ class ScraperEngine:
         self._started = False
         self._driver_pid = None
         logger.info("[scraper/engine.py] ScraperEngine: stopped")
+
+    # ------------------------------------------------------------------
+    # Lending the ONE browser — every browser fetch in this process
+    # ------------------------------------------------------------------
+
+    @asynccontextmanager
+    async def borrow_browser(
+        self, *, headless: bool = True, timeout: float = 60.0
+    ) -> AsyncGenerator[Any, None]:
+        """Yield a Playwright ``Browser`` from the ONE pool this engine owns.
+
+        This exists so no other module ever calls `async_playwright()` for a
+        page fetch. A second `async_playwright()` means a second driver node
+        and a second ~200 MB Chromium tree on the USER'S laptop, and — worse —
+        that tree is invisible to `driver_pid` / `terminate_playwright_tree`,
+        which is exactly the untracked-orphan class that produced "ended
+        unexpectedly" crash reports (CLAUDE.md Hard Rule 0).
+
+        The borrower gets a raw Browser and owns whatever context it opens on
+        it: this pool's browsers are LONG-LIVED and shared, so every context
+        you create you must close, and you must never call `browser.close()`.
+
+        `headless=False` honours the user's "Headless Mode" setting (Settings →
+        Scraping): a visible window cannot come out of the headless pool, so it
+        gets a transient browser launched from the SAME driver — still one
+        driver tree, still reaped by the same PID, closed when you're done.
+
+        Raises `BrowserUnavailable` when there is no browser to lend.
+        """
+        if not self._started:
+            raise BrowserUnavailable(
+                "The scraper engine has not started, so no browser is available yet."
+            )
+        pool = self._browser_pool
+        if pool is None:
+            raise BrowserUnavailable(
+                "No Playwright browser is installed on this machine, so pages "
+                "cannot be rendered."
+            )
+
+        if not headless:
+            # The pool launched headless; a visible window needs its own
+            # browser. Take it off the pool's driver so the process tree — and
+            # therefore `driver_pid` — still covers it.
+            playwright = getattr(pool, "_playwright", None)
+            if playwright is None:
+                logger.warning(
+                    "[scraper/engine.py] borrow_browser: headless=False requested but "
+                    "the pool's Playwright driver is not reachable — serving a HEADLESS "
+                    "browser instead. The page will render with no visible window."
+                )
+            else:
+                browser = await playwright.chromium.launch(headless=False)
+                try:
+                    yield browser
+                finally:
+                    try:
+                        await browser.close()
+                    except Exception:
+                        logger.debug(
+                            "[scraper/engine.py] borrow_browser: headful browser close "
+                            "failed (already gone?)",
+                            exc_info=True,
+                        )
+                return
+
+        browser = await pool.acquire(timeout=timeout)
+        try:
+            yield browser
+        finally:
+            pool.release(browser)
 
     # ------------------------------------------------------------------
     # Scraping

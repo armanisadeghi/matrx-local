@@ -1,17 +1,26 @@
 """Network tools — HTTP fetch, headless browser fetch, and scraper-engine tools.
 
-Simple tools (FetchUrl, FetchWithBrowser) use httpx/Playwright directly for
-quick requests from the user's residential IP.
+`FetchUrl` is a plain httpx request from the user's residential IP.
+
+`FetchWithBrowser` renders one page in a real browser and hands back raw HTML
+or body text — no parsing, caller-controlled waits. It is the deliberately
+LIGHT browser path; the parsing one is `Scrape`.
 
 Advanced tools (Scrape, Search, Research) run the canonical `matrx_scraper`
 engine through the local lane (`app/services/scraper/engine.py`): browser
 impersonation with a Playwright fallback, Cloudflare/firewall detection,
 HTML/PDF/image/JSON extraction, and a session cache — all from this machine's
 own IP, never a proxy.
+
+**There is ONE browser.** Both browser paths borrow the single Playwright pool
+owned by `ScraperEngine` (`borrow_browser`), so this process holds one driver
+tree, tracked by one `driver_pid` and reaped by one owner. Nothing in this
+module may call `async_playwright()`.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -150,19 +159,23 @@ async def tool_fetch_with_browser(
     wait_timeout: int = 30000,
     extract_text: bool = False,
 ) -> ToolResult:
+    """Render one page in a real browser and return its HTML or text.
+
+    The navigation semantics here are this tool's own and deliberately differ
+    from the scraper lane's: a caller-supplied `wait_for` selector, a
+    `networkidle` settle when there is none, a fixed desktop UA + 1920x1080
+    viewport, and raw HTML (or `body` inner text) with NO parsing. The scraper
+    lane instead runs the full matrx_scraper pipeline and returns a parsed
+    `ScrapeResult`.
+
+    What it does NOT own is the browser. Until 2026-08-09 this called
+    `async_playwright()` itself, so the engine could hold TWO driver trees at
+    once and only one of them was tracked for reaping. The browser now comes
+    from the single pool owned by `ScraperEngine` (`borrow_browser`), which
+    keeps one `driver_pid` and one lifecycle owner.
+    """
     if blocked := _check_forbidden(url):
         return blocked
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        return ToolResult(
-            type=ToolResultType.ERROR,
-            output=(
-                "Browser fetch requires playwright. Install with:\n"
-                "  uv add playwright\n"
-                "  playwright install chromium"
-            ),
-        )
 
     # Read headless setting from engine settings
     try:
@@ -171,10 +184,19 @@ async def tool_fetch_with_browser(
     except Exception:
         _headless = True
 
+    from app.services.scraper.engine import BrowserUnavailable
+
     start = time.monotonic()
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=_headless)
+        # The pool holds ONE browser, so a concurrent scrape can be using it.
+        # Wait at least as long as this fetch is itself allowed to take rather
+        # than failing a healthy request on a fixed queue timeout.
+        borrow_timeout = max(30.0, wait_timeout / 1000 + 15.0)
+        async with _get_engine().borrow_browser(
+            headless=_headless, timeout=borrow_timeout
+        ) as browser:
+            # The borrowed browser is shared and long-lived: close the context
+            # we opened, never the browser.
             context = await browser.new_context(
                 user_agent=(
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -182,24 +204,52 @@ async def tool_fetch_with_browser(
                 ),
                 viewport={"width": 1920, "height": 1080},
             )
-            page = await context.new_page()
+            try:
+                page = await context.new_page()
 
-            response = await page.goto(url, wait_until="domcontentloaded", timeout=wait_timeout)
+                response = await page.goto(url, wait_until="domcontentloaded", timeout=wait_timeout)
 
-            if wait_for:
-                await page.wait_for_selector(wait_for, timeout=wait_timeout)
-            else:
-                await page.wait_for_load_state("networkidle", timeout=wait_timeout)
+                if wait_for:
+                    await page.wait_for_selector(wait_for, timeout=wait_timeout)
+                else:
+                    await page.wait_for_load_state("networkidle", timeout=wait_timeout)
 
-            if extract_text:
-                content = await page.inner_text("body")
-            else:
-                content = await page.content()
+                if extract_text:
+                    content = await page.inner_text("body")
+                else:
+                    content = await page.content()
 
-            status = response.status if response else 0
-            final_url = page.url
-
-            await browser.close()
+                status = response.status if response else 0
+                final_url = page.url
+            finally:
+                await context.close()
+    except BrowserUnavailable as e:
+        # A STATE with a one-click remedy, not a failure to shout about: the
+        # dispatcher turns `fix_capability_id` into the canonical ActionNeeded.
+        logger.info("[tool_fetch_with_browser] no browser available: %s", e)
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=(
+                f"{e} Install the Browser Automation capability "
+                "(Settings → Capabilities) and try again."
+            ),
+            metadata={"fix_capability_id": "browser_automation"},
+        )
+    except asyncio.TimeoutError:
+        # Only the pool's `acquire` raises this — Playwright's own page
+        # timeouts are a different class. Say WHICH wait expired; "Browser
+        # fetch failed: TimeoutError:" told the user nothing.
+        logger.warning(
+            "[tool_fetch_with_browser] waited %.0fs for the shared browser and gave up (url=%s)",
+            borrow_timeout, url,
+        )
+        return ToolResult(
+            type=ToolResultType.ERROR,
+            output=(
+                f"The browser was busy with another page for {borrow_timeout:.0f}s. "
+                "Try again in a moment."
+            ),
+        )
     except Exception as e:
         return ToolResult(type=ToolResultType.ERROR, output=f"Browser fetch failed: {type(e).__name__}: {e}")
 

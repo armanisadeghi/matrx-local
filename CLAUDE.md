@@ -175,6 +175,20 @@ cd desktop && pnpm tauri:dev
    `tests/test_desktop_consumer_ports.py`. A local copy of engine logic is a
    defect, not a shortcut.
 
+   **Package / Implementation Separation — the rule behind "never fork it."**
+   The package is CAPABLE, the implementation CHOOSES. `matrx-scraper` must be
+   able to own and run its own database — never remove that to "simplify" for
+   this app; that is exactly how it once got hardwired to aidream and became
+   unusable here. And when a Matrx package here does need Postgres, it takes ONE
+   required set of variables (`SUPABASE_MATRIX_HOST/_PORT/_DATABASE_NAME/_USER/
+   _PASSWORD`, `_SSL` for TLS) and raises without them — **banned: a second
+   candidate for a connection** (`<PKG>_DATABASE_URL` → `DATABASE_URL` →
+   `MATRX_<PKG>_POSTGRES_*`). Pointing a package at a different database is a
+   change of VALUES, never a new variable name. (Desktop caveat: env vars are
+   developer-only here — see § Security & configuration posture.) System of
+   record, read before touching any package/DB/connection config:
+   `/Users/armanisadeghi/code/common-docs/policies/package-vs-implementation.md`.
+
 2. **The result shape is the package's `ScrapeResult`.** Consumers read
    `success` / `failure_reason` (never a `status` string or an `error` field),
    and anything persisted or pushed to the server goes through
@@ -182,7 +196,7 @@ cd desktop && pnpm tauri:dev
    content dict. `STORED_FIELDS` there names real `ScrapeResult` fields and
    crashes at call time if one is renamed away.
 
-3. **Graceful degradation** — Engine works without PostgreSQL (memory cache) or Brave API (search disabled). Never add hard dependencies on these. Playwright, psutil, zeroconf are always-available core deps.
+3. **Graceful degradation** — Engine works without a Brave API key (search disabled). Never add a hard dependency on it. Playwright, psutil, zeroconf are always-available core deps. (There is no local Postgres tier any more — the scrape cache is in-memory; see § External Connections.)
 
 4. **Port 22140** — Default engine port. Auto-scans 22140–22159. Discovery file: `~/.matrx/local.json`.
 
@@ -249,7 +263,7 @@ Three separate concerns — do not confuse them:
 
 1. **Supabase Auth** — Instance `txzxabzwovsujtloxrus`. Uses **publishable key** (not anon key). All ops use user JWT. Never use service role key. **Never reference `SUPABASE_JWT_SECRET`** — this is a desktop app running on the user's machine; there is no secure place to keep a server-side JWT signing secret. The `/extension/*` surface validates incoming tokens via JWKS for asymmetric algorithms (RS256/ES256) when `SUPABASE_URL` is set, and falls back to bearer-presence verification over loopback for HS256 tokens. See `app/api/extension_auth.py` for the full posture and `docs/MATRX_EXTEND_CONNECTION.md` for the rationale.
 2. **Remote Scraper Server** — `scraper.app.matrxserver.com`. REST API with Bearer token (API key or Supabase JWT). Its PostgreSQL is internal-only — no direct DB access.
-3. **Local Scraper Cache** — Optional local PostgreSQL via `DATABASE_URL` for persistent scrape cache. Defaults to in-memory TTLCache. This is NOT the remote server's DB.
+3. ~~**Local Scraper Cache**~~ — **gone.** There is no `DATABASE_URL` page cache in this repo (deleted 2026-08-09 with `scraper-service/`); the scrape cache is in-memory only. Do not reintroduce a `DATABASE_URL` here — see the connection rule under Hard Rule 1.
 
 ## Env Files (developer-only — see § Security & configuration posture)
 

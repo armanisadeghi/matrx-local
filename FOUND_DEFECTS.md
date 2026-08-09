@@ -608,6 +608,39 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Cross-repo
 
+### MXL-D-075 — matrx-utils/matrx-connect floors permit an ImportError-ing pair; the broken pair is what's installed today
+- **Area:** `pyproject.toml:73,76` (`matrx-utils>=2.0.0`, `matrx-connect>=0.1.10`)
+- **Symptom:** matrx-connect has imported `matrx_utils.AsyncSingleFlight` in
+  `middleware/auth.py` since 0.1.8, but matrx-utils first exported that symbol in
+  **2.0.1** (and `LEGACY_VISIBILITY_MAP` / `VisibilityLiteral` in **2.0.7**). Our
+  floors allow matrx-utils 2.0.0, and that is exactly what resolved into
+  `.venv` (matrx-utils 2.0.0 + matrx-connect 0.1.10), so `matrx_connect.middleware`
+  raises at import:
+  `ImportError: cannot import name 'AsyncSingleFlight' from 'matrx_utils'`.
+- **Currently LATENT, not broken:** verified 2026-08-09 that `matrx_connect/__init__.py`
+  does **not** eagerly import `middleware`, and every path this repo actually uses
+  imports clean — `matrx_connect.streaming`, `.context.app_context`, `.reservations`,
+  `.emitters.stream_emitter` (all OK). Only `matrx_connect.middleware` fails, and
+  nothing here imports it (`grep -rn matrx_connect app/`). The day someone adds an
+  auth-middleware import, the AI streaming surface dies at first request instead.
+- **Evidence:**
+  - Surfaced as the PyInstaller warning "Failed to collect submodules for
+    `matrx_scraper.server` … ImportError: cannot import name 'AsyncSingleFlight'"
+    while collecting matrx_scraper into the frozen sidecar (commit 5189719b1).
+  - `.venv/bin/python -c "import matrx_connect.middleware"` → ImportError.
+  - Root cause fixed upstream 2026-08-09: matrx-connect **0.1.25** now floors
+    `matrx-utils>=2.0.7` (aidream `packages/matrx-connect/pyproject.toml`, published
+    to PyPI). Nothing was removed from matrx-utils — the symbols were *added* and
+    consumers never raised their floors.
+- **Fix:** raise this repo's floors to `matrx-utils>=2.0.7` and
+  `matrx-connect>=0.1.25`, then `uv sync --all-extras` (plain `uv sync` strips the
+  installed extras — Hard Rule 5). One-line change per floor; the upstream release it
+  depends on is already live.
+- **Status:** open — **Analyzed 2026-08-09 — verified in code and against the
+  installed venv** (import matrix run per-module, not inferred).
+- **Owner hint:** whoever next touches `pyproject.toml` deps or the sidecar spec —
+  cheap to land alongside.
+
 ### MXL-D-059 — ✅ chat_sync BLIND-UPSERTS server-owned cloud rows (already corrupted production data)
 - **Area:** chat_sync / cross-repo (shared Supabase `chat.*`)
 - **Symptom:** `_push_table` publishes locally-rebuilt rows to the shared cloud DB with an

@@ -296,6 +296,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # falls back to presence-only on loopback for HS256 tokens. See
     # app/api/extension_auth.py for the full posture.
 
+    # Phase 0000: matrx_* package settings. MUST be the first thing in this
+    # lifespan — `matrx_utils.conf.settings` is process-global, refuses a second
+    # configure, and raises NotConfiguredError on first READ, so every phase
+    # below (AI engine, scraper, file tools) depends on it already being wired.
+    # BASE_DIR derives from MATRX_HOME_DIR, so a dev engine's package scratch
+    # stays in ~/.matrx-dev (Hard Rule 9). See app/package_integration.py.
+    _registry.starting("matrx_settings")
+    try:
+        from app.package_integration import configure_matrx_packages
+
+        _matrx_settings = configure_matrx_packages()
+        _registry.ready(
+            "matrx_settings",
+            base_dir=_matrx_settings.BASE_DIR,
+            temp_dir=str(_matrx_settings.TEMP_DIR),
+        )
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 0000: matrx_* settings configuration FAILED — "
+            "every matrx package (scraper parsing, Office file tools, matrx-ai) "
+            "will raise NotConfiguredError on first use",
+            exc_info=True,
+        )
+        print("[phase:matrx-settings] matrx_* settings FAILED", flush=True)
+        _registry.failed("matrx_settings", exc)
+
     # Phase 00: Remote app config (server URLs, flags, min version).
     # MUST run before every sync engine / client that consumes a server URL.
     # NEVER blocks startup: the resolved config comes from disk cache or

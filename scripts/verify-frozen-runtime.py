@@ -147,6 +147,49 @@ def check_office_archive(binary: Path) -> None:
         )
 
 
+def check_scraper_archive(binary: Path) -> None:
+    """Prove THE scraper engine reached the artifact.
+
+    `matrx_scraper/__init__.py` resolves ~90 top-level names through importlib
+    at call time (PEP 562 `__getattr__`), so PyInstaller's static analysis sees
+    almost none of the package — exactly the shape that shipped a sidecar with
+    a broken matrx_ai before. Until 2026-08-09 a forked `scraper-service/app`
+    tree was bundled as DATA instead; the fork is deleted and this package IS
+    the engine, so its absence means Scrape/Search/Research are dead on users'
+    machines while every dev run stays green.
+
+    These are the modules the local lane actually imports — the whole fetch →
+    parse → extract chain, not just the entry point.
+    """
+    required_modules = {
+        "matrx_scraper",
+        "matrx_scraper.orchestrator",     # scrape / scrape_many
+        "matrx_scraper.scraper",          # fetch transports + RequestType
+        "matrx_scraper.scrape_options",   # the result shape's field flags
+        "matrx_scraper.cache",            # session dedupe
+        "matrx_scraper.domain_config",    # StaticDomainConfigStore
+        "matrx_scraper.browser_pool",     # browser-rendered lane
+        "matrx_scraper.extractors",       # PDF / image / JSON extraction
+        "matrx_scraper.utils.url",        # validate_and_correct_url, page keys
+        "matrx_scraper.parser.core",      # the parse pipeline
+        "matrx_scraper.parser.element_extractor",
+        "matrx_scraper.parser.link_extractor",
+        "matrx_scraper.parser.noise_remover",
+        "matrx_scraper.parser.scrape_filter",
+        "matrx_scraper.parser.transform",
+        "matrx_scraper.parser.utils",     # DomainFilter / adblock lists
+        "matrx_scraper.search",           # Brave client + configure_client
+        "matrx_scraper.search.brave_client",
+        "matrx_scraper.search.search",
+    }
+    missing = sorted(required_modules - archive_modules(binary))
+    if missing:
+        raise RuntimeError(
+            "frozen archive is missing scraper engine modules (Scrape/Search/"
+            "Research would fail at runtime): " + ", ".join(missing)
+        )
+
+
 def run_office_probe(binary: Path) -> dict:
     """Execute the Office read/write probe inside the frozen process.
 
@@ -353,6 +396,7 @@ def main() -> int:
     contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
     check_archive(binary, contract, target=args.target)
     check_office_archive(binary)
+    check_scraper_archive(binary)
     print(f"archive verified: {binary}")
 
     # The Office probe needs no managed runtime and no network, so it gates

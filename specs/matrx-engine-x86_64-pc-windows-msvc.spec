@@ -134,6 +134,21 @@ if not _matrx_files_mods:
     )
 _office_hidden = _matrx_files_mods + collect_office_modules(collect_submodules)
 
+# ── THE scraper engine — matrx_scraper ────────────────────────────────────────
+# Same lazy shape as matrx_ai: matrx_scraper/__init__.py resolves ~90 top-level
+# names through importlib at call time (PEP 562 __getattr__), so PyInstaller's
+# static analysis sees almost none of the package. Until 2026-08-09 the forked
+# `scraper-service/app` tree was shipped as DATA instead, which is why this
+# collection did not exist. The fork is deleted and this package IS the engine
+# now — an omission here is a sidecar that cannot scrape at all, failing only
+# on the user's machine. Absence is FATAL, never skipped (Hard Rule 6).
+_matrx_scraper_mods = collect_submodules('matrx_scraper')
+if not _matrx_scraper_mods:
+    raise RuntimeError(
+        'matrx_scraper is absent from the build environment; the Scrape, '
+        'Search and Research tools would be missing from the sidecar'
+    )
+
 
 
 a = Analysis(
@@ -145,7 +160,8 @@ a = Analysis(
         (os.path.join(_ROOT, 'pyproject.toml'), '.'),
         (os.path.join(_ROOT, 'config/runtime-manifests'), 'config/runtime-manifests'),
     ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data + _pkg_metadata + _office_datas,
-    hiddenimports=_matrx_ai_mods + _protobuf_mods + _shared_runtime_mods + _office_hidden + [
+    hiddenimports=_matrx_ai_mods + _protobuf_mods + _shared_runtime_mods + _office_hidden
+    + _matrx_scraper_mods + [
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
         'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',
         'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto',

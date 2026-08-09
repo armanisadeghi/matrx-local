@@ -1,7 +1,7 @@
 {
-  "contract_sha256": "fd3834162e0fa5d3c3d45e407a4375fe62c3354963e0723d3a3a4e0c733f041f",
+  "contract_sha256": "76543df0c6c1b5d396862f097a0b00ac62c06452b4a0719b2cc16a9dace754a3",
   "lock_file": "image-gen-x86_64-unknown-linux-gnu.requirements.txt",
-  "lock_sha256": "cec8940f2342425dca48b55d46d68f00fca648440f96fa9f0afd3ee226e583f1",
+  "lock_sha256": "85955ca29ec33a6ad3e74e0f13bb78b20534155a88a232c6417cd02083056136",
   "minimum_glibc": "2.28",
   "packages": [
     {
@@ -88,12 +88,12 @@
     },
     {
       "name": "cuda-pathfinder",
-      "version": "1.5.6",
+      "version": "1.6.0",
       "wheels": [
         {
-          "filename": "cuda_pathfinder-1.5.6-py3-none-any.whl",
-          "sha256": "7e4c07c117b78ba1fb35dac4c444d21f3677b1b1ff56175c53a8e3025c5b43c0",
-          "url": "https://files.pythonhosted.org/packages/d2/53/8fc9b0cdc5b7f62746e6a01b85b6461e5ae27f871010a5fcf8fa6950766d/cuda_pathfinder-1.5.6-py3-none-any.whl"
+          "filename": "cuda_pathfinder-1.6.0-py3-none-any.whl",
+          "sha256": "1503af579d8379c24bdd65528379bc57039b0455be9f5f9686cf8e473a1fce51",
+          "url": "https://files.pythonhosted.org/packages/fc/b4/d088047afe39827556df21118cac9ffd20cc3f968c99a7681494d1eb333c/cuda_pathfinder-1.6.0-py3-none-any.whl"
         }
       ]
     },

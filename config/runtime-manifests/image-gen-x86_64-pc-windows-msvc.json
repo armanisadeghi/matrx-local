@@ -1,7 +1,7 @@
 {
-  "contract_sha256": "fd3834162e0fa5d3c3d45e407a4375fe62c3354963e0723d3a3a4e0c733f041f",
+  "contract_sha256": "76543df0c6c1b5d396862f097a0b00ac62c06452b4a0719b2cc16a9dace754a3",
   "lock_file": "image-gen-x86_64-pc-windows-msvc.requirements.txt",
-  "lock_sha256": "48c969b1ebe0c7518aebbfa8593c590d4c67bd2c76eb19202182c159de0eb2c7",
+  "lock_sha256": "ac2469c6154c2a0daeda316a9563fd061acdf9262cfef2789e046ea873a04a57",
   "packages": [
     {
       "name": "accelerate",

@@ -428,6 +428,15 @@ args = [
     # specs/_office_bundle.py (imported below, after sys.path picks up specs/).
     "--collect-submodules", "matrx_files",
     "--hidden-import", "matrx_files",
+    # THE scraper engine. Same PEP 562 lazy-__getattr__ shape as matrx_ai:
+    # `matrx_scraper/__init__.py` resolves ~90 top-level names through
+    # importlib at call time, so static analysis sees almost none of the
+    # package. Until 2026-08-09 the forked `scraper-service/app` tree was
+    # shipped as DATA instead, which is why this line did not exist; the fork
+    # is deleted and the package IS the engine now, so an omission here is a
+    # sidecar that cannot scrape at all.
+    "--collect-submodules", "matrx_scraper",
+    "--hidden-import", "matrx_scraper",
     # google.protobuf is a namespace-package member PyInstaller misses; when
     # absent from the bundle, `import google.protobuf` resolves via sys.path
     # to ~/.matrx/image-gen-packages' protobuf 7.x, which xai-sdk hard-rejects

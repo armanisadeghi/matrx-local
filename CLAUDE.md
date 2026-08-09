@@ -210,6 +210,26 @@ cd desktop && pnpm tauri:dev
    content dict. `STORED_FIELDS` there names real `ScrapeResult` fields and
    crashes at call time if one is renamed away.
 
+   **The client sees ONE shape, whichever lane ran.** Local and remote scrapes
+   run the same engine, so they must be indistinguishable to a client.
+   [`app/services/scraper/result_contract.py`](app/services/scraper/result_contract.py)
+   is the only place a scrape result becomes a client payload: the `Scrape` /
+   `FetchWithBrowser` tools emit it as `metadata["results"]` (always a list,
+   single URL or bulk), and `/remote-scraper/scrape` + `/scrape/stream` run the
+   server's pages through the same converter before they leave the proxy. The
+   client reads it in exactly one place,
+   [`desktop/src/lib/scrape-result.ts`](desktop/src/lib/scrape-result.ts) —
+   adding a second mapping at a call site re-forks the contract one layer up,
+   which is what the `status`-string shim used to do (deleted 2026-08-09).
+   `tests/unit/test_scrape_result_contract.py` fails if the Python and
+   TypeScript field lists drift.
+
+   The scraper server streams **NDJSON**, not SSE. The scrape proxy translates
+   it into real SSE frames (`event: page_result` carrying the contract); do not
+   forward server envelopes raw under a `text/event-stream` content type — the
+   browser's SSE parser drops every line and the stream silently produces
+   nothing.
+
 3. **Graceful degradation** — Engine works without a Brave API key (search disabled). Never add a hard dependency on it. Playwright, psutil, zeroconf are always-available core deps. (There is no local Postgres tier any more — the scrape cache is in-memory; see § External Connections.)
 
 4. **Port 22140** — Default engine port. Auto-scans 22140–22159. Discovery file: `~/.matrx/local.json`.

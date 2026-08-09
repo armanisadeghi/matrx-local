@@ -9,10 +9,13 @@ unauthenticated requests (server-to-server or dev). All routes work for
 authenticated users regardless of whether SCRAPER_API_KEY is set.
 """
 
+import json
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from app.services.scraper.remote_client import get_remote_scraper
+from app.services.scraper.result_contract import from_page_dict
 from app.common.system_logger import get_logger
 
 router = APIRouter(prefix="/remote-scraper", tags=["remote-scraper"])
@@ -74,25 +77,81 @@ async def remote_scraper_status():
 
 @router.post("/scrape")
 async def remote_scrape(req: ScrapeRequest, request: Request):
-    """Scrape URLs via the remote server. Results are stored server-side."""
+    """Scrape URLs via the remote server. Results are stored server-side.
+
+    Results are normalised through `result_contract` — the SAME conversion the
+    local `Scrape` tool runs — so a client cannot tell a remote result from a
+    local one. The server's own response is untouched; only this proxy's
+    payload is shaped.
+    """
     client = _get_client_or_raise()
     try:
-        return await client.scrape(req.urls, req.options, auth_token=_get_user_token(request))
+        resp = await client.scrape(req.urls, req.options, auth_token=_get_user_token(request))
     except Exception as e:
         logger.error("Remote scrape failed: %s", e)
         raise HTTPException(502, f"Remote scraper error: {e}")
+
+    elapsed_ms = int(resp.get("execution_time_ms") or 0)
+    pages = [from_page_dict(p, elapsed_ms=elapsed_ms) for p in resp.get("results") or []]
+    return {
+        "results": pages,
+        "total": len(pages),
+        "success_count": sum(1 for p in pages if p["success"]),
+        "elapsed_ms": elapsed_ms,
+    }
+
+
+async def _scrape_sse(urls: list[str], options: dict | None, auth_token: str | None):
+    """Translate the scraper server's NDJSON stream into canonical SSE frames.
+
+    The server streams NDJSON envelopes (`{"event":"data","data":{"type":
+    "fetch_results","results":[page,…]}}`) — not SSE. Forwarding those raw
+    under a `text/event-stream` content type gave the browser lines its SSE
+    parser silently dropped, so remote streaming produced nothing. Here each
+    page becomes one `page_result` event carrying exactly the client contract,
+    identical to what the local lane returns.
+    """
+    client = _get_client_or_raise()
+
+    def frame(event: str, payload: dict) -> bytes:
+        return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
+
+    try:
+        async for raw in client.stream_sse(
+            "/api/scraper/quick-scrape",
+            {"urls": urls, "options": options or {}},
+            auth_token=auth_token,
+        ):
+            line = raw.decode("utf-8", "replace").strip()
+            if not line:
+                continue
+            try:
+                envelope = json.loads(line)
+            except json.JSONDecodeError:
+                logger.warning("Remote scrape stream: unparseable line %r", line[:200])
+                continue
+
+            kind = envelope.get("event")
+            data = envelope.get("data")
+            if kind == "data" and isinstance(data, dict) and data.get("type") == "fetch_results":
+                elapsed_ms = int((data.get("metadata") or {}).get("execution_time_ms") or 0)
+                for page in data.get("results") or []:
+                    yield frame("page_result", from_page_dict(page, elapsed_ms=elapsed_ms))
+            elif kind == "error":
+                message = data if isinstance(data, str) else json.dumps(data)
+                yield frame("error", {"failure_reason": message})
+    except Exception as e:
+        logger.error("Remote scrape stream failed: %s", e)
+        yield frame("error", {"failure_reason": f"Remote scraper error: {e}"})
+
+    yield frame("done", {})
 
 
 @router.post("/scrape/stream")
 async def remote_scrape_stream(req: ScrapeRequest, request: Request):
     """Scrape URLs via SSE — results stream back as each URL completes."""
-    client = _get_client_or_raise()
     return StreamingResponse(
-        client.stream_sse(
-            "/api/scraper/quick-scrape",
-            {"urls": req.urls, "options": req.options or {}},
-            auth_token=_get_user_token(request),
-        ),
+        _scrape_sse(req.urls, req.options, _get_user_token(request)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

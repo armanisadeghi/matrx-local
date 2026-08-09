@@ -10,7 +10,12 @@
  */
 
 import { useState, useCallback, useRef, useMemo } from "react";
-import { engine, type ScrapeResultData } from "@/lib/api";
+import { engine } from "@/lib/api";
+import {
+  failedScrapeResult,
+  toScrapeResult,
+  type ScrapeResultData,
+} from "@/lib/scrape-result";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -32,7 +37,7 @@ export interface ScrapeHistoryEntry {
   elapsed_ms: number;
   savedAt: string;
   content?: string;
-  status_code?: number;
+  status_code?: number | null;
   method?: ScrapeMethod;
 }
 
@@ -105,26 +110,26 @@ function logFailure(
     status_code: result?.status_code ?? null,
     content_type: result?.content_type ?? null,
     title: result?.title ?? null,
-    response_body_preview: result?.content ? result.content.slice(0, 500) : null,
-    error_field: result?.error ?? null,
+    response_body_preview: result?.text_data
+      ? result.text_data.slice(0, 500)
+      : null,
+    failure_reason: result?.failure_reason ?? null,
     timestamp: new Date().toISOString(),
   });
 }
 
-// ── Result normalisation ───────────────────────────────────────────────────
+// ── Result reading ─────────────────────────────────────────────────────────
+// Every lane returns the engine's canonical payload; `toScrapeResult` (in
+// lib/scrape-result.ts) is the one reader. Nothing is mapped here.
 
-function makeFallbackResult(url: string, error: string): ScrapeResultData {
-  return {
-    url,
-    success: false,
-    status_code: 0,
-    content: "",
-    title: "",
-    content_type: "",
-    response_url: url,
-    error,
-    elapsed_ms: 0,
-  };
+/** Pull the first result out of a tool's metadata. */
+function firstToolResult(
+  metadata: Record<string, unknown> | undefined,
+  url: string,
+): ScrapeResultData | null {
+  const results = metadata?.results;
+  if (!Array.isArray(results) || results.length === 0) return null;
+  return toScrapeResult(results[0], url);
 }
 
 async function executeScrape(
@@ -159,18 +164,10 @@ async function executeScrape(
     console.info(`[use-scrape/executeScrape] FetchWithBrowser returned`, {
       url, type: toolResult.type, outputLength: toolResult.output?.length, elapsed_ms: Date.now() - t0,
     });
-    const meta = toolResult.metadata ?? {};
-    return {
-      url,
-      success: toolResult.type === "success",
-      status_code: (meta.status_code as number) ?? 0,
-      content: toolResult.output,
-      title: (meta.title as string) ?? "",
-      content_type: "text/html",
-      response_url: (meta.url as string) ?? url,
-      error: toolResult.type === "error" ? toolResult.output : null,
-      elapsed_ms: (meta.elapsed_ms as number) ?? 0,
-    };
+    return (
+      firstToolResult(toolResult.metadata, url) ??
+      failedScrapeResult(url, toolResult.output || "Browser fetch failed")
+    );
   }
 
   if (method === "engine") {
@@ -194,25 +191,16 @@ async function executeScrape(
       metadataKeys: toolResult.metadata ? Object.keys(toolResult.metadata) : [],
       elapsed_ms: Date.now() - t0,
     });
-    const meta = toolResult.metadata ?? {};
-    const results = meta.results as Record<string, unknown>[] | undefined;
-    const r = results?.[0];
-    if (results && results.length > 0) {
-      console.info(`[use-scrape/executeScrape] first result metadata`, {
-        url, status: r?.status, status_code: r?.status_code, has_error: !!r?.error,
-      });
-    }
-    return {
+    const result =
+      firstToolResult(toolResult.metadata, url) ??
+      failedScrapeResult(url, toolResult.output || "Scrape failed");
+    console.info(`[use-scrape/executeScrape] first result metadata`, {
       url,
-      success: r ? r.status === "success" : toolResult.type === "success",
-      status_code: (r?.status_code as number) ?? (meta.status_code as number) ?? 0,
-      content: toolResult.output,
-      title: (r?.title as string) ?? "",
-      content_type: (r?.content_type as string) ?? "text/html",
-      response_url: (r?.url as string) ?? url,
-      error: r?.error ? String(r.error) : toolResult.type === "error" ? toolResult.output : null,
-      elapsed_ms: (r?.elapsed_ms as number) ?? (meta.elapsed_ms as number) ?? 0,
-    };
+      success: result.success,
+      status_code: result.status_code,
+      failure_reason: result.failure_reason,
+    });
+    return result;
   }
 
   // remote — caller handles SSE streaming; this path is never called directly
@@ -261,27 +249,17 @@ export function useScrapeOne() {
           }
           console.info(`[use-scrape/useScrapeOne] scrapeRemotely() returned`, {
             url: normalized, resultCount: resp.results.length,
-            status: resp.status, execution_time_ms: resp.execution_time_ms,
+            success_count: resp.success_count, elapsed_ms: resp.elapsed_ms,
           });
           const r = resp.results[0];
           if (!r) throw new Error("No result returned from remote scraper");
 
-          const mapped: ScrapeResultData = {
-            url: r.url,
-            success: r.status === "success",
-            status_code: r.status_code ?? 0,
-            content: r.text_data ?? "",
-            title: "",
-            content_type: r.content_type ?? "",
-            response_url: r.url,
-            error: r.error,
-            elapsed_ms: resp.execution_time_ms,
-          };
+          const mapped = toScrapeResult(r, normalized);
 
           if (mapped.success) {
             logSuccess(normalized, mapped, method);
           } else {
-            logFailure(normalized, method, useCache, new Error(mapped.error ?? "Unknown error"), mapped);
+            logFailure(normalized, method, useCache, new Error(mapped.failure_reason ?? "Unknown error"), mapped);
           }
 
           addToHistory({
@@ -290,7 +268,7 @@ export function useScrapeOne() {
             title: mapped.title,
             elapsed_ms: mapped.elapsed_ms,
             savedAt: new Date().toISOString(),
-            content: mapped.content.slice(0, 2000),
+            content: mapped.text_data.slice(0, 2000),
             status_code: mapped.status_code,
             method,
           });
@@ -308,7 +286,7 @@ export function useScrapeOne() {
         if (res.success) {
           logSuccess(normalized, res, method);
         } else {
-          logFailure(normalized, method, useCache, new Error(res.error ?? "Scrape failed"), res);
+          logFailure(normalized, method, useCache, new Error(res.failure_reason ?? "Scrape failed"), res);
         }
 
         addToHistory({
@@ -317,7 +295,7 @@ export function useScrapeOne() {
           title: res.title,
           elapsed_ms: res.elapsed_ms,
           savedAt: new Date().toISOString(),
-          content: res.content.slice(0, 2000),
+          content: res.text_data.slice(0, 2000),
           status_code: res.status_code,
           method,
         });
@@ -388,17 +366,21 @@ export function useScrapeMany() {
         id: `${h.url}-${Date.now()}`,
         url: h.url,
         status: h.success ? "success" : "error",
-        result: {
-          url: h.url,
-          success: h.success,
-          status_code: h.status_code ?? (h.success ? 200 : 0),
-          content: h.content ?? "",
-          title: h.title,
-          content_type: "text/plain",
-          response_url: h.url,
-          error: h.success ? null : "Restored from history (original error not saved)",
-          elapsed_ms: h.elapsed_ms,
-        },
+        result: toScrapeResult(
+          {
+            url: h.url,
+            success: h.success,
+            status_code: h.status_code ?? (h.success ? 200 : null),
+            text_data: h.content ?? "",
+            title: h.title,
+            content_type: "text/plain",
+            failure_reason: h.success
+              ? null
+              : "Restored from history (original failure reason not saved)",
+            elapsed_ms: h.elapsed_ms,
+          },
+          h.url,
+        ),
         startedAt: new Date(h.savedAt),
         completedAt: new Date(h.savedAt),
       };
@@ -422,7 +404,7 @@ export function useScrapeMany() {
           ? {
               ...e,
               status: "error",
-              result: makeFallbackResult(e.url, "Stopped by user"),
+              result: failedScrapeResult(e.url, "Stopped by user"),
               completedAt: new Date(),
             }
           : e,
@@ -467,6 +449,20 @@ export function useScrapeMany() {
           ),
         );
 
+      const markAllRunningFailed = (reason: string) =>
+        setEntries((prev) =>
+          prev.map((e) =>
+            e.status === "running"
+              ? {
+                  ...e,
+                  status: "error",
+                  result: failedScrapeResult(e.url, reason),
+                  completedAt: new Date(),
+                }
+              : e,
+          ),
+        );
+
       if (method === "remote") {
         const urls = toScrape.map((e) => e.url);
         urls.forEach((url) => markRunning(url));
@@ -484,23 +480,15 @@ export function useScrapeMany() {
             if (isStopped()) return;
             const d = data as Record<string, unknown>;
             if (event === "page_result") {
-              const url = String(d.url ?? "");
-              const result: ScrapeResultData = {
-                url,
-                success: d.status === "success",
-                status_code: (d.status_code as number) ?? 0,
-                content: String(d.text_data ?? d.content ?? ""),
-                title: String(d.title ?? ""),
-                content_type: String(d.content_type ?? ""),
-                response_url: url,
-                error: d.error ? String(d.error) : null,
-                elapsed_ms: (d.elapsed_ms as number) ?? 0,
-              };
+              // The proxy already emitted the canonical contract — same
+              // converter the local lane runs. Read it, don't remap it.
+              const result = toScrapeResult(d);
+              const url = result.url;
 
               if (result.success) {
                 logSuccess(url, result, method);
               } else {
-                logFailure(url, method, useCache, new Error(result.error ?? "Remote error"), result);
+                logFailure(url, method, useCache, new Error(result.failure_reason ?? "Remote error"), result);
               }
 
               addToHistory({
@@ -509,7 +497,7 @@ export function useScrapeMany() {
                 title: result.title,
                 elapsed_ms: result.elapsed_ms,
                 savedAt: new Date().toISOString(),
-                content: result.content.slice(0, 2000),
+                content: result.text_data.slice(0, 2000),
                 status_code: result.status_code,
                 method,
               });
@@ -517,7 +505,7 @@ export function useScrapeMany() {
               markDone(url, result);
             } else if (event === "error") {
               const url = String(d.url ?? "");
-              const errMsg = String(d.error ?? d.message ?? "Remote stream error");
+              const errMsg = String(d.failure_reason ?? "Remote stream error");
               console.error("[scrape] STREAM ERROR", {
                 url,
                 method,
@@ -525,7 +513,13 @@ export function useScrapeMany() {
                 data: d,
                 timestamp: new Date().toISOString(),
               });
-              markDone(url, makeFallbackResult(url, errMsg));
+              if (url) {
+                markDone(url, failedScrapeResult(url, errMsg));
+              } else {
+                // Whole-stream failure: every URL still in flight is dead, and
+                // leaving them spinning forever was the old behaviour.
+                markAllRunningFailed(errMsg);
+              }
             }
           },
           () => {
@@ -560,7 +554,7 @@ export function useScrapeMany() {
           if (result.success) {
             logSuccess(entry.url, result, method);
           } else {
-            logFailure(entry.url, method, useCache, new Error(result.error ?? "Scrape failed"), result);
+            logFailure(entry.url, method, useCache, new Error(result.failure_reason ?? "Scrape failed"), result);
           }
 
           addToHistory({
@@ -569,7 +563,7 @@ export function useScrapeMany() {
             title: result.title,
             elapsed_ms: result.elapsed_ms,
             savedAt: new Date().toISOString(),
-            content: result.content.slice(0, 2000),
+            content: result.text_data.slice(0, 2000),
             status_code: result.status_code,
             method,
           });
@@ -579,7 +573,7 @@ export function useScrapeMany() {
           if ((err as Error).name === "AbortError") break;
           const message = err instanceof Error ? err.message : String(err);
           logFailure(entry.url, method, useCache, err);
-          markDone(entry.url, makeFallbackResult(entry.url, message));
+          markDone(entry.url, failedScrapeResult(entry.url, message));
         }
       }
 

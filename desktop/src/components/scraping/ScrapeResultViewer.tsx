@@ -8,7 +8,7 @@ import { ExternalLink, Clock, CheckCircle2, XCircle, Loader2 } from "lucide-reac
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { ScrapeResultData } from "@/lib/api";
+import type { ScrapeResultData } from "@/lib/scrape-result";
 
 interface ScrapeResultViewerProps {
   url?: string;
@@ -76,7 +76,7 @@ export function ScrapeResultViewer({
         </span>
 
         <div className="flex shrink-0 items-center gap-2">
-          {result.status_code > 0 && (
+          {result.status_code !== null && result.status_code > 0 && (
             <Badge variant="secondary" className={cn("text-[10px] font-mono tabular-nums", statusCodeColor(result.status_code))}>
               {result.status_code}
             </Badge>
@@ -114,30 +114,30 @@ export function ScrapeResultViewer({
 
       {/* Content area */}
       <div className="min-h-0 flex-1 overflow-auto">
-        {result.error && !result.success ? (
+        {result.failure_reason && !result.success ? (
           <div className="p-4">
             <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4">
               <p className="mb-2 text-sm font-semibold text-red-700 dark:text-red-400">Scrape failed</p>
               <pre className="whitespace-pre-wrap font-mono text-xs text-red-700 dark:text-red-400 dark:text-red-300 leading-relaxed">
-                {result.error}
+                {result.failure_reason}
               </pre>
             </div>
 
             {/* Still show any partial content */}
-            {result.content && (
+            {result.text_data && (
               <div className="mt-4">
                 <p className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                   Partial content
                 </p>
                 <pre className="whitespace-pre-wrap font-mono text-xs text-foreground leading-relaxed">
-                  {result.content}
+                  {result.text_data}
                 </pre>
               </div>
             )}
           </div>
         ) : (
           <pre className="p-4 font-mono text-xs text-foreground whitespace-pre-wrap break-words leading-relaxed">
-            {result.content || "(no content returned)"}
+            {result.text_data || "(no content returned)"}
           </pre>
         )}
       </div>

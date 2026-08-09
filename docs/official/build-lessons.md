@@ -42,6 +42,42 @@ _ROOT = os.path.abspath(os.path.join(SPECPATH, '..'))
 
 This makes spec files location-independent. Never use bare relative strings.
 
+### A lazily-imported package needs its DATA collected, not just its modules
+
+`--collect-submodules docx` proves nothing about `docx/templates/default.docx`.
+python-docx's `Document()` and python-pptx's `Presentation()`, called with no
+argument, open a template file that ships **beside** the package. A bundle can
+carry every module of both packages and still raise the moment a user creates a
+document, because the template is data and no module list covers it.
+
+The Office codec is the whole failure shape in one place: `matrx_files.
+specific_handlers.office` and its renderers (python-docx / python-pptx /
+openpyxl / xlsxwriter) are imported inside functions (`file_ops._read_office`,
+`media.tool_office_generate`), so static analysis reaches none of them, and two
+of them then read data files at call time.
+
+The contract lives in **one** place, `specs/_office_bundle.py`, consumed by all
+four specs and by the `build-sidecar.sh` fallback:
+
+* `collect_office_modules()` — every submodule of every Office package; a
+  missing package raises. It must never be wrapped in `except: pass` (it was,
+  in all four specs, until 2026-08-09 — the same silent skip that shipped the
+  `google.protobuf` / `jinja2` / `huggingface_hub` / `tqdm` frozen-only outages).
+* `collect_office_datas()` — every data file, asserting `docx/templates/
+  default.docx` and `pptx/templates/default.pptx` by their **destination** path,
+  the one the frozen process resolves from `sys._MEIPASS`.
+
+And the artifact itself is verified, not just the spec inputs
+(`scripts/verify-frozen-runtime.py`, run by `build-sidecar.sh` and by the
+release workflow on every target):
+
+* `check_office_archive()` reads the built archive's PYZ **and** its data TOC.
+* `run_office_probe()` executes the binary with `MATRX_FROZEN_OFFICE_VERIFY=1`,
+  which generates a docx/pptx/xlsx from a spec, extracts each back to markdown,
+  and reads documents authored with the raw renderers — inside the real frozen
+  CPython process. It needs no managed runtime and no network, so it gates
+  every target, including the archive-only ones.
+
 ---
 
 ## Rust Crates That Download at Build Time

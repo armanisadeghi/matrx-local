@@ -120,14 +120,19 @@ _managed_runtime_excludes = managed_runtime_excluded_packages(
 # moment an Office document is read or generated. collect_data_files also ships
 # the python-docx / python-pptx default template files (default.docx /
 # default.pptx) that Document()/Presentation() load with no args.
-_office_datas = []
-_office_hidden = collect_submodules('matrx_files')
-for _office_pkg in ('docx', 'pptx', 'openpyxl', 'xlsxwriter', 'et_xmlfile'):
-    try:
-        _office_datas += collect_data_files(_office_pkg)
-        _office_hidden += collect_submodules(_office_pkg)
-    except Exception:
-        pass
+# Collection failures are FATAL here, never skipped — a build host missing
+# python-docx must fail the build, not quietly ship a sidecar that cannot open
+# a Word file. One list, four specs: see specs/_office_bundle.py.
+from _office_bundle import collect_office_datas, collect_office_modules
+
+_office_datas = collect_office_datas(collect_data_files)
+_matrx_files_mods = collect_submodules('matrx_files')
+if not _matrx_files_mods:
+    raise RuntimeError(
+        'matrx_files is absent from the build environment; the Office codec '
+        'and every Office tool would be missing from the sidecar'
+    )
+_office_hidden = _matrx_files_mods + collect_office_modules(collect_submodules)
 
 
 

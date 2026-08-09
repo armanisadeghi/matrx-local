@@ -168,6 +168,28 @@ cd desktop && pnpm tauri:dev
 
 6. **PyInstaller hidden imports must sync** — Packages PyInstaller can't auto-discover (e.g., `python_multipart`) go in all 4 `.spec` files under `specs/` AND `scripts/build-sidecar.sh` fallback. Use Python import name, not pip name. Omitting causes silent runtime failures in compiled sidecar only.
 
+   - **A collection that can fail must fail the BUILD, never be skipped.** A
+     bare `except Exception: pass` around a `collect_submodules` /
+     `collect_data_files` turns a broken build environment into a sidecar that
+     ships and then dies at the user's first click. Whole-package lists that
+     five files would otherwise duplicate live in ONE module —
+     [`specs/_managed_runtime_bundle.py`](specs/_managed_runtime_bundle.py)
+     (packages a managed runtime dir also provides) and
+     [`specs/_office_bundle.py`](specs/_office_bundle.py) (the Office codec) —
+     and both raise on absence.
+   - **`hiddenimports` does not cover DATA.** `docx.Document()` /
+     `pptx.Presentation()` load `templates/default.docx` / `default.pptx` from
+     beside the package, so a bundle can carry every module and still fail at
+     document creation. Collect the data too, and assert it by destination path.
+   - **Prove it on the ARTIFACT, not on the spec.**
+     [`scripts/verify-frozen-runtime.py`](scripts/verify-frozen-runtime.py)
+     inspects the built archive's module *and* data tables, then executes the
+     binary (`MATRX_FROZEN_OFFICE_VERIFY=1`) to read and write real Office
+     documents inside the frozen process. `build-sidecar.sh` and the release
+     workflow run it on every target. Add a lazily-imported subsystem → add its
+     archive assertion and its in-process probe in the same change.
+     Details: [docs/official/build-lessons.md](docs/official/build-lessons.md).
+
 7. **llama-server must be signed on macOS** — Re-sign with `codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY"` before `tauri-action`. Ad-hoc signatures from llama.cpp releases are rejected by Gatekeeper on end-user machines.
 
 8. **Tauri JSON Configs must be strict** — Do not use `"$comment"`, `"_comment"`, or any other non-schema properties in `tauri.conf.json` (or platform overlays like `tauri.macos.conf.json`). The Tauri CLI v2 strictly validates the merged config against its schema, and unexpected properties will fail the CI build.

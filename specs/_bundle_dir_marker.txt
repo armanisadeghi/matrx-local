@@ -1,0 +1,4 @@
+This empty file exists so PyInstaller materializes its destination directory
+inside sys._MEIPASS. See specs/_office_bundle.py — python-docx and python-pptx
+resolve template files through "<subpackage>/../templates/...", a literal path
+that POSIX and Windows can only resolve when <subpackage> exists on disk.

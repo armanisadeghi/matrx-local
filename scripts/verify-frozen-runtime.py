@@ -20,6 +20,7 @@ CONTRACT_PATH = (
     ROOT / "config" / "runtime-manifests" / "image-gen-contract.json"
 )
 SENTINEL = "MATRX_FROZEN_RUNTIME_VERIFY="
+OFFICE_SENTINEL = "MATRX_FROZEN_OFFICE_VERIFY="
 TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
@@ -46,12 +47,16 @@ def _extension_module_name(archive_name: str) -> str | None:
     return None
 
 
-def archive_modules(binary: Path) -> set[str]:
+def _open_archive(binary: Path):
     try:
         from PyInstaller.archive.readers import CArchiveReader
     except ImportError as exc:
         raise RuntimeError("PyInstaller is required to inspect the frozen archive") from exc
-    archive = CArchiveReader(str(binary))
+    return CArchiveReader(str(binary))
+
+
+def archive_modules(binary: Path) -> set[str]:
+    archive = _open_archive(binary)
     pyz = archive.open_embedded_archive("PYZ.pyz")
     modules = set(pyz.toc)
     # Extension modules are binary entries in the outer CArchive, never in the
@@ -63,6 +68,109 @@ def archive_modules(binary: Path) -> set[str]:
         if module:
             modules.add(module)
     return modules
+
+
+def archive_data_files(binary: Path) -> set[str]:
+    """Return the archive-relative paths of every bundled DATA entry.
+
+    Data files never appear in the PYZ module table, so a module-only check
+    passes on an artifact whose python-docx/python-pptx default templates never
+    shipped — the exact failure that only surfaces when a user creates a
+    document.
+    """
+    archive = _open_archive(binary)
+    return {
+        name.replace("\\", "/")
+        for name, entry in archive.toc.items()
+        if entry[-1] == "x"
+    }
+
+
+def check_office_archive(binary: Path) -> None:
+    """Prove the Office codec and its default templates reached the artifact.
+
+    The codec and its renderers are lazily imported inside functions, so
+    PyInstaller's static analysis reaches none of them and only an explicit
+    check on the built archive can prove the specs' collection worked.
+    """
+    sys.path.insert(0, str(ROOT / "specs"))
+    from _office_bundle import (
+        OFFICE_PACKAGES,
+        OFFICE_REQUIRED_DATA_FILES,
+        office_parent_relative_dirs,
+    )
+
+    modules = archive_modules(binary)
+    required_modules = {
+        "matrx_files.specific_handlers.office",
+        "matrx_files.specific_handlers.office.extract",
+        "matrx_files.specific_handlers.office.generate",
+        *OFFICE_PACKAGES,
+    }
+    missing_modules = sorted(required_modules - modules)
+    if missing_modules:
+        raise RuntimeError(
+            "frozen archive is missing Office codec modules: "
+            + ", ".join(missing_modules)
+        )
+
+    datas = archive_data_files(binary)
+    missing_datas = sorted(
+        f"{package}/{relative}"
+        for package, relative in OFFICE_REQUIRED_DATA_FILES.items()
+        if f"{package}/{relative}" not in datas
+    )
+    if missing_datas:
+        raise RuntimeError(
+            "frozen archive is missing Office default templates (document "
+            "creation would fail at runtime): " + ", ".join(missing_datas)
+        )
+
+    # python-docx / python-pptx open templates through "<subpackage>/../
+    # templates/…". The OS resolves that literal path only when <subpackage> is
+    # a real directory under sys._MEIPASS — and frozen modules live in the PYZ,
+    # not on disk. Every such directory therefore needs at least one extracted
+    # file, or the template is present and still unreachable.
+    missing_dirs = sorted(
+        directory
+        for directory in office_parent_relative_dirs()
+        if not any(entry.startswith(directory + "/") for entry in datas)
+    )
+    if missing_dirs:
+        raise RuntimeError(
+            "frozen archive has no extracted file under these Office package "
+            "directories, so their '../templates/…' lookups cannot resolve: "
+            + ", ".join(missing_dirs)
+        )
+
+
+def run_office_probe(binary: Path) -> dict:
+    """Execute the Office read/write probe inside the frozen process.
+
+    Deliberately independent of the managed image runtime so every target is
+    gated, including the ones whose managed runtime is archive-only.
+    """
+    environment = os.environ.copy()
+    environment["MATRX_FROZEN_OFFICE_VERIFY"] = "1"
+    process = subprocess.run(
+        [str(binary)],
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=300,
+        check=False,
+    )
+    payload = None
+    for line in process.stdout.splitlines():
+        if line.startswith(OFFICE_SENTINEL):
+            payload = json.loads(line[len(OFFICE_SENTINEL) :])
+    if process.returncode != 0 or not payload or not payload.get("ok"):
+        raise RuntimeError(
+            f"frozen Office codec probe failed (exit={process.returncode}):\n"
+            + process.stdout[-12000:]
+        )
+    return payload
 
 
 def check_archive(binary: Path, contract: dict, *, target: str) -> None:
@@ -241,7 +349,22 @@ def main() -> int:
     binary = args.binary.resolve(strict=True)
     contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
     check_archive(binary, contract, target=args.target)
+    check_office_archive(binary)
     print(f"archive verified: {binary}")
+
+    # The Office probe needs no managed runtime and no network, so it gates
+    # every target — including the archive-only ones — and runs before the
+    # expensive locked-runtime install. Every caller builds and verifies on the
+    # target's own platform, so the artifact is always executable here.
+    office = run_office_probe(binary)
+    print(
+        "frozen Office codec verified: generated "
+        + ", ".join(
+            f"{kind} {size}B"
+            for kind, size in sorted(office["generated_bytes"].items())
+        )
+    )
+
     if not args.archive_only:
         target_manifest = load_target_manifest(args.target, contract)
         if target_manifest is not None and target_manifest.get("supported") is False:

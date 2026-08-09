@@ -423,19 +423,10 @@ args = [
     # tool), so static analysis misses them — omitting these = ModuleNotFoundError
     # in the frozen sidecar only. --collect-data ships python-docx/pptx default
     # template files (default.docx/default.pptx) that Document()/Presentation()
-    # load with no args. Keep in sync with specs/*.spec.
+    # load with no args. The package list and the required-template assertion
+    # live in ONE place so this path and specs/*.spec cannot drift:
+    # specs/_office_bundle.py (imported below, after sys.path picks up specs/).
     "--collect-submodules", "matrx_files",
-    "--collect-submodules", "docx",
-    "--collect-submodules", "pptx",
-    "--collect-submodules", "openpyxl",
-    "--collect-submodules", "xlsxwriter",
-    "--collect-data", "docx",
-    "--collect-data", "pptx",
-    "--hidden-import", "docx",
-    "--hidden-import", "pptx",
-    "--hidden-import", "openpyxl",
-    "--hidden-import", "xlsxwriter",
-    "--hidden-import", "et_xmlfile",
     "--hidden-import", "matrx_files",
     # google.protobuf is a namespace-package member PyInstaller misses; when
     # absent from the bundle, `import google.protobuf` resolves via sys.path
@@ -518,6 +509,32 @@ for _pkg in managed_runtime_excluded_packages(target):
     args += ["--exclude-module", _pkg]
 for _pkg in managed_runtime_shared_packages(target):
     args += ["--collect-submodules", _pkg]
+
+# Office codec — same single source of truth the specs use. Its collectors are
+# fatal on a missing package or a missing default.docx/default.pptx template.
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+from _office_bundle import (
+    DIR_MARKER,
+    OFFICE_PACKAGES,
+    collect_office_datas,
+    collect_office_modules,
+    office_parent_relative_dirs,
+)
+
+collect_office_datas(collect_data_files)  # assert the templates are reachable
+collect_office_modules(collect_submodules)  # assert every package is present
+for _pkg in OFFICE_PACKAGES:
+    args += ["--collect-submodules", _pkg, "--collect-data", _pkg,
+             "--hidden-import", _pkg]
+# --collect-data ships each package's OWN data, which is not enough: python-docx
+# and python-pptx read templates through "<subpackage>/../templates/…", and that
+# literal path resolves only when <subpackage> physically exists under
+# sys._MEIPASS. The specs get these directories from collect_office_datas'
+# return value; this path has to add them explicitly or it would rebuild the
+# exact frozen-only FileNotFoundError the gate now rejects.
+for _dir in office_parent_relative_dirs():
+    args += ["--add-data", f"{DIR_MARKER}{os.pathsep}{_dir}"]
 
 args.append("run.py")
 

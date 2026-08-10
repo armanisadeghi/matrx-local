@@ -30,6 +30,17 @@ _Last updated: 2026-07-14 (step-7 pass: both official-docs asks APPROVED + appli
 
 ## Active (ranked — quickest wins first within priority)
 
+- [ ] **Reset the matrx-local E2E test account password and refresh `desktop/.env.test` (1 minute)** —
+  `./scripts/smoke.sh` on 2026-08-09 passed the three unauthenticated production
+  boot checks but the authenticated shell stayed on Login with Supabase
+  `Invalid login credentials` (run
+  `.smoke/runs/20260809-172724-79912`; `.env.test` is gitignored). In the
+  Supabase dashboard for `txzxabzwovsujtloxrus`, reset the password for
+  `matrx-local-e2e@titaniumsuccess.com`, then from `desktop/` run
+  `OLD_PASSWORD='<dashboard password>' TEST_EMAIL='matrx-local-e2e@titaniumsuccess.com' node e2e/setup/rotate-password.mjs`.
+  The script generates a second strong password, verifies it, and writes it
+  mode-600 to `.env.test` without printing it. Re-run `../scripts/smoke.sh web`.
+
 - [ ] **APPROVE: add 2 rows to `docs/official/settings-catalog.md` (5 seconds — say yes)** —
   scrape concurrency is now a user setting (was the hardcoded
   `MAX_SCRAPE_CONCURRENCY = 5` / `MAX_RESEARCH_CONCURRENCY = 5` in

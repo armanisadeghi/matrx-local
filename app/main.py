@@ -53,6 +53,7 @@ from app.api.scrape_routes import router as scrape_router
 from app.api.extension_bridge_routes import router as extension_bridge_router
 from app.api.extension_routes import router as extension_router
 from app.api.artifact_routes import router as artifact_router
+from app.api.coding_session_routes import router as coding_session_router
 from app.api.filesystem_routes import router as filesystem_router
 from app.services.downloads.routes import router as downloads_router
 from app.config import (
@@ -901,6 +902,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("artifact_sync", exc)
 
+    # Phase 2h: provider-neutral coding-session hook outbox. Local command
+    # hooks commit into SQLite through POST /coding-session/hooks; this loop
+    # forwards the oldest exact envelope to aidream with the persisted user's
+    # JWT. It owns no process and adds no daemon beyond this asyncio task.
+    _registry.starting("coding_session_bridge")
+    try:
+        from app.services.coding_sessions import get_coding_session_bridge_outbox
+
+        _coding_bridge = get_coding_session_bridge_outbox()
+        await _coding_bridge.start_background()
+        _registry.ready(
+            "coding_session_bridge",
+            ingress="/coding-session/hooks",
+            upstream="/api/coding-sessions/bridge",
+        )
+        logger.info("[app/main.py] Phase 2h: Coding-session bridge outbox started ✓")
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 2h: Coding-session bridge FAILED to start — "
+            "local hook events cannot be durably forwarded",
+            exc_info=True,
+        )
+        _registry.failed("coding_session_bridge", exc)
+
     # Phase 3: Start scraper engine
     print("[phase:scraper] Starting scraper engine...", flush=True)
     logger.info("[app/main.py] Phase 3: Starting scraper engine...")
@@ -1576,6 +1601,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("[app/main.py] Artifact publisher did not stop cleanly: %s", exc)
         _registry.stopped("artifact_sync")
 
+    try:
+        from app.services.coding_sessions import (
+            get_coding_session_bridge_outbox as _get_coding_bridge,
+        )
+
+        _coding_bridge = _get_coding_bridge()
+        if _coding_bridge.active:
+            _registry.stopping("coding_session_bridge")
+            await asyncio.wait_for(_coding_bridge.stop_background(), timeout=3.0)
+            _registry.stopped("coding_session_bridge")
+            logger.info("[app/main.py] Coding-session bridge outbox stopped ✓")
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning(
+            "[app/main.py] Coding-session bridge did not stop cleanly: %s", exc
+        )
+        _registry.stopped("coding_session_bridge")
+
     if _doc_sync.watcher_active:
         try:
             await asyncio.wait_for(_doc_sync.stop_watcher(), timeout=3.0)
@@ -1816,6 +1858,7 @@ app.include_router(chat_router)
 app.include_router(data_router)
 app.include_router(permissions_router)
 app.include_router(artifact_router)
+app.include_router(coding_session_router)
 app.include_router(filesystem_router)
 app.include_router(capabilities_router)
 app.include_router(fetch_proxy_router)

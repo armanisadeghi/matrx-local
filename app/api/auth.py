@@ -308,6 +308,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path == "/extension/pair":
             return await call_next(request)
 
+        # Provider command hooks cannot carry the user's Supabase JWT. This
+        # mutation surface owns a stricter direct-loopback-only check and must
+        # receive tunnel-marked requests itself so they get the contractual
+        # hard 403 rather than a generic missing-credential 401.
+        if path == "/coding-session/hooks":
+            return await call_next(request)
+
         # Local-bootstrap routes — permissive on direct loopback (the Rust
         # shell / desktop UI have no verifiable token yet), but over the
         # tunnel they require a verified identity like any other route.

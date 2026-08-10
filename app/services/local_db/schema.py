@@ -808,6 +808,32 @@ WHERE cloud_sync_status = 'failed'
   AND is_deleted = 0
 """
 
+# Coding-agent command hooks must not wait on network availability. The exact
+# validated adapter envelope lands here before the loopback ingress returns
+# 202; an engine-owned publisher later replays the oldest row unchanged to
+# aidream. This is deliberately a local outbox, not a chat.* structural mirror:
+# raw provider ledgers remain owner-only in cloud Postgres and are never pulled.
+_V19_CODING_SESSION_BRIDGE_OUTBOX = """
+CREATE TABLE IF NOT EXISTS coding_session_bridge_outbox (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    dedupe_key      TEXT,
+    envelope_json   TEXT NOT NULL,
+    envelope_sha256 TEXT NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at REAL NOT NULL DEFAULT 0,
+    last_error      TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_coding_session_bridge_dedupe
+ON coding_session_bridge_outbox(dedupe_key)
+WHERE dedupe_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_coding_session_bridge_order
+ON coding_session_bridge_outbox(id)
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -827,4 +853,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (16, _V16_LOCAL_ARTIFACTS),
     (17, _V17_DROP_STALE_API_KEY_VALIDATION),
     (18, _V18_SCRAPE_SYNC_BLOCK_REASON),
+    (19, _V19_CODING_SESSION_BRIDGE_OUTBOX),
 ]

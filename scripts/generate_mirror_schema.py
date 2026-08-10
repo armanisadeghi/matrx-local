@@ -45,7 +45,13 @@ OUTPUT_PATH = REPO_ROOT / "app" / "services" / "local_db" / "mirror_schema.py"
 # the rest of that schema (idempotency, webhooks, OCR, …) is server-side
 # machinery a device replica never mirrors.
 MIRRORED_SCHEMAS: dict[str, dict] = {
-    "chat": {"include_views": False},
+    # Provider-native ledgers can contain commands, paths, file contents, and
+    # secrets. They are owner-only cloud state and must never enter the generic
+    # desktop chat replica, even after a future live-schema snapshot refresh.
+    "chat": {
+        "include_views": False,
+        "exclude_tables": ("coding_session", "coding_session_entry"),
+    },
     "files": {"include_views": False, "tables": ("files", "folders")},
 }
 
@@ -124,10 +130,13 @@ def generate(snapshot: dict) -> str:
             raise SystemExit(f"schema '{schema}' missing from snapshot — refresh snapshot.json")
         mirror[schema] = {}
         table_scope = opts.get("tables")
+        excluded = frozenset(opts.get("exclude_tables", ()))
         for name, spec in sorted(tables.items()):
             if spec["kind"] != "table" and not opts["include_views"]:
                 continue
             if table_scope is not None and name not in table_scope:
+                continue
+            if name in excluded:
                 continue
             mirror[schema][name] = build_table_entry(schema, name, spec)
 

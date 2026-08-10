@@ -41,6 +41,11 @@ logger = get_logger()
 
 _SCHEMA = "chat"
 
+# Defense in depth beyond generate_mirror_schema.py: these owner-only raw
+# provider ledgers may contain secrets and must never be pulled or pushed by
+# generic chat sync even if somebody checks in a malformed generated mirror.
+_OWNER_ONLY_RAW_TABLES = frozenset({"coding_session", "coding_session_entry"})
+
 # Parents before children — RLS on child tables authorizes through the
 # conversation row, so it must exist in the cloud first.
 _PUSH_ORDER = [
@@ -404,7 +409,7 @@ class ChatSyncEngine:
             table = r["entity_type"].split(".", 1)[1]
             by_table.setdefault(table, []).append(dict(r))
 
-        known = set(MIRROR_TABLES[_SCHEMA])
+        known = set(MIRROR_TABLES[_SCHEMA]) - _OWNER_ONLY_RAW_TABLES
         ordered = [t for t in _PUSH_ORDER if t in by_table] + sorted(
             t for t in by_table if t not in _PUSH_ORDER
         )
@@ -752,6 +757,15 @@ class ChatSyncEngine:
     async def _pull_changes(self) -> dict[str, Any]:
         results: dict[str, Any] = {}
         for table, spec in MIRROR_TABLES[_SCHEMA].items():
+            if table in _OWNER_ONLY_RAW_TABLES:
+                logger.error(
+                    "[chat_sync] SECURITY GUARD: refusing generic mirror pull for "
+                    "owner-only raw table chat.%s; regenerate the mirror with its "
+                    "exclusion policy",
+                    table,
+                )
+                results[table] = {"skipped": "owner_only_raw_ledger"}
+                continue
             cursor_col = spec["cursor_col"]
             if cursor_col is None:
                 if not self._warned_no_cursor.get(table):

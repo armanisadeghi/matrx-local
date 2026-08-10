@@ -15,7 +15,7 @@ from typing import Optional
 
 import aiosqlite
 
-from app.config import LOCAL_DB_PATH, MATRX_HOME_DIR
+from app.config import LOCAL_DB_PATH
 from app.common.system_logger import get_logger
 from app.services.local_db.mirror import attach_and_ensure_mirror
 from app.services.local_db.schema import MIGRATIONS

@@ -54,7 +54,6 @@ def _stable_delivery_key(request: BridgeRequest) -> str | None:
             request.provider.value,
             request.provider_session_id,
             request.stream_key,
-            hook.name,
             hook.stable_event_id,
         ],
         separators=(",", ":"),

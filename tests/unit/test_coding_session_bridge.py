@@ -169,6 +169,11 @@ async def test_ack_follows_commit_and_stable_replay_is_local_noop(
     with pytest.raises(BridgeMutationConflict):
         await service.enqueue(_hook(text="mutated"))
 
+    renamed = _hook().model_dump(mode="json")
+    renamed["hook_event"]["name"] = "Stop"
+    with pytest.raises(BridgeMutationConflict):
+        await service.enqueue(BridgeRequest.model_validate(renamed))
+
 
 @pytest.mark.anyio
 async def test_missing_provider_id_is_not_falsely_deduplicated(

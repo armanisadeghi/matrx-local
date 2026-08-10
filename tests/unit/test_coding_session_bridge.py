@@ -304,7 +304,21 @@ async def test_unknown_remote_outcome_survives_restart_and_replays_exact_envelop
         (receipt.receipt_id,),
     )
     await bridge_db.commit()
-    online = FakeClient()
+    online = FakeClient(
+        [
+            {
+                "schema_version": 1,
+                "action": "observe_hook",
+                "provider": "claude_code",
+                "session_id": "11111111-1111-4111-8111-111111111111",
+                "conversation_id": "22222222-2222-4222-8222-222222222222",
+                "fidelity": "event_mirror",
+                "accepted": 0,
+                "duplicates": 1,
+                "conflicts": 0,
+            }
+        ]
+    )
     restarted = CodingSessionBridgeOutbox(
         db=bridge_db,
         client=online,

@@ -391,7 +391,7 @@ Never let a discovered issue go untracked. Prefer the right file; do not invent 
 - Work systematically, one task at a time
 - Track discoveries in `FOUND_DEFECTS.md`; execute approved work from `.matrx/AGENT_TASKS.md`
 - Production-grade only — no stubs, no TODOs, no placeholder logic
-- **Changed anything that runs at startup? A green typecheck is not evidence the app starts — run `./scripts/smoke.sh` (Windows: `scripts\smoke.ps1`), which builds/launches the app and hands you the logs. See [docs/SMOKE_HARNESS.md](docs/SMOKE_HARNESS.md).**
+- **Changed anything that runs at startup? A green frontend typecheck (`cd desktop && pnpm typecheck`) is not evidence the app starts — run `./scripts/smoke.sh` (Windows: `scripts\smoke.ps1`), which builds/launches the app and hands you the logs. See [docs/SMOKE_HARNESS.md](docs/SMOKE_HARNESS.md).**
 - Keep solutions simple; avoid over-engineering
 - Keep going until done or stuck
 - OK to edit .env files — comment out, don't delete

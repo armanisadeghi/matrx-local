@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -173,6 +174,22 @@ async def test_ack_follows_commit_and_stable_replay_is_local_noop(
     renamed["hook_event"]["name"] = "Stop"
     with pytest.raises(BridgeMutationConflict):
         await service.enqueue(BridgeRequest.model_validate(renamed))
+
+
+@pytest.mark.anyio
+async def test_concurrent_stable_replays_commit_one_row_without_rollback(
+    bridge_db: LocalDatabase,
+) -> None:
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=FakeClient(),
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    receipts = await asyncio.gather(*(service.enqueue(_hook()) for _ in range(8)))
+    assert len({receipt.receipt_id for receipt in receipts}) == 1
+    assert sum(receipt.duplicate for receipt in receipts) == 7
+    assert await service.pending_count() == 1
 
 
 @pytest.mark.anyio

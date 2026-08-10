@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import sqlite3
 import time
 from collections.abc import Callable
 from typing import Any
@@ -125,19 +124,17 @@ class CodingSessionBridgeOutbox:
         _payload, serialized, digest = _canonical_envelope(request)
         dedupe_key = _stable_delivery_key(request)
         duplicate = False
-        try:
-            cursor = await self._db.execute(
-                """INSERT INTO coding_session_bridge_outbox (
-                     dedupe_key, envelope_json, envelope_sha256
-                   ) VALUES (?, ?, ?)""",
-                (dedupe_key, serialized, digest),
-            )
-            await self._db.commit()
+        insert_verb = "INSERT OR IGNORE" if dedupe_key is not None else "INSERT"
+        cursor = await self._db.execute(
+            f"""{insert_verb} INTO coding_session_bridge_outbox (
+                 dedupe_key, envelope_json, envelope_sha256
+               ) VALUES (?, ?, ?)""",
+            (dedupe_key, serialized, digest),
+        )
+        await self._db.commit()
+        if cursor.rowcount == 1:
             outbox_id = int(cursor.lastrowid)
-        except sqlite3.IntegrityError:
-            await self._db.db.rollback()
-            if dedupe_key is None:
-                raise
+        else:
             row = await self._db.fetchone(
                 "SELECT id, envelope_sha256 FROM coding_session_bridge_outbox "
                 "WHERE dedupe_key = ?",

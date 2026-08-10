@@ -438,6 +438,12 @@
         "description": "Unix timestamp when the next retry is scheduled.",
         "title": "Retry At"
       },
+      "discard_partial_output": {
+        "default": false,
+        "description": "When true, the client must rewind text, reasoning, render blocks, and citations emitted by the failed provider attempt before rendering the next attempt.",
+        "title": "Discard Partial Output",
+        "type": "boolean"
+      },
       "schedule": {
         "items": {
           "type": "number"
@@ -859,6 +865,46 @@
         "default": null,
         "description": "When emitted from a sub-agent, the ``operation_id`` of the init/completion pair so the FE can attribute the event.",
         "title": "Operation Id"
+      },
+      "kind": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Canonical content_ir.kind_definition slug for this output.",
+        "title": "Kind"
+      },
+      "kind_version": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Kind version used for the validation verdict.",
+        "title": "Kind Version"
+      },
+      "kind_checked": {
+        "default": false,
+        "description": "True when kind/schema validation actually ran; false is skipped, not pass.",
+        "title": "Kind Checked",
+        "type": "boolean"
+      },
+      "kind_errors": {
+        "description": "Per-contract validation errors; empty only means pass when kind_checked is true.",
+        "items": {
+          "type": "string"
+        },
+        "title": "Kind Errors",
+        "type": "array"
       }
     },
     "required": [
@@ -1178,6 +1224,26 @@
             ],
             "default": null,
             "title": "Total Cost"
+          },
+          "known_cost_subtotal": {
+            "default": 0,
+            "title": "Known Cost Subtotal",
+            "type": "number"
+          },
+          "provider_reported_requests": {
+            "default": 0,
+            "title": "Provider Reported Requests",
+            "type": "integer"
+          },
+          "catalog_priced_requests": {
+            "default": 0,
+            "title": "Catalog Priced Requests",
+            "type": "integer"
+          },
+          "unknown_cost_requests": {
+            "default": 0,
+            "title": "Unknown Cost Requests",
+            "type": "integer"
           }
         },
         "title": "UsageTotals",
@@ -1516,6 +1582,26 @@
         ],
         "default": null,
         "title": "Total Cost"
+      },
+      "known_cost_subtotal": {
+        "default": 0,
+        "title": "Known Cost Subtotal",
+        "type": "number"
+      },
+      "provider_reported_requests": {
+        "default": 0,
+        "title": "Provider Reported Requests",
+        "type": "integer"
+      },
+      "catalog_priced_requests": {
+        "default": 0,
+        "title": "Catalog Priced Requests",
+        "type": "integer"
+      },
+      "unknown_cost_requests": {
+        "default": 0,
+        "title": "Unknown Cost Requests",
+        "type": "integer"
       }
     },
     "title": "UsageTotals",
@@ -1565,6 +1651,52 @@
       }
     },
     "title": "PersistenceResult",
+    "type": "object"
+  },
+  "AssignmentProgressData": {
+    "additionalProperties": false,
+    "description": "Durable coordinated-assignment progress for API and workflow UIs.",
+    "properties": {
+      "type": {
+        "const": "assignment_progress",
+        "default": "assignment_progress",
+        "title": "Type",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "completed": {
+        "minimum": 0,
+        "title": "Completed",
+        "type": "integer"
+      },
+      "total": {
+        "minimum": 0,
+        "title": "Total",
+        "type": "integer"
+      },
+      "status": {
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "partially_failed",
+          "failed",
+          "cancelled"
+        ],
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "completed",
+      "total",
+      "status"
+    ],
+    "title": "AssignmentProgressData",
     "type": "object"
   },
   "ConversationIdData": {
@@ -1844,7 +1976,7 @@
   },
   "AudioStreamChunkData": {
     "additionalProperties": false,
-    "description": "A live segment of streaming TTS audio, emitted as it arrives from the provider.\n\nProviders that stream audio (Gemini TTS via ``generate_content_stream``) yield\nthe audio as a sequence of RAW PCM segments — NOT a self-contained file per\nchunk. Each chunk here carries one such segment so the client can buffer and\nprogressively play it (e.g. via the Web Audio API) while the full render is\nstill in flight. The authoritative, persisted file arrives at the end via\n``AudioStreamEndData`` (and the usual ``MediaBlockData``); these chunks are a\npreview/low-latency-playback aid and are NOT individually renderable as files.\n\n``audio_base64`` is base64 of the raw segment bytes in the format described by\n``encoding`` / ``sample_rate`` / ``bits_per_sample`` / ``channels`` (Gemini:\nsigned 16-bit little-endian PCM, 24 kHz, mono). ``stream_id`` groups every\nchunk + the end marker for one audio render; ``seq`` is monotonic from 0.",
+    "description": "A live segment of streaming TTS audio, emitted as it arrives from the provider.\n\nGemini TTS yields raw PCM segments for Web Audio playback. ElevenLabs yields\nconsecutive MP3 bytes for MediaSource playback. Individual chunks are not\nstandalone files in either case: clients append them in monotonic ``seq``\norder until ``AudioStreamEndData`` hands over the authoritative persisted\nfile.\n\n``audio_base64`` is base64 of the provider bytes in the format described by\n``encoding`` and ``mime_type``. PCM additionally uses ``sample_rate`` /\n``bits_per_sample`` / ``channels``. ``stream_id`` groups every chunk and the\nend marker for one audio render; ``seq`` is monotonic from zero.",
     "properties": {
       "type": {
         "const": "audio_stream_chunk",
@@ -1870,8 +2002,11 @@
         "type": "string"
       },
       "encoding": {
-        "const": "pcm_s16le",
         "default": "pcm_s16le",
+        "enum": [
+          "pcm_s16le",
+          "mp3"
+        ],
         "title": "Encoding",
         "type": "string"
       },
@@ -2039,9 +2174,10 @@
             "anyOf": [
               {
                 "enum": [
-                  "public",
-                  "private",
-                  "shared"
+                  "personal",
+                  "internal",
+                  "link",
+                  "public"
                 ],
                 "type": "string"
               },
@@ -2301,9 +2437,10 @@
             "anyOf": [
               {
                 "enum": [
-                  "public",
-                  "private",
-                  "shared"
+                  "personal",
+                  "internal",
+                  "link",
+                  "public"
                 ],
                 "type": "string"
               },
@@ -2563,9 +2700,10 @@
             "anyOf": [
               {
                 "enum": [
-                  "public",
-                  "private",
-                  "shared"
+                  "personal",
+                  "internal",
+                  "link",
+                  "public"
                 ],
                 "type": "string"
               },
@@ -2838,9 +2976,10 @@
             "anyOf": [
               {
                 "enum": [
-                  "public",
-                  "private",
-                  "shared"
+                  "personal",
+                  "internal",
+                  "link",
+                  "public"
                 ],
                 "type": "string"
               },
@@ -3122,9 +3261,10 @@
             "anyOf": [
               {
                 "enum": [
-                  "public",
-                  "private",
-                  "shared"
+                  "personal",
+                  "internal",
+                  "link",
+                  "public"
                 ],
                 "type": "string"
               },
@@ -6336,6 +6476,109 @@
     "title": "ImageEditCompleteData",
     "type": "object"
   },
+  "ImageGenerateCompleteData": {
+    "$defs": {
+      "GeneratedImageFileItem": {
+        "additionalProperties": false,
+        "description": "One generated image persisted to cld_files — same fields as the\nlegacy ``ImageResult`` shape the image-studio FE client consumes\n(``cloud_file_id`` + ``public_url``). ``public_url`` is the always-\nrenderable ``url`` flavour from the persist envelope (CDN when public,\nsigned-inline otherwise); clients should identify by ``cloud_file_id``\nand re-mint on expiry.",
+        "properties": {
+          "cloud_file_id": {
+            "title": "Cloud File Id",
+            "type": "string"
+          },
+          "public_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Public Url"
+          },
+          "mime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mime"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Height"
+          }
+        },
+        "required": [
+          "cloud_file_id"
+        ],
+        "title": "GeneratedImageFileItem",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Terminal result of POST /images/generate — ``files`` carries one\nentry per persisted image (the legacy blocking GenerateImageResponse\nbody); a migrating client reads this one event as the old response.",
+    "properties": {
+      "type": {
+        "const": "image_generate_complete",
+        "default": "image_generate_complete",
+        "title": "Type",
+        "type": "string"
+      },
+      "prompt": {
+        "default": "",
+        "title": "Prompt",
+        "type": "string"
+      },
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Model"
+      },
+      "files": {
+        "items": {
+          "$ref": "#/$defs/GeneratedImageFileItem"
+        },
+        "title": "Files",
+        "type": "array"
+      }
+    },
+    "title": "ImageGenerateCompleteData",
+    "type": "object"
+  },
   "ImageStudioVariantData": {
     "additionalProperties": false,
     "description": "One Image Studio variant finished (rendered + staged) or failed —\nsame per-variant shape as the legacy StudioVariantOut entries.\n``completed``/``total`` are running per-item counters.",
@@ -8030,6 +8273,271 @@
     "title": "RagVerifyResultData",
     "type": "object"
   },
+  "PlanGenStartedData": {
+    "additionalProperties": false,
+    "description": "Content-plan generator kickoff: which site, which research angles, and\nhow much keyword context (seo.site_keyword_value) the waves get to see.",
+    "properties": {
+      "type": {
+        "const": "plan_gen_started",
+        "default": "plan_gen_started",
+        "title": "Type",
+        "type": "string"
+      },
+      "site_id": {
+        "title": "Site Id",
+        "type": "string"
+      },
+      "domain": {
+        "title": "Domain",
+        "type": "string"
+      },
+      "angles": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Angles",
+        "type": "array"
+      },
+      "keyword_count": {
+        "default": 0,
+        "title": "Keyword Count",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "site_id",
+      "domain"
+    ],
+    "title": "PlanGenStartedData",
+    "type": "object"
+  },
+  "PlanGenCandidateData": {
+    "additionalProperties": false,
+    "description": "One research wave finished: its candidate tree size and rationale.",
+    "properties": {
+      "type": {
+        "const": "plan_gen_candidate",
+        "default": "plan_gen_candidate",
+        "title": "Type",
+        "type": "string"
+      },
+      "angle": {
+        "title": "Angle",
+        "type": "string"
+      },
+      "node_count": {
+        "title": "Node Count",
+        "type": "integer"
+      },
+      "rationale": {
+        "default": "",
+        "title": "Rationale",
+        "type": "string"
+      }
+    },
+    "required": [
+      "angle",
+      "node_count"
+    ],
+    "title": "PlanGenCandidateData",
+    "type": "object"
+  },
+  "PlanGenMergedData": {
+    "additionalProperties": false,
+    "description": "The merger produced the final tree.",
+    "properties": {
+      "type": {
+        "const": "plan_gen_merged",
+        "default": "plan_gen_merged",
+        "title": "Type",
+        "type": "string"
+      },
+      "node_count": {
+        "title": "Node Count",
+        "type": "integer"
+      },
+      "summary": {
+        "default": "",
+        "title": "Summary",
+        "type": "string"
+      },
+      "candidates_used": {
+        "default": 0,
+        "title": "Candidates Used",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "node_count"
+    ],
+    "title": "PlanGenMergedData",
+    "type": "object"
+  },
+  "PlanGenAppliedData": {
+    "additionalProperties": false,
+    "description": "Terminal: the tree was applied through the plan write path (or dry-run).",
+    "properties": {
+      "type": {
+        "const": "plan_gen_applied",
+        "default": "plan_gen_applied",
+        "title": "Type",
+        "type": "string"
+      },
+      "site_id": {
+        "title": "Site Id",
+        "type": "string"
+      },
+      "created": {
+        "title": "Created",
+        "type": "integer"
+      },
+      "existing": {
+        "title": "Existing",
+        "type": "integer"
+      },
+      "failed": {
+        "title": "Failed",
+        "type": "integer"
+      },
+      "errors": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Errors",
+        "type": "array"
+      },
+      "dry_run": {
+        "default": false,
+        "title": "Dry Run",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "site_id",
+      "created",
+      "existing",
+      "failed"
+    ],
+    "title": "PlanGenAppliedData",
+    "type": "object"
+  },
+  "PlanDeepenResultData": {
+    "additionalProperties": false,
+    "description": "Terminal event of POST /content-plan/nodes/{id}/deepen: the node's\nrefreshed brief size and how many cited sources were attached.",
+    "properties": {
+      "type": {
+        "const": "plan_deepen_result",
+        "default": "plan_deepen_result",
+        "title": "Type",
+        "type": "string"
+      },
+      "node_id": {
+        "title": "Node Id",
+        "type": "string"
+      },
+      "route": {
+        "default": "",
+        "title": "Route",
+        "type": "string"
+      },
+      "brief_lines": {
+        "default": 0,
+        "title": "Brief Lines",
+        "type": "integer"
+      },
+      "sources_attached": {
+        "default": 0,
+        "title": "Sources Attached",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "node_id"
+    ],
+    "title": "PlanDeepenResultData",
+    "type": "object"
+  },
+  "PlanCmsFillPreviewData": {
+    "additionalProperties": false,
+    "description": "Terminal event of POST /content-plan/sites/{id}/cms-fill/preview: ONE\nauthored page (html/css/meta) plus the site's real global CSS and\nheader/footer so the client can compose a faithful preview.",
+    "properties": {
+      "type": {
+        "const": "plan_cms_fill_preview",
+        "default": "plan_cms_fill_preview",
+        "title": "Type",
+        "type": "string"
+      },
+      "node_id": {
+        "title": "Node Id",
+        "type": "string"
+      },
+      "page_id": {
+        "title": "Page Id",
+        "type": "string"
+      },
+      "route": {
+        "default": "/",
+        "title": "Route",
+        "type": "string"
+      },
+      "title": {
+        "default": "",
+        "title": "Title",
+        "type": "string"
+      },
+      "html": {
+        "default": "",
+        "title": "Html",
+        "type": "string"
+      },
+      "css": {
+        "default": "",
+        "title": "Css",
+        "type": "string"
+      },
+      "meta_title": {
+        "default": "",
+        "title": "Meta Title",
+        "type": "string"
+      },
+      "meta_description": {
+        "default": "",
+        "title": "Meta Description",
+        "type": "string"
+      },
+      "model": {
+        "default": "",
+        "title": "Model",
+        "type": "string"
+      },
+      "wrote": {
+        "default": false,
+        "title": "Wrote",
+        "type": "boolean"
+      },
+      "global_css": {
+        "default": "",
+        "title": "Global Css",
+        "type": "string"
+      },
+      "header_html": {
+        "default": "",
+        "title": "Header Html",
+        "type": "string"
+      },
+      "footer_html": {
+        "default": "",
+        "title": "Footer Html",
+        "type": "string"
+      }
+    },
+    "required": [
+      "node_id",
+      "page_id"
+    ],
+    "title": "PlanCmsFillPreviewData",
+    "type": "object"
+  },
   "ToolStartedData": {
     "additionalProperties": false,
     "properties": {
@@ -8100,23 +8608,14 @@
     "type": "object"
   },
   "ToolCompletedData": {
+    "$defs": {
+      "JsonValue": {}
+    },
     "additionalProperties": false,
     "properties": {
       "result": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "additionalProperties": true,
-            "type": "object"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "default": null,
-        "title": "Result"
+        "$ref": "#/$defs/JsonValue",
+        "default": null
       }
     },
     "title": "ToolCompletedData",
@@ -8187,7 +8686,8 @@
           "context_state",
           "context_trimmed",
           "injection_consumed",
-          "provider_retry"
+          "provider_retry",
+          "citation"
         ],
         "title": "EventType",
         "type": "string"
@@ -8236,7 +8736,8 @@
       "context_state",
       "context_trimmed",
       "injection_consumed",
-      "provider_retry"
+      "provider_retry",
+      "citation"
     ]
   }
 }

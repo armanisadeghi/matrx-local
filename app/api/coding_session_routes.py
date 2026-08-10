@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.api.remote_auth import headers_indicate_tunnel
@@ -16,6 +18,20 @@ from app.services.coding_sessions.models import (
 )
 
 router = APIRouter(prefix="/coding-session", tags=["coding-session-bridge"])
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    """Accept exact IPv4/IPv6 loopback peers, never hostnames or LAN IPs."""
+    if not host:
+        return False
+    try:
+        address = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return False
+    if address.is_loopback:
+        return True
+    mapped = getattr(address, "ipv4_mapped", None)
+    return bool(mapped and mapped.is_loopback)
 
 
 @router.post(
@@ -34,7 +50,8 @@ async def persist_coding_session_hook(
     always rejected here even when it has an otherwise-valid user token.
     """
 
-    if headers_indicate_tunnel(request.headers):
+    peer_host = request.client.host if request.client else None
+    if headers_indicate_tunnel(request.headers) or not _is_loopback_host(peer_host):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Coding-session hook ingress is available on direct loopback only",

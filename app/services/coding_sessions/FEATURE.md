@@ -9,7 +9,8 @@ System of record:
 ingress. It accepts the strict adapter envelope v1 with
 `action="observe_hook"` for Claude Code, Codex, Cursor, or VS Code. The route
 is available without a bearer only on the engine's direct loopback socket and
-hard-rejects Cloudflare/tunnel-marked traffic with 403. A command hook never
+requires an exact IPv4/IPv6 loopback peer in addition to rejecting every
+Cloudflare/tunnel-marked request with 403. A command hook never
 receives or stores the user's Supabase JWT.
 
 The success boundary is the local SQLite commit. A successful request returns

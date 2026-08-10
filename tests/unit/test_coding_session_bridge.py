@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from app.api.coding_session_routes import _is_loopback_host
 from app.services.aidream.client import AIDreamOfflineError
 from app.services.coding_sessions.models import BridgeRequest
 from app.services.coding_sessions.service import (
@@ -97,6 +98,28 @@ def test_bridge_request_is_strict_and_matches_action_contract() -> None:
                 "origin": "matrx_local",
             }
         )
+
+
+def test_ingress_peer_check_accepts_only_ipv4_and_ipv6_loopback() -> None:
+    assert _is_loopback_host("127.0.0.1") is True
+    assert _is_loopback_host("127.255.255.254") is True
+    assert _is_loopback_host("::1") is True
+    assert _is_loopback_host("::ffff:127.0.0.1") is True
+    assert _is_loopback_host("192.168.1.5") is False
+    assert _is_loopback_host("203.0.113.7") is False
+    assert _is_loopback_host("localhost") is False
+    assert _is_loopback_host(None) is False
+
+
+def test_conversation_store_cannot_disable_cloud_persistence() -> None:
+    payload = _hook().model_dump(mode="json")
+    payload["conversation"] = {
+        "conversation_id": "11111111-2222-4333-8444-555555555555",
+        "is_new": True,
+        "store": False,
+    }
+    with pytest.raises(ValidationError, match="Input should be True"):
+        BridgeRequest.model_validate(payload)
 
 
 @pytest.mark.anyio

@@ -44,7 +44,7 @@ class BridgeConversation(BaseModel):
 
     conversation_id: UUID
     is_new: bool
-    store: bool = True
+    store: Literal[True] = True
 
 
 class BridgeHookEvent(BaseModel):

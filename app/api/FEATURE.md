@@ -16,7 +16,8 @@ It accepts only strict Coding Session Bridge `observe_hook` envelopes and
 returns HTTP 202 only after the dedicated SQLite outbox commit. Command hooks
 cannot carry the desktop user's JWT, so `AuthMiddleware` passes this exact path
 to its route-owned boundary: direct loopback is accepted without a bearer and
-any Cloudflare/tunnel marker receives hard 403 even with valid credentials.
+the route requires an exact IPv4/IPv6 loopback peer; any non-loopback peer or
+Cloudflare/tunnel marker receives hard 403 even with valid credentials.
 The background publisher, retry ordering, and raw-ledger mirror exclusion live
 under `app/services/coding_sessions/`; do not route these payloads through
 `extension_handlers`, Broadcast, the generic chat `sync_queue`, or direct

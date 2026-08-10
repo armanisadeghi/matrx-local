@@ -8,6 +8,10 @@ import json
 import time
 from collections.abc import Callable
 from typing import Any
+from uuid import UUID
+
+import aiosqlite
+from pydantic import ValidationError
 
 from app.common.system_logger import get_logger
 from app.services.aidream.client import (
@@ -61,14 +65,54 @@ def _stable_delivery_key(request: BridgeRequest) -> str | None:
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
-def _hook_payload_sha256(payload: dict[str, Any]) -> str:
-    canonical = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+def _validate_upstream_acknowledgement(
+    response: Any,
+    request: BridgeRequest,
+) -> None:
+    """Prove a 2xx body durably accepted exactly this one hook event.
+
+    A reverse proxy, stale server, or accidentally remounted route can return
+    JSON with HTTP 2xx without committing the bridge entry. Deleting the local
+    outbox row on that weak signal would turn a deployment mistake into data
+    loss, so the response must satisfy the frozen BridgeResponse v1 receipt.
+    """
+
+    def _count(name: str) -> int:
+        value = response.get(name) if isinstance(response, dict) else None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise AIDreamError(502, f"bridge acknowledgement has invalid {name}")
+        return value
+
+    if not isinstance(response, dict):
+        raise AIDreamError(502, "bridge acknowledgement is not a JSON object")
+    expected = {
+        "schema_version": 1,
+        "action": "observe_hook",
+        "provider": request.provider.value,
+        "fidelity": "event_mirror",
+    }
+    for field, value in expected.items():
+        if response.get(field) != value:
+            raise AIDreamError(
+                502,
+                f"bridge acknowledgement {field} did not match request",
+            )
+    for field in ("session_id", "conversation_id"):
+        try:
+            UUID(str(response.get(field)))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise AIDreamError(
+                502,
+                f"bridge acknowledgement has invalid {field}",
+            ) from exc
+    accepted = _count("accepted")
+    duplicates = _count("duplicates")
+    conflicts = _count("conflicts")
+    if conflicts != 0 or accepted + duplicates != 1:
+        raise AIDreamError(
+            502,
+            "bridge acknowledgement did not accept or deduplicate exactly one event",
+        )
 
 
 class CodingSessionBridgeOutbox:
@@ -133,36 +177,11 @@ class CodingSessionBridgeOutbox:
         """Commit an exact envelope before returning a receipt."""
         _payload, serialized, digest = _canonical_envelope(request)
         dedupe_key = _stable_delivery_key(request)
-        duplicate = False
-        insert_verb = "INSERT OR IGNORE" if dedupe_key is not None else "INSERT"
-        cursor = await self._db.execute(
-            f"""{insert_verb} INTO coding_session_bridge_outbox (
-                 dedupe_key, envelope_json, envelope_sha256
-               ) VALUES (?, ?, ?)""",
-            (dedupe_key, serialized, digest),
+        outbox_id, duplicate = await self._commit_enqueue(
+            dedupe_key=dedupe_key,
+            serialized=serialized,
+            digest=digest,
         )
-        await self._db.commit()
-        if cursor.rowcount == 1:
-            outbox_id = int(cursor.lastrowid)
-        else:
-            row = await self._db.fetchone(
-                "SELECT id, envelope_json FROM coding_session_bridge_outbox "
-                "WHERE dedupe_key = ?",
-                (dedupe_key,),
-            )
-            if row is None:
-                raise
-            existing = json.loads(str(row["envelope_json"]))
-            existing_payload = existing["hook_event"]["payload"]
-            request_payload = request.hook_event.payload if request.hook_event else {}
-            if _hook_payload_sha256(existing_payload) != _hook_payload_sha256(
-                request_payload
-            ):
-                raise BridgeMutationConflict(
-                    "stable hook event identity was reused with different payload"
-                )
-            outbox_id = int(row["id"])
-            duplicate = True
 
         pending = await self.pending_count()
         self.wake()
@@ -171,6 +190,73 @@ class CodingSessionBridgeOutbox:
             duplicate=duplicate,
             pending=pending,
         )
+
+    async def _commit_enqueue(
+        self,
+        *,
+        dedupe_key: str | None,
+        serialized: str,
+        digest: str,
+    ) -> tuple[int, bool]:
+        """Use a private, FULL-sync transaction for the durable-ack boundary.
+
+        The application's general repositories intentionally share one
+        aiosqlite connection. Their multi-step writes can therefore commit or
+        roll back one another when coroutines interleave. A hook 202 has a
+        stronger promise: its row must already be independently durable. This
+        short connection targets the same SQLite database (not a second
+        store), takes one immediate transaction, fsyncs its WAL commit, and
+        closes before the HTTP response is assembled.
+        """
+
+        async with aiosqlite.connect(str(self._db.path)) as connection:
+            connection.row_factory = aiosqlite.Row
+            await connection.execute("PRAGMA busy_timeout=5000")
+            await connection.execute("PRAGMA synchronous=FULL")
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                if dedupe_key is None:
+                    cursor = await connection.execute(
+                        """INSERT INTO coding_session_bridge_outbox (
+                             dedupe_key, envelope_json, envelope_sha256
+                           ) VALUES (?, ?, ?)""",
+                        (None, serialized, digest),
+                    )
+                else:
+                    cursor = await connection.execute(
+                        """INSERT INTO coding_session_bridge_outbox (
+                             dedupe_key, envelope_json, envelope_sha256
+                           ) VALUES (?, ?, ?)
+                           ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL
+                           DO NOTHING""",
+                        (dedupe_key, serialized, digest),
+                    )
+                if cursor.rowcount == 1:
+                    outbox_id = int(cursor.lastrowid)
+                    duplicate = False
+                else:
+                    existing_cursor = await connection.execute(
+                        """SELECT id, envelope_sha256
+                           FROM coding_session_bridge_outbox
+                           WHERE dedupe_key = ?""",
+                        (dedupe_key,),
+                    )
+                    row = await existing_cursor.fetchone()
+                    if row is None:
+                        raise RuntimeError(
+                            "stable bridge event disappeared inside its write transaction"
+                        )
+                    if str(row["envelope_sha256"]) != digest:
+                        raise BridgeMutationConflict(
+                            "stable hook event identity was reused with a different envelope"
+                        )
+                    outbox_id = int(row["id"])
+                    duplicate = True
+                await connection.commit()
+                return outbox_id, duplicate
+            except BaseException:
+                await connection.rollback()
+                raise
 
     async def pending_count(self) -> int:
         row = await self._db.fetchone(
@@ -198,7 +284,11 @@ class CodingSessionBridgeOutbox:
         async with self._sync_lock:
             if not self._cloud_enabled:
                 await self._defer_head("cloud_participation_disabled", increment=False)
-                return {"sent": 0, "failed": 0, "blocked": "cloud_participation_disabled"}
+                return {
+                    "sent": 0,
+                    "failed": 0,
+                    "blocked": "cloud_participation_disabled",
+                }
 
             token_row = await self._tokens.get()
             if (
@@ -222,23 +312,48 @@ class CodingSessionBridgeOutbox:
             sent = 0
             while sent < limit:
                 row = await self._db.fetchone(
-                    """SELECT id, envelope_json, attempts, next_attempt_at
+                    """SELECT id, envelope_json, envelope_sha256, attempts, next_attempt_at
                        FROM coding_session_bridge_outbox ORDER BY id LIMIT 1"""
                 )
                 if row is None:
                     break
                 if float(row["next_attempt_at"] or 0) > time.time():
                     break
-                payload = json.loads(str(row["envelope_json"]))
                 try:
-                    await client.post(
+                    serialized = str(row["envelope_json"])
+                    actual_digest = hashlib.sha256(
+                        serialized.encode("utf-8")
+                    ).hexdigest()
+                    if actual_digest != str(row["envelope_sha256"]):
+                        raise AIDreamError(
+                            500,
+                            "persisted bridge envelope failed its SHA-256 integrity check",
+                        )
+                    try:
+                        payload = json.loads(serialized)
+                    except json.JSONDecodeError as exc:
+                        raise AIDreamError(
+                            500,
+                            "persisted bridge envelope is not valid JSON",
+                        ) from exc
+                    try:
+                        persisted_request = BridgeRequest.model_validate(payload)
+                    except ValidationError as exc:
+                        raise AIDreamError(
+                            500,
+                            "persisted bridge envelope no longer satisfies schema v1",
+                        ) from exc
+                    response = await client.post(
                         _SERVER_PATH,
                         payload,
                         jwt=str(token_row["access_token"]),
                         timeout=30.0,
                     )
+                    _validate_upstream_acknowledgement(response, persisted_request)
                 except (AIDreamOfflineError, AIDreamError) as exc:
-                    await self._record_failure(int(row["id"]), int(row["attempts"]), exc)
+                    await self._record_failure(
+                        int(row["id"]), int(row["attempts"]), exc
+                    )
                     return {"sent": sent, "failed": 1, "blocked": None}
 
                 await self._db.execute(
@@ -290,13 +405,16 @@ class CodingSessionBridgeOutbox:
 
     async def _publisher_loop(self) -> None:
         while not self._stopping:
+            # Consume the wake signal before work. An enqueue that lands while
+            # sync_pending is running then remains set and triggers the next
+            # pass immediately instead of being cleared and delayed 15s.
+            self._wake.clear()
             try:
                 await self.sync_pending()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("[coding_session_bridge] publisher tick failed")
-            self._wake.clear()
             try:
                 await asyncio.wait_for(
                     self._wake.wait(), timeout=_PUBLISH_INTERVAL_SECONDS

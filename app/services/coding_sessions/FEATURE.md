@@ -13,8 +13,12 @@ requires an exact IPv4/IPv6 loopback peer in addition to rejecting every
 Cloudflare/tunnel-marked request with 403. A command hook never
 receives or stores the user's Supabase JWT.
 
-The success boundary is the local SQLite commit. A successful request returns
-HTTP 202 with:
+The success boundary is an independently durable local SQLite commit. The
+route uses a short connection to the same `matrx.db`, `BEGIN IMMEDIATE`, and
+`synchronous=FULL`; this prevents an unrelated coroutine on the application's
+shared connection from committing or rolling back the hook transaction and
+fsyncs the WAL before the response exists. A successful request returns HTTP
+202 with:
 
 ```json
 {
@@ -29,9 +33,9 @@ HTTP 202 with:
 
 The response never claims cloud delivery. `receipt_id` is the durable
 `coding_session_bridge_outbox.id` committed before the response is created.
-Provider-supplied stable event IDs deduplicate a still-pending exact replay;
-reusing one with different content is a 409. Events without a real provider ID
-are never given a fabricated stable identity.
+Provider-supplied stable event IDs deduplicate a still-pending exact envelope
+replay; reusing one with any changed envelope field is a 409. Events without a
+real provider ID are never given a fabricated stable identity.
 
 ## Ordered cloud publication
 
@@ -43,7 +47,13 @@ daemon, service, or database.
 
 - Rows are attempted strictly by SQLite ID. A deferred or failed head row
   blocks later rows; the bridge never reorders a provider event stream.
-- Success means aidream returned 2xx; only then is the local row deleted.
+- Success means aidream returned 2xx **and** a valid BridgeResponse v1 receipt
+  for the same provider/action with event-mirror fidelity, canonical session
+  and conversation UUIDs, zero conflicts, and exactly one accepted or duplicate
+  entry. A generic/stale/proxy 2xx is retryable and never deletes the row.
+- The stored envelope bytes are checked against their committed SHA-256 and
+  revalidated as adapter envelope v1 before every upload. Corruption blocks the
+  ordered queue loudly instead of sending mutated raw data.
 - Network/auth/server failure keeps the exact envelope and records a bounded
   retry delay. If aidream accepted it but the response was lost, restart
   replays the same envelope and server idempotency resolves the duplicate.
@@ -74,9 +84,11 @@ model once that package version is published and consumed here.
 ## Verification
 
 - `tests/unit/test_coding_session_bridge.py`: strict envelope validation,
-  migration, durable ack, stable replay/mutation, missing-ID behavior,
-  offline/restart replay, ordered failure recovery, exact upstream path/JWT,
-  and future-schema raw-table exclusion.
+  migration, FULL-sync transaction isolation, durable ack, exact stable
+  replay/mutation, missing-ID behavior, offline/restart replay, ordered failure
+  recovery, persisted-byte integrity, and strict upstream receipt validation.
+- `tests/unit/test_coding_session_mirror_policy.py`: future-schema generation
+  plus independent runtime pull and push refusals for both raw tables.
 - `tests/smoke/test_coding_session_bridge.py`: real engine loopback 202,
   tunnel 403, hooks-only gate, and unknown-field rejection.
 - `python scripts/generate_mirror_schema.py --check`: generated mirror parity.

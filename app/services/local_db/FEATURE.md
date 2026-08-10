@@ -64,7 +64,10 @@ phrase in the sync directories.
 - `coding_session_bridge_outbox` is separate from `sync_queue` because it
   persists an exact provider adapter envelope to one authenticated aidream
   route, not a row mutation for generic PostgREST mirror sync. Its success
-  boundary is local commit first, ordered cloud acknowledgement second.
+  boundary is a short `synchronous=FULL` transaction on the same SQLite file
+  first, then an ordered, schema-validated cloud acknowledgement. Do not move
+  its 202 boundary onto the shared repository transaction: an unrelated
+  coroutine can commit or roll back that connection while the route awaits.
 - `chat.coding_session` and `chat.coding_session_entry` are owner-only raw
   ledgers and are never structural-mirror tables. The generator excludes both
   by name and chat sync has a second runtime refusal guard.

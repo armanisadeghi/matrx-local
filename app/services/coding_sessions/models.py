@@ -76,8 +76,12 @@ class BridgeRequest(BaseModel):
     schema_version: Literal[1] = 1
     action: BridgeAction
     provider: BridgeProvider
-    provider_session_id: Annotated[str, Field(min_length=1, max_length=1024)] | None = None
-    provider_project_key: Annotated[str, Field(min_length=1, max_length=1024)] | None = None
+    provider_session_id: Annotated[str, Field(min_length=1, max_length=1024)] | None = (
+        None
+    )
+    provider_project_key: (
+        Annotated[str, Field(min_length=1, max_length=1024)] | None
+    ) = None
     conversation: BridgeConversation | None = None
     origin: BridgeOrigin | None = None
     stream_key: Annotated[str, Field(min_length=1, max_length=512)] = "main"

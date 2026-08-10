@@ -33,7 +33,9 @@ class FakeTokenRepo:
 
 
 class FakeClient:
-    def __init__(self, outcomes: list[Exception | dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self, outcomes: list[Exception | dict[str, Any]] | None = None
+    ) -> None:
         self.outcomes = list(outcomes or [])
         self.calls: list[tuple[str, dict[str, Any], str | None, float]] = []
 
@@ -50,8 +52,38 @@ class FakeClient:
             outcome = self.outcomes.pop(0)
             if isinstance(outcome, Exception):
                 raise outcome
-            return outcome
-        return {"accepted": 1}
+            if outcome:
+                return outcome
+        return {
+            "schema_version": 1,
+            "action": payload["action"],
+            "provider": payload["provider"],
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "conversation_id": "22222222-2222-4222-8222-222222222222",
+            "fidelity": "event_mirror",
+            "accepted": 1,
+            "duplicates": 0,
+            "conflicts": 0,
+        }
+
+
+class BlockingClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+
+    async def post(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        jwt: str | None = None,
+        timeout: float = 130.0,
+    ) -> dict[str, Any]:
+        self.calls.append((path, deepcopy(payload), jwt, timeout))
+        self.started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("publisher cancellation did not stop the upload")
 
 
 def _hook(*, stable_id: str | None = "prompt-1", text: str = "hello") -> BridgeRequest:
@@ -124,12 +156,14 @@ def test_conversation_store_cannot_disable_cloud_persistence() -> None:
 
 
 @pytest.mark.anyio
-async def test_migration_creates_dedicated_local_outbox(bridge_db: LocalDatabase) -> None:
-    row = await bridge_db.fetchone(
-        "SELECT version FROM _migrations WHERE version = 19"
-    )
+async def test_migration_creates_dedicated_local_outbox(
+    bridge_db: LocalDatabase,
+) -> None:
+    row = await bridge_db.fetchone("SELECT version FROM _migrations WHERE version = 19")
     assert row and row["version"] == 19
-    columns = await bridge_db.fetchall("PRAGMA table_info(coding_session_bridge_outbox)")
+    columns = await bridge_db.fetchall(
+        "PRAGMA table_info(coding_session_bridge_outbox)"
+    )
     assert {row["name"] for row in columns} >= {
         "id",
         "dedupe_key",
@@ -172,15 +206,45 @@ async def test_ack_follows_commit_and_stable_replay_is_local_noop(
 
     renamed = _hook().model_dump(mode="json")
     renamed["hook_event"]["name"] = "Stop"
-    same_payload = await service.enqueue(BridgeRequest.model_validate(renamed))
-    assert same_payload.receipt_id == first.receipt_id
-    assert same_payload.duplicate is True
+    with pytest.raises(BridgeMutationConflict):
+        await service.enqueue(BridgeRequest.model_validate(renamed))
 
     equivalent = _hook().model_dump(mode="json")
     equivalent.pop("origin")
-    same_entry = await service.enqueue(BridgeRequest.model_validate(equivalent))
-    assert same_entry.receipt_id == first.receipt_id
-    assert same_entry.duplicate is True
+    with pytest.raises(BridgeMutationConflict):
+        await service.enqueue(BridgeRequest.model_validate(equivalent))
+
+
+@pytest.mark.anyio
+async def test_durable_ack_isolated_from_shared_connection_rollback(
+    bridge_db: LocalDatabase,
+) -> None:
+    await bridge_db.execute("CREATE TABLE shared_tx_probe (value TEXT)")
+    await bridge_db.commit()
+    await bridge_db.execute(
+        "INSERT INTO shared_tx_probe (value) VALUES ('rollback-me')"
+    )
+
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=FakeClient(),
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    enqueue_task = asyncio.create_task(service.enqueue(_hook()))
+    await asyncio.sleep(0.05)
+    assert not enqueue_task.done(), (
+        "private writer must wait for the active transaction"
+    )
+
+    await bridge_db.db.rollback()
+    receipt = await enqueue_task
+
+    assert await bridge_db.fetchone("SELECT value FROM shared_tx_probe") is None
+    assert await bridge_db.fetchone(
+        "SELECT id FROM coding_session_bridge_outbox WHERE id=?",
+        (receipt.receipt_id,),
+    )
 
 
 @pytest.mark.anyio
@@ -279,9 +343,7 @@ async def test_failure_at_head_blocks_later_rows_until_ordered_retry(
         "first"
     ]
 
-    await bridge_db.execute(
-        "UPDATE coding_session_bridge_outbox SET next_attempt_at=0"
-    )
+    await bridge_db.execute("UPDATE coding_session_bridge_outbox SET next_attempt_at=0")
     await bridge_db.commit()
     assert (await service.sync_pending())["sent"] == 2
     assert [call[1]["hook_event"]["payload"]["prompt"] for call in client.calls] == [
@@ -289,3 +351,75 @@ async def test_failure_at_head_blocks_later_rows_until_ordered_retry(
         "first",
         "second",
     ]
+
+
+@pytest.mark.anyio
+async def test_malformed_upstream_2xx_does_not_delete_durable_row(
+    bridge_db: LocalDatabase,
+) -> None:
+    client = FakeClient([{"accepted": 1}])
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=client,
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    await service.enqueue(_hook())
+
+    result = await service.sync_pending()
+
+    assert result == {"sent": 0, "failed": 1, "blocked": None}
+    assert await service.pending_count() == 1
+    head = await bridge_db.fetchone(
+        "SELECT attempts, last_error FROM coding_session_bridge_outbox ORDER BY id LIMIT 1"
+    )
+    assert head["attempts"] == 1
+    assert "acknowledgement schema_version" in head["last_error"]
+
+
+@pytest.mark.anyio
+async def test_persisted_envelope_integrity_failure_blocks_upload(
+    bridge_db: LocalDatabase,
+) -> None:
+    client = FakeClient()
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=client,
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    receipt = await service.enqueue(_hook())
+    await bridge_db.execute(
+        "UPDATE coding_session_bridge_outbox SET envelope_json='{}' WHERE id=?",
+        (receipt.receipt_id,),
+    )
+    await bridge_db.commit()
+
+    result = await service.sync_pending()
+
+    assert result == {"sent": 0, "failed": 1, "blocked": None}
+    assert client.calls == []
+    assert await service.pending_count() == 1
+
+
+@pytest.mark.anyio
+async def test_shutdown_cancels_inflight_upload_and_keeps_durable_row(
+    bridge_db: LocalDatabase,
+) -> None:
+    client = BlockingClient()
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=client,
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    await service.enqueue(_hook())
+    await service.start_background()
+    publisher = service._task
+    await asyncio.wait_for(client.started.wait(), timeout=1)
+
+    await asyncio.wait_for(service.stop_background(), timeout=1)
+
+    assert publisher is not None and publisher.done()
+    assert service.active is False
+    assert await service.pending_count() == 1

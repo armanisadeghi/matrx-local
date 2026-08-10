@@ -35,6 +35,15 @@ def test_loopback_hook_is_acknowledged_only_as_durably_persisted(
     assert body["pending"] >= 1
 
 
+def test_bridge_publisher_is_launcher_managed(http_public: httpx.Client) -> None:
+    response = http_public.get("/admin/status")
+    assert response.status_code == 200, response.text
+    service = response.json()["services"]["coding_session_bridge"]
+    assert service["state"] == "ready"
+    assert service["metadata"]["ingress"] == "/coding-session/hooks"
+    assert service["metadata"]["upstream"] == "/api/coding-sessions/bridge"
+
+
 def test_hook_ingress_hard_rejects_tunnel_even_without_auth(
     http_public: httpx.Client,
 ) -> None:

@@ -15,8 +15,8 @@ production regression, not a hypothetical.
    tripwire tests.
 3. **Startup, shutdown, or process spawn/kill?** → each layer stops only its
    OWN children (CLAUDE.md Hard Rule 0), then run `./scripts/smoke.sh` — a
-   green typecheck is not evidence the app starts, quits cleanly, or leaves
-   no orphans.
+   green frontend typecheck (`cd desktop && pnpm typecheck`) is not evidence
+   the app starts, quits cleanly, or leaves no orphans.
 4. **Shell commands, filesystem paths, signals, or signing?** → must work on
    macOS AND Windows (pkill vs taskkill, `/` vs `\`, codesign vs signtool).
    Green on your Mac ≠ done.

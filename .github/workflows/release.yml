@@ -49,6 +49,10 @@ jobs:
       - name: Byte-compile Python
         run: uv run python -m compileall -q app run.py
 
+      - name: Tool registry drift (non-blocking signal)
+        continue-on-error: true
+        run: uv run --frozen python scripts/check_tool_db_drift.py
+
       - name: Smoke and parity tests
         run: uv run --frozen pytest tests/smoke tests/parity tests/unit -q
         env:

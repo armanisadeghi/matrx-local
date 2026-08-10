@@ -29,10 +29,11 @@ The ADVERTISED surface is **19 action-enum mega-tools** (`local_file`,
 `is_active=false`) in the same changeset; the live route serves exactly 19.
 
 - **Spec + fan-out:** `actions.py::ACTION_GROUPS` maps every legacy tool into
-  exactly one group; `make_group_handler` validates `action` and re-dispatches
-  through `dispatch()` — mega handlers WRAP legacy handlers, never rewrite
-  them (all hooks in the underlying handlers, e.g. file-sync hydration, ride
-  along).
+  exactly one group; `make_group_handler` validates `action`, validates the
+  selected action through its real Pydantic arg model when one exists, and
+  re-dispatches through `dispatch()` (whose real handler signature enforces
+  model-less actions) — mega handlers WRAP legacy handlers, never rewrite them
+  (all hooks in the underlying handlers, e.g. file-sync hydration, ride along).
 - **Catalog flags:** legacy entries carry `advertised=False` (dispatchable,
   not advertised); mega entries carry `advertised=True` +
   `cloud_parameters` (the flat `$variants` dialect stored in the DB, distinct
@@ -124,9 +125,29 @@ becomes typed data) → `desktop/src/components/scraping/`.
 
 ## Drift checking
 
-`uv run python -m app.tools.tool_sync status|diff` — LOUD + NON-BLOCKING
-(exit 1 = drift signal, 0 = in-sync or cloud unreachable; "couldn't check" is
-not drift — mirrors matrx-extend `check-tool-db-drift.ts`). Read path is
-`GET {AIDREAM_SERVER_URL}/ai-tools/app/matrx-local/all`; when that route is
-unreachable it falls back to the embedded 49-name baseline in names-only mode
-and says so loudly. Full semantics in the `tool_sync.py` module docstring.
+Run the release-grade guard directly:
+
+```bash
+uv run --frozen python scripts/check_tool_db_drift.py
+```
+
+It reads active `matrx-local` / `matrx-local.*` bindings plus the
+`matrx-local/desktop` defaults directly from the live Supabase `tool` schema
+(`Accept-Profile: tool`) using the app's shipped public connection defaults;
+no opt-in env flag or privileged credential is required. It compares those
+rows with the 19 advertised mega-tools and the real Pydantic models / fallback
+handler signatures their dispatcher enforces. It checks name/binding parity,
+`tier`, `admin_only`, `category`, and each top-level argument's type, required
+flag, enum members, and default. It also rejects an `always_include_tools` name
+without an active binding, except `load_desktop_tools`, which intentionally
+executes on `matrx-ai-core`.
+
+The script exits 1 on drift and prints a large warning, but release/CI call it
+as a non-blocking signal. A network/registry failure is reported as "could not
+verify" and exits 0; it is not misclassified as drift. Retired bindings are
+never read, so the 115 granular `local_*` rows stay retired.
+
+`uv run python -m app.tools.tool_sync status|diff|emit-changeset` remains the
+operator workflow for explaining drift and preparing a reviewable DB change;
+the release guard is read-only and never writes or suggests silently syncing
+code into the database.

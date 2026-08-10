@@ -58,6 +58,10 @@ class ActionGroup:
     category: str
     tags: tuple[str, ...]
     actions: Mapping[str, str]           # action -> legacy dispatcher name
+    # Structural registry metadata. These values are compared directly with
+    # tool.definition by scripts/check_tool_db_drift.py.
+    tier: str | None = None
+    admin_only: bool = False
     # action -> {mega_param_name: inner_param_name} renames applied pre-dispatch
     arg_aliases: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
@@ -306,6 +310,30 @@ def make_group_handler(
         for mega_key, inner_key in group.arg_aliases.get(action, {}).items():
             if mega_key in tool_input:
                 tool_input[inner_key] = tool_input.pop(mega_key)
+
+        # Validate through the same Pydantic model that handles a direct call
+        # to the wrapped legacy tool. This makes the composed mega-tool schema
+        # an executable contract, rather than a generated catalog mirror that
+        # the dispatcher never enforces.
+        from app.tools.catalog import get_by_dispatcher_name
+
+        target_entry = get_by_dispatcher_name(target)
+        if target_entry is None:  # pragma: no cover - catalog parity guards this
+            raise RuntimeError(
+                f"{group.cloud_name}: dispatcher target {target!r} is missing from the catalog"
+            )
+        if target_entry.arg_model is not None:
+            try:
+                parsed = target_entry.arg_model.model_validate(tool_input)
+                tool_input = parsed.model_dump(exclude_none=True)
+            except Exception as exc:
+                return ToolResult(
+                    type=ToolResultType.ERROR,
+                    output=(
+                        f"Invalid parameters for {group.cloud_name} "
+                        f"action {action!r}: {exc}"
+                    ),
+                )
 
         from app.tools.dispatcher import dispatch  # deferred: avoids import cycle
 

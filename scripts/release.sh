@@ -772,6 +772,18 @@ LOCKFILE_CHECK=$(cd desktop && pnpm install --frozen-lockfile 2>&1) || {
 }
 ok "pnpm-lock.yaml is up to date."
 
+# ── Tool registry drift signal (loud, deliberately non-blocking) ─────────────
+# The live DB is canonical, but registry reachability or drift must not stop an
+# otherwise valid desktop release. The checker exits 1 on real drift so this
+# step stays visible; release.sh warns and continues, matching the other
+# platform consumers' release posture.
+info "Checking live matrx-local tool-registry drift (non-blocking)..."
+if uv run --frozen python scripts/check_tool_db_drift.py; then
+    ok "Tool registry matches the executable dispatcher contracts."
+else
+    warn "Tool-registry drift detected — release continues, but treat the report above as a bug."
+fi
+
 # pyproject.toml is the one release authority. The other manifests are derived
 # copies required by their respective toolchains; never begin a release from a
 # drifted tree.

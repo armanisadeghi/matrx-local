@@ -557,6 +557,8 @@ def build_local_tool_definitions() -> list[Any]:
                     tool_type=ToolType.EXTERNAL_HANDLER,
                     source_kind="matrx_local",
                     category=entry.category,
+                    tier=entry.tier,
+                    admin_only=entry.admin_only,
                     tags=list(entry.tags),
                     # ToolDefinition.version became an int row-version in
                     # matrx-ai 0.3.0; the catalog's semantic version string

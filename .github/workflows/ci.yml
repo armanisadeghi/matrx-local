@@ -44,6 +44,10 @@ jobs:
       - name: Byte-compile (syntax check)
         run: uv run python -m compileall -q app run.py
 
+      - name: Tool registry drift (non-blocking signal)
+        continue-on-error: true
+        run: uv run --frozen python scripts/check_tool_db_drift.py
+
       - name: Lint (advisory)
         run: uv run ruff check app || true
 

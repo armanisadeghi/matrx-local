@@ -756,6 +756,8 @@ class CatalogEntry:
     handler: Callable[..., Any]
     timeout_seconds: float
     platforms: tuple[str, ...] | None
+    tier: str | None = None
+    admin_only: bool = False
     output_schema: dict[str, Any] | None = None
     version: str = CATALOG_VERSION
     # W7 action collapse: mega-tools (advertised=True) are what the platform
@@ -858,6 +860,8 @@ def _build_catalog() -> tuple[CatalogEntry, ...]:
                 handler=handler,
                 timeout_seconds=meta.timeout_seconds,
                 platforms=meta.platforms,
+                tier=None,
+                admin_only=False,
                 output_schema=meta.output_schema,
                 advertised=False,  # legacy tool: collapsed into a mega-tool
             )
@@ -886,6 +890,8 @@ def _build_catalog() -> tuple[CatalogEntry, ...]:
                 handler=TOOL_HANDLERS[group.dispatcher_name],
                 timeout_seconds=composed["timeout_seconds"],
                 platforms=composed["platforms"],
+                tier=group.tier,
+                admin_only=group.admin_only,
                 output_schema=composed["output_schema"],
                 advertised=True,
                 cloud_parameters=composed["cloud_parameters"],

@@ -23,7 +23,10 @@ phrase in the sync directories.
   `/api/agents` → `ai_models`/`prompt_builtins`/`agents`; the local tool
   catalog (`app.tools.catalog.get_catalog`, 108 entries) → `tools`. Runs at
   startup + every 10 min (`DEFAULT_SYNC_INTERVAL = 600`). It is the ONLY
-  component allowed to write cloud catalog data into SQLite.
+  component allowed to write cloud catalog data into SQLite. Initial and
+  periodic failures are logged and retried on the next interval; an
+  independent task completion callback also screams if the loop itself ever
+  exits unexpectedly.
   NOTE (2026-07): `/api/ai-models` was reshaped server-side (aidream
   c7cfe4349) — `endpoints`/`provider`/`pricing` now live under
   `metadata.legacy`, `api_class` is the routing field. `sync_models` maps

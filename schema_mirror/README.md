@@ -48,3 +48,8 @@ generated module is stale relative to the snapshot.
   the cloud accepted.
 - Views (`chat.conversation_summary`, `ai.model_*` views) are captured in the
   snapshot but not mirrored as tables in phase 1.
+- `chat.coding_session` and `chat.coding_session_entry` are always excluded.
+  They are owner-only raw provider ledgers that can contain commands, paths,
+  file content, and secrets; shared-conversation access does not convey them.
+  The coding-session local edge uses its dedicated forwarding outbox, never a
+  generic structural mirror of these cloud tables.

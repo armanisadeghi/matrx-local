@@ -14,8 +14,9 @@ phrase in the sync directories.
 - `database.py` — connection/bootstrap for `~/.matrx/matrx.db`.
 - `schema.py` — versioned migrations `_V1.._V7+` (core catalog tables,
   auth_tokens/prompts/notes, conversation persistence, notes-sync metadata,
-  local version history, and the opaque canonical executable-agent cache in
-  V14). Additive, applied at startup.
+  local version history, the opaque canonical executable-agent cache in V14,
+  and the dedicated coding-session hook outbox in V19). Additive, applied at
+  startup.
 - `repositories.py` — typed repo layer; ALL reads elsewhere in the app go
   through these (the replica IS the read path — never route local reads
   through the cloud "for consistency").
@@ -60,6 +61,13 @@ phrase in the sync directories.
 - **Do NOT delete `sync_queue` or `SyncMetaRepo`'s queue methods** — dormant,
   but it is the designated outbox for future offline-write push pipelines
   (conversations first; contract gap #1).
+- `coding_session_bridge_outbox` is separate from `sync_queue` because it
+  persists an exact provider adapter envelope to one authenticated aidream
+  route, not a row mutation for generic PostgREST mirror sync. Its success
+  boundary is local commit first, ordered cloud acknowledgement second.
+- `chat.coding_session` and `chat.coding_session_entry` are owner-only raw
+  ledgers and are never structural-mirror tables. The generator excludes both
+  by name and chat sync has a second runtime refusal guard.
 - Conversations/messages are local-only today (gap #1) — hard-delete is fine
   there because no cloud counterpart exists yet.
 - Known wart: `sync_all()` reports `"success"` for skipped entities (gap #6,

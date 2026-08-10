@@ -1,10 +1,26 @@
-# FEATURE — Extension Bridge (`extension_*` files in this directory)
+# FEATURE — Local bridge ingress APIs
 
-Scope: `extension_handlers.py`, `extension_routes.py`, `extension_auth.py`,
+Extension scope: `extension_handlers.py`, `extension_routes.py`, `extension_auth.py`,
 `extension_broadcast.py`, `extension_invoke.py`, `extension_ws_manager.py`,
 `extension_bridge_routes.py`, `extension_metrics.py`, `extension_boot_check.py`,
 plus `cross_component_envelope.py` / `cross_component_router.py`.
 Cross-repo map: `docs/MATRX_EXTEND_CONNECTION.md`.
+
+Coding-session scope: `coding_session_routes.py`; implementation and wire
+contract: `app/services/coding_sessions/FEATURE.md`.
+
+## Coding-session command-hook ingress
+
+`POST /coding-session/hooks` is deliberately not another extension transport.
+It accepts only strict Coding Session Bridge `observe_hook` envelopes and
+returns HTTP 202 only after the dedicated SQLite outbox commit. Command hooks
+cannot carry the desktop user's JWT, so `AuthMiddleware` passes this exact path
+to its route-owned boundary: direct loopback is accepted without a bearer and
+any Cloudflare/tunnel marker receives hard 403 even with valid credentials.
+The background publisher, retry ordering, and raw-ledger mirror exclusion live
+under `app/services/coding_sessions/`; do not route these payloads through
+`extension_handlers`, Broadcast, the generic chat `sync_queue`, or direct
+PostgREST.
 
 ## One command surface, several transports
 

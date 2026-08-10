@@ -41,6 +41,7 @@ FIRST-ACCESS REPLICA — not a competing server.**
 | **API keys (providers)** | SQLite `app_settings` blob key `api_keys`, keychain-encrypted (`secret_store.protect`, Fernet DEK in OS keychain; base64 fallback) | **Local-only, NEVER synced** — deliberately. `cloud_sync/settings_sync.py` pushes `~/.matrx/settings.json` only; `api_keys` lives in the *SQLite* settings blob, which no sync path reads. Do not "unify" these two stores | N/A | N/A | N/A | Full local write |
 | **Auth tokens (JWT)** | SQLite `auth_tokens`, keychain-encrypted | Local-only (written by React via `POST /auth/token`) | N/A | Cleared on logout | `expires_at` | N/A |
 | **Scrape pages** | SQLite `scrape_pages` → remote scraper server | Push-only with local-first persistence | N/A (append-only) | Local soft-delete (`is_deleted`/`deleted_at` columns) | `cloud_sync_status` per row (`pending`/`synced`/`failed`), retried on startup | Full: row written locally immediately, pushed later |
+| **Coding-session hook events** | SQLite `coding_session_bridge_outbox` → aidream `POST /api/coding-sessions/bridge` → owner-only `chat.coding_session` / `chat.coding_session_entry` | Push-only, strictly ordered, exact adapter envelope v1. Direct-loopback command-hook ingress commits before returning HTTP 202; engine-owned task uploads with the persisted active user's JWT | Provider/server idempotency: a real stable event ID deduplicates an exact pending replay and mutation conflicts; no-ID events keep honest best-effort semantics. Unknown remote outcome replays the same persisted bytes after restart | Successful 2xx removes the outbox row; raw cloud ledger retention/deletion is owned by aidream | Oldest SQLite outbox ID; a deferred/failing head blocks later rows and carries attempts/next retry/error | Full: hook success means durable SQLite only. Offline/auth/server failure never loses or rejects the locally accepted event |
 | **Downloads** | SQLite `downloads` | Local-only (device-specific artifacts) | N/A | Status `cancelled` | N/A | Full |
 | **User files (matrx-files replica)** | `~/Documents/Matrx/Files` + ATTACHed mirror `files.files`/`files.folders` + SQLite `file_sync_state` (V11) | **Bidirectional, mode-gated** (`file_sync_mode`: `off\|pointers\|full`, default pointers): engine-owned loop (`app/services/file_sync/engine.py`, Phase 2e) pulls the matrx-files change feed (`GET /files/sync/changes`, opaque keyset cursor in `sync_meta` entity `files.files`), watcher (watchfiles) turns local create/modify/delete into pending ops drained through the matrx-files API with the user JWT. Bytes ONLY via the DownloadManager (category `file_sync`), URLs ONLY from the service's envelope. Pointer mode = zero-byte placeholders, hydrate-on-access via the tool seam (`hydration.ensure_hydrated`) | Content-hash compare against `last_synced_hash` (= cloud checksum at last SUCCESSFUL sync, never optimistic). Both-changed → `conflict` state, local kept, remote copy in `.sync/conflicts/<file_id>/`, user resolves `keep_local\|keep_remote`. Edit-vs-remote-delete → edit resurrects as a new upload. Watcher echo suppression is state-based (event hash == mirror checksum ⇒ own pull) | Cloud soft-delete (`deleted_at`, rides the feed because `platform._touch_row` stamps `updated_at`); local removals go to the OS trash (send2trash), never unlinked | Feed's opaque `next_cursor` in `sync_meta` (`files.files`) | Full: local writes land immediately; push intents queue in `file_sync_state.pending_op` and drain on reconnect; hydrated files read/write fully offline |
 
@@ -59,7 +60,7 @@ schema name, so local SQL uses the canonical qualified names
 tables annihilated in migration V10); `workbench.*` and `ai.*` are captured
 in the snapshot and are follow-up cutovers.
 
-Four sync subsystems, deliberately separate:
+Five sync subsystems, deliberately separate:
 
 1. **`app/services/local_db/sync_engine.py`** — the pull-only replica engine.
    Pulls models/agents/tools from AIDream into SQLite on startup + every 10
@@ -89,6 +90,12 @@ Four sync subsystems, deliberately separate:
    boundary maps legacy visibility `private` → live enum value `personal` and
    recursively removes credential fields from metadata). Status:
    `GET /chat/mirror/status`; manual cycle: `POST /chat/mirror/sync`.
+5. **`app/services/coding_sessions/`** — the provider-hook edge. A dedicated
+   SQLite outbox accepts strict adapter envelope v1 on direct loopback and
+   forwards it in receipt order through the existing authenticated aidream
+   client. It is intentionally not a generic raw-table mirror:
+   `chat.coding_session` and `chat.coding_session_entry` are excluded from
+   mirror generation and independently refused by the chat sync runtime.
 
 Related local-first stores that ride their own queues: `scrape_pages`
 (scraper retry queue) and `downloads` (download manager).
@@ -127,6 +134,9 @@ through SQLite), not data ownership — they have been corrected.
   before/without the push makes offline edits look synced and lets the next
   pull clobber them with older cloud content (fixed + pinned 2026-07-13).
 - API keys and auth tokens never leave the machine.
+- Raw coding-provider ledgers never enter generic chat mirror generation or
+  pull sync. Only the short-lived local forwarding envelope exists in the
+  dedicated outbox until aidream acknowledges it.
 
 **Do-not list:**
 

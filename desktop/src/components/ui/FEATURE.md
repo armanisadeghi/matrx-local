@@ -15,3 +15,12 @@ onChange={(e) => setCount(Number(e.target.value) || 1)}
 `NumberInput` keeps a string draft while focused so the field can be blank, then
 commits/clamps on blur. Live `onChange` fires only when the draft parses to a
 finite number.
+
+## Floating overlays
+
+Account menus, notifications, selects, and similar floating controls use the
+shared Radix `Popover` / `Select` primitives instead of hand-rolled absolute
+positioning and document click listeners. Their portal content sits at
+`z-[100]`, above the desktop shell and quick-action bar. User-facing popovers
+and notification toasts render on an opaque `bg-popover` surface so content
+behind them cannot bleed through.

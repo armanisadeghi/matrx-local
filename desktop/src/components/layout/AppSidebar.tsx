@@ -248,12 +248,13 @@ export function AppSidebar({ engineStatus, user, onSignOut }: AppSidebarProps) {
       {user && (
         <div className={cn("border-t p-2", collapsed && "flex justify-center")}>
           <Popover open={profileOpen} onOpenChange={setProfileOpen}>
-            <PopoverTrigger>
-              <Tooltip delayDuration={collapsed ? 0 : 700}>
-                <TooltipTrigger asChild>
-                  <div
+            <Tooltip delayDuration={collapsed ? 0 : 700}>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
                     className={cn(
-                      "flex items-center gap-2 rounded-lg px-2 py-2 cursor-pointer transition-colors hover:bg-sidebar-accent/50 whitespace-nowrap overflow-hidden",
+                      "flex w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-lg px-2 py-2 transition-colors hover:bg-sidebar-accent/50",
                       collapsed && "justify-center px-0",
                     )}
                   >
@@ -266,17 +267,17 @@ export function AppSidebar({ engineStatus, user, onSignOut }: AppSidebarProps) {
                       </AvatarFallback>
                     </Avatar>
                     {!collapsed && (
-                      <span className="text-xs text-sidebar-foreground/80 truncate flex-1">
+                      <span className="flex-1 truncate text-xs text-sidebar-foreground/80">
                         {displayName}
                       </span>
                     )}
-                  </div>
-                </TooltipTrigger>
-                {collapsed && (
-                  <TooltipContent side="right">{displayName}</TooltipContent>
-                )}
-              </Tooltip>
-            </PopoverTrigger>
+                  </button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              {collapsed && (
+                <TooltipContent side="right">{displayName}</TooltipContent>
+              )}
+            </Tooltip>
             <PopoverContent side="top" align="start" className="w-56">
               <div className="space-y-3">
                 <div className="flex items-center gap-2">

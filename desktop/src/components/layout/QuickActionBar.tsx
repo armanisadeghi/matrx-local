@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { DownloadIndicator } from "@/components/downloads/DownloadIndicator";
 import {
@@ -28,6 +28,11 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@/components/ui/tooltip";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { OpenInWindowButton } from "@/components/OpenInWindowButton";
 import { QuickChatModal } from "@/components/quick-actions/QuickChatModal";
@@ -213,23 +218,8 @@ export function QuickActionBar(props: QuickActionBarProps) {
   const [scrapeOpen, setScrapeOpen] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const userMenuRef = useRef<HTMLDivElement>(null);
   const [restarting, setRestarting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-
-  useEffect(() => {
-    if (!userMenuOpen) return;
-    const handle = (e: MouseEvent) => {
-      if (
-        userMenuRef.current &&
-        !userMenuRef.current.contains(e.target as Node)
-      ) {
-        setUserMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handle);
-    return () => document.removeEventListener("mousedown", handle);
-  }, [userMenuOpen]);
 
   const llmRunning = llmState.serverStatus?.running ?? false;
   const llmStarting = llmState.isStarting;
@@ -334,7 +324,7 @@ export function QuickActionBar(props: QuickActionBarProps) {
 
   return (
     <>
-      <div className="no-select glass flex h-11 shrink-0 items-center gap-0.5 border-b px-3">
+      <div className="no-select glass relative z-30 flex h-11 shrink-0 items-center gap-0.5 border-b px-3">
         {/* ═══ GROUP 1: Voice & Audio ═══ */}
         <BarButton
           tooltip={
@@ -496,33 +486,44 @@ export function QuickActionBar(props: QuickActionBarProps) {
 
         <OpenInWindowButton />
 
-        <div ref={userMenuRef} className="relative">
-          <BarButton
-            tooltip={user ? (user.email ?? "Account") : "Not signed in"}
-            onClick={() => setUserMenuOpen((v) => !v)}
-          >
-            <User className="h-4 w-4" />
-          </BarButton>
-          {userMenuOpen && (
-            <div className="absolute right-0 top-full z-50 mt-1 w-48 rounded-lg border bg-popover p-1 shadow-lg">
-              {user && (
-                <p className="truncate px-2 py-1 text-xs text-muted-foreground">
-                  {user.email}
-                </p>
-              )}
-              <button
-                onClick={() => {
-                  setUserMenuOpen(false);
-                  onSignOut();
-                }}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              >
-                <LogOut className="h-3.5 w-3.5" />
-                Sign out
-              </button>
-            </div>
-          )}
-        </div>
+        <Popover open={userMenuOpen} onOpenChange={setUserMenuOpen}>
+          <Tooltip delayDuration={150}>
+            <TooltipTrigger asChild>
+              <PopoverTrigger asChild>
+                <button
+                  className={cn(
+                    "relative flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+                    "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                    userMenuOpen && "bg-muted/50 text-foreground",
+                  )}
+                  aria-label={user ? (user.email ?? "Account") : "Not signed in"}
+                >
+                  <User className="h-4 w-4" />
+                </button>
+              </PopoverTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {user ? (user.email ?? "Account") : "Not signed in"}
+            </TooltipContent>
+          </Tooltip>
+          <PopoverContent align="end" sideOffset={8} className="w-48 p-1">
+            {user && (
+              <p className="truncate px-2 py-1 text-xs text-muted-foreground">
+                {user.email}
+              </p>
+            )}
+            <button
+              onClick={() => {
+                setUserMenuOpen(false);
+                onSignOut();
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              Sign out
+            </button>
+          </PopoverContent>
+        </Popover>
 
         <NotificationCenter
           notifications={notifications}

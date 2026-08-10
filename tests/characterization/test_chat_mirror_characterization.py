@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from app.services.local_db import database as database_module
+from app.services.local_db import schema as schema_module
 from app.services.local_db.database import LocalDatabase
 from app.services.local_db.mirror_schema import MIRROR_TABLES
 from app.services.chat_sync.client import ChatSyncHTTPError
@@ -1150,7 +1151,10 @@ def test_v13_repairs_model_source_and_reenqueues(tmp_path: Path) -> None:
 
     async def scenario(db: LocalDatabase) -> None:
         # Simulate a pre-fix database: poisoned rows + a dead-lettered queue
-        # entry, then rewind the ledger so V13 reruns on reconnect.
+        # entry, then execute the historical V13 repair itself. Rewinding the
+        # migration ledger is not a valid way to replay one old migration:
+        # the runner keys off MAX(version), while rewinding every later row
+        # would reapply their irreversible additive schema changes too.
         await db.execute(
             "INSERT INTO chat.conversation (id, title, created_at, updated_at) "
             "VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01','C','2026-01-01','2026-01-01')"
@@ -1182,32 +1186,26 @@ def test_v13_repairs_model_source_and_reenqueues(tmp_path: Path) -> None:
             "INSERT INTO sync_queue (entity_type, entity_id, action, payload, attempts) "
             "VALUES ('chat.message','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11','dead','{}',3)"
         )
-        await db.execute("DELETE FROM _migrations WHERE version >= 13")
+        migration_v13 = dict(schema_module.MIGRATIONS)[13]
+        for statement in migration_v13.split(";\n"):
+            if statement.strip():
+                await db.execute(statement)
         await db.commit()
-        await db.close()
 
-        db2 = LocalDatabase(db.path)
-        await db2.connect()  # reruns V13
-        try:
-            rows = [
-                dict(r)
-                for r in await db2.fetchall("SELECT id, source FROM chat.message")
-            ]
-            assert all(r["source"] == "user" for r in rows), rows
-            queue = [
-                dict(r)
-                for r in await db2.fetchall(
-                    "SELECT entity_id, action FROM sync_queue WHERE entity_type='chat.message'"
-                )
-            ]
-            by_id = {q["entity_id"]: q["action"] for q in queue}
-            # dead-lettered row resurrected as a fresh pending upsert
-            assert by_id.get("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11") == "upsert"
-            # legacy-conversation child and non-UUID id must NOT be enqueued
-            assert "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12" not in by_id
-            assert "1751234567-abc" not in by_id
-        finally:
-            await db2.close()
+        rows = [dict(r) for r in await db.fetchall("SELECT id, source FROM chat.message")]
+        assert all(r["source"] == "user" for r in rows), rows
+        queue = [
+            dict(r)
+            for r in await db.fetchall(
+                "SELECT entity_id, action FROM sync_queue WHERE entity_type='chat.message'"
+            )
+        ]
+        by_id = {q["entity_id"]: q["action"] for q in queue}
+        # dead-lettered row resurrected as a fresh pending upsert
+        assert by_id.get("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11") == "upsert"
+        # legacy-conversation child and non-UUID id must NOT be enqueued
+        assert "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12" not in by_id
+        assert "1751234567-abc" not in by_id
 
     _run(tmp_path, scenario)
 

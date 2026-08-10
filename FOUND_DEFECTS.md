@@ -671,31 +671,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   deleting. If unused, `git rm` both.
 - **Owner hint:** whoever does the CDN installer-slimming work — fold into that.
 
-### MXL-D-056 — `scheduler` extra claimed "bundled into release builds" but the sidecar build never syncs it
-- **Area:** `pyproject.toml:85` (scheduler-extra comment) vs
-  `scripts/build-sidecar.sh:148` (venv sync) and `build-sidecar.sh:412`
-  (`--hidden-import matrx_scheduler`)
-- **Symptom:** `pyproject.toml` states the `scheduler` extra "is bundled into
-  release builds — see scripts/build-sidecar.sh," but `build-sidecar.sh` syncs
-  only `--extra transcription`, never `--extra scheduler`. So `matrx-scheduler`
-  is absent from the packaged venv and `--hidden-import matrx_scheduler` is a
-  warning-level miss in the shipped binary. Currently inert — the Phase 8
-  scheduler host is gated off by default (`MATRX_LOCAL_SCHEDULER_ENABLED`) and
-  imported lazily — but the moment that host is enabled in a release build it
-  would `ModuleNotFoundError` at runtime (packaged-only, exactly the class
-  Hard Rule 5/6 exist to prevent), and the doc is misleading today.
-- **Evidence:** Surfaced 2026-07-15 by adversarial review of the matrx-* wave
-  bump (an aside, not caused by the bump). `build-sidecar.sh:148` syncs
-  `--extra transcription` only; no `--extra scheduler` anywhere in the build
-  scripts; `matrx-scheduler` has no metadata in the synced venv.
-- **Status:** open
-- **Analysis stamp:** Analyzed 2026-07-15 — verified in code; runtime impact
-  latent (host gated off), doc claim is wrong now.
-- **Owner hint:** Either add `--extra scheduler` to the release sync (if the
-  host is meant to ship) or correct the `pyproject.toml:85` comment to say it
-  is NOT bundled and must be enabled+synced deliberately. Pick one so doc and
-  build agree.
-
 ## Testing infrastructure
 
 ### MXL-D-076 — `Scrape` tool's `get_links` / `get_overview` flags are inert; every scrape always returns the full payload

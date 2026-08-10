@@ -733,9 +733,13 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 - **Impact:** the production-bundle smoke gate cannot certify an unrelated
   startup change, and the blank page may represent a real browser-mode boot
   regression on current `origin/main`.
-- **Next proof:** run `pnpm test:boot` at clean current `origin/main`, capture
-  page/console errors before first navigation, and bisect the provider/startup
-  stack only if the clean control reproduces. Do not weaken the Login assertion.
+- **Clean-main control:** a detached worktree at exact `origin/main`
+  `9c4605f06` reproduced all three failures in mandatory smoke run
+  `20260809-180647-5818` (3 failed, 1 skipped), with the same missing Login
+  heading after 45 seconds. This proves the failure is not introduced by the
+  coding-session edge.
+- **Next proof:** capture page/console errors before first navigation and bisect
+  the provider/startup stack. Do not weaken the Login assertion.
 
 ### MXL-D-076 — retry-queue `/queue/submit` discards the scraped content the desktop just produced
 - **Area:** `app/services/scraper/remote_client.py::submit_result` (~line 284);

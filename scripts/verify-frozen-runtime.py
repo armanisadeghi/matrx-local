@@ -27,6 +27,18 @@ TARGETS = (
     "x86_64-pc-windows-msvc",
     "x86_64-unknown-linux-gnu",
 )
+SCHEDULER_REQUIRED_MODULES = frozenset(
+    {
+        "matrx_scheduler",
+        "matrx_scheduler._ext",
+        "matrx_scheduler.cron_helpers",
+        "matrx_scheduler.models",
+        "matrx_scheduler.next_due",
+        "matrx_scheduler.queries",
+        "matrx_scheduler.runner",
+        "matrx_scheduler.scanner",
+    }
+)
 
 
 def _extension_module_name(archive_name: str) -> str | None:
@@ -187,6 +199,29 @@ def check_scraper_archive(binary: Path) -> None:
         raise RuntimeError(
             "frozen archive is missing scraper engine modules (Scrape/Search/"
             "Research would fail at runtime): " + ", ".join(missing)
+        )
+
+
+def check_scheduler_archive(binary: Path) -> None:
+    """Prove the opt-in desktop scheduler host can start in the artifact.
+
+    ``app.services.scheduler_host`` imports ``matrx_scheduler`` lazily because
+    the host is disabled by default. That keeps PyInstaller's static analysis
+    from discovering the package. A missing hidden import is only a warning,
+    so inspecting the completed archive is the release gate that turns an
+    absent ``scheduler`` extra into a build failure instead of a latent
+    packaged-only ``ModuleNotFoundError``.
+
+    The public package import eagerly loads this operational module graph. The
+    optional HTTP API is not used by the desktop host and the distribution has
+    no runtime data files.
+    """
+    missing = sorted(SCHEDULER_REQUIRED_MODULES - archive_modules(binary))
+    if missing:
+        raise RuntimeError(
+            "frozen archive is missing scheduler host modules "
+            "(enabling MATRX_LOCAL_SCHEDULER_ENABLED would fail at runtime): "
+            + ", ".join(missing)
         )
 
 
@@ -397,6 +432,7 @@ def main() -> int:
     check_archive(binary, contract, target=args.target)
     check_office_archive(binary)
     check_scraper_archive(binary)
+    check_scheduler_archive(binary)
     print(f"archive verified: {binary}")
 
     # The Office probe needs no managed runtime and no network, so it gates

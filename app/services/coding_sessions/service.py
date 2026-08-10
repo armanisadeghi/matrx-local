@@ -61,6 +61,16 @@ def _stable_delivery_key(request: BridgeRequest) -> str | None:
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
+def _hook_payload_sha256(payload: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 class CodingSessionBridgeOutbox:
     """Persists first, then uploads the oldest envelope until acknowledged.
 
@@ -136,15 +146,20 @@ class CodingSessionBridgeOutbox:
             outbox_id = int(cursor.lastrowid)
         else:
             row = await self._db.fetchone(
-                "SELECT id, envelope_sha256 FROM coding_session_bridge_outbox "
+                "SELECT id, envelope_json FROM coding_session_bridge_outbox "
                 "WHERE dedupe_key = ?",
                 (dedupe_key,),
             )
             if row is None:
                 raise
-            if row["envelope_sha256"] != digest:
+            existing = json.loads(str(row["envelope_json"]))
+            existing_payload = existing["hook_event"]["payload"]
+            request_payload = request.hook_event.payload if request.hook_event else {}
+            if _hook_payload_sha256(existing_payload) != _hook_payload_sha256(
+                request_payload
+            ):
                 raise BridgeMutationConflict(
-                    "stable hook event identity was reused with different content"
+                    "stable hook event identity was reused with different payload"
                 )
             outbox_id = int(row["id"])
             duplicate = True

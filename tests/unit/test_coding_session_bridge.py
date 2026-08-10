@@ -172,8 +172,15 @@ async def test_ack_follows_commit_and_stable_replay_is_local_noop(
 
     renamed = _hook().model_dump(mode="json")
     renamed["hook_event"]["name"] = "Stop"
-    with pytest.raises(BridgeMutationConflict):
-        await service.enqueue(BridgeRequest.model_validate(renamed))
+    same_payload = await service.enqueue(BridgeRequest.model_validate(renamed))
+    assert same_payload.receipt_id == first.receipt_id
+    assert same_payload.duplicate is True
+
+    equivalent = _hook().model_dump(mode="json")
+    equivalent.pop("origin")
+    same_entry = await service.enqueue(BridgeRequest.model_validate(equivalent))
+    assert same_entry.receipt_id == first.receipt_id
+    assert same_entry.duplicate is True
 
 
 @pytest.mark.anyio

@@ -1587,21 +1587,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             _registry.stopped("delegation")
 
     try:
-        from app.services.artifacts import get_artifact_service as _get_artifacts
-
-        _artifact_service = _get_artifacts()
-        if _artifact_service.active:
-            _registry.stopping("artifact_sync")
-            await asyncio.wait_for(
-                _artifact_service.stop_background(), timeout=3.0
-            )
-            _registry.stopped("artifact_sync")
-            logger.info("[app/main.py] Artifact publisher stopped ✓")
-    except (asyncio.TimeoutError, Exception) as exc:
-        logger.warning("[app/main.py] Artifact publisher did not stop cleanly: %s", exc)
-        _registry.stopped("artifact_sync")
-
-    try:
         from app.services.coding_sessions import (
             get_coding_session_bridge_outbox as _get_coding_bridge,
         )
@@ -1617,6 +1602,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "[app/main.py] Coding-session bridge did not stop cleanly: %s", exc
         )
         _registry.stopped("coding_session_bridge")
+
+    try:
+        from app.services.artifacts import get_artifact_service as _get_artifacts
+
+        _artifact_service = _get_artifacts()
+        if _artifact_service.active:
+            _registry.stopping("artifact_sync")
+            await asyncio.wait_for(
+                _artifact_service.stop_background(), timeout=3.0
+            )
+            _registry.stopped("artifact_sync")
+            logger.info("[app/main.py] Artifact publisher stopped ✓")
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning("[app/main.py] Artifact publisher did not stop cleanly: %s", exc)
+        _registry.stopped("artifact_sync")
 
     if _doc_sync.watcher_active:
         try:

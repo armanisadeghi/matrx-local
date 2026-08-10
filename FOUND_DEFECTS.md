@@ -721,6 +721,22 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   outcome alongside 500 with a message naming the device as the cause.
 - **Status:** open — low priority, test-only.
 
+### MXL-D-078 — Production web boot smoke is blank and all three unauthenticated boot assertions time out
+- **Found:** 2026-08-09 while running the mandatory landing smoke for the
+  coding-session Python edge. That branch has no `desktop/**` source changes.
+- **Evidence:** `./scripts/smoke.sh` run `20260809-180301-4606` built the
+  production Vite bundle, then all three independent `boot.spec.ts` checks
+  waited 45 seconds for the Login heading and failed. Failure screenshots are
+  a completely blank dark page; no ErrorBoundary text rendered. The theme
+  tests and the general boot test fail identically. Summary:
+  `.smoke/runs/20260809-180301-4606/summary.md`.
+- **Impact:** the production-bundle smoke gate cannot certify an unrelated
+  startup change, and the blank page may represent a real browser-mode boot
+  regression on current `origin/main`.
+- **Next proof:** run `pnpm test:boot` at clean current `origin/main`, capture
+  page/console errors before first navigation, and bisect the provider/startup
+  stack only if the clean control reproduces. Do not weaken the Login assertion.
+
 ### MXL-D-076 — retry-queue `/queue/submit` discards the scraped content the desktop just produced
 - **Area:** `app/services/scraper/remote_client.py::submit_result` (~line 284);
   server side `packages/matrx-scraper/matrx_scraper/api/ext_router.py::queue_submit`

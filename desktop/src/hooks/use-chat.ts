@@ -4,15 +4,15 @@
  * Manages conversations, messages, and streaming AI responses via three
  * matrx-ai endpoints, chosen automatically based on context:
  *
- *   1. Agent   — POST /chat/ai/api/ai/agents/{agent_id}
+ *   1. Agent   — POST /chat/ai/agents/{agent_id}
  *      First message when an agent is selected. Sends variables + optional user_input.
  *      Server returns a conversation_id for follow-ups.
  *
- *   2. Conversation — POST /chat/ai/api/ai/conversations/{conversation_id}
+ *   2. Conversation — POST /chat/ai/conversations/{conversation_id}
  *      Any follow-up after the server has given us a conversation_id.
  *      Only sends user_input — the server manages history and config.
  *
- *   3. Chat   — POST /chat/ai/api/ai/chat
+ *   3. Chat   — POST /chat/ai/chat
  *      No agent selected. Client manages full message history and config.
  *
  * Conversations are persisted to localStorage.
@@ -26,6 +26,7 @@ import { loadSettings } from "@/lib/settings";
 import type { ToolImageData, ToolMediaArtifact } from "@/lib/api";
 import type { ActionNeeded } from "@/features/action-needed";
 import type { ChatMessageBlock } from "@/lib/chat-blocks";
+import { buildConversationStartRequest } from "@/lib/conversation-start";
 
 // ---- Types ----
 
@@ -209,20 +210,24 @@ function toApiMessages(messages: ChatMessage[]): Array<{role: string; content: A
  *   3. Chat — no agent, client manages full history. Hits /chat.
  *      Body: { ai_model_id, messages, stream, ... }
  */
-function buildRequest(
+export function buildEngineChatRequest(
   baseUrl: string,
   conv: Conversation,
   userContent: string,
   currentModel: string,
   options?: { agentId?: string; variables?: Record<string, string> },
   allMessages?: ChatMessage[],
-): { url: string; body: Record<string, unknown> } {
+): {
+  url: string;
+  body: Record<string, unknown>;
+  startedConversationId?: string;
+} {
   const serverConvId = conv.serverConversationId;
   const hasAgent = !!options?.agentId;
 
   if (serverConvId) {
     return {
-      url: `${baseUrl}/chat/ai/api/ai/conversations/${serverConvId}`,
+      url: `${baseUrl}/chat/ai/conversations/${serverConvId}`,
       body: {
         user_input: userContent,
         stream: true,
@@ -240,21 +245,18 @@ function buildRequest(
     if (options?.variables && Object.keys(options.variables).length > 0) {
       body.variables = options.variables;
     }
-    return {
-      url: `${baseUrl}/chat/ai/api/ai/agents/${options!.agentId}`,
+    return buildConversationStartRequest(
+      `${baseUrl}/chat/ai/agents/${options!.agentId}`,
       body,
-    };
+    );
   }
 
-  return {
-    url: `${baseUrl}/chat/ai/api/ai/chat`,
-    body: {
-      ai_model_id: currentModel,
-      messages: toApiMessages(allMessages ?? []),
-      stream: true,
-      max_iterations: 20,
-    },
-  };
+  return buildConversationStartRequest(`${baseUrl}/chat/ai/chat`, {
+    ai_model_id: currentModel,
+    messages: toApiMessages(allMessages ?? []),
+    stream: true,
+    max_iterations: 20,
+  });
 }
 
 // ---- Hook ----
@@ -672,7 +674,7 @@ export function useChat({ engineUrl }: UseChatOptions) {
 
         const allMessages = userMsg ? [...existingMessages, userMsg] : existingMessages;
 
-        const { url, body } = buildRequest(
+        const { url, body, startedConversationId } = buildEngineChatRequest(
           engineUrl!,
           convSnapshot,
           trimmed,
@@ -713,6 +715,13 @@ export function useChat({ engineUrl }: UseChatOptions) {
           updateAssistant({ content: `Error: ${errText}`, isStreaming: false, error: errText });
           setIsStreaming(false);
           return;
+        }
+
+        if (startedConversationId) {
+          updateConversationMeta({
+            serverConversationId: startedConversationId,
+            routeMode: "conversation",
+          });
         }
 
         // Capture server conversation_id from response header as immediate fallback

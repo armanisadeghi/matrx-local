@@ -22,8 +22,12 @@ envelope, and the aidream server injects tools from the DB:
 - Envelope builder: `desktop/src/lib/desktop-client-context.ts` (identity
   from engine `/health`; keep in sync with the Python twin in
   `app/services/delegation/engine.py::_build_client_context`).
-- Attached in `use-cloud-chat.ts buildRequest()` on all three request
+- Attached in `use-cloud-chat.ts buildCloudChatRequest()` on all three request
   shapes (conversation / agent / bare chat), cloud target only.
+- Agent and bare-chat starts go through
+  `desktop/src/lib/conversation-start.ts`, which mints the required UUID and
+  sends `conversation_id` + `is_new: true` + `store: true`. Follow-up turns
+  use `/conversations/{id}` and do not resend the start-only assertion.
 - Server side (already existed): surface defaults give agents
   `load_desktop_tools` + `local_file` + `local_shell`; the rest load on
   demand by category. Agent overrides: `agx_agent.tool_config`

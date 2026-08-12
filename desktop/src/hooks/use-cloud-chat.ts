@@ -20,6 +20,7 @@ import {
   loadCloudChatCache,
   saveCloudChatCache,
 } from "@/lib/cloud-chat-cache";
+import { buildConversationStartRequest } from "@/lib/conversation-start";
 import { StreamBlockBuilder } from "@/lib/chat-blocks";
 import { CloudChatRunGate } from "@/lib/cloud-chat-run-gate";
 import {
@@ -185,7 +186,7 @@ function toApiMessages(
     }));
 }
 
-function buildRequest(
+export function buildCloudChatRequest(
   conversation: Conversation,
   userContent: string,
   currentModel: string,
@@ -198,7 +199,11 @@ function buildRequest(
   clientContext: DesktopClientContext | null,
   runControls: CloudChatRunControls,
   attachments: ChatAttachment[],
-): { url: string; body: Record<string, unknown> } {
+): {
+  url: string;
+  body: Record<string, unknown>;
+  startedConversationId?: string;
+} {
   const base =
     target === "local"
       ? `${engineUrl}/ai`
@@ -270,10 +275,7 @@ function buildRequest(
     if (options.variables && Object.keys(options.variables).length > 0) {
       body.variables = options.variables;
     }
-    return {
-      url: `${base}/agents/${options.agentId}`,
-      body,
-    };
+    return buildConversationStartRequest(`${base}/agents/${options.agentId}`, body);
   }
 
   const apiMessages = toApiMessages(allMessages);
@@ -284,19 +286,16 @@ function buildRequest(
     }
   }
 
-  return {
-    url: `${base}/chat`,
-    body: {
-      ai_model_id: localModel ?? currentModel,
-      messages: apiMessages,
-      stream: true,
-      max_iterations: 20,
-      source_app: CLOUD_SOURCE_APP,
-      source_feature: CLOUD_SOURCE_FEATURE,
-      ...(configOverrides ? { config_overrides: configOverrides } : {}),
-      ...clientEnvelope,
-    },
-  };
+  return buildConversationStartRequest(`${base}/chat`, {
+    ai_model_id: localModel ?? currentModel,
+    messages: apiMessages,
+    stream: true,
+    max_iterations: 20,
+    source_app: CLOUD_SOURCE_APP,
+    source_feature: CLOUD_SOURCE_FEATURE,
+    ...(configOverrides ? { config_overrides: configOverrides } : {}),
+    ...clientEnvelope,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1554,7 +1553,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                 removeTools: runControls.excludedTools,
               })
             : null;
-        const { url, body } = buildRequest(
+        const { url, body, startedConversationId } = buildCloudChatRequest(
           requestConversation,
           trimmed,
           model,
@@ -1575,6 +1574,12 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
             : requestConversation.cloudConversationId ?? requestConversation.serverConversationId;
         let cloudConversationId =
           executionTarget === "cloud" ? existingTargetConversationId ?? null : null;
+        if (startedConversationId) {
+          if (executionTarget === "cloud") {
+            cloudConversationId = startedConversationId;
+          }
+        }
+        let startConversationPersisted = false;
         // Delegated (locally-executed) tool calls observed in the current
         // stream segment; a non-empty set at segment end means the turn was
         // suspended and must be resumed after the engine runs the tools.
@@ -1958,6 +1963,13 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               error: message,
             });
             return;
+          }
+
+          if (startedConversationId && !startConversationPersisted) {
+            updateConversationMeta(
+              conversationIdPatch(executionTarget, startedConversationId),
+            );
+            startConversationPersisted = true;
           }
 
           const headerConversationId = response.headers.get("X-Conversation-ID");

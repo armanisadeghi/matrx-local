@@ -3,6 +3,11 @@
 System of record:
 `/Users/armanisadeghi/code/common-docs/systems/coding-session-bridge/FEATURE.md`.
 
+Cross-repo product plan:
+`/Users/armanisadeghi/code/common-docs/projects/ai-work-hub/PLAN.md` — read it before building
+conversation browsing, provider launch, saved requests, skills, associations, or automation for
+this integration.
+
 ## What this edge owns
 
 `POST /coding-session/hooks` is the frozen provider-neutral command-hook

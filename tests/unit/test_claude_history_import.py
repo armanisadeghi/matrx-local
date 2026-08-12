@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -28,8 +29,9 @@ def _write_session(
     session_id: str,
     records: list[dict[str, Any] | bytes],
     subagents: dict[str, list[dict[str, Any]]] | None = None,
+    project_dir_name: str = "-private-project",
 ) -> Path:
-    project = config_dir / "projects" / "-private-project"
+    project = config_dir / "projects" / project_dir_name
     project.mkdir(parents=True, exist_ok=True)
     path = project / f"{session_id}.jsonl"
     with path.open("wb") as handle:
@@ -71,7 +73,9 @@ async def importer_env(tmp_path: Path):
 
 
 @pytest.mark.anyio
-async def test_preview_discloses_scope_without_paths_or_account_pii(importer_env) -> None:
+async def test_preview_discloses_scope_without_paths_or_account_pii(
+    importer_env,
+) -> None:
     config_dir, db, outbox = importer_env
     session_id = str(uuid4())
     _write_session(
@@ -184,6 +188,7 @@ async def test_selected_import_is_atomic_bounded_and_replay_safe(importer_env) -
             "sessions": [
                 {
                     "session_id": session_id,
+                    "provider_project_key": preview["sessions"][0]["project_key"],
                     "source_revision": preview["sessions"][0]["source_revision"],
                 }
             ],
@@ -201,7 +206,9 @@ async def test_selected_import_is_atomic_bounded_and_replay_safe(importer_env) -
     rows = await db.fetchall(
         "SELECT envelope_json FROM coding_session_bridge_outbox ORDER BY id"
     )
-    envelopes = [BridgeRequest.model_validate_json(row["envelope_json"]) for row in rows]
+    envelopes = [
+        BridgeRequest.model_validate_json(row["envelope_json"]) for row in rows
+    ]
     assert {envelope.stream_key for envelope in envelopes} == {
         "main",
         "subagent:agent-one",
@@ -253,6 +260,7 @@ async def test_account_switch_and_changed_revision_do_not_enqueue(importer_env) 
         "sessions": [
             {
                 "session_id": session_id,
+                "provider_project_key": preview["sessions"][0]["project_key"],
                 "source_revision": preview["sessions"][0]["source_revision"],
             }
         ],
@@ -264,7 +272,9 @@ async def test_account_switch_and_changed_revision_do_not_enqueue(importer_env) 
         account_reader=_account_b,
     )
     with pytest.raises(ClaudeHistoryConflict, match="changed after preview"):
-        await switched.import_selected(ClaudeHistoryImportRequest.model_validate(payload))
+        await switched.import_selected(
+            ClaudeHistoryImportRequest.model_validate(payload)
+        )
     assert await outbox.pending_count() == 0
 
     with path.open("ab") as handle:
@@ -279,12 +289,62 @@ async def test_account_switch_and_changed_revision_do_not_enqueue(importer_env) 
             )
         )
     with pytest.raises(ClaudeHistoryConflict, match="changed after preview"):
-        await importer.import_selected(ClaudeHistoryImportRequest.model_validate(payload))
+        await importer.import_selected(
+            ClaudeHistoryImportRequest.model_validate(payload)
+        )
     assert await outbox.pending_count() == 0
 
 
 @pytest.mark.anyio
-async def test_reused_provider_uuid_is_rejected_without_partial_outbox(importer_env) -> None:
+async def test_account_switch_during_bounded_read_does_not_enqueue(
+    importer_env,
+) -> None:
+    config_dir, db, outbox = importer_env
+    session_id = str(uuid4())
+    _write_session(
+        config_dir,
+        session_id=session_id,
+        records=[{"type": "user", "message": {"content": "hello"}}],
+    )
+    preview = await ClaudeHistoryImporter(
+        db=db, outbox=outbox, config_dir=config_dir, account_reader=_account_a
+    ).preview()
+    calls = 0
+
+    async def switching_account() -> _AccountSnapshot:
+        nonlocal calls
+        calls += 1
+        return await (_account_a() if calls == 1 else _account_b())
+
+    importer = ClaudeHistoryImporter(
+        db=db,
+        outbox=outbox,
+        config_dir=config_dir,
+        account_reader=switching_account,
+    )
+    item = preview["sessions"][0]
+    with pytest.raises(ClaudeHistoryConflict, match="changed while history"):
+        await importer.import_selected(
+            ClaudeHistoryImportRequest.model_validate(
+                {
+                    "provider_account_key": preview["provider_account_key"],
+                    "sessions": [
+                        {
+                            "session_id": session_id,
+                            "provider_project_key": item["project_key"],
+                            "source_revision": item["source_revision"],
+                        }
+                    ],
+                }
+            )
+        )
+    assert await outbox.pending_count() == 0
+
+
+@pytest.mark.anyio
+async def test_reused_provider_uuid_is_rejected_without_partial_outbox(
+    importer_env,
+) -> None:
     config_dir, db, outbox = importer_env
     session_id = str(uuid4())
     reused = str(uuid4())
@@ -319,6 +379,7 @@ async def test_reused_provider_uuid_is_rejected_without_partial_outbox(importer_
             "sessions": [
                 {
                     "session_id": session_id,
+                    "provider_project_key": preview["sessions"][0]["project_key"],
                     "source_revision": preview["sessions"][0]["source_revision"],
                 }
             ],
@@ -327,3 +388,141 @@ async def test_reused_provider_uuid_is_rejected_without_partial_outbox(importer_
     with pytest.raises(ValueError, match="reuses entry UUID"):
         await importer.import_selected(request)
     assert await outbox.pending_count() == 0
+
+
+@pytest.mark.anyio
+async def test_same_size_same_mtime_replacement_fails_revision_gate(
+    importer_env,
+) -> None:
+    config_dir, db, outbox = importer_env
+    session_id = str(uuid4())
+    path = _write_session(
+        config_dir,
+        session_id=session_id,
+        records=[{"type": "user", "message": {"content": "alpha"}}],
+    )
+    importer = ClaudeHistoryImporter(
+        db=db, outbox=outbox, config_dir=config_dir, account_reader=_account_a
+    )
+    preview = await importer.preview()
+    item = preview["sessions"][0]
+    original = path.read_bytes()
+    prior = path.stat()
+    replacement = original.replace(b"alpha", b"bravo")
+    assert len(replacement) == len(original)
+    path.write_bytes(replacement)
+    os.utime(path, ns=(prior.st_atime_ns, prior.st_mtime_ns))
+
+    with pytest.raises(ClaudeHistoryConflict, match="changed after preview"):
+        await importer.import_selected(
+            ClaudeHistoryImportRequest.model_validate(
+                {
+                    "provider_account_key": preview["provider_account_key"],
+                    "sessions": [
+                        {
+                            "session_id": session_id,
+                            "provider_project_key": item["project_key"],
+                            "source_revision": item["source_revision"],
+                        }
+                    ],
+                }
+            )
+        )
+    assert await outbox.pending_count() == 0
+
+
+@pytest.mark.anyio
+async def test_giant_unterminated_line_is_bounded_and_not_enqueued(
+    importer_env,
+) -> None:
+    config_dir, db, outbox = importer_env
+    session_id = str(uuid4())
+    _write_session(
+        config_dir,
+        session_id=session_id,
+        records=[b"{" + b"x" * (2_097_152 + 200_000)],
+    )
+    importer = ClaudeHistoryImporter(
+        db=db, outbox=outbox, config_dir=config_dir, account_reader=_account_a
+    )
+    preview = await importer.preview()
+    item = preview["sessions"][0]
+    with pytest.raises(ValueError, match="has no valid entries"):
+        await importer.import_selected(
+            ClaudeHistoryImportRequest.model_validate(
+                {
+                    "provider_account_key": preview["provider_account_key"],
+                    "sessions": [
+                        {
+                            "session_id": session_id,
+                            "provider_project_key": item["project_key"],
+                            "source_revision": item["source_revision"],
+                        }
+                    ],
+                }
+            )
+        )
+    assert await outbox.pending_count() == 0
+
+
+@pytest.mark.anyio
+async def test_symlinked_sources_are_never_discovered(
+    importer_env, tmp_path: Path
+) -> None:
+    config_dir, db, outbox = importer_env
+    project = config_dir / "projects" / "-private-project"
+    project.mkdir(parents=True)
+    outside = tmp_path / "outside.jsonl"
+    outside.write_bytes(_line({"type": "user", "message": {"content": "secret"}}))
+    (project / f"{uuid4()}.jsonl").symlink_to(outside)
+
+    preview = await ClaudeHistoryImporter(
+        db=db, outbox=outbox, config_dir=config_dir, account_reader=_account_a
+    ).preview()
+    assert preview["totals"]["session_count"] == 0
+    assert "secret" not in json.dumps(preview)
+
+
+@pytest.mark.anyio
+async def test_same_uuid_across_projects_keeps_project_identity(importer_env) -> None:
+    config_dir, db, outbox = importer_env
+    session_id = str(uuid4())
+    for project, content in (("-project-a", "alpha"), ("-project-b", "bravo")):
+        _write_session(
+            config_dir,
+            session_id=session_id,
+            project_dir_name=project,
+            records=[{"type": "user", "message": {"content": content}}],
+        )
+    importer = ClaudeHistoryImporter(
+        db=db, outbox=outbox, config_dir=config_dir, account_reader=_account_a
+    )
+    preview = await importer.preview()
+    matches = [item for item in preview["sessions"] if item["session_id"] == session_id]
+    assert len(matches) == 2
+    assert len({item["project_key"] for item in matches}) == 2
+
+    for item in matches:
+        await importer.import_selected(
+            ClaudeHistoryImportRequest.model_validate(
+                {
+                    "provider_account_key": preview["provider_account_key"],
+                    "sessions": [
+                        {
+                            "session_id": session_id,
+                            "provider_project_key": item["project_key"],
+                            "source_revision": item["source_revision"],
+                        }
+                    ],
+                }
+            )
+        )
+    rows = await db.fetchall(
+        "SELECT envelope_json FROM coding_session_bridge_outbox ORDER BY id"
+    )
+    envelopes = [
+        BridgeRequest.model_validate_json(row["envelope_json"]) for row in rows
+    ]
+    assert {item.provider_project_key for item in envelopes} == {
+        match["project_key"] for match in matches
+    }

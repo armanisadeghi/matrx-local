@@ -49,8 +49,9 @@ export function ClaudeHistorySync() {
   const [result, setResult] = useState<ClaudeHistoryImportResult | null>(null);
 
   const selectedSessions = useMemo(
-    () =>
-      preview?.sessions.filter((session) => selected.has(session.session_id)) ?? [],
+    () => preview?.sessions.filter((session) =>
+      selected.has(`${session.project_key}:${session.session_id}`),
+    ) ?? [],
     [preview, selected],
   );
   const selectedBytes = useMemo(
@@ -92,7 +93,8 @@ export function ClaudeHistorySync() {
         preview.provider_account_key,
         selectedSessions.map((session) => ({
           session_id: session.session_id,
-          source_revision: session.source_revision,
+          provider_project_key: session.project_key,
+          source_revision: session.source_revision!,
         })),
       );
       setResult(next);
@@ -178,18 +180,20 @@ export function ClaudeHistorySync() {
             </CardHeader>
             <CardContent className="space-y-2">
               {preview.sessions.map((session) => {
-                const checked = selected.has(session.session_id);
+                const selectionKey = `${session.project_key}:${session.session_id}`;
+                const checked = selected.has(selectionKey);
                 const disabled =
-                  !checked && selected.size >= preview.limits.selected_sessions;
+                  !session.import_available ||
+                  (!checked && selected.size >= preview.limits.selected_sessions);
                 return (
                   <label
-                    key={session.session_id}
+                    key={selectionKey}
                     className="flex cursor-pointer items-start gap-3 rounded-md border p-3 hover:bg-muted/40"
                   >
                     <Checkbox
                       checked={checked}
                       disabled={disabled || !preview.import_ready}
-                      onCheckedChange={() => toggle(session.session_id)}
+                      onCheckedChange={() => toggle(selectionKey)}
                       aria-label={`Select ${session.title}`}
                     />
                     <span className="min-w-0 flex-1">
@@ -202,6 +206,9 @@ export function ClaudeHistorySync() {
                         <span>{formatBytes(session.bytes)}</span>
                         {session.subagent_count > 0 && (
                           <span>{session.subagent_count} subagents</span>
+                        )}
+                        {!session.import_available && (
+                          <span>Too large to import safely</span>
                         )}
                       </span>
                     </span>

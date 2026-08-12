@@ -72,9 +72,7 @@ class BridgeSourceMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_kind: Literal["claude_local_jsonl"]
-    provider_account_key: Annotated[
-        str, Field(pattern=r"^[0-9a-f]{64}$")
-    ] | None = None
+    provider_account_key: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
     importer_version: Annotated[str, Field(min_length=1, max_length=64)]
     client_version: Annotated[str, Field(min_length=1, max_length=64)] | None = None
     transcript_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -157,6 +155,10 @@ class BridgeRequest(BaseModel):
             ):
                 raise ValueError(
                     "source_metadata is supported only for Matrx Local Claude imports"
+                )
+            if self.source_metadata is not None and self.provider_project_key is None:
+                raise ValueError(
+                    "provider_project_key is required for local Claude imports"
                 )
         elif self.entries:
             raise ValueError("entries are only valid for append_native")

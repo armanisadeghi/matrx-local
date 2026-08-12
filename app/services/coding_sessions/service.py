@@ -111,7 +111,9 @@ def _validate_upstream_acknowledgement(
     accepted = _count("accepted")
     duplicates = _count("duplicates")
     conflicts = _count("conflicts")
-    expected_count = 1 if request.action.value == "observe_hook" else len(request.entries)
+    expected_count = (
+        1 if request.action.value == "observe_hook" else len(request.entries)
+    )
     if request.action.value == "append_native" and response.get("fidelity") not in {
         "native",
         "event_mirror",
@@ -207,9 +209,7 @@ class CodingSessionBridgeOutbox:
         prepared: list[tuple[str | None, str, str]] = []
         for request in requests:
             _payload, serialized, digest = _canonical_envelope(request)
-            prepared.append(
-                (_stable_delivery_key(request, digest), serialized, digest)
-            )
+            prepared.append((_stable_delivery_key(request, digest), serialized, digest))
         ids, duplicates = await self._commit_enqueue_many(prepared)
         pending = await self.pending_count()
         self.wake()

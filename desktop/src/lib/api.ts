@@ -235,7 +235,9 @@ export interface EngineSettings {
 
 export interface ClaudeHistorySessionPreview {
   session_id: string;
-  source_revision: string;
+  source_revision: string | null;
+  import_available: boolean;
+  import_blocked_reason: string | null;
   title: string;
   project_name: string;
   project_key: string;
@@ -2053,7 +2055,11 @@ class EngineAPI {
 
   async importClaudeHistory(
     providerAccountKey: string,
-    sessions: Array<{ session_id: string; source_revision: string }>,
+    sessions: Array<{
+      session_id: string;
+      provider_project_key: string;
+      source_revision: string;
+    }>,
   ): Promise<ClaudeHistoryImportResult> {
     return this.request<ClaudeHistoryImportResult>(
       "/coding-session/claude/history/import",

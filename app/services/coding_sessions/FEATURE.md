@@ -90,15 +90,24 @@ session IDs with their exact preview revisions and atomically commits every gene
   `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<project>/<session>.jsonl`; subordinate JSONL files
   become independent `subagent:<id>` streams.
 - **Preview is privacy-minimal.** It never returns transcript text or a raw directory. It exposes a
-  project display basename plus an opaque SHA-256 project key. The import preserves exact raw JSON
-  only after explicit selection; raw cloud entries remain owner-only.
+  project display basename plus an opaque SHA-256 project key. Its selection revision hashes the
+  exact bytes of every main/subagent stream, not file timestamps. The import reopens bounded regular
+  files without following symlinks, re-hashes the bytes actually read, and rejects a replacement or
+  mutation before the outbox changes. The import preserves exact raw JSON only after explicit
+  selection; the full parsed provider record remains owner-only (JSON whitespace/key-order are not
+  claimed as durable semantics).
 - **Account identity is provenance, not authorization.** `claude auth status --json` is reduced to
   a local SHA-256 `provider_account_key`; email, organization name, credentials, and tokens never
   enter preview, outbox, or cloud metadata. An unknown account may be enriched once; a known key
-  can never change for the same provider session ID.
+  can never change for the same provider session ID. This key describes the active login at import;
+  Claude's local transcript does not independently prove which historical account created a file.
+  Claude and AI Matrx identities are rechecked after the bounded read and before enqueue.
 - **Reconciliation is additive and idempotent.** Entry UUID plus exact canonical payload hash is
   replay-safe. A changed preview revision, account switch, transcript UUID reuse, or source mutation
-  rejects before any new outbox row. Transcript truncation/rotation never deletes cloud history.
+  rejects before any new outbox row. Selection identity is session UUID plus opaque project key;
+  duplicate UUIDs across project directories never collapse locally, and the server rejects a
+  provider-session UUID already bound to another project. Transcript truncation/rotation never
+  deletes cloud history.
 - **Partial files stay partial.** Corrupt/oversized lines are omitted with their original line-based
   sequences retained, so the cloud checkpoint reports a gap instead of pretending the import is
   complete. Subagents and compaction/system records remain exact raw entries even when no safe
@@ -137,5 +146,6 @@ model once that package version is published and consumed here.
   tunnel 403, hooks-only gate, and unknown-field rejection.
 - `python scripts/generate_mirror_schema.py --check`: generated mirror parity.
 - `tests/unit/test_claude_history_import.py`: explicit preview, privacy, subagent/compaction
-  preservation, corrupt-line gaps, atomic batching, replay, account switch, revision drift, and
-  duplicate provider UUID refusal.
+  preservation, corrupt-line gaps, atomic batching, replay, account switch, content-bound revision
+  drift (including preserved size/mtime), bounded giant lines, symlink refusal, duplicate project
+  UUID separation, and duplicate entry UUID refusal.

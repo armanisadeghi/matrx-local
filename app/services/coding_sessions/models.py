@@ -72,6 +72,7 @@ class BridgeSourceMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_kind: Literal["claude_local_jsonl"]
+    provider_native_session_id: UUID
     provider_account_key: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
     importer_version: Annotated[str, Field(min_length=1, max_length=64)]
     client_version: Annotated[str, Field(min_length=1, max_length=64)] | None = None

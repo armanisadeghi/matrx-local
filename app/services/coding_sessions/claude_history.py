@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -90,6 +92,17 @@ def _conversation_id(
         f"{user_id}:claude_code:{provider_project_key}:{provider_session_id}:conversation"
     )
     return str(uuid5(NAMESPACE_URL, value))
+
+
+def _bridge_provider_session_id(project_key: str, raw_session_id: str) -> str:
+    project_digest = hashlib.sha256(project_key.encode("utf-8")).hexdigest()
+    encoded_session = (
+        base64.urlsafe_b64encode(raw_session_id.encode("utf-8")).decode().rstrip("=")
+    )
+    value = f"claude-sdk:{project_digest}:{encoded_session}"
+    if len(value) > 1024:
+        raise ValueError("Claude session identity exceeds the bridge limit")
+    return value
 
 
 def _safe_json(raw: bytes) -> dict[str, Any] | None:
@@ -224,7 +237,15 @@ def _read_summary(
             handle.seek(max(0, size - 262_144))
             if handle.tell() > 0:
                 handle.readline()
-            candidates.extend(handle.readlines())
+            remaining = 262_144
+            while remaining > 0:
+                line = handle.readline(min(remaining, 65_536) + 1)
+                if not line:
+                    break
+                if len(line) > remaining:
+                    break
+                candidates.append(line)
+                remaining -= len(line)
     for raw in candidates:
         record = _safe_json(raw)
         if record is None:
@@ -405,9 +426,16 @@ async def _read_account_snapshot() -> _AccountSnapshot:
             version_stdout.decode(errors="replace").strip()[:64] or None,
             "claude_account_identity_unavailable",
         )
-    account_key = _sha256_text(
-        "claude-code-account-v1\0" + "\0".join(str(value or "") for value in material)
-    )
+    from app.services.pairing import get_or_create_installation_hmac_key
+
+    account_key = hmac.new(
+        get_or_create_installation_hmac_key().encode("utf-8"),
+        (
+            "claude-code-account-v1\0"
+            + "\0".join(str(value or "") for value in material)
+        ).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
     return _AccountSnapshot(
         True,
         account_key,
@@ -732,6 +760,7 @@ class ClaudeHistoryImporter:
             )
         metadata = {
             "source_kind": "claude_local_jsonl",
+            "provider_native_session_id": source.session_id,
             "provider_account_key": account.account_key,
             "importer_version": IMPORTER_VERSION,
             "client_version": account.client_version,
@@ -742,8 +771,11 @@ class ClaudeHistoryImporter:
             "source_complete": corrupt_lines == 0,
             "corrupt_line_count": corrupt_lines,
         }
+        provider_session_id = _bridge_provider_session_id(
+            source.project_key, source.session_id
+        )
         conversation_id = _conversation_id(
-            user_id, source.session_id, source.project_key
+            user_id, provider_session_id, source.project_key
         )
         runtime_id = f"matrx-local:claude-history:{account.account_key}"
         requests: list[BridgeRequest] = []
@@ -770,6 +802,7 @@ class ClaudeHistoryImporter:
                     requests.append(
                         self._append_request(
                             source,
+                            provider_session_id,
                             stream_key,
                             batch,
                             metadata,
@@ -785,6 +818,7 @@ class ClaudeHistoryImporter:
                 requests.append(
                     self._append_request(
                         source,
+                        provider_session_id,
                         stream_key,
                         batch,
                         metadata,
@@ -799,6 +833,7 @@ class ClaudeHistoryImporter:
     @staticmethod
     def _append_request(
         source: _SessionSource,
+        provider_session_id: str,
         stream_key: str,
         entries: list[dict[str, Any]],
         metadata: dict[str, Any],
@@ -809,7 +844,7 @@ class ClaudeHistoryImporter:
             {
                 "action": "append_native",
                 "provider": "claude_code",
-                "provider_session_id": source.session_id,
+                "provider_session_id": provider_session_id,
                 "provider_project_key": source.project_key,
                 "conversation": {
                     "conversation_id": conversation_id,
@@ -834,14 +869,52 @@ class ClaudeHistoryImporter:
 
             outbox = get_coding_session_bridge_outbox()
         outbox_status = await outbox.status()
+        pending_history_imports = await outbox.pending_native_import_count()
+        oldest_history_import = await outbox.oldest_native_import()
         sync = await self._sync_meta.get_last_sync("claude_history_import")
         return {
             "schema_version": 1,
             "source": "claude_local_jsonl",
             "pending_outbox": outbox_status["pending"],
+            "pending_history_imports": pending_history_imports,
+            "oldest_history_import": oldest_history_import,
             "oldest_pending": outbox_status["oldest"],
             "last_sync": sync,
             "native_restore_available": False,
+        }
+
+    async def discard_pending(self) -> dict[str, Any]:
+        outbox = self._outbox
+        if outbox is None:
+            from app.services.coding_sessions.service import (
+                get_coding_session_bridge_outbox,
+            )
+
+            outbox = get_coding_session_bridge_outbox()
+        result = await outbox.discard_pending_native_imports()
+        await self._sync_meta.set_last_sync(
+            "claude_history_import",
+            status="discarded",
+        )
+        return {
+            "schema_version": 1,
+            "source": "claude_local_jsonl",
+            **result,
+        }
+
+    async def retry_pending(self) -> dict[str, Any]:
+        outbox = self._outbox
+        if outbox is None:
+            from app.services.coding_sessions.service import (
+                get_coding_session_bridge_outbox,
+            )
+
+            outbox = get_coding_session_bridge_outbox()
+        result = await outbox.retry_pending_native_imports()
+        return {
+            "schema_version": 1,
+            "source": "claude_local_jsonl",
+            **result,
         }
 
 

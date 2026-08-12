@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -7,6 +7,7 @@ import {
   History,
   Loader2,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -18,6 +19,7 @@ import { engine } from "@/lib/api";
 import type {
   ClaudeHistoryImportResult,
   ClaudeHistoryPreview,
+  ClaudeHistoryStatus,
 } from "@/lib/api";
 
 function formatBytes(value: number): string {
@@ -47,6 +49,20 @@ export function ClaudeHistorySync() {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ClaudeHistoryImportResult | null>(null);
+  const [historyStatus, setHistoryStatus] = useState<ClaudeHistoryStatus | null>(null);
+  const [discarding, setDiscarding] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+
+  const refreshStatus = useCallback(async () => {
+    const next = await engine.getClaudeHistoryStatus();
+    setHistoryStatus(next);
+  }, []);
+
+  useEffect(() => {
+    void refreshStatus().catch(() => {
+      // The main review action reports engine/auth errors with full context.
+    });
+  }, [refreshStatus]);
 
   const selectedSessions = useMemo(
     () => preview?.sessions.filter((session) =>
@@ -67,6 +83,7 @@ export function ClaudeHistorySync() {
       const next = await engine.previewClaudeHistory(100);
       setPreview(next);
       setSelected(new Set());
+      await refreshStatus();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
@@ -98,10 +115,38 @@ export function ClaudeHistorySync() {
         })),
       );
       setResult(next);
+      await refreshStatus();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const discardPending = async () => {
+    setDiscarding(true);
+    setError(null);
+    try {
+      await engine.discardPendingClaudeHistory();
+      await refreshStatus();
+      setResult(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setDiscarding(false);
+    }
+  };
+
+  const retryPending = async () => {
+    setRetrying(true);
+    setError(null);
+    try {
+      await engine.retryPendingClaudeHistory();
+      await refreshStatus();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setRetrying(false);
     }
   };
 
@@ -269,6 +314,52 @@ export function ClaudeHistorySync() {
                   {result.corrupt_lines} incomplete or corrupt lines were not uploaded. Valid entries keep their original line positions so the gap remains visible.
                 </p>
               )}
+            </div>
+          </div>
+        )}
+
+        {historyStatus && historyStatus.pending_history_imports > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
+            <div>
+              <p className="font-medium">
+                {historyStatus.pending_history_imports.toLocaleString()} history batches are still queued
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                {historyStatus.oldest_history_import?.last_error
+                  ? `Delivery is blocked after ${historyStatus.oldest_history_import.attempts} attempts: ${historyStatus.oldest_history_import.last_error}`
+                  : "Delivery is waiting for acknowledgement."}
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                Retry after repairing sign-in or server access, or discard the queued copies. Neither action changes Claude files or hook observations.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={discarding || retrying || syncing}
+                onClick={() => void retryPending()}
+              >
+                {retrying ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                Retry now
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={discarding || retrying || syncing}
+                onClick={() => void discardPending()}
+              >
+                {discarding ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="mr-2 h-4 w-4" />
+                )}
+                Discard queued copies
+              </Button>
             </div>
           </div>
         )}

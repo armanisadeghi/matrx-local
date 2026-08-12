@@ -39,6 +39,7 @@ logger = get_logger()
 
 _PAIRING_FILE = MATRX_HOME_DIR / "pairing.json"
 _TOKEN_PREFIX = "mxl_pair_"
+_HMAC_PREFIX = "mxl_hmac_"
 
 _lock = threading.Lock()
 _cached_token: Optional[str] = None
@@ -71,10 +72,23 @@ def _read_from_disk() -> Optional[str]:
     return None
 
 
+def _read_hmac_key_from_disk() -> Optional[str]:
+    try:
+        raw = json.loads(_PAIRING_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    key = raw.get("provenance_hmac_key") if isinstance(raw, dict) else None
+    return key if isinstance(key, str) and key.startswith(_HMAC_PREFIX) else None
+
+
 def _write_to_disk(token: str) -> None:
+    provenance_key = _read_hmac_key_from_disk()
+    payload: dict[str, object] = {"pair_token": token, "schema": 2}
+    if provenance_key is not None:
+        payload["provenance_hmac_key"] = provenance_key
     _PAIRING_FILE.parent.mkdir(parents=True, exist_ok=True)
     _PAIRING_FILE.write_text(
-        json.dumps({"pair_token": token, "schema": 1}, indent=2) + "\n",
+        json.dumps(payload, indent=2) + "\n",
         encoding="utf-8",
     )
     try:
@@ -100,6 +114,39 @@ def get_or_create_pair_token() -> str:
             )
         _cached_token = token
         return token
+
+
+def get_or_create_installation_hmac_key() -> str:
+    """Return a stable random HMAC key without exposing provider identifiers."""
+    global _cached_token
+    with _lock:
+        key = _read_hmac_key_from_disk()
+        if key is not None:
+            return key
+        token = _cached_token or _read_from_disk()
+        if token is None:
+            token = _TOKEN_PREFIX + secrets.token_urlsafe(32)
+            _cached_token = token
+        key = _HMAC_PREFIX + secrets.token_urlsafe(32)
+        _PAIRING_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _PAIRING_FILE.write_text(
+            json.dumps(
+                {
+                    "pair_token": token,
+                    "provenance_hmac_key": key,
+                    "schema": 2,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        try:
+            _PAIRING_FILE.chmod(0o600)
+        except OSError:
+            pass
+        logger.info("[pairing] minted stable local provenance HMAC key")
+        return key
 
 
 def rotate_pair_token() -> str:

@@ -290,6 +290,23 @@ export interface ClaudeHistoryImportResult {
   continuation: string;
 }
 
+export interface ClaudeHistoryStatus {
+  schema_version: 1;
+  source: "claude_local_jsonl";
+  pending_outbox: number;
+  pending_history_imports: number;
+  oldest_pending: Record<string, unknown> | null;
+  oldest_history_import: {
+    id: number;
+    attempts: number;
+    next_attempt_at: number;
+    last_error: string | null;
+    created_at: string;
+  } | null;
+  last_sync: Record<string, unknown> | null;
+  native_restore_available: false;
+}
+
 /** A configurable storage path entry from GET /settings/paths */
 export interface StoragePath {
   name: string; // e.g. "notes"
@@ -2074,15 +2091,30 @@ class EngineAPI {
     );
   }
 
-  async getClaudeHistoryStatus(): Promise<{
+  async getClaudeHistoryStatus(): Promise<ClaudeHistoryStatus> {
+    return this.request("/coding-session/claude/history/status");
+  }
+
+  async discardPendingClaudeHistory(): Promise<{
     schema_version: 1;
     source: "claude_local_jsonl";
-    pending_outbox: number;
-    oldest_pending: Record<string, unknown> | null;
-    last_sync: Record<string, unknown> | null;
-    native_restore_available: false;
+    discarded: number;
+    pending: number;
   }> {
-    return this.request("/coding-session/claude/history/status");
+    return this.request("/coding-session/claude/history/pending", {
+      method: "DELETE",
+    });
+  }
+
+  async retryPendingClaudeHistory(): Promise<{
+    schema_version: 1;
+    source: "claude_local_jsonl";
+    retried: number;
+    pending: number;
+  }> {
+    return this.request("/coding-session/claude/history/pending/retry", {
+      method: "POST",
+    });
   }
 
   // ---- Generic HTTP helpers ----

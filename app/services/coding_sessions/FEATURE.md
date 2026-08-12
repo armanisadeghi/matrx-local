@@ -84,7 +84,11 @@ user presses **Review local history**, reports file/session/byte/project counts 
 summaries, and uploads nothing. `POST /coding-session/claude/history/import` accepts at most ten
 session IDs with their exact preview revisions and atomically commits every generated
 `append_native` batch to the existing V19 outbox before returning 202. `GET
-/coding-session/claude/history/status` reports the outbox and last explicit enqueue.
+/coding-session/claude/history/status` reports the outbox and last explicit enqueue. If delivery is
+blocked, the page exposes `DELETE /coding-session/claude/history/pending` as **Discard queued
+copies**; it removes only explicit Claude-history batches and never source files, hook observations,
+or already-delivered cloud history. **Retry now** clears only history-batch backoff/error and wakes
+the ordered publisher; neither repair silently drops an event.
 
 - **The source is Claude's documented local JSONL.** Main transcripts come from
   `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<project>/<session>.jsonl`; subordinate JSONL files
@@ -97,7 +101,9 @@ session IDs with their exact preview revisions and atomically commits every gene
   selection; the full parsed provider record remains owner-only (JSON whitespace/key-order are not
   claimed as durable semantics).
 - **Account identity is provenance, not authorization.** `claude auth status --json` is reduced to
-  a local SHA-256 `provider_account_key`; email, organization name, credentials, and tokens never
+  an HMAC-SHA-256 `provider_account_key` keyed by a stable random installation secret stored in the
+  existing owner-only pairing document, so an email guess cannot be tested against its cloud
+  fingerprint. Email, organization name, credentials, and tokens never
   enter preview, outbox, or cloud metadata. An unknown account may be enriched once; a known key
   can never change for the same provider session ID. This key describes the active login at import;
   Claude's local transcript does not independently prove which historical account created a file.
@@ -105,8 +111,9 @@ session IDs with their exact preview revisions and atomically commits every gene
 - **Reconciliation is additive and idempotent.** Entry UUID plus exact canonical payload hash is
   replay-safe. A changed preview revision, account switch, transcript UUID reuse, or source mutation
   rejects before any new outbox row. Selection identity is session UUID plus opaque project key;
-  duplicate UUIDs across project directories never collapse locally, and the server rejects a
-  provider-session UUID already bound to another project. Transcript truncation/rotation never
+  duplicate UUIDs across project directories use the same deterministic namespaced identity as the
+  Claude Agent SDK SessionStore and never collapse. The raw Claude UUID remains only in bounded
+  source metadata. Transcript truncation/rotation never
   deletes cloud history.
 - **Partial files stay partial.** Corrupt/oversized lines are omitted with their original line-based
   sequences retained, so the cloud checkpoint reports a gap instead of pretending the import is

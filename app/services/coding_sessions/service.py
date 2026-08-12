@@ -344,6 +344,78 @@ class CodingSessionBridgeOutbox:
         )
         return int(row["count"]) if row else 0
 
+    async def pending_native_import_count(self) -> int:
+        row = await self._db.fetchone(
+            """SELECT COUNT(*) AS count
+               FROM coding_session_bridge_outbox
+               WHERE json_valid(envelope_json)
+                 AND json_extract(envelope_json, '$.action') = 'append_native'
+                 AND json_extract(
+                       envelope_json, '$.source_metadata.source_kind'
+                     ) = 'claude_local_jsonl'"""
+        )
+        return int(row["count"]) if row else 0
+
+    async def oldest_native_import(self) -> dict[str, Any] | None:
+        row = await self._db.fetchone(
+            """SELECT id, attempts, next_attempt_at, last_error, created_at
+               FROM coding_session_bridge_outbox
+               WHERE json_valid(envelope_json)
+                 AND json_extract(envelope_json, '$.action') = 'append_native'
+                 AND json_extract(
+                       envelope_json, '$.source_metadata.source_kind'
+                     ) = 'claude_local_jsonl'
+               ORDER BY id LIMIT 1"""
+        )
+        return dict(row) if row else None
+
+    async def retry_pending_native_imports(self) -> dict[str, int]:
+        """Make queued Claude-history copies immediately eligible for retry."""
+        async with aiosqlite.connect(str(self._db.path)) as connection:
+            await connection.execute("PRAGMA busy_timeout=5000")
+            await connection.execute("PRAGMA synchronous=FULL")
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await connection.execute(
+                    """UPDATE coding_session_bridge_outbox
+                       SET next_attempt_at=0, last_error=NULL,
+                           updated_at=datetime('now')
+                       WHERE json_valid(envelope_json)
+                         AND json_extract(envelope_json, '$.action') = 'append_native'
+                         AND json_extract(
+                               envelope_json, '$.source_metadata.source_kind'
+                             ) = 'claude_local_jsonl'"""
+                )
+                retried = max(0, int(cursor.rowcount))
+                await connection.commit()
+            except BaseException:
+                await connection.rollback()
+                raise
+        self.wake()
+        return {"retried": retried, "pending": await self.pending_count()}
+
+    async def discard_pending_native_imports(self) -> dict[str, int]:
+        """Delete only explicitly queued Claude-history copies, never hook rows."""
+        async with aiosqlite.connect(str(self._db.path)) as connection:
+            await connection.execute("PRAGMA busy_timeout=5000")
+            await connection.execute("PRAGMA synchronous=FULL")
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await connection.execute(
+                    """DELETE FROM coding_session_bridge_outbox
+                       WHERE json_valid(envelope_json)
+                         AND json_extract(envelope_json, '$.action') = 'append_native'
+                         AND json_extract(
+                               envelope_json, '$.source_metadata.source_kind'
+                             ) = 'claude_local_jsonl'"""
+                )
+                discarded = max(0, int(cursor.rowcount))
+                await connection.commit()
+            except BaseException:
+                await connection.rollback()
+                raise
+        return {"discarded": discarded, "pending": await self.pending_count()}
+
     async def status(self) -> dict[str, Any]:
         row = await self._db.fetchone(
             """SELECT id, attempts, next_attempt_at, last_error, created_at

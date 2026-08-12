@@ -526,3 +526,69 @@ async def test_same_uuid_across_projects_keeps_project_identity(importer_env) ->
     assert {item.provider_project_key for item in envelopes} == {
         match["project_key"] for match in matches
     }
+    assert len({item.provider_session_id for item in envelopes}) == 2
+    assert all(
+        item.source_metadata
+        and str(item.source_metadata.provider_native_session_id) == session_id
+        for item in envelopes
+    )
+
+
+@pytest.mark.anyio
+async def test_discard_pending_history_preserves_hook_events(importer_env) -> None:
+    config_dir, db, outbox = importer_env
+    session_id = str(uuid4())
+    _write_session(
+        config_dir,
+        session_id=session_id,
+        records=[{"type": "user", "message": {"content": "hello"}}],
+    )
+    importer = ClaudeHistoryImporter(
+        db=db, outbox=outbox, config_dir=config_dir, account_reader=_account_a
+    )
+    preview = await importer.preview()
+    item = preview["sessions"][0]
+    imported = await importer.import_selected(
+        ClaudeHistoryImportRequest.model_validate(
+            {
+                "provider_account_key": preview["provider_account_key"],
+                "sessions": [
+                    {
+                        "session_id": session_id,
+                        "provider_project_key": item["project_key"],
+                        "source_revision": item["source_revision"],
+                    }
+                ],
+            }
+        )
+    )
+    await outbox.enqueue(
+        BridgeRequest.model_validate(
+            {
+                "action": "observe_hook",
+                "provider": "claude_code",
+                "provider_session_id": str(uuid4()),
+                "origin": "independent_hook",
+                "hook_event": {
+                    "name": "Stop",
+                    "stable_event_id": "keep-this-hook",
+                    "payload": {"reason": "complete"},
+                },
+            }
+        )
+    )
+    status = await importer.status()
+    assert status["pending_history_imports"] == imported["queued_batches"]
+
+    discarded = await importer.discard_pending()
+    assert discarded == {
+        "schema_version": 1,
+        "source": "claude_local_jsonl",
+        "discarded": imported["queued_batches"],
+        "pending": 1,
+    }
+    remaining = await db.fetchall(
+        "SELECT envelope_json FROM coding_session_bridge_outbox"
+    )
+    assert len(remaining) == 1
+    assert json.loads(remaining[0]["envelope_json"])["action"] == "observe_hook"

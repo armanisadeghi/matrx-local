@@ -111,3 +111,15 @@ async def import_claude_history(
 @router.get("/claude/history/status")
 async def claude_history_status() -> dict[str, object]:
     return await ClaudeHistoryImporter().status()
+
+
+@router.delete("/claude/history/pending")
+async def discard_pending_claude_history() -> dict[str, object]:
+    """Discard queued history copies; source files and hook observations are untouched."""
+    return await ClaudeHistoryImporter().discard_pending()
+
+
+@router.post("/claude/history/pending/retry")
+async def retry_pending_claude_history() -> dict[str, object]:
+    """Retry queued history copies explicitly after the user repairs the cause."""
+    return await ClaudeHistoryImporter().retry_pending()

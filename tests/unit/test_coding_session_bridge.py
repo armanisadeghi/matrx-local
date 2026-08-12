@@ -106,6 +106,43 @@ def _hook(*, stable_id: str | None = "prompt-1", text: str = "hello") -> BridgeR
     )
 
 
+def _native_import() -> BridgeRequest:
+    return BridgeRequest.model_validate(
+        {
+            "action": "append_native",
+            "provider": "claude_code",
+            "provider_session_id": "claude-sdk:project:session",
+            "provider_project_key": "claude-local:project",
+            "origin": "matrx_local",
+            "writer_runtime_id": "matrx-local:claude-history:test",
+            "conversation": {
+                "conversation_id": "22222222-2222-4222-8222-222222222222",
+                "is_new": True,
+                "store": True,
+            },
+            "entries": [
+                {
+                    "entry_id": "native-1",
+                    "source_sequence": 0,
+                    "kind": "user",
+                    "payload": {"type": "user", "message": "hello"},
+                }
+            ],
+            "source_metadata": {
+                "source_kind": "claude_local_jsonl",
+                "provider_native_session_id": "11111111-1111-4111-8111-111111111111",
+                "provider_account_key": "a" * 64,
+                "importer_version": "matrx-local/test",
+                "transcript_sha256": "b" * 64,
+                "transcript_bytes": 10,
+                "transcript_entry_count": 1,
+                "transcript_mtime_ns": 1,
+                "source_complete": True,
+            },
+        }
+    )
+
+
 @pytest.fixture
 async def bridge_db(tmp_path: Path):
     db = LocalDatabase(tmp_path / "matrx.db")
@@ -356,7 +393,6 @@ async def test_failure_at_head_blocks_later_rows_until_ordered_retry(
     assert [call[1]["hook_event"]["payload"]["prompt"] for call in client.calls] == [
         "first"
     ]
-
     await bridge_db.execute("UPDATE coding_session_bridge_outbox SET next_attempt_at=0")
     await bridge_db.commit()
     assert (await service.sync_pending())["sent"] == 2
@@ -365,6 +401,39 @@ async def test_failure_at_head_blocks_later_rows_until_ordered_retry(
         "first",
         "second",
     ]
+
+
+@pytest.mark.anyio
+async def test_history_retry_recovers_ordered_drain_without_dropping_hook(
+    bridge_db: LocalDatabase,
+) -> None:
+    client = FakeClient([AIDreamOfflineError("offline")])
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=client,
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    await service.enqueue(_native_import())
+    await service.enqueue(_hook(stable_id="after-import"))
+
+    assert (await service.sync_pending())["failed"] == 1
+    assert await service.pending_native_import_count() == 1
+    oldest = await service.oldest_native_import()
+    assert oldest is not None and oldest["attempts"] == 1
+    assert oldest["last_error"]
+
+    assert await service.retry_pending_native_imports() == {
+        "retried": 1,
+        "pending": 2,
+    }
+    assert (await service.sync_pending(limit=2))["sent"] == 2
+    assert [call[1]["action"] for call in client.calls] == [
+        "append_native",
+        "append_native",
+        "observe_hook",
+    ]
+    assert await service.pending_count() == 0
 
 
 @pytest.mark.anyio

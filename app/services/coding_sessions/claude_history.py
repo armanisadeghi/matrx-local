@@ -236,8 +236,14 @@ def _read_summary(
         if size > 262_144:
             handle.seek(max(0, size - 262_144))
             if handle.tell() > 0:
-                handle.readline()
-            remaining = 262_144
+                discarded = handle.readline(262_145)
+                if len(discarded) > 262_144 or not discarded.endswith(b"\n"):
+                    discarded = b""
+                    remaining = 0
+                else:
+                    remaining = 262_144 - len(discarded)
+            else:
+                remaining = 262_144
             while remaining > 0:
                 line = handle.readline(min(remaining, 65_536) + 1)
                 if not line:

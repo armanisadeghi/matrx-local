@@ -466,6 +466,28 @@ async def test_giant_unterminated_line_is_bounded_and_not_enqueued(
 
 
 @pytest.mark.anyio
+async def test_preview_summary_tail_with_unterminated_giant_line_is_bounded(
+    importer_env,
+) -> None:
+    config_dir, db, outbox = importer_env
+    session_id = str(uuid4())
+    path = _write_session(
+        config_dir,
+        session_id=session_id,
+        records=[
+            {"type": "user", "message": {"content": "hello"}},
+            b"{" + b"x" * 500_000,
+        ],
+    )
+    preview = await ClaudeHistoryImporter(
+        db=db, outbox=outbox, config_dir=config_dir, account_reader=_account_a
+    ).preview()
+    assert preview["sessions"][0]["session_id"] == session_id
+    assert preview["sessions"][0]["bytes"] == path.stat().st_size
+    assert preview["sessions"][0]["title"].startswith("Claude session")
+
+
+@pytest.mark.anyio
 async def test_symlinked_sources_are_never_discovered(
     importer_env, tmp_path: Path
 ) -> None:

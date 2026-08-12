@@ -68,6 +68,8 @@ phrase in the sync directories.
   first, then an ordered, schema-validated cloud acknowledgement. Do not move
   its 202 boundary onto the shared repository transaction: an unrelated
   coroutine can commit or roll back that connection while the route awaits.
+  Explicit Claude history imports reuse this same table and one atomic FULL-sync multi-row
+  transaction; they do not add a second local database or sync engine.
 - `chat.coding_session` and `chat.coding_session_entry` are owner-only raw
   ledgers and are never structural-mirror tables. The generator excludes both
   by name and chat sync has a second runtime refusal guard.

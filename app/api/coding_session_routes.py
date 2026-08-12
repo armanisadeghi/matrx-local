@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from app.api.remote_auth import headers_indicate_tunnel
 from app.services.coding_sessions import (
@@ -15,6 +15,11 @@ from app.services.coding_sessions.models import (
     BridgeAction,
     BridgeRequest,
     LocalBridgeReceipt,
+)
+from app.services.coding_sessions.claude_history import (
+    ClaudeHistoryConflict,
+    ClaudeHistoryImporter,
+    ClaudeHistoryImportRequest,
 )
 
 router = APIRouter(prefix="/coding-session", tags=["coding-session-bridge"])
@@ -68,3 +73,41 @@ async def persist_coding_session_hook(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
+
+
+@router.get("/claude/history/preview")
+async def preview_claude_history(
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, object]:
+    """Inspect local Claude history only after an explicit user request."""
+    try:
+        return await ClaudeHistoryImporter().preview(limit=limit)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/claude/history/import", status_code=status.HTTP_202_ACCEPTED)
+async def import_claude_history(
+    body: ClaudeHistoryImportRequest,
+) -> dict[str, object]:
+    """Reconcile selected transcript revisions into the durable bridge outbox."""
+    try:
+        return await ClaudeHistoryImporter().import_selected(body)
+    except ClaudeHistoryConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/claude/history/status")
+async def claude_history_status() -> dict[str, object]:
+    return await ClaudeHistoryImporter().status()

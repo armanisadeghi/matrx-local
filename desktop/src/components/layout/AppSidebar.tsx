@@ -26,6 +26,7 @@ import {
   RefreshCw,
   Plug,
   FolderClosed,
+  History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -72,6 +73,7 @@ const navItems = [
   { to: "/aimatrx", icon: Sparkles, label: "AiMatrx" },
   { to: "/browser", icon: MonitorSmartphone, label: "Browser" },
   { to: "/bridge-test", icon: Plug, label: "Bridge Test" },
+  { to: "/claude-history", icon: History, label: "Claude History" },
   { to: "/configurations", icon: SlidersHorizontal, label: "Configurations" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ];

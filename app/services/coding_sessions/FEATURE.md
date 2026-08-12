@@ -77,12 +77,51 @@ refuses to pull or push them even if a malformed generated mirror includes
 one. Generic schema regeneration can therefore never copy raw commands,
 paths, file contents, or secrets into the desktop chat replica.
 
-## Deliberate v1 boundary
+## Explicit Claude history sync
 
-Only independently observed hook events enter this route. Managed native
-provider sessions will use the same envelope models later, but this slice adds
-no Claude, Codex, Cursor, or VS Code SDK dependency and does not advertise
-native resume/fork. `models.py` is the exact wire twin of the unreleased
+`GET /coding-session/claude/history/preview` is the only discovery door. It runs only after the
+user presses **Review local history**, reports file/session/byte/project counts plus bounded session
+summaries, and uploads nothing. `POST /coding-session/claude/history/import` accepts at most ten
+session IDs with their exact preview revisions and atomically commits every generated
+`append_native` batch to the existing V19 outbox before returning 202. `GET
+/coding-session/claude/history/status` reports the outbox and last explicit enqueue.
+
+- **The source is Claude's documented local JSONL.** Main transcripts come from
+  `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<project>/<session>.jsonl`; subordinate JSONL files
+  become independent `subagent:<id>` streams.
+- **Preview is privacy-minimal.** It never returns transcript text or a raw directory. It exposes a
+  project display basename plus an opaque SHA-256 project key. The import preserves exact raw JSON
+  only after explicit selection; raw cloud entries remain owner-only.
+- **Account identity is provenance, not authorization.** `claude auth status --json` is reduced to
+  a local SHA-256 `provider_account_key`; email, organization name, credentials, and tokens never
+  enter preview, outbox, or cloud metadata. An unknown account may be enriched once; a known key
+  can never change for the same provider session ID.
+- **Reconciliation is additive and idempotent.** Entry UUID plus exact canonical payload hash is
+  replay-safe. A changed preview revision, account switch, transcript UUID reuse, or source mutation
+  rejects before any new outbox row. Transcript truncation/rotation never deletes cloud history.
+- **Partial files stay partial.** Corrupt/oversized lines are omitted with their original line-based
+  sequences retained, so the cloud checkpoint reports a gap instead of pretending the import is
+  complete. Subagents and compaction/system records remain exact raw entries even when no safe
+  normalized projection exists.
+- **Exact ledger is not native restore.** The copied JSONL supports a faithful private AI Matrx
+  transcript. Native Claude continuation is only the local `claude --resume <session-id>` command
+  while the original file, workspace, and current Claude login exist. The importer does not copy
+  file-history snapshots, permissions, credentials, or filesystem state and always reports
+  `native_restore_available=false`.
+- **Pin/archive truth is unsupported.** Local Claude exposes names, project grouping, branch, and
+  fork/session lineage in the documented transcript/session picker. No stable local pin/archive
+  source exists, so the product does not infer those states. Web-managed archive is a separate
+  Claude web capability.
+
+Hard bounds: 10,000 discovered sessions; 200 preview rows; ten selected sessions; 64 MiB per
+explicit import; 2 MiB per JSONL line; 100 entries and 4 MiB per outbox envelope; 2,048 UTF-8 bytes
+for the allowlisted `source_metadata` object.
+
+## Deliberate hook boundary
+
+Only independently observed hook events enter `/hooks`; selected Claude JSONL uses the explicit
+history routes above. Managed native provider sessions use the same envelope models, but history
+sync adds no Claude SDK dependency and does not advertise native resume/fork. `models.py` is the exact wire twin of the unreleased
 `matrx_ai.coding_sessions.BridgeRequest`; replace the twin with the package
 model once that package version is published and consumed here.
 
@@ -97,3 +136,6 @@ model once that package version is published and consumed here.
 - `tests/smoke/test_coding_session_bridge.py`: real engine loopback 202,
   tunnel 403, hooks-only gate, and unknown-field rejection.
 - `python scripts/generate_mirror_schema.py --check`: generated mirror parity.
+- `tests/unit/test_claude_history_import.py`: explicit preview, privacy, subagent/compaction
+  preservation, corrupt-line gaps, atomic batching, replay, account switch, revision drift, and
+  duplicate provider UUID refusal.

@@ -233,6 +233,61 @@ export interface EngineSettings {
   research_concurrency: number;
 }
 
+export interface ClaudeHistorySessionPreview {
+  session_id: string;
+  source_revision: string;
+  title: string;
+  project_name: string;
+  project_key: string;
+  git_branch: string | null;
+  bytes: number;
+  file_count: number;
+  subagent_count: number;
+  last_modified_ns: number;
+}
+
+export interface ClaudeHistoryPreview {
+  schema_version: 1;
+  source: "claude_local_jsonl";
+  explicit_action_required: true;
+  account_identity_available: boolean;
+  provider_account_key: string | null;
+  account_fingerprint: string | null;
+  account_blocked_reason: string | null;
+  claude_client_version: string | null;
+  matrx_user_available: boolean;
+  import_ready: boolean;
+  totals: {
+    session_count: number;
+    file_count: number;
+    bytes: number;
+    project_count: number;
+  };
+  limits: {
+    preview_sessions: number;
+    selected_sessions: number;
+    import_bytes: number;
+    line_bytes: number;
+  };
+  sessions: ClaudeHistorySessionPreview[];
+  truncated: boolean;
+}
+
+export interface ClaudeHistoryImportResult {
+  schema_version: 1;
+  accepted: true;
+  provider_account_fingerprint: string;
+  selected_sessions: number;
+  entries: number;
+  corrupt_lines: number;
+  source_complete: boolean;
+  queued_batches: number;
+  duplicate_pending_batches: number;
+  pending_outbox: number;
+  native_restore_available: false;
+  continuation: string;
+}
+
 /** A configurable storage path entry from GET /settings/paths */
 export interface StoragePath {
   name: string; // e.g. "notes"
@@ -1988,6 +2043,40 @@ class EngineAPI {
     const resp = await fetch(`${this.baseUrl}/cloud/instances`, { headers });
     if (!resp.ok) throw new Error(`List instances failed: ${resp.status}`);
     return resp.json();
+  }
+
+  async previewClaudeHistory(limit = 50): Promise<ClaudeHistoryPreview> {
+    return this.request<ClaudeHistoryPreview>(
+      `/coding-session/claude/history/preview?limit=${encodeURIComponent(limit)}`,
+    );
+  }
+
+  async importClaudeHistory(
+    providerAccountKey: string,
+    sessions: Array<{ session_id: string; source_revision: string }>,
+  ): Promise<ClaudeHistoryImportResult> {
+    return this.request<ClaudeHistoryImportResult>(
+      "/coding-session/claude/history/import",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider_account_key: providerAccountKey,
+          sessions,
+        }),
+      },
+    );
+  }
+
+  async getClaudeHistoryStatus(): Promise<{
+    schema_version: 1;
+    source: "claude_local_jsonl";
+    pending_outbox: number;
+    oldest_pending: Record<string, unknown> | null;
+    last_sync: Record<string, unknown> | null;
+    native_restore_available: false;
+  }> {
+    return this.request("/coding-session/claude/history/status");
   }
 
   // ---- Generic HTTP helpers ----

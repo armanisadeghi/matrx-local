@@ -68,6 +68,29 @@ class BridgeEntry(BaseModel):
     source_cursor: dict[str, JsonValue] | None = None
 
 
+class BridgeSourceMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_kind: Literal["claude_local_jsonl"]
+    provider_account_key: Annotated[
+        str, Field(pattern=r"^[0-9a-f]{64}$")
+    ] | None = None
+    importer_version: Annotated[str, Field(min_length=1, max_length=64)]
+    client_version: Annotated[str, Field(min_length=1, max_length=64)] | None = None
+    transcript_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    transcript_bytes: Annotated[int, Field(ge=0, le=268_435_456)]
+    transcript_entry_count: Annotated[int, Field(ge=0, le=1_000_000)]
+    transcript_mtime_ns: Annotated[int, Field(ge=0)]
+    source_complete: bool
+    corrupt_line_count: Annotated[int, Field(ge=0, le=1_000_000)] = 0
+
+    @model_validator(mode="after")
+    def enforce_wire_size(self) -> "BridgeSourceMetadata":
+        if len(self.model_dump_json(exclude_none=True).encode("utf-8")) > 2_048:
+            raise ValueError("source_metadata exceeds the 2048-byte UTF-8 limit")
+        return self
+
+
 class BridgeRequest(BaseModel):
     """The complete provider-neutral request, even though ingress is hooks-only."""
 
@@ -89,6 +112,7 @@ class BridgeRequest(BaseModel):
     entries: Annotated[list[BridgeEntry], Field(max_length=1000)] = Field(
         default_factory=list
     )
+    source_metadata: BridgeSourceMetadata | None = None
     writer_runtime_id: Annotated[str, Field(min_length=1, max_length=512)] | None = None
     writer_lease_seconds: Annotated[int, Field(ge=30, le=3600)] = 300
     after_source_sequence: Annotated[int, Field(ge=0)] | None = None
@@ -127,8 +151,17 @@ class BridgeRequest(BaseModel):
                 )
             if self.writer_runtime_id is None:
                 raise ValueError("writer_runtime_id is required for append_native")
+            if self.source_metadata is not None and (
+                self.provider is not BridgeProvider.CLAUDE_CODE
+                or self.origin is not BridgeOrigin.MATRX_LOCAL
+            ):
+                raise ValueError(
+                    "source_metadata is supported only for Matrx Local Claude imports"
+                )
         elif self.entries:
             raise ValueError("entries are only valid for append_native")
+        elif self.source_metadata is not None:
+            raise ValueError("source_metadata is only valid for append_native")
         if self.action is BridgeAction.LOAD_NATIVE and self.conversation is not None:
             raise ValueError(
                 "load_native resolves its persisted binding; omit conversation"
@@ -159,5 +192,6 @@ __all__ = [
     "BridgeOrigin",
     "BridgeProvider",
     "BridgeRequest",
+    "BridgeSourceMetadata",
     "LocalBridgeReceipt",
 ]

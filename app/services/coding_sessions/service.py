@@ -48,7 +48,9 @@ def _canonical_envelope(request: BridgeRequest) -> tuple[dict[str, Any], str, st
     return payload, serialized, digest
 
 
-def _stable_delivery_key(request: BridgeRequest) -> str | None:
+def _stable_delivery_key(request: BridgeRequest, envelope_digest: str) -> str | None:
+    if request.action.value == "append_native":
+        return hashlib.sha256(f"append_native:{envelope_digest}".encode()).hexdigest()
     hook = request.hook_event
     if hook is None or hook.stable_event_id is None:
         return None
@@ -87,10 +89,11 @@ def _validate_upstream_acknowledgement(
         raise AIDreamError(502, "bridge acknowledgement is not a JSON object")
     expected = {
         "schema_version": 1,
-        "action": "observe_hook",
+        "action": request.action.value,
         "provider": request.provider.value,
-        "fidelity": "event_mirror",
     }
+    if request.action.value == "observe_hook":
+        expected["fidelity"] = "event_mirror"
     for field, value in expected.items():
         if response.get(field) != value:
             raise AIDreamError(
@@ -108,10 +111,16 @@ def _validate_upstream_acknowledgement(
     accepted = _count("accepted")
     duplicates = _count("duplicates")
     conflicts = _count("conflicts")
-    if conflicts != 0 or accepted + duplicates != 1:
+    expected_count = 1 if request.action.value == "observe_hook" else len(request.entries)
+    if request.action.value == "append_native" and response.get("fidelity") not in {
+        "native",
+        "event_mirror",
+    }:
+        raise AIDreamError(502, "bridge acknowledgement has invalid import fidelity")
+    if conflicts != 0 or accepted + duplicates != expected_count:
         raise AIDreamError(
             502,
-            "bridge acknowledgement did not accept or deduplicate exactly one event",
+            "bridge acknowledgement did not account for every submitted entry",
         )
 
 
@@ -176,7 +185,7 @@ class CodingSessionBridgeOutbox:
     async def enqueue(self, request: BridgeRequest) -> LocalBridgeReceipt:
         """Commit an exact envelope before returning a receipt."""
         _payload, serialized, digest = _canonical_envelope(request)
-        dedupe_key = _stable_delivery_key(request)
+        dedupe_key = _stable_delivery_key(request, digest)
         outbox_id, duplicate = await self._commit_enqueue(
             dedupe_key=dedupe_key,
             serialized=serialized,
@@ -190,6 +199,77 @@ class CodingSessionBridgeOutbox:
             duplicate=duplicate,
             pending=pending,
         )
+
+    async def enqueue_many(self, requests: list[BridgeRequest]) -> dict[str, Any]:
+        """Atomically persist a bounded import plan before reporting success."""
+        if not requests:
+            raise ValueError("at least one bridge request is required")
+        prepared: list[tuple[str | None, str, str]] = []
+        for request in requests:
+            _payload, serialized, digest = _canonical_envelope(request)
+            prepared.append(
+                (_stable_delivery_key(request, digest), serialized, digest)
+            )
+        ids, duplicates = await self._commit_enqueue_many(prepared)
+        pending = await self.pending_count()
+        self.wake()
+        return {
+            "queued": len(ids) - duplicates,
+            "duplicate_pending": duplicates,
+            "receipt_ids": ids,
+            "pending": pending,
+        }
+
+    async def _commit_enqueue_many(
+        self,
+        prepared: list[tuple[str | None, str, str]],
+    ) -> tuple[list[int], int]:
+        ids: list[int] = []
+        duplicates = 0
+        async with aiosqlite.connect(str(self._db.path)) as connection:
+            connection.row_factory = aiosqlite.Row
+            await connection.execute("PRAGMA busy_timeout=5000")
+            await connection.execute("PRAGMA synchronous=FULL")
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                for dedupe_key, serialized, digest in prepared:
+                    if dedupe_key is None:
+                        cursor = await connection.execute(
+                            """INSERT INTO coding_session_bridge_outbox (
+                                 dedupe_key, envelope_json, envelope_sha256
+                               ) VALUES (?, ?, ?)""",
+                            (None, serialized, digest),
+                        )
+                    else:
+                        cursor = await connection.execute(
+                            """INSERT INTO coding_session_bridge_outbox (
+                                 dedupe_key, envelope_json, envelope_sha256
+                               ) VALUES (?, ?, ?)
+                               ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL
+                               DO NOTHING""",
+                            (dedupe_key, serialized, digest),
+                        )
+                    if cursor.rowcount == 1:
+                        ids.append(int(cursor.lastrowid))
+                        continue
+                    existing_cursor = await connection.execute(
+                        """SELECT id, envelope_sha256
+                           FROM coding_session_bridge_outbox
+                           WHERE dedupe_key = ?""",
+                        (dedupe_key,),
+                    )
+                    row = await existing_cursor.fetchone()
+                    if row is None or str(row["envelope_sha256"]) != digest:
+                        raise BridgeMutationConflict(
+                            "stable import identity was reused with different bytes"
+                        )
+                    ids.append(int(row["id"]))
+                    duplicates += 1
+                await connection.commit()
+            except BaseException:
+                await connection.rollback()
+                raise
+        return ids, duplicates
 
     async def _commit_enqueue(
         self,

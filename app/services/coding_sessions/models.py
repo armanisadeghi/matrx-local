@@ -68,12 +68,45 @@ class BridgeEntry(BaseModel):
     source_cursor: dict[str, JsonValue] | None = None
 
 
+class BridgeAccountIdentity(BaseModel):
+    """Opaque, display-safe provider-account provenance. Never authorization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider_account_key: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    provider_account_key_version: Literal[1, 2] = 2
+    provider_account_fingerprint: (
+        Annotated[str, Field(pattern=r"^[0-9a-f]{12}$")] | None
+    ) = None
+    provider_account_label: Annotated[str, Field(min_length=1, max_length=64)] | None = (
+        None
+    )
+
+    @model_validator(mode="after")
+    def enforce_fingerprint_consistency(self) -> "BridgeAccountIdentity":
+        if (
+            self.provider_account_fingerprint is not None
+            and self.provider_account_fingerprint != self.provider_account_key[:12]
+        ):
+            raise ValueError(
+                "provider_account_fingerprint must be the key's first 12 hex chars"
+            )
+        return self
+
+
 class BridgeSourceMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_kind: Literal["claude_local_jsonl"]
     provider_native_session_id: UUID
     provider_account_key: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    provider_account_key_version: Literal[1, 2] = 1
+    provider_account_fingerprint: (
+        Annotated[str, Field(pattern=r"^[0-9a-f]{12}$")] | None
+    ) = None
+    provider_account_label: Annotated[str, Field(min_length=1, max_length=64)] | None = (
+        None
+    )
     importer_version: Annotated[str, Field(min_length=1, max_length=64)]
     client_version: Annotated[str, Field(min_length=1, max_length=64)] | None = None
     transcript_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -85,6 +118,16 @@ class BridgeSourceMetadata(BaseModel):
 
     @model_validator(mode="after")
     def enforce_wire_size(self) -> "BridgeSourceMetadata":
+        if (
+            self.provider_account_fingerprint is not None
+            and self.provider_account_key is not None
+            and self.provider_account_fingerprint != self.provider_account_key[:12]
+        ):
+            raise ValueError(
+                "provider_account_fingerprint must be the key's first 12 hex chars"
+            )
+        if self.provider_account_key is None and self.provider_account_fingerprint is not None:
+            raise ValueError("provider_account_fingerprint requires provider_account_key")
         if len(self.model_dump_json(exclude_none=True).encode("utf-8")) > 2_048:
             raise ValueError("source_metadata exceeds the 2048-byte UTF-8 limit")
         return self
@@ -112,6 +155,7 @@ class BridgeRequest(BaseModel):
         default_factory=list
     )
     source_metadata: BridgeSourceMetadata | None = None
+    account_identity: BridgeAccountIdentity | None = None
     writer_runtime_id: Annotated[str, Field(min_length=1, max_length=512)] | None = None
     writer_lease_seconds: Annotated[int, Field(ge=30, le=3600)] = 300
     after_source_sequence: Annotated[int, Field(ge=0)] | None = None
@@ -165,6 +209,12 @@ class BridgeRequest(BaseModel):
             raise ValueError("entries are only valid for append_native")
         elif self.source_metadata is not None:
             raise ValueError("source_metadata is only valid for append_native")
+        if self.account_identity is not None:
+            if self.action is not BridgeAction.OBSERVE_HOOK:
+                raise ValueError(
+                    "account_identity is only valid for observe_hook; "
+                    "append_native carries account provenance inside source_metadata"
+                )
         if self.action is BridgeAction.LOAD_NATIVE and self.conversation is not None:
             raise ValueError(
                 "load_native resolves its persisted binding; omit conversation"
@@ -189,6 +239,7 @@ class LocalBridgeReceipt(BaseModel):
 
 
 __all__ = [
+    "BridgeAccountIdentity",
     "BridgeAction",
     "BridgeEntry",
     "BridgeHookEvent",

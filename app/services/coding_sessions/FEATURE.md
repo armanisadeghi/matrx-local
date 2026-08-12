@@ -101,13 +101,20 @@ the ordered publisher; neither repair silently drops an event.
   selection; the full parsed provider record remains owner-only (JSON whitespace/key-order are not
   claimed as durable semantics).
 - **Account identity is provenance, not authorization.** `claude auth status --json` is reduced to
-  an HMAC-SHA-256 `provider_account_key` keyed by a stable random installation secret stored in the
-  existing owner-only pairing document, so an email guess cannot be tested against its cloud
-  fingerprint. Email, organization name, credentials, and tokens never
-  enter preview, outbox, or cloud metadata. An unknown account may be enriched once; a known key
-  can never change for the same provider session ID. This key describes the active login at import;
-  Claude's local transcript does not independently prove which historical account created a file.
-  Claude and AI Matrx identities are rechecked after the bounded read and before enqueue.
+  the canonical v2 `provider_account_key`: a deterministic SHA-256 of the fixed public namespace
+  `matrx:coding-session:claude-code-account:v2` plus apiProvider/authMethod/orgId/lowercased email,
+  so the SAME Claude account produces the SAME key on every machine (the retired v1 key was HMAC'd
+  with a per-installation secret and falsely conflicted across machines). It is an opaque
+  correlation ID, deliberately not a secret. The wire metadata also carries
+  `provider_account_key_version=2`, `provider_account_fingerprint` (the key's first 12 hex chars),
+  and a display-safe `provider_account_label` — a masked email such as `a***n@t***.com`, else
+  `org:<orgId[:8]>`; `orgName` is never used because it commonly embeds the raw email. The raw
+  email, organization name, credentials, and tokens never enter preview, outbox, or cloud metadata.
+  An unknown account may be enriched once; a known same-version key can never change for the same
+  provider session ID, and a v2 key upgrades a legacy v1 binding exactly once on re-import. This
+  identity describes the active login at import time; Claude's local transcript does not
+  independently prove which historical account created a file. Claude and AI Matrx identities are
+  rechecked after the bounded read and before enqueue.
 - **Reconciliation is additive and idempotent.** Entry UUID plus exact canonical payload hash is
   replay-safe. A changed preview revision, account switch, transcript UUID reuse, or source mutation
   rejects before any new outbox row. Selection identity is session UUID plus opaque project key;
@@ -155,4 +162,5 @@ model once that package version is published and consumed here.
 - `tests/unit/test_claude_history_import.py`: explicit preview, privacy, subagent/compaction
   preservation, corrupt-line gaps, atomic batching, replay, account switch, content-bound revision
   drift (including preserved size/mtime), bounded giant lines, symlink refusal, duplicate project
-  UUID separation, and duplicate entry UUID refusal.
+  UUID separation, duplicate entry UUID refusal, deterministic cross-machine v2 account-key
+  derivation, and masked-label safety (only the masked label may carry an `@`).

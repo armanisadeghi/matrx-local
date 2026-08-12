@@ -9,10 +9,14 @@ from uuid import uuid4
 import pytest
 
 from app.services.coding_sessions.claude_history import (
+    ACCOUNT_KEY_VERSION,
     ClaudeHistoryConflict,
     ClaudeHistoryImporter,
     ClaudeHistoryImportRequest,
     _AccountSnapshot,
+    account_label,
+    derive_account_key,
+    mask_email,
 )
 from app.services.coding_sessions.models import BridgeRequest
 from app.services.coding_sessions.service import CodingSessionBridgeOutbox
@@ -47,11 +51,15 @@ def _write_session(
 
 
 async def _account_a() -> _AccountSnapshot:
-    return _AccountSnapshot(True, "a" * 64, "a" * 12, "2.1.228", None)
+    return _AccountSnapshot(
+        True, "a" * 64, "a" * 12, "2.1.228", None, account_label="a***n@t***.com"
+    )
 
 
 async def _account_b() -> _AccountSnapshot:
-    return _AccountSnapshot(True, "b" * 64, "b" * 12, "2.1.228", None)
+    return _AccountSnapshot(
+        True, "b" * 64, "b" * 12, "2.1.228", None, account_label="o***r@e***.com"
+    )
 
 
 @pytest.fixture
@@ -124,10 +132,13 @@ async def test_preview_discloses_scope_without_paths_or_account_pii(
     assert preview["sessions"][0]["title"] == "History work"
     assert preview["sessions"][0]["project_name"] == "secret-project"
     assert preview["sessions"][0]["subagent_count"] == 1
+    assert preview["provider_account_key_version"] == ACCOUNT_KEY_VERSION
+    assert preview["provider_account_label"] == "a***n@t***.com"
     serialized = json.dumps(preview)
     assert "/private/company" not in serialized
     assert "private prompt" not in serialized
-    assert "@" not in serialized
+    # Only the masked display label may carry an "@"; never a raw address.
+    assert "@" not in serialized.replace("a***n@t***.com", "")
 
 
 @pytest.mark.anyio
@@ -229,7 +240,14 @@ async def test_selected_import_is_atomic_bounded_and_replay_safe(importer_env) -
     serialized = "".join(row["envelope_json"] for row in rows)
     assert "/private/company" in serialized
     assert "provider_account_key" in serialized
-    assert "@" not in serialized
+    metadata = envelopes[0].source_metadata
+    assert metadata is not None
+    assert metadata.provider_account_key == "a" * 64
+    assert metadata.provider_account_key_version == ACCOUNT_KEY_VERSION
+    assert metadata.provider_account_fingerprint == "a" * 12
+    assert metadata.provider_account_label == "a***n@t***.com"
+    # Only the masked display label may carry an "@"; never a raw address.
+    assert "@" not in serialized.replace("a***n@t***.com", "")
 
 
 @pytest.mark.anyio
@@ -554,6 +572,37 @@ async def test_same_uuid_across_projects_keeps_project_identity(importer_env) ->
         and str(item.source_metadata.provider_native_session_id) == session_id
         for item in envelopes
     )
+
+
+def test_account_key_is_deterministic_across_machines() -> None:
+    fields = {
+        "api_provider": "firstParty",
+        "auth_method": "claude.ai",
+        "org_id": "e883f812-239f-4dd8-b03e-bee73ca21fc3",
+        "email": "user@example.com",
+    }
+    key = derive_account_key(**fields)
+    # No installation secret participates: any machine derives the same key.
+    assert key == derive_account_key(**fields)
+    assert len(key) == 64 and int(key, 16) >= 0
+    assert key != derive_account_key(**{**fields, "email": "other@example.com"})
+    assert key != derive_account_key(**{**fields, "org_id": None})
+    # Field boundaries are delimited: shifting characters between fields differs.
+    assert derive_account_key(
+        api_provider="ab", auth_method="c", org_id=None, email=None
+    ) != derive_account_key(api_provider="a", auth_method="bc", org_id=None, email=None)
+
+
+def test_account_label_is_masked_and_never_a_raw_email() -> None:
+    assert mask_email("arman@titaniumsuccess.com") == "a***n@t***.com"
+    assert mask_email("x@y.io") == "x***@y***.io"
+    assert mask_email("not-an-email") is None
+    assert mask_email("user@nodot") is None
+    assert account_label(email="arman@titaniumsuccess.com", org_id="e883f812-239f") == (
+        "a***n@t***.com"
+    )
+    assert account_label(email=None, org_id="e883f812-239f-4dd8") == "org:e883f812"
+    assert account_label(email=None, org_id=None) is None
 
 
 @pytest.mark.anyio

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import hmac
 import json
 import os
 import shutil
@@ -23,7 +22,16 @@ from app.services.coding_sessions.service import CodingSessionBridgeOutbox
 from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import SyncMetaRepo, TokenRepo
 
-IMPORTER_VERSION = "matrx-local/claude-history-v1"
+IMPORTER_VERSION = "matrx-local/claude-history-v2"
+
+# Canonical account-key contract (version 2): a deterministic SHA-256 of this
+# fixed public platform namespace plus the provider's stable account fields, so
+# the SAME Claude account produces the SAME key on every machine. This is an
+# opaque correlation ID, not a secret and never authorization; the raw email
+# never leaves this machine. Version 1 was an HMAC keyed by a per-installation
+# secret and is retired because two machines produced two keys for one account.
+ACCOUNT_KEY_VERSION = 2
+_ACCOUNT_KEY_NAMESPACE = "matrx:coding-session:claude-code-account:v2"
 MAX_DISCOVERED_SESSIONS = 10_000
 MAX_PREVIEW_SESSIONS = 200
 MAX_SELECTED_SESSIONS = 10
@@ -62,6 +70,7 @@ class _AccountSnapshot:
     fingerprint: str | None
     client_version: str | None
     reason: str | None
+    account_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +91,53 @@ class _SessionSource:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def derive_account_key(
+    *,
+    api_provider: str | None,
+    auth_method: str | None,
+    org_id: str | None,
+    email: str | None,
+) -> str:
+    """Deterministic v2 provider-account key — identical on every machine.
+
+    Plain SHA-256 with a fixed public namespace: this is a correlation ID for
+    "which Claude login imported this", not a secret. The raw fields (including
+    the email) never leave the machine; only this digest, its 12-char prefix,
+    and a masked display label enter cloud metadata.
+    """
+    material = "\0".join(
+        value or "" for value in (api_provider, auth_method, org_id, email)
+    )
+    return _sha256_text(f"{_ACCOUNT_KEY_NAMESPACE}\0{material}")
+
+
+def mask_email(email: str) -> str | None:
+    """`arman@titaniumsuccess.com` -> `a***n@t***.com`; None when not an email."""
+    local, _, domain = email.partition("@")
+    if not local or not domain or "." not in domain:
+        return None
+    domain_name, _, tld = domain.rpartition(".")
+    if not domain_name or not tld:
+        return None
+    local_masked = local[0] + "***" + (local[-1] if len(local) > 1 else "")
+    return f"{local_masked}@{domain_name[0]}***.{tld}"[:64]
+
+
+def account_label(*, email: str | None, org_id: str | None) -> str | None:
+    """Display-safe account label: masked email, else an org-id prefix.
+
+    Claude's `orgName` is deliberately not used because it commonly embeds the
+    raw email address.
+    """
+    if email:
+        masked = mask_email(email)
+        if masked:
+            return masked
+    if org_id:
+        return f"org:{org_id[:8]}"
+    return None
 
 
 def _conversation_id(
@@ -418,13 +474,11 @@ async def _read_account_snapshot() -> _AccountSnapshot:
     snapshot = _safe_json(stdout)
     if not snapshot or snapshot.get("loggedIn") is not True:
         return _AccountSnapshot(False, None, None, None, "claude_not_signed_in")
-    material = [
-        snapshot.get("apiProvider"),
-        snapshot.get("authMethod"),
-        snapshot.get("orgId"),
-        str(snapshot.get("email", "")).strip().lower() or None,
-    ]
-    if not any(isinstance(value, str) and value for value in material[2:]):
+    api_provider = snapshot.get("apiProvider")
+    auth_method = snapshot.get("authMethod")
+    org_id = snapshot.get("orgId")
+    email = str(snapshot.get("email", "")).strip().lower() or None
+    if not any(isinstance(value, str) and value for value in (org_id, email)):
         return _AccountSnapshot(
             False,
             None,
@@ -432,22 +486,22 @@ async def _read_account_snapshot() -> _AccountSnapshot:
             version_stdout.decode(errors="replace").strip()[:64] or None,
             "claude_account_identity_unavailable",
         )
-    from app.services.pairing import get_or_create_installation_hmac_key
-
-    account_key = hmac.new(
-        get_or_create_installation_hmac_key().encode("utf-8"),
-        (
-            "claude-code-account-v1\0"
-            + "\0".join(str(value or "") for value in material)
-        ).encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
+    account_key = derive_account_key(
+        api_provider=api_provider if isinstance(api_provider, str) else None,
+        auth_method=auth_method if isinstance(auth_method, str) else None,
+        org_id=org_id if isinstance(org_id, str) else None,
+        email=email,
+    )
     return _AccountSnapshot(
         True,
         account_key,
         account_key[:12],
         version_stdout.decode(errors="replace").strip()[:64] or None,
         None,
+        account_label=account_label(
+            email=email,
+            org_id=org_id if isinstance(org_id, str) else None,
+        ),
     )
 
 
@@ -486,7 +540,9 @@ class ClaudeHistoryImporter:
             "explicit_action_required": True,
             "account_identity_available": account.available,
             "provider_account_key": account.account_key,
+            "provider_account_key_version": ACCOUNT_KEY_VERSION,
             "account_fingerprint": account.fingerprint,
+            "provider_account_label": account.account_label,
             "account_blocked_reason": account.reason,
             "claude_client_version": account.client_version,
             "matrx_user_available": matrx_user_available,
@@ -635,6 +691,7 @@ class ClaudeHistoryImporter:
             "schema_version": 1,
             "accepted": True,
             "provider_account_fingerprint": account.fingerprint,
+            "provider_account_label": account.account_label,
             "selected_sessions": len(selected_sources),
             "entries": imported_entries,
             "corrupt_lines": corrupt_lines,
@@ -768,6 +825,9 @@ class ClaudeHistoryImporter:
             "source_kind": "claude_local_jsonl",
             "provider_native_session_id": source.session_id,
             "provider_account_key": account.account_key,
+            "provider_account_key_version": ACCOUNT_KEY_VERSION,
+            "provider_account_fingerprint": account.fingerprint,
+            "provider_account_label": account.account_label,
             "importer_version": IMPORTER_VERSION,
             "client_version": account.client_version,
             "transcript_sha256": source_revision,
@@ -925,8 +985,12 @@ class ClaudeHistoryImporter:
 
 
 __all__ = [
+    "ACCOUNT_KEY_VERSION",
     "ClaudeHistoryConflict",
     "ClaudeHistoryImporter",
     "ClaudeHistoryImportRequest",
     "ClaudeHistorySelection",
+    "account_label",
+    "derive_account_key",
+    "mask_email",
 ]

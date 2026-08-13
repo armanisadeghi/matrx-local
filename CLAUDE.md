@@ -100,6 +100,22 @@ through 3).
 - **Build:** `scripts/build-sidecar.sh`, `specs/*.spec` (PyInstaller per-platform)
 - **Auth:** Supabase instance `txzxabzwovsujtloxrus`, publishable key in `desktop/.env`
 
+### Canonical frontend test login
+
+For authenticated browser/UI verification against AI Matrx, use the shared
+canonical admin test account. Do not create a replacement account or stop to
+ask Arman for credentials:
+
+```bash
+AI_ADMIN_USERNAME="admin@admin.com"
+AI_ADMIN_PASSWORD="Password1234#"
+```
+
+Matrx Local's Playwright harness reads these names from the gitignored
+`desktop/.env.test` (and still accepts the legacy `TEST_USER_EMAIL` /
+`TEST_USER_PASSWORD` aliases). This account is a super-admin test identity;
+never use it to prove ordinary-user RLS or entitlement behavior.
+
 ## Development Commands
 
 ```bash

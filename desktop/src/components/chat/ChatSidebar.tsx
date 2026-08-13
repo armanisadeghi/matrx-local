@@ -164,6 +164,9 @@ export function ChatSidebar({
                 return (
                   <div
                     key={conv.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open chat ${conv.title}`}
                     className={cn(
                       "group relative mx-1 mb-0.5 flex items-center rounded-md px-2.5 py-2 cursor-pointer transition-colors",
                       isActive
@@ -171,6 +174,12 @@ export function ChatSidebar({
                         : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                     )}
                     onClick={() => onSelect(conv.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onSelect(conv.id);
+                      }
+                    }}
                     onMouseEnter={() => setHoveredId(conv.id)}
                     onMouseLeave={() => setHoveredId(null)}
                   >

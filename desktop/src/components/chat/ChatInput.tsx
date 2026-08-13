@@ -391,6 +391,7 @@ export function ChatInput({
             {isStreaming ? (
               <button
                 onClick={onStop}
+                aria-label="Stop generating"
                 className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors"
               >
                 <Square className="h-3 w-3" />
@@ -399,6 +400,7 @@ export function ChatInput({
               <button
                 onClick={handleSend}
                 disabled={!canSend}
+                aria-label="Send message"
                 title={!engineReady ? "Engine not connected" : undefined}
                 className={cn(
                   "flex h-7 w-7 items-center justify-center rounded-full transition-all duration-200",

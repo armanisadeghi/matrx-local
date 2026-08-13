@@ -1,8 +1,9 @@
 /**
  * Shared helpers for the Matrx Local E2E suite.
  *
- * - Credentials come from desktop/.env.test (gitignored; provisioned by
- *   e2e/setup/create-test-user.mjs, rotated by e2e/setup/rotate-password.mjs).
+ * - Canonical admin credentials come from desktop/.env.test (gitignored),
+ *   using AI_ADMIN_USERNAME / AI_ADMIN_PASSWORD. Legacy TEST_USER_* aliases
+ *   remain accepted so existing CI/local setup does not break.
  * - Engine policy: tests probe ~/.matrx/local.json for a live engine and use
  *   it READ-ONLY (status/list/health endpoints). Never trigger downloads,
  *   generation jobs, or vault mutations against the user's engine.
@@ -35,8 +36,10 @@ function parseEnvFile(p: string): Record<string, string> {
 /** Load the test account from desktop/.env.test, or null if not provisioned. */
 export function loadTestCreds(): TestCreds | null {
   const env = parseEnvFile(path.resolve(__dirname, "..", ".env.test"));
-  if (env.TEST_USER_EMAIL && env.TEST_USER_PASSWORD) {
-    return { email: env.TEST_USER_EMAIL, password: env.TEST_USER_PASSWORD };
+  const email = env.AI_ADMIN_USERNAME || env.TEST_USER_EMAIL;
+  const password = env.AI_ADMIN_PASSWORD || env.TEST_USER_PASSWORD;
+  if (email && password) {
+    return { email, password };
   }
   return null;
 }

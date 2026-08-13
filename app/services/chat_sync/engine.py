@@ -62,6 +62,12 @@ _PUSH_ORDER = [
 # grant the desktop permission to publish it back.  This is deliberately an
 # allowlist (not a denylist) so newly-added server ledger columns remain
 # cloud-only until a local writer intentionally adopts them.
+#
+# No ownership column appears here, ever.  `user_id` was the legacy owner on
+# the chat component tables and is being dropped; its canonical replacement
+# `created_by` is stamped cloud-side by `platform._stamp_actor` on insert, so
+# publishing either one is a legacy write, not a fallback.  Same for
+# `project_id`: a feature table may not carry a project FK.
 _PUSH_COLUMNS: dict[str, frozenset[str]] = {
     "conversation": frozenset(
         {
@@ -69,7 +75,7 @@ _PUSH_COLUMNS: dict[str, frozenset[str]] = {
             "message_count", "forked_from_id", "forked_at_position",
             "created_at", "deleted_at", "metadata", "last_model_id",
             "parent_conversation_id", "variables", "overrides", "description",
-            "keywords", "project_id", "task_id", "source_app", "source_feature",
+            "keywords", "task_id", "source_app", "source_feature",
             "organization_id",
             "is_ephemeral", "initial_agent_id", "initial_agent_version_id",
             "is_favorite", "cache_state", "last_context_breakdown",
@@ -79,7 +85,7 @@ _PUSH_COLUMNS: dict[str, frozenset[str]] = {
     ),
     "user_request": frozenset(
         {
-            "id", "user_id", "status", "source_app", "source_feature",
+            "id", "status", "source_app", "source_feature",
             "metadata", "error", "finish_reason", "agent_id", "agent_version_id",
             "created_at", "completed_at", "last_activity_at", "deleted_at",
             "api_duration_ms", "tool_duration_ms", "total_duration_ms",
@@ -109,7 +115,7 @@ _PUSH_COLUMNS: dict[str, frozenset[str]] = {
     ),
     "tool_call": frozenset(
         {
-            "id", "conversation_id", "user_request_id", "message_id", "user_id",
+            "id", "conversation_id", "user_request_id", "message_id",
             "tool_name", "tool_name_as_called", "tool_type", "call_id", "arguments",
             "status", "success", "is_error", "output", "output_preview",
             "output_type", "output_chars", "error_message", "error_type",
@@ -122,13 +128,13 @@ _PUSH_COLUMNS: dict[str, frozenset[str]] = {
     ),
     "media": frozenset(
         {
-            "id", "conversation_id", "user_id", "kind", "url", "file_uri",
+            "id", "conversation_id", "kind", "url", "file_uri",
             "mime_type", "file_size_bytes", "metadata", "created_at", "deleted_at",
         }
     ),
     "artifact": frozenset(
         {
-            "id", "message_id", "conversation_id", "user_id", "project_id",
+            "id", "message_id", "conversation_id",
             "task_id", "artifact_type", "status", "external_system", "external_id",
             "external_url", "title", "description", "thumbnail_url", "metadata",
             "canvas_item_id", "source_system", "source_id", "artifact_index",
@@ -490,7 +496,7 @@ class ChatSyncEngine:
             # pulled under this user's RLS, or rows from a previous account
             # on this machine). Pushing them either RLS-403s forever or, on
             # insert, re-attributes another user's content to this account.
-            owner = local_row.get("created_by") or local_row.get("user_id")
+            owner = local_row.get("created_by")
             if owner and self._user_id and owner != self._user_id:
                 logger.error(
                     "[chat_sync] chat.%s %s belongs to user %s (signed in: %s) — "
@@ -513,10 +519,6 @@ class ChatSyncEngine:
                 )
                 failed += 1
                 continue
-            # NOT NULL ownership column some child tables carry; local rows
-            # written before sign-in may lack it (None or legacy '').
-            if "user_id" in spec["columns"] and not payload.get("user_id"):
-                payload["user_id"] = self._user_id
             raw_version = local_row.get("version")
             expected_version = (
                 int(raw_version) if raw_version is not None and "version" in spec["columns"] else None
@@ -632,9 +634,11 @@ class ChatSyncEngine:
         """CAS-update an existing row without discarding either side."""
         spec = MIRROR_TABLES[_SCHEMA][table]
         if "version" not in spec["columns"]:
-            # chat.media currently has no version column and no desktop update
-            # writer. Existing media is therefore cloud-authoritative; treating
-            # it as an insert-only entity is safer than an unguarded PATCH.
+            # A mirrored table with no `version` column cannot be CAS-updated.
+            # Existing rows there are cloud-authoritative; treating them as
+            # insert-only is safer than an unguarded PATCH. (chat.media was the
+            # original case; it gained `version` in the canonical base-contract
+            # pass, so it now takes the CAS path below.)
             current = await self._client.get_rows(
                 table, params={pk: f"eq.{row_id}", "limit": "1"}
             )

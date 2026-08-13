@@ -293,7 +293,9 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
         assert conv["source_feature"] == "chat-route"
         assert conv["visibility"] == "personal"
         assert conv["organization_id"] == "11111111-1111-4111-8111-111111111111"
-        assert conv["project_id"] == "22222222-2222-4222-8222-222222222222"
+        # chat.conversation carries no project FK — the cloud dropped the
+        # column, so the mirror has none and the writer must not invent one.
+        assert "project_id" not in conv
         assert conv["task_id"] == "33333333-3333-4333-8333-333333333333"
         assert conv["message_count"] == 2
 
@@ -303,7 +305,7 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
             )
         )
         assert ur["status"] == "completed"
-        assert ur["user_id"] == "u1"
+        assert ur["created_by"] == "u1"
 
         # tool logging: canonical columns + extras preserved in metadata
         await store.log_tool_call_start(
@@ -1028,7 +1030,7 @@ def test_repo_compat_shapes_and_tombstone_delete(tmp_path: Path) -> None:
                 "model": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
                 "route_mode": "chat",
                 "agent_id": "a1",
-                "user_id": "u1",
+                "created_by": "u1",
             }
         )
         got = await convs.get("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01")
@@ -1348,7 +1350,7 @@ def test_push_projection_excludes_cloud_tool_result_ledger(tmp_path: Path) -> No
             tool_id,
             {
                 "conversation_id": conversation_id,
-                "user_id": "u1",
+                "created_by": "u1",
                 "tool_name": "desktop_tool",
                 "call_id": "call-1",
                 "arguments": {"x": 1},
@@ -1392,7 +1394,7 @@ def test_existing_row_push_preserves_version_conflict(tmp_path: Path) -> None:
         conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
         convs = ConversationsRepo()
         await convs.create(
-            {"id": conversation_id, "title": "local edit", "user_id": "u1"}
+            {"id": conversation_id, "title": "local edit", "created_by": "u1"}
         )
 
         engine = ChatSyncEngine()
@@ -1454,7 +1456,7 @@ def test_pull_preserves_pending_local_edit_when_cloud_also_changed(
         conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
         convs = ConversationsRepo()
         await convs.create(
-            {"id": conversation_id, "title": "local edit", "user_id": "u1"}
+            {"id": conversation_id, "title": "local edit", "created_by": "u1"}
         )
         await db.execute(
             "UPDATE chat.conversation SET updated_at=?, version=1 WHERE id=?",
@@ -1498,7 +1500,7 @@ def test_pull_sql_atomically_protects_edit_enqueued_after_preflight(
 
         conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
         await ConversationsRepo().create(
-            {"id": conversation_id, "title": "original", "user_id": "u1"}
+            {"id": conversation_id, "title": "original", "created_by": "u1"}
         )
         await db.execute("DELETE FROM sync_queue")
         await db.execute(
@@ -1657,7 +1659,7 @@ def test_pull_lww_tombstones_and_pending_protection(tmp_path: Path) -> None:
             {
                 "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
                 "title": "local",
-                "user_id": "u1",
+                "created_by": "u1",
             }
         )
         # drain the outbox so LWW comparisons run un-pended
@@ -1800,14 +1802,14 @@ def test_push_poison_row_isolation(tmp_path: Path) -> None:
             {
                 "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa41",
                 "title": "ok",
-                "user_id": "u1",
+                "created_by": "u1",
             }
         )
         await convs.create(
             {
                 "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa42",
                 "title": "bad",
-                "user_id": "u1",
+                "created_by": "u1",
             }
         )
 

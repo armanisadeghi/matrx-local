@@ -473,6 +473,8 @@ CREATE INDEX IF NOT EXISTS idx_downloads_created  ON downloads(created_at DESC)
 #   messages.model/tool_calls/results   -> message.metadata JSON
 #   user_requests.conversation_id       -> user_request.metadata JSON
 #     (the cloud user_request table has no conversation_id column)
+#   user_requests.user_id               -> user_request.created_by
+#     (the legacy owner column was cut cloud-side; created_by is canonical)
 #   tool_call_logs.data (full dict)     -> canonical columns extracted,
 #                                          whole blob kept in metadata
 # ------------------------------------------------------------------
@@ -516,7 +518,7 @@ UPDATE chat.conversation
 SET message_count = (SELECT COUNT(*) FROM chat.message m
                      WHERE m.conversation_id = chat.conversation.id);
 INSERT OR IGNORE INTO chat.user_request
-    (id, user_id, status, source_app, metadata, created_at, updated_at,
+    (id, created_by, status, source_app, metadata, created_at, updated_at,
      last_activity_at, total_input_tokens, total_output_tokens,
      total_cached_tokens, total_tokens, iterations, total_tool_calls, version)
 SELECT id, user_id, status, 'matrx_local',

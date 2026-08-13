@@ -138,8 +138,9 @@ access." The cloud DB is the spec — never local docs or local table shapes
    the column stops lying.
 9. **Known accepted limits (documented in SYNC_CONTRACT.md, revisit if they
    bite)**: field-clears (set-to-NULL) never propagate (push omits nulls);
-   `chat.media` has no version column and is therefore insert-only from the
-   desktop; durable `sync_queue.action='conflict'` rows preserve both copies
+   a mirrored table with no version column is insert-only from the desktop
+   (`chat.media` was the original case; it gained `version` in the canonical
+   base-contract pass); durable `sync_queue.action='conflict'` rows preserve both copies
    but still need a user-facing resolver; message content is
    flattened to text parts locally (`_normalize_message`) — rich parts
    (images etc.) survive only as JSON-dumped text; `chat.request` rows are

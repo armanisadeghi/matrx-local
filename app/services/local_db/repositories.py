@@ -362,7 +362,7 @@ class ConversationsRepo:
             "route_mode": conv.get("route_mode", "chat"),
             "model": conv.get("model", ""),
         }
-        owner = conv.get("user_id") or await TokenRepo(self._db).get_owner_user_id()
+        owner = conv.get("created_by") or await TokenRepo(self._db).get_owner_user_id()
         metadata: dict[str, Any] = {}
         if conv.get("server_conversation_id") and conv["server_conversation_id"] != conv["id"]:
             # Legacy aidream server-conversation link — preserved, not discarded.

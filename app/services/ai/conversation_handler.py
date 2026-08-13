@@ -178,15 +178,18 @@ class SQLiteConversationStore:
                 ),
             }
             cursor = await db.execute(
+                # No project_id: chat.conversation carries no project FK
+                # (project membership is a platform.associations edge), so the
+                # column no longer exists in the cloud or the mirror.
                 """INSERT OR IGNORE INTO chat.conversation
                    (id, title, config, status, parent_conversation_id, variables,
-                    overrides, organization_id, project_id, task_id,
+                    overrides, organization_id, task_id,
                     initial_agent_id, initial_agent_version_id,
                     source_app, source_feature, created_by,
                     created_at, updated_at, message_count, is_favorite,
                     is_ephemeral, conversation_type, visibility, version,
                     metadata, cache_state, exclude_from_kg)
-                   VALUES (?, 'New conversation', ?, 'active', ?, ?, ?, ?, ?, ?,
+                   VALUES (?, 'New conversation', ?, 'active', ?, ?, ?, ?, ?,
                            ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'standard',
                            'personal', 1, '{}', '{}', 0)""",
                 (
@@ -196,7 +199,6 @@ class SQLiteConversationStore:
                     json.dumps(variables or {}, ensure_ascii=False, default=str),
                     json.dumps(overrides, ensure_ascii=False, default=str),
                     ctx.organization_id if ctx is not None else None,
-                    ctx.project_id if ctx is not None else None,
                     ctx.task_id if ctx is not None else None,
                     ctx.agent_id if ctx is not None else None,
                     ctx.agent_version_id if ctx is not None else None,
@@ -247,15 +249,14 @@ class SQLiteConversationStore:
             now = _now()
             cursor = await db.execute(
                 """INSERT OR IGNORE INTO chat.user_request
-                   (id, user_id, status, source_app, metadata, created_by,
+                   (id, status, source_app, metadata, created_by,
                     created_at, updated_at, last_activity_at,
                     total_input_tokens, total_output_tokens, total_cached_tokens,
                    total_tokens, iterations, total_tool_calls, version)
-                   VALUES (?, ?, 'pending', 'matrx_local', ?, ?, ?, ?, ?,
+                   VALUES (?, 'pending', 'matrx_local', ?, ?, ?, ?, ?,
                            0, 0, 0, 0, 0, 0, 1)""",
                 (
                     request_id,
-                    user_id,
                     json.dumps({"conversation_id": conversation_id}),
                     user_id,
                     now,

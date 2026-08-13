@@ -1,10 +1,19 @@
 -- Migration 003: Per-user forbidden URL list
 --
+-- 🚨 RETIRED 2026-08-13 — DO NOT RUN. `public.forbidden_urls` was DROPPED from the
+-- shared Supabase DB on 2026-08-12 (0 rows, no readers; public-schema triage batch 1,
+-- recorded in `platform.deprecated_relations`). Running this would recreate a dropped
+-- public table, which the changeover doctrine forbids (forward-only).
+--
+-- The LIVE path: forbidden URLs are a key inside the synced settings blob
+-- (`forbidden_urls` in app_settings.settings_json) — see app/api/settings_routes.py
+-- and app/services/cloud_sync/settings_sync.py. Nothing reads a forbidden_urls table.
+--
+-- Kept only as the historical record of the original design.
+--
 -- Stores URL patterns that are blocked from scraping for each user.
 -- Patterns are stored as normalized bare domains/paths (no scheme, no trailing slash).
 -- Wildcard prefix patterns are supported: *.example.com blocks all subdomains.
---
--- Run in Supabase SQL Editor before enabling cloud sync for forbidden URLs.
 
 CREATE TABLE IF NOT EXISTS forbidden_urls (
     id          uuid            PRIMARY KEY DEFAULT gen_random_uuid(),

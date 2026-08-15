@@ -32,6 +32,14 @@ _(none)_
 
 ## Active
 
+### TASK-003: Reconcile Claude-native titles and branches onto live mirrored sessions
+- **Status:** ready. Approved by Arman 2026-08-15. `Analyzed 2026-08-15 — verified in code`.
+- **Created:** 2026-08-15
+- **Priority:** P0
+- **Scope:** matrx-local + current aidream bridge contract
+- **Source:** Claude's native `customTitle` / `aiTitle` / summary and git branch must survive synchronization instead of leaving AI Matrx with only the first-prompt fallback.
+- **Deliverable:** use the existing bounded Claude history reader to send the existing `SessionMetadata` observation for a matching mirrored/imported session, then prove title precedence `user-set > provider > first-prompt > placeholder`, branch/workspace metadata, idempotent replay, and no raw path in shareable metadata. Handle an existing event-mirror binding as metadata reconciliation; never try to promote it to native fidelity. Backfill through the normal explicit sync path and record an installed-release proof. The Claude plugin `0.2.0-alpha.6` now supplies the owner-only `transcript_path` locator; aidream already accepts and applies `SessionMetadata`.
+
 ### Log audit 2026-07-14 — scheduled from `docs/LOG_AUDIT_2026-07-14.md`
 
 > Source log export 2026-07-14 12:27:26. Facts + file links only in the audit doc —

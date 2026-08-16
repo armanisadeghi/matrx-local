@@ -253,10 +253,15 @@ export function ClaudeHistorySync() {
             <div>
               <CardTitle className="text-base">Keep titles in sync</CardTitle>
               <p className="mt-1 text-sm text-muted-foreground">
-                Sends the exact label Claude Code shows for each session AI Matrx
-                already has, so a rename in Claude Code lands here too. Sessions
-                AI Matrx has never seen are never touched, and a title you set in
-                AI Matrx always wins.
+                Keeps one label in both places, both ways. A rename in Claude
+                Code lands here, and a conversation you rename in AI Matrx is
+                written back into Claude Code&rsquo;s own session list. Sessions
+                AI Matrx has never seen are never read or touched, and if you
+                renamed the same session in both places, Claude Code wins.
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Claude Code reads its session list when it starts, so a title
+                sent back appears there the next time Claude Code reloads.
               </p>
             </div>
             <Button
@@ -293,6 +298,10 @@ export function ClaudeHistorySync() {
                   value={labelStatus.synced_sessions.toLocaleString()}
                 />
                 <Summary
+                  label="Renames sent back"
+                  value={labelStatus.pushed_sessions.toLocaleString()}
+                />
+                <Summary
                   label="Index files read"
                   value={labelStatus.index_files.toLocaleString()}
                 />
@@ -317,6 +326,38 @@ export function ClaudeHistorySync() {
                     already identical
                   </span>
                 </div>
+                {(labelResult.push_down.written > 0 ||
+                  labelResult.push_down.refused > 0 ||
+                  labelResult.push_down.deferred_to_claude > 0) && (
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                    <span>
+                      {labelResult.push_down.written.toLocaleString()} AI Matrx
+                      rename
+                      {labelResult.push_down.written === 1 ? "" : "s"} written
+                      back into Claude Code
+                      {labelResult.push_down.deferred_to_claude > 0 && (
+                        <>
+                          {" "}
+                          ·{" "}
+                          {labelResult.push_down.deferred_to_claude.toLocaleString()}{" "}
+                          left to Claude Code, which was renamed more recently
+                        </>
+                      )}
+                      {labelResult.push_down.refused > 0 && (
+                        <>
+                          {" "}
+                          · {labelResult.push_down.refused.toLocaleString()}{" "}
+                          skipped to avoid overwriting Claude Code (
+                          {Object.keys(
+                            labelResult.push_down.refusal_reasons,
+                          ).join(", ")}
+                          )
+                        </>
+                      )}
+                    </span>
+                  </div>
+                )}
                 {labelResult.unmatched > 0 && (
                   <p className="text-xs text-muted-foreground">
                     {labelResult.unmatched.toLocaleString()} synced session

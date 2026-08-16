@@ -849,6 +849,20 @@ CREATE TABLE IF NOT EXISTS claude_session_metadata_sent (
 )
 """
 
+# The RETURN direction of the same rule: a rename made in AI Matrx must reach
+# Claude Code's own session index. This send-ledger records the exact title
+# last written down per bound session, so an unchanged label costs zero file
+# work and only a genuine rename reopens another application's data. It is a
+# record of what WE wrote, never a cache of what Claude currently shows —
+# Claude's index is always re-read for that.
+_V21_CLAUDE_SESSION_TITLE_PUSHED = """
+CREATE TABLE IF NOT EXISTS claude_session_title_pushed (
+    provider_session_id TEXT PRIMARY KEY,
+    title_sha256        TEXT NOT NULL,
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+)
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -870,4 +884,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (18, _V18_SCRAPE_SYNC_BLOCK_REASON),
     (19, _V19_CODING_SESSION_BRIDGE_OUTBOX),
     (20, _V20_CLAUDE_SESSION_METADATA_SENT),
+    (21, _V21_CLAUDE_SESSION_TITLE_PUSHED),
 ]

@@ -13,7 +13,11 @@ pass carries it to the platform.
 
 Only display labels are read. Raw paths (``cwd``, ``worktreePath``) never leave
 this module as themselves — callers take the last path segment as a workspace
-label, exactly as the server does for hook observations.
+label, exactly as the server does for hook observations. The one path an entry
+does carry, ``record_paths``, is the location of the record files themselves:
+it never enters a payload and exists so the RETURN direction
+(:mod:`app.services.coding_sessions.claude_label_writer`) can write a rename
+made in AI Matrx back into the same records without a second full scan.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ import json
 import os
 import stat
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +47,9 @@ class ClaudeSessionIndexEntry:
     worktree_name: str | None
     is_archived: bool | None
     last_activity_at: int
+    # Every record file carrying this ``cliSessionId``, across accounts. Local
+    # only — never part of any payload. See the module docstring.
+    record_paths: tuple[Path, ...] = ()
 
     def metadata_payload(self) -> dict[str, Any]:
         """The SessionMetadata hook payload for this record (labels only)."""
@@ -117,15 +124,23 @@ def _entry_from_record(record: dict[str, Any]) -> ClaudeSessionIndexEntry | None
 def read_session_index(
     root: Path | None = None,
 ) -> tuple[dict[str, ClaudeSessionIndexEntry], dict[str, int]]:
-    """Read every ``local_*.json`` record, newest activity wins per session.
+    """Read every ``local_*.json`` record, freshest record wins per session.
 
     A sync script unions these index files across Claude accounts, so the same
-    ``cliSessionId`` commonly appears once per account folder. The record with
-    the latest ``lastActivityAt`` is the current one; ties keep the first read.
+    ``cliSessionId`` commonly appears once per account folder — five, on this
+    machine. Freshness is ``lastActivityAt``, then the record file's own mtime.
+
+    **The mtime tie-break is load-bearing, not a nicety.** Observed 2026-08-16
+    against the real app: renaming a session in Claude Code rewrites ONLY the
+    active account's copy and does NOT bump ``lastActivityAt``, so every copy
+    ties and a first-read tie-break selects a stale sibling's old title purely
+    by directory sort order. mtime is the only signal that separates them.
     """
     sessions_root = root or default_sessions_root()
     totals = {"files": 0, "records": 0, "unreadable": 0}
     entries: dict[str, ClaudeSessionIndexEntry] = {}
+    freshness: dict[str, tuple[int, int]] = {}
+    paths: dict[str, list[Path]] = {}
     if not sessions_root.exists() or not sessions_root.is_dir():
         return entries, totals
     for path in sorted(sessions_root.rglob("local_*.json")):
@@ -151,9 +166,15 @@ def read_session_index(
         entry = _entry_from_record(record)
         if entry is None:
             continue
-        existing = entries.get(entry.cli_session_id)
-        if existing is None or entry.last_activity_at > existing.last_activity_at:
+        paths.setdefault(entry.cli_session_id, []).append(path)
+        rank = (entry.last_activity_at, info.st_mtime_ns)
+        if entry.cli_session_id not in entries or rank > freshness[entry.cli_session_id]:
             entries[entry.cli_session_id] = entry
+            freshness[entry.cli_session_id] = rank
+    entries = {
+        session_id: replace(entry, record_paths=tuple(paths[session_id]))
+        for session_id, entry in entries.items()
+    }
     totals["records"] = len(entries)
     return entries, totals
 

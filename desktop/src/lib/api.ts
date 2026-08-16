@@ -319,8 +319,21 @@ export interface ClaudeHistoryStatus {
  * mirrors. The title in AI Matrx must be the exact label Claude shows, and a
  * rename in Claude Code must reach us on the next sync pass.
  */
+export interface ClaudeLabelPushDown {
+  /** Bound sessions whose AI Matrx title was typed by the user. */
+  user_titled_sessions: number;
+  /** Sessions whose label was written into Claude Code's own index. */
+  written: number;
+  already_identical: number;
+  /** Claude Code was renamed too, so its value wins and we stood down. */
+  deferred_to_claude: number;
+  refused: number;
+  refusal_reasons: Record<string, number>;
+  sample_titles: { provider_session_id: string; title: string }[];
+}
+
 export interface ClaudeLabelSyncResult {
-  schema_version: 1;
+  schema_version: 2;
   source: "claude_desktop_session_index";
   dry_run: boolean;
   bound_sessions: number;
@@ -334,12 +347,16 @@ export interface ClaudeLabelSyncResult {
   queued: number;
   unreadable_identities: number;
   sample_titles: { provider_session_id: string; title: string }[];
+  /** AI Matrx → Claude Code: renames written back into Claude's own index. */
+  push_down: ClaudeLabelPushDown;
 }
 
 export interface ClaudeLabelSyncStatus {
-  schema_version: 1;
+  schema_version: 2;
   source: "claude_desktop_session_index";
   index_available: boolean;
+  index_writable: boolean;
+  pushed_sessions: number;
   index_files: number;
   index_records: number;
   synced_sessions: number;

@@ -33,7 +33,16 @@ _(none)_
 ## Active
 
 ### TASK-003: Reconcile Claude-native titles and branches onto live mirrored sessions
-- **Status:** ready. Approved by Arman 2026-08-15. `Analyzed 2026-08-15 — verified in code`.
+- **Status:** ✅ DONE 2026-08-16. Shipped `claude_session_index.py` + `title_sync.py` +
+  `POST /coding-session/claude/labels/sync` + the desktop **Sync titles now** card; the import path
+  now prefers Claude's own labels and queues them behind the batches that mint the binding; aidream
+  observes `worktree_name` / `is_archived`. Live proof against production: 235 bound sessions,
+  232 matched, 232 delivered, 0 failed, second pass idempotent; `chat.conversation.title` equals
+  Claude's exact sidebar label on all 232 with `title_source=provider`; `Auto:` placeholders 9 → 1.
+  Rules live in [`app/services/coding_sessions/FEATURE.md`](../app/services/coding_sessions/FEATURE.md)
+  § "Claude's own labels". One decision-gated follow-up filed in aidream `FOUND_DEFECTS.md`
+  (duplicate binding for one Claude session — the surviving `Auto:` row).
+- **Original status:** ready. Approved by Arman 2026-08-15. `Analyzed 2026-08-15 — verified in code`.
 - **Created:** 2026-08-15
 - **Priority:** P0
 - **Scope:** matrx-local + current aidream bridge contract

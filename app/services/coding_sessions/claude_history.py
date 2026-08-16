@@ -17,8 +17,16 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.services.coding_sessions.claude_session_index import (
+    ClaudeSessionIndexEntry,
+    read_session_index,
+)
 from app.services.coding_sessions.models import BridgeRequest
 from app.services.coding_sessions.service import CodingSessionBridgeOutbox
+from app.services.coding_sessions.title_sync import (
+    payload_digest,
+    session_metadata_request,
+)
 from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import SyncMetaRepo, TokenRepo
 
@@ -87,6 +95,7 @@ class _SessionSource:
     title: str
     git_branch: str | None
     import_blocked_reason: str | None = None
+    index_entry: ClaudeSessionIndexEntry | None = None
 
 
 def _sha256_text(value: str) -> str:
@@ -331,8 +340,15 @@ def _read_summary(
 
 
 def _discover_sources(
-    config_dir: Path, *, hash_content: bool = True
+    config_dir: Path,
+    *,
+    hash_content: bool = True,
+    index: dict[str, ClaudeSessionIndexEntry] | None = None,
 ) -> tuple[list[_SessionSource], dict[str, int]]:
+    # Claude's desktop session index holds the EXACT sidebar label for each
+    # transcript, which the JSONL only sometimes carries. Prefer it, so an
+    # imported session is titled the same in AI Matrx from the first sync.
+    session_index = index or {}
     unresolved_root = config_dir / "projects"
     if not unresolved_root.exists():
         return [], {"files": 0, "bytes": 0, "projects": 0}
@@ -409,6 +425,11 @@ def _discover_sources(
                 )
             except (ClaudeHistoryConflict, FileNotFoundError, OSError):
                 continue
+            index_entry = session_index.get(session_id)
+            if index_entry is not None:
+                title = index_entry.title or title
+                project_name = index_entry.workspace_name or project_name
+                git_branch = index_entry.git_branch or git_branch
             sources.append(
                 _SessionSource(
                     session_id=session_id,
@@ -424,6 +445,7 @@ def _discover_sources(
                     title=title,
                     git_branch=git_branch,
                     import_blocked_reason=blocked_reason,
+                    index_entry=index_entry,
                 )
             )
             if len(sources) > MAX_DISCOVERED_SESSIONS:
@@ -512,6 +534,7 @@ class ClaudeHistoryImporter:
         db: LocalDatabase | None = None,
         outbox: CodingSessionBridgeOutbox | None = None,
         config_dir: Path | None = None,
+        sessions_dir: Path | None = None,
         account_reader: Callable[[], Any] = _read_account_snapshot,
     ) -> None:
         self._db = db or get_db()
@@ -520,18 +543,27 @@ class ClaudeHistoryImporter:
         self._config_dir = config_dir or (
             Path(configured).expanduser() if configured else Path.home() / ".claude"
         )
+        self._sessions_dir = sessions_dir
         self._account_reader = account_reader
         self._tokens = TokenRepo(self._db)
         self._sync_meta = SyncMetaRepo(self._db)
 
+    async def _read_index(self) -> dict[str, ClaudeSessionIndexEntry]:
+        """Claude's own sidebar labels, keyed by CLI session UUID."""
+        entries, _totals = await asyncio.to_thread(
+            read_session_index, self._sessions_dir
+        )
+        return entries
+
     async def preview(self, *, limit: int = 50) -> dict[str, Any]:
         if not 1 <= limit <= MAX_PREVIEW_SESSIONS:
             raise ValueError(f"limit must be between 1 and {MAX_PREVIEW_SESSIONS}")
-        account, discovered = await asyncio.gather(
-            self._account_reader(),
-            asyncio.to_thread(_discover_sources, self._config_dir),
+        account, index = await asyncio.gather(
+            self._account_reader(), self._read_index()
         )
-        sources, totals = discovered
+        sources, totals = await asyncio.to_thread(
+            _discover_sources, self._config_dir, index=index
+        )
         token_row = await self._tokens.get()
         matrx_user_available = bool(token_row and token_row.get("user_id"))
         return {
@@ -566,6 +598,23 @@ class ClaudeHistoryImporter:
                     "import_available": source.source_revision is not None,
                     "import_blocked_reason": source.import_blocked_reason,
                     "title": source.title,
+                    "title_from_claude_index": source.index_entry is not None
+                    and bool(source.index_entry.title),
+                    "claude_title_source": (
+                        source.index_entry.title_source
+                        if source.index_entry is not None
+                        else None
+                    ),
+                    "is_archived": (
+                        source.index_entry.is_archived
+                        if source.index_entry is not None
+                        else None
+                    ),
+                    "worktree_name": (
+                        source.index_entry.worktree_name
+                        if source.index_entry is not None
+                        else None
+                    ),
                     "project_name": source.project_name,
                     "project_key": source.project_key,
                     "git_branch": source.git_branch,
@@ -598,8 +647,9 @@ class ClaudeHistoryImporter:
                 "Sign in to AI Matrx before syncing Claude history"
             )
 
+        index = await self._read_index()
         sources, _totals = await asyncio.to_thread(
-            _discover_sources, self._config_dir, hash_content=False
+            _discover_sources, self._config_dir, hash_content=False, index=index
         )
         by_identity = {
             (source.session_id, source.project_key): source for source in sources
@@ -631,6 +681,7 @@ class ClaudeHistoryImporter:
         imported_entries = 0
         corrupt_lines = 0
         imported_bytes = 0
+        label_requests: list[BridgeRequest] = []
         for source in selected_sources:
             (
                 session_requests,
@@ -652,6 +703,14 @@ class ClaudeHistoryImporter:
                     f"Claude session {source.session_id} changed while it was being read"
                 )
             requests.extend(session_requests)
+            # Claude's own label rides the same explicit import, queued behind
+            # the batches that mint the binding, so an imported session is
+            # never left wearing a first-prompt fallback title. It stays a
+            # separate metadata-plane envelope: discarding queued transcript
+            # COPIES must never silently drop a label update.
+            metadata_request = self._label_request(source)
+            if metadata_request is not None:
+                label_requests.append(metadata_request)
             imported_entries += entry_count
             corrupt_lines += bad_count
             imported_bytes += read_bytes
@@ -680,6 +739,10 @@ class ClaudeHistoryImporter:
 
             outbox = get_coding_session_bridge_outbox()
         queued = await outbox.enqueue_many(requests)
+        queued_labels = 0
+        if label_requests:
+            queued_labels = (await outbox.enqueue_many(label_requests))["queued"]
+            await self._record_label_digests(label_requests)
         await self._sync_meta.set_last_sync(
             "claude_history_import",
             status="queued",
@@ -693,6 +756,8 @@ class ClaudeHistoryImporter:
             "provider_account_fingerprint": account.fingerprint,
             "provider_account_label": account.account_label,
             "selected_sessions": len(selected_sources),
+            "labeled_sessions": len(label_requests),
+            "queued_label_updates": queued_labels,
             "entries": imported_entries,
             "corrupt_lines": corrupt_lines,
             "source_complete": corrupt_lines == 0,
@@ -702,6 +767,57 @@ class ClaudeHistoryImporter:
             "native_restore_available": False,
             "continuation": "Open the original local Claude transcript with claude --resume <session-id> only while that local file, workspace, and login remain available.",
         }
+
+    async def _record_label_digests(self, requests: list[BridgeRequest]) -> None:
+        """Share the reconciler's send-ledger so a pull pass sees these as sent."""
+        for item in requests:
+            if item.hook_event is None or item.provider_session_id is None:
+                continue
+            await self._db.execute(
+                """INSERT INTO claude_session_metadata_sent
+                       (provider_session_id, payload_sha256, updated_at)
+                   VALUES (?, ?, datetime('now'))
+                   ON CONFLICT(provider_session_id) DO UPDATE SET
+                       payload_sha256 = excluded.payload_sha256,
+                       updated_at = excluded.updated_at""",
+                (
+                    item.provider_session_id,
+                    payload_digest(dict(item.hook_event.payload)),
+                ),
+            )
+        await self._db.commit()
+
+    @staticmethod
+    def _label_request(source: _SessionSource) -> BridgeRequest | None:
+        """The SessionMetadata observation carrying Claude's own labels.
+
+        Falls back to the transcript-derived title/branch when the desktop
+        session index has no record for this session, so an import always
+        carries whatever provider label actually exists.
+        """
+        entry = source.index_entry
+        payload: dict[str, Any] = (
+            entry.metadata_payload()
+            if entry is not None
+            else {
+                key: value
+                for key, value in (
+                    ("title", source.title),
+                    ("project_name", source.project_name),
+                    ("git_branch", source.git_branch),
+                )
+                if value
+            }
+        )
+        if not payload:
+            return None
+        return session_metadata_request(
+            provider_session_id=_bridge_provider_session_id(
+                source.project_key, source.session_id
+            ),
+            provider_project_key=source.project_key,
+            payload=payload,
+        )
 
     def _requests_for_source(
         self,

@@ -239,6 +239,11 @@ export interface ClaudeHistorySessionPreview {
   import_available: boolean;
   import_blocked_reason: string | null;
   title: string;
+  /** True when the title is Claude Code's own sidebar label, not a fallback. */
+  title_from_claude_index: boolean;
+  claude_title_source: string | null;
+  is_archived: boolean | null;
+  worktree_name: string | null;
   project_name: string;
   project_key: string;
   git_branch: string | null;
@@ -280,6 +285,8 @@ export interface ClaudeHistoryImportResult {
   accepted: true;
   provider_account_fingerprint: string;
   selected_sessions: number;
+  labeled_sessions: number;
+  queued_label_updates: number;
   entries: number;
   corrupt_lines: number;
   source_complete: boolean;
@@ -305,6 +312,38 @@ export interface ClaudeHistoryStatus {
   } | null;
   last_sync: Record<string, unknown> | null;
   native_restore_available: false;
+}
+
+/**
+ * Claude Code's own session labels, reconciled onto sessions AI Matrx already
+ * mirrors. The title in AI Matrx must be the exact label Claude shows, and a
+ * rename in Claude Code must reach us on the next sync pass.
+ */
+export interface ClaudeLabelSyncResult {
+  schema_version: 1;
+  source: "claude_desktop_session_index";
+  dry_run: boolean;
+  bound_sessions: number;
+  index_files: number;
+  index_records: number;
+  matched: number;
+  unmatched: number;
+  unmatched_session_ids: string[];
+  matched_without_labels: number;
+  unchanged: number;
+  queued: number;
+  unreadable_identities: number;
+  sample_titles: { provider_session_id: string; title: string }[];
+}
+
+export interface ClaudeLabelSyncStatus {
+  schema_version: 1;
+  source: "claude_desktop_session_index";
+  index_available: boolean;
+  index_files: number;
+  index_records: number;
+  synced_sessions: number;
+  last_sync: Record<string, unknown> | null;
 }
 
 /** A configurable storage path entry from GET /settings/paths */
@@ -2093,6 +2132,17 @@ class EngineAPI {
 
   async getClaudeHistoryStatus(): Promise<ClaudeHistoryStatus> {
     return this.request("/coding-session/claude/history/status");
+  }
+
+  async getClaudeLabelStatus(): Promise<ClaudeLabelSyncStatus> {
+    return this.request("/coding-session/claude/labels/status");
+  }
+
+  async syncClaudeLabels(dryRun = false): Promise<ClaudeLabelSyncResult> {
+    return this.request(
+      `/coding-session/claude/labels/sync?dry_run=${dryRun ? "true" : "false"}`,
+      { method: "POST" },
+    );
   }
 
   async discardPendingClaudeHistory(): Promise<{

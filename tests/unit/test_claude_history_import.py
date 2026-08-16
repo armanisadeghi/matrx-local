@@ -217,9 +217,20 @@ async def test_selected_import_is_atomic_bounded_and_replay_safe(importer_env) -
     rows = await db.fetchall(
         "SELECT envelope_json FROM coding_session_bridge_outbox ORDER BY id"
     )
-    envelopes = [
+    all_envelopes = [
         BridgeRequest.model_validate_json(row["envelope_json"]) for row in rows
     ]
+    envelopes = [
+        item for item in all_envelopes if item.action.value == "append_native"
+    ]
+    # The import also queues Claude's own labels as one metadata-plane
+    # observation per session, behind the transcript batches that mint the
+    # binding. It is never an append_native copy and carries no entries.
+    labels = [item for item in all_envelopes if item.action.value == "observe_hook"]
+    assert len(labels) == 1
+    assert labels[0].hook_event is not None
+    assert labels[0].hook_event.name == "SessionMetadata"
+    assert labels[0].entries == []
     assert {envelope.stream_key for envelope in envelopes} == {
         "main",
         "subagent:agent-one",
@@ -560,13 +571,20 @@ async def test_same_uuid_across_projects_keeps_project_identity(importer_env) ->
     rows = await db.fetchall(
         "SELECT envelope_json FROM coding_session_bridge_outbox ORDER BY id"
     )
-    envelopes = [
+    all_envelopes = [
         BridgeRequest.model_validate_json(row["envelope_json"]) for row in rows
     ]
-    assert {item.provider_project_key for item in envelopes} == {
+    envelopes = [
+        item for item in all_envelopes if item.action.value == "append_native"
+    ]
+    assert {item.provider_project_key for item in all_envelopes} == {
         match["project_key"] for match in matches
     }
+    # Both the transcript copies and the label observations keep the two
+    # same-UUID projects apart under distinct bridge session identities.
     assert len({item.provider_session_id for item in envelopes}) == 2
+    labels = [item for item in all_envelopes if item.action.value == "observe_hook"]
+    assert len({item.provider_session_id for item in labels}) == 2
     assert all(
         item.source_metadata
         and str(item.source_metadata.provider_native_session_id) == session_id
@@ -651,15 +669,25 @@ async def test_discard_pending_history_preserves_hook_events(importer_env) -> No
     status = await importer.status()
     assert status["pending_history_imports"] == imported["queued_batches"]
 
+    # Discarding queued transcript COPIES drops only the append_native rows.
+    # The independent hook event AND the session's label observation survive —
+    # a label update is metadata-plane, cheap and idempotent, and must never be
+    # collateral damage of abandoning a byte copy.
     discarded = await importer.discard_pending()
     assert discarded == {
         "schema_version": 1,
         "source": "claude_local_jsonl",
         "discarded": imported["queued_batches"],
-        "pending": 1,
+        "pending": 2,
     }
     remaining = await db.fetchall(
-        "SELECT envelope_json FROM coding_session_bridge_outbox"
+        "SELECT envelope_json FROM coding_session_bridge_outbox ORDER BY id"
     )
-    assert len(remaining) == 1
-    assert json.loads(remaining[0]["envelope_json"])["action"] == "observe_hook"
+    assert len(remaining) == 2
+    assert [json.loads(row["envelope_json"])["action"] for row in remaining] == [
+        "observe_hook",
+        "observe_hook",
+    ]
+    assert {
+        json.loads(row["envelope_json"])["hook_event"]["name"] for row in remaining
+    } == {"SessionMetadata", "Stop"}

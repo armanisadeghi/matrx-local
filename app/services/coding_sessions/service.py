@@ -27,6 +27,11 @@ from app.services.local_db.repositories import TokenRepo
 logger = get_logger()
 
 _SERVER_PATH = "/coding-sessions/bridge"
+# The metadata-plane hook name. It carries provider-authored session labels
+# (title, workspace, branch, worktree, archived) rather than transcript
+# content, so the server applies it to an EXISTING binding of either fidelity
+# and settles an unbound session with accepted=0 instead of minting one.
+SESSION_METADATA_EVENT = "SessionMetadata"
 _PUBLISH_INTERVAL_SECONDS = 15.0
 _MAX_BATCH = 100
 _MAX_BACKOFF_SECONDS = 60.0
@@ -92,6 +97,48 @@ def _validate_upstream_acknowledgement(
         "action": request.action.value,
         "provider": request.provider.value,
     }
+    hook_event = request.hook_event
+    is_session_metadata = (
+        request.action.value == "observe_hook"
+        and hook_event is not None
+        and hook_event.name == SESSION_METADATA_EVENT
+    )
+    if is_session_metadata:
+        # A label update lands on an existing binding of EITHER fidelity, and
+        # an unmirrored local session settles with accepted=0 and no session
+        # identity — that is a durable "nothing to update here", not a failure
+        # to retry forever.
+        for field, value in expected.items():
+            if response.get(field) != value:
+                raise AIDreamError(
+                    502,
+                    f"bridge acknowledgement {field} did not match request",
+                )
+        accepted = _count("accepted")
+        duplicates = _count("duplicates")
+        if _count("conflicts") != 0:
+            raise AIDreamError(
+                502,
+                "bridge acknowledgement did not account for every submitted entry",
+            )
+        if accepted == 0 and duplicates == 0:
+            return
+        if accepted + duplicates != 1:
+            raise AIDreamError(
+                502,
+                "bridge acknowledgement did not account for every submitted entry",
+            )
+        if response.get("fidelity") not in {"native", "event_mirror"}:
+            raise AIDreamError(502, "bridge acknowledgement has invalid fidelity")
+        for field in ("session_id", "conversation_id"):
+            try:
+                UUID(str(response.get(field)))
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise AIDreamError(
+                    502,
+                    f"bridge acknowledgement has invalid {field}",
+                ) from exc
+        return
     if request.action.value == "observe_hook":
         expected["fidelity"] = "event_mirror"
     for field, value in expected.items():

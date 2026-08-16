@@ -21,6 +21,10 @@ from app.services.coding_sessions.claude_history import (
     ClaudeHistoryImporter,
     ClaudeHistoryImportRequest,
 )
+from app.services.coding_sessions.title_sync import (
+    ClaudeSessionMetadataReconciler,
+    ClaudeTitleSyncBlocked,
+)
 
 router = APIRouter(prefix="/coding-session", tags=["coding-session-bridge"])
 
@@ -117,6 +121,30 @@ async def claude_history_status() -> dict[str, object]:
 async def discard_pending_claude_history() -> dict[str, object]:
     """Discard queued history copies; source files and hook observations are untouched."""
     return await ClaudeHistoryImporter().discard_pending()
+
+
+@router.get("/claude/labels/status")
+async def claude_label_status() -> dict[str, object]:
+    """Report whether Claude's own session index is readable and last synced."""
+    return await ClaudeSessionMetadataReconciler().status()
+
+
+@router.post("/claude/labels/sync", status_code=status.HTTP_202_ACCEPTED)
+async def sync_claude_labels(
+    dry_run: bool = Query(default=False),
+) -> dict[str, object]:
+    """Match already-mirrored Claude sessions to Claude's own labels and sync.
+
+    Only sessions AI Matrx already knows are touched; labels of local sessions
+    the user never mirrored never leave this machine.
+    """
+    try:
+        return await ClaudeSessionMetadataReconciler().sync(dry_run=dry_run)
+    except ClaudeTitleSyncBlocked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.reason,
+        ) from exc
 
 
 @router.post("/claude/history/pending/retry")

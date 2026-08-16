@@ -131,10 +131,52 @@ the ordered publisher; neither repair silently drops an event.
   while the original file, workspace, and current Claude login exist. The importer does not copy
   file-history snapshots, permissions, credentials, or filesystem state and always reports
   `native_restore_available=false`.
-- **Pin/archive truth is unsupported.** Local Claude exposes names, project grouping, branch, and
-  fork/session lineage in the documented transcript/session picker. No stable local pin/archive
-  source exists, so the product does not infer those states. Web-managed archive is a separate
-  Claude web capability.
+- **Pinning is unsupported; archive is now READ, never inferred.** Claude Code's desktop app keeps a
+  real `isArchived` flag in its own session index (below), so archive state is observed as provider
+  truth. There is still no local pin/starred/tags/category source anywhere — the product does not
+  infer those and must not invent them.
+
+## Claude's own labels — the same title, kept in sync
+
+🚨 **Arman's ruling (2026-08-16): "Those labels cannot be different. They must be exactly the same,
+and they must remain in sync. So if it's changed in Claude Code, we are able to update it in our
+system."** The Claude Code desktop app stores the EXACT label it shows in its sidebar in one small
+JSON record per session at
+`<app support>/Claude/claude-code-sessions/<accountUuid>/<orgUuid>/local_<id>.json`. Every record
+carries `cliSessionId` — the UUID naming `~/.claude/projects/<cwd-slug>/<cliSessionId>.jsonl` —
+which is the identity the bridge already binds, so the join is exact.
+
+- **[`claude_session_index.py`](claude_session_index.py) is the only reader.** It reduces each
+  record to display labels — `title`, `titleSource`, workspace name (the last segment of `cwd`),
+  `branch`, `worktreeName`, `isArchived` — and never emits a raw path. A desktop sync script unions
+  these index files across accounts, so the same `cliSessionId` appears once per account folder; the
+  record with the newest `lastActivityAt` wins. Bounds: 50,000 files, 8 MiB per file. Override the
+  root with `CLAUDE_DESKTOP_SESSIONS_DIR`.
+- **[`title_sync.py`](title_sync.py) is the pull-sync reconciler.** `POST
+  /coding-session/claude/labels/sync` asks aidream `GET /coding-sessions/sessions?provider=claude_code`
+  for the owner's bindings, matches each `provider_session_id` (raw UUID for event-mirror bindings,
+  the decoded `claude-sdk:<digest>:<b64 id>` composite for imports) to an index record, and enqueues
+  one `SessionMetadata` observation per session whose labels changed. `GET
+  /coding-session/claude/labels/status` reports index availability and the last pass; `?dry_run=true`
+  reports without enqueueing.
+- **The server list is the allowlist.** Labels of local sessions AI Matrx never mirrored never leave
+  this machine. This is the whole privacy boundary of the feature — never widen it to "every local
+  session".
+- **Idempotent by ledger.** `claude_session_metadata_sent` (V20) records the exact payload digest
+  last enqueued per bound session, so an unchanged label costs zero network work and a rename is
+  detected on the next pass. The explicit import writes the same ledger, so an import and a pull
+  pass never duplicate each other.
+- **Metadata plane, not the ledger.** A `SessionMetadata` observation updates an EXISTING binding's
+  labels only — it never mints a binding or a conversation and never appends a transcript entry, so
+  it works against event-mirror and native bindings alike. aidream applies title precedence
+  `user > provider > first_prompt > placeholder`: a title the user set in AI Matrx always wins.
+  An unmirrored session comes back `accepted=0` with no session identity, which the outbox treats as
+  a durable settle rather than retrying forever.
+- **The import carries the same labels.** `_discover_sources` prefers the index title/branch/
+  workspace over anything derived from the JSONL, and `import_selected` queues one label observation
+  per session behind the batches that mint the binding. It is deliberately a separate envelope:
+  **Discard queued copies** drops only `append_native` rows, and abandoning a byte copy must never be
+  collateral damage for a label update.
 
 Hard bounds: 10,000 discovered sessions; 200 preview rows; ten selected sessions; 64 MiB per
 explicit import; 2 MiB per JSONL line; 100 entries and 4 MiB per outbox envelope; 2,048 UTF-8 bytes
@@ -159,6 +201,12 @@ model once that package version is published and consumed here.
 - `tests/smoke/test_coding_session_bridge.py`: real engine loopback 202,
   tunnel 403, hooks-only gate, and unknown-field rejection.
 - `python scripts/generate_mirror_schema.py --check`: generated mirror parity.
+- `tests/unit/test_claude_session_labels.py`: index dedupe by newest activity, no raw path in any
+  payload, both bound identity forms resolving to one CLI session UUID, the server list as the
+  allowlist (an unmirrored session's label never enters an envelope), idempotent re-sync, a rename in
+  Claude Code reaching the next pass, dry-run, loud blocked reasons, the SessionMetadata
+  acknowledgement contract (native fidelity accepted, unbound `accepted=0` settles), and the import
+  carrying the exact index title.
 - `tests/unit/test_claude_history_import.py`: explicit preview, privacy, subagent/compaction
   preservation, corrupt-line gaps, atomic batching, replay, account switch, content-bound revision
   drift (including preserved size/mtime), bounded giant lines, symlink refusal, duplicate project

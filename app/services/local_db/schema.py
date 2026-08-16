@@ -836,6 +836,19 @@ CREATE INDEX IF NOT EXISTS idx_coding_session_bridge_order
 ON coding_session_bridge_outbox(id)
 """
 
+# Claude Code owns the label it shows in its own sidebar; AI Matrx must show
+# the SAME one and keep showing it after a rename. The pull-sync reconciler
+# records the exact label payload it last enqueued per bound session so an
+# unchanged title costs no network work and a rename is detected on the next
+# pass. This is a send-ledger, not a cache of provider state.
+_V20_CLAUDE_SESSION_METADATA_SENT = """
+CREATE TABLE IF NOT EXISTS claude_session_metadata_sent (
+    provider_session_id TEXT PRIMARY KEY,
+    payload_sha256      TEXT NOT NULL,
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+)
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -856,4 +869,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (17, _V17_DROP_STALE_API_KEY_VALIDATION),
     (18, _V18_SCRAPE_SYNC_BLOCK_REASON),
     (19, _V19_CODING_SESSION_BRIDGE_OUTBOX),
+    (20, _V20_CLAUDE_SESSION_METADATA_SENT),
 ]

@@ -7,6 +7,7 @@ import {
   History,
   Loader2,
   RefreshCw,
+  Tags,
   Trash2,
 } from "lucide-react";
 
@@ -20,6 +21,8 @@ import type {
   ClaudeHistoryImportResult,
   ClaudeHistoryPreview,
   ClaudeHistoryStatus,
+  ClaudeLabelSyncResult,
+  ClaudeLabelSyncStatus,
 } from "@/lib/api";
 
 function formatBytes(value: number): string {
@@ -52,10 +55,18 @@ export function ClaudeHistorySync() {
   const [historyStatus, setHistoryStatus] = useState<ClaudeHistoryStatus | null>(null);
   const [discarding, setDiscarding] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [labelStatus, setLabelStatus] = useState<ClaudeLabelSyncStatus | null>(null);
+  const [labelResult, setLabelResult] = useState<ClaudeLabelSyncResult | null>(null);
+  const [labelSyncing, setLabelSyncing] = useState(false);
+  const [labelError, setLabelError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
     const next = await engine.getClaudeHistoryStatus();
     setHistoryStatus(next);
+  }, []);
+
+  const refreshLabelStatus = useCallback(async () => {
+    setLabelStatus(await engine.getClaudeLabelStatus());
   }, []);
 
   useEffect(() => {
@@ -63,6 +74,28 @@ export function ClaudeHistorySync() {
       // The main review action reports engine/auth errors with full context.
     });
   }, [refreshStatus]);
+
+  useEffect(() => {
+    void refreshLabelStatus().catch(() => {
+      // Label sync reports its own blocked reason when the user presses sync.
+    });
+  }, [refreshLabelStatus]);
+
+  const syncLabels = async () => {
+    setLabelSyncing(true);
+    setLabelError(null);
+    try {
+      setLabelResult(await engine.syncClaudeLabels());
+      await refreshLabelStatus();
+      await refreshStatus();
+    } catch (nextError) {
+      setLabelError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    } finally {
+      setLabelSyncing(false);
+    }
+  };
 
   const selectedSessions = useMemo(
     () => preview?.sessions.filter((session) =>
@@ -215,6 +248,97 @@ export function ClaudeHistorySync() {
           )}
         </Card>
 
+        <Card>
+          <CardHeader className="flex flex-row items-start justify-between gap-4">
+            <div>
+              <CardTitle className="text-base">Keep titles in sync</CardTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Sends the exact label Claude Code shows for each session AI Matrx
+                already has, so a rename in Claude Code lands here too. Sessions
+                AI Matrx has never seen are never touched, and a title you set in
+                AI Matrx always wins.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => void syncLabels()}
+              disabled={labelSyncing}
+            >
+              {labelSyncing ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Tags className="mr-2 h-4 w-4" />
+              )}
+              Sync titles now
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {labelStatus && !labelStatus.index_available && (
+              <div className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <span>
+                  The Claude Code desktop app has not written a session index on
+                  this machine, so there are no Claude titles to read yet.
+                </span>
+              </div>
+            )}
+            {labelStatus && labelStatus.index_available && (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <Summary
+                  label="Claude sessions on this Mac"
+                  value={labelStatus.index_records.toLocaleString()}
+                />
+                <Summary
+                  label="Titles synced"
+                  value={labelStatus.synced_sessions.toLocaleString()}
+                />
+                <Summary
+                  label="Index files read"
+                  value={labelStatus.index_files.toLocaleString()}
+                />
+              </div>
+            )}
+            {labelError && (
+              <div className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                <span>{labelError}</span>
+              </div>
+            )}
+            {labelResult && (
+              <div className="space-y-2 rounded-md border p-3 text-sm">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  <span>
+                    {labelResult.queued.toLocaleString()} title update
+                    {labelResult.queued === 1 ? "" : "s"} queued ·{" "}
+                    {labelResult.matched.toLocaleString()} of{" "}
+                    {labelResult.bound_sessions.toLocaleString()} synced sessions
+                    matched a Claude session · {labelResult.unchanged.toLocaleString()}{" "}
+                    already identical
+                  </span>
+                </div>
+                {labelResult.unmatched > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {labelResult.unmatched.toLocaleString()} synced session
+                    {labelResult.unmatched === 1 ? " has" : "s have"} no Claude
+                    record on this machine — they were most likely created on
+                    another computer.
+                  </p>
+                )}
+                {labelResult.sample_titles.length > 0 && (
+                  <ul className="space-y-1 text-xs text-muted-foreground">
+                    {labelResult.sample_titles.slice(0, 5).map((item) => (
+                      <li key={item.provider_session_id} className="truncate">
+                        {item.title}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {preview && (
           <Card>
             <CardHeader>
@@ -248,6 +372,13 @@ export function ClaudeHistorySync() {
                       <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                         <span>{session.project_name}</span>
                         {session.git_branch && <span>{session.git_branch}</span>}
+                        {session.worktree_name && (
+                          <span>worktree {session.worktree_name}</span>
+                        )}
+                        {session.is_archived && <span>Archived in Claude</span>}
+                        {!session.title_from_claude_index && (
+                          <span>No Claude title — using the first prompt</span>
+                        )}
                         <span>{formatBytes(session.bytes)}</span>
                         {session.subagent_count > 0 && (
                           <span>{session.subagent_count} subagents</span>

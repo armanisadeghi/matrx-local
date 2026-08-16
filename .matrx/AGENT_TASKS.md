@@ -32,6 +32,21 @@ _(none)_
 
 ## Active
 
+### TASK-003b: The return direction — an AI Matrx rename must reach Claude Code's label
+- **Status:** ✅ DONE 2026-08-16. Approved by Arman the same day, as the second half of his ruling
+  (*"when our conversations go to Claude Code, or if I update this, then the Claude Code value
+  should be updated to match"*). Shipped `claude_label_writer.py` + the outbound leg of
+  `title_sync.py` + V21 `claude_session_title_pushed` + aidream's server-computed `title_source` /
+  `conversation_title` / `claude_title` on `GET /coding-sessions/sessions` and the
+  `title_origin="ai_matrx_user"` return marker. Conflict rule documented: last-writer-wins, Claude
+  Code wins a tie. Live proof against the real DB and the real index, both directions, everything
+  restored: `aidream/scripts/_verify_claude_label_return_sync.py`. Also fixed a real inbound defect
+  found by probing the app — a Claude rename rewrites only the active account's copy without
+  bumping `lastActivityAt`, so the reader's tie-break could pick a stale sibling's title; freshness
+  now breaks ties on file mtime. Rules in
+  [`app/services/coding_sessions/FEATURE.md`](../app/services/coding_sessions/FEATURE.md)
+  § "Claude's own labels".
+
 ### TASK-003: Reconcile Claude-native titles and branches onto live mirrored sessions
 - **Status:** ✅ DONE 2026-08-16. Shipped `claude_session_index.py` + `title_sync.py` +
   `POST /coding-session/claude/labels/sync` + the desktop **Sync titles now** card; the import path

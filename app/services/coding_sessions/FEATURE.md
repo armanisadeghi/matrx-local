@@ -136,42 +136,96 @@ the ordered publisher; neither repair silently drops an event.
   truth. There is still no local pin/starred/tags/category source anywhere — the product does not
   infer those and must not invent them.
 
-## Claude's own labels — the same title, kept in sync
+## Claude's own labels — the same title, kept in sync BOTH ways
 
 🚨 **Arman's ruling (2026-08-16): "Those labels cannot be different. They must be exactly the same,
 and they must remain in sync. So if it's changed in Claude Code, we are able to update it in our
-system."** The Claude Code desktop app stores the EXACT label it shows in its sidebar in one small
+system."** and *"The Claude Code title is what we should use for our label. And when our
+conversations go to Claude Code, or if I update this, then the Claude Code value should be updated
+to match."* The Claude Code desktop app stores the EXACT label it shows in its sidebar in one small
 JSON record per session at
 `<app support>/Claude/claude-code-sessions/<accountUuid>/<orgUuid>/local_<id>.json`. Every record
 carries `cliSessionId` — the UUID naming `~/.claude/projects/<cwd-slug>/<cliSessionId>.jsonl` —
 which is the identity the bridge already binds, so the join is exact.
 
+One explicit pass (`POST /coding-session/claude/labels/sync`) reconciles both directions.
+Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding-session-bridge/FEATURE.md`
+§ "The session label".
+
 - **[`claude_session_index.py`](claude_session_index.py) is the only reader.** It reduces each
   record to display labels — `title`, `titleSource`, workspace name (the last segment of `cwd`),
   `branch`, `worktreeName`, `isArchived` — and never emits a raw path. A desktop sync script unions
-  these index files across accounts, so the same `cliSessionId` appears once per account folder; the
-  record with the newest `lastActivityAt` wins. Bounds: 50,000 files, 8 MiB per file. Override the
-  root with `CLAUDE_DESKTOP_SESSIONS_DIR`.
-- **[`title_sync.py`](title_sync.py) is the pull-sync reconciler.** `POST
-  /coding-session/claude/labels/sync` asks aidream `GET /coding-sessions/sessions?provider=claude_code`
-  for the owner's bindings, matches each `provider_session_id` (raw UUID for event-mirror bindings,
-  the decoded `claude-sdk:<digest>:<b64 id>` composite for imports) to an index record, and enqueues
-  one `SessionMetadata` observation per session whose labels changed. `GET
-  /coding-session/claude/labels/status` reports index availability and the last pass; `?dry_run=true`
-  reports without enqueueing.
-- **The server list is the allowlist.** Labels of local sessions AI Matrx never mirrored never leave
-  this machine. This is the whole privacy boundary of the feature — never widen it to "every local
-  session".
+  these index files across accounts, so the same `cliSessionId` appears once per account folder
+  (five, on this machine); the freshest record wins. Bounds: 50,000 files, 8 MiB per file. Override
+  the root with `CLAUDE_DESKTOP_SESSIONS_DIR`.
+- 🚨 **Freshness is `lastActivityAt` THEN the record file's mtime, and the mtime half is
+  load-bearing.** Observed against the real app 2026-08-16: renaming a session in Claude Code
+  rewrites ONLY the active account's copy and does NOT bump `lastActivityAt`, so every copy ties and
+  a first-read tie-break selects a stale sibling's old title purely by directory sort order. Never
+  drop back to a single-key comparison.
+- **[`title_sync.py`](title_sync.py) is the reconciler for both directions.** It asks aidream
+  `GET /coding-sessions/sessions?provider=claude_code` for the owner's bindings and matches each
+  `provider_session_id` (raw UUID for event-mirror bindings, the decoded
+  `claude-sdk:<digest>:<b64 id>` composite for imports) to an index record. Inbound: one
+  `SessionMetadata` observation per session whose Claude labels changed. Outbound: see below. `GET
+  /coding-session/claude/labels/status` reports index availability and the last pass;
+  `?dry_run=true` reports without enqueueing and without opening a single Claude file.
+- **The server list is the allowlist for BOTH directions.** Labels of local sessions AI Matrx never
+  mirrored never leave this machine, and a session AI Matrx does not own is never written to on
+  disk. This is the whole privacy boundary of the feature — never widen it to "every local session".
 - **Idempotent by ledger.** `claude_session_metadata_sent` (V20) records the exact payload digest
-  last enqueued per bound session, so an unchanged label costs zero network work and a rename is
-  detected on the next pass. The explicit import writes the same ledger, so an import and a pull
-  pass never duplicate each other.
+  last enqueued per bound session; `claude_session_title_pushed` (V21) records the exact title last
+  written down. An unchanged label costs zero network work and zero writes into another
+  application's files. The explicit import writes the V20 ledger too, so an import and a pull pass
+  never duplicate each other.
 - **Metadata plane, not the ledger.** A `SessionMetadata` observation updates an EXISTING binding's
   labels only — it never mints a binding or a conversation and never appends a transcript entry, so
-  it works against event-mirror and native bindings alike. aidream applies title precedence
-  `user > provider > first_prompt > placeholder`: a title the user set in AI Matrx always wins.
-  An unmirrored session comes back `accepted=0` with no session identity, which the outbox treats as
-  a durable settle rather than retrying forever.
+  it works against event-mirror and native bindings alike. An unmirrored session comes back
+  `accepted=0` with no session identity, which the outbox treats as a durable settle rather than
+  retrying forever.
+
+### The return direction — AI Matrx → Claude Code
+
+🚨 **THE CLIENT LAW APPLIES HARDEST HERE: the ladder is a SERVER answer.** aidream computes
+`title_source` (`user > provider > first_prompt > placeholder`) with `titles.resolve_title_source`
+and returns it, plus `conversation_title` and `claude_title`, on every identity row. This repo
+decides nothing about precedence — it pushes down when, and only when, the server says `user`.
+Re-deriving the ladder here would be the exact defect
+`/Users/armanisadeghi/code/common-docs/policies/clients-consume-never-reimplement.md` names.
+
+- **[`claude_label_writer.py`](claude_label_writer.py) is the only writer**, and every rule in it is
+  a restriction, derived by observing the real app on 2026-08-16 rather than assumed:
+  - **Two fields, never a third.** Only `title` and `titleSource` are assigned, with `titleSource`
+    inserted directly after `title` exactly as Claude Code's own rename does. `titleSource` is
+    `user`, because an AI Matrx rename IS the human naming their session — the same value Claude
+    records for a title its auto-titler must not replace.
+  - **Byte-fidelity or refuse.** Claude's writers use three JSON serializations across its history
+    (all 4,282 records on this machine match one exactly). The parsed record is re-serialized with
+    each candidate and compared to the original bytes; the match is reused for the write. A format
+    this module has never seen is left untouched. Never "just write it out" — that would silently
+    reformat someone else's file.
+  - **Backed up once per file** into `<MATRX_HOME_DIR>/backups/claude-session-index/`, holding the
+    bytes from before AI Matrx ever touched that record. A later write never overwrites the
+    snapshot.
+  - **Fenced.** Size, mtime_ns and content SHA-256 are re-checked immediately before an atomic
+    temp+fsync+rename. A record Claude Code moved underneath us is refused (`concurrent_modification`),
+    never clobbered — its value is newer and the inbound leg will pull it up.
+  - **Every account copy** of the session is written, so no stale sibling can win the next read.
+- **The push is reported back.** After a successful write the reconciler enqueues a
+  `SessionMetadata` observation carrying that title plus `title_origin="ai_matrx_user"`. The server
+  then records the tier as `user` AND converges `applied_title` on the shared label. **Do not drop
+  that second envelope** — without it `applied_title` goes stale and a later rename in Claude Code
+  could never win, because the ladder would read our pushed title as a user title it must not
+  overwrite.
+- **Conflict rule: last-writer-wins, Claude Code wins a tie.** Both sides agree only while
+  `applied_title` equals the shown label. If Claude's index title no longer equals the server's
+  `claude_title`, Claude Code was renamed too and the return leg stands down for that pass. If
+  Claude Code overwrites a title we wrote, nothing is lost — the V21 ledger recognises our own value
+  and stands down, and the next inbound pass pulls Claude's value back.
+- **Latency is honest.** Claude Code loads this index at startup and serves it from memory — a disk
+  write is NOT picked up live (verified 2026-08-16: the app kept reporting its cached title after
+  the file changed). The card says the title appears "the next time Claude Code reloads". Never
+  promise instant.
 - **The import carries the same labels.** `_discover_sources` prefers the index title/branch/
   workspace over anything derived from the JSONL, and `import_selected` queues one label observation
   per session behind the batches that mint the binding. It is deliberately a separate envelope:
@@ -201,6 +255,14 @@ model once that package version is published and consumed here.
 - `tests/smoke/test_coding_session_bridge.py`: real engine loopback 202,
   tunnel 403, hooks-only gate, and unknown-field rejection.
 - `python scripts/generate_mirror_schema.py --check`: generated mirror parity.
+- `tests/unit/test_claude_label_writeback.py`: the RETURN direction — byte-for-byte writes through
+  each of Claude's three serializations, refusal of an unseen format / a concurrent rewrite / a
+  record that now names another session, the once-per-file backup, all account copies written, the
+  mtime tie-break, only `title_source="user"` travelling down, an unowned session never written,
+  Claude Code winning a two-sided rename, our own overwritten push not being fought over, and
+  dry-run opening no file at all.
+- `aidream/scripts/_verify_claude_label_return_sync.py`: the live two-way proof against the real
+  platform database and the real Claude index on this machine, restoring every byte it touches.
 - `tests/unit/test_claude_session_labels.py`: index dedupe by newest activity, no raw path in any
   payload, both bound identity forms resolving to one CLI session UUID, the server list as the
   allowlist (an unmirrored session's label never enters an envelope), idempotent re-sync, a rename in

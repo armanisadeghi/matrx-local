@@ -177,6 +177,16 @@ the ordered publisher; neither repair silently drops an event.
   identity describes the active login at import time; Claude's local transcript does not
   independently prove which historical account created a file. Claude and AI Matrx identities are
   rechecked after the bounded read and before enqueue.
+- **[`claude_probe.py`](claude_probe.py) is the single CLI/account probe.** A packaged desktop GUI
+  has a deliberately sparse system `PATH`, while Claude's current native installer puts the
+  launcher at `~/.local/bin/claude`. Resolution therefore checks executable `PATH` entries plus the
+  official per-user location, the retired `~/.claude/local/claude` location, and known
+  Homebrew/system/platform locations. History import and the local runtime consume this same
+  resolver. Auth/version subprocesses are bounded; a timeout terminates and reaps its child, and
+  the probe preserves distinct not-found, execution-failure, timeout, signed-out, and
+  stable-identity-unavailable states. Developer-owned Anthropic keys and gateway overrides are
+  blanked for the probe so they cannot shadow the user's subscription login; version failure is
+  diagnostic only and cannot turn a successfully verified account into a false sign-out.
 - **Reconciliation is additive and idempotent.** Entry UUID plus exact canonical payload hash is
   replay-safe. A changed preview revision, account switch, transcript UUID reuse, or source mutation
   rejects before any new outbox row. Selection identity is session UUID plus opaque project key;
@@ -336,6 +346,10 @@ model once that package version is published and consumed here.
   drift (including preserved size/mtime), bounded giant lines, symlink refusal, duplicate project
   UUID separation, duplicate entry UUID refusal, deterministic cross-machine v2 account-key
   derivation, and masked-label safety (only the masked label may carry an `@`).
+- `tests/unit/test_claude_probe.py`: packaged macOS `PATH` discovery of the official
+  `~/.local/bin/claude` launcher, executable validation, legacy-location compatibility, safe
+  account reduction, distinct probe failure states, bounded diagnostics, and timeout
+  termination/reaping.
 
 ## The LOCAL Claude Code runtime — start/resume/cancel/stream on this machine
 

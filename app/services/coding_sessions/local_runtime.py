@@ -53,6 +53,10 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.common.system_logger import get_logger
+from app.services.coding_sessions.claude_probe import (
+    read_account_snapshot as _read_account_snapshot,
+    resolve_claude_executable,
+)
 from app.services.coding_sessions.claude_history import (
     ClaudeHistoryConflict,
     ClaudeHistoryImporter,
@@ -61,7 +65,6 @@ from app.services.coding_sessions.claude_history import (
     _bridge_provider_session_id,
     _conversation_id,
     _hash_source,
-    _read_account_snapshot,
 )
 from app.services.local_db.database import get_db
 from app.services.local_db.repositories import TokenRepo
@@ -168,23 +171,6 @@ def _message_payload(message: object) -> dict[str, Any]:
     return json.loads(json.dumps(payload, default=repr))
 
 
-def _find_claude_cli() -> Path | None:
-    """The user's own installed Claude Code binary — never a bundled copy."""
-    import shutil as _shutil
-
-    found = _shutil.which("claude")
-    if found:
-        return Path(found)
-    for candidate in (
-        Path.home() / ".claude" / "local" / "claude",
-        Path("/opt/homebrew/bin/claude"),
-        Path("/usr/local/bin/claude"),
-    ):
-        if candidate.is_file():
-            return candidate
-    return None
-
-
 def _settings():
     from app.services.cloud_sync.settings_sync import get_settings_sync
 
@@ -247,7 +233,7 @@ class LocalClaudeRuntime:
         except Exception as exc:  # pragma: no cover - environment-dependent
             sdk_available = False
             reasons.append(f"claude-agent-sdk unavailable: {exc}")
-        cli = _find_claude_cli()
+        cli = resolve_claude_executable()
         if cli is None:
             reasons.append(
                 "Claude Code is not installed on this machine (no `claude` binary found)"
@@ -599,7 +585,7 @@ class LocalClaudeRuntime:
                 ResultMessage,
             )
 
-            cli = _find_claude_cli()
+            cli = resolve_claude_executable()
             if cli is None:
                 raise LocalRuntimeRefused(
                     "claude_cli_missing", "Claude Code binary disappeared before launch"

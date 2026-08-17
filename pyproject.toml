@@ -1,6 +1,6 @@
 [project]
 name = "matrx-local"
-version = "1.4.29"
+version = "1.4.30"
 description = "Companion desktop application for AI Matrx — extends web platform with local capabilities via FastAPI"
 readme = "README.md"
 requires-python = ">=3.13"

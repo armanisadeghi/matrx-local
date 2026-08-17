@@ -96,6 +96,12 @@ async def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         }
     )
     monkeypatch.setattr(runtime_module, "_settings", lambda: settings)
+    # CI machines have no installed `claude`; these tests exercise the gates
+    # BEFORE any launch, so a fake CLI path keeps the capability probe from
+    # short-circuiting refusal reasons that come later in the ladder.
+    fake_cli = tmp_path / "claude"
+    fake_cli.write_text("#!/bin/sh\nexit 0\n")
+    monkeypatch.setattr(runtime_module, "_find_claude_cli", lambda: fake_cli)
     importer = ClaudeHistoryImporter(
         db=db,
         outbox=outbox,

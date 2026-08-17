@@ -613,6 +613,30 @@ class LocalClaudeRuntime:
                 session_id=run.session_id if run.action == "start" else None,
                 resume=run.session_id if run.action == "resume" else None,
                 include_partial_messages=False,
+                # THE AUTH PATH IS THE USER'S OWN SUBSCRIPTION LOGIN — always.
+                # A developer/engine environment may carry ANTHROPIC_API_KEY or
+                # a gateway override, and the CLI silently prefers those over
+                # the claude.ai login (observed live in the E2E: "another auth
+                # source is set and takes precedence"). Blank them for the
+                # child so a runtime session can never silently bill an API
+                # key instead of the user's subscription.
+                env={
+                    "ANTHROPIC_API_KEY": "",
+                    "ANTHROPIC_AUTH_TOKEN": "",
+                    "ANTHROPIC_BASE_URL": "",
+                    "CLAUDE_CODE_USE_BEDROCK": "",
+                    "CLAUDE_CODE_USE_VERTEX": "",
+                },
+                # "project" + "local" load the repo's CLAUDE.md and settings so
+                # a runtime session works on a real codebase like any Claude
+                # Code session. "user" is DELIBERATELY excluded: the user-level
+                # AI Matrx plugin's event-mirror hooks would otherwise fire
+                # inside this session and mint a SECOND (event_mirror, raw
+                # UUID) binding beside this runtime's native ledger — the exact
+                # dual-binding defect the bridge contract forbids. The native
+                # ledger this runtime maintains is strictly richer than the
+                # hook mirror, so nothing is lost.
+                setting_sources=["project", "local"],
             )
             client = ClaudeSDKClient(options=options)
             run.client = client

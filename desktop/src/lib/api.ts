@@ -363,6 +363,49 @@ export interface ClaudeLabelSyncStatus {
   last_sync: Record<string, unknown> | null;
 }
 
+/** GET /coding-session/runtime/capabilities — the local Claude Code runtime. */
+export interface LocalRuntimeCapabilities {
+  schema_version: 1;
+  available: boolean;
+  reasons: string[];
+  sdk_available: boolean;
+  claude_cli: string | null;
+  claude_account_label: string | null;
+  claude_client_version: string | null;
+  matrx_user_available: boolean;
+  auth_path: "user_subscription_login";
+  workspace_roots: string[];
+  approved_folders: string[];
+  active_runs: number;
+  capabilities: {
+    start: boolean;
+    send: boolean;
+    cancel: boolean;
+    resume_native: boolean;
+    fork_native: boolean;
+    stream: boolean;
+  };
+}
+
+/** One local runtime run (start or native resume) and its live state. */
+export interface LocalRuntimeRun {
+  runtime_id: string;
+  session_id: string;
+  action: "start" | "resume";
+  status: "starting" | "running" | "completed" | "failed" | "cancelled";
+  workspace: string;
+  prompt_preview: string;
+  provider_session_id: string | null;
+  conversation_id: string | null;
+  error: string | null;
+  started_at: string;
+  ended_at: string | null;
+  turns_completed: number;
+  mirror_passes: number;
+  mirror_error: string | null;
+  event_count: number;
+}
+
 /** A configurable storage path entry from GET /settings/paths */
 export interface StoragePath {
   name: string; // e.g. "notes"
@@ -2182,6 +2225,68 @@ class EngineAPI {
     return this.request("/coding-session/claude/history/pending/retry", {
       method: "POST",
     });
+  }
+
+  // ---- Local Claude Code runtime (start/resume/cancel on this machine) ----
+
+  async getRuntimeCapabilities(): Promise<LocalRuntimeCapabilities> {
+    return this.request("/coding-session/runtime/capabilities");
+  }
+
+  async getRuntimeApprovals(): Promise<{
+    workspace_roots: string[];
+    approved_folders: string[];
+  }> {
+    return this.request("/coding-session/runtime/approvals");
+  }
+
+  async approveRuntimeFolder(folder: string): Promise<{
+    workspace_roots: string[];
+    approved_folders: string[];
+  }> {
+    return this.request("/coding-session/runtime/approvals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder }),
+    });
+  }
+
+  async revokeRuntimeFolder(folder: string): Promise<{
+    workspace_roots: string[];
+    approved_folders: string[];
+  }> {
+    return this.request(
+      `/coding-session/runtime/approvals?folder=${encodeURIComponent(folder)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  async startRuntimeSession(body: {
+    workspace: string;
+    prompt: string;
+    resume_session_id?: string;
+    model?: string;
+    max_turns?: number;
+    permission_mode?: "acceptEdits" | "plan" | "bypassPermissions";
+  }): Promise<LocalRuntimeRun> {
+    return this.request("/coding-session/runtime/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async getRuntimeStatus(): Promise<{ runs: LocalRuntimeRun[] }> {
+    return this.request("/coding-session/runtime/status");
+  }
+
+  async cancelRuntimeSession(
+    runtimeId: string,
+  ): Promise<{ runtime_id: string; cancelled: boolean; status: string }> {
+    return this.request(
+      `/coding-session/runtime/${encodeURIComponent(runtimeId)}/cancel`,
+      { method: "POST" },
+    );
   }
 
   // ---- Generic HTTP helpers ----

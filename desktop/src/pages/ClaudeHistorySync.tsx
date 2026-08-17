@@ -11,6 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 
+import { AgentRuntimeCard } from "@/components/coding-sessions/AgentRuntimeCard";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -196,6 +197,7 @@ export function ClaudeHistorySync() {
         description="Review local sessions, then explicitly copy only the sessions you choose into your private AI Matrx history."
       />
       <div className="flex-1 space-y-4 overflow-y-auto p-6">
+        <AgentRuntimeCard />
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-4">
             <div>

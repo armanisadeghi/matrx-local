@@ -1628,6 +1628,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning(
             "[app/main.py] Coding-session bridge did not stop cleanly: %s", exc
         )
+
+    # Local Claude Code runtime: interrupt every active SDK run so no `claude`
+    # child outlives the engine (lifecycle ownership — Hard Rule 0). Touch the
+    # singleton only if it was ever created; shutdown must not instantiate it.
+    try:
+        from app.services.coding_sessions import local_runtime as _local_runtime_mod
+
+        _local_runtime = _local_runtime_mod._runtime
+        if _local_runtime is not None:
+            await asyncio.wait_for(_local_runtime.shutdown(), timeout=8.0)
+            logger.info("[app/main.py] Local Claude runtime runs stopped ✓")
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning(
+            "[app/main.py] Local Claude runtime did not stop cleanly: %s", exc
+        )
         _registry.stopped("coding_session_bridge")
 
     try:

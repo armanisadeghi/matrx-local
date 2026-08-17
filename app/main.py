@@ -926,6 +926,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("coding_session_bridge", exc)
 
+    # Phase 2i: capture reconciler. A failed Claude Code hook is NON-BLOCKING,
+    # so the MCP-delivered hook path can stop mirroring permanently and
+    # silently (23.5h lost on 2026-08-16). This loop diffs Claude's own local
+    # JSONL against the platform's session list and backfills what the hooks
+    # never delivered, through the SAME importer and the SAME outbox above —
+    # no second transport. It only backfills sessions from AFTER the owner's
+    # first binding; pre-install history stays behind the explicit door.
+    _registry.starting("claude_capture_reconciler")
+    try:
+        from app.services.coding_sessions import get_claude_capture_reconciler
+
+        _capture_reconciler = get_claude_capture_reconciler()
+        await _capture_reconciler.start_background()
+        _registry.ready(
+            "claude_capture_reconciler",
+            source="claude_local_jsonl",
+            upstream="/api/coding-sessions/bridge",
+        )
+        logger.info("[app/main.py] Phase 2i: Claude capture reconciler started ✓")
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 2i: Claude capture reconciler FAILED to start — "
+            "sessions the hook path misses will NOT be backfilled",
+            exc_info=True,
+        )
+        _registry.failed("claude_capture_reconciler", exc)
+
     # Phase 3: Start scraper engine
     print("[phase:scraper] Starting scraper engine...", flush=True)
     logger.info("[app/main.py] Phase 3: Starting scraper engine...")
@@ -1602,6 +1629,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "[app/main.py] Coding-session bridge did not stop cleanly: %s", exc
         )
         _registry.stopped("coding_session_bridge")
+
+    try:
+        from app.services.coding_sessions import (
+            get_claude_capture_reconciler as _get_capture_reconciler,
+        )
+
+        _capture_reconciler = _get_capture_reconciler()
+        if _capture_reconciler.active:
+            _registry.stopping("claude_capture_reconciler")
+            await asyncio.wait_for(_capture_reconciler.stop(), timeout=3.0)
+            _registry.stopped("claude_capture_reconciler")
+            logger.info("[app/main.py] Claude capture reconciler stopped ✓")
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning(
+            "[app/main.py] Claude capture reconciler did not stop cleanly: %s", exc
+        )
+        _registry.stopped("claude_capture_reconciler")
 
     try:
         from app.services.artifacts import get_artifact_service as _get_artifacts

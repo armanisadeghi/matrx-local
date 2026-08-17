@@ -36,6 +36,39 @@ _PUBLISH_INTERVAL_SECONDS = 15.0
 _MAX_BATCH = 100
 _MAX_BACKOFF_SECONDS = 60.0
 
+# THE POISON-ROW RULE. Publication is strictly ordered — deliberately, so a
+# provider event stream is never reordered — which means one permanently
+# rejected row stops every row behind it, forever. Found live 2026-08-17: a
+# single row had failed 2,520 times since 2026-08-13 with 409 `entry_mutated`
+# and had blocked 3,709 rows for four days with nothing surfacing it.
+#
+# `entry_mutated` is definitionally terminal: the server already stores that
+# stable event id with DIFFERENT bytes, so this envelope can never be accepted,
+# and attempt 2,521 will fail exactly like attempt 1. Retrying a permanent
+# rejection is not durability, it is a stall.
+_TERMINAL_ERROR_CODES = frozenset({"entry_mutated"})
+
+# Statuses that mean "the server understood and refused". They are quarantined
+# only after a long retry run, because a proxy or a mid-deploy server can emit
+# them transiently and dropping a row early would be real data loss.
+_TERMINAL_STATUSES = frozenset({400, 409, 422})
+_QUARANTINE_AFTER_ATTEMPTS = 25
+
+
+def _is_terminal_rejection(exc: Exception, attempts: int) -> bool:
+    """True when retrying this exact envelope can never succeed.
+
+    Offline is never terminal — the server has said nothing. A known-terminal
+    error code is terminal immediately; a generic understood-and-refused status
+    is terminal only after a long retry run.
+    """
+    if isinstance(exc, AIDreamOfflineError) or not isinstance(exc, AIDreamError):
+        return False
+    message = str(exc)
+    if any(f'"{code}"' in message for code in _TERMINAL_ERROR_CODES):
+        return True
+    return exc.status in _TERMINAL_STATUSES and attempts >= _QUARANTINE_AFTER_ATTEMPTS
+
 
 class BridgeMutationConflict(ValueError):
     """A provider reused a stable event identity with different content."""
@@ -473,6 +506,8 @@ class CodingSessionBridgeOutbox:
             "cloud_enabled": self._cloud_enabled,
             "pending": await self.pending_count(),
             "oldest": dict(row) if row else None,
+            # Non-zero means real events are permanently NOT in the platform.
+            "quarantined": await self.quarantined_count(),
             "server_path": f"/api{_SERVER_PATH}",
         }
 
@@ -550,6 +585,11 @@ class CodingSessionBridgeOutbox:
                     )
                     _validate_upstream_acknowledgement(response, persisted_request)
                 except (AIDreamOfflineError, AIDreamError) as exc:
+                    if _is_terminal_rejection(exc, int(row["attempts"])):
+                        await self._quarantine_head(row, exc)
+                        # Keep going: the whole point is that the queue behind a
+                        # poison row is deliverable and must not wait for it.
+                        continue
                     await self._record_failure(
                         int(row["id"]), int(row["attempts"]), exc
                     )
@@ -562,6 +602,47 @@ class CodingSessionBridgeOutbox:
                 await self._db.commit()
                 sent += 1
             return {"sent": sent, "failed": 0, "blocked": None}
+
+    async def _quarantine_head(self, row: Any, exc: Exception) -> None:
+        """Move a permanently-rejected row aside so the queue can advance.
+
+        The envelope is PRESERVED, never dropped — zero data loss is this
+        outbox's contract, and a row the server refuses is exactly the row a
+        human will want to look at. Screams, because a quarantine means real
+        events are not in the platform and never will be without repair.
+        """
+        status_code = getattr(exc, "status", None)
+        await self._db.execute(
+            """INSERT OR REPLACE INTO coding_session_bridge_quarantine
+                   (id, envelope_json, envelope_sha256, attempts, http_status,
+                    last_error, original_created_at, quarantined_at)
+               SELECT id, envelope_json, envelope_sha256, attempts, ?, ?,
+                      created_at, datetime('now')
+               FROM coding_session_bridge_outbox WHERE id = ?""",
+            (status_code, str(exc)[:1000], int(row["id"])),
+        )
+        await self._db.execute(
+            "DELETE FROM coding_session_bridge_outbox WHERE id = ?",
+            (int(row["id"]),),
+        )
+        await self._db.commit()
+        logger.error(
+            "[coding_session_bridge] QUARANTINED outbox id=%s after %s attempts "
+            "(HTTP %s) — the server permanently refuses this envelope, so these "
+            "events will NEVER reach AI Matrx. The row is preserved in "
+            "coding_session_bridge_quarantine. Every row behind it was blocked "
+            "until now: %s",
+            int(row["id"]),
+            int(row["attempts"]),
+            status_code,
+            exc,
+        )
+
+    async def quarantined_count(self) -> int:
+        row = await self._db.fetchone(
+            "SELECT COUNT(*) AS c FROM coding_session_bridge_quarantine"
+        )
+        return int(row["c"]) if row else 0
 
     async def _defer_head(self, reason: str, *, increment: bool) -> None:
         row = await self._db.fetchone(

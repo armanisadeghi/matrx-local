@@ -863,6 +863,50 @@ CREATE TABLE IF NOT EXISTS claude_session_title_pushed (
 )
 """
 
+# A Claude Code hook that fails is NON-BLOCKING: the coding session keeps
+# running and mirrors nothing, forever, with no error anywhere (a 23.5-hour
+# outage on 2026-08-16 was noticed only because timestamps looked wrong). The
+# capture reconciler closes that hole by backfilling sessions the hook path
+# never delivered, through the SAME durable outbox and the SAME import path the
+# explicit history sync already uses. This is its attempt ledger: one row per
+# local session it has enqueued, so a permanently unimportable session is
+# retried a bounded number of times instead of spinning on every pass forever.
+_V22_CLAUDE_CAPTURE_BACKFILL = """
+CREATE TABLE IF NOT EXISTS claude_capture_backfill (
+    session_key     TEXT PRIMARY KEY,
+    source_revision TEXT,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT,
+    enqueued_at     TEXT,
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+)
+"""
+
+# THE POISON-ROW QUARANTINE. The bridge outbox publishes in strict insertion
+# order and never reorders a provider event stream — correct, and the reason a
+# single permanently-rejected row stops EVERYTHING behind it. Found live
+# 2026-08-17: one row had failed 2,520 times since 2026-08-13 with HTTP 409
+# `entry_mutated` (the server already holds that stable event id with different
+# bytes, so the local copy can never be accepted) and had blocked 3,709 rows
+# for four days, silently. Retrying a permanent rejection forever is not
+# durability — it is a stall.
+#
+# A terminal row moves HERE and leaves the queue, so ordering is preserved for
+# everything still deliverable. It is never deleted: the exact envelope stays
+# for inspection, because zero data loss is the outbox's whole contract.
+_V23_CODING_SESSION_BRIDGE_QUARANTINE = """
+CREATE TABLE IF NOT EXISTS coding_session_bridge_quarantine (
+    id               INTEGER PRIMARY KEY,
+    envelope_json    TEXT NOT NULL,
+    envelope_sha256  TEXT NOT NULL,
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    http_status      INTEGER,
+    last_error       TEXT,
+    original_created_at TEXT,
+    quarantined_at   TEXT NOT NULL DEFAULT (datetime('now'))
+)
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -885,4 +929,6 @@ MIGRATIONS: list[tuple[int, str]] = [
     (19, _V19_CODING_SESSION_BRIDGE_OUTBOX),
     (20, _V20_CLAUDE_SESSION_METADATA_SENT),
     (21, _V21_CLAUDE_SESSION_TITLE_PUSHED),
+    (22, _V22_CLAUDE_CAPTURE_BACKFILL),
+    (23, _V23_CODING_SESSION_BRIDGE_QUARANTINE),
 ]

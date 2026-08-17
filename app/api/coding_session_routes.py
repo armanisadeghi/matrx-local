@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from app.api.remote_auth import headers_indicate_tunnel
 from app.services.coding_sessions import (
     BridgeMutationConflict,
+    CaptureReconcileBlocked,
+    get_claude_capture_reconciler,
     get_coding_session_bridge_outbox,
 )
 from app.services.coding_sessions.models import (
@@ -151,3 +153,28 @@ async def sync_claude_labels(
 async def retry_pending_claude_history() -> dict[str, object]:
     """Retry queued history copies explicitly after the user repairs the cause."""
     return await ClaudeHistoryImporter().retry_pending()
+
+
+@router.get("/claude/capture/status")
+async def claude_capture_status() -> dict[str, object]:
+    """Report the capture reconciler: enabled, running, and recent backfills."""
+    return await get_claude_capture_reconciler().status()
+
+
+@router.post("/claude/capture/reconcile", status_code=status.HTTP_202_ACCEPTED)
+async def reconcile_claude_capture(
+    dry_run: bool = Query(default=False),
+) -> dict[str, object]:
+    """Run one capture-reconcile pass now instead of waiting for the timer.
+
+    Backfills only sessions from AFTER the owner's first binding — history from
+    before they ever mirrored anything stays behind the explicit
+    `Review local history` door. `dry_run` reports the diff and enqueues nothing.
+    """
+    try:
+        return await get_claude_capture_reconciler().reconcile(dry_run=dry_run)
+    except CaptureReconcileBlocked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.reason,
+        ) from exc

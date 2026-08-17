@@ -67,6 +67,68 @@ daemon, service, or database.
 - The task is registered as `coding_session_bridge` in the existing launcher
   registry and stops before SQLite closes. It owns no subprocess.
 
+### 🚨 THE POISON-ROW RULE — ordered delivery plus infinite retry means STOP
+
+Strict ordering is deliberate and correct. Retrying until success is deliberate
+and correct. **Together they mean one permanently-rejected envelope halts every
+row behind it, forever, with nothing surfacing it.** Found live 2026-08-17: a
+single row had failed **2,520 times since 2026-08-13** with HTTP 409
+`entry_mutated` and had blocked **3,709 rows for four days** — a second silent
+capture outage sitting underneath the first one.
+
+`entry_mutated` is definitionally terminal: the server already holds that
+stable event id with DIFFERENT bytes, so attempt 2,521 fails exactly like
+attempt 1. A terminal rejection now moves the row into
+`coding_session_bridge_quarantine` and the queue advances.
+
+- **Terminal immediately:** an error code in `_TERMINAL_ERROR_CODES`.
+- **Terminal only after `_QUARANTINE_AFTER_ATTEMPTS`:** a bare 400/409/422. A
+  proxy or a mid-deploy server emits those transiently, and dropping a row
+  early would be real data loss.
+- **Never terminal:** offline, or any 5xx. The server has refused nothing.
+- **The envelope is PRESERVED, never deleted** — zero data loss is this
+  outbox's contract, and a refused row is exactly what a human needs to see.
+- **Quarantine logs at ERROR and `status()` reports a `quarantined` count.** A
+  non-zero count means real events are permanently absent from the platform.
+
+## Automatic capture reconciliation — backfilling what the hooks lost
+
+`capture_reconciler.py` closes the hole a non-blocking hook leaves. Every Claude
+Code hook rides the plugin's already-connected MCP session, an MCP hook can
+never initiate OAuth, and Claude treats hook failure as **non-blocking** — so a
+dropped connection stops mirroring permanently and silently (23.5 hours lost on
+2026-08-16; a live diff on 2026-08-17 then found **160 of the 200 most recent
+local sessions had never reached the platform at all**).
+
+**This is not a second transport.** The reconciler runs the diff a human
+otherwise runs by hand: `GET /coding-sessions/sessions` for what the platform
+holds, `ClaudeHistoryImporter.preview()` for what is on disk, and the existing
+`import_selected` → the existing outbox for whatever is missing. Every
+byte-hashing, account-identity, and conflict rule stays the importer's.
+
+- 🚨 **THE ERA RULE — the consent boundary.** Only sessions whose local activity
+  falls at or after the owner's **earliest existing binding** are backfilled:
+  the era in which they had already opted into continuous mirroring and it
+  simply failed. An owner with **no bindings at all gets nothing** — a
+  first-time user's whole history is never swept up — and pre-install sessions
+  stay local forever. Never widen this without Arman's ruling.
+- **Both identity forms are matched.** A hook binding stores Claude's RAW
+  session UUID; a native import stores the `claude-sdk:<digest>:<b64>`
+  composite. Checking only one form re-uploads everything on every pass.
+- **Bounded per pass:** at most `MAX_SELECTED_SESSIONS`, under
+  `BATCH_BYTE_BUDGET` (half the importer's cap), oldest-first so a backlog
+  drains deterministically. The byte budget exists so one huge transcript
+  cannot fail a batch and burn the retry budget of nine innocent sessions.
+- **Bounded per session:** `claude_capture_backfill` counts attempts; after
+  `MAX_ATTEMPTS` a session is left alone with its error preserved. A CHANGED
+  `source_revision` resets the count — more writing is a new input, not the
+  same failure repeating.
+- **A backfill logs at WARNING, not INFO.** It firing means the hook path lost
+  data, which is a defect upstream, not routine housekeeping.
+- Routes: `GET /coding-session/claude/capture/status`,
+  `POST /coding-session/claude/capture/reconcile?dry_run=true`. Task:
+  `claude_capture_reconciler` in the launcher registry.
+
 ## Raw-ledger boundary
 
 This outbox is not the cloud raw ledger and not part of generic chat mirror

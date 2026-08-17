@@ -336,3 +336,59 @@ model once that package version is published and consumed here.
   drift (including preserved size/mtime), bounded giant lines, symlink refusal, duplicate project
   UUID separation, duplicate entry UUID refusal, deterministic cross-machine v2 account-key
   derivation, and masked-label safety (only the masked label may carry an `@`).
+
+## The LOCAL Claude Code runtime — start/resume/cancel/stream on this machine
+
+`local_runtime.py` is the desktop half of the managed provider-runtime story
+(the hosted half is aidream's sandbox-gated `claude_managed_runtime.py`). It
+drives the official Claude Agent SDK against **the user's OWN installed
+`claude` and subscription login** — `cli_path` is always the user's binary, no
+`CLAUDE_CONFIG_DIR` override, and `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/
+`ANTHROPIC_BASE_URL` (+ Bedrock/Vertex switches) are BLANKED in the child env
+because the CLI silently prefers an inherited key over the claude.ai login
+(observed live). A runtime session is therefore a first-class Claude Code
+session: it writes the real `~/.claude/projects/<slug>/<id>.jsonl`, shows up in
+Claude Code's own UI, and stays locally `--resume`-able.
+
+- **Persistence is the EXISTING import pipeline — deliberately not a second
+  transport and not the SDK `session_store` seam.** After each completed turn
+  and at settle, the runtime runs a targeted
+  `ClaudeHistoryImporter.import_selected` pass for this one session. Exact
+  JSONL bytes become `append_native` batches in the durable outbox → production
+  `chat.coding_session` as fidelity=native, origin=matrx_local, with account
+  identity and Claude's own label riding along. A pass that conflicts because
+  Claude wrote mid-hash simply defers to the next turn boundary (the capture
+  reconciler closes any residual gap). Live tokens stream over the local SSE
+  seam; the cloud ledger advances at turn boundaries — that is the honest v1
+  granularity and the UI says so.
+- **`setting_sources=["project","local"]`** — the repo's CLAUDE.md loads;
+  user-level settings are excluded ON PURPOSE so the AI Matrx plugin's hooks
+  cannot fire inside a runtime session and mint a second (event_mirror, raw
+  UUID) binding beside the native ledger.
+- **The workspace allowlist is the safety boundary.** Roots from setting
+  `claude_runtime_workspace_roots` (default `~/code`); each folder must be
+  approved once (`claude_runtime_approved_folders`, persisted). Approval is
+  loopback-only — a physical-presence decision made in the desktop app, never
+  remotely.
+- **Resume is capability-gated truth.** `resumable()` answers only from
+  Claude's own local store (transcript file present + workspace still exists).
+  SEND is RESUME: a follow-up turn is a native resume with a new prompt.
+- **The cloud→local relay is the EXISTING per-user Supabase Broadcast bridge
+  channel** (`matrx-local-bridge:<user_id>` → `cross_component_router` →
+  `invoke_command`): `coding_runtime.{capabilities,start,status,cancel,
+  resumable}` in `app/api/coding_runtime_handlers.py`, the same registry that
+  already carries the ~80-tool dispatcher. No new service, database, or
+  inbound port. The browser client is matrx-frontend
+  `features/ai-work/lib/matrxLocalRuntime.ts`.
+- Loopback HTTP routes for the desktop UI: `/coding-session/runtime/*`
+  (capabilities, approvals, start, status, cancel, resumable, SSE `/events`).
+  Desktop surface: `AgentRuntimeCard` on the Claude Code history page.
+- Engine shutdown interrupts active runs (Hard Rule 0, wired in `app/main.py`).
+
+Verification: `tests/unit/test_local_claude_runtime.py` (allowlist/approval
+gates, resume truth, a REAL importer→outbox mirror pass) and
+`scripts/_verify_local_claude_runtime_e2e.py` — the production proof run
+2026-08-17: START/STREAM → native binding + canonical conversation in
+production (`fidelity=native`, marker text projected), NATIVE RESUME appending
+to the same binding (entries 10→17, history marker repeated), CANCEL settling
+as `cancelled`, outbox drained to zero with validated receipts.

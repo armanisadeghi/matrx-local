@@ -332,6 +332,8 @@ args = [
     "--hidden-import", "uvicorn.lifespan.on",
     "--hidden-import", "httptools",
     "--hidden-import", "python_multipart",
+    "--hidden-import", "claude_agent_sdk",
+    "--hidden-import", "mcp",
     "--hidden-import", "multipart",
     "--hidden-import", "pydantic",
     "--hidden-import", "fastapi",

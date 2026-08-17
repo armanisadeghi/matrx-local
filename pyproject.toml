@@ -24,6 +24,11 @@ dependencies = [
     "tqdm>=4.67.3",
     # HTTP client (scraping proxy, file transfer)
     "httpx",
+    # LOCAL Claude Code runtime (app/services/coding_sessions/local_runtime.py):
+    # official Claude Agent SDK drives the USER'S OWN installed `claude` CLI +
+    # subscription login (cli_path is always set; the SDK's bundled CLI is not
+    # relied on and its data is not collected into the frozen sidecar).
+    "claude-agent-sdk>=0.2.134",
     # Clipboard
     "pyperclip",
     # Notifications

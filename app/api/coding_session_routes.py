@@ -27,6 +27,11 @@ from app.services.coding_sessions.title_sync import (
     ClaudeSessionMetadataReconciler,
     ClaudeTitleSyncBlocked,
 )
+from app.services.coding_sessions.local_runtime import (
+    LocalRuntimeRefused,
+    LocalRuntimeStartRequest,
+    get_local_claude_runtime,
+)
 
 router = APIRouter(prefix="/coding-session", tags=["coding-session-bridge"])
 
@@ -178,3 +183,126 @@ async def reconcile_claude_capture(
             status_code=status.HTTP_409_CONFLICT,
             detail=exc.reason,
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# LOCAL Claude Code runtime — start/stream/cancel/resume on this machine.
+# The desktop UI reaches these over loopback; the browser reaches the same
+# operations through the Supabase Broadcast bridge channel (see
+# app/api/coding_runtime_handlers.py). Mutating routes are loopback-only:
+# launching an agent with shell access on this machine over the tunnel
+# without an auth story would be wrong, and the Broadcast channel is the
+# sanctioned remote door.
+# ---------------------------------------------------------------------------
+
+
+def _require_loopback(request: Request) -> None:
+    peer_host = request.client.host if request.client else None
+    if headers_indicate_tunnel(request.headers) or not _is_loopback_host(peer_host):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This runtime route is available on direct loopback only",
+        )
+
+
+def _refused(exc: LocalRuntimeRefused) -> HTTPException:
+    status_code = (
+        status.HTTP_404_NOT_FOUND
+        if exc.code == "unknown_runtime"
+        else status.HTTP_409_CONFLICT
+    )
+    return HTTPException(
+        status_code=status_code, detail={"code": exc.code, "detail": exc.detail}
+    )
+
+
+@router.get("/runtime/capabilities")
+async def runtime_capabilities() -> dict[str, object]:
+    """Truthful local-runtime availability, allowlist, and active runs."""
+    return await get_local_claude_runtime().capabilities()
+
+
+@router.get("/runtime/approvals")
+async def runtime_approvals() -> dict[str, object]:
+    return get_local_claude_runtime().list_approved()
+
+
+@router.post("/runtime/approvals")
+async def approve_runtime_folder(request: Request, body: dict[str, str]) -> dict[str, object]:
+    """One-click persisted approval of a workspace folder — loopback only."""
+    _require_loopback(request)
+    folder = body.get("folder")
+    if not isinstance(folder, str) or not folder:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="folder is required",
+        )
+    try:
+        return get_local_claude_runtime().approve_folder(folder)
+    except LocalRuntimeRefused as exc:
+        raise _refused(exc) from exc
+
+
+@router.delete("/runtime/approvals")
+async def revoke_runtime_folder(request: Request, folder: str = Query()) -> dict[str, object]:
+    _require_loopback(request)
+    return get_local_claude_runtime().revoke_folder(folder)
+
+
+@router.post("/runtime/start", status_code=status.HTTP_202_ACCEPTED)
+async def start_runtime_session(
+    request: Request, body: LocalRuntimeStartRequest
+) -> dict[str, object]:
+    """Start (or natively resume) a Claude Code session on this machine."""
+    _require_loopback(request)
+    try:
+        return await get_local_claude_runtime().start(body)
+    except LocalRuntimeRefused as exc:
+        raise _refused(exc) from exc
+
+
+@router.get("/runtime/status")
+async def runtime_status(runtime_id: str | None = Query(default=None)) -> dict[str, object]:
+    try:
+        return get_local_claude_runtime().status(runtime_id)
+    except LocalRuntimeRefused as exc:
+        raise _refused(exc) from exc
+
+
+@router.post("/runtime/{runtime_id}/cancel")
+async def cancel_runtime_session(request: Request, runtime_id: str) -> dict[str, object]:
+    _require_loopback(request)
+    try:
+        return await get_local_claude_runtime().cancel(runtime_id)
+    except LocalRuntimeRefused as exc:
+        raise _refused(exc) from exc
+
+
+@router.get("/runtime/resumable")
+async def runtime_resumable(provider_session_id: str = Query()) -> dict[str, object]:
+    """Native-resume verdict from Claude's OWN local store — never a guess."""
+    return await get_local_claude_runtime().resumable(provider_session_id)
+
+
+@router.get("/runtime/{runtime_id}/events")
+async def runtime_events(runtime_id: str):
+    """SSE stream: buffered replay, then live SDK events until the run ends."""
+    from fastapi.responses import StreamingResponse
+    import json as _json
+
+    runtime = get_local_claude_runtime()
+    try:
+        runtime.status(runtime_id)
+    except LocalRuntimeRefused as exc:
+        raise _refused(exc) from exc
+
+    async def _stream():
+        async for event in runtime.subscribe(runtime_id):
+            yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+        yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

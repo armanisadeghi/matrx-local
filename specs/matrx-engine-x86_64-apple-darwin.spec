@@ -144,6 +144,11 @@ a = Analysis(
         'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto',
         'uvicorn.lifespan', 'uvicorn.lifespan.on',
         'httptools', 'python_multipart', 'multipart',
+        # Local Claude Code runtime — official SDK (drives the user's own
+        # installed `claude`; the SDK's bundled CLI data is deliberately NOT
+        # collected). `mcp` is the SDK's own dependency tree.
+        'claude_agent_sdk', 'mcp', 'mcp.types', 'mcp.server', 'mcp.server.fastmcp',
+        'mcp.client', 'mcp.shared', 'sniffio', 'anyio',
         'pydantic', 'fastapi', 'websockets', 'httpx',
         'curl_cffi', 'bs4', 'lxml', 'selectolax', 'asyncpg', 'cachetools',
         'tldextract', 'markdownify', 'tabulate', 'fitz', 'pytesseract',

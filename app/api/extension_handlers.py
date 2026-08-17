@@ -242,3 +242,12 @@ async def handle_tool(args: Dict[str, Any], req: Optional[Request]) -> Dict[str,
         "ok": True,
         "result": result_payload,
     }
+
+
+# ---------------------------------------------------------------------------
+# Additional command families registered from their own modules. Imported at
+# the END so `register` exists; each module self-registers on import. The
+# local Claude Code runtime commands ride the same registry so the Supabase
+# Broadcast bridge channel (the existing cloud→local relay) can reach them.
+# ---------------------------------------------------------------------------
+from app.api import coding_runtime_handlers  # noqa: E402,F401  (self-registers)

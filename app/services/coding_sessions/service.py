@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -20,7 +21,11 @@ from app.services.aidream.client import (
     AIDreamOfflineError,
     get_aidream_client,
 )
-from app.services.coding_sessions.models import BridgeRequest, LocalBridgeReceipt
+from app.services.coding_sessions.models import (
+    BridgeProvider,
+    BridgeRequest,
+    LocalBridgeReceipt,
+)
 from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import TokenRepo
 
@@ -53,6 +58,131 @@ _TERMINAL_ERROR_CODES = frozenset({"entry_mutated"})
 # them transiently and dropping a row early would be real data loss.
 _TERMINAL_STATUSES = frozenset({400, 409, 422})
 _QUARANTINE_AFTER_ATTEMPTS = 25
+
+_PROVIDER_CAPABILITIES: dict[BridgeProvider, dict[str, Any]] = {
+    BridgeProvider.CLAUDE_CODE: {
+        "event_mirror": True,
+        "historical_import": True,
+        "title_sync": True,
+        "local_runtime": True,
+        "native_resume": True,
+        "participant_conversations": False,
+        "limitations": [],
+    },
+    BridgeProvider.CODEX: {
+        "event_mirror": True,
+        "historical_import": False,
+        "title_sync": False,
+        "local_runtime": False,
+        "native_resume": False,
+        "participant_conversations": False,
+        "limitations": [
+            "Historical import, title sync, and local runtime are not implemented yet."
+        ],
+    },
+    BridgeProvider.CURSOR: {
+        "event_mirror": True,
+        "historical_import": False,
+        "title_sync": False,
+        "local_runtime": False,
+        "native_resume": False,
+        "participant_conversations": False,
+        "limitations": [
+            "Capture is limited to events the Cursor host exposes; full historical host fidelity is not available."
+        ],
+    },
+    BridgeProvider.VSCODE: {
+        "event_mirror": False,
+        "historical_import": False,
+        "title_sync": False,
+        "local_runtime": False,
+        "native_resume": False,
+        "participant_conversations": True,
+        "limitations": [
+            "Only AI Matrx @matrx participant conversations are available; unrelated VS Code chat history is outside the extension API boundary."
+        ],
+    },
+}
+
+_SOURCE_SQL = """CASE
+    WHEN json_valid(envelope_json) THEN COALESCE(
+        json_extract(envelope_json, '$.source_metadata.source_kind'),
+        json_extract(envelope_json, '$.origin'),
+        'unspecified'
+    )
+    ELSE 'unknown'
+END"""
+
+
+def _delivery_dimensions(request: BridgeRequest) -> tuple[str, str, str]:
+    """Return bounded, non-identifying aggregation dimensions for status."""
+    source = (
+        request.source_metadata.source_kind
+        if request.source_metadata is not None
+        else request.origin.value
+        if request.origin is not None
+        else "unspecified"
+    )
+    return request.provider.value, request.action.value, source
+
+
+def _safe_delivery_error(raw_error: Any) -> dict[str, str] | None:
+    """Reduce a persisted failure to a display-safe operational explanation.
+
+    Server bodies can echo arbitrary request context. The status route must
+    never turn the durable raw-event store into an accidental transcript or
+    path disclosure, so no unrecognized error text leaves the engine.
+    """
+    if not isinstance(raw_error, str) or not raw_error:
+        return None
+    known = {
+        "cloud_participation_disabled": (
+            "cloud_participation_disabled",
+            "Cloud delivery is disabled for this local development engine.",
+        ),
+        "no_active_user_jwt": (
+            "sign_in_required",
+            "Sign in to AI Matrx to deliver queued coding-session events.",
+        ),
+        "aidream_server_unconfigured": (
+            "cloud_server_unavailable",
+            "The AI Matrx cloud service is not configured for this app.",
+        ),
+    }
+    if raw_error in known:
+        code, message = known[raw_error]
+        return {"code": code, "message": message}
+    if "entry_mutated" in raw_error:
+        return {
+            "code": "entry_mutated",
+            "message": "The cloud already has this event identity with different content.",
+        }
+    if "SHA-256 integrity check" in raw_error:
+        return {
+            "code": "local_integrity_failure",
+            "message": "A queued event failed its local integrity check.",
+        }
+    if "not valid JSON" in raw_error or "no longer satisfies schema" in raw_error:
+        return {
+            "code": "invalid_local_envelope",
+            "message": "A queued event no longer satisfies the bridge contract.",
+        }
+    if "bridge acknowledgement" in raw_error:
+        return {
+            "code": "invalid_cloud_acknowledgement",
+            "message": "The cloud response did not prove that the queued event was stored.",
+        }
+    status_match = re.search(r"HTTP\s+(\d{3})", raw_error)
+    if status_match:
+        status_code = status_match.group(1)
+        return {
+            "code": f"cloud_http_{status_code}",
+            "message": f"Cloud delivery returned HTTP {status_code}; the event remains local.",
+        }
+    return {
+        "code": "cloud_delivery_failed",
+        "message": "Cloud delivery failed; the event remains local and will be retried.",
+    }
 
 
 def _is_terminal_rejection(exc: Exception, attempts: int) -> bool:
@@ -272,6 +402,7 @@ class CodingSessionBridgeOutbox:
             dedupe_key=dedupe_key,
             serialized=serialized,
             digest=digest,
+            dimensions=_delivery_dimensions(request),
         )
 
         pending = await self.pending_count()
@@ -286,10 +417,17 @@ class CodingSessionBridgeOutbox:
         """Atomically persist a bounded import plan before reporting success."""
         if not requests:
             raise ValueError("at least one bridge request is required")
-        prepared: list[tuple[str | None, str, str]] = []
+        prepared: list[tuple[str | None, str, str, tuple[str, str, str]]] = []
         for request in requests:
             _payload, serialized, digest = _canonical_envelope(request)
-            prepared.append((_stable_delivery_key(request, digest), serialized, digest))
+            prepared.append(
+                (
+                    _stable_delivery_key(request, digest),
+                    serialized,
+                    digest,
+                    _delivery_dimensions(request),
+                )
+            )
         ids, duplicates = await self._commit_enqueue_many(prepared)
         pending = await self.pending_count()
         self.wake()
@@ -302,7 +440,7 @@ class CodingSessionBridgeOutbox:
 
     async def _commit_enqueue_many(
         self,
-        prepared: list[tuple[str | None, str, str]],
+        prepared: list[tuple[str | None, str, str, tuple[str, str, str]]],
     ) -> tuple[list[int], int]:
         ids: list[int] = []
         duplicates = 0
@@ -312,7 +450,7 @@ class CodingSessionBridgeOutbox:
             await connection.execute("PRAGMA synchronous=FULL")
             await connection.execute("BEGIN IMMEDIATE")
             try:
-                for dedupe_key, serialized, digest in prepared:
+                for dedupe_key, serialized, digest, dimensions in prepared:
                     if dedupe_key is None:
                         cursor = await connection.execute(
                             """INSERT INTO coding_session_bridge_outbox (
@@ -330,7 +468,13 @@ class CodingSessionBridgeOutbox:
                             (dedupe_key, serialized, digest),
                         )
                     if cursor.rowcount == 1:
-                        ids.append(int(cursor.lastrowid))
+                        receipt_id = int(cursor.lastrowid)
+                        ids.append(receipt_id)
+                        await self._record_enqueue_activity(
+                            connection,
+                            dimensions=dimensions,
+                            receipt_id=receipt_id,
+                        )
                         continue
                     existing_cursor = await connection.execute(
                         """SELECT id, envelope_sha256
@@ -357,6 +501,7 @@ class CodingSessionBridgeOutbox:
         dedupe_key: str | None,
         serialized: str,
         digest: str,
+        dimensions: tuple[str, str, str],
     ) -> tuple[int, bool]:
         """Use a private, FULL-sync transaction for the durable-ack boundary.
 
@@ -394,6 +539,11 @@ class CodingSessionBridgeOutbox:
                 if cursor.rowcount == 1:
                     outbox_id = int(cursor.lastrowid)
                     duplicate = False
+                    await self._record_enqueue_activity(
+                        connection,
+                        dimensions=dimensions,
+                        receipt_id=outbox_id,
+                    )
                 else:
                     existing_cursor = await connection.execute(
                         """SELECT id, envelope_sha256
@@ -417,6 +567,27 @@ class CodingSessionBridgeOutbox:
             except BaseException:
                 await connection.rollback()
                 raise
+
+    @staticmethod
+    async def _record_enqueue_activity(
+        connection: aiosqlite.Connection,
+        *,
+        dimensions: tuple[str, str, str],
+        receipt_id: int,
+    ) -> None:
+        """Update the bounded activity aggregate inside the enqueue commit."""
+        provider, action, source = dimensions
+        await connection.execute(
+            """INSERT INTO coding_session_bridge_delivery_activity (
+                   provider, action, source,
+                   last_enqueued_at, last_enqueued_receipt_id, updated_at
+               ) VALUES (?, ?, ?, datetime('now'), ?, datetime('now'))
+               ON CONFLICT(provider, action, source) DO UPDATE SET
+                   last_enqueued_at=excluded.last_enqueued_at,
+                   last_enqueued_receipt_id=excluded.last_enqueued_receipt_id,
+                   updated_at=excluded.updated_at""",
+            (provider, action, source, receipt_id),
+        )
 
     async def pending_count(self) -> int:
         row = await self._db.fetchone(
@@ -447,7 +618,27 @@ class CodingSessionBridgeOutbox:
                      ) = 'claude_local_jsonl'
                ORDER BY id LIMIT 1"""
         )
-        return dict(row) if row else None
+        if row is None:
+            return None
+        result = dict(row)
+        safe_error = _safe_delivery_error(result.pop("last_error", None))
+        result["error"] = safe_error
+        # Compatibility for the existing history card; this is the same
+        # redacted object, never the persisted raw server text.
+        result["last_error"] = safe_error
+        return result
+
+    async def quarantined_native_import_count(self) -> int:
+        row = await self._db.fetchone(
+            """SELECT COUNT(*) AS count
+               FROM coding_session_bridge_quarantine
+               WHERE json_valid(envelope_json)
+                 AND json_extract(envelope_json, '$.action') = 'append_native'
+                 AND json_extract(
+                       envelope_json, '$.source_metadata.source_kind'
+                     ) = 'claude_local_jsonl'"""
+        )
+        return int(row["count"]) if row else 0
 
     async def retry_pending_native_imports(self) -> dict[str, int]:
         """Make queued Claude-history copies immediately eligible for retry."""
@@ -496,19 +687,240 @@ class CodingSessionBridgeOutbox:
                 raise
         return {"discarded": discarded, "pending": await self.pending_count()}
 
-    async def status(self) -> dict[str, Any]:
-        row = await self._db.fetchone(
-            """SELECT id, attempts, next_attempt_at, last_error, created_at
-               FROM coding_session_bridge_outbox ORDER BY id LIMIT 1"""
+    async def _queue_breakdown(self, table: str) -> dict[str, Any]:
+        if table not in {
+            "coding_session_bridge_outbox",
+            "coding_session_bridge_quarantine",
+        }:
+            raise ValueError("unsupported coding-session delivery table")
+        rows = await self._db.fetchall(
+            f"""SELECT
+                    CASE WHEN json_valid(envelope_json)
+                         THEN COALESCE(json_extract(envelope_json, '$.provider'), 'unknown')
+                         ELSE 'unknown' END AS provider,
+                    CASE WHEN json_valid(envelope_json)
+                         THEN COALESCE(json_extract(envelope_json, '$.action'), 'unknown')
+                         ELSE 'unknown' END AS action,
+                    {_SOURCE_SQL} AS source,
+                    COUNT(*) AS count
+                FROM {table}
+                GROUP BY provider, action, source"""
         )
+        by_provider = {provider.value: 0 for provider in BridgeProvider}
+        by_action: dict[str, int] = {}
+        by_source: dict[str, int] = {}
+        dimensions: list[dict[str, Any]] = []
+        total = 0
+        for row in rows:
+            provider = str(row["provider"])
+            action = str(row["action"])
+            source = str(row["source"])
+            count = int(row["count"])
+            total += count
+            by_provider[provider] = by_provider.get(provider, 0) + count
+            by_action[action] = by_action.get(action, 0) + count
+            by_source[source] = by_source.get(source, 0) + count
+            dimensions.append(
+                {
+                    "provider": provider,
+                    "action": action,
+                    "source": source,
+                    "count": count,
+                }
+            )
+        return {
+            "total": total,
+            "by_provider": by_provider,
+            "by_action": by_action,
+            "by_source": by_source,
+            "dimensions": dimensions,
+        }
+
+    @staticmethod
+    def _enqueue_summary(row: Any) -> dict[str, Any] | None:
+        if row["last_enqueued_at"] is None:
+            return None
+        return {
+            "receipt_id": int(row["last_enqueued_receipt_id"]),
+            "at": str(row["last_enqueued_at"]),
+            "provider": str(row["provider"]),
+            "action": str(row["action"]),
+            "source": str(row["source"]),
+        }
+
+    @staticmethod
+    def _acknowledgement_summary(row: Any) -> dict[str, Any] | None:
+        if row["last_acknowledged_at"] is None:
+            return None
+        return {
+            "receipt_id": int(row["last_acknowledged_receipt_id"]),
+            "at": str(row["last_acknowledged_at"]),
+            "provider": str(row["provider"]),
+            "action": str(row["action"]),
+            "source": str(row["source"]),
+            "accepted": int(row["last_acknowledged_accepted"] or 0),
+            "duplicates": int(row["last_acknowledged_duplicates"] or 0),
+            "fidelity": (
+                str(row["last_acknowledged_fidelity"])
+                if row["last_acknowledged_fidelity"] is not None
+                else None
+            ),
+        }
+
+    async def delivery_status(self) -> dict[str, Any]:
+        """Return provider-neutral queue truth without any stored envelope data."""
+        pending = await self._queue_breakdown("coding_session_bridge_outbox")
+        quarantine = await self._queue_breakdown("coding_session_bridge_quarantine")
+        activity_rows = await self._db.fetchall(
+            """SELECT * FROM coding_session_bridge_delivery_activity
+               ORDER BY provider, action, source"""
+        )
+
+        providers: dict[str, dict[str, Any]] = {
+            provider.value: {
+                "capabilities": dict(_PROVIDER_CAPABILITIES[provider]),
+                "pending": 0,
+                "quarantined": 0,
+                "by_action": {},
+                "by_source": {},
+                "last_enqueue": None,
+                "last_acknowledgement": None,
+            }
+            for provider in BridgeProvider
+        }
+
+        def _dimension_cell(container: dict[str, Any], key: str) -> dict[str, Any]:
+            return container.setdefault(
+                key,
+                {
+                    "pending": 0,
+                    "quarantined": 0,
+                    "last_enqueue": None,
+                    "last_acknowledgement": None,
+                },
+            )
+
+        def _set_latest(
+            container: dict[str, Any], key: str, summary: dict[str, Any]
+        ) -> None:
+            current = container.get(key)
+            if current is None or summary["receipt_id"] > current["receipt_id"]:
+                container[key] = summary
+
+        for state_name, breakdown in (
+            ("pending", pending),
+            ("quarantined", quarantine),
+        ):
+            for item in breakdown.pop("dimensions"):
+                provider_state = providers.get(item["provider"])
+                if provider_state is None:
+                    continue
+                count = int(item["count"])
+                provider_state[state_name] += count
+                _dimension_cell(provider_state["by_action"], item["action"])[
+                    state_name
+                ] += count
+                _dimension_cell(provider_state["by_source"], item["source"])[
+                    state_name
+                ] += count
+
+        last_enqueue: dict[str, Any] | None = None
+        last_acknowledgement: dict[str, Any] | None = None
+        for row in activity_rows:
+            provider_state = providers.get(str(row["provider"]))
+            if provider_state is None:
+                continue
+            enqueue = self._enqueue_summary(row)
+            acknowledgement = self._acknowledgement_summary(row)
+            action_state = _dimension_cell(
+                provider_state["by_action"], str(row["action"])
+            )
+            source_state = _dimension_cell(
+                provider_state["by_source"], str(row["source"])
+            )
+            if enqueue is not None:
+                _set_latest(action_state, "last_enqueue", enqueue)
+                _set_latest(source_state, "last_enqueue", enqueue)
+                if (
+                    provider_state["last_enqueue"] is None
+                    or enqueue["receipt_id"]
+                    > provider_state["last_enqueue"]["receipt_id"]
+                ):
+                    provider_state["last_enqueue"] = enqueue
+                if (
+                    last_enqueue is None
+                    or enqueue["receipt_id"] > last_enqueue["receipt_id"]
+                ):
+                    last_enqueue = enqueue
+            if acknowledgement is not None:
+                _set_latest(action_state, "last_acknowledgement", acknowledgement)
+                _set_latest(source_state, "last_acknowledgement", acknowledgement)
+                if (
+                    provider_state["last_acknowledgement"] is None
+                    or acknowledgement["receipt_id"]
+                    > provider_state["last_acknowledgement"]["receipt_id"]
+                ):
+                    provider_state["last_acknowledgement"] = acknowledgement
+                if (
+                    last_acknowledgement is None
+                    or acknowledgement["receipt_id"]
+                    > last_acknowledgement["receipt_id"]
+                ):
+                    last_acknowledgement = acknowledgement
+
+        head = await self._db.fetchone(
+            f"""SELECT id, attempts, next_attempt_at, last_error, created_at,
+                       CASE WHEN json_valid(envelope_json)
+                            THEN COALESCE(json_extract(envelope_json, '$.provider'), 'unknown')
+                            ELSE 'unknown' END AS provider,
+                       CASE WHEN json_valid(envelope_json)
+                            THEN COALESCE(json_extract(envelope_json, '$.action'), 'unknown')
+                            ELSE 'unknown' END AS action,
+                       {_SOURCE_SQL} AS source
+                FROM coding_session_bridge_outbox ORDER BY id LIMIT 1"""
+        )
+        head_blocker = None
+        if head is not None:
+            next_attempt_at = float(head["next_attempt_at"] or 0)
+            head_blocker = {
+                "receipt_id": int(head["id"]),
+                "provider": str(head["provider"]),
+                "action": str(head["action"]),
+                "source": str(head["source"]),
+                "attempts": int(head["attempts"]),
+                "next_attempt_at": next_attempt_at,
+                "retry_in_seconds": max(0.0, next_attempt_at - time.time()),
+                "created_at": str(head["created_at"]),
+                "error": _safe_delivery_error(head["last_error"]),
+            }
+
+        return {
+            "schema_version": 2,
+            "publisher": {
+                "active": self.active,
+                "cloud_enabled": self._cloud_enabled,
+                "server_path": f"/api{_SERVER_PATH}",
+            },
+            "pending": pending,
+            "quarantine": quarantine,
+            "providers": providers,
+            "head_blocker": head_blocker,
+            "last_enqueue": last_enqueue,
+            "last_acknowledgement": last_acknowledgement,
+        }
+
+    async def status(self) -> dict[str, Any]:
+        """Compatibility status for existing callers plus the v2 facade."""
+        delivery = await self.delivery_status()
         return {
             "active": self.active,
             "cloud_enabled": self._cloud_enabled,
-            "pending": await self.pending_count(),
-            "oldest": dict(row) if row else None,
+            "pending": delivery["pending"]["total"],
+            "oldest": delivery["head_blocker"],
             # Non-zero means real events are permanently NOT in the platform.
-            "quarantined": await self.quarantined_count(),
+            "quarantined": delivery["quarantine"]["total"],
             "server_path": f"/api{_SERVER_PATH}",
+            "delivery": delivery,
         }
 
     async def sync_pending(self, *, limit: int = _MAX_BATCH) -> dict[str, Any]:
@@ -595,6 +1007,11 @@ class CodingSessionBridgeOutbox:
                     )
                     return {"sent": sent, "failed": 1, "blocked": None}
 
+                await self._record_delivery_acknowledgement(
+                    receipt_id=int(row["id"]),
+                    request=persisted_request,
+                    response=response,
+                )
                 await self._db.execute(
                     "DELETE FROM coding_session_bridge_outbox WHERE id = ?",
                     (int(row["id"]),),
@@ -602,6 +1019,46 @@ class CodingSessionBridgeOutbox:
                 await self._db.commit()
                 sent += 1
             return {"sent": sent, "failed": 0, "blocked": None}
+
+    async def _record_delivery_acknowledgement(
+        self,
+        *,
+        receipt_id: int,
+        request: BridgeRequest,
+        response: dict[str, Any],
+    ) -> None:
+        """Persist a bounded proof summary; never retain the server body."""
+        provider, action, source = _delivery_dimensions(request)
+        accepted = int(response.get("accepted", 0))
+        duplicates = int(response.get("duplicates", 0))
+        fidelity_value = response.get("fidelity")
+        fidelity = str(fidelity_value) if fidelity_value is not None else None
+        await self._db.execute(
+            """INSERT INTO coding_session_bridge_delivery_activity (
+                   provider, action, source,
+                   last_acknowledged_at, last_acknowledged_receipt_id,
+                   last_acknowledged_accepted, last_acknowledged_duplicates,
+                   last_acknowledged_fidelity, acknowledged_envelopes, updated_at
+               ) VALUES (?, ?, ?, datetime('now'), ?, ?, ?, ?, 1, datetime('now'))
+               ON CONFLICT(provider, action, source) DO UPDATE SET
+                   last_acknowledged_at=excluded.last_acknowledged_at,
+                   last_acknowledged_receipt_id=excluded.last_acknowledged_receipt_id,
+                   last_acknowledged_accepted=excluded.last_acknowledged_accepted,
+                   last_acknowledged_duplicates=excluded.last_acknowledged_duplicates,
+                   last_acknowledged_fidelity=excluded.last_acknowledged_fidelity,
+                   acknowledged_envelopes=
+                       coding_session_bridge_delivery_activity.acknowledged_envelopes + 1,
+                   updated_at=excluded.updated_at""",
+            (
+                provider,
+                action,
+                source,
+                receipt_id,
+                accepted,
+                duplicates,
+                fidelity,
+            ),
+        )
 
     async def _quarantine_head(self, row: Any, exc: Exception) -> None:
         """Move a permanently-rejected row aside so the queue can advance.

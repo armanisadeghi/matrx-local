@@ -933,16 +933,45 @@ class ClaudeHistoryImporter:
             outbox = get_coding_session_bridge_outbox()
         outbox_status = await outbox.status()
         pending_history_imports = await outbox.pending_native_import_count()
+        quarantined_history_imports = await outbox.quarantined_native_import_count()
         oldest_history_import = await outbox.oldest_native_import()
         sync = await self._sync_meta.get_last_sync("claude_history_import")
+        delivery = outbox_status["delivery"]
+        history_activity = delivery["providers"]["claude_code"]["by_source"].get(
+            "claude_local_jsonl", {}
+        )
+        last_enqueue = history_activity.get("last_enqueue")
+        last_acknowledgement = history_activity.get("last_acknowledgement")
+        if quarantined_history_imports:
+            delivery_state = "attention_required"
+        elif pending_history_imports:
+            delivery_state = "queued"
+        elif sync and sync.get("status") == "discarded":
+            delivery_state = "discarded"
+        elif last_acknowledgement is not None and (
+            last_enqueue is None
+            or last_acknowledgement["receipt_id"] >= last_enqueue["receipt_id"]
+        ):
+            delivery_state = "acknowledged"
+        else:
+            delivery_state = "idle"
         return {
             "schema_version": 1,
             "source": "claude_local_jsonl",
             "pending_outbox": outbox_status["pending"],
             "pending_history_imports": pending_history_imports,
+            "quarantined_outbox": outbox_status["quarantined"],
+            "quarantined_history_imports": quarantined_history_imports,
             "oldest_history_import": oldest_history_import,
             "oldest_pending": outbox_status["oldest"],
             "last_sync": sync,
+            "delivery": {
+                "state": delivery_state,
+                "queued_batches": pending_history_imports,
+                "quarantined_batches": quarantined_history_imports,
+                "last_enqueue": last_enqueue,
+                "last_acknowledgement": last_acknowledgement,
+            },
             "native_restore_available": False,
         }
 

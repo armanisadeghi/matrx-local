@@ -91,6 +91,37 @@ attempt 1. A terminal rejection now moves the row into
 - **Quarantine logs at ERROR and `status()` reports a `quarantined` count.** A
   non-zero count means real events are permanently absent from the platform.
 
+### Provider-neutral delivery status
+
+`GET /coding-session/status` is the one desktop-facing status facade for every
+bridge provider (`claude_code`, `codex`, `cursor`, and `vscode`). It reports:
+
+- whether the publisher task is active and cloud participation is enabled;
+- pending and quarantined totals grouped by provider, action, and source;
+- a row for every supported provider even when all of its counts are zero;
+- backend-owned capability flags for event mirror, historical import, title
+  sync, local runtime, native resume, and VS Code participant conversations,
+  plus provider limitations the UI can explain without hardcoded assumptions;
+- the safe queue head (provider/action/source, attempts, next retry, and a
+  redacted operational error); and
+- the last durable local enqueue and last validated cloud acknowledgement,
+  globally and per provider/action/source.
+
+Migration V24 stores those enqueue/acknowledgement summaries in the bounded
+`coding_session_bridge_delivery_activity` aggregate. It has one row per
+provider/action/source and never stores an envelope, provider session ID,
+project path, transcript, server response body, or raw error. An
+acknowledgement is written only after the existing strict BridgeResponse v1
+validation passes, in the same transaction that removes the durable outbox
+row. “Queued” therefore means local-only; “acknowledged” means aidream proved
+the receipt. Claude history status derives the same truth for the
+`claude_local_jsonl` source and includes its quarantine count instead of
+silently dropping it.
+
+The publisher remains globally FIFO in this implementation. The status facade
+makes cross-provider blocking visible, but changing scheduling/ordering is a
+separate contract change and is not part of V24.
+
 ## Automatic capture reconciliation — backfilling what the hooks lost
 
 `capture_reconciler.py` closes the hole a non-blocking hook leaves. Every Claude

@@ -50,6 +50,17 @@ def _is_loopback_host(host: str | None) -> bool:
     return bool(mapped and mapped.is_loopback)
 
 
+@router.get("/status")
+async def coding_session_delivery_status() -> dict[str, object]:
+    """Provider-neutral local capture and cloud-delivery truth.
+
+    Counts and acknowledgement summaries are safe aggregates. No command,
+    transcript, provider session id, project path, or raw server error is
+    returned from this route.
+    """
+    return await get_coding_session_bridge_outbox().delivery_status()
+
+
 @router.post(
     "/hooks",
     response_model=LocalBridgeReceipt,

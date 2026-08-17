@@ -12,7 +12,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.api.coding_session_routes import _is_loopback_host
-from app.services.aidream.client import AIDreamOfflineError
+from app.services.aidream.client import AIDreamError, AIDreamOfflineError
+from app.services.coding_sessions.claude_history import ClaudeHistoryImporter
 from app.services.coding_sessions.models import BridgeRequest
 from app.services.coding_sessions.service import (
     BridgeMutationConflict,
@@ -86,7 +87,12 @@ class BlockingClient(FakeClient):
         raise AssertionError("publisher cancellation did not stop the upload")
 
 
-def _hook(*, stable_id: str | None = "prompt-1", text: str = "hello") -> BridgeRequest:
+def _hook(
+    *,
+    stable_id: str | None = "prompt-1",
+    text: str = "hello",
+    provider: str = "claude_code",
+) -> BridgeRequest:
     event: dict[str, Any] = {
         "name": "UserPromptSubmit",
         "payload": {"prompt": text},
@@ -97,7 +103,7 @@ def _hook(*, stable_id: str | None = "prompt-1", text: str = "hello") -> BridgeR
         {
             "schema_version": 1,
             "action": "observe_hook",
-            "provider": "claude_code",
+            "provider": provider,
             "provider_session_id": "provider-session-1",
             "origin": "independent_hook",
             "stream_key": "main",
@@ -210,6 +216,176 @@ async def test_migration_creates_dedicated_local_outbox(
         "next_attempt_at",
         "last_error",
     }
+    activity_migration = await bridge_db.fetchone(
+        "SELECT version FROM _migrations WHERE version = 24"
+    )
+    assert activity_migration and activity_migration["version"] == 24
+    activity_columns = await bridge_db.fetchall(
+        "PRAGMA table_info(coding_session_bridge_delivery_activity)"
+    )
+    activity_column_names = {row["name"] for row in activity_columns}
+    assert activity_column_names >= {
+        "provider",
+        "action",
+        "source",
+        "last_enqueued_at",
+        "last_acknowledged_at",
+        "last_acknowledged_accepted",
+        "last_acknowledged_duplicates",
+    }
+    assert "envelope_json" not in activity_column_names
+    assert "payload" not in activity_column_names
+
+
+@pytest.mark.anyio
+async def test_provider_neutral_status_shows_codex_pending_and_quarantine_safely(
+    bridge_db: LocalDatabase,
+) -> None:
+    client = FakeClient(
+        [
+            AIDreamError(
+                409,
+                'HTTP 409: {"error":"entry_mutated",'
+                '"echo":"private prompt /Users/private/repo"}',
+            )
+        ]
+    )
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=client,
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    await service.enqueue(
+        _hook(provider="codex", stable_id="poison", text="private prompt")
+    )
+    await service.sync_pending()
+    await service.enqueue(
+        _hook(provider="codex", stable_id="waiting", text="second secret")
+    )
+
+    status = await service.delivery_status()
+
+    assert status["schema_version"] == 2
+    assert status["pending"]["total"] == 1
+    assert status["quarantine"]["total"] == 1
+    assert status["pending"]["by_provider"]["codex"] == 1
+    assert status["quarantine"]["by_provider"]["codex"] == 1
+    assert status["providers"]["codex"]["pending"] == 1
+    assert status["providers"]["codex"]["quarantined"] == 1
+    assert status["providers"]["codex"]["by_action"]["observe_hook"] == {
+        "pending": 1,
+        "quarantined": 1,
+        "last_enqueue": status["providers"]["codex"]["last_enqueue"],
+        "last_acknowledgement": None,
+    }
+    assert set(status["providers"]) == {
+        "claude_code",
+        "codex",
+        "cursor",
+        "vscode",
+    }
+    assert status["providers"]["claude_code"]["capabilities"] == {
+        "event_mirror": True,
+        "historical_import": True,
+        "title_sync": True,
+        "local_runtime": True,
+        "native_resume": True,
+        "participant_conversations": False,
+        "limitations": [],
+    }
+    assert status["providers"]["codex"]["capabilities"]["event_mirror"] is True
+    assert status["providers"]["codex"]["capabilities"]["historical_import"] is False
+    assert status["providers"]["cursor"]["capabilities"]["limitations"] == [
+        "Capture is limited to events the Cursor host exposes; full historical host fidelity is not available."
+    ]
+    assert status["providers"]["vscode"]["capabilities"] == {
+        "event_mirror": False,
+        "historical_import": False,
+        "title_sync": False,
+        "local_runtime": False,
+        "native_resume": False,
+        "participant_conversations": True,
+        "limitations": [
+            "Only AI Matrx @matrx participant conversations are available; unrelated VS Code chat history is outside the extension API boundary."
+        ],
+    }
+    serialized = json.dumps(status)
+    assert "private prompt" not in serialized
+    assert "/Users/private/repo" not in serialized
+    assert status["head_blocker"]["error"] is None
+
+
+@pytest.mark.anyio
+async def test_successful_codex_ack_is_persisted_after_validation(
+    bridge_db: LocalDatabase,
+) -> None:
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=FakeClient(),
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    receipt = await service.enqueue(_hook(provider="codex"))
+    queued = await service.delivery_status()
+    assert queued["last_enqueue"]["receipt_id"] == receipt.receipt_id
+    assert queued["last_acknowledgement"] is None
+
+    assert await service.sync_pending() == {
+        "sent": 1,
+        "failed": 0,
+        "blocked": None,
+    }
+    delivered = await service.delivery_status()
+    acknowledgement = delivered["providers"]["codex"]["last_acknowledgement"]
+    assert delivered["pending"]["total"] == 0
+    assert acknowledgement == delivered["last_acknowledgement"]
+    assert acknowledgement == {
+        "receipt_id": receipt.receipt_id,
+        "at": acknowledgement["at"],
+        "provider": "codex",
+        "action": "observe_hook",
+        "source": "independent_hook",
+        "accepted": 1,
+        "duplicates": 0,
+        "fidelity": "event_mirror",
+    }
+    activity = await bridge_db.fetchone(
+        """SELECT acknowledged_envelopes
+           FROM coding_session_bridge_delivery_activity
+           WHERE provider='codex' AND action='observe_hook'"""
+    )
+    assert activity and activity["acknowledged_envelopes"] == 1
+
+
+@pytest.mark.anyio
+async def test_claude_history_status_separates_queued_from_acknowledged(
+    bridge_db: LocalDatabase,
+    tmp_path: Path,
+) -> None:
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=FakeClient(),
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    await service.enqueue(_native_import())
+    importer = ClaudeHistoryImporter(
+        db=bridge_db,
+        outbox=service,
+        config_dir=tmp_path / ".claude",
+    )
+
+    queued = await importer.status()
+    assert queued["delivery"]["state"] == "queued"
+    assert queued["delivery"]["queued_batches"] == 1
+    assert queued["delivery"]["last_acknowledgement"] is None
+
+    assert (await service.sync_pending())["sent"] == 1
+    acknowledged = await importer.status()
+    assert acknowledged["delivery"]["state"] == "acknowledged"
+    assert acknowledged["delivery"]["queued_batches"] == 0
+    assert acknowledged["delivery"]["last_acknowledgement"]["accepted"] == 1
 
 
 @pytest.mark.anyio
@@ -458,6 +634,8 @@ async def test_malformed_upstream_2xx_does_not_delete_durable_row(
     )
     assert head["attempts"] == 1
     assert "acknowledgement schema_version" in head["last_error"]
+    status = await service.delivery_status()
+    assert status["last_acknowledgement"] is None
 
 
 @pytest.mark.anyio

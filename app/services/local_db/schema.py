@@ -907,6 +907,30 @@ CREATE TABLE IF NOT EXISTS coding_session_bridge_quarantine (
 )
 """
 
+# Bounded, payload-free delivery truth for the Coding Sessions UI. Successful
+# publication deletes the durable outbox row, so queue inspection alone can
+# only say what is waiting — it cannot prove what aidream acknowledged. One
+# aggregate row per provider/action/source retains the latest enqueue and
+# acknowledgement receipt plus small response counts. It deliberately stores
+# no provider session id, project path, envelope, transcript, or server body.
+_V24_CODING_SESSION_BRIDGE_DELIVERY_ACTIVITY = """
+CREATE TABLE IF NOT EXISTS coding_session_bridge_delivery_activity (
+    provider                       TEXT NOT NULL,
+    action                         TEXT NOT NULL,
+    source                         TEXT NOT NULL,
+    last_enqueued_at               TEXT,
+    last_enqueued_receipt_id       INTEGER,
+    last_acknowledged_at           TEXT,
+    last_acknowledged_receipt_id   INTEGER,
+    last_acknowledged_accepted     INTEGER,
+    last_acknowledged_duplicates   INTEGER,
+    last_acknowledged_fidelity     TEXT,
+    acknowledged_envelopes         INTEGER NOT NULL DEFAULT 0,
+    updated_at                     TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (provider, action, source)
+)
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -931,4 +955,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (21, _V21_CLAUDE_SESSION_TITLE_PUSHED),
     (22, _V22_CLAUDE_CAPTURE_BACKFILL),
     (23, _V23_CODING_SESSION_BRIDGE_QUARANTINE),
+    (24, _V24_CODING_SESSION_BRIDGE_DELIVERY_ACTIVITY),
 ]

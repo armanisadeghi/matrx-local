@@ -28,7 +28,7 @@ local and remote use. OpenAI SDKs should pass the Supabase JWT as the
 - `/v1/*` remains protected by the standard `AuthMiddleware`; auth failures on `/v1/*` now return OpenAI-shaped error objects while preserving existing non-`/v1` auth responses: `app/api/auth.py`.
 - Proxy hardening avoids stale `Content-Encoding`/decoded-body mismatches and uses a finite non-streaming read timeout while keeping streaming reads open-ended: `app/api/openai_compat_routes.py`.
 - `/v1` request bodies are redacted in engine request logs so prompts, speech text, embeddings input, and audio request bodies do not land in DEBUG/error logs: `app/main.py`.
-- Local AI client-host runtime defects found during adjacent smoke coverage were fixed: DB-less matrx-ai queue/drain/rollup paths are guarded, and Decimal tool-call costs persist cleanly to SQLite: `app/services/ai/engine.py`, `app/services/ai/conversation_handler.py`.
+- Local AI client-host runtime defects found during adjacent smoke coverage were fixed: matrx-ai's CLIENT-mode queue/drain/rollup paths are guarded (matrx-ai runs here as a CLIENT with its own local SQLite — never "DB-less"; what it lacks is direct reach to server-only tables, so it calls the aidream API for those), and Decimal tool-call costs persist cleanly to SQLite: `app/services/ai/engine.py`, `app/services/ai/conversation_handler.py`.
 - Focused smoke coverage pins the OpenAI-compatible surface, auth envelope, proxy behavior, audio limits, transcription temp path seam, embeddings shape, and log redaction: `tests/smoke/test_openai_compat_surface.py`.
 
 ## Remaining work

@@ -5,6 +5,17 @@ and tool turns; `SQLiteConversationStore` owns local-first chat persistence.
 
 ## Invariants
 
+- 🚨 **Which agent runs a step is a DATABASE answer — resolved through a Mandate, never a constant.**
+  `matrx-ai` runs here as a **CLIENT**, not a server. That is not "DB-less": this host has its own
+  database and persists everything (`SQLiteConversationStore`, the local chat mirror, the request
+  ledger). What a client cannot do is reach server-only tables directly, so for exactly those it
+  calls an **API**. Mandate resolution is one of them: `matrx_ai.configure()` auto-installs
+  `ServerMandateSource` because `engine.py` supplies both `server_url` and `get_jwt`, so a Mandate
+  resolves over `GET {server_url}/api/mandates/{mandate_key}/resolution` with the SAME precedence
+  the server uses for itself (system default → org binding → user binding), and a user's rebind
+  reaches desktop with no deploy. A missing capability is a missing API call to add, never a licence
+  to hardcode an agent id. Cross-repo law:
+  `/Users/armanisadeghi/code/common-docs/systems/mandates/RUNTIME.md`.
 - A successful terminal turn must contain user-visible output. The shared
   orchestrator enforces this; `local_ai_task` repeats the check as a packaging
   backstop and converts reasoning-only stops into a persisted failed turn plus

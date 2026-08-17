@@ -8,12 +8,15 @@ only passes when a runtime-launched session genuinely becomes exact
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from app.services.coding_sessions.claude_history import (
     ClaudeHistoryImporter,
@@ -25,10 +28,12 @@ from app.services.coding_sessions.local_runtime import (
     APPROVED_FOLDERS_SETTING,
     WORKSPACE_ROOTS_SETTING,
     LocalClaudeRuntime,
+    LocalRuntimeFolderRequest,
     LocalRuntimeRefused,
     LocalRuntimeStartRequest,
     _LocalRun,
 )
+from app.services.coding_sessions.workspace_discovery import WorkspaceDiscoveryNode
 from app.services.coding_sessions import local_runtime as runtime_module
 from app.services.coding_sessions.service import CodingSessionBridgeOutbox
 from app.services.local_db.database import LocalDatabase
@@ -152,6 +157,167 @@ async def test_approving_folder_outside_roots_is_refused(env, tmp_path: Path) ->
     with pytest.raises(LocalRuntimeRefused) as excinfo:
         runtime.approve_folder(str(outside))
     assert excinfo.value.code == "workspace_outside_allowlist"
+
+
+async def test_workspace_root_management_is_explicit_minimal_and_preserves_approvals(
+    env, tmp_path: Path
+) -> None:
+    runtime, _outbox, _config, workspace_root, settings, _db = env
+    other_root = tmp_path / "other-code"
+    project = other_root / "team" / "service"
+    project.mkdir(parents=True)
+
+    added = runtime.add_workspace_root(str(other_root))
+    assert added.workspace_roots == [
+        str(workspace_root.resolve()),
+        str(other_root.resolve()),
+    ]
+    # Adding a nested project does not create redundant filesystem authority.
+    nested = runtime.add_workspace_root(str(project))
+    assert nested.workspace_roots == added.workspace_roots
+
+    runtime.approve_folder(str(project))
+    removed = runtime.remove_workspace_root(str(other_root))
+    assert removed.workspace_roots == [str(workspace_root.resolve())]
+    assert removed.approved_folders == [str(project.resolve())]
+    assert removed.affected_approvals == [str(project.resolve())]
+    # Removing authority never silently deletes approval history, but the
+    # execution gate still refuses the now-out-of-root project.
+    assert settings.values[APPROVED_FOLDERS_SETTING] == [str(project.resolve())]
+    with pytest.raises(LocalRuntimeRefused) as excinfo:
+        runtime._require_approved_workspace(str(project))
+    assert excinfo.value.code == "workspace_outside_allowlist"
+
+
+async def test_removing_last_root_does_not_reenable_default(env) -> None:
+    runtime, _outbox, _config, workspace_root, settings, _db = env
+    removed = runtime.remove_workspace_root(str(workspace_root))
+    assert removed.workspace_roots == []
+    assert settings.values[WORKSPACE_ROOTS_SETTING] == []
+    assert runtime.list_approved()["workspace_roots"] == []
+
+
+async def test_workspace_folder_request_is_strict() -> None:
+    with pytest.raises(ValidationError):
+        LocalRuntimeFolderRequest.model_validate(
+            {"folder": "/tmp/project", "unexpected": True}
+        )
+
+
+def _flatten_discovery(
+    nodes: list[WorkspaceDiscoveryNode],
+) -> list[WorkspaceDiscoveryNode]:
+    flattened: list[WorkspaceDiscoveryNode] = []
+    pending = list(nodes)
+    while pending:
+        node = pending.pop(0)
+        flattened.append(node)
+        pending[0:0] = node.children
+    return flattened
+
+
+async def test_workspace_discovery_returns_project_aware_privacy_minimal_tree(
+    env, tmp_path: Path
+) -> None:
+    runtime, _outbox, _config, workspace_root, _settings, _db = env
+    git_repo = workspace_root / "backend"
+    (git_repo / ".git").mkdir(parents=True)
+    (git_repo / "pyproject.toml").write_text("[project]\nname='private'\n")
+    (git_repo / "secret-customer-name.txt").write_text("must not be returned")
+    (git_repo / "src" / "internal").mkdir(parents=True)
+    web_project = workspace_root / "frontend"
+    web_project.mkdir()
+    (web_project / "package.json").write_text("{}")
+    ordinary = workspace_root / "notes"
+    ordinary.mkdir()
+    monorepo_project = workspace_root / "portfolio" / "services" / "billing"
+    monorepo_project.mkdir(parents=True)
+    (monorepo_project / "go.mod").write_text("module example.invalid/billing\n")
+    hidden = workspace_root / ".private-repo"
+    (hidden / ".git").mkdir(parents=True)
+    vendor = workspace_root / "node_modules" / "dependency"
+    (vendor / "package.json").parent.mkdir(parents=True)
+    (vendor / "package.json").write_text("{}")
+    outside = tmp_path / "outside"
+    (outside / ".git").mkdir(parents=True)
+    symlink = workspace_root / "escaped-link"
+    try:
+        symlink.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable on this platform")
+
+    result = await runtime.discover_workspaces()
+    assert result.parent is None
+    assert result.workspace_roots == [str(workspace_root.resolve())]
+    assert result.approved_folders == []
+    nodes = _flatten_discovery(result.roots)
+    by_path = {node.path: node for node in nodes}
+    assert by_path[str(git_repo.resolve())].kind == "git_repository"
+    assert by_path[str(git_repo.resolve())].project_kinds == ["git", "python"]
+    assert by_path[str(web_project.resolve())].kind == "project"
+    assert by_path[str(web_project.resolve())].project_kinds == ["javascript"]
+    assert by_path[str(ordinary.resolve())].kind == "directory"
+    assert by_path[str(monorepo_project.resolve())].project_kinds == ["go"]
+    assert str((git_repo / "src").resolve()) not in by_path
+    assert str(hidden.resolve()) not in by_path
+    assert str(vendor.resolve()) not in by_path
+    assert str(outside.resolve()) not in by_path
+    assert result.project_count == 3
+    assert result.skipped >= 3
+    # No filenames or file contents cross the discovery response.
+    payload = result.model_dump_json()
+    assert "secret-customer-name" not in payload
+    assert "must not be returned" not in payload
+
+
+async def test_workspace_discovery_selected_parent_must_be_under_configured_root(
+    env, tmp_path: Path
+) -> None:
+    runtime, *_ = env
+    outside = tmp_path / "outside-root"
+    outside.mkdir()
+    with pytest.raises(LocalRuntimeRefused) as excinfo:
+        await runtime.discover_workspaces(str(outside))
+    assert excinfo.value.code == "workspace_outside_allowlist"
+
+
+async def test_workspace_discovery_selected_parent_is_stable_and_bounded(env) -> None:
+    runtime, _outbox, _config, workspace_root, _settings, _db = env
+    parent = workspace_root / "portfolio"
+    cursor = parent
+    for index in range(11):
+        cursor = cursor / f"level-{index}"
+        cursor.mkdir(parents=True)
+    (cursor / "Cargo.toml").write_text("[package]\n")
+
+    result = await runtime.discover_workspaces(str(parent))
+    assert result.parent == str(parent.resolve())
+    assert [node.path for node in result.roots] == [str(parent.resolve())]
+    assert result.truncated is True
+    assert any(node.truncated for node in _flatten_discovery(result.roots))
+
+
+async def test_workspace_discovery_calls_do_not_overlap(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, *_ = env
+    entered = threading.Event()
+    release = threading.Event()
+    real_discover = runtime_module.discover_workspace_tree
+
+    def blocked_discover(*args, **kwargs):
+        entered.set()
+        assert release.wait(timeout=5)
+        return real_discover(*args, **kwargs)
+
+    monkeypatch.setattr(runtime_module, "discover_workspace_tree", blocked_discover)
+    first = asyncio.create_task(runtime.discover_workspaces())
+    assert await asyncio.to_thread(entered.wait, 5)
+    with pytest.raises(LocalRuntimeRefused) as excinfo:
+        await runtime.discover_workspaces()
+    assert excinfo.value.code == "workspace_discovery_in_progress"
+    release.set()
+    await first
 
 
 async def test_start_refuses_when_capabilities_unavailable(env) -> None:

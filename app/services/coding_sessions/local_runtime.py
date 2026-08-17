@@ -66,6 +66,10 @@ from app.services.coding_sessions.claude_history import (
     _conversation_id,
     _hash_source,
 )
+from app.services.coding_sessions.workspace_discovery import (
+    WorkspaceDiscoveryResponse,
+    discover_workspace_tree,
+)
 from app.services.local_db.database import get_db
 from app.services.local_db.repositories import TokenRepo
 
@@ -107,6 +111,24 @@ class LocalRuntimeStartRequest(BaseModel):
     )
     max_turns: int = Field(default=30, ge=1, le=200)
     permission_mode: Literal["acceptEdits", "plan", "bypassPermissions"] = "acceptEdits"
+
+
+class LocalRuntimeFolderRequest(BaseModel):
+    """A folder selected by the user in the native desktop picker."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    folder: str = Field(min_length=1, max_length=4096)
+
+
+class LocalRuntimeWorkspaceRootsResponse(BaseModel):
+    """Persisted filesystem authority plus approvals affected by a root change."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_roots: list[str]
+    approved_folders: list[str]
+    affected_approvals: list[str] = Field(default_factory=list)
 
 
 @dataclass
@@ -178,13 +200,17 @@ def _settings():
 
 
 def _workspace_roots() -> list[Path]:
-    raw = _settings().get(WORKSPACE_ROOTS_SETTING, DEFAULT_WORKSPACE_ROOTS)
+    raw = _settings().get(WORKSPACE_ROOTS_SETTING, None)
+    if raw is None:
+        raw = DEFAULT_WORKSPACE_ROOTS
     roots: list[Path] = []
     if isinstance(raw, list):
         for item in raw:
             if isinstance(item, str) and item.strip():
                 roots.append(Path(item).expanduser())
-    return roots or [Path(DEFAULT_WORKSPACE_ROOTS[0]).expanduser()]
+        # An explicit empty list is meaningful: the user removed every root.
+        return roots
+    return [Path(DEFAULT_WORKSPACE_ROOTS[0]).expanduser()]
 
 
 def _approved_folders() -> list[str]:
@@ -217,6 +243,7 @@ class LocalClaudeRuntime:
         self._db = db
         self._account_reader = account_reader
         self._lock = asyncio.Lock()
+        self._discovery_lock = asyncio.Lock()
 
     def _database(self):
         return self._db if self._db is not None else get_db()
@@ -245,7 +272,7 @@ class LocalClaudeRuntime:
         matrx_user = bool(token_row and token_row.get("user_id"))
         if not matrx_user:
             reasons.append("Sign in to AI Matrx in the desktop app")
-        roots = _workspace_roots()
+        roots = self._normalized_roots()
         return {
             "schema_version": 1,
             "available": not reasons,
@@ -275,26 +302,130 @@ class LocalClaudeRuntime:
 
     def list_approved(self) -> dict[str, Any]:
         return {
-            "workspace_roots": [str(r) for r in _workspace_roots()],
+            "workspace_roots": [str(r) for r in self._normalized_roots()],
             "approved_folders": _approved_folders(),
         }
 
-    def approve_folder(self, folder: str) -> dict[str, Any]:
-        """One-click, persisted, per-folder approval — the first-launch gate."""
+    @staticmethod
+    def _existing_directory(folder: str, *, label: str = "Folder") -> Path:
         path = Path(folder).expanduser()
         try:
             resolved = path.resolve(strict=True)
         except OSError as exc:
             raise LocalRuntimeRefused(
-                "workspace_missing", f"Folder does not exist: {folder}"
+                "workspace_missing", f"{label} does not exist: {folder}"
             ) from exc
         if not resolved.is_dir():
-            raise LocalRuntimeRefused("workspace_not_directory", f"Not a directory: {folder}")
-        if not any(_is_under(root.resolve(), resolved) for root in _workspace_roots()):
+            raise LocalRuntimeRefused(
+                "workspace_not_directory", f"{label} is not a directory: {folder}"
+            )
+        return resolved
+
+    @staticmethod
+    def _normalized_roots() -> list[Path]:
+        """Resolved configured roots, preserving unavailable roots as paths."""
+        roots: list[Path] = []
+        for root in _workspace_roots():
+            resolved = root.resolve(strict=False)
+            if resolved not in roots:
+                roots.append(resolved)
+        return roots
+
+    def add_workspace_root(self, folder: str) -> LocalRuntimeWorkspaceRootsResponse:
+        """Persist one explicitly selected parent as local filesystem authority."""
+        resolved = self._existing_directory(folder, label="Workspace root")
+        roots = self._normalized_roots()
+        if not any(resolved == root or _is_under(root, resolved) for root in roots):
+            # A broader selected root replaces nested roots. Keeping both adds
+            # no authority and makes the tree/settings misleading.
+            roots = [root for root in roots if not _is_under(resolved, root)]
+            roots.append(resolved)
+            roots.sort(key=lambda item: (str(item).casefold(), str(item)))
+            _settings().set(WORKSPACE_ROOTS_SETTING, [str(root) for root in roots])
+        return LocalRuntimeWorkspaceRootsResponse(
+            workspace_roots=[str(root) for root in roots],
+            approved_folders=_approved_folders(),
+        )
+
+    def remove_workspace_root(self, folder: str) -> LocalRuntimeWorkspaceRootsResponse:
+        """Remove exactly one root without silently deleting folder approvals."""
+        target = Path(folder).expanduser().resolve(strict=False)
+        roots = self._normalized_roots()
+        remaining = [root for root in roots if root != target]
+        if len(remaining) != len(roots):
+            _settings().set(WORKSPACE_ROOTS_SETTING, [str(root) for root in remaining])
+        affected = [
+            approved
+            for approved in _approved_folders()
+            if _is_under(target, Path(approved).resolve(strict=False))
+            and not any(
+                _is_under(root, Path(approved).resolve(strict=False))
+                for root in remaining
+            )
+        ]
+        return LocalRuntimeWorkspaceRootsResponse(
+            workspace_roots=[str(root) for root in remaining],
+            approved_folders=_approved_folders(),
+            affected_approvals=affected,
+        )
+
+    async def discover_workspaces(
+        self, parent: str | None = None
+    ) -> WorkspaceDiscoveryResponse:
+        """Return a bounded project-aware tree beneath configured authority."""
+        if self._discovery_lock.locked():
+            raise LocalRuntimeRefused(
+                "workspace_discovery_in_progress",
+                "Workspace discovery is already running",
+            )
+        async with self._discovery_lock:
+            configured = self._normalized_roots()
+            existing_roots: list[Path] = []
+            unavailable = 0
+            for root in configured:
+                try:
+                    resolved = root.resolve(strict=True)
+                except OSError:
+                    unavailable += 1
+                    continue
+                if resolved.is_dir() and resolved not in existing_roots:
+                    existing_roots.append(resolved)
+                else:
+                    unavailable += 1
+
+            selected_parent: str | None = None
+            if parent is not None:
+                selected = self._existing_directory(parent, label="Discovery parent")
+                if not any(_is_under(root, selected) for root in existing_roots):
+                    raise LocalRuntimeRefused(
+                        "workspace_outside_allowlist",
+                        f"{selected} is outside the configured workspace roots. "
+                        "Add it as a workspace root first.",
+                    )
+                scan_roots = [selected]
+                selected_parent = str(selected)
+            else:
+                scan_roots = existing_roots
+
+            return await asyncio.to_thread(
+                discover_workspace_tree,
+                scan_roots,
+                parent=selected_parent,
+                workspace_roots=[str(root) for root in configured],
+                approved_folders=_approved_folders(),
+                initial_skipped=unavailable,
+            )
+
+    def approve_folder(self, folder: str) -> dict[str, Any]:
+        """One-click, persisted, per-folder approval — the first-launch gate."""
+        resolved = self._existing_directory(folder)
+        roots = self._normalized_roots()
+        if not any(_is_under(root, resolved) for root in roots):
+            roots_label = ", ".join(str(root) for root in roots) or "none configured"
             raise LocalRuntimeRefused(
                 "workspace_outside_allowlist",
                 f"{resolved} is outside the allowed workspace roots "
-                f"({', '.join(str(r) for r in _workspace_roots())}). "
+                f"({roots_label}). "
                 "Add a root in settings first.",
             )
         approved = _approved_folders()
@@ -321,16 +452,17 @@ class LocalClaudeRuntime:
             raise LocalRuntimeRefused(
                 "workspace_not_directory", f"Workspace is not a directory: {workspace}"
             )
-        roots = [root.resolve() for root in _workspace_roots()]
+        roots = self._normalized_roots()
         if not any(_is_under(root, resolved) for root in roots):
+            roots_label = ", ".join(str(root) for root in roots) or "none configured"
             raise LocalRuntimeRefused(
                 "workspace_outside_allowlist",
-                f"{resolved} is outside the allowed workspace roots "
-                f"({', '.join(str(r) for r in roots)})",
+                f"{resolved} is outside the allowed workspace roots ({roots_label})",
             )
         approved = _approved_folders()
         if not any(
-            resolved == Path(item) or _is_under(Path(item), resolved) for item in approved
+            resolved == Path(item) or _is_under(Path(item), resolved)
+            for item in approved
         ):
             raise LocalRuntimeRefused(
                 "workspace_not_approved",
@@ -851,8 +983,10 @@ def get_local_claude_runtime() -> LocalClaudeRuntime:
 __all__ = [
     "APPROVED_FOLDERS_SETTING",
     "LocalClaudeRuntime",
+    "LocalRuntimeFolderRequest",
     "LocalRuntimeRefused",
     "LocalRuntimeStartRequest",
+    "LocalRuntimeWorkspaceRootsResponse",
     "WORKSPACE_ROOTS_SETTING",
     "get_local_claude_runtime",
 ]

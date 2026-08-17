@@ -28,10 +28,13 @@ from app.services.coding_sessions.title_sync import (
     ClaudeTitleSyncBlocked,
 )
 from app.services.coding_sessions.local_runtime import (
+    LocalRuntimeFolderRequest,
     LocalRuntimeRefused,
     LocalRuntimeStartRequest,
+    LocalRuntimeWorkspaceRootsResponse,
     get_local_claude_runtime,
 )
+from app.services.coding_sessions.workspace_discovery import WorkspaceDiscoveryResponse
 
 router = APIRouter(prefix="/coding-session", tags=["coding-session-bridge"])
 
@@ -239,17 +242,13 @@ async def runtime_approvals() -> dict[str, object]:
 
 
 @router.post("/runtime/approvals")
-async def approve_runtime_folder(request: Request, body: dict[str, str]) -> dict[str, object]:
+async def approve_runtime_folder(
+    request: Request, body: LocalRuntimeFolderRequest
+) -> dict[str, object]:
     """One-click persisted approval of a workspace folder — loopback only."""
     _require_loopback(request)
-    folder = body.get("folder")
-    if not isinstance(folder, str) or not folder:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="folder is required",
-        )
     try:
-        return get_local_claude_runtime().approve_folder(folder)
+        return get_local_claude_runtime().approve_folder(body.folder)
     except LocalRuntimeRefused as exc:
         raise _refused(exc) from exc
 
@@ -258,6 +257,50 @@ async def approve_runtime_folder(request: Request, body: dict[str, str]) -> dict
 async def revoke_runtime_folder(request: Request, folder: str = Query()) -> dict[str, object]:
     _require_loopback(request)
     return get_local_claude_runtime().revoke_folder(folder)
+
+
+@router.post(
+    "/runtime/workspaces/roots",
+    response_model=LocalRuntimeWorkspaceRootsResponse,
+)
+async def add_runtime_workspace_root(
+    request: Request, body: LocalRuntimeFolderRequest
+) -> LocalRuntimeWorkspaceRootsResponse:
+    """Persist a parent explicitly selected in the native folder picker."""
+    _require_loopback(request)
+    try:
+        return get_local_claude_runtime().add_workspace_root(body.folder)
+    except LocalRuntimeRefused as exc:
+        raise _refused(exc) from exc
+
+
+@router.delete(
+    "/runtime/workspaces/roots",
+    response_model=LocalRuntimeWorkspaceRootsResponse,
+)
+async def remove_runtime_workspace_root(
+    request: Request,
+    folder: str = Query(min_length=1, max_length=4096),
+) -> LocalRuntimeWorkspaceRootsResponse:
+    """Remove one exact root and report approvals that lose root authority."""
+    _require_loopback(request)
+    return get_local_claude_runtime().remove_workspace_root(folder)
+
+
+@router.get(
+    "/runtime/workspaces/discovery",
+    response_model=WorkspaceDiscoveryResponse,
+)
+async def discover_runtime_workspaces(
+    request: Request,
+    parent: str | None = Query(default=None, min_length=1, max_length=4096),
+) -> WorkspaceDiscoveryResponse:
+    """Build a bounded local-only directory/project tree for folder approval."""
+    _require_loopback(request)
+    try:
+        return await get_local_claude_runtime().discover_workspaces(parent)
+    except LocalRuntimeRefused as exc:
+        raise _refused(exc) from exc
 
 
 @router.post("/runtime/start", status_code=status.HTTP_202_ACCEPTED)

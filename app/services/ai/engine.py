@@ -14,6 +14,15 @@ Initialization sequence
        - ``get_jwt`` + ``server_url`` + ``source_app`` → user identity +
          the server-backed tool registry fetch (matrx-ai >= 0.4.0 derives a
          ServerToolSource that GETs /ai-tools/app/matrx_local/all)
+
+     Supplying ``get_jwt`` + ``server_url`` ALSO gives this host MANDATE
+     resolution for free: matrx-ai derives a ``ServerMandateSource`` and
+     installs it as the Mandate resolver, so a Mandate (the named job — DB
+     decides which agent/orchestra/workflow fulfils it) resolves over the
+     aidream API with the SAME precedence the server uses for itself, and a
+     user's rebind reaches desktop with no deploy. Never hardcode an agent
+     id here; a missing capability is a missing API call to add.
+     Contract: common-docs/systems/mandates/RUNTIME.md.
      Seam validation is all-errors-at-once (ClientHostConfigError) and any
      wiring failure CRASHES startup — a client host without its seams would
      die with DBNotConfiguredError mid-request otherwise.

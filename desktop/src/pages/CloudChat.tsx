@@ -11,9 +11,11 @@ import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessages } from "@/components/chat/ChatMessages";
 import { ChatSidebar } from "@/components/chat/ChatSidebar";
 import { GuidedVariableInputs } from "@/components/chat/GuidedVariableInputs";
+import { GmailReviewCard } from "@/components/chat/GmailReviewCard";
 import { CloudChatPlusMenu } from "@/components/chat/PlusMenu";
 import { Button } from "@/components/ui/button";
 import { useCloudAgents } from "@/hooks/use-cloud-agents";
+import { useEmailReviews } from "@/hooks/use-email-reviews";
 import {
   type ChatAttachment,
   type CloudChatExecutionTarget,
@@ -75,6 +77,10 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [draftInsertion, setDraftInsertion] = useState<{ id: number; text: string } | null>(null);
   const cloudChat = useCloudChat({ engineUrl });
+  // Delegated calls parked for explicit human review (a proposed Gmail
+  // message). Nothing has been sent; the card below IS the authorization.
+  const [emailReviews, emailReviewActions] = useEmailReviews(engineUrl);
+  const resolveEmailReview = emailReviewActions.resolve;
   const cloudAgents = useCloudAgents();
   const {
     activeConversationId,
@@ -406,6 +412,20 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
                 disabled={isStreaming}
                 seamless
               />
+            </div>
+          </div>
+        )}
+
+        {emailReviews.length > 0 && (
+          <div className="max-h-[60%] shrink-0 overflow-y-auto px-4 pt-2">
+            <div className="mx-auto flex max-w-3xl flex-col gap-2">
+              {emailReviews.map((review) => (
+                <GmailReviewCard
+                  key={review.callId}
+                  review={review}
+                  onResolve={resolveEmailReview}
+                />
+              ))}
             </div>
           </div>
         )}

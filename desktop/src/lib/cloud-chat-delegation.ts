@@ -7,6 +7,12 @@ export interface EngineDelegationState {
   claimed?: boolean;
   calls?: Array<{ call_id: string; tool_name: string; state: string }>;
   continuation?: { user_request_id?: string | null; needed?: boolean } | null;
+  /**
+   * Delegated calls parked for explicit human review (e.g. a proposed Gmail
+   * message). A review has NO deadline — a person may take an hour — so the
+   * wait below must not abandon the stream while one is open.
+   */
+  reviews_pending?: number;
 }
 
 export type DelegationAccessToken = string | (() => Promise<string>);
@@ -74,8 +80,8 @@ export async function waitForDelegatedContinuation(
   signal: AbortSignal,
   onStatus: (status: string) => void,
 ): Promise<string | null> {
-  const startedAt = Date.now();
-  while (!signal.aborted && Date.now() - startedAt < DELEGATION_WAIT_CAP_MS) {
+  let deadline = Date.now() + DELEGATION_WAIT_CAP_MS;
+  while (!signal.aborted && Date.now() < deadline) {
     const state = await claimDelegationUi(
       engineUrl,
       conversationId,
@@ -85,6 +91,14 @@ export async function waitForDelegatedContinuation(
       const continuation = state.continuation;
       if (continuation?.needed && continuation.user_request_id) {
         return continuation.user_request_id;
+      }
+      if ((state.reviews_pending ?? 0) > 0) {
+        // The user is reading a proposed message. Hold the stream open for as
+        // long as that takes; the timeout only bounds machine work.
+        deadline = Date.now() + DELEGATION_WAIT_CAP_MS;
+        onStatus("Waiting for you to review a message before it is sent...");
+        await new Promise((resolve) => setTimeout(resolve, DELEGATION_POLL_MS));
+        continue;
       }
       const executing = state.calls?.filter((call) => call.state === "executing") ?? [];
       if (executing.length > 0) {

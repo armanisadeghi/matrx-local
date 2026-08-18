@@ -234,6 +234,70 @@ async def delegation_ui_release(body: UiClaimRequest) -> dict[str, Any]:
     return {"released": True}
 
 
+@router.get("/delegation/reviews")
+async def delegation_pending_reviews() -> dict[str, Any]:
+    """Delegated calls parked for explicit human review (never executed).
+
+    Today that is `google_email_send`: the agent proposed a message and
+    NOTHING has been sent. This response carries the proposed fields because
+    showing the user the exact message is the whole point of the boundary —
+    the desktop card renders them, the user edits them, and only the user's
+    click sends anything.
+    """
+    from app.services.delegation import get_delegation_engine
+
+    reviews = get_delegation_engine().pending_reviews()
+    return {"reviews": reviews, "count": len(reviews)}
+
+
+class ReviewDecisionRequest(BaseModel):
+    """The user's decision on one parked review.
+
+    There is deliberately no "always send", no agent-supplied confirmation,
+    and no way to reach this endpoint except a person clicking in the app.
+    One decision covers exactly ONE call.
+    """
+
+    call_id: str
+    outcome: str  # sent | declined | cancelled | error
+    message_id: str | None = None
+    to: str | None = None
+    cc: list[str] = []
+    subject: str | None = None
+    from_email: str | None = None
+    edited: bool = False
+    error: str | None = None
+
+
+@router.post("/delegation/review-decision")
+async def delegation_review_decision(body: ReviewDecisionRequest) -> dict[str, Any]:
+    """Resolve one parked user-review call with the user's decision.
+
+    The send itself already happened in the UI (the reviewed bytes go straight
+    to aidream's reviewed-send endpoint with the user's own JWT). This turns
+    the outcome into the tool result and delivers it, which is what lets the
+    suspended agent turn continue. An unknown or already-resolved call is a
+    404, so a double click can never deliver twice.
+    """
+    from app.services.delegation import get_delegation_engine
+    from app.services.delegation.user_review import REVIEW_OUTCOMES
+
+    if body.outcome not in REVIEW_OUTCOMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown outcome {body.outcome!r}. Expected one of {sorted(REVIEW_OUTCOMES)}.",
+        )
+    resolved = await get_delegation_engine().resolve_review(
+        body.call_id, body.model_dump()
+    )
+    if resolved is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No pending review for that call_id (already resolved or expired).",
+        )
+    return resolved
+
+
 @router.get("/delegation/conversation/{conversation_id}")
 async def delegation_conversation_state(conversation_id: str) -> dict[str, Any]:
     """Per-conversation delegation snapshot for the local UI poller."""

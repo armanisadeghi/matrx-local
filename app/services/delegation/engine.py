@@ -61,6 +61,12 @@ from app.services.delegation.client import (
     ResumeOutcome,
 )
 from app.services.delegation.outbox import DelegationOutbox, SqliteDelegationOutbox
+from app.services.delegation.user_review import (
+    REVIEW_KINDS,
+    USER_REVIEW_TOOLS,
+    build_review_output,
+    normalize_review_arguments,
+)
 
 logger = get_logger()
 
@@ -193,6 +199,12 @@ class DelegationEngine:
         self._ui_claims: Dict[str, float] = {}
         # conversation_id → delegation facts for the local UI poller.
         self._conversation_facts: Dict[str, dict[str, Any]] = {}
+        # call_id → parked user-review call (see user_review.py). These are
+        # NEVER executed: the human's click in the desktop UI is the only
+        # thing that can resolve them, so they sit here until the UI POSTs a
+        # decision. Not persisted — the server ledger is durable, so a restart
+        # simply re-discovers them on the next sweep.
+        self._reviews: Dict[str, dict[str, Any]] = {}
         # Tool names whose "disabled by the user" block was already logged.
         # States, not errors: one INFO per transition, not one per sweep.
         # Pruned each sweep to the currently-disabled set so re-disabling
@@ -280,6 +292,116 @@ class DelegationEngine:
             "claimed": self._ui_claim_active(conversation_id),
             "calls": list(facts.get("calls", {}).values()),
             "continuation": facts.get("continuation"),
+            # The UI's wait loop must not time out while a human is still
+            # reading a proposed message — a review has no deadline.
+            "reviews_pending": self.review_count(conversation_id),
+        }
+
+    # ------------------------------------------------------------------
+    # User-review calls (an authorization boundary, not an execution path)
+    # ------------------------------------------------------------------
+
+    def _park_review(self, call: dict[str, Any]) -> None:
+        """Hold a user-review call for the human. Nothing runs; nothing is
+        sent. The desktop UI reads these, renders the proposal, and the user's
+        explicit click is the only thing that can resolve one."""
+        call_id = str(call["call_id"])
+        tool_name = str(call["tool_name"])
+        conversation_id = str(call["conversation_id"])
+        self._reviews[call_id] = {
+            "call_id": call_id,
+            "conversation_id": conversation_id,
+            "tool_name": tool_name,
+            "kind": REVIEW_KINDS.get(tool_name, "review"),
+            "arguments": normalize_review_arguments(tool_name, call.get("arguments")),
+            "created_at": time.time(),
+        }
+        self._note_call(conversation_id, call_id, tool_name, "awaiting_user_review")
+        logger.info(
+            "[delegation] %s parked for user review (call_id=%s) — nothing is "
+            "sent until the user approves it in the app",
+            tool_name,
+            call_id,
+        )
+        self._event(
+            "awaiting_user_review",
+            call_id=call_id,
+            tool_name=tool_name,
+            conversation_id=conversation_id,
+        )
+
+    def _prune_reviews(self, live_call_ids: set[str]) -> None:
+        """Drop parked reviews the server no longer lists (expired, or
+        resolved by another client). Self-healing, never a send."""
+        for call_id in [c for c in self._reviews if c not in live_call_ids]:
+            stale = self._reviews.pop(call_id)
+            self._event(
+                "user_review_expired",
+                call_id=call_id,
+                tool_name=stale.get("tool_name"),
+                conversation_id=stale.get("conversation_id"),
+            )
+
+    def pending_reviews(self) -> list[dict[str, Any]]:
+        """Every parked review, oldest first, for the desktop review UI.
+
+        Unlike :meth:`ui_conversation_state` this DOES include arguments —
+        showing the user the exact proposed message is the entire point.
+        """
+        return sorted(self._reviews.values(), key=lambda item: item["created_at"])
+
+    def review_count(self, conversation_id: str | None = None) -> int:
+        if conversation_id is None:
+            return len(self._reviews)
+        return sum(
+            1
+            for item in self._reviews.values()
+            if item["conversation_id"] == conversation_id
+        )
+
+    async def resolve_review(
+        self, call_id: str, decision: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Turn the user's decision into a tool result and deliver it.
+
+        Returns None when the call is unknown or already resolved — the route
+        turns that into a 404 so a duplicate click can never deliver twice.
+        """
+        review = self._reviews.pop(call_id, None)
+        if review is None:
+            return None
+        tool_name = str(review["tool_name"])
+        conversation_id = str(review["conversation_id"])
+        outcome = str(decision.get("outcome") or "")
+        self._mark_handled(call_id)
+        self._note_call(conversation_id, call_id, tool_name, f"review_{outcome}")
+        self._event(
+            "user_review_resolved",
+            call_id=call_id,
+            tool_name=tool_name,
+            conversation_id=conversation_id,
+            outcome=outcome,
+        )
+        logger.info(
+            "[delegation] user review resolved for %s (call_id=%s outcome=%s)",
+            tool_name,
+            call_id,
+            outcome,
+        )
+        payload = {
+            "call_id": call_id,
+            "tool_name": tool_name,
+            "output": build_review_output(tool_name, decision),
+            "is_error": False,
+            "error_message": None,
+            "duration_ms": int((time.time() - float(review["created_at"])) * 1000),
+        }
+        await self._deliver(conversation_id, call_id, payload)
+        return {
+            "resolved": True,
+            "call_id": call_id,
+            "conversation_id": conversation_id,
+            "outcome": outcome,
         }
 
     def _note_call(
@@ -364,6 +486,7 @@ class DelegationEngine:
                 "recent_resumes": len(self._recent_resumes),
                 "call_tasks": len(self._call_tasks),
                 "ui_claims": len(self._ui_claims),
+                "awaiting_user_review": len(self._reviews),
             },
             "recent_events": list(self._events),
             "timestamps": {
@@ -435,6 +558,8 @@ class DelegationEngine:
         disabled_tools = get_disabled_cloud_tools()
         self._blocked_logged &= disabled_tools
 
+        self._prune_reviews({str(call.get("call_id") or "") for call in pending})
+
         dispatched = 0
         unresolved: set[str] = set()
         for call in pending:
@@ -445,6 +570,15 @@ class DelegationEngine:
                 logger.warning("[delegation] malformed pending call skipped: %r", call)
                 continue
             if call_id in self._inflight or call_id in self._handled:
+                continue
+            if tool_name in USER_REVIEW_TOOLS:
+                # Never executed — parked for the human. See user_review.py.
+                if call_id in self._reviews:
+                    continue
+                if tool_name in disabled_tools:
+                    self._refuse_disabled(conversation_id, call_id, tool_name)
+                    continue
+                self._park_review(call)
                 continue
             entry = self._resolve_tool(tool_name)
             if entry is None:
@@ -458,39 +592,7 @@ class DelegationEngine:
                 )
                 continue
             if tool_name in disabled_tools:
-                # Never executed — answered with an explicit error result so
-                # the agent hears a refusal instead of a stranded turn.
-                if tool_name not in self._blocked_logged:
-                    logger.info(
-                        "[delegation] %s is disabled on this computer by the "
-                        "user — delegated calls are refused with an error "
-                        "result (first blocked call_id=%s)",
-                        tool_name,
-                        call_id,
-                    )
-                    self._blocked_logged.add(tool_name)
-                self._mark_handled(call_id)
-                self._note_call(conversation_id, call_id, tool_name, "blocked")
-                self._event(
-                    "blocked_disabled_tool",
-                    call_id=call_id,
-                    tool_name=tool_name,
-                    conversation_id=conversation_id,
-                )
-                refusal = {
-                    "call_id": call_id,
-                    "tool_name": tool_name,
-                    "output": None,
-                    "is_error": True,
-                    "error_message": DISABLED_TOOL_ERROR_MESSAGE,
-                    "duration_ms": 0,
-                }
-                task = asyncio.create_task(
-                    self._deliver(conversation_id, call_id, refusal),
-                    name=f"delegation-blocked-{call_id[:12]}",
-                )
-                self._call_tasks.add(task)
-                task.add_done_callback(self._call_tasks.discard)
+                self._refuse_disabled(conversation_id, call_id, tool_name)
                 continue
             try:
                 queued = await self._outbox.enqueue(call)
@@ -559,6 +661,44 @@ class DelegationEngine:
     # ------------------------------------------------------------------
     # Execution
     # ------------------------------------------------------------------
+
+    def _refuse_disabled(
+        self, conversation_id: str, call_id: str, tool_name: str
+    ) -> None:
+        """Answer a delegated call for a user-disabled tool with an explicit
+        error result. Never executed, never silently dropped — the agent hears
+        a clear refusal instead of a stranded turn."""
+        if tool_name not in self._blocked_logged:
+            logger.info(
+                "[delegation] %s is disabled on this computer by the "
+                "user — delegated calls are refused with an error "
+                "result (first blocked call_id=%s)",
+                tool_name,
+                call_id,
+            )
+            self._blocked_logged.add(tool_name)
+        self._mark_handled(call_id)
+        self._note_call(conversation_id, call_id, tool_name, "blocked")
+        self._event(
+            "blocked_disabled_tool",
+            call_id=call_id,
+            tool_name=tool_name,
+            conversation_id=conversation_id,
+        )
+        refusal = {
+            "call_id": call_id,
+            "tool_name": tool_name,
+            "output": None,
+            "is_error": True,
+            "error_message": DISABLED_TOOL_ERROR_MESSAGE,
+            "duration_ms": 0,
+        }
+        task = asyncio.create_task(
+            self._deliver(conversation_id, call_id, refusal),
+            name=f"delegation-blocked-{call_id[:12]}",
+        )
+        self._call_tasks.add(task)
+        task.add_done_callback(self._call_tasks.discard)
 
     def _resolve_tool(self, tool_name: str) -> Any | None:
         from app.tools.catalog import get_by_cloud_name

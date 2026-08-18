@@ -73,6 +73,29 @@ class _FakeClient:
         return {"provider": "claude_code", "sessions": self._sessions}
 
 
+class _BridgeAckClient:
+    async def post(
+        self,
+        _path: str,
+        payload: dict[str, Any],
+        *,
+        jwt: str | None = None,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        assert jwt and timeout == 30.0
+        return {
+            "schema_version": 1,
+            "action": payload["action"],
+            "provider": payload["provider"],
+            "fidelity": "event_mirror",
+            "session_id": str(uuid4()),
+            "conversation_id": str(uuid4()),
+            "accepted": 1,
+            "duplicates": 0,
+            "conflicts": 0,
+        }
+
+
 @pytest.fixture
 async def env(tmp_path: Path):
     db = LocalDatabase(tmp_path / "matrx.db")
@@ -226,11 +249,30 @@ async def test_sync_matches_bound_sessions_only_and_is_idempotent(env) -> None:
     assert unbound not in serialized
     assert "Private local work" not in serialized
 
-    # An unchanged label costs nothing on the next pass.
+    # Local enqueue is not cloud sync. Before acknowledgement, a second pass
+    # reports the already-durable row instead of marking it synchronized.
     second = await reconciler.sync()
     assert second["queued"] == 0
-    assert second["unchanged"] == 1
+    assert second["already_queued"] == 1
+    assert second["unchanged"] == 0
     assert len(await db.fetchall("SELECT id FROM coding_session_bridge_outbox")) == 1
+    assert await db.fetchall("SELECT * FROM claude_session_metadata_sent") == []
+
+    publisher = CodingSessionBridgeOutbox(
+        db=db,
+        client=_BridgeAckClient(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    assert (await publisher.sync_pending())["sent"] == 1
+    acknowledged_rows = await db.fetchall(
+        "SELECT provider_session_id, payload_sha256 FROM claude_session_metadata_sent"
+    )
+    assert len(acknowledged_rows) == 1
+    assert acknowledged_rows[0]["provider_session_id"] == bound
+    acknowledged = await reconciler.sync()
+    assert acknowledged["queued"] == 0
+    assert acknowledged["already_queued"] == 0
+    assert acknowledged["unchanged"] == 1
 
 
 @pytest.mark.anyio
@@ -434,7 +476,8 @@ async def test_import_carries_the_claude_index_title(env) -> None:
         item["project_key"], session_id
     )
 
-    # The import shares the reconciler's send-ledger: no duplicate pull-sync.
+    # The import shares the same durable outbox transaction. Until the cloud
+    # acknowledges it, the label is pending rather than falsely "synced".
     reconciler = ClaudeSessionMetadataReconciler(
         db=db,
         outbox=outbox,
@@ -450,5 +493,6 @@ async def test_import_carries_the_claude_index_title(env) -> None:
     )
     result = await reconciler.sync()
     assert result["matched"] == 1
-    assert result["unchanged"] == 1
+    assert result["unchanged"] == 0
     assert result["queued"] == 0
+    assert result["already_queued"] == 1

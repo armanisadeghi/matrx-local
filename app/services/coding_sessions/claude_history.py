@@ -31,7 +31,6 @@ from app.services.coding_sessions.claude_session_index import (
 from app.services.coding_sessions.models import BridgeRequest
 from app.services.coding_sessions.service import CodingSessionBridgeOutbox
 from app.services.coding_sessions.title_sync import (
-    payload_digest,
     session_metadata_request,
 )
 from app.services.local_db.database import LocalDatabase, get_db
@@ -619,11 +618,16 @@ class ClaudeHistoryImporter:
             )
 
             outbox = get_coding_session_bridge_outbox()
-        queued = await outbox.enqueue_many(requests)
-        queued_labels = 0
-        if label_requests:
-            queued_labels = (await outbox.enqueue_many(label_requests))["queued"]
-            await self._record_label_digests(label_requests)
+        # Transcript batches and their metadata observation are one durable
+        # commit. A label failure can therefore never leave a 500 response
+        # behind transcript rows the caller was told did not enqueue.
+        transcript_count = len(requests)
+        queued = await outbox.enqueue_many([*requests, *label_requests])
+        duplicate_flags = queued["duplicates_by_index"]
+        transcript_duplicates = sum(duplicate_flags[:transcript_count])
+        label_duplicates = sum(duplicate_flags[transcript_count:])
+        queued_batches = transcript_count - transcript_duplicates
+        queued_labels = len(label_requests) - label_duplicates
         await self._sync_meta.set_last_sync(
             "claude_history_import",
             status="queued",
@@ -642,31 +646,12 @@ class ClaudeHistoryImporter:
             "entries": imported_entries,
             "corrupt_lines": corrupt_lines,
             "source_complete": corrupt_lines == 0,
-            "queued_batches": queued["queued"],
-            "duplicate_pending_batches": queued["duplicate_pending"],
+            "queued_batches": queued_batches,
+            "duplicate_pending_batches": transcript_duplicates,
             "pending_outbox": queued["pending"],
             "native_restore_available": False,
             "continuation": "Open the original local Claude transcript with claude --resume <session-id> only while that local file, workspace, and login remain available.",
         }
-
-    async def _record_label_digests(self, requests: list[BridgeRequest]) -> None:
-        """Share the reconciler's send-ledger so a pull pass sees these as sent."""
-        for item in requests:
-            if item.hook_event is None or item.provider_session_id is None:
-                continue
-            await self._db.execute(
-                """INSERT INTO claude_session_metadata_sent
-                       (provider_session_id, payload_sha256, updated_at)
-                   VALUES (?, ?, datetime('now'))
-                   ON CONFLICT(provider_session_id) DO UPDATE SET
-                       payload_sha256 = excluded.payload_sha256,
-                       updated_at = excluded.updated_at""",
-                (
-                    item.provider_session_id,
-                    payload_digest(dict(item.hook_event.payload)),
-                ),
-            )
-        await self._db.commit()
 
     @staticmethod
     def _label_request(source: _SessionSource) -> BridgeRequest | None:

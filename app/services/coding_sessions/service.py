@@ -126,6 +126,44 @@ def _delivery_dimensions(request: BridgeRequest) -> tuple[str, str, str]:
     return request.provider.value, request.action.value, source
 
 
+def _delivery_lane_key(request: BridgeRequest) -> str:
+    """Canonical local ordering lane for one logical provider session.
+
+    Every action and subordinate stream sharing a real session deliberately
+    shares a lane, so metadata cannot pass any transcript batch that may create
+    its binding. Sessionless requests use action plus source as their identity,
+    allowing unrelated operations to progress independently.
+    """
+    if request.provider_session_id is not None:
+        identity = request.provider_session_id
+        discriminator = "$session"
+    else:
+        identity = f"$action:{request.action.value}"
+        discriminator = _delivery_dimensions(request)[2]
+    return json.dumps(
+        [
+            request.provider.value,
+            request.provider_project_key or "",
+            identity,
+            discriminator,
+        ],
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+def _session_metadata_payload_digest(payload: dict[str, Any]) -> str:
+    """Canonical digest shared with the Claude title reconciler's ledger."""
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _safe_delivery_error(raw_error: Any) -> dict[str, str] | None:
     """Reduce a persisted failure to a display-safe operational explanation.
 
@@ -403,6 +441,7 @@ class CodingSessionBridgeOutbox:
             serialized=serialized,
             digest=digest,
             dimensions=_delivery_dimensions(request),
+            lane_key=_delivery_lane_key(request),
         )
 
         pending = await self.pending_count()
@@ -417,7 +456,7 @@ class CodingSessionBridgeOutbox:
         """Atomically persist a bounded import plan before reporting success."""
         if not requests:
             raise ValueError("at least one bridge request is required")
-        prepared: list[tuple[str | None, str, str, tuple[str, str, str]]] = []
+        prepared: list[tuple[str | None, str, str, tuple[str, str, str], str]] = []
         for request in requests:
             _payload, serialized, digest = _canonical_envelope(request)
             prepared.append(
@@ -426,46 +465,49 @@ class CodingSessionBridgeOutbox:
                     serialized,
                     digest,
                     _delivery_dimensions(request),
+                    _delivery_lane_key(request),
                 )
             )
-        ids, duplicates = await self._commit_enqueue_many(prepared)
+        ids, duplicates_by_index = await self._commit_enqueue_many(prepared)
+        duplicates = sum(duplicates_by_index)
         pending = await self.pending_count()
         self.wake()
         return {
             "queued": len(ids) - duplicates,
             "duplicate_pending": duplicates,
+            "duplicates_by_index": duplicates_by_index,
             "receipt_ids": ids,
             "pending": pending,
         }
 
     async def _commit_enqueue_many(
         self,
-        prepared: list[tuple[str | None, str, str, tuple[str, str, str]]],
-    ) -> tuple[list[int], int]:
+        prepared: list[tuple[str | None, str, str, tuple[str, str, str], str]],
+    ) -> tuple[list[int], list[bool]]:
         ids: list[int] = []
-        duplicates = 0
+        duplicates_by_index: list[bool] = []
         async with aiosqlite.connect(str(self._db.path)) as connection:
             connection.row_factory = aiosqlite.Row
             await connection.execute("PRAGMA busy_timeout=5000")
             await connection.execute("PRAGMA synchronous=FULL")
             await connection.execute("BEGIN IMMEDIATE")
             try:
-                for dedupe_key, serialized, digest, dimensions in prepared:
+                for dedupe_key, serialized, digest, dimensions, lane_key in prepared:
                     if dedupe_key is None:
                         cursor = await connection.execute(
                             """INSERT INTO coding_session_bridge_outbox (
-                                 dedupe_key, envelope_json, envelope_sha256
-                               ) VALUES (?, ?, ?)""",
-                            (None, serialized, digest),
+                                 dedupe_key, envelope_json, envelope_sha256, lane_key
+                               ) VALUES (?, ?, ?, ?)""",
+                            (None, serialized, digest, lane_key),
                         )
                     else:
                         cursor = await connection.execute(
                             """INSERT INTO coding_session_bridge_outbox (
-                                 dedupe_key, envelope_json, envelope_sha256
-                               ) VALUES (?, ?, ?)
+                                 dedupe_key, envelope_json, envelope_sha256, lane_key
+                               ) VALUES (?, ?, ?, ?)
                                ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL
                                DO NOTHING""",
-                            (dedupe_key, serialized, digest),
+                            (dedupe_key, serialized, digest, lane_key),
                         )
                     if cursor.rowcount == 1:
                         receipt_id = int(cursor.lastrowid)
@@ -475,6 +517,7 @@ class CodingSessionBridgeOutbox:
                             dimensions=dimensions,
                             receipt_id=receipt_id,
                         )
+                        duplicates_by_index.append(False)
                         continue
                     existing_cursor = await connection.execute(
                         """SELECT id, envelope_sha256
@@ -488,12 +531,12 @@ class CodingSessionBridgeOutbox:
                             "stable import identity was reused with different bytes"
                         )
                     ids.append(int(row["id"]))
-                    duplicates += 1
+                    duplicates_by_index.append(True)
                 await connection.commit()
             except BaseException:
                 await connection.rollback()
                 raise
-        return ids, duplicates
+        return ids, duplicates_by_index
 
     async def _commit_enqueue(
         self,
@@ -502,6 +545,7 @@ class CodingSessionBridgeOutbox:
         serialized: str,
         digest: str,
         dimensions: tuple[str, str, str],
+        lane_key: str,
     ) -> tuple[int, bool]:
         """Use a private, FULL-sync transaction for the durable-ack boundary.
 
@@ -523,18 +567,18 @@ class CodingSessionBridgeOutbox:
                 if dedupe_key is None:
                     cursor = await connection.execute(
                         """INSERT INTO coding_session_bridge_outbox (
-                             dedupe_key, envelope_json, envelope_sha256
-                           ) VALUES (?, ?, ?)""",
-                        (None, serialized, digest),
+                             dedupe_key, envelope_json, envelope_sha256, lane_key
+                           ) VALUES (?, ?, ?, ?)""",
+                        (None, serialized, digest, lane_key),
                     )
                 else:
                     cursor = await connection.execute(
                         """INSERT INTO coding_session_bridge_outbox (
-                             dedupe_key, envelope_json, envelope_sha256
-                           ) VALUES (?, ?, ?)
+                             dedupe_key, envelope_json, envelope_sha256, lane_key
+                           ) VALUES (?, ?, ?, ?)
                            ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL
                            DO NOTHING""",
-                        (dedupe_key, serialized, digest),
+                        (dedupe_key, serialized, digest, lane_key),
                     )
                 if cursor.rowcount == 1:
                     outbox_id = int(cursor.lastrowid)
@@ -868,6 +912,9 @@ class CodingSessionBridgeOutbox:
                 ):
                     last_acknowledgement = acknowledgement
 
+        # The oldest lane head currently waiting for its retry window. Ready
+        # rows are ordinary queued work, not blockers, and later rows in the
+        # same lane are intentionally hidden behind this head.
         head = await self._db.fetchone(
             f"""SELECT id, attempts, next_attempt_at, last_error, created_at,
                        CASE WHEN json_valid(envelope_json)
@@ -877,7 +924,16 @@ class CodingSessionBridgeOutbox:
                             THEN COALESCE(json_extract(envelope_json, '$.action'), 'unknown')
                             ELSE 'unknown' END AS action,
                        {_SOURCE_SQL} AS source
-                FROM coding_session_bridge_outbox ORDER BY id LIMIT 1"""
+                FROM coding_session_bridge_outbox AS current
+                WHERE current.next_attempt_at > ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM coding_session_bridge_outbox AS prior
+                      WHERE prior.lane_key = current.lane_key
+                        AND prior.id < current.id
+                  )
+                ORDER BY current.id LIMIT 1""",
+            (time.time(),),
         )
         head_blocker = None
         if head is not None:
@@ -924,7 +980,7 @@ class CodingSessionBridgeOutbox:
         }
 
     async def sync_pending(self, *, limit: int = _MAX_BATCH) -> dict[str, Any]:
-        """Upload in insertion order and stop at the first deferred/failing row."""
+        """Publish eligible lane heads while preserving order inside each lane."""
         if limit < 1:
             raise ValueError("limit must be at least 1")
         async with self._sync_lock:
@@ -956,15 +1012,27 @@ class CodingSessionBridgeOutbox:
                 }
 
             sent = 0
-            while sent < limit:
+            failed = 0
+            processed = 0
+            while processed < limit:
                 row = await self._db.fetchone(
-                    """SELECT id, envelope_json, envelope_sha256, attempts, next_attempt_at
-                       FROM coding_session_bridge_outbox ORDER BY id LIMIT 1"""
+                    """SELECT o.id, o.envelope_json, o.envelope_sha256,
+                              o.attempts, o.next_attempt_at, o.lane_key
+                       FROM coding_session_bridge_outbox AS o
+                       WHERE o.next_attempt_at <= ?
+                         AND NOT EXISTS (
+                             SELECT 1
+                             FROM coding_session_bridge_outbox AS prior
+                             WHERE prior.lane_key = o.lane_key
+                               AND prior.id < o.id
+                         )
+                       ORDER BY o.id
+                       LIMIT 1""",
+                    (time.time(),),
                 )
                 if row is None:
                     break
-                if float(row["next_attempt_at"] or 0) > time.time():
-                    break
+                processed += 1
                 try:
                     serialized = str(row["envelope_json"])
                     actual_digest = hashlib.sha256(
@@ -999,13 +1067,18 @@ class CodingSessionBridgeOutbox:
                 except (AIDreamOfflineError, AIDreamError) as exc:
                     if _is_terminal_rejection(exc, int(row["attempts"])):
                         await self._quarantine_head(row, exc)
-                        # Keep going: the whole point is that the queue behind a
-                        # poison row is deliverable and must not wait for it.
+                        # The next row in this lane, plus every unrelated lane,
+                        # can now advance.
                         continue
                     await self._record_failure(
                         int(row["id"]), int(row["attempts"]), exc
                     )
-                    return {"sent": sent, "failed": 1, "blocked": None}
+                    failed += 1
+                    if isinstance(exc, AIDreamOfflineError):
+                        # Network reachability is publisher-wide, not a poison
+                        # row; burning every lane's retry counter adds no value.
+                        break
+                    continue
 
                 await self._record_delivery_acknowledgement(
                     receipt_id=int(row["id"]),
@@ -1018,7 +1091,7 @@ class CodingSessionBridgeOutbox:
                 )
                 await self._db.commit()
                 sent += 1
-            return {"sent": sent, "failed": 0, "blocked": None}
+            return {"sent": sent, "failed": failed, "blocked": None}
 
     async def _record_delivery_acknowledgement(
         self,
@@ -1059,6 +1132,28 @@ class CodingSessionBridgeOutbox:
                 fidelity,
             ),
         )
+        hook = request.hook_event
+        if (
+            request.provider is BridgeProvider.CLAUDE_CODE
+            and request.provider_session_id is not None
+            and hook is not None
+            and hook.name == SESSION_METADATA_EVENT
+        ):
+            # This ledger means cloud-acknowledged, not merely locally queued.
+            # Keeping it in the same transaction as outbox deletion prevents a
+            # failed label from being mistaken for a synchronized one.
+            await self._db.execute(
+                """INSERT INTO claude_session_metadata_sent
+                       (provider_session_id, payload_sha256, updated_at)
+                   VALUES (?, ?, datetime('now'))
+                   ON CONFLICT(provider_session_id) DO UPDATE SET
+                       payload_sha256=excluded.payload_sha256,
+                       updated_at=excluded.updated_at""",
+                (
+                    request.provider_session_id,
+                    _session_metadata_payload_digest(dict(hook.payload)),
+                ),
+            )
 
     async def _quarantine_head(self, row: Any, exc: Exception) -> None:
         """Move a permanently-rejected row aside so the queue can advance.
@@ -1087,8 +1182,8 @@ class CodingSessionBridgeOutbox:
             "[coding_session_bridge] QUARANTINED outbox id=%s after %s attempts "
             "(HTTP %s) — the server permanently refuses this envelope, so these "
             "events will NEVER reach AI Matrx. The row is preserved in "
-            "coding_session_bridge_quarantine. Every row behind it was blocked "
-            "until now: %s",
+            "coding_session_bridge_quarantine. Later rows in its delivery lane "
+            "were blocked until now: %s",
             int(row["id"]),
             int(row["attempts"]),
             status_code,

@@ -45,7 +45,7 @@ Deliberate boundaries:
   directions.
 - **Metadata plane only.** ``SessionMetadata`` updates a binding's labels; it
   never mints a binding and never appends a transcript entry.
-- **Idempotent both ways.** The exact payload last enqueued and the exact title
+- **Idempotent both ways.** The exact payload last cloud-acknowledged and the exact title
   last written down are recorded locally, so an unchanged label costs zero
   network work and zero writes into another application's files.
 """
@@ -193,18 +193,6 @@ class ClaudeSessionMetadataReconciler:
             str(row["provider_session_id"]): str(row["payload_sha256"]) for row in rows
         }
 
-    async def _record_sent(self, provider_session_id: str, digest: str) -> None:
-        await self._db.execute(
-            """INSERT INTO claude_session_metadata_sent
-                   (provider_session_id, payload_sha256, updated_at)
-               VALUES (?, ?, datetime('now'))
-               ON CONFLICT(provider_session_id) DO UPDATE SET
-                   payload_sha256 = excluded.payload_sha256,
-                   updated_at = excluded.updated_at""",
-            (provider_session_id, digest),
-        )
-        await self._db.commit()
-
     async def _pushed_titles(self) -> dict[str, str]:
         rows = await self._db.fetchall(
             "SELECT provider_session_id, title_sha256 FROM claude_session_title_pushed"
@@ -262,6 +250,7 @@ class ClaudeSessionMetadataReconciler:
         no_labels = 0
         unchanged = 0
         queued = 0
+        already_queued = 0
         unreadable_identity = 0
         titles: list[dict[str, str]] = []
 
@@ -305,9 +294,11 @@ class ClaudeSessionMetadataReconciler:
                 payload=payload,
             )
             outbox = self._outbox or get_coding_session_bridge_outbox()
-            await outbox.enqueue(request)
-            await self._record_sent(provider_session_id, digest)
-            queued += 1
+            receipt = await outbox.enqueue(request)
+            if receipt.duplicate:
+                already_queued += 1
+            else:
+                queued += 1
             if entry.title and len(titles) < 25:
                 titles.append(
                     {
@@ -321,17 +312,23 @@ class ClaudeSessionMetadataReconciler:
         if not dry_run:
             await self._sync_meta.set_last_sync(
                 "claude_session_metadata",
-                status="queued" if queued or pushed["written"] else "current",
+                status=(
+                    "queued"
+                    if queued or already_queued or pushed["written"]
+                    else "current"
+                ),
             )
-            if queued or pushed["written"]:
+            if queued or already_queued or pushed["written"]:
                 (self._outbox or get_coding_session_bridge_outbox()).wake()
         logger.info(
             "[coding_session_bridge] claude label sync bound=%s matched=%s "
-            "unmatched=%s queued=%s unchanged=%s pushed_down=%s refused=%s",
+            "unmatched=%s queued=%s already_queued=%s unchanged=%s "
+            "pushed_down=%s refused=%s",
             len(identities),
             matched,
             len(unmatched),
             queued,
+            already_queued,
             unchanged,
             pushed["written"],
             pushed["refused"],
@@ -349,6 +346,7 @@ class ClaudeSessionMetadataReconciler:
             "matched_without_labels": no_labels,
             "unchanged": unchanged,
             "queued": queued,
+            "already_queued": already_queued,
             "unreadable_identities": unreadable_identity,
             "sample_titles": titles,
             "push_down": pushed,

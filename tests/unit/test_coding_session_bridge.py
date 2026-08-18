@@ -18,6 +18,7 @@ from app.services.coding_sessions.models import BridgeRequest
 from app.services.coding_sessions.service import (
     BridgeMutationConflict,
     CodingSessionBridgeOutbox,
+    _delivery_lane_key,
 )
 from app.services.local_db.database import LocalDatabase
 
@@ -92,6 +93,7 @@ def _hook(
     stable_id: str | None = "prompt-1",
     text: str = "hello",
     provider: str = "claude_code",
+    provider_session_id: str = "provider-session-1",
 ) -> BridgeRequest:
     event: dict[str, Any] = {
         "name": "UserPromptSubmit",
@@ -104,7 +106,7 @@ def _hook(
             "schema_version": 1,
             "action": "observe_hook",
             "provider": provider,
-            "provider_session_id": "provider-session-1",
+            "provider_session_id": provider_session_id,
             "origin": "independent_hook",
             "stream_key": "main",
             "hook_event": event,
@@ -235,6 +237,14 @@ async def test_migration_creates_dedicated_local_outbox(
     }
     assert "envelope_json" not in activity_column_names
     assert "payload" not in activity_column_names
+    lane_migration = await bridge_db.fetchone(
+        "SELECT version FROM _migrations WHERE version = 25"
+    )
+    assert lane_migration and lane_migration["version"] == 25
+    outbox_columns = await bridge_db.fetchall(
+        "PRAGMA table_info(coding_session_bridge_outbox)"
+    )
+    assert "lane_key" in {row["name"] for row in outbox_columns}
 
 
 @pytest.mark.anyio
@@ -313,7 +323,7 @@ async def test_provider_neutral_status_shows_codex_pending_and_quarantine_safely
     serialized = json.dumps(status)
     assert "private prompt" not in serialized
     assert "/Users/private/repo" not in serialized
-    assert status["head_blocker"]["error"] is None
+    assert status["head_blocker"] is None, "a ready row is not a blocker"
 
 
 @pytest.mark.anyio
@@ -356,6 +366,95 @@ async def test_successful_codex_ack_is_persisted_after_validation(
            WHERE provider='codex' AND action='observe_hook'"""
     )
     assert activity and activity["acknowledged_envelopes"] == 1
+
+
+@pytest.mark.anyio
+async def test_retry_blocks_only_its_session_lane_while_other_lanes_progress(
+    bridge_db: LocalDatabase,
+) -> None:
+    client = FakeClient([AIDreamError(500, "session-specific rejection"), {}, {}, {}])
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=client,
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    blocked_first = await service.enqueue(
+        _hook(stable_id="a-1", provider_session_id="claude-session-a")
+    )
+    await service.enqueue(
+        _hook(stable_id="a-2", provider_session_id="claude-session-a")
+    )
+    await service.enqueue(
+        _hook(
+            stable_id="codex-1",
+            provider="codex",
+            provider_session_id="codex-session",
+        )
+    )
+    await service.enqueue(
+        _hook(stable_id="b-1", provider_session_id="claude-session-b")
+    )
+
+    result = await service.sync_pending(limit=4)
+
+    assert result == {"sent": 2, "failed": 1, "blocked": None}
+    assert [call[1]["hook_event"]["stable_event_id"] for call in client.calls] == [
+        "a-1",
+        "codex-1",
+        "b-1",
+    ]
+    assert await service.pending_count() == 2
+    status = await service.delivery_status()
+    assert status["head_blocker"]["receipt_id"] == blocked_first.receipt_id
+    assert status["head_blocker"]["provider"] == "claude_code"
+
+    await bridge_db.execute("UPDATE coding_session_bridge_outbox SET next_attempt_at=0")
+    await bridge_db.commit()
+    retry = await service.sync_pending(limit=2)
+
+    assert retry == {"sent": 2, "failed": 0, "blocked": None}
+    assert [call[1]["hook_event"]["stable_event_id"] for call in client.calls] == [
+        "a-1",
+        "codex-1",
+        "b-1",
+        "a-1",
+        "a-2",
+    ]
+
+
+def test_session_actions_share_a_lane_while_sessionless_actions_do_not() -> None:
+    native = _native_import()
+    metadata_payload = native.model_dump(mode="json")
+    metadata_payload.update(
+        {
+            "action": "observe_hook",
+            "origin": "independent_hook",
+            "entries": [],
+            "source_metadata": None,
+            "conversation": None,
+            "writer_runtime_id": None,
+            "stream_key": "metadata-plane",
+            "hook_event": {
+                "name": "SessionMetadata",
+                "stable_event_id": "metadata-1",
+                "payload": {"title": "Same lane"},
+            },
+        }
+    )
+    metadata = BridgeRequest.model_validate(metadata_payload)
+
+    assert native.action.value != metadata.action.value
+    assert native.stream_key != metadata.stream_key
+    assert _delivery_lane_key(native) == _delivery_lane_key(metadata)
+
+    health = BridgeRequest.model_validate(
+        {"action": "health", "provider": "claude_code"}
+    )
+    listing = BridgeRequest.model_validate(
+        {"action": "list_native", "provider": "claude_code"}
+    )
+    assert _delivery_lane_key(health) != _delivery_lane_key(listing)
 
 
 @pytest.mark.anyio

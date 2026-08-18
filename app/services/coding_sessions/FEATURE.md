@@ -50,8 +50,14 @@ user session through `TokenRepo`, obtains the existing app-configured
 `POST /api/coding-sessions/bridge`. There is no second token, HTTP client,
 daemon, service, or database.
 
-- Rows are attempted strictly by SQLite ID. A deferred or failed head row
-  blocks later rows; the bridge never reorders a provider event stream.
+- Rows are strictly ordered inside a V25 **delivery lane**: canonical
+  `(provider, provider_project_key, provider_session_id)` across every action
+  and subordinate stream. For the rare sessionless request, action plus source
+  replaces the session identity.
+  The oldest eligible lane head is attempted first, but a deferred lane does
+  not block another provider, session, or project. Every action/stream for the
+  same real session deliberately shares a lane, so `SessionMetadata` cannot
+  pass any transcript batch that creates its binding.
 - Success means aidream returned 2xx **and** a valid BridgeResponse v1 receipt
   for the same provider/action with event-mirror fidelity, canonical session
   and conversation UUIDs, zero conflicts, and exactly one accepted or duplicate
@@ -69,9 +75,9 @@ daemon, service, or database.
 
 ### 🚨 THE POISON-ROW RULE — ordered delivery plus infinite retry means STOP
 
-Strict ordering is deliberate and correct. Retrying until success is deliberate
+Per-lane ordering is deliberate and correct. Retrying until success is deliberate
 and correct. **Together they mean one permanently-rejected envelope halts every
-row behind it, forever, with nothing surfacing it.** Found live 2026-08-17: a
+later row in that lane, forever, without quarantine.** Found live 2026-08-17: a
 single row had failed **2,520 times since 2026-08-13** with HTTP 409
 `entry_mutated` and had blocked **3,709 rows for four days** — a second silent
 capture outage sitting underneath the first one.
@@ -118,9 +124,16 @@ the receipt. Claude history status derives the same truth for the
 `claude_local_jsonl` source and includes its quarantine count instead of
 silently dropping it.
 
-The publisher remains globally FIFO in this implementation. The status facade
-makes cross-provider blocking visible, but changing scheduling/ordering is a
-separate contract change and is not part of V24.
+V25 replaces the retired global FIFO scheduler with those session-stream lanes.
+`head_blocker` is the oldest lane head whose retry time is still in the future;
+an ordinary ready row is no longer mislabeled as a blocker.
+
+The same migration changes `claude_session_metadata_sent` from an enqueue
+ledger into an acknowledgement ledger. Legacy rows are cleared once, because
+they cannot prove cloud delivery; one idempotent reconciliation repairs them.
+The publisher writes the digest only in the validated acknowledgement +
+outbox-delete transaction. A repeated reconciliation before that reports the
+metadata as already queued, never synchronized.
 
 ## Automatic capture reconciliation — backfilling what the hooks lost
 
@@ -176,7 +189,9 @@ paths, file contents, or secrets into the desktop chat replica.
 user presses **Review local history**, reports file/session/byte/project counts plus bounded session
 summaries, and uploads nothing. `POST /coding-session/claude/history/import` accepts at most ten
 session IDs with their exact preview revisions and atomically commits every generated
-`append_native` batch to the existing V19 outbox before returning 202. `GET
+`append_native` batch **and its `SessionMetadata` observation in one transaction**
+to the existing V19 outbox before returning 202. A metadata failure rolls back the
+transcript batches, so a 500 can never conceal a partial commit. `GET
 /coding-session/claude/history/status` reports the outbox and last explicit enqueue. If delivery is
 blocked, the page exposes `DELETE /coding-session/claude/history/pending` as **Discard queued
 copies**; it removes only explicit Claude-history batches and never source files, hook observations,
@@ -277,7 +292,7 @@ Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding-sessi
   mirrored never leave this machine, and a session AI Matrx does not own is never written to on
   disk. This is the whole privacy boundary of the feature — never widen it to "every local session".
 - **Idempotent by ledger.** `claude_session_metadata_sent` (V20) records the exact payload digest
-  last enqueued per bound session; `claude_session_title_pushed` (V21) records the exact title last
+  last cloud-acknowledged per bound session; `claude_session_title_pushed` (V21) records the exact title last
   written down. An unchanged label costs zero network work and zero writes into another
   application's files. The explicit import writes the V20 ledger too, so an import and a pull pass
   never duplicate each other.

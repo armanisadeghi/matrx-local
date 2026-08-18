@@ -838,9 +838,10 @@ ON coding_session_bridge_outbox(id)
 
 # Claude Code owns the label it shows in its own sidebar; AI Matrx must show
 # the SAME one and keep showing it after a rename. The pull-sync reconciler
-# records the exact label payload it last enqueued per bound session so an
-# unchanged title costs no network work and a rename is detected on the next
-# pass. This is a send-ledger, not a cache of provider state.
+# records the exact label payload the cloud last acknowledged per bound session
+# so an unchanged title costs no network work and a rename is detected on the
+# next pass. V25 clears legacy enqueue-time rows once when this becomes an
+# acknowledgement ledger; it is not a cache of provider state.
 _V20_CLAUDE_SESSION_METADATA_SENT = """
 CREATE TABLE IF NOT EXISTS claude_session_metadata_sent (
     provider_session_id TEXT PRIMARY KEY,
@@ -931,6 +932,53 @@ CREATE TABLE IF NOT EXISTS coding_session_bridge_delivery_activity (
 )
 """
 
+# Ordered publication is scoped to one logical provider session stream, not to
+# every coding surface on the machine. A deferred Claude session must not stop
+# a Codex session (or even another Claude session) from reaching the cloud.
+# The key is a canonical JSON array of provider, opaque project key, opaque
+# session identity, and a discriminator. Every stream/action in a real session
+# uses the fixed `$session` discriminator; sessionless requests use their
+# action plus source. It is local scheduling metadata only and is never exposed
+# through status.
+_V25_CODING_SESSION_BRIDGE_DELIVERY_LANES = """
+ALTER TABLE coding_session_bridge_outbox ADD COLUMN lane_key TEXT;
+
+UPDATE coding_session_bridge_outbox
+SET lane_key = CASE
+    WHEN json_valid(envelope_json) THEN json_array(
+        COALESCE(json_extract(envelope_json, '$.provider'), 'unknown'),
+        COALESCE(json_extract(envelope_json, '$.provider_project_key'), ''),
+        CASE
+            WHEN json_extract(envelope_json, '$.provider_session_id') IS NOT NULL
+                THEN json_extract(envelope_json, '$.provider_session_id')
+            ELSE '$action:' || COALESCE(
+                json_extract(envelope_json, '$.action'), 'unknown'
+            )
+        END,
+        CASE
+            WHEN json_extract(envelope_json, '$.provider_session_id') IS NOT NULL
+                THEN '$session'
+            ELSE COALESCE(
+                json_extract(envelope_json, '$.source_metadata.source_kind'),
+                json_extract(envelope_json, '$.origin'),
+                'unspecified'
+            )
+        END
+    )
+    ELSE json_array('unknown', '', '$row:' || id, 'main')
+END
+WHERE lane_key IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_coding_session_bridge_lane_order
+ON coding_session_bridge_outbox(lane_key, id);
+
+-- Before V25 this ledger was written at local enqueue time. It now means a
+-- validated cloud acknowledgement, so legacy rows cannot be trusted. Clearing
+-- it causes one idempotent metadata reconciliation and repairs any label that
+-- was queued but never delivered.
+DELETE FROM claude_session_metadata_sent
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -956,4 +1004,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (22, _V22_CLAUDE_CAPTURE_BACKFILL),
     (23, _V23_CODING_SESSION_BRIDGE_QUARANTINE),
     (24, _V24_CODING_SESSION_BRIDGE_DELIVERY_ACTIVITY),
+    (25, _V25_CODING_SESSION_BRIDGE_DELIVERY_LANES),
 ]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -214,15 +215,15 @@ async def test_selected_import_is_atomic_bounded_and_replay_safe(importer_env) -
     assert first["native_restore_available"] is False
     assert replay["queued_batches"] == 0
     assert replay["duplicate_pending_batches"] == first["queued_batches"]
+    assert first["queued_label_updates"] == 1
+    assert replay["queued_label_updates"] == 0
     rows = await db.fetchall(
         "SELECT envelope_json FROM coding_session_bridge_outbox ORDER BY id"
     )
     all_envelopes = [
         BridgeRequest.model_validate_json(row["envelope_json"]) for row in rows
     ]
-    envelopes = [
-        item for item in all_envelopes if item.action.value == "append_native"
-    ]
+    envelopes = [item for item in all_envelopes if item.action.value == "append_native"]
     # The import also queues Claude's own labels as one metadata-plane
     # observation per session, behind the transcript batches that mint the
     # binding. It is never an append_native copy and carries no entries.
@@ -420,6 +421,64 @@ async def test_reused_provider_uuid_is_rejected_without_partial_outbox(
 
 
 @pytest.mark.anyio
+async def test_transcript_and_label_enqueue_roll_back_as_one_transaction(
+    importer_env,
+) -> None:
+    config_dir, db, outbox = importer_env
+    session_id = str(uuid4())
+    _write_session(
+        config_dir,
+        session_id=session_id,
+        records=[
+            {
+                "type": "user",
+                "uuid": str(uuid4()),
+                "sessionId": session_id,
+                "message": {"role": "user", "content": "Atomic label import"},
+            }
+        ],
+    )
+    importer = ClaudeHistoryImporter(
+        db=db,
+        outbox=outbox,
+        config_dir=config_dir,
+        account_reader=_account_a,
+    )
+    preview = await importer.preview()
+    item = preview["sessions"][0]
+    await db.execute(
+        """CREATE TRIGGER reject_session_metadata
+           BEFORE INSERT ON coding_session_bridge_outbox
+           WHEN json_extract(NEW.envelope_json, '$.hook_event.name') = 'SessionMetadata'
+           BEGIN
+             SELECT RAISE(ABORT, 'metadata enqueue rejected');
+           END"""
+    )
+    await db.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="metadata enqueue rejected"):
+        await importer.import_selected(
+            ClaudeHistoryImportRequest.model_validate(
+                {
+                    "provider_account_key": preview["provider_account_key"],
+                    "sessions": [
+                        {
+                            "session_id": session_id,
+                            "provider_project_key": item["project_key"],
+                            "source_revision": item["source_revision"],
+                        }
+                    ],
+                }
+            )
+        )
+
+    assert await outbox.pending_count() == 0
+    assert (
+        await db.fetchall("SELECT * FROM coding_session_bridge_delivery_activity") == []
+    )
+
+
+@pytest.mark.anyio
 async def test_same_size_same_mtime_replacement_fails_revision_gate(
     importer_env,
 ) -> None:
@@ -574,9 +633,7 @@ async def test_same_uuid_across_projects_keeps_project_identity(importer_env) ->
     all_envelopes = [
         BridgeRequest.model_validate_json(row["envelope_json"]) for row in rows
     ]
-    envelopes = [
-        item for item in all_envelopes if item.action.value == "append_native"
-    ]
+    envelopes = [item for item in all_envelopes if item.action.value == "append_native"]
     assert {item.provider_project_key for item in all_envelopes} == {
         match["project_key"] for match in matches
     }

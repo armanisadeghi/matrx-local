@@ -140,6 +140,55 @@ claim instead of racing the 2.5 s browser grace window:
   `tool_delegated` → claim → poll → `POST /resume` with the desktop client
   envelope). Pinned by `test_ui_claim_defers_resume_then_self_heals_on_release`.
 
+## User-review calls — an authorization boundary, not an execution path
+
+Some delegated tools are executed by NOBODY. `google_email_send` is the
+category (`app/services/delegation/user_review.py`): it has **no server
+executor anywhere in the platform**, and that absence IS the Gmail
+authorization boundary — with no server path, an agent-authored
+`user_confirmed` cannot exist, let alone authorize anything.
+
+So the desktop must not dispatch it either. `sweep_once` intercepts a
+`USER_REVIEW_TOOLS` call BEFORE `_resolve_tool` and **parks** it:
+
+```
+pending call (tool bound to matrx-local)
+  → user-review tool?  → _park_review()   [no dispatcher, no outbox, no send]
+  → GET  /chat/delegation/reviews          (desktop card reads the proposal)
+  → user edits + clicks Send in <GmailReviewCard>
+      → the CARD posts the reviewed bytes to aidream
+        /api/google-workspace/gmail/send-reviewed with the user's own JWT
+  → POST /chat/delegation/review-decision  (sent | declined | cancelled | error)
+      → build_review_output() → the normal _deliver() path → /resume
+```
+
+Rules that must not erode:
+
+- **The engine never sends mail.** It holds a proposal and turns a human
+  decision into a tool result. The send lives in the card
+  (`desktop/src/lib/google-workspace.ts`), which is where the reviewed bytes
+  are — matching matrx-frontend exactly. Never add a "send" capability to the
+  engine; a loopback endpoint that sends is an unattended send path.
+- **Only the four human outcomes exist.** The route rejects anything else, and
+  `normalize_review_arguments` keeps only `to/cc/subject/body` — an agent
+  cannot smuggle a confirmation flag into the card.
+- **Parking is never an answer.** A parked call is not `_handled`; nothing is
+  delivered until a person decides. A review the server stops listing is
+  DROPPED (`_prune_reviews`), never auto-answered. `resolve_review` pops the
+  entry first, so a double click delivers once (404 the second time).
+- **A review has no deadline.** `ui_conversation_state` reports
+  `reviews_pending` so the UI's continuation wait
+  (`waitForDelegatedContinuation`) extends its deadline instead of handing the
+  conversation to the headless resume while a human is still reading.
+- **The user's exposure gate still applies** — a disabled `google_email_send`
+  is refused with an error result, not parked.
+
+Desktop half: `desktop/src/hooks/use-email-reviews.ts` (poller + decision) and
+`desktop/src/components/chat/GmailReviewCard.tsx` (the consent surface,
+rendered above the Cloud Chat composer). Pinned by
+`tests/unit/test_delegation_user_review.py` and
+`tests/smoke/test_delegation_user_review_routes.py`.
+
 ## User tool exposure gate
 
 Settings key `cloud_tools` (`{"disabled_tools": [<cloud_name>...]}`) —

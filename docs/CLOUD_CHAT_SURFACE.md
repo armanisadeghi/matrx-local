@@ -44,6 +44,21 @@ them; the OPEN Cloud Chat view claims the continuation over loopback so the
 resumed stream renders live. See `app/services/delegation/FEATURE.md`
 § Local UI stream claims.
 
+## Google Workspace on this surface (2026-08-18)
+
+`tool.surface_defaults` for `matrx-local/desktop` now includes the `google`
+bundle, so cloud agents reach both first-party Google tools from desktop:
+
+- `google_workspace` (executor `aidream`) — Doc/Sheet read, append, create,
+  bounded write, and `prepare_email`. Runs on the server; nothing to build here.
+- `google_email_send` (client-only) — **parked, never executed.** The engine
+  holds the proposal and `<GmailReviewCard>` above the composer IS the
+  authorization: the user sees and edits the exact message and only their click
+  sends it. See `app/services/delegation/FEATURE.md` § User-review calls. The
+  matching `tool.binding` is to executor `matrx-local` (a CLIENT binding,
+  parallel to the chrome-extension one); there is still no server executor and
+  there must never be one.
+
 ## Ordered stream blocks (2026-07-19)
 
 Live cloud-chat messages render from `ChatMessage.blocks` — an ordered

@@ -52,6 +52,7 @@ Deliberate boundaries:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -184,6 +185,7 @@ class ClaudeSessionMetadataReconciler:
         self._writer = writer or ClaudeSessionIndexWriter()
         self._tokens = TokenRepo(self._db)
         self._sync_meta = SyncMetaRepo(self._db)
+        self._sync_lock = asyncio.Lock()
 
     async def _sent_digests(self) -> dict[str, str]:
         rows = await self._db.fetchall(
@@ -240,6 +242,11 @@ class ClaudeSessionMetadataReconciler:
         return [row for row in sessions if isinstance(row, dict)]
 
     async def sync(self, *, dry_run: bool = False) -> dict[str, Any]:
+        """Serialize title reconciliation so reports and mutation fences agree."""
+        async with self._sync_lock:
+            return await self._sync_once(dry_run=dry_run)
+
+    async def _sync_once(self, *, dry_run: bool = False) -> dict[str, Any]:
         """Reconcile every bound Claude session's label in BOTH directions."""
         identities = await self._identities()
         index, index_totals = self._index_reader()

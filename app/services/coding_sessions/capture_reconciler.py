@@ -214,6 +214,11 @@ class ClaudeCaptureReconciler:
     # ------------------------------------------------------------------- pass
 
     async def reconcile(self, *, dry_run: bool = False) -> dict[str, Any]:
+        """Serialize manual and background passes, then return one report."""
+        async with self._lock:
+            return await self._reconcile_once(dry_run=dry_run)
+
+    async def _reconcile_once(self, *, dry_run: bool = False) -> dict[str, Any]:
         """One bounded pass. Returns exactly what it saw and what it enqueued."""
         if not AUTO_BACKFILL_ENABLED:
             return {"status": "disabled", "enqueued": 0}
@@ -424,8 +429,7 @@ class ClaudeCaptureReconciler:
     async def _loop(self) -> None:
         while not self._stopping:
             try:
-                async with self._lock:
-                    await self.reconcile()
+                await self.reconcile()
             except CaptureReconcileBlocked as exc:
                 # Signed out, offline, or unconfigured are ordinary states for a
                 # desktop app; they are not defects and must not spam ERROR.

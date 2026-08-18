@@ -16,18 +16,16 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
-  FolderPlus,
   Loader2,
   Play,
   RefreshCw,
   Square,
-  Trash2,
 } from "lucide-react";
 
+import { WorkspaceApprovalTree } from "@/components/coding-sessions/WorkspaceApprovalTree";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { engine } from "@/lib/api";
 import type { LocalRuntimeCapabilities, LocalRuntimeRun } from "@/lib/api";
 
@@ -50,10 +48,10 @@ export function AgentRuntimeCard() {
   const [capabilities, setCapabilities] =
     useState<LocalRuntimeCapabilities | null>(null);
   const [runs, setRuns] = useState<LocalRuntimeRun[]>([]);
-  const [folderInput, setFolderInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [initialLoad, setInitialLoad] = useState(true);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -71,6 +69,7 @@ export function AgentRuntimeCard() {
       );
     } finally {
       setRefreshing(false);
+      setInitialLoad(false);
     }
   }, []);
 
@@ -84,36 +83,6 @@ export function AgentRuntimeCard() {
     const id = setInterval(() => void refresh(), 3000);
     return () => clearInterval(id);
   }, [hasActiveRuns, refresh]);
-
-  const approve = async () => {
-    if (!folderInput.trim()) return;
-    setBusy(true);
-    try {
-      await engine.approveRuntimeFolder(folderInput.trim());
-      setFolderInput("");
-      await refresh();
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : String(nextError),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const revoke = async (folder: string) => {
-    setBusy(true);
-    try {
-      await engine.revokeRuntimeFolder(folder);
-      await refresh();
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : String(nextError),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const cancel = async (runtimeId: string) => {
     setBusy(true);
@@ -135,12 +104,12 @@ export function AgentRuntimeCard() {
         <div>
           <CardTitle className="flex items-center gap-2 text-base">
             <Play className="h-4 w-4" />
-            Agent Runtime — Claude Code on this Mac
+            Local runtime — Claude Code on this Mac
           </CardTitle>
           <p className="mt-1 text-sm text-muted-foreground">
-            Start Claude Code sessions here or from AI Matrx on the web. Runs
-            use your own installed Claude Code and its login, work only inside
-            folders you approve below, and mirror into AI Matrx as they run.
+            Runs use your installed Claude Code and its subscription login.
+            They can work only in folders you explicitly approve, and their
+            turn events are queued for delivery to your private AI Matrx history.
           </p>
         </div>
         <Button variant="outline" onClick={() => void refresh()} disabled={refreshing}>
@@ -160,13 +129,20 @@ export function AgentRuntimeCard() {
           </div>
         )}
 
+        {initialLoad && (
+          <div className="flex items-center gap-2 rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Checking Claude Code,
+            account access, and local runtime support…
+          </div>
+        )}
+
         {capabilities && !capabilities.available && (
           <div className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
             <div>
-              <div className="font-medium">The runtime is not available yet:</div>
+              <div className="font-medium">Runtime setup needs attention</div>
               <ul className="mt-1 list-disc pl-5">
-                {capabilities.reasons.map((reason) => (
+                {[...new Set(capabilities.reasons)].map((reason) => (
                   <li key={reason}>{reason}</li>
                 ))}
               </ul>
@@ -177,7 +153,7 @@ export function AgentRuntimeCard() {
         {capabilities?.available && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-            Ready — {capabilities.claude_cli}
+            Claude Code is ready — {capabilities.claude_cli}
             {capabilities.claude_account_label
               ? ` · ${capabilities.claude_account_label}`
               : null}
@@ -185,53 +161,20 @@ export function AgentRuntimeCard() {
           </div>
         )}
 
-        <div>
-          <div className="text-sm font-medium">Approved folders</div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Agent runs may only touch these folders (all must be under{" "}
-            {capabilities?.workspace_roots.join(", ") ?? "~/code"}). Approval is
-            one click, once, and only from this app.
-          </p>
-          <div className="mt-2 space-y-1">
-            {(capabilities?.approved_folders ?? []).map((folder) => (
-              <div
-                key={folder}
-                className="flex items-center justify-between rounded-md border px-3 py-1.5 text-sm"
-              >
-                <span className="truncate font-mono text-xs">{folder}</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void revoke(folder)}
-                  disabled={busy}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            ))}
-            {capabilities && capabilities.approved_folders.length === 0 && (
-              <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-                No folders approved yet — nothing can run until you approve one.
-              </div>
-            )}
-          </div>
-          <div className="mt-2 flex gap-2">
-            <Input
-              placeholder="~/code/my-repo"
-              value={folderInput}
-              onChange={(event) => setFolderInput(event.target.value)}
-            />
-            <Button onClick={() => void approve()} disabled={busy || !folderInput.trim()}>
-              <FolderPlus className="mr-2 h-4 w-4" />
-              Approve
-            </Button>
-          </div>
-        </div>
+        {capabilities && (
+          <WorkspaceApprovalTree
+            workspaceRoots={capabilities.workspace_roots}
+            approvedFolders={capabilities.approved_folders}
+            disabled={busy}
+            onChanged={refresh}
+            onError={setError}
+          />
+        )}
 
         <div>
           <div className="text-sm font-medium">Runs</div>
           <div className="mt-2 space-y-1">
-            {runs.length === 0 && (
+            {!initialLoad && runs.length === 0 && (
               <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
                 No runs yet. Start one from AI Matrx → New work → Claude Code.
               </div>

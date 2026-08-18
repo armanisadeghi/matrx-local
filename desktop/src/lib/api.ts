@@ -260,6 +260,8 @@ export interface ClaudeHistoryPreview {
   account_identity_available: boolean;
   provider_account_key: string | null;
   account_fingerprint: string | null;
+  provider_account_key_version: 2;
+  provider_account_label: string | null;
   account_blocked_reason: string | null;
   claude_client_version: string | null;
   matrx_user_available: boolean;
@@ -284,6 +286,7 @@ export interface ClaudeHistoryImportResult {
   schema_version: 1;
   accepted: true;
   provider_account_fingerprint: string;
+  provider_account_label: string | null;
   selected_sessions: number;
   labeled_sessions: number;
   queued_label_updates: number;
@@ -302,6 +305,8 @@ export interface ClaudeHistoryStatus {
   source: "claude_local_jsonl";
   pending_outbox: number;
   pending_history_imports: number;
+  quarantined_outbox: number;
+  quarantined_history_imports: number;
   oldest_pending: Record<string, unknown> | null;
   oldest_history_import: {
     id: number;
@@ -311,6 +316,13 @@ export interface ClaudeHistoryStatus {
     created_at: string;
   } | null;
   last_sync: Record<string, unknown> | null;
+  delivery: {
+    state: "idle" | "queued" | "acknowledged" | "discarded" | "attention_required";
+    queued_batches: number;
+    quarantined_batches: number;
+    last_enqueue: CodingSessionActivitySummary | null;
+    last_acknowledgement: CodingSessionActivitySummary | null;
+  };
   native_restore_available: false;
 }
 
@@ -345,6 +357,7 @@ export interface ClaudeLabelSyncResult {
   matched_without_labels: number;
   unchanged: number;
   queued: number;
+  already_queued: number;
   unreadable_identities: number;
   sample_titles: { provider_session_id: string; title: string }[];
   /** AI Matrx → Claude Code: renames written back into Claude's own index. */
@@ -385,6 +398,119 @@ export interface LocalRuntimeCapabilities {
     fork_native: boolean;
     stream: boolean;
   };
+}
+
+export type CodingSessionProvider =
+  | "claude_code"
+  | "codex"
+  | "cursor"
+  | "vscode";
+
+export interface CodingSessionActivitySummary {
+  receipt_id: number;
+  at: string;
+  provider: CodingSessionProvider;
+  action: string;
+  source: string;
+  accepted?: number;
+  duplicates?: number;
+  fidelity?: string | null;
+}
+
+export interface CodingSessionHeadBlocker {
+  receipt_id: number;
+  provider: CodingSessionProvider;
+  action: string;
+  source: string;
+  attempts: number;
+  next_attempt_at: number;
+  retry_in_seconds: number;
+  created_at: string;
+  error: { code: string | null; message: string | null } | null;
+}
+
+export interface CodingSessionProviderStatus {
+  pending: number;
+  quarantined: number;
+  capabilities: {
+    event_mirror: boolean;
+    historical_import: boolean;
+    title_sync: boolean;
+    local_runtime: boolean;
+    native_resume: boolean;
+    participant_conversations: boolean;
+    limitations: string[];
+  };
+  by_action: Record<string, { pending: number; quarantined: number }>;
+  by_source: Record<string, { pending: number; quarantined: number }>;
+  last_enqueue: CodingSessionActivitySummary | null;
+  last_acknowledgement: CodingSessionActivitySummary | null;
+}
+
+export interface CodingSessionBridgeStatus {
+  schema_version: 2;
+  publisher: {
+    active: boolean;
+    cloud_enabled: boolean;
+    server_path: string;
+  };
+  pending: {
+    total: number;
+    by_provider: Record<CodingSessionProvider, number>;
+    by_action: Record<string, number>;
+    by_source: Record<string, number>;
+  };
+  quarantine: {
+    total: number;
+    by_provider: Record<CodingSessionProvider, number>;
+    by_action: Record<string, number>;
+    by_source: Record<string, number>;
+  };
+  providers: Record<CodingSessionProvider, CodingSessionProviderStatus>;
+  head_blocker: CodingSessionHeadBlocker | null;
+  last_enqueue: CodingSessionActivitySummary | null;
+  last_acknowledgement: CodingSessionActivitySummary | null;
+}
+
+export interface ClaudeCaptureStatus {
+  enabled: boolean;
+  running: boolean;
+  interval_seconds: number;
+  max_per_pass: number;
+  recent: Array<{
+    session_key: string;
+    attempts: number;
+    last_error: string | null;
+    enqueued_at: string | null;
+  }>;
+  exhausted: Array<{
+    session_key: string;
+    attempts: number;
+    last_error: string | null;
+    enqueued_at: string | null;
+  }>;
+}
+
+export interface WorkspaceDiscoveryNode {
+  path: string;
+  name: string;
+  kind: "directory" | "git_repository" | "project";
+  project_kinds: string[];
+  children: WorkspaceDiscoveryNode[];
+  truncated: boolean;
+}
+
+export interface WorkspaceDiscoveryResult {
+  schema_version: 1;
+  parent: string | null;
+  workspace_roots: string[];
+  roots: WorkspaceDiscoveryNode[];
+  approved_folders: string[];
+  project_count: number;
+  directory_count: number;
+  scanned_entries: number;
+  truncated: boolean;
+  skipped: number;
 }
 
 /** One local runtime run (start or native resume) and its live state. */
@@ -2194,6 +2320,21 @@ class EngineAPI {
     return this.request("/coding-session/claude/history/status");
   }
 
+  async getCodingSessionStatus(): Promise<CodingSessionBridgeStatus> {
+    return this.request("/coding-session/status");
+  }
+
+  async getClaudeCaptureStatus(): Promise<ClaudeCaptureStatus> {
+    return this.request("/coding-session/claude/capture/status");
+  }
+
+  async reconcileClaudeCapture(dryRun = false): Promise<Record<string, unknown>> {
+    return this.request(
+      `/coding-session/claude/capture/reconcile?dry_run=${dryRun ? "true" : "false"}`,
+      { method: "POST" },
+    );
+  }
+
   async getClaudeLabelStatus(): Promise<ClaudeLabelSyncStatus> {
     return this.request("/coding-session/claude/labels/status");
   }
@@ -2238,6 +2379,33 @@ class EngineAPI {
     approved_folders: string[];
   }> {
     return this.request("/coding-session/runtime/approvals");
+  }
+
+  async discoverRuntimeWorkspaces(parent?: string): Promise<WorkspaceDiscoveryResult> {
+    const query = parent ? `?parent=${encodeURIComponent(parent)}` : "";
+    return this.request(`/coding-session/runtime/workspaces/discovery${query}`);
+  }
+
+  async addRuntimeWorkspaceRoot(folder: string): Promise<{
+    workspace_roots: string[];
+    approved_folders: string[];
+  }> {
+    return this.request("/coding-session/runtime/workspaces/roots", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder }),
+    });
+  }
+
+  async removeRuntimeWorkspaceRoot(folder: string): Promise<{
+    workspace_roots: string[];
+    approved_folders: string[];
+    affected_approvals?: string[];
+  }> {
+    return this.request(
+      `/coding-session/runtime/workspaces/roots?folder=${encodeURIComponent(folder)}`,
+      { method: "DELETE" },
+    );
   }
 
   async approveRuntimeFolder(folder: string): Promise<{
@@ -2348,14 +2516,14 @@ class EngineAPI {
     if (!resp.ok) {
       const payload = await resp.json().catch(() => null);
       await reportActionNeededErrorPayload(payload, operationKey);
-      const message =
+      const errorBody =
         payload && typeof payload === "object"
-          ? String(
-              (payload as Record<string, unknown>).message ??
-                (payload as Record<string, unknown>).detail ??
-                `HTTP ${resp.status}`,
-            )
-          : `HTTP ${resp.status}`;
+          ? (payload as Record<string, unknown>)
+          : null;
+      const message = stringifyErrorDetail(
+        errorBody?.message ?? errorBody?.detail,
+        `HTTP ${resp.status}`,
+      );
       throw new Error(`${init?.method ?? "GET"} ${path} failed: ${message}`);
     }
     await resolveHttpActionNeeded(operationKey);
@@ -4974,7 +5142,7 @@ function isAbortTimeout(e: unknown): boolean {
  * Coercing those with template literals / new Error() renders the dreaded
  * "[object Object]". This flattens any detail shape into a readable string.
  */
-function stringifyErrorDetail(detail: unknown, fallback: string): string {
+export function stringifyErrorDetail(detail: unknown, fallback: string): string {
   if (typeof detail === "string" && detail.trim()) return detail;
   if (Array.isArray(detail)) {
     const parts = detail
@@ -4994,6 +5162,13 @@ function stringifyErrorDetail(detail: unknown, fallback: string): string {
     if (parts.length) return parts.join("; ");
   }
   if (detail && typeof detail === "object") {
+    const record = detail as Record<string, unknown>;
+    const nested = record.message ?? record.detail ?? record.reason;
+    if (nested !== undefined && nested !== detail) {
+      const message = stringifyErrorDetail(nested, fallback);
+      const code = typeof record.code === "string" ? record.code.trim() : "";
+      return code && !message.includes(code) ? `${message} (${code})` : message;
+    }
     try {
       return JSON.stringify(detail);
     } catch {

@@ -4,9 +4,12 @@ import {
   CheckCircle2,
   CloudUpload,
   Copy,
+  Database,
   History,
   Loader2,
+  MonitorCheck,
   RefreshCw,
+  RotateCw,
   Tags,
   Trash2,
 } from "lucide-react";
@@ -17,14 +20,34 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { engine } from "@/lib/api";
 import type {
+  ClaudeCaptureStatus,
   ClaudeHistoryImportResult,
   ClaudeHistoryPreview,
   ClaudeHistoryStatus,
   ClaudeLabelSyncResult,
   ClaudeLabelSyncStatus,
+  CodingSessionBridgeStatus,
+  CodingSessionProvider,
 } from "@/lib/api";
+
+type CodingSessionsTab = "overview" | "history" | "titles" | "runtime";
+
+const PROVIDER_LABELS: Record<CodingSessionProvider, string> = {
+  claude_code: "Claude Code",
+  codex: "Codex",
+  cursor: "Cursor",
+  vscode: "VS Code",
+};
+
+const PROVIDER_SCOPE: Record<CodingSessionProvider, string> = {
+  claude_code: "Live events, local history import, titles, and local runtime",
+  codex: "Live command-hook events",
+  cursor: "Live editor events exposed by Cursor",
+  vscode: "Conversations created through the @matrx participant",
+};
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -36,9 +59,13 @@ function formatBytes(value: number): string {
 function blockedMessage(reason: string | null): string {
   switch (reason) {
     case "claude_not_installed":
-      return "Claude Code is not installed or cannot be found.";
+      return "AI Matrx could not locate an executable Claude Code installation. Open Local runtime for diagnostics.";
     case "claude_not_signed_in":
       return "Sign in to Claude Code, then review again.";
+    case "claude_status_timeout":
+      return "Claude Code was found, but its account check timed out. Close any blocked Claude process and review again.";
+    case "claude_status_execution_failed":
+      return "Claude Code was found, but its account status command failed. Open Local runtime for the exact recovery step.";
     case "claude_account_identity_unavailable":
       return "Claude is signed in, but this login does not expose a stable account identity. Sync is paused so histories from different accounts cannot be mixed.";
     default:
@@ -47,6 +74,7 @@ function blockedMessage(reason: string | null): string {
 }
 
 export function ClaudeHistorySync() {
+  const [activeTab, setActiveTab] = useState<CodingSessionsTab>("overview");
   const [preview, setPreview] = useState<ClaudeHistoryPreview | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
@@ -60,6 +88,11 @@ export function ClaudeHistorySync() {
   const [labelResult, setLabelResult] = useState<ClaudeLabelSyncResult | null>(null);
   const [labelSyncing, setLabelSyncing] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
+  const [bridgeStatus, setBridgeStatus] = useState<CodingSessionBridgeStatus | null>(null);
+  const [captureStatus, setCaptureStatus] = useState<ClaudeCaptureStatus | null>(null);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
+  const [overviewRefreshing, setOverviewRefreshing] = useState(false);
+  const [captureReconciling, setCaptureReconciling] = useState(false);
 
   const refreshStatus = useCallback(async () => {
     const next = await engine.getClaudeHistoryStatus();
@@ -68,6 +101,38 @@ export function ClaudeHistorySync() {
 
   const refreshLabelStatus = useCallback(async () => {
     setLabelStatus(await engine.getClaudeLabelStatus());
+  }, []);
+
+  const refreshOverview = useCallback(async () => {
+    setOverviewRefreshing(true);
+    try {
+      const [bridgeResult, captureResult] = await Promise.allSettled([
+        engine.getCodingSessionStatus(),
+        engine.getClaudeCaptureStatus(),
+      ]);
+      const failures: string[] = [];
+      if (bridgeResult.status === "fulfilled") {
+        setBridgeStatus(bridgeResult.value);
+      } else {
+        failures.push(
+          bridgeResult.reason instanceof Error
+            ? bridgeResult.reason.message
+            : String(bridgeResult.reason),
+        );
+      }
+      if (captureResult.status === "fulfilled") {
+        setCaptureStatus(captureResult.value);
+      } else {
+        failures.push(
+          captureResult.reason instanceof Error
+            ? captureResult.reason.message
+            : String(captureResult.reason),
+        );
+      }
+      setOverviewError(failures.length > 0 ? failures.join(" · ") : null);
+    } finally {
+      setOverviewRefreshing(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -81,6 +146,31 @@ export function ClaudeHistorySync() {
       // Label sync reports its own blocked reason when the user presses sync.
     });
   }, [refreshLabelStatus]);
+
+  useEffect(() => {
+    void refreshOverview();
+  }, [refreshOverview]);
+
+  useEffect(() => {
+    if (!bridgeStatus || bridgeStatus.pending.total === 0) return;
+    const id = window.setInterval(() => void refreshOverview(), 3000);
+    return () => window.clearInterval(id);
+  }, [bridgeStatus?.pending.total, refreshOverview]);
+
+  const reconcileCapture = async () => {
+    setCaptureReconciling(true);
+    setOverviewError(null);
+    try {
+      await engine.reconcileClaudeCapture(false);
+      await refreshOverview();
+    } catch (nextError) {
+      setOverviewError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    } finally {
+      setCaptureReconciling(false);
+    }
+  };
 
   const syncLabels = async () => {
     setLabelSyncing(true);
@@ -193,17 +283,44 @@ export function ClaudeHistorySync() {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <PageHeader
-        title="Claude Code history"
-        description="Review local sessions, then explicitly copy only the sessions you choose into your private AI Matrx history."
+        title="Coding sessions"
+        description="See what each coding provider supports, control local access, and follow every sync from local capture through cloud acknowledgement."
       />
-      <div className="flex-1 space-y-4 overflow-y-auto p-6">
-        <AgentRuntimeCard />
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as CodingSessionsTab)}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <div className="border-b px-6 py-3">
+          <TabsList className="h-auto flex-wrap justify-start">
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="history">History import</TabsTrigger>
+            <TabsTrigger value="titles">Title sync</TabsTrigger>
+            <TabsTrigger value="runtime">Local runtime</TabsTrigger>
+          </TabsList>
+        </div>
+        <div className="flex-1 space-y-4 overflow-y-auto p-6">
+        {activeTab === "overview" && (
+          <OverviewPanel
+            bridgeStatus={bridgeStatus}
+            captureStatus={captureStatus}
+            error={overviewError}
+            refreshing={overviewRefreshing}
+            reconciling={captureReconciling}
+            onRefresh={refreshOverview}
+            onReconcile={reconcileCapture}
+          />
+        )}
+
+        {activeTab === "history" && (
+          <>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-4">
             <div>
-              <CardTitle className="text-base">Sync Claude Code now</CardTitle>
+              <CardTitle className="text-base">Review local Claude history</CardTitle>
               <p className="mt-1 text-sm text-muted-foreground">
-                Nothing is scanned or uploaded until you press Review. Review never uploads.
+                Review scans local Claude transcript metadata and never uploads.
+                You choose sessions in a separate step before any copies enter the delivery queue.
               </p>
             </div>
             <Button onClick={() => void review()} disabled={loading || syncing}>
@@ -228,10 +345,11 @@ export function ClaudeHistorySync() {
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 {preview.account_identity_available ? (
                   <Badge variant="secondary">
-                    Claude account {preview.account_fingerprint}
+                    Claude account{" "}
+                    {preview.provider_account_label ?? preview.account_fingerprint}
                   </Badge>
                 ) : (
-                  <Badge variant="destructive">Claude account not verified</Badge>
+                  <Badge variant="destructive">Claude identity unavailable</Badge>
                 )}
                 {preview.claude_client_version && (
                   <Badge variant="outline">{preview.claude_client_version}</Badge>
@@ -250,6 +368,10 @@ export function ClaudeHistorySync() {
           )}
         </Card>
 
+          </>
+        )}
+
+        {activeTab === "titles" && (
         <Card>
           <CardHeader className="flex flex-row items-start justify-between gap-4">
             <div>
@@ -296,7 +418,7 @@ export function ClaudeHistorySync() {
                   value={labelStatus.index_records.toLocaleString()}
                 />
                 <Summary
-                  label="Titles synced"
+                  label="Titles acknowledged"
                   value={labelStatus.synced_sessions.toLocaleString()}
                 />
                 <Summary
@@ -322,6 +444,11 @@ export function ClaudeHistorySync() {
                   <span>
                     {labelResult.queued.toLocaleString()} title update
                     {labelResult.queued === 1 ? "" : "s"} queued ·{" "}
+                    {labelResult.already_queued > 0 && (
+                      <>
+                        {labelResult.already_queued.toLocaleString()} already waiting ·{" "}
+                      </>
+                    )}
                     {labelResult.matched.toLocaleString()} of{" "}
                     {labelResult.bound_sessions.toLocaleString()} synced sessions
                     matched a Claude session · {labelResult.unchanged.toLocaleString()}{" "}
@@ -381,8 +508,9 @@ export function ClaudeHistorySync() {
             )}
           </CardContent>
         </Card>
+        )}
 
-        {preview && (
+        {activeTab === "history" && preview && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Choose sessions</CardTitle>
@@ -468,14 +596,14 @@ export function ClaudeHistorySync() {
                   ) : (
                     <CloudUpload className="mr-2 h-4 w-4" />
                   )}
-                  Sync selected now
+                  Queue selected copies
                 </Button>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {result && (
+        {activeTab === "history" && result && (
           <div className="flex gap-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm">
             <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
             <div>
@@ -492,7 +620,7 @@ export function ClaudeHistorySync() {
           </div>
         )}
 
-        {historyStatus && historyStatus.pending_history_imports > 0 && (
+        {activeTab === "history" && historyStatus && historyStatus.pending_history_imports > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
             <div>
               <p className="font-medium">
@@ -538,27 +666,325 @@ export function ClaudeHistorySync() {
           </div>
         )}
 
-        {error && (
+        {activeTab === "history" && historyStatus && historyStatus.quarantined_history_imports > 0 && (
+          <div className="flex gap-3 rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+            <div>
+              <p className="font-medium">
+                {historyStatus.quarantined_history_imports.toLocaleString()} history batch
+                {historyStatus.quarantined_history_imports === 1 ? " was" : "es were"} not delivered
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                AI Matrx refused these preserved local copies. They are not
+                counted as synced; review the provider-wide delivery status for
+                the blocking reason before retrying.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "history" && error && (
           <div className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{error}</span>
           </div>
         )}
 
+        {activeTab === "history" && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">What this can and cannot restore</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
-            <p>AI Matrx receives exact local JSONL entries and creates a readable private conversation. Repeating Sync reconciles updates idempotently.</p>
+            <p>AI Matrx receives exact local JSONL entries and creates a readable private conversation. Repeating an import reconciles updates idempotently.</p>
             <p>Native Claude resume remains local: use Claude Code with the original session ID while the same transcript, workspace, and active Claude login are available.</p>
             <p>AI Matrx does not claim that a copied transcript can recreate Claude file checkpoints, permissions, credentials, or another machine&apos;s workspace.</p>
             <p>Claude&apos;s local session format exposes names, project grouping, branches, and fork lineage. Stable local pin/archive metadata is not available, so this sync does not invent it.</p>
           </CardContent>
         </Card>
+        )}
+
+        {activeTab === "runtime" && <AgentRuntimeCard />}
       </div>
+      </Tabs>
     </div>
   );
+}
+
+function OverviewPanel({
+  bridgeStatus,
+  captureStatus,
+  error,
+  refreshing,
+  reconciling,
+  onRefresh,
+  onReconcile,
+}: {
+  bridgeStatus: CodingSessionBridgeStatus | null;
+  captureStatus: ClaudeCaptureStatus | null;
+  error: string | null;
+  refreshing: boolean;
+  reconciling: boolean;
+  onRefresh: () => Promise<void>;
+  onReconcile: () => Promise<void>;
+}) {
+  const capabilityLabels = {
+    event_mirror: "Live events",
+    historical_import: "History import",
+    title_sync: "Title sync",
+    local_runtime: "Local runtime",
+    native_resume: "Native resume",
+    participant_conversations: "@matrx conversations",
+  } as const;
+
+  return (
+    <>
+      <Card>
+        <CardHeader className="flex flex-row items-start justify-between gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <MonitorCheck className="h-4 w-4" /> Provider coverage
+            </CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              The delivery bridge supports multiple coding providers. Deeper
+              local features appear only where the provider exposes a safe,
+              stable local interface; unsupported capabilities are explicit.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void onRefresh()}
+            disabled={refreshing}
+          >
+            {refreshing ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            Refresh status
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!bridgeStatus && !error && (
+            <div className="flex items-center gap-2 rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading provider and
+              delivery status…
+            </div>
+          )}
+          {bridgeStatus && (
+            <div className="grid gap-3 xl:grid-cols-2">
+              {(Object.keys(PROVIDER_LABELS) as CodingSessionProvider[]).map(
+                (provider) => {
+                  const status = bridgeStatus.providers[provider];
+                  return (
+                    <div key={provider} className="rounded-md border p-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-medium">{PROVIDER_LABELS[provider]}</h3>
+                        {status.pending > 0 && (
+                          <Badge variant="outline">{status.pending} queued</Badge>
+                        )}
+                        {status.quarantined > 0 && (
+                          <Badge variant="destructive">
+                            {status.quarantined} needs attention
+                          </Badge>
+                        )}
+                        {status.pending === 0 && status.quarantined === 0 && (
+                          <Badge variant="secondary">Queue clear</Badge>
+                        )}
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {PROVIDER_SCOPE[provider]}
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {Object.entries(capabilityLabels).map(([key, label]) => {
+                          const supported = status.capabilities[key as keyof typeof capabilityLabels];
+                          return (
+                            <Badge
+                              key={key}
+                              variant={supported ? "secondary" : "outline"}
+                              className={!supported ? "opacity-50" : undefined}
+                            >
+                              {supported ? "✓ " : "— "}{label}
+                            </Badge>
+                          );
+                        })}
+                      </div>
+                      {status.capabilities.limitations.length > 0 && (
+                        <p className="mt-3 text-xs text-muted-foreground">
+                          {status.capabilities.limitations.join(" ")}
+                        </p>
+                      )}
+                    </div>
+                  );
+                },
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Database className="h-4 w-4" /> Delivery pipeline
+          </CardTitle>
+          <p className="mt-1 text-sm text-muted-foreground">
+            “Queued” means safely stored on this Mac. “Acknowledged” means AI
+            Matrx accepted the exact stored payload. A quarantined item was
+            preserved because the server refused it and is not counted as delivered.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {bridgeStatus &&
+            (!bridgeStatus.publisher.cloud_enabled || !bridgeStatus.publisher.active) && (
+              <div className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <div>
+                  <p className="font-medium">Cloud delivery is paused</p>
+                  <p className="mt-1 text-muted-foreground">
+                    {!bridgeStatus.publisher.cloud_enabled
+                      ? "This runtime has cloud participation disabled. Captured items remain safely queued locally."
+                      : "The background publisher is not running. Restart the local engine before expecting acknowledgement."}
+                  </p>
+                </div>
+              </div>
+            )}
+          <div className="grid gap-2 sm:grid-cols-4" aria-label="Delivery stages">
+            <PipelineStage label="1. Captured" detail="Provider event or selected history" />
+            <PipelineStage label="2. Saved locally" detail="Durable, integrity-checked queue" />
+            <PipelineStage
+              label="3. Waiting for AI Matrx"
+              detail={`${bridgeStatus?.pending.total ?? 0} queued`}
+              active={Boolean(bridgeStatus?.pending.total)}
+            />
+            <PipelineStage
+              label="4. Acknowledged"
+              detail={
+                bridgeStatus?.last_acknowledgement
+                  ? `Last at ${formatDate(bridgeStatus.last_acknowledgement.at)}`
+                  : "No acknowledgement recorded yet"
+              }
+            />
+          </div>
+
+          {bridgeStatus?.head_blocker && (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+              <p className="font-medium">
+                Delivery is waiting on {PROVIDER_LABELS[bridgeStatus.head_blocker.provider]}
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                {bridgeStatus.head_blocker.action} · attempt {bridgeStatus.head_blocker.attempts}
+                {bridgeStatus.head_blocker.retry_in_seconds > 0
+                  ? ` · retry in ${bridgeStatus.head_blocker.retry_in_seconds}s`
+                  : " · retry is due"}
+              </p>
+              {bridgeStatus.head_blocker.error?.message && (
+                <p className="mt-1 text-amber-800 dark:text-amber-200">
+                  {bridgeStatus.head_blocker.error.message}
+                </p>
+              )}
+            </div>
+          )}
+
+          {bridgeStatus && bridgeStatus.quarantine.total > 0 && (
+            <div className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <div>
+                <p className="font-medium">
+                  {bridgeStatus.quarantine.total.toLocaleString()} preserved event
+                  {bridgeStatus.quarantine.total === 1 ? " needs" : "s need"} attention
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  These events were not acknowledged by AI Matrx. They remain
+                  locally quarantined instead of being dropped or reported as synced.
+                </p>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-start justify-between gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <RotateCw className="h-4 w-4" /> Recover missed Claude events
+            </CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              A background check compares Claude sessions with AI Matrx and
+              queues sessions that live hooks missed. It never changes Claude files.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void onReconcile()}
+            disabled={reconciling || !captureStatus?.enabled}
+          >
+            {reconciling ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            Check now
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {captureStatus ? (
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Summary
+                label="Automatic recovery"
+                value={captureStatus.enabled ? "Enabled" : "Disabled"}
+              />
+              <Summary
+                label="Background worker"
+                value={captureStatus.running ? "Running" : "Stopped"}
+              />
+              <Summary
+                label="Exhausted retries"
+                value={captureStatus.exhausted.length.toLocaleString()}
+              />
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Loading recovery status…</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {error && (
+        <div
+          className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+          role="alert"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+    </>
+  );
+}
+
+function PipelineStage({
+  label,
+  detail,
+  active = false,
+}: {
+  label: string;
+  detail: string;
+  active?: boolean;
+}) {
+  return (
+    <div className={`rounded-md border p-3 ${active ? "border-blue-500/40 bg-blue-500/5" : ""}`}>
+      <p className="text-sm font-medium">{label}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+    </div>
+  );
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
 function Summary({ label, value }: { label: string; value: string }) {

@@ -462,6 +462,7 @@ function AppInner() {
       { path: "/browser", element: <BrowserLab /> },
       { path: "/browser/tauri", element: <TauriFetchBrowser /> },
       { path: "/configurations", element: <Configurations /> },
+      { path: "/coding-sessions", element: <ClaudeHistorySync /> },
       { path: "/claude-history", element: <ClaudeHistorySync /> },
       {
         path: "/bridge-test",

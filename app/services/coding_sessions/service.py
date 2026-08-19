@@ -1080,16 +1080,60 @@ class CodingSessionBridgeOutbox:
                         break
                     continue
 
-                await self._record_delivery_acknowledgement(
-                    receipt_id=int(row["id"]),
-                    request=persisted_request,
-                    response=response,
-                )
-                await self._db.execute(
-                    "DELETE FROM coding_session_bridge_outbox WHERE id = ?",
-                    (int(row["id"]),),
-                )
-                await self._db.commit()
+                # The upstream POST succeeded — from here on the envelope is
+                # DELIVERED and the only remaining work is local bookkeeping.
+                # The activity summary is best-effort: a transient local write
+                # failure ("database is locked" under hook-ingress contention)
+                # must never keep the delivered row at the head of its lane.
+                # Pre-fix, an ack-write failure raised out of the tick AFTER a
+                # successful upload, the row was never deleted, and the whole
+                # outbox wedged behind it re-sending the same envelope forever
+                # (observed live 2026-08-18/19: 17k rows, all attempts=0).
+                try:
+                    await self._record_delivery_acknowledgement(
+                        receipt_id=int(row["id"]),
+                        request=persisted_request,
+                        response=response,
+                    )
+                except Exception:
+                    logger.warning(
+                        "[coding_session_bridge] delivery succeeded but the "
+                        "local acknowledgement write failed for id=%s — "
+                        "continuing to delete the delivered row",
+                        int(row["id"]),
+                        exc_info=True,
+                    )
+                try:
+                    await self._db.execute(
+                        "DELETE FROM coding_session_bridge_outbox WHERE id = ?",
+                        (int(row["id"]),),
+                    )
+                    await self._db.commit()
+                except Exception as exc:
+                    # Could not delete a DELIVERED row. Push it to the back of
+                    # the retry window instead of crashing the tick; the server
+                    # bridge is idempotent, so an eventual re-send is a
+                    # duplicate, not corruption.
+                    logger.error(
+                        "[coding_session_bridge] could not delete delivered "
+                        "outbox row id=%s — deferring it (server dedupe makes "
+                        "the re-send harmless)",
+                        int(row["id"]),
+                        exc_info=True,
+                    )
+                    try:
+                        await self._record_failure(
+                            int(row["id"]), int(row["attempts"]), exc
+                        )
+                    except Exception:
+                        logger.warning(
+                            "[coding_session_bridge] deferral write also "
+                            "failed for id=%s",
+                            int(row["id"]),
+                            exc_info=True,
+                        )
+                    failed += 1
+                    continue
                 sent += 1
             return {"sent": sent, "failed": failed, "blocked": None}
 

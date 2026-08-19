@@ -82,6 +82,38 @@ pub fn log(event: &str) {
     }
 }
 
+/// Append one timestamped engine STDERR line to engine-stderr.log.
+///
+/// The engine's stderr carries what system.log cannot: Python tracebacks from
+/// import-time failures, SystemExit messages, and PyInstaller bootstrap
+/// errors — everything a crashed boot prints before (or instead of) its
+/// logging setup. Until 2026-08-19 those lines lived only in the 200-line
+/// in-memory SidecarLogs ring buffer and the app's stdout (nowhere, for a
+/// Finder launch), which made the recurring "engine exited code=1 ~35s after
+/// spawn, nothing in system.log" boots undiagnosable after the fact. Same
+/// destination directory and best-effort semantics as lifecycle.log.
+pub fn engine_stderr(line: &str) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let entry = format!("{} {}\n", format_utc(now), line);
+
+    let Some(dir) = log_dir() else { return };
+    let path = dir.join("engine-stderr.log");
+    let _ = std::fs::create_dir_all(&dir);
+
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > MAX_BYTES {
+            let _ = std::fs::rename(&path, dir.join("engine-stderr.log.1"));
+        }
+    }
+
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = f.write_all(entry.as_bytes());
+    }
+}
+
 /// Seconds-since-epoch → "YYYY-MM-DD HH:MM:SSZ" (civil-from-days algorithm,
 /// avoids pulling in chrono for one format call).
 fn format_utc(secs: u64) -> String {

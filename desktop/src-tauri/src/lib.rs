@@ -558,6 +558,10 @@ async fn start_sidecar(
                 CommandEvent::Stderr(line) => {
                     let text = String::from_utf8_lossy(&line).to_string();
                     eprintln!("[engine] {}", text);
+                    // Durable copy — stderr is where a crashing boot's Python
+                    // traceback goes, and a Finder-launched app has no
+                    // captured stdio. See lifecycle_log::engine_stderr.
+                    lifecycle_log::engine_stderr(&text);
                     {
                         let mut lines = log_lines.lock().unwrap();
                         lines.push(format!("[stderr] {}", text));

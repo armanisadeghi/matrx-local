@@ -120,7 +120,19 @@ project path, transcript, server response body, or raw error. An
 acknowledgement is written only after the existing strict BridgeResponse v1
 validation passes, in the same transaction that removes the durable outbox
 row. “Queued” therefore means local-only; “acknowledged” means aidream proved
-the receipt. Claude history status derives the same truth for the
+the receipt.
+
+The acknowledgement write is **best-effort relative to the delete**: once the
+upstream POST has been validated, the envelope is DELIVERED, and a local
+write failure (e.g. `database is locked` under hook-ingress contention) must
+never keep the delivered row at the head of its lane. Pre-fix (2026-08-19),
+an ack-write failure raised out of the publisher tick *after* a successful
+upload; the row was never deleted, the lane wedged re-sending the same
+envelope forever, and the outbox grew to 17k rows / 579 MB with every row at
+`attempts=0`. Now an ack failure logs loudly and the delete still runs; a
+delete failure defers the row with backoff instead of crashing the tick
+(server-side bridge idempotency makes the eventual re-send a duplicate, not
+corruption). Claude history status derives the same truth for the
 `claude_local_jsonl` source and includes its quarantine count instead of
 silently dropping it.
 

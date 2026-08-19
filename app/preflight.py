@@ -652,6 +652,21 @@ def _pid_listening_on(port: int) -> int | None:
     return None
 
 
+# How long a freshly spawned engine may take to become healthy (bind its port
+# and answer /health). Startup on a loaded machine has been observed at ~40s;
+# 150s leaves generous margin without meaningfully delaying real orphan
+# cleanup (a lingering orphan from a previous session is minutes-to-days old).
+ENGINE_BOOT_GRACE_SECONDS = 150.0
+
+
+def _process_age_seconds(pid: int) -> float | None:
+    """Seconds since the process started, or None if it can't be read."""
+    try:
+        return max(0.0, time.time() - psutil.Process(pid).create_time())
+    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+        return None
+
+
 def _protected_engine_pids(found: list[FoundProcess]) -> set[int]:
     """PIDs of live, healthy Matrx engines (and their ancestor chains) that
     ``protect_live_owner`` services must never kill.
@@ -660,7 +675,21 @@ def _protected_engine_pids(found: list[FoundProcess]) -> set[int]:
       (a) it is the discovery-file owner (pid match) AND that URL answers
           /health as a Matrx engine, or
       (b) it is listening on a port in the engine scan range AND that port
-          answers /health as a Matrx engine.
+          answers /health as a Matrx engine, or
+      (c) it is younger than ENGINE_BOOT_GRACE_SECONDS — a MID-BOOT engine.
+          Engine startup takes ~40s before /health answers, and during that
+          window the health probes above cannot vouch for it. Before this
+          clause existed, two engines booting concurrently would preflight-
+          murder each other: each one's clean_orphans() saw the other as a
+          "lingering process from a previous session" (no health answer yet)
+          and SIGTERM→SIGKILLed it mid-boot. Observed live 2026-08-19
+          00:11:33–43 (Tauri-spawned engine child pid 19311 SIGTERMed at
+          T+80s into its boot, SIGKILLed 10s later, killer engine bound
+          22140 one second after that) and as the recurring "engine exited
+          code=1 ~35s after spawn" lifecycle signature (mid-boot SIGTERM →
+          partial-startup teardown wedge → 30s force-exit watchdog →
+          os._exit(1)). A genuinely lingering orphan is by definition OLD,
+          so an age gate loses nothing.
 
     The healthy engine's ancestor chain is protected too, so a parent/launcher
     process that also matches the engine pattern (e.g. the packaged app's outer
@@ -689,6 +718,19 @@ def _protected_engine_pids(found: list[FoundProcess]) -> set[int]:
                 ):
                     healthy = True
                     break
+        if not healthy:
+            # (c) Mid-boot grace: never kill an engine process younger than
+            # the boot budget. Loud by contract — sparing a process the sweep
+            # would otherwise have killed must be attributable in the log.
+            age = _process_age_seconds(fp.pid)
+            if age is not None and age < ENGINE_BOOT_GRACE_SECONDS:
+                _warn(
+                    fp.service.name,
+                    f"pid {fp.pid} is only {age:.0f}s old — likely MID-BOOT, "
+                    f"not a lingering orphan; sparing it (boot grace "
+                    f"{ENGINE_BOOT_GRACE_SECONDS}s)",
+                )
+                healthy = True
         if healthy:
             protected.add(fp.pid)
             protected |= _ancestor_pids(fp.pid)

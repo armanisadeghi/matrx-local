@@ -1839,8 +1839,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.debug("[app/main.py] Download manager cleanup skipped")
 
     # ── Phase S7: Close local SQLite database (must be last) ─────────────
+    # Bounded: aiosqlite's close() waits behind everything still queued on the
+    # connection's worker thread. Under heavy write contention that queue can
+    # be deep, and an unbounded wait here is exactly the "Lifespan teardown
+    # did NOT complete within 15s" hang observed 2026-08-18 14:34 (teardown
+    # logged 'Download manager stopped ✓' then went silent at this await).
+    # WAL journaling makes an unclosed-connection exit crash-safe, so after 8s
+    # we log loudly and move on rather than eating the whole teardown budget.
     try:
-        await get_db().close()
+        await asyncio.wait_for(get_db().close(), timeout=8.0)
+    except asyncio.TimeoutError:
+        logger.error(
+            "[app/main.py] Local database close timed out after 8s — the "
+            "aiosqlite worker is wedged (deep write queue or a locked "
+            "commit). Continuing teardown; WAL keeps the file crash-safe."
+        )
     except Exception:
         pass
 

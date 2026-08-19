@@ -32,38 +32,6 @@ _(none)_
 
 ## Active
 
-### TASK-003b: The return direction — an AI Matrx rename must reach Claude Code's label
-- **Status:** ✅ DONE 2026-08-16. Approved by Arman the same day, as the second half of his ruling
-  (*"when our conversations go to Claude Code, or if I update this, then the Claude Code value
-  should be updated to match"*). Shipped `claude_label_writer.py` + the outbound leg of
-  `title_sync.py` + V21 `claude_session_title_pushed` + aidream's server-computed `title_source` /
-  `conversation_title` / `claude_title` on `GET /coding-sessions/sessions` and the
-  `title_origin="ai_matrx_user"` return marker. Conflict rule documented: last-writer-wins, Claude
-  Code wins a tie. Live proof against the real DB and the real index, both directions, everything
-  restored: `aidream/scripts/_verify_claude_label_return_sync.py`. Also fixed a real inbound defect
-  found by probing the app — a Claude rename rewrites only the active account's copy without
-  bumping `lastActivityAt`, so the reader's tie-break could pick a stale sibling's title; freshness
-  now breaks ties on file mtime. Rules in
-  [`app/services/coding_sessions/FEATURE.md`](../app/services/coding_sessions/FEATURE.md)
-  § "Claude's own labels".
-
-### TASK-003: Reconcile Claude-native titles and branches onto live mirrored sessions
-- **Status:** ✅ DONE 2026-08-16. Shipped `claude_session_index.py` + `title_sync.py` +
-  `POST /coding-session/claude/labels/sync` + the desktop **Sync titles now** card; the import path
-  now prefers Claude's own labels and queues them behind the batches that mint the binding; aidream
-  observes `worktree_name` / `is_archived`. Live proof against production: 235 bound sessions,
-  232 matched, 232 delivered, 0 failed, second pass idempotent; `chat.conversation.title` equals
-  Claude's exact sidebar label on all 232 with `title_source=provider`; `Auto:` placeholders 9 → 1.
-  Rules live in [`app/services/coding_sessions/FEATURE.md`](../app/services/coding_sessions/FEATURE.md)
-  § "Claude's own labels". One decision-gated follow-up filed in aidream `FOUND_DEFECTS.md`
-  (duplicate binding for one Claude session — the surviving `Auto:` row).
-- **Original status:** ready. Approved by Arman 2026-08-15. `Analyzed 2026-08-15 — verified in code`.
-- **Created:** 2026-08-15
-- **Priority:** P0
-- **Scope:** matrx-local + current aidream bridge contract
-- **Source:** Claude's native `customTitle` / `aiTitle` / summary and git branch must survive synchronization instead of leaving AI Matrx with only the first-prompt fallback.
-- **Deliverable:** use the existing bounded Claude history reader to send the existing `SessionMetadata` observation for a matching mirrored/imported session, then prove title precedence `user-set > provider > first-prompt > placeholder`, branch/workspace metadata, idempotent replay, and no raw path in shareable metadata. Handle an existing event-mirror binding as metadata reconciliation; never try to promote it to native fidelity. Backfill through the normal explicit sync path and record an installed-release proof. The Claude plugin `0.2.0-alpha.6` now supplies the owner-only `transcript_path` locator; aidream already accepts and applies `SessionMetadata`.
-
 ### Log audit 2026-07-14 — scheduled from `docs/LOG_AUDIT_2026-07-14.md`
 
 > Source log export 2026-07-14 12:27:26. Facts + file links only in the audit doc —
@@ -479,6 +447,9 @@ are condensed under Completed. Still open:
   publishing: `uv lock && uv sync --extra all` and drop the `--no-sync`
   workaround note in tests/conftest.py if desired.
 ## Completed
+
+- [TASK-003] Claude-native titles/branches reconciled onto mirrored sessions; live proof 232/232 — 2026-08-16 (`app/services/coding_sessions/title_sync.py`, FEATURE.md § Claude's own labels)
+- [TASK-003b] Return direction: AI Matrx rename reaches Claude's own label, last-writer-wins — 2026-08-16 (`claude_label_writer.py`; proof `aidream/scripts/_verify_claude_label_return_sync.py`)
 
 - [TASK-004] Unified provider sync, Claude probing, and workspace tree UX — 2026-08-17 (e0894b257)
 

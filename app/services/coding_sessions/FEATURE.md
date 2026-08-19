@@ -97,6 +97,39 @@ attempt 1. A terminal rejection now moves the row into
 - **Quarantine logs at ERROR and `status()` reports a `quarantined` count.** A
   non-zero count means real events are permanently absent from the platform.
 
+### 🚨 THE POST-DELIVERY RULE — retiring a DELIVERED row is not bookkeeping
+
+Once aidream has accepted an envelope, deleting its local row is the ONLY thing
+that stops the publisher sending it again. That write therefore runs on the same
+durable boundary the hook ingress uses — a private short connection with
+`BEGIN IMMEDIATE`, `synchronous=FULL`, and `_DURABLE_WRITE_BUSY_TIMEOUT_MS` —
+never on the application's shared connection.
+
+Found live 2026-08-19 on **v1.4.35**, which had already fixed the v1.4.34 crash
+(an ack-write exception raising out of the tick). The write was still issued on
+the shared connection, so under a codex hook burst it lost with
+`database is locked`; the ack failed, the delete failed, the deferral failed,
+and the loop `continue`d and re-selected the same row. Outbox row 72184 was
+re-POSTed to aidream **48 times**, and because `sync_pending` holds
+`_sync_lock` for the whole tick — up to `_MAX_BATCH` uploads of one delivered
+row — every coding-session route queued behind it: `/coding-session/status`
+median **1,040 s**, `/coding-session/hooks` median **330 s**, while `/health`
+stayed at 0 ms. A wedge in this loop is an engine-wide latency event, not a
+quiet backlog.
+
+- **`_retire_delivered_row` is ack + delete in ONE private transaction.** If it
+  fails, a delete-only private transaction is attempted, so an acknowledgement
+  problem can never keep a delivered envelope queued.
+- **A delivered row is never uploaded twice.** If the delete still cannot land,
+  the id goes into the in-memory `_delivered_undeleted` set, the tick `break`s
+  (it does not `continue`), and later ticks retry only the delete. Selection
+  skips those ids outright.
+- **`attempts=0` on a pending row is normal, not evidence of starvation.** The
+  publisher only ever touches lane HEADS, so of 22,126 rows exactly 219 were
+  ever eligible. Read a pileup as one stalled tick, not a starved lane.
+
+Regression: `tests/unit/test_coding_session_delivered_row_wedge.py`.
+
 ### Provider-neutral delivery status
 
 `GET /coding-session/status` is the one desktop-facing status facade for every

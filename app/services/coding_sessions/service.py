@@ -41,6 +41,18 @@ _PUBLISH_INTERVAL_SECONDS = 15.0
 _MAX_BATCH = 100
 _MAX_BACKOFF_SECONDS = 60.0
 
+# THE POST-DELIVERY DURABILITY BOUNDARY. Once aidream has accepted an envelope,
+# deleting its local row is no longer bookkeeping — it is the only thing that
+# stops the publisher re-sending an already-delivered event. That write must
+# therefore be as strong as the hook's own durable-ack boundary: a private
+# short connection with BEGIN IMMEDIATE, not the application's shared
+# connection. Found live 2026-08-19 under v1.4.35: a codex hook storm held the
+# write lock continuously, the shared connection's delete lost with
+# `database is locked`, and row 72184 was re-uploaded to the server every ~20s
+# while the outbox grew. Ordered delivery plus a lost delete is a wedge exactly
+# like a poison row, only louder on the server side.
+_DURABLE_WRITE_BUSY_TIMEOUT_MS = 15000
+
 # THE POISON-ROW RULE. Publication is strictly ordered — deliberately, so a
 # provider event stream is never reordered — which means one permanently
 # rejected row stops every row behind it, forever. Found live 2026-08-17: a
@@ -405,6 +417,10 @@ class CodingSessionBridgeOutbox:
         self._wake = asyncio.Event()
         self._stopping = False
         self._sync_lock = asyncio.Lock()
+        # Rows aidream has ALREADY accepted whose local delete has not yet
+        # won the SQLite write lock. They are never uploaded again — the
+        # publisher only retries their delete.
+        self._delivered_undeleted: set[int] = set()
 
     @property
     def active(self) -> bool:
@@ -1011,6 +1027,12 @@ class CodingSessionBridgeOutbox:
                     "blocked": "aidream_server_unconfigured",
                 }
 
+            # A row aidream already accepted must never be uploaded twice.
+            # Clear any that lost the write lock last tick before selecting
+            # new work; while one is still stuck it also blocks its lane, so
+            # skipping it here is order-preserving, not order-breaking.
+            await self._drain_delivered_undeleted()
+
             sent = 0
             failed = 0
             processed = 0
@@ -1031,6 +1053,11 @@ class CodingSessionBridgeOutbox:
                     (time.time(),),
                 )
                 if row is None:
+                    break
+                if int(row["id"]) in self._delivered_undeleted:
+                    # Delivered, delete still losing the lock. Re-sending it
+                    # would duplicate an accepted event on the server for no
+                    # local benefit.
                     break
                 processed += 1
                 try:
@@ -1081,76 +1108,141 @@ class CodingSessionBridgeOutbox:
                     continue
 
                 # The upstream POST succeeded — from here on the envelope is
-                # DELIVERED and the only remaining work is local bookkeeping.
-                # The activity summary is best-effort: a transient local write
-                # failure ("database is locked" under hook-ingress contention)
-                # must never keep the delivered row at the head of its lane.
-                # Pre-fix, an ack-write failure raised out of the tick AFTER a
-                # successful upload, the row was never deleted, and the whole
-                # outbox wedged behind it re-sending the same envelope forever
-                # (observed live 2026-08-18/19: 17k rows, all attempts=0).
-                try:
-                    await self._record_delivery_acknowledgement(
-                        receipt_id=int(row["id"]),
-                        request=persisted_request,
-                        response=response,
-                    )
-                except Exception:
-                    logger.warning(
-                        "[coding_session_bridge] delivery succeeded but the "
-                        "local acknowledgement write failed for id=%s — "
-                        "continuing to delete the delivered row",
-                        int(row["id"]),
-                        exc_info=True,
-                    )
-                try:
-                    await self._db.execute(
-                        "DELETE FROM coding_session_bridge_outbox WHERE id = ?",
-                        (int(row["id"]),),
-                    )
-                    await self._db.commit()
-                except Exception as exc:
-                    # Could not delete a DELIVERED row. Push it to the back of
-                    # the retry window instead of crashing the tick; the server
-                    # bridge is idempotent, so an eventual re-send is a
-                    # duplicate, not corruption.
-                    logger.error(
-                        "[coding_session_bridge] could not delete delivered "
-                        "outbox row id=%s — deferring it (server dedupe makes "
-                        "the re-send harmless)",
-                        int(row["id"]),
-                        exc_info=True,
-                    )
-                    try:
-                        await self._record_failure(
-                            int(row["id"]), int(row["attempts"]), exc
-                        )
-                    except Exception:
-                        logger.warning(
-                            "[coding_session_bridge] deferral write also "
-                            "failed for id=%s",
-                            int(row["id"]),
-                            exc_info=True,
-                        )
-                    failed += 1
+                # DELIVERED. Retiring the row is the ONLY thing that stops the
+                # publisher sending it again, so it runs on the same durable
+                # boundary the hook ingress uses (see
+                # _DURABLE_WRITE_BUSY_TIMEOUT_MS).
+                if await self._retire_delivered_row(
+                    outbox_id=int(row["id"]),
+                    request=persisted_request,
+                    response=response,
+                ):
+                    sent += 1
                     continue
-                sent += 1
+
+                # The delete lost the write lock. The row is DELIVERED, so it
+                # must never be uploaded again — remember it and stop this
+                # tick. The next tick retries the delete before any upload.
+                self._delivered_undeleted.add(int(row["id"]))
+                failed += 1
+                break
             return {"sent": sent, "failed": failed, "blocked": None}
 
-    async def _record_delivery_acknowledgement(
+    async def _drain_delivered_undeleted(self) -> None:
+        """Retry deletes for rows aidream already accepted. Never re-uploads."""
+        for outbox_id in sorted(self._delivered_undeleted):
+            if await self._delete_delivered_row(outbox_id):
+                self._delivered_undeleted.discard(outbox_id)
+            else:
+                # Still locked. Leave the rest for the next tick rather than
+                # burning it against a write lock we are plainly not winning.
+                return
+
+    async def _retire_delivered_row(
         self,
+        *,
+        outbox_id: int,
+        request: BridgeRequest,
+        response: dict[str, Any],
+    ) -> bool:
+        """Record the acknowledgement and delete the row in one durable write.
+
+        Returns True once the row is gone. The acknowledgement summary stays
+        best-effort RELATIVE TO THE DELETE: if the combined transaction fails,
+        a delete-only transaction is attempted, so an ack-write problem can
+        never keep a delivered envelope in the queue.
+        """
+        try:
+            await self._commit_delivery_retirement(
+                outbox_id=outbox_id, request=request, response=response
+            )
+            return True
+        except Exception:
+            logger.warning(
+                "[coding_session_bridge] delivered id=%s could not be retired "
+                "with its acknowledgement summary — retrying delete alone",
+                outbox_id,
+                exc_info=True,
+            )
+        return await self._delete_delivered_row(outbox_id)
+
+    async def _delete_delivered_row(self, outbox_id: int) -> bool:
+        try:
+            async with aiosqlite.connect(str(self._db.path)) as connection:
+                await connection.execute(
+                    f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}"
+                )
+                await connection.execute("PRAGMA synchronous=FULL")
+                await connection.execute("BEGIN IMMEDIATE")
+                try:
+                    await connection.execute(
+                        "DELETE FROM coding_session_bridge_outbox WHERE id = ?",
+                        (outbox_id,),
+                    )
+                    await connection.commit()
+                except BaseException:
+                    await connection.rollback()
+                    raise
+            return True
+        except Exception:
+            logger.error(
+                "[coding_session_bridge] could not delete DELIVERED outbox row "
+                "id=%s — it stays queued but will NOT be re-uploaded; the "
+                "delete is retried next tick",
+                outbox_id,
+                exc_info=True,
+            )
+            return False
+
+    async def _commit_delivery_retirement(
+        self,
+        *,
+        outbox_id: int,
+        request: BridgeRequest,
+        response: dict[str, Any],
+    ) -> None:
+        """One private BEGIN IMMEDIATE transaction: ack summary + delete."""
+        async with aiosqlite.connect(str(self._db.path)) as connection:
+            await connection.execute(
+                f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}"
+            )
+            await connection.execute("PRAGMA synchronous=FULL")
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                await self._write_delivery_acknowledgement(
+                    connection,
+                    receipt_id=outbox_id,
+                    request=request,
+                    response=response,
+                )
+                await connection.execute(
+                    "DELETE FROM coding_session_bridge_outbox WHERE id = ?",
+                    (outbox_id,),
+                )
+                await connection.commit()
+            except BaseException:
+                await connection.rollback()
+                raise
+
+    @staticmethod
+    async def _write_delivery_acknowledgement(
+        connection: aiosqlite.Connection,
         *,
         receipt_id: int,
         request: BridgeRequest,
         response: dict[str, Any],
     ) -> None:
-        """Persist a bounded proof summary; never retain the server body."""
+        """Persist a bounded proof summary; never retain the server body.
+
+        Runs inside the caller's transaction so the acknowledgement and the
+        outbox delete land together or not at all.
+        """
         provider, action, source = _delivery_dimensions(request)
         accepted = int(response.get("accepted", 0))
         duplicates = int(response.get("duplicates", 0))
         fidelity_value = response.get("fidelity")
         fidelity = str(fidelity_value) if fidelity_value is not None else None
-        await self._db.execute(
+        await connection.execute(
             """INSERT INTO coding_session_bridge_delivery_activity (
                    provider, action, source,
                    last_acknowledged_at, last_acknowledged_receipt_id,
@@ -1186,7 +1278,7 @@ class CodingSessionBridgeOutbox:
             # This ledger means cloud-acknowledged, not merely locally queued.
             # Keeping it in the same transaction as outbox deletion prevents a
             # failed label from being mistaken for a synchronized one.
-            await self._db.execute(
+            await connection.execute(
                 """INSERT INTO claude_session_metadata_sent
                        (provider_session_id, payload_sha256, updated_at)
                    VALUES (?, ?, datetime('now'))

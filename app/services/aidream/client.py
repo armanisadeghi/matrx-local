@@ -15,6 +15,7 @@ The SyncEngine catches this and skips the sync cycle gracefully, logging a warni
 from __future__ import annotations
 
 import logging
+import ssl
 from typing import Any, Optional
 
 import httpx
@@ -96,6 +97,16 @@ class AIDreamClient:
             raise AIDreamOfflineError(
                 f"[aidream_client] HTTP error reaching {url}: {exc}"
             ) from exc
+        except (ssl.SSLError, OSError) as exc:
+            # httpx does not wrap every transport failure. A TLS alert raised
+            # mid-stream (SSLV3_ALERT_BAD_RECORD_MAC, seen live 2026-08-19 on
+            # the coding-session publisher) reaches callers RAW, escapes their
+            # `except AIDreamOfflineError` and kills the caller's loop. At this
+            # boundary an OSError means exactly one thing — the server was not
+            # reached — which is this client's definition of offline.
+            raise AIDreamOfflineError(
+                f"[aidream_client] Transport failure reaching {url}: {exc}"
+            ) from exc
 
         if not resp.is_success:
             raise AIDreamError(
@@ -142,6 +153,16 @@ class AIDreamClient:
         except httpx.HTTPError as exc:
             raise AIDreamOfflineError(
                 f"[aidream_client] HTTP error reaching {url}: {exc}"
+            ) from exc
+        except (ssl.SSLError, OSError) as exc:
+            # httpx does not wrap every transport failure. A TLS alert raised
+            # mid-stream (SSLV3_ALERT_BAD_RECORD_MAC, seen live 2026-08-19 on
+            # the coding-session publisher) reaches callers RAW, escapes their
+            # `except AIDreamOfflineError` and kills the caller's loop. At this
+            # boundary an OSError means exactly one thing — the server was not
+            # reached — which is this client's definition of offline.
+            raise AIDreamOfflineError(
+                f"[aidream_client] Transport failure reaching {url}: {exc}"
             ) from exc
 
         if not resp.is_success:

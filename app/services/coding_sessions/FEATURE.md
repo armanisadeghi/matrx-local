@@ -128,6 +128,19 @@ quiet backlog.
   publisher only ever touches lane HEADS, so of 22,126 rows exactly 219 were
   ever eligible. Read a pileup as one stalled tick, not a starved lane.
 
+- **An UNEXPECTED exception defers its row; it never stops the publisher.**
+  Three separate incidents have now taken the whole tick down — v1.4.34's ack
+  write, v1.4.35's delete, and (2026-08-19, v1.4.36) a raw
+  `ssl.SSLError: SSLV3_ALERT_BAD_RECORD_MAC` that `AIDreamClient` did not
+  classify, so it sailed past `except (AIDreamOfflineError, AIDreamError)`.
+  Each time the row recorded no attempt, so it earned no backoff either, and
+  every lane sat at `attempts=0` with nothing in the outbox explaining the
+  stall. `sync_pending` now catches `Exception` per row, screams, records the
+  failure, and lets the next lane through. `AIDreamClient` classifies
+  `ssl.SSLError`/`OSError` at its request boundary as `AIDreamOfflineError` —
+  at that boundary an `OSError` means exactly one thing, the server was not
+  reached.
+
 Regression: `tests/unit/test_coding_session_delivered_row_wedge.py`.
 
 ### Provider-neutral delivery status

@@ -1106,6 +1106,34 @@ class CodingSessionBridgeOutbox:
                         # row; burning every lane's retry counter adds no value.
                         break
                     continue
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # An UNEXPECTED failure must degrade to a deferred row, not
+                    # a dead publisher. Three separate incidents (v1.4.34's ack
+                    # write, v1.4.35's delete, and a raw ssl.SSLError escaping
+                    # the aidream client on 2026-08-19) each stopped the whole
+                    # tick, and because the row never recorded an attempt it
+                    # also got no backoff — every lane stalled at attempts=0
+                    # with nothing in the outbox explaining why. Record it,
+                    # scream, and let the next lane through.
+                    logger.exception(
+                        "[coding_session_bridge] unexpected failure on id=%s — "
+                        "deferring the row instead of stopping the publisher",
+                        int(row["id"]),
+                    )
+                    try:
+                        await self._record_failure(
+                            int(row["id"]), int(row["attempts"]), exc
+                        )
+                    except Exception:
+                        logger.exception(
+                            "[coding_session_bridge] could not even defer "
+                            "id=%s", int(row["id"])
+                        )
+                        break
+                    failed += 1
+                    continue
 
                 # The upstream POST succeeded — from here on the envelope is
                 # DELIVERED. Retiring the row is the ONLY thing that stops the

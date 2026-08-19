@@ -206,3 +206,68 @@ async def test_the_row_retires_once_the_lock_clears(tmp_path: Path) -> None:
     assert await outbox.pending_count() == 0, "the retried delete must land"
     assert outbox._delivered_undeleted == set()
     await db.close()
+
+
+@pytest.mark.anyio
+async def test_a_raw_transport_error_defers_the_row_instead_of_killing_the_tick(
+    tmp_path: Path,
+) -> None:
+    """The third wedge: an exception the client did not classify.
+
+    Live 2026-08-19 on v1.4.36: `ssl.SSLError: SSLV3_ALERT_BAD_RECORD_MAC`
+    reached `sync_pending` raw, missed its `except (AIDreamOfflineError,
+    AIDreamError)`, and killed the publisher tick. The row recorded no attempt,
+    so it got no backoff either — every lane sat at attempts=0 with nothing in
+    the outbox explaining the stall.
+    """
+    import ssl
+
+    path = tmp_path / "matrx.db"
+    db = LocalDatabase(path)
+    await db.connect()
+    await _seed_user(db)
+
+    class _RawSSLFailure:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def post(self, path: str, payload: dict, jwt: str, timeout: float) -> Any:  # noqa: ARG002
+            self.calls += 1
+            raise ssl.SSLError("[SSL: SSLV3_ALERT_BAD_RECORD_MAC] bad record mac")
+
+    client = _RawSSLFailure()
+    outbox = CodingSessionBridgeOutbox(db=db, client=client, cloud_enabled=True)
+    await outbox.enqueue(_request())
+
+    result = await outbox.sync_pending()
+
+    assert result["failed"] == 1, "the tick must survive and report the failure"
+    assert await outbox.pending_count() == 1, "the envelope is never dropped"
+
+    row = await db.fetchone(
+        "SELECT attempts, next_attempt_at FROM coding_session_bridge_outbox"
+    )
+    assert row is not None
+    assert int(row["attempts"]) == 1, "an unexpected failure still counts"
+    assert float(row["next_attempt_at"]) > 0, "and still earns a backoff"
+    await db.close()
+
+
+@pytest.mark.anyio
+async def test_the_client_classifies_a_raw_ssl_error_as_offline() -> None:
+    """Offline is retryable; an unclassified error is not even catchable."""
+    import ssl
+
+    import httpx
+
+    from app.services.aidream.client import AIDreamClient, AIDreamOfflineError
+
+    def _explode(request: httpx.Request) -> httpx.Response:
+        raise ssl.SSLError("[SSL: SSLV3_ALERT_BAD_RECORD_MAC] bad record mac")
+
+    client = AIDreamClient(
+        "https://server.example.com",
+        transport=httpx.MockTransport(_explode),
+    )
+    with pytest.raises(AIDreamOfflineError):
+        await client.post("/coding-sessions/bridge", {}, jwt="t", timeout=5.0)

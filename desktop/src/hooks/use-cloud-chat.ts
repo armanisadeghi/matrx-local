@@ -1794,11 +1794,6 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               break;
             }
 
-            case EventType.BROKER: {
-              setStatus(`Broker value received: ${event.data.broker_id}.`);
-              break;
-            }
-
             case EventType.HEARTBEAT: {
               if (!accumulated) setStatus(lastStatus || `Waiting for ${serviceLabel}...`);
               break;

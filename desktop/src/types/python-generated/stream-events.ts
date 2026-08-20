@@ -16,7 +16,6 @@ export const EventType = {
   COMPLETION: "completion",
   ERROR: "error",
   TOOL_EVENT: "tool_event",
-  BROKER: "broker",
   HEARTBEAT: "heartbeat",
   END: "end",
   RENDER_BLOCK: "render_block",
@@ -164,13 +163,6 @@ export interface ToolEventPayload {
   message?: string | null;
   show_spinner?: boolean;
   data?: Record<string, unknown>;
-}
-
-export interface BrokerPayload {
-  broker_id: string;
-  value: unknown;
-  source?: string | null;
-  source_id?: string | null;
 }
 
 export interface HeartbeatPayload {
@@ -432,6 +424,24 @@ export interface CategorizationResultData {
   metadata?: Record<string, unknown>;
 }
 
+export interface JsonValue {
+}
+
+export interface ClaudeManagedSdkMessageData {
+  type?: "claude_managed_sdk_message";
+  runtime_id: string;
+  session_id: string;
+  sdk_message_type: string;
+  message: Record<string, JsonValue>;
+}
+
+export interface ClaudeManagedWarningData {
+  type?: "claude_managed_warning";
+  code: string;
+  runtime_id: string;
+  session_id: string;
+}
+
 export interface ContextChangedData {
   type?: "context_changed";
   key: string;
@@ -557,6 +567,7 @@ export interface ExtractionIndexProgressData {
 }
 
 export interface FetchResultItem {
+  [key: string]: unknown;
   url?: string;
   title?: string;
   content?: string;
@@ -789,6 +800,223 @@ export interface LegalSyncEventData {
   error?: string | null;
 }
 
+export interface MasterworkAuditionProgressData {
+  type?: "masterwork_audition_progress";
+  step: string;
+  message: string;
+}
+
+export interface AuditionRuleFinding {
+  rule_id: string;
+  winner: string;
+  note?: string;
+}
+
+export interface MasterworkAuditionVerdictData {
+  type?: "masterwork_audition_verdict";
+  rulebook_id: string;
+  verdict: string;
+  summary: string;
+  findings?: AuditionRuleFinding[];
+  gaps?: string[];
+  gaps_captured?: number;
+  rulebook_version?: number | null;
+  quality_score?: number | null;
+  judge_confidence?: number | null;
+  vanilla_compared?: boolean;
+  vanilla_score?: number | null;
+  vanilla_verdict?: string | null;
+  vanilla_findings?: AuditionRuleFinding[];
+  vanilla_text?: string | null;
+  vanilla_model?: string | null;
+  vanilla_error?: string | null;
+  beat_vanilla_rules?: number | null;
+  lost_to_vanilla_rules?: number | null;
+  vanilla_rules_compared?: number | null;
+  verdict_sentence?: string | null;
+}
+
+export interface MasterworkBuildCompleteData {
+  type?: "masterwork_build_complete";
+  workflow_id: string;
+  name: string;
+  masterwork_kind: string;
+  rulebook_id: string;
+  rulebook_slug: string;
+  rulebook_version: number;
+  agent_ids?: string[];
+}
+
+export interface MasterworkBuildProgressData {
+  type?: "masterwork_build_progress";
+  step: string;
+  message: string;
+  agent_id?: string | null;
+  agent_name?: string | null;
+}
+
+export interface CheckupFinding {
+  id: string;
+  kind: string;
+  target_rule_id?: string | null;
+  proposed?: Record<string, unknown> | null;
+  alternatives?: Record<string, unknown>[];
+  reason?: string;
+  evidence?: string;
+  evidence_ref?: Record<string, unknown>;
+  confidence?: number;
+  source?: string;
+  content_ir?: Record<string, unknown> | null;
+}
+
+export interface MasterworkCheckupCompleteData {
+  type?: "masterwork_checkup_complete";
+  rulebook_id: string;
+  rulebook_version: number;
+  findings?: CheckupFinding[];
+  producers_run?: string[];
+  producers_failed?: string[];
+  evidence_rejected?: number;
+  already_dismissed?: number;
+  corpus_segments?: number;
+  corpus_chars?: number;
+  corpus_cleaned?: boolean;
+  notes?: string[];
+}
+
+export interface MasterworkCheckupFindingData {
+  type?: "masterwork_checkup_finding";
+  rulebook_id: string;
+  finding: CheckupFinding;
+  content_ir?: Record<string, unknown> | null;
+}
+
+export interface MasterworkCheckupProgressData {
+  type?: "masterwork_checkup_progress";
+  step: string;
+  message: string;
+  producer?: string | null;
+  findings_found?: number | null;
+  findings_dropped?: number | null;
+}
+
+export interface MasterworkCorpusCleanedData {
+  type?: "masterwork_corpus_cleaned";
+  rulebook_id: string;
+  rulebook_version: number;
+  segments?: number;
+  cleaned?: number;
+  reused?: number;
+  failed?: number;
+  total_chars?: number;
+  text?: string;
+}
+
+export interface MasterworkCorpusProgressData {
+  type?: "masterwork_corpus_progress";
+  step: string;
+  message: string;
+  segment_label?: string | null;
+  segment_index?: number | null;
+  total_segments?: number | null;
+}
+
+export interface MasterworkDumpResourceOutcome {
+  kind: string;
+  token?: string | null;
+  id?: string | null;
+  url?: string | null;
+  title?: string | null;
+  status: string;
+  rules_added?: number;
+  duplicates?: number;
+  error?: string | null;
+}
+
+export interface MasterworkDumpCompleteData {
+  type?: "masterwork_dump_complete";
+  rulebook_id: string;
+  rulebook_version: number;
+  added?: number;
+  duplicates_skipped?: number;
+  quotes_verified?: number;
+  quotes_unverified?: number;
+  resources?: MasterworkDumpResourceOutcome[];
+}
+
+export interface MasterworkDumpProgressData {
+  type?: "masterwork_dump_progress";
+  step: string;
+  message: string;
+  resource_index: number;
+  resource_count: number;
+  kind?: string | null;
+  token?: string | null;
+  id?: string | null;
+  url?: string | null;
+  title?: string | null;
+  rules_added?: number | null;
+  rules_added_total?: number;
+}
+
+export interface MasterworkIngestCompleteData {
+  type?: "masterwork_ingest_complete";
+  rulebook_id: string;
+  rulebook_version: number;
+  added?: number;
+  duplicates_skipped?: number;
+  quotes_verified?: number;
+  quotes_unverified?: number;
+  followup_seed?: string | null;
+}
+
+export interface MasterworkIngestProgressData {
+  type?: "masterwork_ingest_progress";
+  step: string;
+  message: string;
+  chunk_index?: number | null;
+  total_chunks?: number | null;
+  rules_found?: number | null;
+}
+
+export interface MasterworkRunData {
+  type?: "masterwork_run";
+  run_id: string;
+  rulebook_id: string;
+  operation: string;
+  label?: string | null;
+}
+
+export interface MasterworkRunFailedData {
+  type?: "masterwork_run_failed";
+  run_id: string;
+  error?: Record<string, unknown> | null;
+}
+
+export interface MasterworkRunSnapshotData {
+  type?: "masterwork_run_snapshot";
+  run_id: string;
+  rulebook_id: string;
+  operation: string;
+  label?: string | null;
+  status: string;
+  live?: boolean;
+  error?: Record<string, unknown> | null;
+  result?: Record<string, unknown> | null;
+  completed_at?: string | null;
+}
+
+export interface MasterworkShortlistItem {
+  key: string;
+  reason?: string;
+}
+
+export interface MasterworkShortlistData {
+  type?: "masterwork_shortlist";
+  selected?: MasterworkShortlistItem[];
+  considered?: number;
+}
+
 export interface AudioBlock {
   origin: "matrx" | "external";
   file_id?: string | null;
@@ -863,9 +1091,6 @@ export interface ImageBlock {
   width?: number | null;
   height?: number | null;
   vision_class?: string | null;
-}
-
-export interface JsonValue {
 }
 
 export interface VideoBlock {
@@ -1170,6 +1395,18 @@ export interface PdfTablesStartedData {
   total_pages: number;
 }
 
+export interface PlanBriefDraftData {
+  type?: "plan_brief_draft";
+  node_id: string;
+  route?: string;
+  brief?: string[];
+  angle?: string;
+  must_not_cover?: string[];
+  concerns?: string[];
+  suggested_word_count?: number | null;
+  accepted?: boolean;
+}
+
 export interface PlanCmsFillPreviewData {
   type?: "plan_cms_fill_preview";
   node_id: string;
@@ -1182,6 +1419,8 @@ export interface PlanCmsFillPreviewData {
   meta_description?: string;
   model?: string;
   wrote?: boolean;
+  is_published?: boolean;
+  write_target?: "live" | "draft";
   global_css?: string;
   header_html?: string;
   footer_html?: string;
@@ -1225,6 +1464,26 @@ export interface PlanGenStartedData {
   domain: string;
   angles?: string[];
   keyword_count?: number;
+}
+
+export interface PlanPageStepResultData {
+  type?: "plan_page_step_result";
+  node_id: string;
+  step: string;
+  route?: string;
+  artifact_id?: string;
+  run_id?: string;
+  summary?: string;
+}
+
+export interface PlanSetupAgentResultData {
+  type?: "plan_setup_agent_result";
+  site_id: string;
+  kind: string;
+  run_id: string;
+  item_count?: number;
+  summary?: string;
+  model_id?: string | null;
 }
 
 export interface PodcastAssetEvent {
@@ -1275,8 +1534,13 @@ export interface PodcastCompleteEvent {
   description?: string;
   image_urls?: string[];
   video_urls?: string[];
+  audio_file_id?: string;
+  image_file_ids?: string[];
+  video_file_ids?: string[];
+  official_video_file_id?: string;
   official_video_url?: string;
   official_video_error?: string;
+  run_mode?: string;
   host_count?: number;
   speakers?: Record<string, unknown>[];
   error?: string | null;
@@ -1376,6 +1640,7 @@ export interface SearchErrorData {
 }
 
 export interface SearchResultItem {
+  [key: string]: unknown;
   url?: string;
   title?: string;
   snippet?: string;
@@ -1435,6 +1700,8 @@ export type TypedDataPayload =
   | AudioStreamChunkData
   | AudioStreamEndData
   | CategorizationResultData
+  | ClaudeManagedSdkMessageData
+  | ClaudeManagedWarningData
   | ContextChangedData
   | ContextConflictData
   | ContextDeltaData
@@ -1463,6 +1730,23 @@ export type TypedDataPayload =
   | ImageStudioProcessCompleteData
   | ImageStudioVariantData
   | LegalSyncEventData
+  | MasterworkAuditionProgressData
+  | MasterworkAuditionVerdictData
+  | MasterworkBuildCompleteData
+  | MasterworkBuildProgressData
+  | MasterworkCheckupCompleteData
+  | MasterworkCheckupFindingData
+  | MasterworkCheckupProgressData
+  | MasterworkCorpusCleanedData
+  | MasterworkCorpusProgressData
+  | MasterworkDumpCompleteData
+  | MasterworkDumpProgressData
+  | MasterworkIngestCompleteData
+  | MasterworkIngestProgressData
+  | MasterworkRunData
+  | MasterworkRunFailedData
+  | MasterworkRunSnapshotData
+  | MasterworkShortlistData
   | MediaBlockData
   | MediaNoticeData
   | MemoryBufferSpawnedData
@@ -1487,12 +1771,15 @@ export type TypedDataPayload =
   | PdfTablesCompleteData
   | PdfTablesPageData
   | PdfTablesStartedData
+  | PlanBriefDraftData
   | PlanCmsFillPreviewData
   | PlanDeepenResultData
   | PlanGenAppliedData
   | PlanGenCandidateData
   | PlanGenMergedData
   | PlanGenStartedData
+  | PlanPageStepResultData
+  | PlanSetupAgentResultData
   | PodcastAssetEvent
   | PodcastAssetGenStartedEvent
   | PodcastAssetResultEvent
@@ -1567,6 +1854,7 @@ export function isContextGroomedEvent(value: unknown): value is ContextGroomedEv
 // --- SEO Streamed Result Models (kind-discriminated data events) ---
 
 export interface KeywordClassifyResult {
+  result_kind?: "keywords.classify";
   eligible?: number;
   batches?: number;
   updated?: number;
@@ -1593,6 +1881,12 @@ export interface KeywordResearchList {
   keywords?: string[];
 }
 
+export interface KeywordVolumeBatchFailure {
+  batch_index: number;
+  keyword_count: number;
+  error: string;
+}
+
 export interface KeywordVolumeBatchReceipt {
   run_id: string;
   keyword_count: number;
@@ -1608,6 +1902,7 @@ export interface KeywordVolumeRefreshResult {
   fetched_phrases?: number;
   rejected_phrases?: KeywordVolumeRejectedPhrase[];
   batches?: KeywordVolumeBatchReceipt[];
+  failed_batches?: KeywordVolumeBatchFailure[];
 }
 
 export interface KeywordVolumeRejectedPhrase {
@@ -2132,7 +2427,7 @@ export interface ProgressItem {
   id: string;
   text: string;
   completed?: boolean;
-  priority?: "high" | "medium" | "low" | null;
+  priority?: "low" | "medium" | "high" | null;
   estimatedHours?: number | null;
   optional?: boolean;
   category?: string | null;
@@ -2142,7 +2437,7 @@ export interface ProgressItem {
   id: string;
   text: string;
   completed?: boolean;
-  priority?: "high" | "medium" | "low" | null;
+  priority?: "low" | "medium" | "high" | null;
   estimatedHours?: number | null;
   optional?: boolean;
   category?: string | null;
@@ -2194,7 +2489,7 @@ export interface TroubleshootingSolution {
   id: string;
   title: string;
   description?: string | null;
-  priority?: "high" | "medium" | "low" | null;
+  priority?: "low" | "medium" | "high" | null;
   successRate?: number | null;
   tags?: string[];
   steps?: TroubleshootingStep[];
@@ -2204,7 +2499,7 @@ export interface TroubleshootingSolution {
   id: string;
   title: string;
   description?: string | null;
-  priority?: "high" | "medium" | "low" | null;
+  priority?: "low" | "medium" | "high" | null;
   successRate?: number | null;
   tags?: string[];
   steps?: TroubleshootingStep[];
@@ -2624,18 +2919,6 @@ export interface QuestionnaireBlockData {
   rawContent?: string;
 }
 
-export interface MatrxBrokerBlockData {
-  matrxRecordId?: string | null;
-  id?: string | null;
-  name?: string | null;
-  defaultValue?: string | null;
-  color?: string | null;
-  status?: string | null;
-  defaultComponent?: string | null;
-  dataType?: string | null;
-  rawContent?: string;
-}
-
 // --- Typed Render Block Interfaces (discriminated on `type`) ---
 
 // Each interface narrows RenderBlockPayload.data to its concrete type.
@@ -2748,16 +3031,6 @@ export interface StructuredInfoRenderBlock {
   status: "streaming" | "complete" | "error";
   content?: string | null;
   data?: Record<string, unknown> | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface MatrxBrokerRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "matrxBroker";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: MatrxBrokerBlockData | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -3013,7 +3286,6 @@ export type TypedRenderBlock =
   | TasksRenderBlock
   | TranscriptRenderBlock
   | StructuredInfoRenderBlock
-  | MatrxBrokerRenderBlock
   | QuestionnaireRenderBlock
   | FlashcardsRenderBlock
   | QuizRenderBlock
@@ -3040,7 +3312,7 @@ export type TypedRenderBlock =
   | ToolRenderBlock;
 
 const TYPED_RENDER_BLOCK_TYPES = new Set<string>([
-  "text", "code", "table", "thinking", "reasoning", "consolidated_reasoning", "image", "video", "tasks", "transcript", "structured_info", "matrxBroker", "questionnaire", "flashcards", "quiz", "presentation", "cooking_recipe", "timeline", "progress_tracker", "comparison_table", "troubleshooting", "resources", "decision_tree", "decision", "research", "diagram", "mermaid", "math_problem", "artifact", "info", "task", "database", "private", "plan", "event", "tool",
+  "text", "code", "table", "thinking", "reasoning", "consolidated_reasoning", "image", "video", "tasks", "transcript", "structured_info", "questionnaire", "flashcards", "quiz", "presentation", "cooking_recipe", "timeline", "progress_tracker", "comparison_table", "troubleshooting", "resources", "decision_tree", "decision", "research", "diagram", "mermaid", "math_problem", "artifact", "info", "task", "database", "private", "plan", "event", "tool",
 ]);
 
 export function isTypedRenderBlock(e: RenderBlockPayload): e is RenderBlockPayload & TypedRenderBlock {
@@ -3292,7 +3564,7 @@ export interface NormalizedCitation {
 
 export interface TextPart {
   metadata?: Record<string, unknown>;
-  type?: "text";
+  type: "text";
   text?: string;
   id?: string;
   citations?: NormalizedCitation[];
@@ -3300,7 +3572,7 @@ export interface TextPart {
 
 export interface ThinkingPart {
   metadata?: Record<string, unknown>;
-  type?: "thinking";
+  type: "thinking";
   text?: string;
   id?: string;
   provider?: "openai" | "anthropic" | "google" | "cerebras" | "moonshot" | "together" | "groq" | "xai" | "generic_openai" | null;
@@ -3311,7 +3583,7 @@ export interface ThinkingPart {
 
 export interface ToolCallPart {
   metadata?: Record<string, unknown>;
-  type?: "tool_call";
+  type: "tool_call";
   call_id?: string;
   name?: string;
   arguments?: Record<string, unknown>;
@@ -3319,7 +3591,7 @@ export interface ToolCallPart {
 
 export interface ToolResultPart {
   metadata?: Record<string, unknown>;
-  type?: "tool_result";
+  type: "tool_result";
   call_id?: string;
   tool_use_id?: string;
   name?: string;
@@ -3328,94 +3600,111 @@ export interface ToolResultPart {
   output_preview?: Record<string, unknown> | null;
 }
 
-export interface ImageMediaPart {
+export type ImageMediaPart = {
   metadata?: Record<string, unknown>;
   origin?: "matrx" | "external" | null;
   file_id?: string | null;
   url?: string | null;
   mime_type?: string | null;
   size_bytes?: number | null;
-  type?: "media";
-  kind?: "image";
+  type: "media";
+  kind: "image";
   width?: number | null;
   height?: number | null;
-}
+} & ({
+  url: string;
+} | {
+  file_id: string;
+});
 
-export interface AudioMediaPart {
+export type AudioMediaPart = {
   metadata?: Record<string, unknown>;
   origin?: "matrx" | "external" | null;
   file_id?: string | null;
   url?: string | null;
   mime_type?: string | null;
   size_bytes?: number | null;
-  type?: "media";
-  kind?: "audio";
+  type: "media";
+  kind: "audio";
   duration_ms?: number | null;
   transcription_result?: string | null;
-}
+} & ({
+  url: string;
+} | {
+  file_id: string;
+});
 
-export interface VideoMediaPart {
+export type VideoMediaPart = {
   metadata?: Record<string, unknown>;
   origin?: "matrx" | "external" | null;
   file_id?: string | null;
   url?: string | null;
   mime_type?: string | null;
   size_bytes?: number | null;
-  type?: "media";
-  kind?: "video";
+  type: "media";
+  kind: "video";
   width?: number | null;
   height?: number | null;
   duration_ms?: number | null;
-}
+} & ({
+  url: string;
+} | {
+  file_id: string;
+});
 
-export interface DocumentMediaPart {
+export type DocumentMediaPart = {
   metadata?: Record<string, unknown>;
   origin?: "matrx" | "external" | null;
   file_id?: string | null;
   url?: string | null;
   mime_type?: string | null;
   size_bytes?: number | null;
-  type?: "media";
-  kind?: "document";
+  type: "media";
+  kind: "document";
   width?: number | null;
   height?: number | null;
   page_count?: number | null;
-}
+} & ({
+  url: string;
+} | {
+  file_id: string;
+});
 
 export interface YouTubeMediaPart {
   metadata?: Record<string, unknown>;
+  type: "media";
+  kind: "youtube";
+  url: string;
+  external_url?: string | null;
   origin?: "external";
   file_id?: string | null;
-  url: string;
   mime_type?: string | null;
   size_bytes?: number | null;
-  type?: "media";
-  kind?: "youtube";
-  external_url?: string | null;
 }
 
 export interface CodeExecPart {
   metadata?: Record<string, unknown>;
-  type?: "code_exec";
+  type: "code_exec";
   language?: string;
   code?: string;
 }
 
 export interface CodeResultPart {
   metadata?: Record<string, unknown>;
-  type?: "code_result";
+  type: "code_result";
   output?: string;
   outcome?: string;
 }
 
 export interface WebSearchPart {
   metadata?: Record<string, unknown>;
-  type?: "web_search";
+  type: "web_search";
   id?: string;
   status?: string;
 }
 
 export interface PreFetchedUrl {
+  [key: string]: unknown;
   url: string;
   textContent: string;
   title?: string | null;
@@ -3425,23 +3714,56 @@ export interface PreFetchedUrl {
 
 export interface WebpageInputPart {
   metadata?: Record<string, unknown>;
-  type?: "input_webpage";
-  urls?: (string | PreFetchedUrl)[];
+  type: "input_webpage";
+  urls: (string | PreFetchedUrl)[];
   convert_to_text?: boolean;
   optional_context?: boolean;
   keep_fresh?: boolean;
   editable?: boolean | null;
 }
 
-export interface ResourceRefInput {
-  id?: string | null;
-  mode?: "reference" | "snapshot";
+export interface LiveResourceRefInput {
+  [key: string]: unknown;
+  id: string;
+  mode?: "reference";
+}
+
+export type ResourceRefInput = LiveResourceRefInput | SnapshotContentResourceRefInput | SnapshotTextResourceRefInput | SnapshotBodyResourceRefInput | SnapshotDescriptionResourceRefInput | SnapshotValueResourceRefInput;
+
+export interface SnapshotBodyResourceRefInput {
+  [key: string]: unknown;
+  mode: "snapshot";
+  body: string;
+}
+
+export interface SnapshotContentResourceRefInput {
+  [key: string]: unknown;
+  mode: "snapshot";
+  content: string;
+}
+
+export interface SnapshotDescriptionResourceRefInput {
+  [key: string]: unknown;
+  mode: "snapshot";
+  description: string;
+}
+
+export interface SnapshotTextResourceRefInput {
+  [key: string]: unknown;
+  mode: "snapshot";
+  text: string;
+}
+
+export interface SnapshotValueResourceRefInput {
+  [key: string]: unknown;
+  mode: "snapshot";
+  value: string;
 }
 
 export interface NotesInputPart {
   metadata?: Record<string, unknown>;
-  type?: "input_notes";
-  note_ids?: (string | ResourceRefInput)[];
+  type: "input_notes";
+  note_ids: (string | ResourceRefInput)[];
   template?: string;
   convert_to_text?: boolean;
   optional_context?: boolean;
@@ -3451,8 +3773,8 @@ export interface NotesInputPart {
 
 export interface TaskInputPart {
   metadata?: Record<string, unknown>;
-  type?: "input_task";
-  task_ids?: (string | ResourceRefInput)[];
+  type: "input_task";
+  task_ids: (string | ResourceRefInput)[];
   template?: string;
   convert_to_text?: boolean;
   optional_context?: boolean;
@@ -3460,14 +3782,93 @@ export interface TaskInputPart {
   editable?: boolean | null;
 }
 
+export interface AgentInputPart {
+  metadata?: Record<string, unknown>;
+  convert_to_text?: boolean;
+  optional_context?: boolean;
+  keep_fresh?: boolean;
+  editable?: boolean | null;
+  template?: "full" | "compact" | "minimal" | null;
+  type: "input_agent";
+  agent_ids: string[];
+}
+
+export interface ProjectInputPart {
+  metadata?: Record<string, unknown>;
+  convert_to_text?: boolean;
+  optional_context?: boolean;
+  keep_fresh?: boolean;
+  editable?: boolean | null;
+  template?: "full" | "compact" | "minimal" | null;
+  type: "input_project";
+  project_ids: string[];
+}
+
+export interface AgentAppInputPart {
+  metadata?: Record<string, unknown>;
+  convert_to_text?: boolean;
+  optional_context?: boolean;
+  keep_fresh?: boolean;
+  editable?: boolean | null;
+  template?: "full" | "compact" | "minimal" | null;
+  type: "input_agent_app";
+  agent_app_ids: string[];
+}
+
+export interface TranscriptInputPart {
+  metadata?: Record<string, unknown>;
+  convert_to_text?: boolean;
+  optional_context?: boolean;
+  keep_fresh?: boolean;
+  editable?: boolean | null;
+  template?: "full" | "compact" | "minimal" | null;
+  type: "input_transcript";
+  transcript_ids: string[];
+}
+
+export interface TranscriptSessionInputPart {
+  metadata?: Record<string, unknown>;
+  convert_to_text?: boolean;
+  optional_context?: boolean;
+  keep_fresh?: boolean;
+  editable?: boolean | null;
+  template?: "full" | "compact" | "minimal" | null;
+  type: "input_transcript_session";
+  transcript_session_ids: string[];
+}
+
+export interface WorkbookInputPart {
+  metadata?: Record<string, unknown>;
+  convert_to_text?: boolean;
+  optional_context?: boolean;
+  keep_fresh?: boolean;
+  editable?: boolean | null;
+  template?: "full" | "compact" | "minimal" | null;
+  type: "input_workbook";
+  workbook_ids: (string | LiveResourceRefInput)[];
+}
+
+export interface DocumentInputPart {
+  metadata?: Record<string, unknown>;
+  convert_to_text?: boolean;
+  optional_context?: boolean;
+  keep_fresh?: boolean;
+  editable?: boolean | null;
+  template?: "full" | "compact" | "minimal" | null;
+  type: "input_document";
+  document_ids: (string | LiveResourceRefInput)[];
+}
+
 export interface FullTableBookmark {
-  type?: "full_table";
+  [key: string]: unknown;
+  type: "full_table";
   table_id: string;
   table_name?: string | null;
 }
 
 export interface TableCellBookmark {
-  type?: "table_cell";
+  [key: string]: unknown;
+  type: "table_cell";
   table_id: string;
   row_id: string;
   column_name: string;
@@ -3475,29 +3876,32 @@ export interface TableCellBookmark {
 }
 
 export interface TableColumnBookmark {
-  type?: "table_column";
+  [key: string]: unknown;
+  type: "table_column";
   table_id: string;
   column_name: string;
   table_name?: string | null;
 }
 
 export interface TableRowBookmark {
-  type?: "table_row";
+  [key: string]: unknown;
+  type: "table_row";
   table_id: string;
   row_id: string;
   table_name?: string | null;
 }
 
 export interface TableSchemaBookmark {
-  type?: "table_schema";
+  [key: string]: unknown;
+  type: "table_schema";
   table_id: string;
   table_name?: string | null;
 }
 
 export interface TableInputPart {
   metadata?: Record<string, unknown>;
-  type?: "input_table";
-  bookmarks?: (FullTableBookmark | TableColumnBookmark | TableRowBookmark | TableCellBookmark | TableSchemaBookmark)[];
+  type: "input_table";
+  bookmarks: (FullTableBookmark | TableColumnBookmark | TableRowBookmark | TableCellBookmark | TableSchemaBookmark)[];
   convert_to_text?: boolean;
   optional_context?: boolean;
   keep_fresh?: boolean;
@@ -3505,20 +3909,23 @@ export interface TableInputPart {
 }
 
 export interface FullListBookmark {
-  type?: "full_list";
+  [key: string]: unknown;
+  type: "full_list";
   list_id: string;
   list_name?: string | null;
 }
 
 export interface ListGroupBookmark {
-  type?: "list_group";
+  [key: string]: unknown;
+  type: "list_group";
   list_id: string;
   group_name: string;
   list_name?: string | null;
 }
 
 export interface ListItemBookmark {
-  type?: "list_item";
+  [key: string]: unknown;
+  type: "list_item";
   list_id: string;
   item_id: string;
   list_name?: string | null;
@@ -3526,18 +3933,52 @@ export interface ListItemBookmark {
 
 export interface ListInputPart {
   metadata?: Record<string, unknown>;
-  type?: "input_list";
-  bookmarks?: (FullListBookmark | ListGroupBookmark | ListItemBookmark)[];
+  type: "input_list";
+  bookmarks: (FullListBookmark | ListGroupBookmark | ListItemBookmark)[];
   convert_to_text?: boolean;
   optional_context?: boolean;
   keep_fresh?: boolean;
   editable?: boolean | null;
 }
 
+export interface DataRefSort {
+  field: string;
+  direction?: "asc" | "desc";
+}
+
+export interface DbFieldRef {
+  table: "notes" | "tasks" | "projects" | "organizations";
+  label?: string;
+  optional_context?: boolean;
+  ref_type: "db_field";
+  id: string;
+  field_name: string;
+}
+
+export interface DbQueryRef {
+  table: "notes" | "tasks" | "projects" | "organizations";
+  label?: string;
+  optional_context?: boolean;
+  ref_type: "db_query";
+  filter?: Record<string, unknown>;
+  fields?: string[] | null;
+  sort?: DataRefSort | null;
+  limit?: number;
+}
+
+export interface DbRecordRef {
+  table: "notes" | "tasks" | "projects" | "organizations";
+  label?: string;
+  optional_context?: boolean;
+  ref_type: "db_record";
+  id: string;
+  fields?: string[] | null;
+}
+
 export interface DataInputPart {
   metadata?: Record<string, unknown>;
-  type?: "input_data";
-  refs?: Record<string, unknown>[];
+  type: "input_data";
+  refs: (DbRecordRef | DbQueryRef | DbFieldRef)[];
   convert_to_text?: boolean;
   optional_context?: boolean;
   keep_fresh?: boolean;
@@ -3546,7 +3987,7 @@ export interface DataInputPart {
 
 export interface ContextInputPart {
   metadata?: Record<string, unknown>;
-  type?: "input_context";
+  type: "input_context";
   context_id?: string;
   context_name?: string;
   context_data?: Record<string, unknown>;
@@ -3572,14 +4013,3150 @@ export type MessagePart =
   | WebpageInputPart
   | NotesInputPart
   | TaskInputPart
+  | AgentInputPart
+  | ProjectInputPart
+  | AgentAppInputPart
+  | TranscriptInputPart
+  | TranscriptSessionInputPart
+  | WorkbookInputPart
+  | DocumentInputPart
   | TableInputPart
   | ListInputPart
   | DataInputPart
   | ContextInputPart;
 
-/** Parse the content array from a cx_message DB row. */
+interface MessagePartJsonSchema {
+  [key: string]: unknown;
+  $ref?: string;
+  anyOf?: MessagePartJsonSchema[];
+  oneOf?: MessagePartJsonSchema[];
+  allOf?: MessagePartJsonSchema[];
+  type?: "object" | "array" | "string" | "number" | "integer" | "boolean" | "null";
+  const?: unknown;
+  enum?: unknown[];
+  required?: string[];
+  properties?: Record<string, MessagePartJsonSchema>;
+  items?: MessagePartJsonSchema;
+  minItems?: number;
+  minLength?: number;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  additionalProperties?: boolean | MessagePartJsonSchema;
+  $defs?: Record<string, MessagePartJsonSchema>;
+}
+
+const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
+  "$defs": {
+    "AgentAppInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "enum": [
+                "full",
+                "compact",
+                "minimal"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "type": {
+          "const": "input_agent_app",
+          "default": "input_agent_app",
+          "title": "Type",
+          "type": "string"
+        },
+        "agent_app_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Agent App Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "agent_app_ids",
+        "type"
+      ],
+      "title": "AgentAppInputPart",
+      "type": "object"
+    },
+    "AgentInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "enum": [
+                "full",
+                "compact",
+                "minimal"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "type": {
+          "const": "input_agent",
+          "default": "input_agent",
+          "title": "Type",
+          "type": "string"
+        },
+        "agent_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Agent Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "agent_ids",
+        "type"
+      ],
+      "title": "AgentInputPart",
+      "type": "object"
+    },
+    "AudioMediaPart": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "properties": {
+                "url": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ]
+            },
+            {
+              "properties": {
+                "file_id": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_id"
+              ]
+            }
+          ]
+        }
+      ],
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "enum": [
+                "matrx",
+                "external"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin"
+        },
+        "file_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File Id"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "mime_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mime Type"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size Bytes"
+        },
+        "type": {
+          "const": "media",
+          "default": "media",
+          "title": "Type",
+          "type": "string"
+        },
+        "kind": {
+          "const": "audio",
+          "default": "audio",
+          "title": "Kind",
+          "type": "string"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ms"
+        },
+        "transcription_result": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transcription Result"
+        }
+      },
+      "required": [
+        "type",
+        "kind"
+      ],
+      "title": "AudioMediaPart",
+      "type": "object"
+    },
+    "CodeExecPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "code_exec",
+          "default": "code_exec",
+          "title": "Type",
+          "type": "string"
+        },
+        "language": {
+          "default": "python",
+          "title": "Language",
+          "type": "string"
+        },
+        "code": {
+          "default": "",
+          "title": "Code",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "CodeExecPart",
+      "type": "object"
+    },
+    "CodeResultPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "code_result",
+          "default": "code_result",
+          "title": "Type",
+          "type": "string"
+        },
+        "output": {
+          "default": "",
+          "title": "Output",
+          "type": "string"
+        },
+        "outcome": {
+          "default": "success",
+          "title": "Outcome",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "CodeResultPart",
+      "type": "object"
+    },
+    "ContextInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "input_context",
+          "default": "input_context",
+          "title": "Type",
+          "type": "string"
+        },
+        "context_id": {
+          "default": "",
+          "title": "Context Id",
+          "type": "string"
+        },
+        "context_name": {
+          "default": "",
+          "title": "Context Name",
+          "type": "string"
+        },
+        "context_data": {
+          "additionalProperties": true,
+          "title": "Context Data",
+          "type": "object"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ContextInputPart",
+      "type": "object"
+    },
+    "DataInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "input_data",
+          "default": "input_data",
+          "title": "Type",
+          "type": "string"
+        },
+        "refs": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "db_field": "#/$defs/DbFieldRef",
+                "db_query": "#/$defs/DbQueryRef",
+                "db_record": "#/$defs/DbRecordRef"
+              },
+              "propertyName": "ref_type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/DbRecordRef"
+              },
+              {
+                "$ref": "#/$defs/DbQueryRef"
+              },
+              {
+                "$ref": "#/$defs/DbFieldRef"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Refs",
+          "type": "array"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        }
+      },
+      "required": [
+        "refs",
+        "type"
+      ],
+      "title": "DataInputPart",
+      "type": "object"
+    },
+    "DataRefSort": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "minLength": 1,
+          "title": "Field",
+          "type": "string"
+        },
+        "direction": {
+          "default": "asc",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "title": "Direction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field"
+      ],
+      "title": "DataRefSort",
+      "type": "object"
+    },
+    "DbFieldRef": {
+      "additionalProperties": false,
+      "description": "Fetch a single field value from one row of a system table.",
+      "properties": {
+        "table": {
+          "enum": [
+            "notes",
+            "tasks",
+            "projects",
+            "organizations"
+          ],
+          "title": "Table",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "title": "Label",
+          "type": "string"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "ref_type": {
+          "const": "db_field",
+          "title": "Ref Type",
+          "type": "string"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "field_name": {
+          "minLength": 1,
+          "title": "Field Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "table",
+        "ref_type",
+        "id",
+        "field_name"
+      ],
+      "title": "DbFieldRef",
+      "type": "object"
+    },
+    "DbQueryRef": {
+      "additionalProperties": false,
+      "description": "Fetch multiple rows from a system table with optional filters.",
+      "properties": {
+        "table": {
+          "enum": [
+            "notes",
+            "tasks",
+            "projects",
+            "organizations"
+          ],
+          "title": "Table",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "title": "Label",
+          "type": "string"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "ref_type": {
+          "const": "db_query",
+          "title": "Ref Type",
+          "type": "string"
+        },
+        "filter": {
+          "additionalProperties": true,
+          "title": "Filter",
+          "type": "object"
+        },
+        "fields": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fields"
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DataRefSort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limit": {
+          "default": 50,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "table",
+        "ref_type"
+      ],
+      "title": "DbQueryRef",
+      "type": "object"
+    },
+    "DbRecordRef": {
+      "additionalProperties": false,
+      "description": "Fetch one full row from a system table by primary key.",
+      "properties": {
+        "table": {
+          "enum": [
+            "notes",
+            "tasks",
+            "projects",
+            "organizations"
+          ],
+          "title": "Table",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "title": "Label",
+          "type": "string"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "ref_type": {
+          "const": "db_record",
+          "title": "Ref Type",
+          "type": "string"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "fields": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fields"
+        }
+      },
+      "required": [
+        "table",
+        "ref_type",
+        "id"
+      ],
+      "title": "DbRecordRef",
+      "type": "object"
+    },
+    "DocumentInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "enum": [
+                "full",
+                "compact",
+                "minimal"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "type": {
+          "const": "input_document",
+          "default": "input_document",
+          "title": "Type",
+          "type": "string"
+        },
+        "document_ids": {
+          "items": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/LiveResourceRefInput"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Document Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "document_ids",
+        "type"
+      ],
+      "title": "DocumentInputPart",
+      "type": "object"
+    },
+    "DocumentMediaPart": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "properties": {
+                "url": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ]
+            },
+            {
+              "properties": {
+                "file_id": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_id"
+              ]
+            }
+          ]
+        }
+      ],
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "enum": [
+                "matrx",
+                "external"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin"
+        },
+        "file_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File Id"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "mime_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mime Type"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size Bytes"
+        },
+        "type": {
+          "const": "media",
+          "default": "media",
+          "title": "Type",
+          "type": "string"
+        },
+        "kind": {
+          "const": "document",
+          "default": "document",
+          "title": "Kind",
+          "type": "string"
+        },
+        "width": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Width"
+        },
+        "height": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Height"
+        },
+        "page_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page Count"
+        }
+      },
+      "required": [
+        "type",
+        "kind"
+      ],
+      "title": "DocumentMediaPart",
+      "type": "object"
+    },
+    "FullListBookmark": {
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "const": "full_list",
+          "default": "full_list",
+          "title": "Type",
+          "type": "string"
+        },
+        "list_id": {
+          "minLength": 1,
+          "title": "List Id",
+          "type": "string"
+        },
+        "list_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "List Name"
+        }
+      },
+      "required": [
+        "list_id"
+      ],
+      "title": "FullListBookmark",
+      "type": "object"
+    },
+    "FullTableBookmark": {
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "const": "full_table",
+          "default": "full_table",
+          "title": "Type",
+          "type": "string"
+        },
+        "table_id": {
+          "minLength": 1,
+          "title": "Table Id",
+          "type": "string"
+        },
+        "table_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Table Name"
+        }
+      },
+      "required": [
+        "table_id"
+      ],
+      "title": "FullTableBookmark",
+      "type": "object"
+    },
+    "ImageMediaPart": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "properties": {
+                "url": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ]
+            },
+            {
+              "properties": {
+                "file_id": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_id"
+              ]
+            }
+          ]
+        }
+      ],
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "enum": [
+                "matrx",
+                "external"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin"
+        },
+        "file_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File Id"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "mime_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mime Type"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size Bytes"
+        },
+        "type": {
+          "const": "media",
+          "default": "media",
+          "title": "Type",
+          "type": "string"
+        },
+        "kind": {
+          "const": "image",
+          "default": "image",
+          "title": "Kind",
+          "type": "string"
+        },
+        "width": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Width"
+        },
+        "height": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Height"
+        }
+      },
+      "required": [
+        "type",
+        "kind"
+      ],
+      "title": "ImageMediaPart",
+      "type": "object"
+    },
+    "ListGroupBookmark": {
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "const": "list_group",
+          "default": "list_group",
+          "title": "Type",
+          "type": "string"
+        },
+        "list_id": {
+          "minLength": 1,
+          "title": "List Id",
+          "type": "string"
+        },
+        "group_name": {
+          "minLength": 1,
+          "title": "Group Name",
+          "type": "string"
+        },
+        "list_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "List Name"
+        }
+      },
+      "required": [
+        "list_id",
+        "group_name"
+      ],
+      "title": "ListGroupBookmark",
+      "type": "object"
+    },
+    "ListInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "input_list",
+          "default": "input_list",
+          "title": "Type",
+          "type": "string"
+        },
+        "bookmarks": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "full_list": "#/$defs/FullListBookmark",
+                "list_group": "#/$defs/ListGroupBookmark",
+                "list_item": "#/$defs/ListItemBookmark"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/FullListBookmark"
+              },
+              {
+                "$ref": "#/$defs/ListGroupBookmark"
+              },
+              {
+                "$ref": "#/$defs/ListItemBookmark"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Bookmarks",
+          "type": "array"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        }
+      },
+      "required": [
+        "bookmarks",
+        "type"
+      ],
+      "title": "ListInputPart",
+      "type": "object"
+    },
+    "ListItemBookmark": {
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "const": "list_item",
+          "default": "list_item",
+          "title": "Type",
+          "type": "string"
+        },
+        "list_id": {
+          "minLength": 1,
+          "title": "List Id",
+          "type": "string"
+        },
+        "item_id": {
+          "minLength": 1,
+          "title": "Item Id",
+          "type": "string"
+        },
+        "list_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "List Name"
+        }
+      },
+      "required": [
+        "list_id",
+        "item_id"
+      ],
+      "title": "ListItemBookmark",
+      "type": "object"
+    },
+    "LiveResourceRefInput": {
+      "additionalProperties": true,
+      "description": "A live id-backed reference; snapshots are not meaningful for opaque resources.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "mode": {
+          "const": "reference",
+          "default": "reference",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "LiveResourceRefInput",
+      "type": "object"
+    },
+    "NormalizedCitation": {
+      "additionalProperties": false,
+      "description": "The canonical cross-provider citation shape — the FE contract.\n\nOffsets come in two flavours and are never conflated:\n  - ``source_start`` / ``source_end``: char/block offsets INTO THE SOURCE\n    document (Anthropic char/content_block locations).\n  - ``answer_start`` / ``answer_end``: char offsets INTO THE ANSWER TEXT\n    (OpenAI url_citation annotations, Gemini grounding segment offsets).\n``page`` / ``end_page`` are 1-based (Anthropic page_location).",
+      "properties": {
+        "kind": {
+          "enum": [
+            "document_char",
+            "document_page",
+            "document_block",
+            "search_result",
+            "web",
+            "grounding"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "anthropic",
+            "openai",
+            "google",
+            "xai"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "cited_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cited Text"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "source_index": {
+          "default": 0,
+          "title": "Source Index",
+          "type": "integer"
+        },
+        "file_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File Id"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page"
+        },
+        "end_page": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End Page"
+        },
+        "source_start": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Start"
+        },
+        "source_end": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source End"
+        },
+        "answer_start": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answer Start"
+        },
+        "answer_end": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answer End"
+        },
+        "raw": {
+          "additionalProperties": true,
+          "title": "Raw",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "provider"
+      ],
+      "title": "NormalizedCitation",
+      "type": "object"
+    },
+    "NotesInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "input_notes",
+          "default": "input_notes",
+          "title": "Type",
+          "type": "string"
+        },
+        "note_ids": {
+          "items": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/ResourceRefInput"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Note Ids",
+          "type": "array"
+        },
+        "template": {
+          "default": "full",
+          "title": "Template",
+          "type": "string"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        }
+      },
+      "required": [
+        "note_ids",
+        "type"
+      ],
+      "title": "NotesInputPart",
+      "type": "object"
+    },
+    "PreFetchedUrl": {
+      "additionalProperties": true,
+      "description": "A webpage entry that has already been scraped by the client.\n\nWhen the frontend has already fetched a page (e.g. via /scraper/quick-scrape)\nit can embed the content here instead of a plain URL string. The server will\nuse this content directly and skip re-scraping.",
+      "properties": {
+        "url": {
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        },
+        "textContent": {
+          "title": "Textcontent",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "scrapedAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scrapedat"
+        },
+        "charCount": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Charcount"
+        }
+      },
+      "required": [
+        "url",
+        "textContent"
+      ],
+      "title": "PreFetchedUrl",
+      "type": "object"
+    },
+    "ProjectInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "enum": [
+                "full",
+                "compact",
+                "minimal"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "type": {
+          "const": "input_project",
+          "default": "input_project",
+          "title": "Type",
+          "type": "string"
+        },
+        "project_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Project Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "project_ids",
+        "type"
+      ],
+      "title": "ProjectInputPart",
+      "type": "object"
+    },
+    "ResourceRefInput": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LiveResourceRefInput"
+        },
+        {
+          "$ref": "#/$defs/SnapshotContentResourceRefInput"
+        },
+        {
+          "$ref": "#/$defs/SnapshotTextResourceRefInput"
+        },
+        {
+          "$ref": "#/$defs/SnapshotBodyResourceRefInput"
+        },
+        {
+          "$ref": "#/$defs/SnapshotDescriptionResourceRefInput"
+        },
+        {
+          "$ref": "#/$defs/SnapshotValueResourceRefInput"
+        }
+      ]
+    },
+    "SnapshotBodyResourceRefInput": {
+      "additionalProperties": true,
+      "properties": {
+        "mode": {
+          "const": "snapshot",
+          "title": "Mode",
+          "type": "string"
+        },
+        "body": {
+          "minLength": 1,
+          "title": "Body",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "body"
+      ],
+      "title": "SnapshotBodyResourceRefInput",
+      "type": "object"
+    },
+    "SnapshotContentResourceRefInput": {
+      "additionalProperties": true,
+      "properties": {
+        "mode": {
+          "const": "snapshot",
+          "title": "Mode",
+          "type": "string"
+        },
+        "content": {
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "content"
+      ],
+      "title": "SnapshotContentResourceRefInput",
+      "type": "object"
+    },
+    "SnapshotDescriptionResourceRefInput": {
+      "additionalProperties": true,
+      "properties": {
+        "mode": {
+          "const": "snapshot",
+          "title": "Mode",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "description"
+      ],
+      "title": "SnapshotDescriptionResourceRefInput",
+      "type": "object"
+    },
+    "SnapshotTextResourceRefInput": {
+      "additionalProperties": true,
+      "properties": {
+        "mode": {
+          "const": "snapshot",
+          "title": "Mode",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "text"
+      ],
+      "title": "SnapshotTextResourceRefInput",
+      "type": "object"
+    },
+    "SnapshotValueResourceRefInput": {
+      "additionalProperties": true,
+      "properties": {
+        "mode": {
+          "const": "snapshot",
+          "title": "Mode",
+          "type": "string"
+        },
+        "value": {
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "value"
+      ],
+      "title": "SnapshotValueResourceRefInput",
+      "type": "object"
+    },
+    "TableCellBookmark": {
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "const": "table_cell",
+          "default": "table_cell",
+          "title": "Type",
+          "type": "string"
+        },
+        "table_id": {
+          "minLength": 1,
+          "title": "Table Id",
+          "type": "string"
+        },
+        "row_id": {
+          "minLength": 1,
+          "title": "Row Id",
+          "type": "string"
+        },
+        "column_name": {
+          "minLength": 1,
+          "title": "Column Name",
+          "type": "string"
+        },
+        "table_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Table Name"
+        }
+      },
+      "required": [
+        "table_id",
+        "row_id",
+        "column_name"
+      ],
+      "title": "TableCellBookmark",
+      "type": "object"
+    },
+    "TableColumnBookmark": {
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "const": "table_column",
+          "default": "table_column",
+          "title": "Type",
+          "type": "string"
+        },
+        "table_id": {
+          "minLength": 1,
+          "title": "Table Id",
+          "type": "string"
+        },
+        "column_name": {
+          "minLength": 1,
+          "title": "Column Name",
+          "type": "string"
+        },
+        "table_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Table Name"
+        }
+      },
+      "required": [
+        "table_id",
+        "column_name"
+      ],
+      "title": "TableColumnBookmark",
+      "type": "object"
+    },
+    "TableInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "input_table",
+          "default": "input_table",
+          "title": "Type",
+          "type": "string"
+        },
+        "bookmarks": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "full_table": "#/$defs/FullTableBookmark",
+                "table_cell": "#/$defs/TableCellBookmark",
+                "table_column": "#/$defs/TableColumnBookmark",
+                "table_row": "#/$defs/TableRowBookmark",
+                "table_schema": "#/$defs/TableSchemaBookmark"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/FullTableBookmark"
+              },
+              {
+                "$ref": "#/$defs/TableColumnBookmark"
+              },
+              {
+                "$ref": "#/$defs/TableRowBookmark"
+              },
+              {
+                "$ref": "#/$defs/TableCellBookmark"
+              },
+              {
+                "$ref": "#/$defs/TableSchemaBookmark"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Bookmarks",
+          "type": "array"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        }
+      },
+      "required": [
+        "bookmarks",
+        "type"
+      ],
+      "title": "TableInputPart",
+      "type": "object"
+    },
+    "TableRowBookmark": {
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "const": "table_row",
+          "default": "table_row",
+          "title": "Type",
+          "type": "string"
+        },
+        "table_id": {
+          "minLength": 1,
+          "title": "Table Id",
+          "type": "string"
+        },
+        "row_id": {
+          "minLength": 1,
+          "title": "Row Id",
+          "type": "string"
+        },
+        "table_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Table Name"
+        }
+      },
+      "required": [
+        "table_id",
+        "row_id"
+      ],
+      "title": "TableRowBookmark",
+      "type": "object"
+    },
+    "TableSchemaBookmark": {
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "const": "table_schema",
+          "default": "table_schema",
+          "title": "Type",
+          "type": "string"
+        },
+        "table_id": {
+          "minLength": 1,
+          "title": "Table Id",
+          "type": "string"
+        },
+        "table_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Table Name"
+        }
+      },
+      "required": [
+        "table_id"
+      ],
+      "title": "TableSchemaBookmark",
+      "type": "object"
+    },
+    "TaskInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "input_task",
+          "default": "input_task",
+          "title": "Type",
+          "type": "string"
+        },
+        "task_ids": {
+          "items": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/ResourceRefInput"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Task Ids",
+          "type": "array"
+        },
+        "template": {
+          "default": "full",
+          "title": "Template",
+          "type": "string"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        }
+      },
+      "required": [
+        "task_ids",
+        "type"
+      ],
+      "title": "TaskInputPart",
+      "type": "object"
+    },
+    "TextPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "text",
+          "default": "text",
+          "title": "Type",
+          "type": "string"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        },
+        "id": {
+          "default": "",
+          "title": "Id",
+          "type": "string"
+        },
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/NormalizedCitation"
+          },
+          "title": "Citations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "TextPart",
+      "type": "object"
+    },
+    "ThinkingPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "thinking",
+          "default": "thinking",
+          "title": "Type",
+          "type": "string"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        },
+        "id": {
+          "default": "",
+          "title": "Id",
+          "type": "string"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "enum": [
+                "openai",
+                "anthropic",
+                "google",
+                "cerebras",
+                "moonshot",
+                "together",
+                "groq",
+                "xai",
+                "generic_openai"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "signature": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Signature"
+        },
+        "signature_encoding": {
+          "anyOf": [
+            {
+              "const": "base64",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Signature Encoding"
+        },
+        "summary": {
+          "items": {},
+          "title": "Summary",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ThinkingPart",
+      "type": "object"
+    },
+    "ToolCallPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "tool_call",
+          "default": "tool_call",
+          "title": "Type",
+          "type": "string"
+        },
+        "call_id": {
+          "default": "",
+          "title": "Call Id",
+          "type": "string"
+        },
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        },
+        "arguments": {
+          "additionalProperties": true,
+          "title": "Arguments",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ToolCallPart",
+      "type": "object"
+    },
+    "ToolResultPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "tool_result",
+          "default": "tool_result",
+          "title": "Type",
+          "type": "string"
+        },
+        "call_id": {
+          "default": "",
+          "title": "Call Id",
+          "type": "string"
+        },
+        "tool_use_id": {
+          "default": "",
+          "title": "Tool Use Id",
+          "type": "string"
+        },
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        },
+        "is_error": {
+          "default": false,
+          "title": "Is Error",
+          "type": "boolean"
+        },
+        "output_chars": {
+          "default": 0,
+          "title": "Output Chars",
+          "type": "integer"
+        },
+        "output_preview": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Preview"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ToolResultPart",
+      "type": "object"
+    },
+    "TranscriptInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "enum": [
+                "full",
+                "compact",
+                "minimal"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "type": {
+          "const": "input_transcript",
+          "default": "input_transcript",
+          "title": "Type",
+          "type": "string"
+        },
+        "transcript_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Transcript Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "transcript_ids",
+        "type"
+      ],
+      "title": "TranscriptInputPart",
+      "type": "object"
+    },
+    "TranscriptSessionInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "enum": [
+                "full",
+                "compact",
+                "minimal"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "type": {
+          "const": "input_transcript_session",
+          "default": "input_transcript_session",
+          "title": "Type",
+          "type": "string"
+        },
+        "transcript_session_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Transcript Session Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "transcript_session_ids",
+        "type"
+      ],
+      "title": "TranscriptSessionInputPart",
+      "type": "object"
+    },
+    "VideoMediaPart": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "properties": {
+                "url": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ]
+            },
+            {
+              "properties": {
+                "file_id": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_id"
+              ]
+            }
+          ]
+        }
+      ],
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "enum": [
+                "matrx",
+                "external"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin"
+        },
+        "file_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File Id"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "mime_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mime Type"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size Bytes"
+        },
+        "type": {
+          "const": "media",
+          "default": "media",
+          "title": "Type",
+          "type": "string"
+        },
+        "kind": {
+          "const": "video",
+          "default": "video",
+          "title": "Kind",
+          "type": "string"
+        },
+        "width": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Width"
+        },
+        "height": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Height"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ms"
+        }
+      },
+      "required": [
+        "type",
+        "kind"
+      ],
+      "title": "VideoMediaPart",
+      "type": "object"
+    },
+    "WebSearchPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "web_search",
+          "default": "web_search",
+          "title": "Type",
+          "type": "string"
+        },
+        "id": {
+          "default": "",
+          "title": "Id",
+          "type": "string"
+        },
+        "status": {
+          "default": "",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "WebSearchPart",
+      "type": "object"
+    },
+    "WebpageInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "input_webpage",
+          "default": "input_webpage",
+          "title": "Type",
+          "type": "string"
+        },
+        "urls": {
+          "items": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/PreFetchedUrl"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Urls",
+          "type": "array"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        }
+      },
+      "required": [
+        "urls",
+        "type"
+      ],
+      "title": "WebpageInputPart",
+      "type": "object"
+    },
+    "WorkbookInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "convert_to_text": {
+          "default": true,
+          "title": "Convert To Text",
+          "type": "boolean"
+        },
+        "optional_context": {
+          "default": false,
+          "title": "Optional Context",
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "default": false,
+          "title": "Keep Fresh",
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editable"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "enum": [
+                "full",
+                "compact",
+                "minimal"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "type": {
+          "const": "input_workbook",
+          "default": "input_workbook",
+          "title": "Type",
+          "type": "string"
+        },
+        "workbook_ids": {
+          "items": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/LiveResourceRefInput"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Workbook Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "workbook_ids",
+        "type"
+      ],
+      "title": "WorkbookInputPart",
+      "type": "object"
+    },
+    "YouTubeMediaPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "media",
+          "default": "media",
+          "title": "Type",
+          "type": "string"
+        },
+        "kind": {
+          "const": "youtube",
+          "default": "youtube",
+          "title": "Kind",
+          "type": "string"
+        },
+        "url": {
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        },
+        "external_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "External Url"
+        },
+        "origin": {
+          "const": "external",
+          "default": "external",
+          "title": "Origin",
+          "type": "string"
+        },
+        "file_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File Id"
+        },
+        "mime_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mime Type"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size Bytes"
+        }
+      },
+      "required": [
+        "url",
+        "type",
+        "kind"
+      ],
+      "title": "YouTubeMediaPart",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/TextPart"
+    },
+    {
+      "$ref": "#/$defs/ThinkingPart"
+    },
+    {
+      "$ref": "#/$defs/ToolCallPart"
+    },
+    {
+      "$ref": "#/$defs/ToolResultPart"
+    },
+    {
+      "discriminator": {
+        "mapping": {
+          "audio": "#/$defs/AudioMediaPart",
+          "document": "#/$defs/DocumentMediaPart",
+          "image": "#/$defs/ImageMediaPart",
+          "video": "#/$defs/VideoMediaPart",
+          "youtube": "#/$defs/YouTubeMediaPart"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ImageMediaPart"
+        },
+        {
+          "$ref": "#/$defs/AudioMediaPart"
+        },
+        {
+          "$ref": "#/$defs/VideoMediaPart"
+        },
+        {
+          "$ref": "#/$defs/DocumentMediaPart"
+        },
+        {
+          "$ref": "#/$defs/YouTubeMediaPart"
+        }
+      ]
+    },
+    {
+      "$ref": "#/$defs/CodeExecPart"
+    },
+    {
+      "$ref": "#/$defs/CodeResultPart"
+    },
+    {
+      "$ref": "#/$defs/WebSearchPart"
+    },
+    {
+      "$ref": "#/$defs/WebpageInputPart"
+    },
+    {
+      "$ref": "#/$defs/NotesInputPart"
+    },
+    {
+      "$ref": "#/$defs/TaskInputPart"
+    },
+    {
+      "$ref": "#/$defs/AgentInputPart"
+    },
+    {
+      "$ref": "#/$defs/ProjectInputPart"
+    },
+    {
+      "$ref": "#/$defs/AgentAppInputPart"
+    },
+    {
+      "$ref": "#/$defs/TranscriptInputPart"
+    },
+    {
+      "$ref": "#/$defs/TranscriptSessionInputPart"
+    },
+    {
+      "$ref": "#/$defs/WorkbookInputPart"
+    },
+    {
+      "$ref": "#/$defs/DocumentInputPart"
+    },
+    {
+      "$ref": "#/$defs/TableInputPart"
+    },
+    {
+      "$ref": "#/$defs/ListInputPart"
+    },
+    {
+      "$ref": "#/$defs/DataInputPart"
+    },
+    {
+      "$ref": "#/$defs/ContextInputPart"
+    }
+  ]
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function schemaTypeMatches(type: MessagePartJsonSchema["type"], value: unknown): boolean {
+  if (type === "null") return value === null;
+  if (type === "array") return Array.isArray(value);
+  if (type === "object") return isRecord(value);
+  if (type === "integer") return typeof value === "number" && Number.isInteger(value);
+  return typeof value === type;
+}
+
+function resolveMessagePartSchemaRef(
+  ref: string,
+  root: MessagePartJsonSchema,
+): MessagePartJsonSchema | undefined {
+  const prefix = "#/$defs/";
+  if (!ref.startsWith(prefix)) return undefined;
+  return root.$defs?.[ref.slice(prefix.length)];
+}
+
+function matchesMessagePartSchema(
+  value: unknown,
+  schema: MessagePartJsonSchema,
+  root: MessagePartJsonSchema,
+): boolean {
+  if (schema.$ref) {
+    const resolved = resolveMessagePartSchemaRef(schema.$ref, root);
+    return resolved !== undefined && matchesMessagePartSchema(value, resolved, root);
+  }
+  if (schema.anyOf && !schema.anyOf.some((item) => matchesMessagePartSchema(value, item, root))) {
+    return false;
+  }
+  if (schema.oneOf) {
+    const matches = schema.oneOf.filter((item) => matchesMessagePartSchema(value, item, root));
+    if (matches.length !== 1) return false;
+  }
+  if (schema.allOf && !schema.allOf.every((item) => matchesMessagePartSchema(value, item, root))) {
+    return false;
+  }
+  if ("const" in schema && !Object.is(value, schema.const)) return false;
+  if (schema.enum && !schema.enum.some((item) => Object.is(value, item))) return false;
+  if (schema.type && !schemaTypeMatches(schema.type, value)) return false;
+  if (schema.type === "string" && typeof value === "string" &&
+      schema.minLength !== undefined && value.length < schema.minLength) return false;
+  if (schema.type === "array" && Array.isArray(value) &&
+      schema.minItems !== undefined && value.length < schema.minItems) return false;
+  if ((schema.type === "number" || schema.type === "integer") && typeof value === "number") {
+    if (schema.minimum !== undefined && value < schema.minimum) return false;
+    if (schema.maximum !== undefined && value > schema.maximum) return false;
+    if (schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum) return false;
+    if (schema.exclusiveMaximum !== undefined && value >= schema.exclusiveMaximum) return false;
+  }
+  if (schema.type === "array" && schema.items && Array.isArray(value)) {
+    return value.every((item) => matchesMessagePartSchema(item, schema.items!, root));
+  }
+  const hasObjectKeywords =
+    schema.type === "object" ||
+    schema.required !== undefined ||
+    schema.properties !== undefined ||
+    schema.additionalProperties !== undefined;
+  if (!hasObjectKeywords) return true;
+  if (!isRecord(value)) return false;
+  if (schema.required?.some((key) => !(key in value))) return false;
+  const properties = schema.properties ?? {};
+  for (const [key, propertySchema] of Object.entries(properties)) {
+    if (key in value && !matchesMessagePartSchema(value[key], propertySchema, root)) {
+      return false;
+    }
+  }
+  const extraKeys = Object.keys(value).filter((key) => !(key in properties));
+  if (schema.additionalProperties === false && extraKeys.length > 0) return false;
+  const additionalSchema = schema.additionalProperties;
+  if (isRecord(additionalSchema)) {
+    return extraKeys.every((key) =>
+      matchesMessagePartSchema(value[key], additionalSchema, root),
+    );
+  }
+  return true;
+}
+
+/** Runtime guard for persisted chat.message.content entries. */
+export function isMessagePart(value: unknown): value is MessagePart {
+  return matchesMessagePartSchema(value, MESSAGE_PART_SCHEMA, MESSAGE_PART_SCHEMA);
+}
+
+/** Validate and parse the content array from a chat.message DB row. */
 export function parseMessageContent(content: unknown[]): MessagePart[] {
-  return content as MessagePart[];
+  return content.map((part, index) => {
+    if (!isMessagePart(part)) {
+      throw new TypeError(
+        `Invalid chat.message.content[${index}]: unknown or malformed message part`,
+      );
+    }
+    return part;
+  });
 }
 
 export interface ChunkEvent {
@@ -3635,11 +7212,6 @@ export interface ErrorEvent {
 export interface ToolEventEvent {
   event: "tool_event";
   data: ToolEventPayload;
-}
-
-export interface BrokerEvent {
-  event: "broker";
-  data: BrokerPayload;
 }
 
 export interface HeartbeatEvent {
@@ -3720,7 +7292,6 @@ export type TypedStreamEvent =
   | CompletionEvent
   | ErrorEvent
   | ToolEventEvent
-  | BrokerEvent
   | HeartbeatEvent
   | EndEvent
   | RenderBlockEvent
@@ -3811,10 +7382,6 @@ export function isErrorEvent(e: TypedStreamEvent): e is { event: "error"; data: 
 
 export function isToolEventEvent(e: TypedStreamEvent): e is { event: "tool_event"; data: ToolEventPayload } {
   return e.event === "tool_event";
-}
-
-export function isBrokerEvent(e: TypedStreamEvent): e is { event: "broker"; data: BrokerPayload } {
-  return e.event === "broker";
 }
 
 export function isHeartbeatEvent(e: TypedStreamEvent): e is { event: "heartbeat"; data: HeartbeatPayload } {

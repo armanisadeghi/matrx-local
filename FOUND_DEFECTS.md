@@ -671,6 +671,61 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   deleting. If unused, `git rm` both.
 - **Owner hint:** whoever does the CDN installer-slimming work — fold into that.
 
+### MXL-D-079 — Large coding-session envelopes fail TLS in-process (`bad record mac`), starving every delivery lane
+- **Area:** `app/services/aidream/client.py` (`AIDreamClient.post`),
+  `app/services/coding_sessions/service.py` (`sync_pending` offline `break`)
+- **Symptom:** On v1.4.38 the publisher no longer crashes (fixed
+  `15b35f723`/`90d930061`/`dc092789d`) and correctly records the failure, but
+  the outbox still does not drain. Uploads of large envelopes fail repeatedly
+  with `ssl.SSLError: [SSL: SSLV3_ALERT_BAD_RECORD_MAC]` and
+  `httpx.ReadError`, then the publisher goes silent mid-upload for minutes at a
+  time without logging.
+- **Evidence (2026-08-19, live):**
+  - `curl https://server.app.matrxserver.com/api/health` succeeded 6/6 with
+    ~50-130 ms TLS handshakes from the same machine at the same time, so the
+    network path is healthy — the corruption is inside the engine process.
+  - The stalled lane head was a run of 155-330 KB envelopes; the largest
+    pending row is **2.6 MB**. Pending size distribution: 13,976 rows <4 KB,
+    6,522 rows 4-32 KB, 2,152 rows 32-256 KB, 763 rows >256 KB. Small
+    envelopes (e.g. 648-byte `SessionMetadata`) deliver fine.
+  - Engine sat at 98-137% CPU throughout (see MXL-D-080), so an httpx
+    `timeout=30.0` may not be firing promptly; the publisher was observed
+    silent for 3+ minutes with 2 outbound sockets open and no log line.
+  - `attempts` never advanced past 1 for the retried row across four ticks,
+    which is not yet explained and may be a second bug in the backoff path.
+- **Suspected design contributor:** a TLS failure on ONE row is classified
+  `AIDreamOfflineError`, and offline deliberately `break`s the whole tick as
+  "publisher-wide". When the failure is actually per-envelope (size-related),
+  one big row at the oldest lane head starves all 226 lanes indefinitely.
+  Consider: escalate a repeated per-row offline into a per-row backoff so other
+  lanes proceed, and/or cap/stream large envelopes.
+- **Status:** `open`
+- **Analysis stamp:** Analyzed 2026-08-19 — verified live in code + logs +
+  access.log + live DB; root cause of the TLS corruption itself NOT identified.
+- **Owner hint:** whoever owns the coding-session bridge edge; pairs with the
+  handoff item in
+  `matrx-frontend/docs/handoffs/coding-agent-bridge-claude-first.md`.
+
+### MXL-D-080 — watchfiles pegs ~2 CPU cores in the engine, degrading every DB-touching route
+- **Area:** `app/tools/tools/file_watch.py:100-135` (`watchfiles.awatch`)
+- **Symptom:** Engine measured at 198% CPU / 3.7 GB RSS / 21 threads while
+  idle from the user's perspective. A 5-second `sample` attributes it to
+  `_rust_notify::RustNotify::__pymethod_watch__` (watchfiles' Rust extension),
+  3,343 samples.
+- **Impact:** `/health` (touches nothing) stayed at 1 ms while DB-touching
+  routes degraded badly — `/coding-session/status` timed out at 60 s,
+  `/setup/status` 23 s, `/filesystem/status` 17 s, `/notes/notes` 10 s.
+- **Open questions:** is a `FileWatch` watch actually active and on what path;
+  do watches leak when the invoking agent never stops them (is `_stop_event`
+  always set?); should an over-broad recursive watch be refused or debounced
+  (`awatch` accepts `debounce`/`step`, neither is passed); should a watch have
+  a TTL given it is agent-invoked.
+- **Status:** `open`
+- **Analysis stamp:** Analyzed 2026-08-19 — verified by process sampling; the
+  specific offending watch was NOT identified (no way to enumerate active
+  watches exists today, which is itself part of the defect).
+- **Owner hint:** tools / engine performance.
+
 ## Testing infrastructure
 
 ### MXL-D-076 — `Scrape` tool's `get_links` / `get_overview` flags are inert; every scrape always returns the full payload

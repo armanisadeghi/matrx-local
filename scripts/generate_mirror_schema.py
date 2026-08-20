@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the local SQLite mirror schema from the canonical cloud snapshot.
 
-The cloud database (Supabase project txzxabzwovsujtloxrus) is the spec. This
+The cloud database (Supabase project brsgrqvjdzwihsvnfqkf) is the spec. This
 script consumes ``schema_mirror/snapshot.json`` — a checked-in introspection
 dump of the cloud schemas — and emits
 ``app/services/local_db/mirror_schema.py``, the generated module the engine

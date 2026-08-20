@@ -69,7 +69,7 @@ ALL_TOOLS_ROUTE = "/ai-tools"
 DEFAULT_CHANGESET_PATH = Path(".matrx/tool_registry_changeset.sql")
 
 # tool.definition rows for executor matrx-local share these values (verified
-# against live Supabase, project txzxabzwovsujtloxrus, 2026-07-10).
+# against live Supabase, project brsgrqvjdzwihsvnfqkf, 2026-07-10).
 MATRX_ORG_ID = "39c38960-d30c-4840-b0c1-c9960de95582"
 DEFINITION_DEFAULTS = {
     "source_kind": "native",
@@ -459,7 +459,7 @@ def emit_changeset(diff: ToolDiff, out_path: Path) -> None:
         f"COLLISIONS={len(diff.collisions)} REMOVED={len(diff.removed)} "
         f"OK={len(diff.ok)} UNVERIFIED={len(diff.unverified)}\n"
         f"--\n"
-        f"-- APPLY VIA SUPABASE MCP (project txzxabzwovsujtloxrus) AFTER REVIEW.\n"
+        f"-- APPLY VIA SUPABASE MCP (project brsgrqvjdzwihsvnfqkf) AFTER REVIEW.\n"
         f"-- The desktop never writes tool.definition/tool.binding directly.\n"
         f"-- Wrap in a transaction; every statement is idempotent-safe to re-run\n"
         f"-- only as a whole (NEW inserts are not — do not apply twice).\n"

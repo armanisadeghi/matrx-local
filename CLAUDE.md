@@ -105,7 +105,7 @@ through 3).
 - **React:** `desktop/src/App.tsx` → pages in `desktop/src/pages/`, hooks in `desktop/src/hooks/`
 - **Rust:** `desktop/src-tauri/src/lib.rs` (sidecar lifecycle, tray, transcription, LLM)
 - **Build:** `scripts/build-sidecar.sh`, `specs/*.spec` (PyInstaller per-platform)
-- **Auth:** Supabase instance `txzxabzwovsujtloxrus`, publishable key in `desktop/.env`
+- **Auth:** Supabase instance `brsgrqvjdzwihsvnfqkf`, publishable key in `desktop/.env`
 
 ### Canonical frontend test login
 
@@ -325,7 +325,7 @@ independent duplicate implementation):
 
 Three separate concerns — do not confuse them:
 
-1. **Supabase Auth** — Instance `txzxabzwovsujtloxrus`. Uses **publishable key** (not anon key). All ops use user JWT. Never use service role key. **Never reference `SUPABASE_JWT_SECRET`** — this is a desktop app running on the user's machine; there is no secure place to keep a server-side JWT signing secret. The `/extension/*` surface validates incoming tokens via JWKS for asymmetric algorithms (RS256/ES256) when `SUPABASE_URL` is set, and falls back to bearer-presence verification over loopback for HS256 tokens. See `app/api/extension_auth.py` for the full posture and `docs/MATRX_EXTEND_CONNECTION.md` for the rationale.
+1. **Supabase Auth** — Instance `brsgrqvjdzwihsvnfqkf`. Uses **publishable key** (not anon key). All ops use user JWT. Never use service role key. **Never reference `SUPABASE_JWT_SECRET`** — this is a desktop app running on the user's machine; there is no secure place to keep a server-side JWT signing secret. The `/extension/*` surface validates incoming tokens via JWKS for asymmetric algorithms (RS256/ES256) when `SUPABASE_URL` is set, and falls back to bearer-presence verification over loopback for HS256 tokens. See `app/api/extension_auth.py` for the full posture and `docs/MATRX_EXTEND_CONNECTION.md` for the rationale.
 2. **Remote Scraper Server** — `scraper.app.matrxserver.com`. REST API with Bearer token (API key or Supabase JWT). Its PostgreSQL is internal-only — no direct DB access.
 3. ~~**Local Scraper Cache**~~ — **gone.** There is no `DATABASE_URL` page cache in this repo (deleted 2026-08-09 with `scraper-service/`); the scrape cache is in-memory only. Do not reintroduce a `DATABASE_URL` here — see the connection rule under Hard Rule 1.
 
@@ -338,7 +338,7 @@ Three separate concerns — do not confuse them:
 
 **Rule: Never create a migration without immediately applying it.**
 
-Migrations live in `migrations/NNN_name.sql`. Apply via Supabase MCP (`apply_migration`) — project `txzxabzwovsujtloxrus`. Verify with `execute_sql`. Update task trackers.
+Migrations live in `migrations/NNN_name.sql`. Apply via Supabase MCP (`apply_migration`) — project `brsgrqvjdzwihsvnfqkf`. Verify with `execute_sql`. Update task trackers.
 
 Unapplied migrations cause `PGRST204` runtime errors. If you find one on disk, apply it before doing anything else.
 

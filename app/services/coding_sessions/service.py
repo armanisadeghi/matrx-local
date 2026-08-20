@@ -1093,13 +1093,34 @@ class CodingSessionBridgeOutbox:
                     _validate_upstream_acknowledgement(response, persisted_request)
                 except (AIDreamOfflineError, AIDreamError) as exc:
                     if _is_terminal_rejection(exc, int(row["attempts"])):
-                        await self._quarantine_head(row, exc)
+                        try:
+                            await self._quarantine_head(row, exc)
+                        except Exception:
+                            logger.exception(
+                                "[coding_session_bridge] could not quarantine "
+                                "id=%s — retrying next tick, envelope intact",
+                                int(row["id"]),
+                            )
+                            failed += 1
+                            break
                         # The next row in this lane, plus every unrelated lane,
                         # can now advance.
                         continue
-                    await self._record_failure(
-                        int(row["id"]), int(row["attempts"]), exc
-                    )
+                    try:
+                        await self._record_failure(
+                            int(row["id"]), int(row["attempts"]), exc
+                        )
+                    except Exception:
+                        # A write failure INSIDE an exception handler is how
+                        # this tick died on v1.4.37. Never let bookkeeping
+                        # about a failure become a worse failure.
+                        logger.exception(
+                            "[coding_session_bridge] could not record the "
+                            "failure for id=%s — backing off this tick",
+                            int(row["id"]),
+                        )
+                        failed += 1
+                        break
                     failed += 1
                     if isinstance(exc, AIDreamOfflineError):
                         # Network reachability is publisher-wide, not a poison
@@ -1193,6 +1214,31 @@ class CodingSessionBridgeOutbox:
                 exc_info=True,
             )
         return await self._delete_delivered_row(outbox_id)
+
+    async def _durable_writes(self, statements: list[tuple[str, tuple]]) -> None:
+        """Run outbox state changes on the durable boundary, not the shared one.
+
+        EVERY mutation of the outbox — enqueue, retire, defer, quarantine —
+        goes through a private BEGIN IMMEDIATE transaction. The shared
+        aiosqlite connection is contended by every other coroutine in the
+        engine, and a queue-state write that loses that race does not merely
+        fail: it fails INSIDE an exception handler and takes the publisher
+        with it (live 2026-08-19 on v1.4.37, `_record_failure` raising
+        `database is locked` out of `except AIDreamOfflineError`).
+        """
+        async with aiosqlite.connect(str(self._db.path)) as connection:
+            await connection.execute(
+                f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}"
+            )
+            await connection.execute("PRAGMA synchronous=FULL")
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                for sql, params in statements:
+                    await connection.execute(sql, params)
+                await connection.commit()
+            except BaseException:
+                await connection.rollback()
+                raise
 
     async def _delete_delivered_row(self, outbox_id: int) -> bool:
         try:
@@ -1328,20 +1374,26 @@ class CodingSessionBridgeOutbox:
         events are not in the platform and never will be without repair.
         """
         status_code = getattr(exc, "status", None)
-        await self._db.execute(
-            """INSERT OR REPLACE INTO coding_session_bridge_quarantine
-                   (id, envelope_json, envelope_sha256, attempts, http_status,
-                    last_error, original_created_at, quarantined_at)
-               SELECT id, envelope_json, envelope_sha256, attempts, ?, ?,
-                      created_at, datetime('now')
-               FROM coding_session_bridge_outbox WHERE id = ?""",
-            (status_code, str(exc)[:1000], int(row["id"])),
+        # Copy-then-delete must be ATOMIC, or a crash between them loses the
+        # envelope outright — the one thing this outbox promises never happens.
+        await self._durable_writes(
+            [
+                (
+                    """INSERT OR REPLACE INTO coding_session_bridge_quarantine
+                           (id, envelope_json, envelope_sha256, attempts,
+                            http_status, last_error, original_created_at,
+                            quarantined_at)
+                       SELECT id, envelope_json, envelope_sha256, attempts, ?, ?,
+                              created_at, datetime('now')
+                       FROM coding_session_bridge_outbox WHERE id = ?""",
+                    (status_code, str(exc)[:1000], int(row["id"])),
+                ),
+                (
+                    "DELETE FROM coding_session_bridge_outbox WHERE id = ?",
+                    (int(row["id"]),),
+                ),
+            ]
         )
-        await self._db.execute(
-            "DELETE FROM coding_session_bridge_outbox WHERE id = ?",
-            (int(row["id"]),),
-        )
-        await self._db.commit()
         logger.error(
             "[coding_session_bridge] QUARANTINED outbox id=%s after %s attempts "
             "(HTTP %s) — the server permanently refuses this envelope, so these "
@@ -1367,31 +1419,37 @@ class CodingSessionBridgeOutbox:
         if row is None:
             return
         attempts = int(row["attempts"]) + (1 if increment else 0)
-        await self._db.execute(
-            """UPDATE coding_session_bridge_outbox
-               SET attempts=?, last_error=?, next_attempt_at=?,
-                   updated_at=datetime('now') WHERE id=?""",
-            (
-                attempts,
-                reason[:1000],
-                time.time() + _PUBLISH_INTERVAL_SECONDS,
-                int(row["id"]),
-            ),
+        await self._durable_writes(
+            [
+                (
+                    """UPDATE coding_session_bridge_outbox
+                       SET attempts=?, last_error=?, next_attempt_at=?,
+                           updated_at=datetime('now') WHERE id=?""",
+                    (
+                        attempts,
+                        reason[:1000],
+                        time.time() + _PUBLISH_INTERVAL_SECONDS,
+                        int(row["id"]),
+                    ),
+                )
+            ]
         )
-        await self._db.commit()
 
     async def _record_failure(
         self, outbox_id: int, prior_attempts: int, exc: Exception
     ) -> None:
         attempts = prior_attempts + 1
         backoff = min(_MAX_BACKOFF_SECONDS, float(2 ** min(attempts, 6)))
-        await self._db.execute(
-            """UPDATE coding_session_bridge_outbox
-               SET attempts=?, last_error=?, next_attempt_at=?,
-                   updated_at=datetime('now') WHERE id=?""",
-            (attempts, str(exc)[:1000], time.time() + backoff, outbox_id),
+        await self._durable_writes(
+            [
+                (
+                    """UPDATE coding_session_bridge_outbox
+                       SET attempts=?, last_error=?, next_attempt_at=?,
+                           updated_at=datetime('now') WHERE id=?""",
+                    (attempts, str(exc)[:1000], time.time() + backoff, outbox_id),
+                )
+            ]
         )
-        await self._db.commit()
         logger.warning(
             "[coding_session_bridge] upload deferred id=%s attempt=%s: %s",
             outbox_id,

@@ -141,6 +141,18 @@ quiet backlog.
   at that boundary an `OSError` means exactly one thing, the server was not
   reached.
 
+- **EVERY outbox mutation runs on the durable boundary.** Enqueue, retire,
+  defer, record-failure, and quarantine all go through
+  `_durable_writes` / the private `BEGIN IMMEDIATE` connection — never the
+  shared one. A queue-state write that loses the shared connection's race does
+  not merely fail: it fails INSIDE an exception handler and takes the publisher
+  with it. That is precisely how v1.4.37 died — `_record_failure` raised
+  `database is locked` out of `except AIDreamOfflineError`. Bookkeeping about a
+  failure must never become a worse failure, so those calls are individually
+  guarded too. Quarantine's copy-then-delete is ONE transaction; a crash
+  between them would lose the envelope, the one thing this outbox promises
+  never happens.
+
 Regression: `tests/unit/test_coding_session_delivered_row_wedge.py`.
 
 ### Provider-neutral delivery status

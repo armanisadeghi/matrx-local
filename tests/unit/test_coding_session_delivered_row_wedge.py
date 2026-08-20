@@ -271,3 +271,69 @@ async def test_the_client_classifies_a_raw_ssl_error_as_offline() -> None:
     )
     with pytest.raises(AIDreamOfflineError):
         await client.post("/coding-sessions/bridge", {}, jwt="t", timeout=5.0)
+
+
+@pytest.mark.anyio
+async def test_a_failed_failure_write_does_not_kill_the_tick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.4.37's wedge: the bookkeeping ABOUT a failure became a worse failure.
+
+    `_record_failure` ran on the shared connection, lost the lock, and raised
+    `database is locked` out of `except AIDreamOfflineError` — killing the
+    publisher loop from inside its own error handler.
+    """
+    from app.services.aidream.client import AIDreamOfflineError
+
+    path = tmp_path / "matrx.db"
+    db = LocalDatabase(path)
+    await db.connect()
+    await _seed_user(db)
+
+    class _Offline:
+        async def post(self, path: str, payload: dict, jwt: str, timeout: float) -> Any:  # noqa: ARG002
+            raise AIDreamOfflineError("[aidream_client] Cannot reach server")
+
+    outbox = CodingSessionBridgeOutbox(db=db, client=_Offline(), cloud_enabled=True)
+    await outbox.enqueue(_request())
+
+    async def _locked(self: Any, *args: Any, **kwargs: Any) -> None:  # noqa: ARG001
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(CodingSessionBridgeOutbox, "_durable_writes", _locked)
+
+    # Pre-fix this raised sqlite3.OperationalError straight out of the tick.
+    result = await outbox.sync_pending()
+
+    assert result["failed"] == 1
+    assert await outbox.pending_count() == 1, "the envelope is never dropped"
+    await db.close()
+
+
+@pytest.mark.anyio
+async def test_quarantine_is_atomic(tmp_path: Path) -> None:
+    """Copy-then-delete in one transaction, or a crash between loses the row."""
+    from app.services.aidream.client import AIDreamError
+
+    path = tmp_path / "matrx.db"
+    db = LocalDatabase(path)
+    await db.connect()
+    await _seed_user(db)
+
+    mutated = (
+        '[aidream_client] /coding-sessions/bridge \u2192 HTTP 409: '
+        '{"error":"entry_mutated","message":"stored with a different payload"}'
+    )
+
+    class _Refuses:
+        async def post(self, path: str, payload: dict, jwt: str, timeout: float) -> Any:  # noqa: ARG002
+            raise AIDreamError(409, mutated)
+
+    outbox = CodingSessionBridgeOutbox(db=db, client=_Refuses(), cloud_enabled=True)
+    await outbox.enqueue(_request())
+
+    await outbox.sync_pending()
+
+    assert await outbox.pending_count() == 0
+    assert await outbox.quarantined_count() == 1, "preserved, never dropped"
+    await db.close()

@@ -147,24 +147,30 @@ def _extract_param_descriptions(docstring: str | None) -> dict[str, str]:
     return descriptions
 
 
+class ToolAnnotationResolutionError(RuntimeError):
+    """Raised when an advertised tool contract cannot be resolved exactly."""
+
+
 def _handler_signature(handler: Any) -> inspect.Signature:
     """Signature with REAL type annotations.
 
     Every tool module uses ``from __future__ import annotations`` (PEP 563),
     so a plain ``inspect.signature()`` returns *string* annotations and every
     parameter would silently degrade to ``{"type": "string"}``. ``eval_str=True``
-    resolves them against the handler's module globals; if a stray annotation
-    cannot be evaluated we fall back to the raw signature for that handler.
+    resolves them against the handler's module globals. The old raw-signature
+    fallback changed unresolved annotations into valid-looking string schemas;
+    that is not an equivalent contract, so schema generation now refuses it.
     """
     try:
         return inspect.signature(handler, eval_str=True)
     except (NameError, AttributeError, TypeError) as exc:
-        logger.warning(
-            "Could not resolve annotations for %s (%s) — its schema degrades "
-            "to string-typed parameters",
-            getattr(handler, "__name__", handler), exc,
-        )
-        return inspect.signature(handler)
+        name = getattr(handler, "__name__", repr(handler))
+        raise ToolAnnotationResolutionError(
+            f'Tool schema generation requested exact annotations for "{name}", '
+            f"but an annotation could not be resolved ({exc}). Import or define "
+            "the missing annotation in the handler module, or remove that tool "
+            "from the advertised catalog; string-typed substitution is refused."
+        ) from exc
 
 
 def generate_tool_schema(tool_name: str) -> dict[str, Any] | None:

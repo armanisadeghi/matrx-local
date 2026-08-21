@@ -37,7 +37,10 @@ phrase in the sync directories.
   cached fields and AI model resolution breaks, not just the models list.
 - `secret_store.py` — keychain-backed Fernet encryption for `api_keys` (in the
   SQLite `app_settings` blob) and `auth_tokens`. **These never sync, never
-  leave the machine.** Do not merge them into the synced settings blob.
+  leave the machine.** Credential writes raise `SecretEncryptionUnavailableError`
+  when the OS keychain/Fernet backend is unavailable; plaintext/base64 is not an
+  equivalent fallback. Historical plaintext remains readable but is never newly written.
+  Do not merge these secrets into the synced settings blob.
 - `agent_execution_definitions` — fetch-through cache of the complete,
   authenticated AIDream execution definition consumed by matrx-ai's
   `ExecutionAgentSource`. It is deliberately separate from `agents` /
@@ -81,3 +84,7 @@ phrase in the sync directories.
 **Enforcement:** `tests/characterization/test_local_db_sync_characterization.py`
 (11 tests) + `tests/parity/test_sync_contract.py`. Red test = contract
 conversation, not a test edit.
+
+## Change log
+
+- 2026-08-21 — Credential writes refuse plaintext/base64 substitution when keychain encryption is unavailable.

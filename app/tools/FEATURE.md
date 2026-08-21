@@ -151,3 +151,11 @@ never read, so the 115 granular `local_*` rows stay retired.
 operator workflow for explaining drift and preparing a reviewable DB change;
 the release guard is read-only and never writes or suggests silently syncing
 code into the database.
+
+`tool_schemas._handler_signature` raises `ToolAnnotationResolutionError` when
+annotations cannot be resolved. **Never substitute the raw string annotations:**
+that advertises a valid-looking string schema for a tool that requested another type.
+
+## Change log
+
+- 2026-08-21 — Tool schema generation refuses unresolved annotations instead of string-typing them.

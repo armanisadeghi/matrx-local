@@ -13,10 +13,8 @@ Design — keychain-backed data-encryption key:
   * Secrets are Fernet-encrypted with the DEK and stored as ``enc:v1:<ct>``.
 
 Fail-safe contract (this is load-bearing — it sits on the auth path):
-  * If ``keyring`` or ``cryptography`` is unavailable, the keychain can't be
-    reached, or anything else goes wrong, :func:`protect` returns the value
-    UNCHANGED (plaintext) after a one-time warning. We never refuse to store
-    a token — that would lock the user out of their own session.
+  * If ``keyring`` or ``cryptography`` is unavailable, the keychain cannot be
+    reached, or encryption fails, :func:`protect` refuses the write loudly.
   * :func:`unprotect` transparently handles all three historical formats —
     ``enc:v1:`` (decrypt), and bare plaintext (return as-is) — so there is no
     migration step and an unreadable keychain never bricks an existing login
@@ -25,7 +23,6 @@ Fail-safe contract (this is load-bearing — it sits on the auth path):
 
 from __future__ import annotations
 
-import os
 import sys
 import threading
 
@@ -39,44 +36,42 @@ from app.common.system_logger import get_logger
 logger = get_logger()
 
 _ENC_PREFIX = "enc:v1:"
-# Cache the resolved Fernet instance (or False once we know it's unavailable)
+# Cache the resolved Fernet instance and unavailable state
 # so we hit the keychain at most once per process.
 _fernet: object | None = None
 _fernet_unavailable = False
-_warned_once = False
 _fernet_lock = threading.Lock()
 
 
-def _warn_once(msg: str) -> None:
-    global _warned_once
-    if not _warned_once:
-        _warned_once = True
-        logger.warning(
-            "[secret_store] %s — secrets stored UNENCRYPTED at rest "
-            "(file permissions still apply).",
-            msg,
-        )
+class SecretEncryptionUnavailableError(RuntimeError):
+    """Raised when a requested credential cannot be encrypted for storage."""
 
 
-def _get_fernet():
-    """Return a Fernet instance backed by a keychain-stored DEK, or None.
+def encryption_backend_or_raise():
+    """Return keychain Fernet or refuse to substitute plaintext for encryption.
 
-    Never raises. On any failure returns None and the caller stores plaintext.
+    The old resolver returned ``None`` when keychain access failed, causing
+    callers to persist plaintext/base64 while reporting a successful encrypted
+    write. Plaintext is not equivalent encryption; restore keychain access or
+    leave the credential unpersisted and re-authenticate.
     """
     global _fernet, _fernet_unavailable
-    if os.environ.get("MATRX_ISOLATED_TEST") == "1":
-        _fernet_unavailable = True
-        return None
     if _fernet is not None:
         return _fernet
     if _fernet_unavailable:
-        return None
+        raise SecretEncryptionUnavailableError(
+            "Credential encryption was requested, but the OS keychain-backed "
+            "Fernet backend is unavailable. Unlock/repair the OS keychain and "
+            "install cryptography plus keyring (non-macOS), then retry. The honest "
+            "alternative is to leave the credential unpersisted and re-authenticate; "
+            "plaintext storage is refused."
+        )
 
     with _fernet_lock:
         if _fernet is not None:
             return _fernet
         if _fernet_unavailable:
-            return None
+            return encryption_backend_or_raise()
 
         try:
             from cryptography.fernet import Fernet
@@ -96,28 +91,30 @@ def _get_fernet():
             _fernet = Fernet(key.encode("ascii"))
             return _fernet
         except Exception as exc:
-            # Keychain locked, timed out, no backend (headless Linux without
-            # Secret Service), corrupt key, etc. Fall back to plaintext rather
-            # than blocking auth or startup.
             _fernet_unavailable = True
-            _warn_once(f"OS keychain unavailable ({exc})")
-            return None
+            raise SecretEncryptionUnavailableError(
+                "Credential encryption was requested, but the OS keychain-backed "
+                f"Fernet backend could not be loaded ({exc}). Unlock/repair the OS "
+                "keychain and install cryptography plus keyring (non-macOS), then "
+                "retry. The honest alternative is to leave the credential "
+                "unpersisted and re-authenticate; plaintext storage is refused."
+            ) from exc
 
 
 def protect(plaintext: str | None) -> str | None:
-    """Encrypt a secret for storage. Returns plaintext unchanged on any
-    failure (never raises, never blocks a write)."""
+    """Encrypt a secret for storage; refuse the write when encryption is absent."""
     if not plaintext:
         return plaintext
-    f = _get_fernet()
-    if f is None:
-        return plaintext
+    f = encryption_backend_or_raise()
     try:
         token = f.encrypt(plaintext.encode("utf-8")).decode("ascii")
         return _ENC_PREFIX + token
-    except Exception:
-        logger.debug("[secret_store] encrypt failed; storing plaintext", exc_info=True)
-        return plaintext
+    except Exception as exc:
+        raise SecretEncryptionUnavailableError(
+            "Credential encryption was requested, but Fernet encryption failed. "
+            "Repair the OS keychain encryption key and retry, or leave the "
+            "credential unpersisted and re-authenticate; plaintext storage is refused."
+        ) from exc
 
 
 def unprotect(stored: str | None) -> str | None:
@@ -129,8 +126,9 @@ def unprotect(stored: str | None) -> str | None:
     if not stored.startswith(_ENC_PREFIX):
         # Legacy / fallback plaintext value.
         return stored
-    f = _get_fernet()
-    if f is None:
+    try:
+        f = encryption_backend_or_raise()
+    except SecretEncryptionUnavailableError:
         logger.warning(
             "[secret_store] have an encrypted secret but no key to "
             "decrypt it (keychain unavailable) — treating as absent"

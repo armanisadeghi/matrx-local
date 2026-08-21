@@ -1,4 +1,4 @@
-"""The credential store must degrade instead of freezing engine startup."""
+"""Credential storage must fail loudly instead of substituting plaintext."""
 
 from __future__ import annotations
 
@@ -63,7 +63,6 @@ def test_keychain_timeout_disables_encryption_without_retrying(
 ) -> None:
     monkeypatch.setattr(secret_store, "_fernet", None)
     monkeypatch.setattr(secret_store, "_fernet_unavailable", False)
-    monkeypatch.setattr(secret_store, "_warned_once", False)
     monkeypatch.setattr(secret_store.sys, "platform", "darwin")
     attempts: list[bool] = []
 
@@ -73,26 +72,44 @@ def test_keychain_timeout_disables_encryption_without_retrying(
 
     monkeypatch.setattr(secret_store, "read_key_from_helper", timeout)
 
-    assert secret_store._get_fernet() is None
-    assert secret_store._get_fernet() is None
+    with pytest.raises(secret_store.SecretEncryptionUnavailableError) as exc:
+        secret_store.encryption_backend_or_raise()
+    with pytest.raises(secret_store.SecretEncryptionUnavailableError):
+        secret_store.encryption_backend_or_raise()
     assert attempts == [True]
     assert secret_store._fernet_unavailable is True
+    message = str(exc.value)
+    assert "OS keychain" in message
+    assert "cryptography plus keyring" in message
+    assert "unpersisted" in message
 
 
-def test_isolated_test_never_touches_os_keychain(
+def test_product_code_has_no_isolated_test_plaintext_toggle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(secret_store, "_fernet", None)
     monkeypatch.setattr(secret_store, "_fernet_unavailable", False)
-    monkeypatch.setenv("MATRX_ISOLATED_TEST", "1")
     monkeypatch.setattr(
         secret_store,
         "read_key_from_helper",
-        lambda: pytest.fail("isolated tests must not touch the OS keychain"),
+        lambda: (_ for _ in ()).throw(TimeoutError("unavailable")),
     )
+    with pytest.raises(secret_store.SecretEncryptionUnavailableError):
+        secret_store.protect("required-secret")
+    source = Path(secret_store.__file__).read_text()
+    assert "MATRX_ISOLATED_TEST" not in source
+    assert "if f is None" not in source
 
-    assert secret_store._get_fernet() is None
-    assert secret_store._fernet_unavailable is True
+
+def test_safe_encryption_path_still_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setattr(secret_store, "_fernet", Fernet(Fernet.generate_key()))
+    monkeypatch.setattr(secret_store, "_fernet_unavailable", False)
+    stored = secret_store.protect("required-secret")
+    assert stored and stored.startswith("enc:v1:")
+    assert stored != "required-secret"
+    assert secret_store.unprotect(stored) == "required-secret"
 
 
 def test_helper_serializes_read_and_create(

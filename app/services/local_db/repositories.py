@@ -815,7 +815,8 @@ class TokenRepo:
         refresh_token: str | None = None,
         expires_at: int | None = None,
     ) -> None:
-        # Encrypt at rest (no-op passthrough if the keychain is unavailable).
+        # 🚨 Do not restore a passthrough: protect() is the fail-loud encrypted
+        # storage resolver, and plaintext is not an equivalent credential store.
         from app.services.local_db.secret_store import protect
 
         await self._db.execute(
@@ -1535,15 +1536,13 @@ class AppSettingsRepo:
 _API_KEYS_SETTINGS_KEY = "api_keys"
 
 def _encode_key(value: str) -> str:
-    # Prefer real encryption-at-rest via the OS keychain; protect() returns
-    # an ``enc:v1:`` string when available, else the plaintext (which we then
-    # base64-encode for the historical at-rest obfuscation).
+    # 🚨 Do not restore base64/plaintext substitution; protect() must raise when
+    # the keychain-backed encryption resource is missing.
     from app.services.local_db.secret_store import protect
 
     protected = protect(value)
-    if protected != value:
-        return protected  # already an enc:v1: token
-    return base64.b64encode(value.encode()).decode()
+    assert protected is not None
+    return protected
 
 
 def _decode_key(encoded: str) -> str:

@@ -15,7 +15,7 @@ and tool turns; `SQLiteConversationStore` owns local-first chat persistence.
   the server uses for itself (system default → org binding → user binding), and a user's rebind
   reaches desktop with no deploy. A missing capability is a missing API call to add, never a licence
   to hardcode an agent id. Cross-repo law:
-  `/Users/armanisadeghi/code/common-docs/systems/mandates/RUNTIME.md`.
+  `/Users/armanisadeghi/code/common-docs/systems/agents/mandates/RUNTIME.md`.
 - A successful terminal turn must contain user-visible output. The shared
   orchestrator enforces this; `local_ai_task` repeats the check as a packaging
   backstop and converts reasoning-only stops into a persisted failed turn plus

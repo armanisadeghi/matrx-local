@@ -5,7 +5,7 @@ the atomic disk cache under ``MATRX_HOME_DIR``, the 6h background refresh
 loop, and the launcher-registry reporting. Mirrors the app_config service
 (``app/services/app_config/service.py``) 1:1 — see
 ``app/services/catalogs/FEATURE.md`` and the cross-repo spec
-(/Users/armanisadeghi/code/common-docs/systems/remote-catalogs/FEATURE.md).
+(/Users/armanisadeghi/code/common-docs/systems/clients/remote-catalogs/FEATURE.md).
 
 Startup contract: ``get_catalogs_service()`` resolves cache/compiled
 SYNCHRONOUSLY (one file read, no network), so the first accessor call is

@@ -11,7 +11,7 @@ Two independent paths, tried in order (same posture as app_config/client.py):
      unauthenticated, server-cached, active rows only). Protects against
      Supabase-side outages. The endpoint ships from aidream separately —
      this client codes to the contract in
-     /Users/armanisadeghi/code/common-docs/systems/remote-catalogs/FEATURE.md.
+     /Users/armanisadeghi/code/common-docs/systems/clients/remote-catalogs/FEATURE.md.
 
 Both return the same rows. PostgREST responds with a bare JSON array; the
 aidream endpoint may wrap it (``{"entries": [...]}``) — both shapes are

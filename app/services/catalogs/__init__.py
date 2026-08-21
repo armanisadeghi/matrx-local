@@ -4,7 +4,7 @@ treats as data (models, LoRAs, voices, presets, prompts, provider patterns).
 One anon-readable Supabase table (`public.catalog_entries`, app='matrx-local',
 164 entries / 14 kinds) fetched at startup, cached to disk, with the legacy
 compiled in-code lists demoted to the explicit fallback tier.
-System-of-record: /Users/armanisadeghi/code/common-docs/systems/remote-catalogs/FEATURE.md.
+System-of-record: /Users/armanisadeghi/code/common-docs/systems/clients/remote-catalogs/FEATURE.md.
 """
 
 from app.services.catalogs.models import (

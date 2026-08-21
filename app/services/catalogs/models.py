@@ -1,7 +1,7 @@
 """Typed models for the Remote Catalogs consumer.
 
 One generic shape for every catalog kind (system-of-record:
-/Users/armanisadeghi/code/common-docs/systems/remote-catalogs/FEATURE.md): rows of
+/Users/armanisadeghi/code/common-docs/systems/clients/remote-catalogs/FEATURE.md): rows of
 ``public.catalog_entries`` for ``app = 'matrx-local'``. The ``payload`` JSONB
 is a faithful snake_case mirror of the legacy compiled struct for that kind —
 per-kind adaptation back into the legacy dataclasses happens at the consumer

@@ -1,6 +1,6 @@
 """Release validation: the LIVE app_config row is fetchable and schema-valid.
 
-Per the cross-repo spec (common-docs/systems/app-config/FEATURE.md §Release
+Per the cross-repo spec (common-docs/systems/platform/app-config/FEATURE.md §Release
 validation), the matrx-local release pipeline must verify:
 
   (a) the live `matrx-local` row is fetchable through BOTH fetch paths and
@@ -73,7 +73,7 @@ def test_live_row_via_postgrest_primary() -> None:
     body = resp.json()
     assert isinstance(body, list) and body, (
         f"No live app_config row for app={APP_KEY!r} — seed the row before "
-        f"releasing (see common-docs/systems/app-config/FEATURE.md)."
+        f"releasing (see common-docs/systems/platform/app-config/FEATURE.md)."
     )
     row = parse_row(body[0])
     _assert_row_shape(row, "postgrest")

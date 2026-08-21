@@ -7,7 +7,7 @@ and never hardcoded at consumer callsites. This module fetches that row,
 caches it to disk, and serves the resolved values process-wide.
 
 Cross-repo system-of-record (schema, DB, aidream endpoint, admin UI):
-`/Users/armanisadeghi/code/common-docs/systems/app-config/FEATURE.md` — read it before
+`/Users/armanisadeghi/code/common-docs/systems/platform/app-config/FEATURE.md` — read it before
 touching this feature in ANY repo.
 
 Sibling system: **Remote Catalogs** ([app/services/catalogs/FEATURE.md](../catalogs/FEATURE.md))

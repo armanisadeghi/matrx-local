@@ -13,7 +13,7 @@ Catches two classes of drift that compile cleanly and fail silently:
 
 The 2026-07-22 common-docs bundle restructure moved every doc under those five
 roots and broke 33 flat pointers (e.g. `common-docs/app-config/FEATURE.md`
-instead of `common-docs/systems/app-config/FEATURE.md`) with no build error,
+instead of `common-docs/systems/platform/app-config/FEATURE.md`) with no build error,
 no runtime error, and no signal until an agent went looking and found a 404
 against a doc that used to exist. This script cannot verify a sibling repo's
 filesystem (it isn't checked out here) or a common-docs file's real existence

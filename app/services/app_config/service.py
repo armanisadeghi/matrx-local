@@ -4,7 +4,7 @@ Owns the precedence chain (env override > fresh remote > disk cache >
 compiled defaults), the atomic disk cache under ``MATRX_HOME_DIR``, the 6h
 background refresh loop, and the launcher-registry reporting. See
 ``app/services/app_config/FEATURE.md`` and the cross-repo spec
-(/Users/armanisadeghi/code/common-docs/systems/app-config/FEATURE.md).
+(/Users/armanisadeghi/code/common-docs/systems/platform/app-config/FEATURE.md).
 
 Startup contract: ``get_app_config_service()`` resolves cache/defaults
 SYNCHRONOUSLY (one small file read) — it never touches the network, so the

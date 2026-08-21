@@ -27,6 +27,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.config import SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL  # noqa: E402
+from app.services.delegation.user_review import USER_REVIEW_TOOLS  # noqa: E402
 from app.tools.catalog import get_advertised_catalog  # noqa: E402
 
 EXECUTOR_NAME = "matrx-local"
@@ -341,7 +342,12 @@ def compute_drift(
                 f"active binding points to inactive definition {tool.name}"
             )
 
-    report.bound_not_implemented = sorted(set(db_by_name) - set(local_by_name))
+    # Review-only tools are intentionally bound to this client but never enter
+    # the executable dispatcher. The desktop parks them for an explicit human
+    # decision, which is the authorization boundary rather than drift.
+    report.bound_not_implemented = sorted(
+        set(db_by_name) - set(local_by_name) - set(USER_REVIEW_TOOLS)
+    )
     report.implemented_not_bound = sorted(set(local_by_name) - set(db_by_name))
 
     for name in sorted(set(local_by_name) & set(db_by_name)):

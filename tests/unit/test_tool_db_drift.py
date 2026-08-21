@@ -161,6 +161,14 @@ def test_compute_drift_covers_bindings_and_surface_allowlist() -> None:
     assert SURFACE_BINDING_ALLOWLIST == frozenset({"load_desktop_tools"})
 
 
+def test_review_only_binding_is_not_reported_as_missing_dispatcher() -> None:
+    registry = _registry((_db("google_email_send"),))
+
+    report = compute_drift((), registry)
+
+    assert report.bound_not_implemented == []
+
+
 def test_fetch_registry_targets_tool_schema_and_active_executor_tree(
     monkeypatch: Any,
 ) -> None:

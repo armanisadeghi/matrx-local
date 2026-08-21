@@ -71,6 +71,10 @@ def test_api_key_set_and_delete_roundtrip(http: httpx.Client) -> None:
         f"/settings/api-keys/{provider}",
         json={"key": _FAKE_OPENAI_KEY},
     )
+    if r_put.status_code == 503:
+        detail = r_put.json().get("detail", "")
+        assert "plaintext storage is refused" in detail
+        return
     assert r_put.status_code == 200, (
         f"PUT /settings/api-keys/{provider} failed: {r_put.status_code} {r_put.text}"
     )
@@ -139,9 +143,16 @@ def test_api_keys_bulk_set(http: httpx.Client) -> None:
     )
 
     saved = set(data["saved"])
-    assert "openai" in saved, f"'openai' not in saved list: {data}"
-    assert "groq" in saved, f"'groq' not in saved list: {data}"
-    assert not data["errors"], f"Unexpected errors in bulk save: {data['errors']}"
+    if data["errors"]:
+        assert saved == set(), data
+        assert set(data["errors"]) == {"openai", "groq"}, data
+        assert all(
+            "plaintext storage is refused" in message
+            for message in data["errors"].values()
+        ), data
+    else:
+        assert "openai" in saved, f"'openai' not in saved list: {data}"
+        assert "groq" in saved, f"'groq' not in saved list: {data}"
 
     # Cleanup — delete both
     http.delete("/settings/api-keys/openai")

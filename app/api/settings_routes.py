@@ -405,7 +405,12 @@ async def set_api_key(provider: str, req: ApiKeySetRequest) -> ApiKeyStatus:
             detail=f"Unknown provider '{provider}'. Valid: {sorted(VALID_PROVIDERS)}",
         )
     from app.services.ai.key_manager import set_user_key
-    await set_user_key(provider, req.key)
+    from app.services.local_db.secret_store import SecretEncryptionUnavailableError
+
+    try:
+        await set_user_key(provider, req.key)
+    except SecretEncryptionUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     meta = PROVIDER_GRANTS[provider]
     return ApiKeyStatus(
         provider=provider,

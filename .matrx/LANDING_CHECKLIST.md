@@ -25,10 +25,10 @@ production regression, not a hypothetical.
    port/path into anything a dev run executes (MXL-D-043).
 6. **React hooks returning actions, or any polling?** → `useMemo` the actions
    object, never list `actions` in a useEffect dep array, gate intervals on
-   the specific boolean (CLAUDE.md § React Patterns — this class flooded the
+   the specific boolean (`docs/REACT_PATTERNS.md` — this class flooded the
    production engine).
 7. **Wrote a `.sql` migration?** → it changed nothing until it is applied to
    live Supabase, verified, and types are regenerated — in this same session.
 8. **New config value, URL, or key?** → pick its category first (CLAUDE.md
-   § Security & configuration posture): env vars are dev-only, no shipped
+   § Configuration posture): env vars are dev-only, no shipped
    behavior may depend on `.env`, and our secrets never exist on the client.

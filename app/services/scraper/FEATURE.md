@@ -101,6 +101,45 @@ desktop sends).
 
 ---
 
+## One browser pool — owned by `ScraperEngine`
+
+There is ONE Playwright browser pool for page fetches, owned by `ScraperEngine`.
+Both the scrape lane and the `FetchWithBrowser` tool borrow it via
+`ScraperEngine.borrow_browser()`; **nothing else in a fetch path may call
+`async_playwright()`.** Two drivers means two ~200 MB Chromium trees on the
+user's laptop AND a tree with no remembered PID — invisible to `driver_pid` /
+`terminate_playwright_tree`, i.e. the orphan class behind "ended unexpectedly"
+crash reports. A borrower owns every context it opens (and closes it) but never
+closes the shared browser. Pinned by `tests/unit/test_single_browser_pool.py`.
+
+The interactive `local_browser` suite (`browser_automation.py`) is a separate,
+headed, user-driven session and is deliberately NOT folded in — but its driver
+is still untracked today (MXL-D-076).
+
+---
+
+## The client payload contract — `result_contract.py`
+
+Local and remote scrapes run the same engine, so they must be indistinguishable
+to a client: **the client sees ONE shape, whichever lane ran.**
+[`result_contract.py`](result_contract.py) is the only place a scrape result
+becomes a client payload. The `Scrape` / `FetchWithBrowser` tools emit it as
+`metadata["results"]` (always a list, single URL or bulk), and
+`/remote-scraper/scrape` + `/scrape/stream` run the server's pages through the
+same converter before they leave the proxy. The client reads it in exactly one
+place, `desktop/src/lib/scrape-result.ts` — adding a second mapping at a call
+site re-forks the contract one layer up, which is what the `status`-string shim
+used to do (deleted 2026-08-09).
+`tests/unit/test_scrape_result_contract.py` fails if the Python and TypeScript
+field lists drift.
+
+**The scraper server streams NDJSON, not SSE.** The scrape proxy translates it
+into real SSE frames (`event: page_result` carrying the contract); never
+forward server envelopes raw under a `text/event-stream` content type — the
+browser's SSE parser drops every line and the stream silently produces nothing.
+
+---
+
 ## Result shape
 
 Consumers read the package's `ScrapeResult` — `success` / `failure_reason`,

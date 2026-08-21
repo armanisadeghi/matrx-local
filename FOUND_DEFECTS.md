@@ -1048,6 +1048,18 @@ _(promotion proposals prepared by non-interactive `/task-hygiene` runs land here
    managers pin percent at 0%). Chunked downloads look frozen/hung to
    users; fix is a bytes-received heartbeat + indeterminate UI state.
 
+**MXL-D-081** — docs/official — two stale claims found during the 2026-08-20
+CLAUDE.md charter rewrite (official docs are edit-gated; needs Arman approval
+to fix): (1) `docs/official/authentication.md:3` names the retired Supabase
+instance `txzxabzwovsujtloxrus` — post-East the live instance is
+`brsgrqvjdzwihsvnfqkf` (see commits b7996d24b / 0ceefe2a4); (2)
+`docs/official/build-lessons.md:92` says hidden imports go in "all **8**
+`.spec` files (`matrx-engine-*` and `aimatrx-engine-*` × 4 platforms)" but
+only the 4 `matrx-engine-*` specs exist under `specs/`. Status: open.
+Analyzed 2026-08-20 — verified in code (`ls specs/*.spec`, grep of both docs).
+Owner hint: any agent with Arman's approval to touch `docs/official/**`;
+one-line fixes.
+
 ---
 
 ## Rejected

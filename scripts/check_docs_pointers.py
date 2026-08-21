@@ -50,7 +50,16 @@ ROOT_MD_GLOB = "*.md"
 # app/**/FEATURE.md specifically (per task scope), not all of app/**/*.md.
 APP_FEATURE_GLOB = "app/**/FEATURE.md"
 
-ALLOWED_COMMON_DOCS_ROOTS = ("systems/", "projects/", "policies/", "skills/", "meta/")
+ALLOWED_COMMON_DOCS_ROOTS = (
+    "systems/",
+    "projects/",
+    "policies/",
+    "operations/",
+    "inbox/",
+    "meta/",
+    "skills/",
+    "workspace-root/",
+)
 
 # Markdown link pattern: [text](target) — we only care about the target.
 MD_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")

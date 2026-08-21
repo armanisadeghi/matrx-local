@@ -11,7 +11,7 @@ process-wide; the legacy in-code lists remain ONLY as the explicitly-labeled
 compiled fallback tier.
 
 Cross-repo system-of-record (table DDL, write RPCs, kind schemas, admin UI,
-aidream endpoints): `/Users/armanisadeghi/code/common-docs/systems/remote-catalogs/FEATURE.md`
+aidream endpoints): `/Users/armanisadeghi/code/common-docs/systems/clients/remote-catalogs/FEATURE.md`
 — read it before touching this feature in ANY repo. Sibling system:
 [app_config](../app_config/FEATURE.md) (config-shaped scalars; this module
 mirrors its architecture 1:1 and imports its semver helpers).

@@ -10,7 +10,7 @@ owner-context: user file sync — full local replica OR pointer-mapped virtual f
 ## Vision
 
 Arman's verbatim intent for this capability lives at
-`common-docs/systems/matrx-files-service/VISION.md` (moved there 2026-08-20, centralization
+`common-docs/systems/media/file-service/VISION.md` (moved there 2026-08-20, centralization
 sweep) — read it first.
 
 2026-07-13 addendum: the managed file service (EC2/Cloudflare,
@@ -21,7 +21,7 @@ API directly from the start (no aidream detour).
 
 - Feature contract + invariants: `app/services/file_sync/FEATURE.md` (read first)
 - Doctrine row: `docs/SYNC_CONTRACT.md` § User files (matrx-files replica)
-- Server wire contract: aidream `packages/matrx-files/matrx_files/api/router_files.py` (`/files/sync/changes` + `/files/sync/folders`) + `common-docs/systems/matrx-files-service/FEATURE.md`
+- Server wire contract: aidream `packages/matrx-files/matrx_files/api/router_files.py` (`/files/sync/changes` + `/files/sync/folders`) + `common-docs/systems/media/file-service/FEATURE.md`
 - Tests: `tests/characterization/test_file_sync_characterization.py` (35) + aidream `packages/matrx-files/tests/test_sync_feed.py` (14)
 - UI: Configurations → File Sync card (`desktop/src/components/files/FileSyncPanel.tsx`, `desktop/src/hooks/use-file-sync.ts`)
 - E2E drill script pattern (isolated tmp DB/root + minted agent JWT + locally-run service): recreate from this doc's Verification section; the original ran from a session scratchpad.

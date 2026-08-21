@@ -49,13 +49,13 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
   Python half has this (`matrx_ai.configure()` installs `ServerMandateSource` via
   `app/services/ai/engine.py`); the TS half does not yet (`CloudChat.tsx` hardcodes the
   default-chat agent id — worklist rows L1–L4). Never add an agent UUID here. →
-  `/Users/armanisadeghi/code/common-docs/systems/mandates/RUNTIME.md` (+ `FEATURE.md`, `ROLLOUT.md`)
+  `/Users/armanisadeghi/code/common-docs/systems/agents/mandates/RUNTIME.md` (+ `FEATURE.md`, `ROLLOUT.md`)
 - **No unapproved schedules.** Every scheduled task exists only with Arman's approval
   by name and interval, registered and claimed via the master registry. →
   `/Users/armanisadeghi/code/common-docs/operations/scheduled-tasks.md`
 - **THE USER-INPUT LAW.** Structured information is never passed as user text — it
   becomes named variables or context. →
-  `/Users/armanisadeghi/code/common-docs/systems/agent-variable-binding/FEATURE.md`
+  `/Users/armanisadeghi/code/common-docs/systems/agents/agent-variable-binding/FEATURE.md`
 - **Limits are knobs, and agents set them.** Never a hardcoded constant or an absent
   control. → `/Users/armanisadeghi/code/common-docs/policies/limits-are-knobs-agents-set-them.md`
 - **We don't do legacy.** Replaced systems are migrated, repointed, DELETED — never
@@ -72,9 +72,9 @@ Exactly four kinds of configuration — identify which before adding any value:
 | Kind | Where it lives |
 |---|---|
 | Env vars / `.env` | **DEVELOPER-ONLY.** Never shipped; no shipped behavior may depend on one; never ask Arman to "set an env value". Comment out, don't delete. [docs/official/configuration.md](docs/official/configuration.md) |
-| Non-secret runtime values (URLs, flags, min versions) | **Remote app config** — anon-readable Supabase row, disk cache, compiled-in fallback. [app/services/app_config/FEATURE.md](app/services/app_config/FEATURE.md); SOR: `/Users/armanisadeghi/code/common-docs/systems/app-config/FEATURE.md` |
+| Non-secret runtime values (URLs, flags, min versions) | **Remote app config** — anon-readable Supabase row, disk cache, compiled-in fallback. [app/services/app_config/FEATURE.md](app/services/app_config/FEATURE.md); SOR: `/Users/armanisadeghi/code/common-docs/systems/platform/app-config/FEATURE.md` |
 | The user's own secrets (their Anthropic key, HF token…) | In-app key store FIRST, then platform Credential Vault; resolution order decided ONLY in `app/services/ai/key_manager.py` (local → Vault → `.env`). Missing key / unavailable Vault = a STATE with a prompt UI, never an error. [app/services/credential_vault/FEATURE.md](app/services/credential_vault/FEATURE.md) |
-| Our secrets | **Never exist on the client.** Privileged capability = aidream API call or the token broker. `/Users/armanisadeghi/code/common-docs/systems/token-broker/FEATURE.md` |
+| Our secrets | **Never exist on the client.** Privileged capability = aidream API call or the token broker. `/Users/armanisadeghi/code/common-docs/systems/platform/token-broker/FEATURE.md` |
 
 Compiled-in catalogs (GGUF lists, LoRAs, presets, prompts…) are demoted fallback data
 — edit DB `catalog_entries` rows and read via `app/services/catalogs` accessors, never
@@ -129,7 +129,7 @@ grow or import the in-code lists. [app/services/catalogs/FEATURE.md](app/service
 12. **Conversation-start contract mirrors aidream exactly** (`conversation_id` +
     `is_new` + `store` required; this repo's copy of the gate is
     `app/services/ai/local_ai_task.py::resolve_conversation_gate` — change one, change
-    both). → `/Users/armanisadeghi/code/common-docs/systems/conversation-start-contract/FEATURE.md`
+    both). → `/Users/armanisadeghi/code/common-docs/systems/agents/conversation-start-contract/FEATURE.md`
 13. **Migrations are applied the moment they're created** (`migrations/NNN_name.sql`,
     Supabase MCP `apply_migration`, project `brsgrqvjdzwihsvnfqkf`); an unapplied
     migration on disk = `PGRST204` at runtime — apply it before anything else.
@@ -145,10 +145,10 @@ grow or import the in-code lists. [app/services/catalogs/FEATURE.md](app/service
 |---|---|
 | Auth (publishable key, user JWT, no `SUPABASE_JWT_SECRET` ever, `/extension/*` token posture) | [docs/official/authentication.md](docs/official/authentication.md) + `app/api/extension_auth.py` |
 | Settings keys / env reference | [docs/official/settings-catalog.md](docs/official/settings-catalog.md) · [docs/official/configuration.md](docs/official/configuration.md) |
-| matrx-extend ↔ engine (Channel B live; envelopes, auth, verification, tunnel runbook) | [docs/MATRX_EXTEND_CONNECTION.md](docs/MATRX_EXTEND_CONNECTION.md); SOR: `/Users/armanisadeghi/code/common-docs/systems/matrx-extend-integration/FEATURE.md` |
+| matrx-extend ↔ engine (Channel B live; envelopes, auth, verification, tunnel runbook) | [docs/MATRX_EXTEND_CONNECTION.md](docs/MATRX_EXTEND_CONNECTION.md); SOR: `/Users/armanisadeghi/code/common-docs/systems/clients/extension/FEATURE.md` |
 | Cloud Chat as a surface (desktop tools for cloud agents, ordered blocks, "+" menu) | [docs/CLOUD_CHAT_SURFACE.md](docs/CLOUD_CHAT_SURFACE.md) + [app/services/delegation/FEATURE.md](app/services/delegation/FEATURE.md) |
 | Google Workspace on desktop — the `google_email_send` review card IS the authorization; the engine parks the call, never sends | [app/services/delegation/FEATURE.md](app/services/delegation/FEATURE.md) § User-review calls |
-| Media durability (signed URL = handoff, never identity; pass `file_id`) | `/Users/armanisadeghi/code/common-docs/systems/media-durability/FEATURE.md` |
+| Media durability (signed URL = handoff, never identity; pass `file_id`) | `/Users/armanisadeghi/code/common-docs/systems/media/media-durability/FEATURE.md` |
 | Matrx Envelope · Tool registry · DB rules | `/Users/armanisadeghi/code/common-docs/systems/{matrx-envelope,tool-registry,db-rules}/FEATURE.md` |
 | Sync doctrine · file sync · coding-session bridge | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) · [app/services/file_sync/FEATURE.md](app/services/file_sync/FEATURE.md) · [app/services/coding_sessions/FEATURE.md](app/services/coding_sessions/FEATURE.md) |
 | Content IR consumers | [docs/CONTENT_IR_CONSUMER_GUIDE.md](docs/CONTENT_IR_CONSUMER_GUIDE.md) |

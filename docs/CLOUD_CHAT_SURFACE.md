@@ -111,7 +111,7 @@ Marked "coming soon" in the + menu; each item names its frontend reference:
    turns) — payload field exists, UI doesn't track it yet.
 10. **Instance targeting (Tier 2)** — FLAG (contradiction, unresolved 2026-08-20): this row
     claims two engines on one account still race, but `app/services/delegation/FEATURE.md` and
-    `common-docs/systems/client-tool-delegation/FEATURE.md` §2.7 (Desktop pending-call claim,
+    `common-docs/systems/clients/client-tool-delegation/FEATURE.md` §2.7 (Desktop pending-call claim,
     verified System of Record) both describe instance-scoped targeting as implemented. Verify
     against live code before treating either claim as current; the repo-local design doc
     (`docs/TIER2_DESKTOP_INSTANCE_TARGETING.md`) was deleted 2026-08-20 as superseded.

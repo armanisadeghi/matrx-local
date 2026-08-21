@@ -1,7 +1,7 @@
 # Coding Session Bridge — Matrx Local edge
 
 System of record:
-`/Users/armanisadeghi/code/common-docs/systems/coding-session-bridge/FEATURE.md`.
+`/Users/armanisadeghi/code/common-docs/systems/coding/coding-session-bridge/FEATURE.md`.
 
 Cross-repo product plan:
 `/Users/armanisadeghi/code/common-docs/projects/ai-work-hub/PLAN.md` — read it before building
@@ -337,7 +337,7 @@ carries `cliSessionId` — the UUID naming `~/.claude/projects/<cwd-slug>/<cliSe
 which is the identity the bridge already binds, so the join is exact.
 
 One explicit pass (`POST /coding-session/claude/labels/sync`) reconciles both directions.
-Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding-session-bridge/FEATURE.md`
+Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding/coding-session-bridge/FEATURE.md`
 § "The session label".
 
 - **[`claude_session_index.py`](claude_session_index.py) is the only reader.** It reduces each

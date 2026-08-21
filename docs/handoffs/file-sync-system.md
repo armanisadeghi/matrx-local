@@ -2,21 +2,16 @@
 status: active
 updated: 2026-07-14
 repos: [matrx-local, aidream]
-owner-context: user file sync — full local replica OR pointer-mapped virtual files; the Matrx alternative to Google Drive (W3 in 00-INTEGRATION-TRACKER.md)
+owner-context: user file sync — full local replica OR pointer-mapped virtual files; the Matrx alternative to Google Drive
 ---
 
 # File sync system — handoff
 
-## Arman's vision (verbatim intent)
+## Vision
 
-"One of the most important roles the local machine plays is syncing all of
-the users' files if they choose to have that feature turned on. Otherwise,
-all of the files still need to be mapped and available so that the AI agent
-acts as though they're physically here, but they don't need to physically be
-stored here — we can have just pointers. But for people who have plenty of
-drive space like I do, I will absolutely want to create a full sync. And the
-point is that we want the user to use our file system for their full cloud
-sync system, instead of using Google Drive or something else."
+Arman's verbatim intent for this capability lives at
+`common-docs/systems/matrx-files-service/VISION.md` (moved there 2026-08-20, centralization
+sweep) — read it first.
 
 2026-07-13 addendum: the managed file service (EC2/Cloudflare,
 `files.matrxserver.com`) is operational — the desktop hits the matrx-files
@@ -35,8 +30,7 @@ API directly from the start (no aidream detour).
 
 1. ~~**Deploy matrx-files 0.1.4**~~ — DONE: matrx-files **0.1.5** deployed to
    `files.matrxserver.com` 2026-07-14 (Arman ran deploy.sh; verified health
-   green + `/files/sync/*` returning 401 = live — see
-   `00-INTEGRATION-TRACKER.md` W3 row / progress log).
+   green + `/files/sync/*` returning 401 = live).
 2. **Verification remaining** (not yet EXERCISED):
    - The engine's own background loop against the PROD service with the real
      desktop sign-in (drill used an isolated engine + locally-run service —

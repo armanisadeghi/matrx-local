@@ -1,3 +1,7 @@
+> ARCHIVED 2026-08-20 — moved from `docs/`. `GenericOpenAIChat` exists live in aidream
+> (`packages/matrx-ai/matrx_ai/providers/generic_openai/`) — the port this doc requested is done.
+> Doc-migration board row 33.
+
 # matrx-ai: Port `GenericOpenAIChat` Provider
 
 **Status:** Required for local LLM agent routing in `matrx-local`  

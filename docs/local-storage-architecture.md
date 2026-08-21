@@ -1,5 +1,13 @@
 # Local Storage Architecture
 
+> **FLAGGED 2026-08-20 (centralization sweep, doc-migration row 33) — contradicts ratified
+> doctrine.** This doc's "local first, cloud is an afterthought, sync is cloud→local" model
+> directly conflicts with `docs/SYNC_CONTRACT.md`, which is cited by this repo's `CLAUDE.md` as
+> **the ratified doctrine** ("Everything lives in the cloud. The local SQLite database … is a
+> full FIRST-ACCESS REPLICA — not a competing server"). Not silently resolved — verify against
+> live code (`app/services/local_db/`, `app/services/documents/`) before trusting either
+> document; `SYNC_CONTRACT.md` is the higher-authority doc pending that verification.
+
 > **Core principle: Local first. Always. The cloud is an afterthought.**
 >
 > This app exists to do things on the user's machine. If we wanted cloud storage,

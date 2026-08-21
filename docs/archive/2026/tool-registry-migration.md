@@ -1,6 +1,9 @@
 # matrx-local Migration Guide — Tool Registry Redesign
 
-> **Historical** (2026). Moved from repo root. Index: [ARCHITECTURE.md](../official/ARCHITECTURE.md).  
+> ARCHIVED 2026-08-20 — moved from `docs/research/` during the matrx-local centralization
+> sweep (doc-migration board row 33). Historical (2026); the `matrx-local:<local>` naming
+> this guide proposed is live in code (`app/tools/tool_sync.py`,
+> `app/services/ai/local_tool_bridge.py`). Index: [ARCHITECTURE.md](../official/ARCHITECTURE.md).
 > Companion docs below were aidream-platform guides — may not exist in this repo.
 
 > Audience: matrx-local (desktop app) developers, server-side and client-side.

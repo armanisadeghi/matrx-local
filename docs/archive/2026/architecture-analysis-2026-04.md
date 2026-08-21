@@ -1,6 +1,8 @@
 # Architecture Analysis & Overhaul Plan
 
-> **Historical audit** (2026-04-10). Layer-boundary findings — see also [FOUND_DEFECTS.md](../../FOUND_DEFECTS.md) for tracked items. Index: [ARCHITECTURE.md](../official/ARCHITECTURE.md).
+> ARCHIVED 2026-08-20 — moved from `docs/research/` during the matrx-local centralization
+> sweep (doc-migration board row 33). Historical audit (2026-04-10); superseded by
+> [FOUND_DEFECTS.md](../../FOUND_DEFECTS.md) for tracked items. Index: [ARCHITECTURE.md](../official/ARCHITECTURE.md).
 
 > Generated 2026-04-10. Based on comprehensive analysis of the full codebase.
 

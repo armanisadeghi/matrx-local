@@ -35,8 +35,10 @@ frontend on the same machine reaches it directly). Deliberately opting a dev
 engine into the shared channel is safe when the conversation targets one
 instance; untargeted legacy calls remain first-claim-wins.
 
-Tier 2 instance-scoped targeting is implemented from the design in
-[docs/TIER2_DESKTOP_INSTANCE_TARGETING.md](../../../docs/TIER2_DESKTOP_INSTANCE_TARGETING.md).
+Tier 2 instance-scoped targeting is implemented per the wire contract in
+`common-docs/systems/client-tool-delegation/FEATURE.md` §2.7 (Desktop pending-call claim) —
+the repo-local design doc (`docs/TIER2_DESKTOP_INSTANCE_TARGETING.md`) was deleted 2026-08-20
+as superseded (centralization sweep, doc-migration row 33).
 
 ## The pipeline
 

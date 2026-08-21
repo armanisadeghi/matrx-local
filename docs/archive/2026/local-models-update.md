@@ -1,3 +1,7 @@
+> ARCHIVED 2026-08-20 — moved from `docs/`. Dated market-research snapshot ("arena.ai rankings as
+> of March 20, 2026") superseded by later work in `docs/CDN_ASSETS_PLAN.md`'s ratified default
+> model. Doc-migration board row 33.
+
 # Complete Local LLM Model List — Best Open Source for llama.cpp (GGUF)
 
 *All models released within the last 180 days (after September 2025). Verified on arena.ai rankings as of March 20, 2026.*

@@ -7,14 +7,18 @@ owner-context: local SQLite as a structural mirror of the canonical cloud DB; ch
 
 # Canonical local DB mirror + chat sync — handoff
 
-## Arman's vision (verbatim intent)
+## Vision
 
-"We're supposed to have a cloud based database … sync the database with a
-local database so that the user would have an identical copy of all of their
-data that are relevant, including system data that is not secretive … make
-sure the system works as well as possible even when they don't have Internet
-access." The cloud DB is the spec — never local docs or local table shapes
-(project `txzxabzwovsujtloxrus`).
+Arman's verbatim intent for the local DB mirror lives at
+`common-docs/systems/desktop/VISION.md` § Local DB mirror (moved there 2026-08-20,
+centralization sweep). One added caution not in that copy: the cloud DB is the spec —
+never local docs or local table shapes, and never the retired Supabase project
+`txzxabzwovsujtloxrus` (always address the platform DB by URL, `db.matrxserver.com`).
+
+Cross-reference: `common-docs/systems/desktop/HANDOFF.md` § "Additional cross-repo remaining
+work" carries P1 mirror items (per-user partitioning, dirty-column outbox, NULL clears, conflict
+UI, reconcile backstop) folded in from a since-deleted snapshot handoff — some may duplicate the
+"Remaining work" list below; dedup before acting on both.
 
 ## Done (2026-07-13 — chat system SHIPPED and exercised live)
 

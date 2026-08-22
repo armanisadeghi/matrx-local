@@ -15,7 +15,7 @@ contract conversation, not a test edit.
   main.py Phase 2c: 10-min incremental pull + pending push, daily full
   reconcile, credentials from the persisted `auth_tokens` row). The watcher
   auto-starts on documents traffic and in the auto-sync tick.
-- `file_manager.py` — note files under `~/matrx-notes/`, `.sync/state.json`
+- `file_manager.py` — note files under `MATRX_NOTES_DIR` (default `~/Documents/Matrx/Notes/`), `.sync/state.json`
   checkpoint, `.sync/conflicts/<id>/{local,remote}.md`. Records access
   evidence into the canonical access-health service; holds NO access state.
 - `access_resources.py` — registers the documents-domain resources with the

@@ -298,10 +298,12 @@ def _os_documents_dir() -> Path:
 # Root of all user-visible Matrx content
 MATRX_USER_DIR = Path(os.getenv("MATRX_USER_DIR", str(_os_documents_dir() / "Matrx")))
 
-# Notes: .md and .txt files — local is source of truth, Supabase is sync target
+# Notes: .md and .txt files — local replica of cloud `workbench.notes`; bidirectional
+# automatic sync (docs/SYNC_CONTRACT.md). The cloud is the durable source of truth.
 MATRX_NOTES_DIR = Path(os.getenv("MATRX_NOTES_DIR", str(MATRX_USER_DIR / "Notes")))
 
-# Files: binary files (PDF, DOCX, XLSX, images, audio, video) — S3 sync on demand
+# Files: binary files (PDF, DOCX, XLSX, images, audio, video) — replica of the matrx-files
+# service, mode-gated bidirectional sync (docs/SYNC_CONTRACT.md). Not S3.
 MATRX_FILES_DIR = Path(os.getenv("MATRX_FILES_DIR", str(MATRX_USER_DIR / "Files")))
 
 # Code: user's git repos (visible to user — agent uses these for their projects)

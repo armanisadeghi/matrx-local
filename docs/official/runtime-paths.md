@@ -45,4 +45,5 @@ Port rules summary: [CLAUDE.md](../../CLAUDE.md) (22140, scan 22140–22159).
 | Transcription / LLM config | App data dir (`transcription.json`, `llm.json`, `*.bin`, `*.gguf`) |
 | Diagnostics | `~/.matrx/diagnostics/` |
 
-Storage philosophy: [local-storage-architecture.md](../local-storage-architecture.md).
+Disk layout: [local-storage-architecture.md](../local-storage-architecture.md). Sync doctrine:
+[SYNC_CONTRACT.md](../SYNC_CONTRACT.md).

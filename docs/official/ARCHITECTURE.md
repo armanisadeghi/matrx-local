@@ -49,7 +49,7 @@ Default engine: `http://127.0.0.1:22140` (scan 22140–22159). Discovery: `~/.ma
 |-------|--------|
 | [whisper-transcription-integration.md](../whisper-transcription-integration.md) | Rust Whisper |
 | [local-llm-inference-integration.md](../local-llm-inference-integration.md) | llama-server |
-| [local-storage-architecture.md](../local-storage-architecture.md) | Local-first storage |
+| [local-storage-architecture.md](../local-storage-architecture.md) | On-disk layout (sync doctrine: [SYNC_CONTRACT.md](../SYNC_CONTRACT.md)) |
 | [proxy-integration-guide.md](../proxy-integration-guide.md) · [proxy-testing-guide.md](../proxy-testing-guide.md) | Cloud-to-local proxy |
 | [WEB_CLIENT_INTEGRATION.md](../WEB_CLIENT_INTEGRATION.md) | Web ↔ desktop engine |
 | [activity-log.md](../activity-log.md) | HTTP logging + SSE |

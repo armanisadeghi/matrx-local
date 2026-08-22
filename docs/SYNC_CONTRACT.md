@@ -14,7 +14,8 @@
 ## The doctrine
 
 **Everything lives in the cloud. The local SQLite database (`~/.matrx/matrx.db`)
-and the local files (`~/matrx-notes/`, `~/.matrx/settings.json`) are a full
+and the local files (`MATRX_NOTES_DIR`, default `~/Documents/Matrx/Notes/`;
+`~/.matrx/settings.json`) are a full
 FIRST-ACCESS REPLICA — not a competing server.**
 
 - **Offline is unnoticeable.** Zero connectivity for minutes, hours, or days
@@ -169,5 +170,13 @@ and note sync is fully automatic (engine auto-sync loop + Realtime + watcher).
 | 1 | ~~Conversations/messages are local-only.~~ **CLOSED 2026-07-13**: the canonical chat mirror + `chat_sync` engine push local turns to `chat.*` and pull cloud conversations incrementally; the `sync_queue` outbox has real writers. Remaining nuance: conversation content flattens non-text message parts to text locally (`_normalize_message`), and `chat.request` rows are not produced by a client host (the user_request↔conversation link rides `user_request.metadata.conversation_id`). | `app/services/chat_sync/`, `app/services/ai/conversation_handler.py` | Closed; characterization-pinned (`test_chat_mirror_characterization.py`) |
 | 3 | **Settings conflict strategy is timestamp LWW,** not both-versions-preserved. Acceptable because the cloud row is per-instance (self vs self), but a frontend remote-edit feature would need real conflict handling. | `app/services/cloud_sync/settings_sync.py` | Documented as accepted divergence |
 | 4 | **`full_sync` does not pull remote deletions** — `get_all_notes_with_hashes` filters to live rows by design; a remotely-deleted note whose file still exists locally gets re-pushed (cloud row stays tombstoned; the delete then arrives via the next `pull_changes`). Eventually consistent, but a `full_sync`-only user sees deleted notes linger locally. | `app/services/documents/sync_engine.py::full_sync` | Documented; incremental path (`pull_changes`) is the delete-propagation channel |
-| 5 | **Stale "SQLite is the single source of truth" claims** remain in out-of-scope files: `app/api/chat_routes.py`, `app/services/ai/conversation_handler.py`, `app/config.py` (notes comment). | see left | Tracked in `.matrx/AGENT_TASKS.md` |
+| 5 | **Stale "SQLite is the single source of truth" claims** remain in out-of-scope files: `app/api/chat_routes.py`, `app/services/ai/conversation_handler.py`. (`app/config.py`'s notes and files comments were corrected 2026-08-22.) | see left | Tracked in `.matrx/AGENT_TASKS.md` |
 | 6 | **`sync_all()` reports `"success"` for skipped entities** (no client / no JWT); the truthful state lives only in `sync_meta.status='skipped'`. | `app/services/local_db/sync_engine.py` | Pinned as characterization (`test_sync_all_with_no_client_reports_success_everywhere`); candidate for a truthful `"skipped"` aggregate later |
+
+# Changelog
+
+- 2026-08-22 — dedupe-and-verify pass: corrected the notes-dir path in the doctrine statement
+  (`~/matrx-notes/` appears nowhere in the code; the real value is `MATRX_NOTES_DIR`, default
+  `~/Documents/Matrx/Notes/`), and closed the `app/config.py` half of gap 5. This document was
+  elected the one home for sync doctrine over `docs/local-storage-architecture.md`, which
+  claimed the opposite ownership model and has been rewritten as a disk-layout reference.

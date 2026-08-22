@@ -109,12 +109,15 @@ Marked "coming soon" in the + menu; each item names its frontend reference:
    NOTE: bundle name `desktop` is TAKEN by the chrome-extension taxonomy.
 9. **`loaded_categories` hint** in the envelope (skip re-discovery across
    turns) — payload field exists, UI doesn't track it yet.
-10. **Instance targeting (Tier 2)** — FLAG (contradiction, unresolved 2026-08-20): this row
-    claims two engines on one account still race, but `app/services/delegation/FEATURE.md` and
-    `common-docs/systems/clients/client-tool-delegation/FEATURE.md` §2.7 (Desktop pending-call claim,
-    verified System of Record) both describe instance-scoped targeting as implemented. Verify
-    against live code before treating either claim as current; the repo-local design doc
-    (`docs/TIER2_DESKTOP_INSTANCE_TARGETING.md`) was deleted 2026-08-20 as superseded.
+10. **Instance targeting (Tier 2)** — **DONE, not a gap.** The "two engines on one account
+    race" claim was false and is retired (verified live 2026-08-22): `chat.tool_call` carries
+    `target_instance_id` / `claimed_by_instance_id` / `claimed_at` / `claim_expires_at` in the
+    live DB; aidream's `_claim_pending_calls_for_instance`
+    (`aidream/services/ai_execution/tool_results.py`) claims rows in one atomic
+    `UPDATE … RETURNING` under a 6-hour lease, scoped to
+    `target_instance_id IS NULL OR = :caller`; this engine sends `instance_id`
+    (`app/services/delegation/client.py:173`); the picker route `/desktop-instances` is mounted.
+    The contract is `common-docs/systems/clients/client-tool-delegation/FEATURE.md` §2.7.
 
 ## Unification note (Arman's directive)
 

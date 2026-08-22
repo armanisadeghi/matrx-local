@@ -1,233 +1,112 @@
-# Local Storage Architecture
+# Local Storage Layout — what lives where on disk
 
-> **FLAGGED 2026-08-20 (centralization sweep, doc-migration row 33) — contradicts ratified
-> doctrine.** This doc's "local first, cloud is an afterthought, sync is cloud→local" model
-> directly conflicts with `docs/SYNC_CONTRACT.md`, which is cited by this repo's `CLAUDE.md` as
-> **the ratified doctrine** ("Everything lives in the cloud. The local SQLite database … is a
-> full FIRST-ACCESS REPLICA — not a competing server"). Not silently resolved — verify against
-> live code (`app/services/local_db/`, `app/services/documents/`) before trusting either
-> document; `SYNC_CONTRACT.md` is the higher-authority doc pending that verification.
-
-> **Core principle: Local first. Always. The cloud is an afterthought.**
+> **Scope: on-disk layout only.** Every question about *what syncs, in which direction, and
+> who wins a conflict* is answered by [`SYNC_CONTRACT.md`](SYNC_CONTRACT.md) — the ratified,
+> test-pinned doctrine this repo's `CLAUDE.md` cites. This document deliberately states no
+> sync behaviour of its own.
 >
-> This app exists to do things on the user's machine. If we wanted cloud storage,
-> we'd stay in the cloud. Everything works offline. Sync happens when convenient,
-> never when critical, never blocking, never causes a failure.
+> **Verified against live code 2026-08-22** (`app/config.py`, `app/preflight.py`,
+> `app/services/documents/file_manager.py`, `app/services/local_db/mirror.py`,
+> `app/services/cloud_sync/instance_manager.py`).
 
----
+## The doctrine this document used to contradict
 
-## The Golden Rules
+This file was written as a pre-doctrine design proposal and led with *"Local first. Always.
+The cloud is an afterthought… sync is almost always cloud → local."* **That model is dead and
+was never built.** The ratified doctrine is the opposite ownership call, and the code
+implements it: everything lives in the cloud, the local SQLite database and local files are a
+full FIRST-ACCESS REPLICA, and the notes / chat / settings / user-files subsystems all sync
+**bidirectionally and automatically**. Arman's desktop vision says the same thing —
+*"NOTHING should be set up to just be local on the user's machine. All settings and configs
+must go to the web and be controllable from the web as well"*
+(`common-docs/systems/clients/desktop/VISION.md`). "Local-first" in that vision names the
+*experience* — instant reads, full offline writes — not data ownership.
 
-1. **Every operation writes locally first.** If local succeeds, the operation succeeded. Full stop.
-2. **Cloud sync never blocks, never fails the user.** Fire-and-forget. No connection? No problem. Queue it for later.
-3. **Sync is almost always cloud → local**, not the other way. The user comes to this app to pull things down and work locally.
-4. **When conflicts happen, save both copies.** Never auto-merge, never discard. Let the user decide.
-5. **Never sync during heavy agent work.** When the agent is spinning through hundreds of thousands of tokens, the last thing we want is network traffic. Sync is a calm-time activity.
-6. **Binary files sync to S3, not Supabase.** And never in real time — always on-demand or scheduled.
+## User-visible root
 
----
-
-## Directory Structure
-
-The user-visible root is called `Matrx` inside the OS-native documents folder.
-
-### OS-native documents folder
+The root is `Matrx` inside the OS-native documents folder (`config._os_documents_dir()`).
 
 | OS | Native documents folder | Our root |
 |----|------------------------|----------|
-| Windows | `C:\Users\<user>\Documents` | `C:\Users\<user>\Documents\Matrx\` |
-| macOS | `/Users/<user>/Documents` | `/Users/<user>/Documents/Matrx/` |
-| Linux | `~/Documents` (XDG) | `~/Documents/Matrx/` |
+| Windows | `%USERPROFILE%\Documents` | `…\Documents\Matrx\` |
+| macOS | `~/Documents` | `~/Documents/Matrx/` |
+| Linux | `$XDG_DOCUMENTS_DIR`, else `~/Documents` | `~/Documents/Matrx/` |
 
-> **Why native Documents?** Users can find their files with File Explorer / Finder without knowing anything about our app. It's their data — they own it, it should be where they expect it.
-
-```
-~/Documents/Matrx/                     ← user-visible root (env: MATRX_USER_DIR)
-  Notes/                               ← .md and .txt files (env: MATRX_NOTES_DIR)
-    Work/
-      project-plan.md
-    Personal/
-      ideas.md
-  Files/                               ← binary files: PDF, DOCX, XLSX, PNG, MP3, MP4, etc. (env: MATRX_FILES_DIR)
-    reports/
-      q1-2026.pdf
-    images/
-      diagram.png
-  Code/                                ← user's git repos (visible to user) (env: MATRX_CODE_DIR)
-    my-project/
-      ...
-```
-
-### Engine internals (hidden from user)
+> **Why native Documents?** Users can find their files in Finder / File Explorer without
+> knowing anything about our app. It's their data — it should be where they expect it.
 
 ```
-~/.matrx/                              ← engine config root (env: MATRX_HOME_DIR)
-  local.json                           ← engine discovery (port, pid, url)
-  settings.json                        ← engine settings
-  instance.json                        ← device identity
-  data/                                ← structured JSON: prompts, agent defs, tool configs
-  workspaces/                          ← agent working copies of repos (never shown to user)
-  .sync/                               ← sync state files, conflict queue
-    state.json                         ← last-synced versions, hashes
-    queue.json                         ← pending outbound sync items
-    conflicts/                         ← conflict pairs (local + remote copy) awaiting user resolution
+~/Documents/Matrx/            ← MATRX_USER_DIR
+  Notes/                      ← MATRX_NOTES_DIR — .md and .txt
+    .sync/                    ← sync state for the notes subsystem, INSIDE the notes dir
+      state.json              ← device_id, last_pull_at, note_hashes
+      mappings.json
+      conflicts/<note_id>/    ← {local,remote}.md pairs awaiting user resolution
+  Files/                      ← MATRX_FILES_DIR — binary files (matrx-files replica)
+  Code/                       ← MATRX_CODE_DIR — the user's own git repos
 ```
 
-### Engine cache / temp (platform-appropriate, never synced)
+Every path is overridable by the identically-named environment variable.
+
+## Engine internals (hidden from the user)
 
 ```
-Windows:  %LOCALAPPDATA%\MatrxLocal\cache\
+~/.matrx/                     ← MATRX_HOME_DIR
+  local.json                  ← engine discovery: port, pid, url, tunnel (app/preflight.py)
+  settings.json               ← engine settings blob (synced; see SYNC_CONTRACT)
+  instance.json               ← device identity (instance_id)
+  matrx.db                    ← the local SQLite replica
+  mirror/                     ← per-schema canonical mirror DBs, e.g. mirror/chat.db
+  data/                       ← MATRX_DATA_DIR — prompts, agent defs, tool configs
+  workspaces/                 ← MATRX_WORKSPACES_DIR — agent working copies of repos
+```
+
+## Cache / temp (platform-appropriate, never synced)
+
+`config._platform_cache_dir()`:
+
+```
+Windows:  %LOCALAPPDATA%\MatrxLocal\
 macOS:    ~/Library/Caches/MatrxLocal/
-Linux:    ~/.cache/matrx-local/
-  screenshots/
-  audio/
-  code_saves/
-  extracted/
+Linux:    ~/.cache/matrx-local/   (XDG)
+  code_saves/  screenshots/  audio/  extracted/
 ```
 
----
+## The storage categories, and who owns their sync
 
-## The 5 Storage Categories
+| Category | On disk | Sync owner (see SYNC_CONTRACT for behaviour) |
+|---|---|---|
+| Notes | `MATRX_NOTES_DIR` + SQLite `notes` | `app/services/documents/` ↔ cloud `workbench.notes` |
+| User files (binary) | `MATRX_FILES_DIR` + mirrored `files.files` | `app/services/file_sync/` ↔ the matrx-files service |
+| Chat | `~/.matrx/mirror/chat.db` | `app/services/chat_sync/` ↔ cloud `chat.*` |
+| Code / agent workspaces | `MATRX_CODE_DIR`, `~/.matrx/workspaces/` | **None — git is the sync mechanism.** Never pushed to cloud storage by us |
+| Structured data / config | `~/.matrx/data/`, `settings.json` | `app/services/cloud_sync/` + the pull-only catalog engine |
+| Engine internals & cache | `~/.matrx/*`, platform cache dir | **Never synced** |
 
-### 1. Notes
-**What:** `.md` and `.txt` files the user writes. Pure text, no binary.
+**There is no S3 path for user files.** The earlier plan to push binaries to S3 behind a
+Supabase `user_files` manifest was never built and is superseded by the matrx-files replica
+(mode-gated `off | pointers | full`, automatic, watcher-driven). No `boto3` user-file writer
+exists in `app/` outside the vendored `z_from_matrx` audio package.
 
-**Local:** `~/Documents/Matrx/Notes/` — this is the source of truth.
-**Cloud:** Supabase `notes` table — text content + metadata. A mirror, not the master.
+## Naming: partially applied, and that is the current state
 
-**Sync behavior:**
-- Write local immediately, always.
-- Queue a background push to Supabase. If it fails, retry later. Never block.
-- Pull from Supabase on user request, on timer, or on startup (not during agent work).
-- Conflict = save two files (`note.md` and `note.conflict-TIMESTAMP.md`), notify user.
+The directory plan above shipped. The accompanying rename did **not**, and the old names are
+still the live ones — do not document them as renamed:
 
-**Tables:** `notes`, `note_folders` (migration 001 — already applied)
+| Planned | Actual today |
+|---|---|
+| `notes_routes.py` | `app/api/document_routes.py` |
+| `NotesFileManager` / `notes_file_manager.py` | `app/services/documents/file_manager.py` |
+| `/notes/*` endpoints | `/documents/*` and `/notes/*` both live in `document_routes.py` |
+| `DOCUMENTS_BASE_DIR` retired | still exported as a deprecated alias of `MATRX_NOTES_DIR` |
 
----
+# Changelog
 
-### 2. Files (binary)
-**What:** PDFs, Word docs, spreadsheets, images, audio, video. Anything binary.
-
-**Local:** `~/Documents/Matrx/Files/` — source of truth.
-**Cloud:** Amazon S3 — on-demand only, never real-time.
-
-**Sync behavior:**
-- All operations are purely local.
-- User explicitly triggers upload to S3 (button, scheduled job).
-- Download from S3 on user request only.
-- No automatic sync, ever. These files can be gigabytes.
-- Conflict = both copies kept, user resolves.
-
-**No database tables for file content** — S3 object keys stored in a Supabase `user_files` manifest table (just metadata: name, size, s3_key, hash, last_modified).
-
----
-
-### 3. Code / Agent Workspaces
-**What:** Git repositories. Some the user owns and sees. Some are agent working copies (hidden).
-
-**User repos:** `~/Documents/Matrx/Code/` — visible.
-**Agent workspaces:** `~/.matrx/workspaces/` — hidden.
-
-**Sync behavior:**
-- **None from our side.** Git is the sync mechanism for code.
-- We never touch `node_modules`, `.venv`, build artifacts.
-- We never push code to S3 or Supabase.
-- Agent workspaces are ephemeral — created for a task, deleted when done (or kept for inspection).
-
----
-
-### 4. Structured Data / Config
-**What:** Prompts, agent definitions, tool configs, workflow definitions, user preferences. Machine-readable JSON.
-
-**Local:** `~/.matrx/data/` — working copy.
-**Cloud:** Supabase JSONB tables — source of truth for this category (because it originates in the cloud).
-
-**Sync behavior:**
-- Cloud → local on startup and on demand. This is the primary direction.
-- Local → cloud when user explicitly saves/publishes a config.
-- Small enough to sync instantly as fire-and-forget when connected.
-- A failed sync never blocks anything — local copy works fine offline.
-
----
-
-### 5. Engine Internals
-**What:** Discovery file, device identity, logs, screenshots, temp files, cache.
-
-**Local:** `~/.matrx/` and platform cache dir.
-**Cloud:** Nothing. Ever.
-
----
-
-## What "Sync" Actually Means
-
-Sync is **not** a real-time operation. It is:
-
-1. **A background queue** — operations are logged locally and pushed when convenient.
-2. **A user-triggered action** — "Sync Now" button that pushes/pulls on demand.
-3. **A startup check** — pull latest from cloud when the engine starts (not during agent work).
-4. **A scheduled job** — optional timer, user-configurable, defaults to off.
-
-### Conflict resolution
-- Never auto-merge.
-- Never discard either version.
-- Save both: `filename.md` (local) and `filename.conflict-20260302-143022.md` (remote).
-- Show a conflict badge in the UI. User picks which to keep, or keeps both.
-
----
-
-## What Needs to Change in the Code
-
-### config.py
-- Add `MATRX_USER_DIR` — OS-native Documents/Matrx path
-- Add `MATRX_NOTES_DIR` — Notes subfolder (replaces `DOCUMENTS_BASE_DIR`)
-- Add `MATRX_FILES_DIR` — Files subfolder (binary)
-- Add `MATRX_CODE_DIR` — Code subfolder (user repos)
-- Add `MATRX_WORKSPACES_DIR` — Agent workspaces (hidden, under `~/.matrx/`)
-- Keep `MATRX_HOME_DIR` for engine internals
-
-### document_routes.py (rename to notes_routes.py)
-- All CRUD: write local first, then fire-and-forget Supabase sync
-- List/read: always from local filesystem, never Supabase
-- Supabase 404/500/timeout: log it, queue for retry, return success to caller
-- Remove all code that blocks on Supabase
-
-### New: sync_routes.py
-- `POST /sync/notes/push` — push local notes to Supabase
-- `POST /sync/notes/pull` — pull Supabase notes to local
-- `GET /sync/status` — pending queue size, last sync time, conflicts
-- `GET /sync/conflicts` — list conflict files
-- `POST /sync/conflicts/{id}/resolve` — user picks a version
-
-### New: files_routes.py
-- `GET /files` — list local Files directory
-- `POST /files/upload` — upload a file to S3 (user-triggered)
-- `POST /files/download` — download a file from S3 (user-triggered)
-- `GET /files/s3` — list files available in S3 manifest
-
----
-
-## Naming Conventions Going Forward
-
-| Old name | New name | Why |
-|----------|----------|-----|
-| `DOCUMENTS_BASE_DIR` | `MATRX_NOTES_DIR` | Documents = binary files to most people; Notes = text |
-| `document_routes.py` | `notes_routes.py` | Matches what the data actually is |
-| `DocumentFileManager` | `NotesFileManager` | Same reason |
-| `/documents/*` endpoints | `/notes/*` endpoints | API clarity |
-| `note_folders` (Supabase) | keep as-is | Already in DB, migration applied |
-
-> The Supabase table is named `note_folders` which is actually correct. The confusion was naming the *local file manager* and *API routes* "documents" when they manage notes.
-
----
-
-## Current State vs. Target State
-
-| Component | Current | Target |
-|-----------|---------|--------|
-| `document_routes.py` | Supabase first, local as side-effect | Local first, Supabase as background queue |
-| `file_manager.py` | Correct foundation | Keep, rename to `notes_file_manager.py` |
-| `supabase_client.py` | Called on every CRUD operation | Only called from sync operations |
-| Config paths | `DOCUMENTS_BASE_DIR` → `~/.matrx/documents` | `MATRX_NOTES_DIR` → `~/Documents/Matrx/Notes` |
-| Binary files | Not implemented | `MATRX_FILES_DIR` → `~/Documents/Matrx/Files` + S3 sync |
-| Agent workspaces | Not implemented | `~/.matrx/workspaces/` |
-| Sync | Blocking, inline | Background queue, user-triggered, fire-and-forget |
+- 2026-08-22 — **Rewritten (dedupe-and-verify).** The "local first, the cloud is an
+  afterthought, sync is cloud → local" doctrine and the entire "What needs to change in the
+  code" plan were **deleted**, not flagged: they contradicted `SYNC_CONTRACT.md` and the
+  desktop VISION, and live code implements the opposite. What survived is the disk layout,
+  re-verified line by line. Corrections made in the process: `.sync/` lives under the **notes
+  dir**, not `~/.matrx/`; `~/.matrx/mirror/` and `matrx.db` were missing entirely; the notes
+  cloud table is `workbench.notes`, not `notes`; binaries go to the matrx-files service, not
+  S3; sync is automatic (600 s loop + watcher + realtime), not "scheduled, defaults to off".

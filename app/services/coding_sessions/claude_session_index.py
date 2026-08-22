@@ -32,6 +32,7 @@ from typing import Any
 
 MAX_INDEX_FILES = 50_000
 MAX_INDEX_FILE_BYTES = 8_388_608
+MAX_LEDGER_BYTES = 33_554_432
 _TITLE_MAX_CHARS = 160
 
 
@@ -47,6 +48,13 @@ class ClaudeSessionIndexEntry:
     worktree_name: str | None
     is_archived: bool | None
     last_activity_at: int
+    # Pins + categories come from the canonical sidebar ledger, not the index
+    # records — the desktop app keeps them in its localStorage, which the
+    # machine's session-sync agent extracts into the ledger. None = the ledger
+    # has no opinion (never observed), so nothing is sent for that field.
+    is_pinned: bool | None = None
+    pinned_rank: int | None = None
+    category: str | None = None
     # Every record file carrying this ``cliSessionId``, across accounts. Local
     # only — never part of any payload. See the module docstring.
     record_paths: tuple[Path, ...] = ()
@@ -64,7 +72,37 @@ class ClaudeSessionIndexEntry:
             payload["worktree_name"] = self.worktree_name
         if self.is_archived is not None:
             payload["is_archived"] = self.is_archived
+        if self.is_pinned is not None:
+            payload["is_pinned"] = self.is_pinned
+            if self.is_pinned and self.pinned_rank is not None:
+                payload["pinned_rank"] = self.pinned_rank
+        if self.category:
+            payload["category"] = self.category
         return payload
+
+
+def default_ledger_path() -> Path:
+    """The canonical sidebar ledger the session-sync agent maintains."""
+    configured = os.environ.get("CLAUDE_SIDEBAR_LEDGER")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".claude/claude-code-sidebar-state.json"
+
+
+def read_sidebar_ledger(path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Map record filename ('local_<id>.json') -> ledger fields. {} if absent."""
+    ledger_path = path or default_ledger_path()
+    try:
+        if ledger_path.stat().st_size > MAX_LEDGER_BYTES:
+            return {}
+        data = json.loads(ledger_path.read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        name: fields for name, fields in data.items() if isinstance(fields, dict)
+    }
 
 
 def default_sessions_root() -> Path:
@@ -171,10 +209,22 @@ def read_session_index(
         if entry.cli_session_id not in entries or rank > freshness[entry.cli_session_id]:
             entries[entry.cli_session_id] = entry
             freshness[entry.cli_session_id] = rank
-    entries = {
-        session_id: replace(entry, record_paths=tuple(paths[session_id]))
-        for session_id, entry in entries.items()
-    }
+    ledger = read_sidebar_ledger()
+    enriched: dict[str, ClaudeSessionIndexEntry] = {}
+    for session_id, entry in entries.items():
+        record_paths = tuple(paths[session_id])
+        fields = ledger.get(record_paths[0].name, {}) if record_paths else {}
+        is_pinned = fields.get("isPinned")
+        rank = fields.get("pinnedRank")
+        category = _clean_text(fields.get("categoryName"))
+        enriched[session_id] = replace(
+            entry,
+            record_paths=record_paths,
+            is_pinned=is_pinned if isinstance(is_pinned, bool) else None,
+            pinned_rank=rank if isinstance(rank, int) else None,
+            category=category,
+        )
+    entries = enriched
     totals["records"] = len(entries)
     return entries, totals
 
@@ -183,6 +233,8 @@ __all__ = [
     "MAX_INDEX_FILES",
     "MAX_INDEX_FILE_BYTES",
     "ClaudeSessionIndexEntry",
+    "default_ledger_path",
     "default_sessions_root",
     "read_session_index",
+    "read_sidebar_ledger",
 ]

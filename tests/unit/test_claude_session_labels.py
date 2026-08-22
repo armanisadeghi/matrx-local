@@ -163,6 +163,51 @@ def test_index_reader_keeps_the_newest_record_and_leaks_no_raw_path(
     assert "/Users/someone" not in json.dumps(payload)
 
 
+def test_index_reader_joins_pins_and_categories_from_the_ledger(
+    tmp_path: Path, monkeypatch
+) -> None:
+    session_id = str(uuid4())
+    root = tmp_path / "claude-code-sessions"
+    record_path = _write_index_record(
+        root,
+        cli_session_id=session_id,
+        title="Pinned work",
+        lastActivityAt=100,
+        cwd="/Users/someone/code/aidream",
+    )
+    ledger = tmp_path / "claude-code-sidebar-state.json"
+    ledger.write_text(
+        json.dumps(
+            {
+                record_path.name: {
+                    "title": "Pinned work",
+                    "titleSource": "user",
+                    "isArchived": False,
+                    "isPinned": True,
+                    "pinnedRank": 4,
+                    "categoryName": "Outreach System",
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("CLAUDE_SIDEBAR_LEDGER", str(ledger))
+    entries, _totals = read_session_index(root)
+    entry = entries[session_id]
+    assert entry.is_pinned is True
+    assert entry.pinned_rank == 4
+    assert entry.category == "Outreach System"
+    payload = entry.metadata_payload()
+    assert payload["is_pinned"] is True
+    assert payload["pinned_rank"] == 4
+    assert payload["category"] == "Outreach System"
+    # A session the ledger has never observed sends no pin/category fields.
+    other = str(uuid4())
+    _write_index_record(root, cli_session_id=other, title="Plain", lastActivityAt=1)
+    entries, _totals = read_session_index(root)
+    assert "is_pinned" not in entries[other].metadata_payload()
+    assert "category" not in entries[other].metadata_payload()
+
+
 def test_index_reader_survives_corrupt_and_missing_roots(tmp_path: Path) -> None:
     root = tmp_path / "claude-code-sessions"
     assert read_session_index(root) == (

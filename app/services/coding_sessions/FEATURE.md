@@ -358,6 +358,14 @@ Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding/codin
   `SessionMetadata` observation per session whose Claude labels changed. Outbound: see below. `GET
   /coding-session/claude/labels/status` reports index availability and the last pass;
   `?dry_run=true` reports without enqueueing and without opening a single Claude file.
+- **Pins + categories ride the same observation (2026-08-21).** The desktop app keeps pins and
+  custom sidebar groups in its localStorage LevelDB, which the machine's session-sync agent
+  extracts into the canonical ledger (`~/.claude/claude-code-sidebar-state.json`; see that
+  machine's `~/.claude/CLAUDE-CODE-SESSION-SYNC.md`). `claude_session_index.read_session_index`
+  joins the ledger by record filename (`CLAUDE_SIDEBAR_LEDGER` overrides the path) and the
+  payload gains `is_pinned` / `pinned_rank` / `category`; the server mirrors pinned onto
+  `chat.conversation.is_favorite` and category into the conversation's bridge metadata. A
+  session the ledger has never observed sends neither field.
 - **The server list is the allowlist for BOTH directions.** Labels of local sessions AI Matrx never
   mirrored never leave this machine, and a session AI Matrx does not own is never written to on
   disk. This is the whole privacy boundary of the feature — never widen it to "every local session".

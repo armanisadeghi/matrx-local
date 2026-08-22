@@ -78,6 +78,28 @@ describe("Cloud Chat request contract", () => {
     expectRequiredStartFields(request.body);
   });
 
+  it("routes a mandate:* reference to the Mandate start route with the same body", () => {
+    const request = buildCloudChatRequest(
+      conversation(),
+      "hi",
+      "test-model",
+      "cloud",
+      null,
+      "http://127.0.0.1:22240",
+      "https://api.example.test",
+      { agentId: "mandate:local.cloud_chat", organizationId: "org-1" },
+      [],
+      null,
+      RUN_CONTROLS,
+      [],
+    );
+
+    expect(request.url).toBe("https://api.example.test/api/ai/mandates/local.cloud_chat");
+    expect(request.body.user_input).toBe("hi");
+    expect(request.body.organization_id).toBe("org-1");
+    expectRequiredStartFields(request.body);
+  });
+
   it("uses the continue route without start-only fields for an existing conversation", () => {
     const request = buildCloudChatRequest(
       conversation({ cloudConversationId: "existing-conversation" }),

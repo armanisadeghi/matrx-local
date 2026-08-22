@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchAIDreamModels } from "@/lib/aidream-client";
+import {
+  fetchAIDreamModels,
+  fetchMandateResolution,
+  resolveConversationOrganizationId,
+} from "@/lib/aidream-client";
+import { mandateKeyFromAgentRef } from "@/lib/agents/mandates";
+import { agentTargetExecutePath } from "@/lib/api/routes/ai";
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import {
   cloudModelDisplayName,
@@ -194,7 +200,14 @@ export function buildCloudChatRequest(
   localModel: string | null,
   engineUrl: string | null | undefined,
   cloudServerUrl: string,
-  options: { agentId?: string; variables?: Record<string, string> } | undefined,
+  options:
+    | {
+        agentId?: string;
+        variables?: Record<string, string>;
+        /** Required by aidream on every NEW cloud conversation (resolved from /auth/whoami). */
+        organizationId?: string;
+      }
+    | undefined,
   allMessages: ChatMessage[],
   clientContext: DesktopClientContext | null,
   runControls: CloudChatRunControls,
@@ -263,11 +276,16 @@ export function buildCloudChatRequest(
     };
   }
 
+  const organizationField = options?.organizationId
+    ? { organization_id: options.organizationId }
+    : {};
+
   if (options?.agentId) {
     const body: Record<string, unknown> = {
       stream: true,
       source_app: CLOUD_SOURCE_APP,
       source_feature: CLOUD_SOURCE_FEATURE,
+      ...organizationField,
       ...(configOverrides ? { config_overrides: configOverrides } : {}),
       ...clientEnvelope,
     };
@@ -275,7 +293,12 @@ export function buildCloudChatRequest(
     if (options.variables && Object.keys(options.variables).length > 0) {
       body.variables = options.variables;
     }
-    return buildConversationStartRequest(`${base}/agents/${options.agentId}`, body);
+    // `options.agentId` is either a concrete agent id or a `mandate:<key>` UI
+    // reference; the latter goes to the Mandate start route (same body).
+    return buildConversationStartRequest(
+      `${base}${agentTargetExecutePath(options.agentId)}`,
+      body,
+    );
   }
 
   const apiMessages = toApiMessages(allMessages);
@@ -293,6 +316,7 @@ export function buildCloudChatRequest(
     max_iterations: 20,
     source_app: CLOUD_SOURCE_APP,
     source_feature: CLOUD_SOURCE_FEATURE,
+    ...organizationField,
     ...(configOverrides ? { config_overrides: configOverrides } : {}),
     ...clientEnvelope,
   });
@@ -1295,6 +1319,10 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       };
 
       let localStatus: LocalLlmStatus | null = null;
+      // What the request builder receives. Identical to `options` except on
+      // the local target with a Mandate-backed choice, where the mandate is
+      // resolved to its agent first (below).
+      let requestOptions: Parameters<typeof buildCloudChatRequest>[7] = options;
       if (executionTarget === "local") {
         localStatus = await refreshLocalLlmStatus();
         if (!localStatus?.registered || !localStatus.canonical_model_name) {
@@ -1310,6 +1338,37 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           });
           runGateRef.current.finish(runId);
           return;
+        }
+        // The local engine mirror only has agent-id routes. Ask the platform
+        // which agent the Mandate resolves to for this user (same precedence
+        // the server uses), then run THAT agent locally. Resolves or refuses —
+        // never a client-side fallback agent.
+        const localMandateKey = mandateKeyFromAgentRef(options?.agentId);
+        if (localMandateKey) {
+          try {
+            const {
+              data: { session },
+            } = await supabase.auth.getSession();
+            if (!session?.access_token) {
+              throw new Error("Sign in before starting a chat.");
+            }
+            const resolution = await fetchMandateResolution(
+              localMandateKey,
+              session.access_token,
+            );
+            requestOptions = { ...options, agentId: resolution.agent_id };
+          } catch (err) {
+            const message = `Could not resolve the default agent (${localMandateKey}): ${
+              err instanceof Error ? err.message : String(err)
+            }`;
+            setRequestError(message);
+            recordPreflightFailure(message, {
+              executionTarget: "local",
+              ...(options?.agentId ? { agentId: options.agentId } : {}),
+            });
+            runGateRef.current.finish(runId);
+            return;
+          }
         }
       }
 
@@ -1547,6 +1606,17 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           ...currentConversation,
           ...routePatch,
         };
+        // A NEW cloud conversation must name its organization; the server
+        // owns that choice (GET /auth/whoami). Continuations carry it already.
+        const startsCloudConversation =
+          executionTarget === "cloud" &&
+          !(requestConversation.cloudConversationId ?? requestConversation.serverConversationId);
+        if (startsCloudConversation) {
+          requestOptions = {
+            ...requestOptions,
+            organizationId: await resolveConversationOrganizationId(token),
+          };
+        }
         const clientContext =
           executionTarget === "cloud"
             ? await buildDesktopClientContext(engineUrl, {
@@ -1561,7 +1631,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           localStatus?.canonical_model_name ?? null,
           engineUrl,
           cloudServerUrl,
-          options,
+          requestOptions,
           allMessages,
           clientContext,
           runControls,

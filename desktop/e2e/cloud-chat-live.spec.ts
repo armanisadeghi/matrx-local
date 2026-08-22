@@ -24,7 +24,7 @@ test.describe("Cloud Chat live integration", () => {
 
     const composer = page.getByPlaceholder("Message AI Matrx...");
     await expect(composer).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole("button", { name: "General Chat" })).toBeVisible({
+    await expect(page.getByRole("button", { name: "Matrx Desktop Agent" })).toBeVisible({
       timeout: 30_000,
     });
 

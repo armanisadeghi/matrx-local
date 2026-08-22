@@ -16,6 +16,8 @@ export type LLMParamModeration = "auto" | "low";
 
 export type LLMParamOutputFormat = "jpeg" | "png" | "webp" | "base64" | "url" | "text" | "json_object" | "json_schema";
 
+export type LLMParamQuality = "low" | "medium" | "high" | "auto";
+
 export type LLMParamReasoningEffort = "auto" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export type LLMParamReasoningSummary = "concise" | "detailed" | "never" | "auto" | "always";
@@ -25,6 +27,8 @@ export type LLMParamRenderQuality = "low" | "medium" | "high" | "auto";
 export type LLMParamResolution = "480p" | "720p" | "1080p" | "4k" | "1K" | "2K" | "4K";
 
 export type LLMParamStyle = "vivid" | "natural";
+
+export type LLMParamTask = "text_to_video" | "image_to_video" | "reference_to_video" | "edit";
 
 export type LLMParamThinkingLevel = "minimal" | "low" | "medium" | "high";
 

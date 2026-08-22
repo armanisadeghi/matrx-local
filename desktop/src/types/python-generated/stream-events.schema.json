@@ -994,7 +994,7 @@
                 "type": "null"
               }
             ],
-            "default": 0.0,
+            "default": 0,
             "title": "Cost"
           }
         },
@@ -1184,7 +1184,7 @@
             "title": "Total Cost"
           },
           "known_cost_subtotal": {
-            "default": 0.0,
+            "default": 0,
             "title": "Known Cost Subtotal",
             "type": "number"
           },
@@ -1352,7 +1352,7 @@
             "type": "null"
           }
         ],
-        "default": 0.0,
+        "default": 0,
         "title": "Cost"
       }
     },
@@ -1542,7 +1542,7 @@
         "title": "Total Cost"
       },
       "known_cost_subtotal": {
-        "default": 0.0,
+        "default": 0,
         "title": "Known Cost Subtotal",
         "type": "number"
       },
@@ -1988,7 +1988,7 @@
         "type": "integer"
       },
       "progress": {
-        "default": 0.0,
+        "default": 0,
         "title": "Progress",
         "type": "number"
       },
@@ -4337,7 +4337,7 @@
         "type": "string"
       },
       "elapsed_seconds": {
-        "default": 0.0,
+        "default": 0,
         "title": "Elapsed Seconds",
         "type": "number"
       },
@@ -5449,7 +5449,7 @@
         "type": "integer"
       },
       "cost": {
-        "default": 0.0,
+        "default": 0,
         "title": "Cost",
         "type": "number"
       },
@@ -5509,7 +5509,7 @@
         "type": "integer"
       },
       "cost": {
-        "default": 0.0,
+        "default": 0,
         "title": "Cost",
         "type": "number"
       },
@@ -6477,7 +6477,7 @@
         "title": "Bottom Left"
       },
       "confidence": {
-        "default": 0.0,
+        "default": 0,
         "title": "Confidence",
         "type": "number"
       },
@@ -8259,7 +8259,7 @@
             "type": "object"
           },
           "confidence": {
-            "default": 0.0,
+            "default": 0,
             "title": "Confidence",
             "type": "number"
           },
@@ -8389,7 +8389,7 @@
             "type": "object"
           },
           "confidence": {
-            "default": 0.0,
+            "default": 0,
             "title": "Confidence",
             "type": "number"
           },

@@ -22,10 +22,9 @@ import {
   useCloudChat,
 } from "@/hooks/use-cloud-chat";
 import type { EngineStatus } from "@/hooks/use-engine";
+import { DEFAULT_CHAT_AGENT } from "@/lib/cloud-agents";
 import { cn } from "@/lib/utils";
 import type { AgentInfo, PromptVariable } from "@/types/agents";
-
-const DEFAULT_GENERAL_CHAT_AGENT_ID = "6b6b4e45-4699-4860-8dea-d8a60e07d69a";
 
 function defaultVariableValues(variables: PromptVariable[]): Record<string, string> {
   const defaults: Record<string, string> = {};
@@ -33,21 +32,6 @@ function defaultVariableValues(variables: PromptVariable[]): Record<string, stri
     if (variable.defaultValue) defaults[variable.name] = variable.defaultValue;
   }
   return defaults;
-}
-
-function findDefaultAgent(agents: AgentInfo[]): AgentInfo | null {
-  return (
-    agents.find((agent) => agent.id === DEFAULT_GENERAL_CHAT_AGENT_ID) ??
-    agents.find(
-      (agent) =>
-        agent.source === "builtin" &&
-        agent.name.trim().toLowerCase() === "general chat",
-    ) ??
-    agents.find((agent) => agent.name.trim().toLowerCase() === "general chat") ??
-    agents.find((agent) => agent.source === "builtin") ??
-    agents[0] ??
-    null
-  );
 }
 
 function CloudEmptyState({ activeAgent }: { activeAgent: AgentInfo | null }) {
@@ -130,13 +114,13 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
     setDraftInsertion({ id: Date.now(), text });
   }, []);
 
+  // The default choice is the `local.cloud_chat` Mandate — a platform answer,
+  // not an agent id — so it needs no agent list to be selectable.
   useEffect(() => {
-    if (defaultAgentApplied || activeAgent || activeConversationId || agents.length === 0) return;
-    const defaultAgent = findDefaultAgent(agents);
-    if (!defaultAgent) return;
-    setActiveAgent(defaultAgent);
+    if (defaultAgentApplied || activeAgent || activeConversationId) return;
+    setActiveAgent(DEFAULT_CHAT_AGENT);
     setDefaultAgentApplied(true);
-  }, [activeAgent, activeConversationId, agents, defaultAgentApplied]);
+  }, [activeAgent, activeConversationId, defaultAgentApplied]);
 
   useEffect(() => {
     if (!activeConversationId) return;
@@ -241,12 +225,9 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   );
 
   const handleNewChat = useCallback(() => {
-    if (!activeAgent) {
-      const defaultAgent = findDefaultAgent(agents);
-      if (defaultAgent) setActiveAgent(defaultAgent);
-    }
+    if (!activeAgent) setActiveAgent(DEFAULT_CHAT_AGENT);
     createConversation();
-  }, [activeAgent, agents, createConversation]);
+  }, [activeAgent, createConversation]);
 
   const handleSelectConversation = useCallback(
     (conversationId: string) => {

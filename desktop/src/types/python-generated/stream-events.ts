@@ -2427,7 +2427,7 @@ export interface ProgressItem {
   id: string;
   text: string;
   completed?: boolean;
-  priority?: "low" | "medium" | "high" | null;
+  priority?: "high" | "medium" | "low" | null;
   estimatedHours?: number | null;
   optional?: boolean;
   category?: string | null;
@@ -2437,7 +2437,7 @@ export interface ProgressItem {
   id: string;
   text: string;
   completed?: boolean;
-  priority?: "low" | "medium" | "high" | null;
+  priority?: "high" | "medium" | "low" | null;
   estimatedHours?: number | null;
   optional?: boolean;
   category?: string | null;
@@ -2489,7 +2489,7 @@ export interface TroubleshootingSolution {
   id: string;
   title: string;
   description?: string | null;
-  priority?: "low" | "medium" | "high" | null;
+  priority?: "high" | "medium" | "low" | null;
   successRate?: number | null;
   tags?: string[];
   steps?: TroubleshootingStep[];
@@ -2499,7 +2499,7 @@ export interface TroubleshootingSolution {
   id: string;
   title: string;
   description?: string | null;
-  priority?: "low" | "medium" | "high" | null;
+  priority?: "high" | "medium" | "low" | null;
   successRate?: number | null;
   tags?: string[];
   steps?: TroubleshootingStep[];

@@ -1,3 +1,7 @@
+import {
+  DEFAULT_CHAT_MANDATE_REF,
+  isMandateAgentRef,
+} from "@/lib/agents/mandates";
 import supabase from "@/lib/supabase";
 import type {
   AgentInfo,
@@ -201,13 +205,37 @@ function agentFromRow(row: AgentListRow): AgentInfo {
   };
 }
 
+/**
+ * Synthetic UI entry for the canonical Cloud Chat Mandate (`local.cloud_chat`).
+ * Always first in the list so a user with no visible agents has a working
+ * choice. The synthetic id is UI state only; execution sends the mandate key
+ * to aidream and the server resolves the agent for the current principal at
+ * run time — an admin repointing the Mandate changes desktop with no deploy.
+ */
+export const DEFAULT_CHAT_AGENT: AgentInfo = {
+  id: DEFAULT_CHAT_MANDATE_REF,
+  name: "Matrx Desktop Agent",
+  description: "Default Matrx agent for Cloud Chat, resolved by the platform when you send.",
+  source: "builtin",
+  variable_defaults: [],
+  settings: {},
+  category: null,
+  tags: [],
+  is_favorite: false,
+  is_owner: false,
+  access_level: "system",
+  created_at: null,
+  updated_at: null,
+};
+
 export async function fetchCloudAgents(): Promise<AgentInfo[]> {
   const { data, error } = await supabase.rpc("agx_get_list_full");
   if (error) throw new Error(error.message);
 
-  return ((data ?? []) as AgentListRow[])
+  const visible = ((data ?? []) as AgentListRow[])
     .filter((row) => row.is_active !== false && row.is_archived !== true)
     .map(agentFromRow);
+  return [DEFAULT_CHAT_AGENT, ...visible];
 }
 
 export async function fetchCloudAgentExecutionFull(
@@ -221,6 +249,19 @@ export async function fetchCloudAgentExecutionFull(
   customTools: unknown;
   uiGates: unknown;
 }> {
+  // A Mandate-backed choice has no client-readable definition: the server
+  // resolves the agent (and its variables) at run time.
+  if (isMandateAgentRef(agentId)) {
+    return {
+      variables: [],
+      contextSlots: [],
+      modelId: null,
+      settings: {},
+      tools: [],
+      customTools: null,
+      uiGates: null,
+    };
+  }
   const { data, error } = await supabase.rpc("agx_get_execution_full", {
     p_agent_id: agentId,
   });

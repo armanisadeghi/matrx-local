@@ -13,6 +13,8 @@
  */
 
 import { getAIDreamServerUrl } from "@/lib/app-config";
+import { mandateResolutionPath } from "@/lib/api/routes/ai";
+import type { components } from "@/types/python-generated/api-types";
 
 // ---------------------------------------------------------------------------
 // Request helpers
@@ -227,4 +229,51 @@ export async function fetchAIDreamToolsForApp(
   opts: RequestOptions = {},
 ): Promise<AIDreamToolsResponse> {
   return aidreamGet<AIDreamToolsResponse>(`/ai-tools/app/${sourceApp}/all`, opts);
+}
+
+// ---------------------------------------------------------------------------
+// Mandates
+// ---------------------------------------------------------------------------
+
+export type MandateResolution = components["schemas"]["MandateResolutionResponse"];
+
+/**
+ * Corresponds to GET /api/mandates/{mandate_key}/resolution (auth required).
+ * Returns the agent the Mandate resolves to for THIS caller — the same
+ * precedence the server applies when it runs the Mandate itself. A Mandate
+ * resolves or refuses: there is no client-side fallback agent.
+ */
+export async function fetchMandateResolution(
+  mandateKey: string,
+  jwt: string,
+  signal?: AbortSignal,
+): Promise<MandateResolution> {
+  return aidreamGet<MandateResolution>(mandateResolutionPath(mandateKey), {
+    jwt,
+    ...(signal ? { signal } : {}),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+interface WhoamiResponse {
+  authenticated: boolean;
+  user_id: string | null;
+  organization_id: string | null;
+}
+
+/**
+ * Corresponds to GET /api/auth/whoami (auth required). Every NEW cloud
+ * conversation must name an `organization_id` (`AgentStartRequest` /
+ * `ChatRequest` require it); the server owns that choice for the caller.
+ * Mirrors matrx-extend's `resolveConversationOrganizationId`.
+ */
+export async function resolveConversationOrganizationId(jwt: string): Promise<string> {
+  const whoami = await aidreamGet<WhoamiResponse>("/auth/whoami", { jwt });
+  if (!whoami.organization_id) {
+    throw new Error("Workspace initialization failed: the server returned no organization.");
+  }
+  return whoami.organization_id;
 }

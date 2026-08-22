@@ -1,6 +1,6 @@
 # Authentication
 
-Supabase instance `txzxabzwovsujtloxrus`. Desktop uses **publishable key** + user JWT — never service role, never `SUPABASE_JWT_SECRET` on the client or engine. External-connection rules: [CLAUDE.md](../../CLAUDE.md).
+Supabase instance at `https://db.matrxserver.com` (Matrx Main). Desktop uses **publishable key** + user JWT — never service role, never `SUPABASE_JWT_SECRET` on the client or engine. External-connection rules: [CLAUDE.md](../../CLAUDE.md).
 
 ---
 

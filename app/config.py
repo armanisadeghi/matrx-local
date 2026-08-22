@@ -175,7 +175,7 @@ MATRX_FILES_URL = os.getenv("MATRX_FILES_URL", MATRX_FILES_URL_DEFAULT)
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://db.matrxserver.com")
 SUPABASE_PUBLISHABLE_KEY = os.getenv(
     "SUPABASE_PUBLISHABLE_KEY",
-    "sb_publishable_4pvkRT-9-_dB0PWqF1sp1w_W9leRIoW",
+    "sb_publishable_scm0jzEJiFUB5ItiqOx5Fg_8BOjB6oA",
 )
 
 # ---------------------------------------------------------------------------

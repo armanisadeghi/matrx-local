@@ -5,7 +5,7 @@ To regenerate: python scripts/write_bundled_config.py
 """
 
 SUPABASE_URL: str = 'https://db.matrxserver.com'
-SUPABASE_PUBLISHABLE_KEY: str = 'sb_publishable_4pvkRT-9-_dB0PWqF1sp1w_W9leRIoW'
+SUPABASE_PUBLISHABLE_KEY: str = 'sb_publishable_scm0jzEJiFUB5ItiqOx5Fg_8BOjB6oA'
 
 
 def apply() -> None:

@@ -40,6 +40,15 @@ SESSION_METADATA_EVENT = "SessionMetadata"
 _PUBLISH_INTERVAL_SECONDS = 15.0
 _MAX_BATCH = 100
 _MAX_BACKOFF_SECONDS = 60.0
+_ENQUEUE_ORIGINS = frozenset(
+    {
+        "live_hook",
+        "explicit_history",
+        "capture_recovery",
+        "local_runtime",
+        "unspecified",
+    }
+)
 
 # THE POST-DELIVERY DURABILITY BOUNDARY. Once aidream has accepted an envelope,
 # deleting its local row is no longer bookkeeping — it is the only thing that
@@ -138,6 +147,20 @@ def _delivery_dimensions(request: BridgeRequest) -> tuple[str, str, str]:
     return request.provider.value, request.action.value, source
 
 
+def _default_enqueue_origin(request: BridgeRequest) -> str:
+    if request.action.value == "observe_hook":
+        return "live_hook"
+    if request.action.value == "append_native":
+        return "explicit_history"
+    return "unspecified"
+
+
+def _validated_enqueue_origin(value: str) -> str:
+    if value not in _ENQUEUE_ORIGINS:
+        raise ValueError(f"unsupported coding-session enqueue origin: {value}")
+    return value
+
+
 def _delivery_lane_key(request: BridgeRequest) -> str:
     """Canonical local ordering lane for one logical provider session.
 
@@ -225,6 +248,14 @@ def _safe_delivery_error(raw_error: Any) -> dict[str, str] | None:
     status_match = re.search(r"HTTP\s+(\d{3})", raw_error)
     if status_match:
         status_code = status_match.group(1)
+        if status_code == "401":
+            return {
+                "code": "cloud_credentials_rejected",
+                "message": (
+                    "AI Matrx rejected the stored session. Sign in again to "
+                    "resume delivery; queued events remain safe on this Mac."
+                ),
+            }
         return {
             "code": f"cloud_http_{status_code}",
             "message": f"Cloud delivery returned HTTP {status_code}; the event remains local.",
@@ -252,6 +283,10 @@ def _is_terminal_rejection(exc: Exception, attempts: int) -> bool:
 
 class BridgeMutationConflict(ValueError):
     """A provider reused a stable event identity with different content."""
+
+
+class LocalEnvelopeIntegrityError(ValueError):
+    """A persisted envelope is deterministically unreadable and cannot retry."""
 
 
 def _canonical_envelope(request: BridgeRequest) -> tuple[dict[str, Any], str, str]:
@@ -417,6 +452,8 @@ class CodingSessionBridgeOutbox:
         self._wake = asyncio.Event()
         self._stopping = False
         self._sync_lock = asyncio.Lock()
+        self._credential_blocker: dict[str, Any] | None = None
+        self._blocked_token_hash: str | None = None
         # Rows aidream has ALREADY accepted whose local delete has not yet
         # won the SQLite write lock. They are never uploaded again — the
         # publisher only retries their delete.
@@ -448,7 +485,37 @@ class CodingSessionBridgeOutbox:
     def wake(self) -> None:
         self._wake.set()
 
-    async def enqueue(self, request: BridgeRequest) -> LocalBridgeReceipt:
+    async def credentials_changed(self) -> None:
+        """Clear a credential-derived pause and retry immediately.
+
+        Called only after token ingress has verified a replacement session, or
+        after logout has removed the rejected one. No token material is retained
+        in the public blocker.
+        """
+        blocker = self._credential_blocker
+        self._credential_blocker = None
+        self._blocked_token_hash = None
+        receipt_id = blocker.get("receipt_id") if blocker is not None else None
+        if isinstance(receipt_id, int):
+            await self._durable_writes(
+                [
+                    (
+                        """UPDATE coding_session_bridge_outbox
+                           SET next_attempt_at=0, last_error=NULL,
+                               updated_at=datetime('now')
+                           WHERE id=?""",
+                        (receipt_id,),
+                    )
+                ]
+            )
+        self.wake()
+
+    async def enqueue(
+        self,
+        request: BridgeRequest,
+        *,
+        enqueue_origin: str | None = None,
+    ) -> LocalBridgeReceipt:
         """Commit an exact envelope before returning a receipt."""
         _payload, serialized, digest = _canonical_envelope(request)
         dedupe_key = _stable_delivery_key(request, digest)
@@ -458,6 +525,11 @@ class CodingSessionBridgeOutbox:
             digest=digest,
             dimensions=_delivery_dimensions(request),
             lane_key=_delivery_lane_key(request),
+            enqueue_origin=_validated_enqueue_origin(
+                enqueue_origin or _default_enqueue_origin(request)
+            ),
+            session_key=request.provider_session_id or request.stream_key,
+            payload_bytes=len(serialized.encode("utf-8")),
         )
 
         pending = await self.pending_count()
@@ -468,11 +540,28 @@ class CodingSessionBridgeOutbox:
             pending=pending,
         )
 
-    async def enqueue_many(self, requests: list[BridgeRequest]) -> dict[str, Any]:
+    async def enqueue_many(
+        self,
+        requests: list[BridgeRequest],
+        *,
+        enqueue_origin: str = "explicit_history",
+    ) -> dict[str, Any]:
         """Atomically persist a bounded import plan before reporting success."""
         if not requests:
             raise ValueError("at least one bridge request is required")
-        prepared: list[tuple[str | None, str, str, tuple[str, str, str], str]] = []
+        normalized_origin = _validated_enqueue_origin(enqueue_origin)
+        prepared: list[
+            tuple[
+                str | None,
+                str,
+                str,
+                tuple[str, str, str],
+                str,
+                str,
+                str | None,
+                int,
+            ]
+        ] = []
         for request in requests:
             _payload, serialized, digest = _canonical_envelope(request)
             prepared.append(
@@ -482,6 +571,9 @@ class CodingSessionBridgeOutbox:
                     digest,
                     _delivery_dimensions(request),
                     _delivery_lane_key(request),
+                    normalized_origin,
+                    request.provider_session_id or request.stream_key,
+                    len(serialized.encode("utf-8")),
                 )
             )
         ids, duplicates_by_index = await self._commit_enqueue_many(prepared)
@@ -498,7 +590,18 @@ class CodingSessionBridgeOutbox:
 
     async def _commit_enqueue_many(
         self,
-        prepared: list[tuple[str | None, str, str, tuple[str, str, str], str]],
+        prepared: list[
+            tuple[
+                str | None,
+                str,
+                str,
+                tuple[str, str, str],
+                str,
+                str,
+                str | None,
+                int,
+            ]
+        ],
     ) -> tuple[list[int], list[bool]]:
         ids: list[int] = []
         duplicates_by_index: list[bool] = []
@@ -508,7 +611,16 @@ class CodingSessionBridgeOutbox:
             await connection.execute("PRAGMA synchronous=FULL")
             await connection.execute("BEGIN IMMEDIATE")
             try:
-                for dedupe_key, serialized, digest, dimensions, lane_key in prepared:
+                for (
+                    dedupe_key,
+                    serialized,
+                    digest,
+                    dimensions,
+                    lane_key,
+                    enqueue_origin,
+                    session_key,
+                    payload_bytes,
+                ) in prepared:
                     if dedupe_key is None:
                         cursor = await connection.execute(
                             """INSERT INTO coding_session_bridge_outbox (
@@ -532,6 +644,14 @@ class CodingSessionBridgeOutbox:
                             connection,
                             dimensions=dimensions,
                             receipt_id=receipt_id,
+                        )
+                        await self._record_queue_metadata(
+                            connection,
+                            receipt_id=receipt_id,
+                            dimensions=dimensions,
+                            enqueue_origin=enqueue_origin,
+                            session_key=session_key,
+                            payload_bytes=payload_bytes,
                         )
                         duplicates_by_index.append(False)
                         continue
@@ -562,6 +682,9 @@ class CodingSessionBridgeOutbox:
         digest: str,
         dimensions: tuple[str, str, str],
         lane_key: str,
+        enqueue_origin: str,
+        session_key: str | None,
+        payload_bytes: int,
     ) -> tuple[int, bool]:
         """Use a private, FULL-sync transaction for the durable-ack boundary.
 
@@ -603,6 +726,14 @@ class CodingSessionBridgeOutbox:
                         connection,
                         dimensions=dimensions,
                         receipt_id=outbox_id,
+                    )
+                    await self._record_queue_metadata(
+                        connection,
+                        receipt_id=outbox_id,
+                        dimensions=dimensions,
+                        enqueue_origin=enqueue_origin,
+                        session_key=session_key,
+                        payload_bytes=payload_bytes,
                     )
                 else:
                     existing_cursor = await connection.execute(
@@ -649,6 +780,33 @@ class CodingSessionBridgeOutbox:
             (provider, action, source, receipt_id),
         )
 
+    @staticmethod
+    async def _record_queue_metadata(
+        connection: aiosqlite.Connection,
+        *,
+        receipt_id: int,
+        dimensions: tuple[str, str, str],
+        enqueue_origin: str,
+        session_key: str | None,
+        payload_bytes: int,
+    ) -> None:
+        provider, action, source = dimensions
+        await connection.execute(
+            """INSERT INTO coding_session_bridge_queue_metadata (
+                   receipt_id, queue_state, provider, action, source,
+                   enqueue_origin, session_key, payload_bytes
+               ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?)""",
+            (
+                receipt_id,
+                provider,
+                action,
+                source,
+                enqueue_origin,
+                session_key,
+                payload_bytes,
+            ),
+        )
+
     async def pending_count(self) -> int:
         row = await self._db.fetchone(
             "SELECT COUNT(*) AS count FROM coding_session_bridge_outbox"
@@ -658,25 +816,26 @@ class CodingSessionBridgeOutbox:
     async def pending_native_import_count(self) -> int:
         row = await self._db.fetchone(
             """SELECT COUNT(*) AS count
-               FROM coding_session_bridge_outbox
-               WHERE json_valid(envelope_json)
-                 AND json_extract(envelope_json, '$.action') = 'append_native'
-                 AND json_extract(
-                       envelope_json, '$.source_metadata.source_kind'
-                     ) = 'claude_local_jsonl'"""
+               FROM coding_session_bridge_queue_metadata
+               WHERE queue_state = 'pending'
+                 AND action = 'append_native'
+                 AND source = 'claude_local_jsonl'
+                 AND enqueue_origin = 'explicit_history'"""
         )
         return int(row["count"]) if row else 0
 
     async def oldest_native_import(self) -> dict[str, Any] | None:
         row = await self._db.fetchone(
-            """SELECT id, attempts, next_attempt_at, last_error, created_at
-               FROM coding_session_bridge_outbox
-               WHERE json_valid(envelope_json)
-                 AND json_extract(envelope_json, '$.action') = 'append_native'
-                 AND json_extract(
-                       envelope_json, '$.source_metadata.source_kind'
-                     ) = 'claude_local_jsonl'
-               ORDER BY id LIMIT 1"""
+            """SELECT outbox.id, outbox.attempts, outbox.next_attempt_at,
+                      outbox.last_error, outbox.created_at
+               FROM coding_session_bridge_outbox AS outbox
+               JOIN coding_session_bridge_queue_metadata AS metadata
+                 ON metadata.receipt_id = outbox.id
+               WHERE metadata.queue_state = 'pending'
+                 AND metadata.action = 'append_native'
+                 AND metadata.source = 'claude_local_jsonl'
+                 AND metadata.enqueue_origin = 'explicit_history'
+               ORDER BY outbox.id LIMIT 1"""
         )
         if row is None:
             return None
@@ -691,12 +850,11 @@ class CodingSessionBridgeOutbox:
     async def quarantined_native_import_count(self) -> int:
         row = await self._db.fetchone(
             """SELECT COUNT(*) AS count
-               FROM coding_session_bridge_quarantine
-               WHERE json_valid(envelope_json)
-                 AND json_extract(envelope_json, '$.action') = 'append_native'
-                 AND json_extract(
-                       envelope_json, '$.source_metadata.source_kind'
-                     ) = 'claude_local_jsonl'"""
+               FROM coding_session_bridge_queue_metadata
+               WHERE queue_state = 'quarantine'
+                 AND action = 'append_native'
+                 AND source = 'claude_local_jsonl'
+                 AND enqueue_origin = 'explicit_history'"""
         )
         return int(row["count"]) if row else 0
 
@@ -711,11 +869,14 @@ class CodingSessionBridgeOutbox:
                     """UPDATE coding_session_bridge_outbox
                        SET next_attempt_at=0, last_error=NULL,
                            updated_at=datetime('now')
-                       WHERE json_valid(envelope_json)
-                         AND json_extract(envelope_json, '$.action') = 'append_native'
-                         AND json_extract(
-                               envelope_json, '$.source_metadata.source_kind'
-                             ) = 'claude_local_jsonl'"""
+                       WHERE id IN (
+                           SELECT receipt_id
+                           FROM coding_session_bridge_queue_metadata
+                           WHERE queue_state = 'pending'
+                             AND action = 'append_native'
+                             AND source = 'claude_local_jsonl'
+                             AND enqueue_origin = 'explicit_history'
+                       )"""
                 )
                 retried = max(0, int(cursor.rowcount))
                 await connection.commit()
@@ -734,13 +895,23 @@ class CodingSessionBridgeOutbox:
             try:
                 cursor = await connection.execute(
                     """DELETE FROM coding_session_bridge_outbox
-                       WHERE json_valid(envelope_json)
-                         AND json_extract(envelope_json, '$.action') = 'append_native'
-                         AND json_extract(
-                               envelope_json, '$.source_metadata.source_kind'
-                             ) = 'claude_local_jsonl'"""
+                       WHERE id IN (
+                           SELECT receipt_id
+                           FROM coding_session_bridge_queue_metadata
+                           WHERE queue_state = 'pending'
+                             AND action = 'append_native'
+                             AND source = 'claude_local_jsonl'
+                             AND enqueue_origin = 'explicit_history'
+                       )"""
                 )
                 discarded = max(0, int(cursor.rowcount))
+                await connection.execute(
+                    """DELETE FROM coding_session_bridge_queue_metadata
+                       WHERE queue_state = 'pending'
+                         AND action = 'append_native'
+                         AND source = 'claude_local_jsonl'
+                         AND enqueue_origin = 'explicit_history'"""
+                )
                 await connection.commit()
             except BaseException:
                 await connection.rollback()
@@ -748,35 +919,44 @@ class CodingSessionBridgeOutbox:
         return {"discarded": discarded, "pending": await self.pending_count()}
 
     async def _queue_breakdown(self, table: str) -> dict[str, Any]:
-        if table not in {
-            "coding_session_bridge_outbox",
-            "coding_session_bridge_quarantine",
-        }:
+        states = {
+            "coding_session_bridge_outbox": "pending",
+            "coding_session_bridge_quarantine": "quarantine",
+        }
+        queue_state = states.get(table)
+        if queue_state is None:
             raise ValueError("unsupported coding-session delivery table")
         rows = await self._db.fetchall(
-            f"""SELECT
-                    CASE WHEN json_valid(envelope_json)
-                         THEN COALESCE(json_extract(envelope_json, '$.provider'), 'unknown')
-                         ELSE 'unknown' END AS provider,
-                    CASE WHEN json_valid(envelope_json)
-                         THEN COALESCE(json_extract(envelope_json, '$.action'), 'unknown')
-                         ELSE 'unknown' END AS action,
-                    {_SOURCE_SQL} AS source,
-                    COUNT(*) AS count
-                FROM {table}
-                GROUP BY provider, action, source"""
+            """SELECT provider, action, source, COUNT(*) AS count,
+                      COALESCE(SUM(payload_bytes), 0) AS payload_bytes,
+                      COUNT(DISTINCT session_key) AS sessions
+               FROM coding_session_bridge_queue_metadata
+               WHERE queue_state = ?
+               GROUP BY provider, action, source""",
+            (queue_state,),
+        )
+        provider_session_rows = await self._db.fetchall(
+            """SELECT provider, COUNT(DISTINCT session_key) AS sessions
+               FROM coding_session_bridge_queue_metadata
+               WHERE queue_state = ?
+               GROUP BY provider""",
+            (queue_state,),
         )
         by_provider = {provider.value: 0 for provider in BridgeProvider}
+        sessions_by_provider = {provider.value: 0 for provider in BridgeProvider}
         by_action: dict[str, int] = {}
         by_source: dict[str, int] = {}
         dimensions: list[dict[str, Any]] = []
         total = 0
+        total_payload_bytes = 0
         for row in rows:
             provider = str(row["provider"])
             action = str(row["action"])
             source = str(row["source"])
             count = int(row["count"])
+            payload_bytes = int(row["payload_bytes"])
             total += count
+            total_payload_bytes += payload_bytes
             by_provider[provider] = by_provider.get(provider, 0) + count
             by_action[action] = by_action.get(action, 0) + count
             by_source[source] = by_source.get(source, 0) + count
@@ -786,15 +966,40 @@ class CodingSessionBridgeOutbox:
                     "action": action,
                     "source": source,
                     "count": count,
+                    "payload_bytes": payload_bytes,
+                    "sessions": int(row["sessions"]),
                 }
             )
+        for row in provider_session_rows:
+            sessions_by_provider[str(row["provider"])] = int(row["sessions"])
         return {
             "total": total,
+            "payload_bytes": total_payload_bytes,
             "by_provider": by_provider,
+            "sessions_by_provider": sessions_by_provider,
             "by_action": by_action,
             "by_source": by_source,
             "dimensions": dimensions,
         }
+
+    async def _quarantine_reason_counts(self) -> list[dict[str, Any]]:
+        rows = await self._db.fetchall(
+            """SELECT http_status, last_error, COUNT(*) AS count
+               FROM coding_session_bridge_quarantine
+               GROUP BY http_status, last_error"""
+        )
+        grouped: dict[tuple[str, str], int] = {}
+        for row in rows:
+            safe = _safe_delivery_error(row["last_error"]) or {
+                "code": "preserved_delivery_failure",
+                "message": "The event was preserved after delivery could not complete.",
+            }
+            key = (str(safe["code"]), str(safe["message"]))
+            grouped[key] = grouped.get(key, 0) + int(row["count"])
+        return [
+            {"code": code, "message": message, "count": count}
+            for (code, message), count in sorted(grouped.items())
+        ]
 
     @staticmethod
     def _enqueue_summary(row: Any) -> dict[str, Any] | None:
@@ -831,6 +1036,7 @@ class CodingSessionBridgeOutbox:
         """Return provider-neutral queue truth without any stored envelope data."""
         pending = await self._queue_breakdown("coding_session_bridge_outbox")
         quarantine = await self._queue_breakdown("coding_session_bridge_quarantine")
+        quarantine["reasons"] = await self._quarantine_reason_counts()
         activity_rows = await self._db.fetchall(
             """SELECT * FROM coding_session_bridge_delivery_activity
                ORDER BY provider, action, source"""
@@ -840,7 +1046,10 @@ class CodingSessionBridgeOutbox:
             provider.value: {
                 "capabilities": dict(_PROVIDER_CAPABILITIES[provider]),
                 "pending": 0,
+                "pending_sessions": 0,
                 "quarantined": 0,
+                "quarantined_sessions": 0,
+                "acknowledged_envelopes": 0,
                 "by_action": {},
                 "by_source": {},
                 "last_enqueue": None,
@@ -883,6 +1092,11 @@ class CodingSessionBridgeOutbox:
                 _dimension_cell(provider_state["by_source"], item["source"])[
                     state_name
                 ] += count
+            session_field = f"{state_name}_sessions"
+            for provider, count in breakdown["sessions_by_provider"].items():
+                provider_state = providers.get(provider)
+                if provider_state is not None:
+                    provider_state[session_field] = int(count)
 
         last_enqueue: dict[str, Any] | None = None
         last_acknowledgement: dict[str, Any] | None = None
@@ -890,6 +1104,9 @@ class CodingSessionBridgeOutbox:
             provider_state = providers.get(str(row["provider"]))
             if provider_state is None:
                 continue
+            provider_state["acknowledged_envelopes"] += int(
+                row["acknowledged_envelopes"] or 0
+            )
             enqueue = self._enqueue_summary(row)
             acknowledgement = self._acknowledgement_summary(row)
             action_state = _dimension_cell(
@@ -972,6 +1189,9 @@ class CodingSessionBridgeOutbox:
                 "active": self.active,
                 "cloud_enabled": self._cloud_enabled,
                 "server_path": f"/api{_SERVER_PATH}",
+                "blocker": dict(self._credential_blocker)
+                if self._credential_blocker is not None
+                else None,
             },
             "pending": pending,
             "quarantine": quarantine,
@@ -1016,7 +1236,21 @@ class CodingSessionBridgeOutbox:
                 or self._tokens.is_expired(token_row)
             ):
                 await self._defer_head("no_active_user_jwt", increment=False)
+                self._credential_blocker = None
+                self._blocked_token_hash = None
                 return {"sent": 0, "failed": 0, "blocked": "no_active_user_jwt"}
+
+            access_token = str(token_row["access_token"])
+            token_hash = hashlib.sha256(access_token.encode("utf-8")).hexdigest()
+            if self._credential_blocker is not None:
+                if token_hash == self._blocked_token_hash:
+                    return {
+                        "sent": 0,
+                        "failed": 0,
+                        "blocked": "cloud_credentials_rejected",
+                    }
+                self._credential_blocker = None
+                self._blocked_token_hash = None
 
             client = self._client or self._client_factory()
             if client is None:
@@ -1066,32 +1300,69 @@ class CodingSessionBridgeOutbox:
                         serialized.encode("utf-8")
                     ).hexdigest()
                     if actual_digest != str(row["envelope_sha256"]):
-                        raise AIDreamError(
-                            500,
+                        raise LocalEnvelopeIntegrityError(
                             "persisted bridge envelope failed its SHA-256 integrity check",
                         )
                     try:
                         payload = json.loads(serialized)
                     except json.JSONDecodeError as exc:
-                        raise AIDreamError(
-                            500,
+                        raise LocalEnvelopeIntegrityError(
                             "persisted bridge envelope is not valid JSON",
                         ) from exc
                     try:
                         persisted_request = BridgeRequest.model_validate(payload)
                     except ValidationError as exc:
-                        raise AIDreamError(
-                            500,
+                        raise LocalEnvelopeIntegrityError(
                             "persisted bridge envelope no longer satisfies schema v1",
                         ) from exc
                     response = await client.post(
                         _SERVER_PATH,
                         payload,
-                        jwt=str(token_row["access_token"]),
+                        jwt=access_token,
                         timeout=30.0,
                     )
                     _validate_upstream_acknowledgement(response, persisted_request)
+                except LocalEnvelopeIntegrityError as exc:
+                    try:
+                        await self._quarantine_head(row, exc)
+                    except Exception:
+                        logger.exception(
+                            "[coding_session_bridge] could not quarantine invalid "
+                            "local envelope id=%s — retrying next tick",
+                            int(row["id"]),
+                        )
+                        failed += 1
+                        break
+                    continue
                 except (AIDreamOfflineError, AIDreamError) as exc:
+                    if isinstance(exc, AIDreamError) and exc.status == 401:
+                        self._credential_blocker = {
+                            "code": "cloud_credentials_rejected",
+                            "message": (
+                                "AI Matrx rejected the stored session. Sign in "
+                                "again to resume delivery; queued events remain "
+                                "safe on this Mac."
+                            ),
+                            "http_status": 401,
+                            "receipt_id": int(row["id"]),
+                            "provider": persisted_request.provider.value,
+                        }
+                        self._blocked_token_hash = token_hash
+                        try:
+                            await self._record_failure(
+                                int(row["id"]), int(row["attempts"]), exc
+                            )
+                        except Exception:
+                            logger.exception(
+                                "[coding_session_bridge] could not record the "
+                                "credential rejection for id=%s",
+                                int(row["id"]),
+                            )
+                        return {
+                            "sent": sent,
+                            "failed": failed + 1,
+                            "blocked": "cloud_credentials_rejected",
+                        }
                     if _is_terminal_rejection(exc, int(row["attempts"])):
                         try:
                             await self._quarantine_head(row, exc)
@@ -1149,8 +1420,8 @@ class CodingSessionBridgeOutbox:
                         )
                     except Exception:
                         logger.exception(
-                            "[coding_session_bridge] could not even defer "
-                            "id=%s", int(row["id"])
+                            "[coding_session_bridge] could not even defer id=%s",
+                            int(row["id"]),
                         )
                         break
                     failed += 1
@@ -1253,6 +1524,10 @@ class CodingSessionBridgeOutbox:
                         "DELETE FROM coding_session_bridge_outbox WHERE id = ?",
                         (outbox_id,),
                     )
+                    await connection.execute(
+                        "DELETE FROM coding_session_bridge_queue_metadata WHERE receipt_id = ?",
+                        (outbox_id,),
+                    )
                     await connection.commit()
                 except BaseException:
                     await connection.rollback()
@@ -1291,6 +1566,10 @@ class CodingSessionBridgeOutbox:
                 )
                 await connection.execute(
                     "DELETE FROM coding_session_bridge_outbox WHERE id = ?",
+                    (outbox_id,),
+                )
+                await connection.execute(
+                    "DELETE FROM coding_session_bridge_queue_metadata WHERE receipt_id = ?",
                     (outbox_id,),
                 )
                 await connection.commit()
@@ -1390,6 +1669,12 @@ class CodingSessionBridgeOutbox:
                 ),
                 (
                     "DELETE FROM coding_session_bridge_outbox WHERE id = ?",
+                    (int(row["id"]),),
+                ),
+                (
+                    """UPDATE coding_session_bridge_queue_metadata
+                       SET queue_state = 'quarantine'
+                       WHERE receipt_id = ?""",
                     (int(row["id"]),),
                 ),
             ]

@@ -63,13 +63,18 @@ daemon, service, or database.
   and conversation UUIDs, zero conflicts, and exactly one accepted or duplicate
   entry. A generic/stale/proxy 2xx is retryable and never deletes the row.
 - The stored envelope bytes are checked against their committed SHA-256 and
-  revalidated as adapter envelope v1 before every upload. Corruption blocks the
-  ordered queue loudly instead of sending mutated raw data.
+  revalidated as adapter envelope v1 before every upload. Deterministic local
+  corruption is preserved in quarantine immediately so mutated bytes are never
+  sent and an impossible retry cannot wedge the lane.
 - Network/auth/server failure keeps the exact envelope and records a bounded
   retry delay. If aidream accepted it but the response was lost, restart
   replays the same envelope and server idempotency resolves the duplicate.
-- Missing/expired auth and the dev world's disabled cloud participation are
-  retryable states, not terminal failures.
+- Missing/expired auth and the dev world's disabled cloud participation retain
+  every row. The first upstream HTTP 401 pauses the publisher globally instead
+  of spraying one rejected credential across every lane; a newly verified
+  session is the explicit resume signal. `POST /auth/token` verifies the token
+  against the configured Supabase Auth project before persisting it, so a token
+  issued by another project cannot silently enter the engine.
 - The task is registered as `coding_session_bridge` in the existing launcher
   registry and stops before SQLite closes. It owns no subprocess.
 
@@ -91,7 +96,9 @@ attempt 1. A terminal rejection now moves the row into
 - **Terminal only after `_QUARANTINE_AFTER_ATTEMPTS`:** a bare 400/409/422. A
   proxy or a mid-deploy server emits those transiently, and dropping a row
   early would be real data loss.
-- **Never terminal:** offline, or any 5xx. The server has refused nothing.
+- **Never terminal:** offline, or any cloud 5xx. The server has refused nothing.
+- **Local-integrity terminal:** persisted SHA, JSON, or envelope-schema failure.
+  These conditions cannot self-heal and are quarantined without an upload.
 - **The envelope is PRESERVED, never deleted** — zero data loss is this
   outbox's contract, and a refused row is exactly what a human needs to see.
 - **Quarantine logs at ERROR and `status()` reports a `quarantined` count.** A
@@ -162,6 +169,7 @@ bridge provider (`claude_code`, `codex`, `cursor`, and `vscode`). It reports:
 
 - whether the publisher task is active and cloud participation is enabled;
 - pending and quarantined totals grouped by provider, action, and source;
+- pending payload bytes and distinct queued-session counts by provider;
 - a row for every supported provider even when all of its counts are zero;
 - backend-owned capability flags for event mirror, historical import, title
   sync, local runtime, native resume, and VS Code participant conversations,
@@ -169,7 +177,8 @@ bridge provider (`claude_code`, `codex`, `cursor`, and `vscode`). It reports:
 - the safe queue head (provider/action/source, attempts, next retry, and a
   redacted operational error); and
 - the last durable local enqueue and last validated cloud acknowledgement,
-  globally and per provider/action/source.
+  globally and per provider/action/source; and
+- a publisher-wide safe blocker plus grouped, redacted quarantine reasons.
 
 Migration V24 stores those enqueue/acknowledgement summaries in the bounded
 `coding_session_bridge_delivery_activity` aggregate. It has one row per
@@ -198,6 +207,13 @@ V25 replaces the retired global FIFO scheduler with those session-stream lanes.
 `head_blocker` is the oldest lane head whose retry time is still in the future;
 an ordinary ready row is no longer mislabeled as a blocker.
 
+Migration V26 adds `coding_session_bridge_queue_metadata`, a payload-free side
+index written in the same durable transaction as every enqueue, retirement, and
+quarantine move. Status groups that small index and never JSON-parses the raw
+outbox. It also stores local-only enqueue provenance (`explicit_history`,
+`capture_recovery`, `local_runtime`, or `live_hook`), so history retry/discard
+actions cannot affect automatic recovery or runtime mirrors.
+
 The same migration changes `claude_session_metadata_sent` from an enqueue
 ledger into an acknowledgement ledger. Legacy rows are cleared once, because
 they cannot prove cloud delivery; one idempotent reconciliation repairs them.
@@ -216,8 +232,9 @@ local sessions had never reached the platform at all**).
 
 **This is not a second transport.** The reconciler runs the diff a human
 otherwise runs by hand: `GET /coding-sessions/sessions` for what the platform
-holds, `ClaudeHistoryImporter.preview()` for what is on disk, and the existing
-`import_selected` → the existing outbox for whatever is missing. Every
+holds, a stat-only inventory of every bounded local session, and the existing
+`import_selected` → the existing outbox for whatever is missing. Only the
+bounded selected candidates are content-hashed before enqueue, while every
 byte-hashing, account-identity, and conflict rule stays the importer's.
 
 - 🚨 **THE ERA RULE — the consent boundary.** Only sessions whose local activity
@@ -233,10 +250,11 @@ byte-hashing, account-identity, and conflict rule stays the importer's.
   `BATCH_BYTE_BUDGET` (half the importer's cap), oldest-first so a backlog
   drains deterministically. The byte budget exists so one huge transcript
   cannot fail a batch and burn the retry budget of nine innocent sessions.
-- **Bounded per session:** `claude_capture_backfill` counts attempts; after
-  `MAX_ATTEMPTS` a session is left alone with its error preserved. A CHANGED
-  `source_revision` resets the count — more writing is a new input, not the
-  same failure repeating.
+- **Bounded per session:** `claude_capture_backfill` counts failed attempts;
+  success resets the count. After `MAX_ATTEMPTS` a broken session is left alone
+  with its error preserved. A changed stat fence resets the count — more writing
+  is a new input, not the same failure repeating. Status aggregates every
+  exhausted failure instead of filtering only the newest 50 ledger rows.
 - **A backfill logs at WARNING, not INFO.** It firing means the hook path lost
   data, which is a defect upstream, not routine housekeeping.
 - Routes: `GET /coding-session/claude/capture/status`,

@@ -16,11 +16,15 @@ import asyncio
 import time
 from typing import Any, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 from app.common.background_tasks import fire_and_forget
 from app.common.system_logger import get_logger
+from app.api.remote_auth import (
+    invalidate_token,
+    verify_supabase_token_result,
+)
 from app.services.local_db.repositories import TokenRepo
 from app.services.ai.engine import clear_jwt_cache, set_jwt_cache
 
@@ -68,6 +72,47 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
     so the local SQLite cache is populated immediately rather than waiting for the
     next scheduled sync interval.
     """
+    verification = await verify_supabase_token_result(req.access_token)
+    if verification.status in {"unavailable", "unconfigured"}:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "session_verification_unavailable",
+                "message": (
+                    "AI Matrx could not verify this session against the configured "
+                    "account service. Check the connection and try signing in again."
+                ),
+            },
+        )
+
+    verified_user = verification.user
+    if verification.status != "verified" or verified_user is None:
+        invalidate_token(req.access_token)
+        await clear_token()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "invalid_supabase_session",
+                "message": (
+                    "This session was not accepted by the configured AI Matrx "
+                    "account service. Sign in again."
+                ),
+            },
+        )
+    if verified_user.user_id != req.user_id:
+        invalidate_token(req.access_token)
+        await clear_token()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "session_user_mismatch",
+                "message": (
+                    "The verified session belongs to a different user than the "
+                    "desktop session. Sign out, then sign in again."
+                ),
+            },
+        )
+
     expires_at: Optional[int] = None
     if req.expires_in:
         expires_at = int(time.time()) + int(req.expires_in)
@@ -86,6 +131,19 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
         req.user_id,
         expires_at,
     )
+
+    # A prior cloud 401 pauses the coding-session publisher to prevent one bad
+    # credential from being sprayed across every delivery lane. A verified new
+    # session is the explicit unblock signal.
+    try:
+        from app.services.coding_sessions import get_coding_session_bridge_outbox
+
+        await get_coding_session_bridge_outbox().credentials_changed()
+    except Exception:
+        logger.debug(
+            "[token_routes] coding-session publisher wake failed",
+            exc_info=True,
+        )
 
     # Cross-component broadcast subscribe — Case B of the lifecycle wiring.
     # Phase 7 startup in app/main.py handles the resume-from-persisted-session
@@ -129,9 +187,13 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
     async def _sync_after_token() -> None:
         try:
             from app.services.local_db.sync_engine import get_sync_engine
+
             engine = get_sync_engine()
             await engine.sync_agents()
-            logger.info("[token_routes] Post-login agent sync complete for user_id=%s", req.user_id)
+            logger.info(
+                "[token_routes] Post-login agent sync complete for user_id=%s",
+                req.user_id,
+            )
         except Exception as exc:
             logger.warning("[token_routes] Post-login agent sync failed: %s", exc)
 
@@ -163,8 +225,10 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
                 logger.info(
                     "[token_routes] Post-login scrape sync: revived=%d pushed=%d "
                     "deferred=%d failed=%d",
-                    result["revived"], result["pushed"],
-                    result["deferred"], result["failed"],
+                    result["revived"],
+                    result["pushed"],
+                    result["deferred"],
+                    result["failed"],
                 )
         except Exception as exc:
             logger.warning("[token_routes] Post-login scrape sync failed: %s", exc)
@@ -211,14 +275,19 @@ async def clear_token() -> dict[str, Any]:
     # down the matching cross-component broadcast subscription. Best-effort:
     # missing row / read failure must not block logout.
     outgoing_user_id: Optional[str] = None
+    row: dict[str, Any] | None = None
     try:
         row = await repo.get()
         if row:
             outgoing_user_id = row.get("user_id")
     except Exception:
-        logger.debug("[token_routes] could not read outgoing user_id on logout", exc_info=True)
+        logger.debug(
+            "[token_routes] could not read outgoing user_id on logout", exc_info=True
+        )
 
     await repo.clear()
+    if row and isinstance(row.get("access_token"), str):
+        invalidate_token(row["access_token"])
     clear_jwt_cache()
     # Drop every Credential-Vault-supplied provider key with the session that
     # authorized it. Keys the user saved on THIS machine survive sign-out.
@@ -226,6 +295,16 @@ async def clear_token() -> dict[str, Any]:
 
     clear_vault_keys()
     logger.info("[token_routes] JWT cleared (logout) user_id=%s", outgoing_user_id)
+
+    try:
+        from app.services.coding_sessions import get_coding_session_bridge_outbox
+
+        await get_coding_session_bridge_outbox().credentials_changed()
+    except Exception:
+        logger.debug(
+            "[token_routes] coding-session publisher wake failed on logout",
+            exc_info=True,
+        )
 
     # Cross-component broadcast disconnect — Case B of the lifecycle wiring.
     # Mirrors the connect in POST /auth/token. Gated on the

@@ -431,7 +431,10 @@ export interface CodingSessionHeadBlocker {
 
 export interface CodingSessionProviderStatus {
   pending: number;
+  pending_sessions?: number;
   quarantined: number;
+  quarantined_sessions?: number;
+  acknowledged_envelopes?: number;
   capabilities: {
     event_mirror: boolean;
     historical_import: boolean;
@@ -453,18 +456,30 @@ export interface CodingSessionBridgeStatus {
     active: boolean;
     cloud_enabled: boolean;
     server_path: string;
+    blocker: {
+      code: string;
+      message: string;
+      http_status?: number;
+      receipt_id?: number;
+      provider?: CodingSessionProvider;
+    } | null;
   };
   pending: {
     total: number;
+    payload_bytes?: number;
     by_provider: Record<CodingSessionProvider, number>;
+    sessions_by_provider?: Record<CodingSessionProvider, number>;
     by_action: Record<string, number>;
     by_source: Record<string, number>;
   };
   quarantine: {
     total: number;
+    payload_bytes?: number;
     by_provider: Record<CodingSessionProvider, number>;
+    sessions_by_provider?: Record<CodingSessionProvider, number>;
     by_action: Record<string, number>;
     by_source: Record<string, number>;
+    reasons?: Array<{ code: string; message: string; count: number }>;
   };
   providers: Record<CodingSessionProvider, CodingSessionProviderStatus>;
   head_blocker: CodingSessionHeadBlocker | null;
@@ -489,6 +504,17 @@ export interface ClaudeCaptureStatus {
     last_error: string | null;
     enqueued_at: string | null;
   }>;
+}
+
+export interface ClaudeCaptureReconcileResult {
+  status: string;
+  detail?: string;
+  cloud_sessions?: number;
+  local_sessions?: number;
+  missing?: number;
+  skipped_pre_era?: number;
+  enqueued: number;
+  batch?: string[];
 }
 
 export interface WorkspaceDiscoveryNode {
@@ -2328,7 +2354,7 @@ class EngineAPI {
     return this.request("/coding-session/claude/capture/status");
   }
 
-  async reconcileClaudeCapture(dryRun = false): Promise<Record<string, unknown>> {
+  async reconcileClaudeCapture(dryRun = false): Promise<ClaudeCaptureReconcileResult> {
     return this.request(
       `/coding-session/claude/capture/reconcile?dry_run=${dryRun ? "true" : "false"}`,
       { method: "POST" },
@@ -2728,7 +2754,7 @@ class EngineAPI {
     expiresIn?: number,
   ): Promise<void> {
     if (!this.baseUrl) return;
-    await fetch(`${this.baseUrl}/auth/token`, {
+    await this.request<{ status: string }>("/auth/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2737,9 +2763,6 @@ class EngineAPI {
         user_id: userId,
         expires_in: expiresIn ?? null,
       }),
-    }).catch(() => {
-      // Non-critical — Python will work without the persisted token,
-      // it just won't survive a restart until React pushes again.
     });
   }
 

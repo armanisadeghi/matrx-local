@@ -218,8 +218,13 @@ async def test_selected_import_is_atomic_bounded_and_replay_safe(importer_env) -
     assert first["queued_label_updates"] == 1
     assert replay["queued_label_updates"] == 0
     rows = await db.fetchall(
-        "SELECT envelope_json FROM coding_session_bridge_outbox ORDER BY id"
+        """SELECT outbox.envelope_json, metadata.enqueue_origin
+           FROM coding_session_bridge_outbox AS outbox
+           JOIN coding_session_bridge_queue_metadata AS metadata
+             ON metadata.receipt_id = outbox.id
+           ORDER BY outbox.id"""
     )
+    assert {row["enqueue_origin"] for row in rows} == {"explicit_history"}
     all_envelopes = [
         BridgeRequest.model_validate_json(row["envelope_json"]) for row in rows
     ]

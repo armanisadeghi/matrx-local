@@ -107,9 +107,7 @@ async def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     fake_cli = tmp_path / "claude"
     fake_cli.write_text("#!/bin/sh\nexit 0\n")
     fake_cli.chmod(0o700)
-    monkeypatch.setattr(
-        runtime_module, "resolve_claude_executable", lambda: fake_cli
-    )
+    monkeypatch.setattr(runtime_module, "resolve_claude_executable", lambda: fake_cli)
     importer = ClaudeHistoryImporter(
         db=db,
         outbox=outbox,
@@ -363,7 +361,9 @@ async def test_resumable_reads_claude_own_store_and_decodes_composite(env) -> No
     import base64
 
     composite = (
-        "claude-sdk:" + "0" * 64 + ":"
+        "claude-sdk:"
+        + "0" * 64
+        + ":"
         + base64.urlsafe_b64encode(session_id.encode()).decode().rstrip("=")
     )
     assert LocalClaudeRuntime.decode_provider_session_id(composite) == session_id
@@ -405,7 +405,10 @@ async def test_mirror_pass_lands_exact_append_native_batches_in_outbox(env) -> N
         {
             "type": "assistant",
             "uuid": str(uuid4()),
-            "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "ok"}],
+            },
             "timestamp": "2026-08-17T01:00:05Z",
         },
     ]
@@ -421,9 +424,12 @@ async def test_mirror_pass_lands_exact_append_native_batches_in_outbox(env) -> N
     assert run.mirror_error is None
     assert run.mirror_passes == 1
 
-    project_key = "claude-local:" + __import__("hashlib").sha256(
-        str(transcript.parent.resolve()).encode()
-    ).hexdigest()
+    project_key = (
+        "claude-local:"
+        + __import__("hashlib")
+        .sha256(str(transcript.parent.resolve()).encode())
+        .hexdigest()
+    )
     expected_provider_session_id = _bridge_provider_session_id(project_key, session_id)
     assert run.provider_session_id == expected_provider_session_id
     assert run.conversation_id == _conversation_id(
@@ -431,8 +437,13 @@ async def test_mirror_pass_lands_exact_append_native_batches_in_outbox(env) -> N
     )
 
     rows = await db.fetchall(
-        "SELECT envelope_json FROM coding_session_bridge_outbox ORDER BY id"
+        """SELECT outbox.envelope_json, metadata.enqueue_origin
+           FROM coding_session_bridge_outbox AS outbox
+           JOIN coding_session_bridge_queue_metadata AS metadata
+             ON metadata.receipt_id = outbox.id
+           ORDER BY outbox.id"""
     )
+    assert {row["enqueue_origin"] for row in rows} == {"local_runtime"}
     envelopes = [json.loads(str(row["envelope_json"])) for row in rows]
     appends = [e for e in envelopes if e["action"] == "append_native"]
     assert len(appends) == 1

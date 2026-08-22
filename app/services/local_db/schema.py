@@ -979,6 +979,113 @@ ON coding_session_bridge_outbox(lane_key, id);
 DELETE FROM claude_session_metadata_sent
 """
 
+# Queue status must stay cheap regardless of transcript volume. Parsing the
+# raw envelope column on every status request turned a 1.2 GB durable queue
+# into a multi-second full-table scan and let overlapping UI polls monopolize
+# the single shared SQLite connection. This payload-free side index is written
+# in the SAME durable transaction as each outbox mutation. It also carries
+# local-only enqueue provenance so an explicit-history discard can never erase
+# automatic recovery or local-runtime mirrors.
+_V26_CODING_SESSION_BRIDGE_QUEUE_METADATA = """
+CREATE TABLE IF NOT EXISTS coding_session_bridge_queue_metadata (
+    receipt_id      INTEGER PRIMARY KEY,
+    queue_state     TEXT NOT NULL CHECK (queue_state IN ('pending', 'quarantine')),
+    provider        TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    enqueue_origin  TEXT NOT NULL,
+    session_key     TEXT,
+    payload_bytes   INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_coding_session_bridge_queue_dimensions
+ON coding_session_bridge_queue_metadata(
+    queue_state, provider, action, source, enqueue_origin
+);
+
+CREATE INDEX IF NOT EXISTS idx_coding_session_bridge_queue_sessions
+ON coding_session_bridge_queue_metadata(queue_state, provider, session_key);
+
+INSERT OR REPLACE INTO coding_session_bridge_queue_metadata (
+    receipt_id, queue_state, provider, action, source, enqueue_origin,
+    session_key, payload_bytes, created_at
+)
+SELECT
+    id,
+    'pending',
+    CASE WHEN json_valid(envelope_json)
+         THEN COALESCE(json_extract(envelope_json, '$.provider'), 'unknown')
+         ELSE 'unknown' END,
+    CASE WHEN json_valid(envelope_json)
+         THEN COALESCE(json_extract(envelope_json, '$.action'), 'unknown')
+         ELSE 'unknown' END,
+    CASE WHEN json_valid(envelope_json)
+         THEN COALESCE(
+             json_extract(envelope_json, '$.source_metadata.source_kind'),
+             json_extract(envelope_json, '$.origin'),
+             'unspecified'
+         ) ELSE 'invalid' END,
+    CASE
+        WHEN json_valid(envelope_json)
+         AND json_extract(envelope_json, '$.action') = 'append_native'
+         AND json_extract(envelope_json, '$.source_metadata.source_kind') =
+             'claude_local_jsonl'
+            THEN 'explicit_history'
+        WHEN json_valid(envelope_json)
+         AND json_extract(envelope_json, '$.action') = 'observe_hook'
+            THEN 'live_hook'
+        ELSE 'unspecified'
+    END,
+    CASE WHEN json_valid(envelope_json)
+         THEN COALESCE(
+             json_extract(envelope_json, '$.provider_session_id'),
+             json_extract(envelope_json, '$.stream_key')
+         ) ELSE NULL END,
+    length(CAST(envelope_json AS BLOB)),
+    created_at
+FROM coding_session_bridge_outbox;
+
+INSERT OR REPLACE INTO coding_session_bridge_queue_metadata (
+    receipt_id, queue_state, provider, action, source, enqueue_origin,
+    session_key, payload_bytes, created_at
+)
+SELECT
+    id,
+    'quarantine',
+    CASE WHEN json_valid(envelope_json)
+         THEN COALESCE(json_extract(envelope_json, '$.provider'), 'unknown')
+         ELSE 'unknown' END,
+    CASE WHEN json_valid(envelope_json)
+         THEN COALESCE(json_extract(envelope_json, '$.action'), 'unknown')
+         ELSE 'unknown' END,
+    CASE WHEN json_valid(envelope_json)
+         THEN COALESCE(
+             json_extract(envelope_json, '$.source_metadata.source_kind'),
+             json_extract(envelope_json, '$.origin'),
+             'unspecified'
+         ) ELSE 'invalid' END,
+    CASE
+        WHEN json_valid(envelope_json)
+         AND json_extract(envelope_json, '$.action') = 'append_native'
+         AND json_extract(envelope_json, '$.source_metadata.source_kind') =
+             'claude_local_jsonl'
+            THEN 'explicit_history'
+        WHEN json_valid(envelope_json)
+         AND json_extract(envelope_json, '$.action') = 'observe_hook'
+            THEN 'live_hook'
+        ELSE 'unspecified'
+    END,
+    CASE WHEN json_valid(envelope_json)
+         THEN COALESCE(
+             json_extract(envelope_json, '$.provider_session_id'),
+             json_extract(envelope_json, '$.stream_key')
+         ) ELSE NULL END,
+    length(CAST(envelope_json AS BLOB)),
+    COALESCE(original_created_at, quarantined_at)
+FROM coding_session_bridge_quarantine
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1005,4 +1112,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (23, _V23_CODING_SESSION_BRIDGE_QUARANTINE),
     (24, _V24_CODING_SESSION_BRIDGE_DELIVERY_ACTIVITY),
     (25, _V25_CODING_SESSION_BRIDGE_DELIVERY_LANES),
+    (26, _V26_CODING_SESSION_BRIDGE_QUEUE_METADATA),
 ]

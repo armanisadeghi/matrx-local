@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -24,6 +25,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { engine } from "@/lib/api";
 import type {
   ClaudeCaptureStatus,
+  ClaudeCaptureReconcileResult,
   ClaudeHistoryImportResult,
   ClaudeHistoryPreview,
   ClaudeHistoryStatus,
@@ -32,6 +34,12 @@ import type {
   CodingSessionBridgeStatus,
   CodingSessionProvider,
 } from "@/lib/api";
+import {
+  codingSessionActionLabel,
+  codingSessionSourceLabel,
+  formatRetryDuration,
+  runSingleFlight,
+} from "@/lib/coding-session-ui";
 
 type CodingSessionsTab = "overview" | "history" | "titles" | "runtime";
 
@@ -74,6 +82,7 @@ function blockedMessage(reason: string | null): string {
 }
 
 export function ClaudeHistorySync() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<CodingSessionsTab>("overview");
   const [preview, setPreview] = useState<ClaudeHistoryPreview | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -93,6 +102,13 @@ export function ClaudeHistorySync() {
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [overviewRefreshing, setOverviewRefreshing] = useState(false);
   const [captureReconciling, setCaptureReconciling] = useState(false);
+  const [bridgeUpdatedAt, setBridgeUpdatedAt] = useState<Date | null>(null);
+  const [captureUpdatedAt, setCaptureUpdatedAt] = useState<Date | null>(null);
+  const [bridgeStale, setBridgeStale] = useState(false);
+  const [captureStale, setCaptureStale] = useState(false);
+  const [captureResult, setCaptureResult] =
+    useState<ClaudeCaptureReconcileResult | null>(null);
+  const overviewFlight = useRef<Promise<void> | null>(null);
 
   const refreshStatus = useCallback(async () => {
     const next = await engine.getClaudeHistoryStatus();
@@ -103,36 +119,49 @@ export function ClaudeHistorySync() {
     setLabelStatus(await engine.getClaudeLabelStatus());
   }, []);
 
-  const refreshOverview = useCallback(async () => {
-    setOverviewRefreshing(true);
-    try {
-      const [bridgeResult, captureResult] = await Promise.allSettled([
-        engine.getCodingSessionStatus(),
-        engine.getClaudeCaptureStatus(),
-      ]);
-      const failures: string[] = [];
-      if (bridgeResult.status === "fulfilled") {
-        setBridgeStatus(bridgeResult.value);
-      } else {
-        failures.push(
-          bridgeResult.reason instanceof Error
-            ? bridgeResult.reason.message
-            : String(bridgeResult.reason),
-        );
+  const refreshOverview = useCallback(() => {
+    return runSingleFlight(overviewFlight, async () => {
+      setOverviewRefreshing(true);
+      try {
+        const [bridgeResult, captureStatusResult] = await Promise.allSettled([
+          engine.getCodingSessionStatus(),
+          engine.getClaudeCaptureStatus(),
+        ]);
+        const failures: string[] = [];
+        const refreshedAt = new Date();
+        if (bridgeResult.status === "fulfilled") {
+          setBridgeStatus(bridgeResult.value);
+          setBridgeUpdatedAt(refreshedAt);
+          setBridgeStale(false);
+        } else {
+          setBridgeStale(true);
+          failures.push(
+            `Delivery status: ${
+              bridgeResult.reason instanceof Error
+                ? bridgeResult.reason.message
+                : String(bridgeResult.reason)
+            }`,
+          );
+        }
+        if (captureStatusResult.status === "fulfilled") {
+          setCaptureStatus(captureStatusResult.value);
+          setCaptureUpdatedAt(refreshedAt);
+          setCaptureStale(false);
+        } else {
+          setCaptureStale(true);
+          failures.push(
+            `Recovery status: ${
+              captureStatusResult.reason instanceof Error
+                ? captureStatusResult.reason.message
+                : String(captureStatusResult.reason)
+            }`,
+          );
+        }
+        setOverviewError(failures.length > 0 ? failures.join(" · ") : null);
+      } finally {
+        setOverviewRefreshing(false);
       }
-      if (captureResult.status === "fulfilled") {
-        setCaptureStatus(captureResult.value);
-      } else {
-        failures.push(
-          captureResult.reason instanceof Error
-            ? captureResult.reason.message
-            : String(captureResult.reason),
-        );
-      }
-      setOverviewError(failures.length > 0 ? failures.join(" · ") : null);
-    } finally {
-      setOverviewRefreshing(false);
-    }
+    });
   }, []);
 
   useEffect(() => {
@@ -153,15 +182,32 @@ export function ClaudeHistorySync() {
 
   useEffect(() => {
     if (!bridgeStatus || bridgeStatus.pending.total === 0) return;
-    const id = window.setInterval(() => void refreshOverview(), 3000);
-    return () => window.clearInterval(id);
+    let cancelled = false;
+    let timeoutId: number | undefined;
+    const poll = async () => {
+      try {
+        await refreshOverview();
+      } catch (nextError) {
+        setOverviewError(
+          nextError instanceof Error ? nextError.message : String(nextError),
+        );
+      } finally {
+        if (!cancelled) timeoutId = window.setTimeout(() => void poll(), 3000);
+      }
+    };
+    timeoutId = window.setTimeout(() => void poll(), 3000);
+    return () => {
+      cancelled = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
   }, [bridgeStatus?.pending.total, refreshOverview]);
 
   const reconcileCapture = async () => {
     setCaptureReconciling(true);
     setOverviewError(null);
+    setCaptureResult(null);
     try {
-      await engine.reconcileClaudeCapture(false);
+      setCaptureResult(await engine.reconcileClaudeCapture(false));
       await refreshOverview();
     } catch (nextError) {
       setOverviewError(
@@ -304,11 +350,18 @@ export function ClaudeHistorySync() {
           <OverviewPanel
             bridgeStatus={bridgeStatus}
             captureStatus={captureStatus}
+            bridgeUpdatedAt={bridgeUpdatedAt}
+            captureUpdatedAt={captureUpdatedAt}
+            bridgeStale={bridgeStale}
+            captureStale={captureStale}
+            captureResult={captureResult}
             error={overviewError}
             refreshing={overviewRefreshing}
             reconciling={captureReconciling}
             onRefresh={refreshOverview}
             onReconcile={reconcileCapture}
+            onNavigate={setActiveTab}
+            onOpenAccount={() => navigate("/settings")}
           />
         )}
 
@@ -714,19 +767,33 @@ export function ClaudeHistorySync() {
 function OverviewPanel({
   bridgeStatus,
   captureStatus,
+  bridgeUpdatedAt,
+  captureUpdatedAt,
+  bridgeStale,
+  captureStale,
+  captureResult,
   error,
   refreshing,
   reconciling,
   onRefresh,
   onReconcile,
+  onNavigate,
+  onOpenAccount,
 }: {
   bridgeStatus: CodingSessionBridgeStatus | null;
   captureStatus: ClaudeCaptureStatus | null;
+  bridgeUpdatedAt: Date | null;
+  captureUpdatedAt: Date | null;
+  bridgeStale: boolean;
+  captureStale: boolean;
+  captureResult: ClaudeCaptureReconcileResult | null;
   error: string | null;
   refreshing: boolean;
   reconciling: boolean;
   onRefresh: () => Promise<void>;
   onReconcile: () => Promise<void>;
+  onNavigate: (tab: CodingSessionsTab) => void;
+  onOpenAccount: () => void;
 }) {
   const capabilityLabels = {
     event_mirror: "Live events",
@@ -743,12 +810,12 @@ function OverviewPanel({
         <CardHeader className="flex flex-row items-start justify-between gap-4">
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
-              <MonitorCheck className="h-4 w-4" /> Provider coverage
+              <MonitorCheck className="h-4 w-4" /> Coding provider support
             </CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">
-              The delivery bridge supports multiple coding providers. Deeper
-              local features appear only where the provider exposes a safe,
-              stable local interface; unsupported capabilities are explicit.
+              Product support is shown separately from this Mac&rsquo;s live
+              delivery activity. Queue counts are stored delivery events, not
+              provider conversation totals or connection indicators.
             </p>
           </div>
           <Button
@@ -766,10 +833,22 @@ function OverviewPanel({
           </Button>
         </CardHeader>
         <CardContent className="space-y-4">
+          <FreshnessLine
+            label="Local delivery activity"
+            updatedAt={bridgeUpdatedAt}
+            stale={bridgeStale && Boolean(bridgeStatus)}
+            refreshing={refreshing}
+          />
           {!bridgeStatus && !error && (
             <div className="flex items-center gap-2 rounded-md border border-dashed p-4 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading provider and
               delivery status…
+            </div>
+          )}
+          {!bridgeStatus && error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              Live delivery activity is unavailable. Product support below will
+              appear after the local engine responds.
             </div>
           )}
           {bridgeStatus && (
@@ -782,19 +861,24 @@ function OverviewPanel({
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="font-medium">{PROVIDER_LABELS[provider]}</h3>
                         {status.pending > 0 && (
-                          <Badge variant="outline">{status.pending} queued</Badge>
+                          <Badge variant="outline">
+                            {status.pending.toLocaleString()} delivery events queued
+                          </Badge>
                         )}
                         {status.quarantined > 0 && (
                           <Badge variant="destructive">
-                            {status.quarantined} needs attention
+                            {status.quarantined.toLocaleString()} preserved events
                           </Badge>
                         )}
                         {status.pending === 0 && status.quarantined === 0 && (
-                          <Badge variant="secondary">Queue clear</Badge>
+                          <Badge variant="secondary">No delivery events waiting</Badge>
                         )}
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
                         {PROVIDER_SCOPE[provider]}
+                      </p>
+                      <p className="mt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        Product capabilities
                       </p>
                       <div className="mt-3 flex flex-wrap gap-1.5">
                         {Object.entries(capabilityLabels).map(([key, label]) => {
@@ -803,9 +887,8 @@ function OverviewPanel({
                             <Badge
                               key={key}
                               variant={supported ? "secondary" : "outline"}
-                              className={!supported ? "opacity-50" : undefined}
                             >
-                              {supported ? "✓ " : "— "}{label}
+                              {supported ? "Supported: " : "Not available: "}{label}
                             </Badge>
                           );
                         })}
@@ -815,6 +898,48 @@ function OverviewPanel({
                           {status.capabilities.limitations.join(" ")}
                         </p>
                       )}
+                      <div className="mt-3 rounded-md bg-muted/30 p-2.5 text-xs text-muted-foreground">
+                        <p>
+                          Sessions represented in the current queue: {status.pending_sessions?.toLocaleString() ?? "not available"}
+                        </p>
+                        <p className="mt-1">
+                          Delivery envelopes acknowledged from this Mac: {status.acknowledged_envelopes?.toLocaleString() ?? "not available"}
+                        </p>
+                        <p>
+                          Last event stored: {status.last_enqueue
+                            ? formatDate(status.last_enqueue.at)
+                            : "none recorded"}
+                        </p>
+                        <p className="mt-1">
+                          Last cloud acknowledgement: {status.last_acknowledgement
+                            ? formatDate(status.last_acknowledgement.at)
+                            : "none recorded"}
+                        </p>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {provider === "claude_code" && (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => onNavigate("history")}>
+                              Review history
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => onNavigate("titles")}>
+                              Sync titles
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => onNavigate("runtime")}>
+                              Open local runtime
+                            </Button>
+                          </>
+                        )}
+                        {(status.pending > 0 || status.quarantined > 0) && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => document.getElementById("delivery-pipeline")?.scrollIntoView({ behavior: "smooth" })}
+                          >
+                            View delivery details
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   );
                 },
@@ -824,7 +949,7 @@ function OverviewPanel({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="delivery-pipeline">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Database className="h-4 w-4" /> Delivery pipeline
@@ -850,12 +975,23 @@ function OverviewPanel({
                 </div>
               </div>
             )}
+          {bridgeStatus?.publisher.blocker && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm">
+              <p className="font-medium">Cloud delivery is paused</p>
+              <p className="mt-1 text-muted-foreground">
+                {bridgeStatus.publisher.blocker.message}
+              </p>
+              <Button className="mt-3" size="sm" onClick={onOpenAccount}>
+                Open account settings
+              </Button>
+            </div>
+          )}
           <div className="grid gap-2 sm:grid-cols-4" aria-label="Delivery stages">
             <PipelineStage label="1. Captured" detail="Provider event or selected history" />
             <PipelineStage label="2. Saved locally" detail="Durable, integrity-checked queue" />
             <PipelineStage
               label="3. Waiting for AI Matrx"
-              detail={`${bridgeStatus?.pending.total ?? 0} queued`}
+              detail={`${(bridgeStatus?.pending.total ?? 0).toLocaleString()} delivery events queued${bridgeStatus?.pending.payload_bytes !== undefined ? ` · ${formatBytes(bridgeStatus.pending.payload_bytes)} stored` : ""}`}
               active={Boolean(bridgeStatus?.pending.total)}
             />
             <PipelineStage
@@ -868,16 +1004,19 @@ function OverviewPanel({
             />
           </div>
 
-          {bridgeStatus?.head_blocker && (
+          {bridgeStatus?.head_blocker && !bridgeStatus.publisher.blocker && (
             <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
               <p className="font-medium">
-                Delivery is waiting on {PROVIDER_LABELS[bridgeStatus.head_blocker.provider]}
+                Cloud delivery is retrying a {PROVIDER_LABELS[bridgeStatus.head_blocker.provider]} event
               </p>
               <p className="mt-1 text-muted-foreground">
-                {bridgeStatus.head_blocker.action} · attempt {bridgeStatus.head_blocker.attempts}
+                {codingSessionActionLabel(bridgeStatus.head_blocker.action)} · attempt {bridgeStatus.head_blocker.attempts}
                 {bridgeStatus.head_blocker.retry_in_seconds > 0
-                  ? ` · retry in ${bridgeStatus.head_blocker.retry_in_seconds}s`
+                  ? ` · retry in ${formatRetryDuration(bridgeStatus.head_blocker.retry_in_seconds)}`
                   : " · retry is due"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Source: {codingSessionSourceLabel(bridgeStatus.head_blocker.source)}. The coding provider already produced this event; AI Matrx acknowledgement is the step being retried.
               </p>
               {bridgeStatus.head_blocker.error?.message && (
                 <p className="mt-1 text-amber-800 dark:text-amber-200">
@@ -888,17 +1027,23 @@ function OverviewPanel({
           )}
 
           {bridgeStatus && bridgeStatus.quarantine.total > 0 && (
-            <div className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+            <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
               <div>
                 <p className="font-medium">
                   {bridgeStatus.quarantine.total.toLocaleString()} preserved event
-                  {bridgeStatus.quarantine.total === 1 ? " needs" : "s need"} attention
+                  {bridgeStatus.quarantine.total === 1 ? " is" : "s are"} not retrying
                 </p>
                 <p className="mt-1 text-muted-foreground">
                   These events were not acknowledged by AI Matrx. They remain
-                  locally quarantined instead of being dropped or reported as synced.
+                  locally preserved instead of being dropped or reported as synced;
+                  they do not block newer events.
                 </p>
+                {bridgeStatus.quarantine.reasons?.map((reason) => (
+                  <p className="mt-2 text-xs text-muted-foreground" key={reason.code}>
+                    {reason.count.toLocaleString()} · {reason.message}
+                  </p>
+                ))}
               </div>
             </div>
           )}
@@ -927,10 +1072,10 @@ function OverviewPanel({
             ) : (
               <RefreshCw className="mr-2 h-4 w-4" />
             )}
-            Check now
+            Run recovery check
           </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           {captureStatus ? (
             <div className="grid gap-3 sm:grid-cols-3">
               <Summary
@@ -949,6 +1094,38 @@ function OverviewPanel({
           ) : (
             <p className="text-sm text-muted-foreground">Loading recovery status…</p>
           )}
+          <FreshnessLine
+            label="Recovery worker status"
+            updatedAt={captureUpdatedAt}
+            stale={captureStale && Boolean(captureStatus)}
+            refreshing={refreshing}
+          />
+          {captureResult && (
+            <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">
+              <p className="font-medium">Recovery check finished</p>
+              {captureResult.detail ? (
+                <p className="mt-1 text-muted-foreground">{captureResult.detail}</p>
+              ) : captureResult.status === "disabled" ? (
+                <p className="mt-1 text-muted-foreground">
+                  Automatic recovery is disabled; no sessions were changed.
+                </p>
+              ) : (
+                <p className="mt-1 text-muted-foreground">
+                  {captureResult.local_sessions?.toLocaleString() ?? "No"} local sessions checked
+                  {captureResult.cloud_sessions !== undefined
+                    ? ` against ${captureResult.cloud_sessions.toLocaleString()} cloud sessions`
+                    : ""}
+                  {captureResult.missing !== undefined
+                    ? ` · ${captureResult.missing.toLocaleString()} missing`
+                    : ""}
+                  {` · ${captureResult.enqueued.toLocaleString()} queued for delivery`}
+                  {captureResult.skipped_pre_era
+                    ? ` · ${captureResult.skipped_pre_era.toLocaleString()} older sessions left untouched`
+                    : ""}
+                </p>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -962,6 +1139,28 @@ function OverviewPanel({
         </div>
       )}
     </>
+  );
+}
+
+function FreshnessLine({
+  label,
+  updatedAt,
+  stale,
+  refreshing,
+}: {
+  label: string;
+  updatedAt: Date | null;
+  stale: boolean;
+  refreshing: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+      <span>
+        {label}: {updatedAt ? `updated ${updatedAt.toLocaleTimeString()}` : "not loaded yet"}
+      </span>
+      {stale && <Badge variant="destructive">Showing last known data</Badge>}
+      {refreshing && <span>Refreshing…</span>}
+    </div>
   );
 }
 

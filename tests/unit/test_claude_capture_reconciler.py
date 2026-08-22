@@ -152,8 +152,82 @@ async def test_backfills_a_session_the_hook_path_missed(env) -> None:
     assert report["enqueued"] == 1
     assert report["missing"] == 1
     # It really reached the durable outbox — this is the whole point.
-    queued = await db.fetchall("SELECT id FROM coding_session_bridge_outbox")
+    queued = await db.fetchall(
+        "SELECT receipt_id, enqueue_origin FROM coding_session_bridge_queue_metadata"
+    )
     assert len(queued) >= 1
+    assert {row["enqueue_origin"] for row in queued} == {"capture_recovery"}
+
+
+@pytest.mark.anyio
+async def test_backfills_a_missed_session_older_than_the_newest_200(env) -> None:
+    """Recovery must inventory all sessions, not only the preview page."""
+    config_dir, db, importer = env
+    era_start = datetime.now(UTC) - timedelta(days=2)
+    missed = str(uuid4())
+    _write_session(
+        config_dir, session_id=missed, mtime=era_start + timedelta(minutes=1)
+    )
+    cloud = [
+        {"provider_session_id": "era-marker", "last_seen_at": era_start.isoformat()}
+    ]
+    for offset in range(200):
+        session_id = str(uuid4())
+        _write_session(
+            config_dir,
+            session_id=session_id,
+            mtime=era_start + timedelta(hours=1, minutes=offset),
+        )
+        cloud.append(
+            {
+                "provider_session_id": session_id,
+                "last_seen_at": (era_start + timedelta(hours=1)).isoformat(),
+            }
+        )
+
+    report = await _reconciler(db, importer, cloud).reconcile()
+
+    assert report["local_sessions"] == 201
+    assert report["missing"] == 1
+    assert report["enqueued"] == 1
+
+
+@pytest.mark.anyio
+async def test_recovery_hashes_only_selected_missing_candidates(
+    env, monkeypatch
+) -> None:
+    """The unattended inventory must not reread every transcript each pass."""
+    import app.services.coding_sessions.claude_history as history
+
+    config_dir, db, importer = env
+    era_start = datetime.now(UTC) - timedelta(days=2)
+    known: list[str] = []
+    for _ in range(5):
+        session_id = str(uuid4())
+        known.append(session_id)
+        _write_session(config_dir, session_id=session_id, mtime=datetime.now(UTC))
+    missed = known.pop()
+    cloud = [
+        {"provider_session_id": "era-marker", "last_seen_at": era_start.isoformat()},
+        *[
+            {"provider_session_id": session_id, "last_seen_at": era_start.isoformat()}
+            for session_id in known
+        ],
+    ]
+    original = history._hash_source
+    hashed: list[tuple[tuple[str, Path], ...]] = []
+
+    def counting_hash(projects_root, streams):
+        hashed.append(streams)
+        return original(projects_root, streams)
+
+    monkeypatch.setattr(history, "_hash_source", counting_hash)
+
+    report = await _reconciler(db, importer, cloud).reconcile()
+
+    assert report["enqueued"] == 1
+    assert len(hashed) == 1
+    assert hashed[0][0][1].stem == missed
 
 
 @pytest.mark.anyio
@@ -202,9 +276,7 @@ async def test_dry_run_reports_the_gap_and_enqueues_nothing(env) -> None:
     config_dir, db, importer = env
     era_start = datetime.now(UTC) - timedelta(days=2)
     _write_session(config_dir, session_id=str(uuid4()), mtime=datetime.now(UTC))
-    cloud = [
-        {"provider_session_id": "known", "last_seen_at": era_start.isoformat()}
-    ]
+    cloud = [{"provider_session_id": "known", "last_seen_at": era_start.isoformat()}]
 
     report = await _reconciler(db, importer, cloud).reconcile(dry_run=True)
 
@@ -220,25 +292,24 @@ async def test_a_broken_session_stops_being_retried(env) -> None:
     era_start = datetime.now(UTC) - timedelta(days=2)
     session_id = str(uuid4())
     _write_session(config_dir, session_id=session_id, mtime=datetime.now(UTC))
-    preview = await importer.preview()
-    project_key = preview["sessions"][0]["project_key"]
+    _account, inventory = await importer.capture_inventory()
+    project_key = inventory[0].project_key
     session_key = f"{project_key}:{session_id}"
-    revision = preview["sessions"][0]["source_revision"]
+    source_state = inventory[0].source_state
     await db.execute(
         """INSERT INTO claude_capture_backfill
                (session_key, source_revision, attempts, last_error, updated_at)
            VALUES (?, ?, ?, 'boom', datetime('now'))""",
-        (session_key, revision, MAX_ATTEMPTS),
+        (session_key, source_state, MAX_ATTEMPTS),
     )
     await db.commit()
-    cloud = [
-        {"provider_session_id": "known", "last_seen_at": era_start.isoformat()}
-    ]
+    cloud = [{"provider_session_id": "known", "last_seen_at": era_start.isoformat()}]
 
     report = await _reconciler(db, importer, cloud).reconcile()
 
     assert report["enqueued"] == 0
     assert report["missing"] == 0
+    assert report["exhausted"] == 1
 
 
 @pytest.mark.anyio
@@ -257,9 +328,7 @@ async def test_more_local_writing_reopens_the_retry_budget(env) -> None:
         (f"{project_key}:{session_id}", MAX_ATTEMPTS),
     )
     await db.commit()
-    cloud = [
-        {"provider_session_id": "known", "last_seen_at": era_start.isoformat()}
-    ]
+    cloud = [{"provider_session_id": "known", "last_seen_at": era_start.isoformat()}]
 
     report = await _reconciler(db, importer, cloud).reconcile()
 
@@ -289,9 +358,7 @@ async def test_an_oversized_transcript_never_blocks_the_batch(env, monkeypatch) 
         _write_session(config_dir, session_id=str(uuid4()), mtime=datetime.now(UTC))
     # Budget smaller than any real transcript: every session reads as oversized.
     monkeypatch.setattr(mod, "BATCH_BYTE_BUDGET", 1)
-    cloud = [
-        {"provider_session_id": "known", "last_seen_at": era_start.isoformat()}
-    ]
+    cloud = [{"provider_session_id": "known", "last_seen_at": era_start.isoformat()}]
 
     report = await _reconciler(db, importer, cloud).reconcile()
 
@@ -301,3 +368,60 @@ async def test_an_oversized_transcript_never_blocks_the_batch(env, monkeypatch) 
         "SELECT last_error FROM claude_capture_backfill WHERE last_error IS NOT NULL"
     )
     assert rows and "import budget" in str(rows[0]["last_error"])
+
+
+@pytest.mark.anyio
+async def test_dry_run_does_not_consume_oversized_retry_budget(
+    env, monkeypatch
+) -> None:
+    import app.services.coding_sessions.capture_reconciler as mod
+
+    config_dir, db, importer = env
+    era_start = datetime.now(UTC) - timedelta(days=2)
+    _write_session(config_dir, session_id=str(uuid4()), mtime=datetime.now(UTC))
+    monkeypatch.setattr(mod, "BATCH_BYTE_BUDGET", 1)
+
+    await _reconciler(
+        db,
+        importer,
+        [{"provider_session_id": "known", "last_seen_at": era_start.isoformat()}],
+    ).reconcile(dry_run=True)
+
+    assert await db.fetchall("SELECT session_key FROM claude_capture_backfill") == []
+
+
+@pytest.mark.anyio
+async def test_success_clears_failure_budget_and_is_not_exhausted(env) -> None:
+    _config_dir, db, importer = env
+    reconciler = _reconciler(db, importer, [])
+    for _ in range(MAX_ATTEMPTS):
+        await reconciler._record_attempt("project:session", "same-state", "boom")
+    await reconciler._record_attempt("project:session", "same-state", None)
+
+    row = await db.fetchone(
+        "SELECT attempts, last_error FROM claude_capture_backfill WHERE session_key = ?",
+        ("project:session",),
+    )
+    assert row is not None
+    assert row["attempts"] == 0
+    assert row["last_error"] is None
+    status = await reconciler.status()
+    assert status["exhausted"] == []
+
+
+@pytest.mark.anyio
+async def test_status_counts_all_exhausted_rows_not_only_recent_50(env) -> None:
+    _config_dir, db, importer = env
+    for index in range(60):
+        await db.execute(
+            """INSERT INTO claude_capture_backfill
+                   (session_key, source_revision, attempts, last_error, updated_at)
+               VALUES (?, 'same-state', ?, 'boom', datetime('now'))""",
+            (f"project:{index}", MAX_ATTEMPTS),
+        )
+    await db.commit()
+
+    status = await _reconciler(db, importer, []).status()
+
+    assert len(status["recent"]) == 50
+    assert len(status["exhausted"]) == 60

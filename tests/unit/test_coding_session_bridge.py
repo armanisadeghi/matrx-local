@@ -34,6 +34,16 @@ class FakeTokenRepo:
         return False
 
 
+class MutableTokenRepo(FakeTokenRepo):
+    def __init__(self, access_token: str = "owner-jwt") -> None:
+        self.access_token = access_token
+
+    async def get(self) -> dict[str, Any]:
+        row = await super().get()
+        row["access_token"] = self.access_token
+        return row
+
+
 class FakeClient:
     def __init__(
         self, outcomes: list[Exception | dict[str, Any]] | None = None
@@ -241,6 +251,10 @@ async def test_migration_creates_dedicated_local_outbox(
         "SELECT version FROM _migrations WHERE version = 25"
     )
     assert lane_migration and lane_migration["version"] == 25
+    metadata_migration = await bridge_db.fetchone(
+        "SELECT version FROM _migrations WHERE version = 26"
+    )
+    assert metadata_migration and metadata_migration["version"] == 26
     outbox_columns = await bridge_db.fetchall(
         "PRAGMA table_info(coding_session_bridge_outbox)"
     )
@@ -282,7 +296,17 @@ async def test_provider_neutral_status_shows_codex_pending_and_quarantine_safely
     assert status["pending"]["by_provider"]["codex"] == 1
     assert status["quarantine"]["by_provider"]["codex"] == 1
     assert status["providers"]["codex"]["pending"] == 1
+    assert status["providers"]["codex"]["pending_sessions"] == 1
     assert status["providers"]["codex"]["quarantined"] == 1
+    assert status["providers"]["codex"]["quarantined_sessions"] == 1
+    assert status["pending"]["payload_bytes"] > 0
+    assert status["quarantine"]["reasons"] == [
+        {
+            "code": "entry_mutated",
+            "message": "The cloud already has this event identity with different content.",
+            "count": 1,
+        }
+    ]
     assert status["providers"]["codex"]["by_action"]["observe_hook"] == {
         "pending": 1,
         "quarantined": 1,
@@ -349,6 +373,7 @@ async def test_successful_codex_ack_is_persisted_after_validation(
     delivered = await service.delivery_status()
     acknowledgement = delivered["providers"]["codex"]["last_acknowledgement"]
     assert delivered["pending"]["total"] == 0
+    assert delivered["providers"]["codex"]["acknowledged_envelopes"] == 1
     assert acknowledgement == delivered["last_acknowledgement"]
     assert acknowledgement == {
         "receipt_id": receipt.receipt_id,
@@ -679,6 +704,60 @@ async def test_failure_at_head_blocks_later_rows_until_ordered_retry(
 
 
 @pytest.mark.anyio
+async def test_first_cloud_401_pauses_all_lanes_until_credentials_change(
+    bridge_db: LocalDatabase,
+) -> None:
+    rejected = AIDreamError(401, "HTTP 401")
+    client = FakeClient([rejected])
+    tokens = MutableTokenRepo()
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=client,
+        token_repo=tokens,  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    await service.enqueue(_hook(stable_id="lane-a", provider_session_id="session-a"))
+    await service.enqueue(_hook(stable_id="lane-b", provider_session_id="session-b"))
+
+    first = await service.sync_pending()
+    assert first == {
+        "sent": 0,
+        "failed": 1,
+        "blocked": "cloud_credentials_rejected",
+    }
+    assert len(client.calls) == 1, "one rejection must stop cross-lane fan-out"
+
+    paused = await service.sync_pending()
+    assert paused == {
+        "sent": 0,
+        "failed": 0,
+        "blocked": "cloud_credentials_rejected",
+    }
+    assert len(client.calls) == 1, "the rejected token must not be retried"
+
+    status = await service.delivery_status()
+    blocker = status["publisher"]["blocker"]
+    assert blocker == {
+        "code": "cloud_credentials_rejected",
+        "message": (
+            "AI Matrx rejected the stored session. Sign in again to resume "
+            "delivery; queued events remain safe on this Mac."
+        ),
+        "http_status": 401,
+        "receipt_id": 1,
+        "provider": "claude_code",
+    }
+    assert status["head_blocker"]["error"]["code"] == ("cloud_credentials_rejected")
+
+    tokens.access_token = "replacement-jwt"
+    await service.credentials_changed()
+    resumed = await service.sync_pending()
+    assert resumed == {"sent": 2, "failed": 0, "blocked": None}
+    assert len(client.calls) == 3
+    assert (await service.delivery_status())["publisher"]["blocker"] is None
+
+
+@pytest.mark.anyio
 async def test_history_retry_recovers_ordered_drain_without_dropping_hook(
     bridge_db: LocalDatabase,
 ) -> None:
@@ -738,7 +817,7 @@ async def test_malformed_upstream_2xx_does_not_delete_durable_row(
 
 
 @pytest.mark.anyio
-async def test_persisted_envelope_integrity_failure_blocks_upload(
+async def test_persisted_envelope_integrity_failure_is_preserved_without_upload(
     bridge_db: LocalDatabase,
 ) -> None:
     client = FakeClient()
@@ -757,9 +836,10 @@ async def test_persisted_envelope_integrity_failure_blocks_upload(
 
     result = await service.sync_pending()
 
-    assert result == {"sent": 0, "failed": 1, "blocked": None}
+    assert result == {"sent": 0, "failed": 0, "blocked": None}
     assert client.calls == []
-    assert await service.pending_count() == 1
+    assert await service.pending_count() == 0
+    assert await service.quarantined_count() == 1
 
 
 @pytest.mark.anyio

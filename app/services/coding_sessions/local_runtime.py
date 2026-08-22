@@ -155,7 +155,9 @@ class _LocalRun:
     events: deque[dict[str, Any]] = field(
         default_factory=lambda: deque(maxlen=_EVENT_BUFFER_MAX)
     )
-    subscribers: list[asyncio.Queue[dict[str, Any] | None]] = field(default_factory=list)
+    subscribers: list[asyncio.Queue[dict[str, Any] | None]] = field(
+        default_factory=list
+    )
     identity_ready: asyncio.Event = field(default_factory=asyncio.Event)
 
     def public_status(self) -> dict[str, Any]:
@@ -759,7 +761,8 @@ class LocalClaudeRuntime:
             client = ClaudeSDKClient(options=options)
             run.client = client
             identity_task = asyncio.create_task(
-                self._establish_identity(run), name=f"claude-local-identity:{run.runtime_id}"
+                self._establish_identity(run),
+                name=f"claude-local-identity:{run.runtime_id}",
             )
             saw_result = False
             try:
@@ -812,7 +815,10 @@ class LocalClaudeRuntime:
             if run.status == "failed":
                 run.error = str(exc)
                 logger.error(
-                    "[local_runtime] run %s FAILED: %s", run.runtime_id, exc, exc_info=True
+                    "[local_runtime] run %s FAILED: %s",
+                    run.runtime_id,
+                    exc,
+                    exc_info=True,
                 )
         finally:
             run.ended_at = time.time()
@@ -856,9 +862,10 @@ class LocalClaudeRuntime:
         if run.provider_session_id is not None:
             return
         project_dir = transcript.parent
-        project_key = "claude-local:" + hashlib.sha256(
-            str(project_dir.resolve()).encode("utf-8")
-        ).hexdigest()
+        project_key = (
+            "claude-local:"
+            + hashlib.sha256(str(project_dir.resolve()).encode("utf-8")).hexdigest()
+        )
         run.transcript_path = transcript
         run.provider_project_key = project_key
         run.provider_session_id = _bridge_provider_session_id(
@@ -919,7 +926,8 @@ class LocalClaudeRuntime:
                                 source_revision=revision,
                             )
                         ],
-                    )
+                    ),
+                    enqueue_origin="local_runtime",
                 )
                 run.mirror_passes += 1
                 run.mirror_error = None

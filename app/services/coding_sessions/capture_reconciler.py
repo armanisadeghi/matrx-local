@@ -75,9 +75,6 @@ logger = get_logger()
 IDENTITY_PATH = "/coding-sessions/sessions"
 MAX_IDENTITY_ROWS = 1000
 
-# How many local sessions one pass inspects. The importer's own preview cap.
-PREVIEW_LIMIT = 200
-
 # A session that cannot be imported is retried this many times, then left with
 # its error recorded. Without this an unreadable transcript re-enters the
 # candidate set on every pass forever.
@@ -114,7 +111,9 @@ def _sdk_identity(project_key: str, raw_session_id: str) -> str:
     a diff that checks only one form re-imports everything on every pass.
     """
     project_digest = hashlib.sha256(project_key.encode("utf-8")).hexdigest()
-    encoded = base64.urlsafe_b64encode(raw_session_id.encode("utf-8")).decode().rstrip("=")
+    encoded = (
+        base64.urlsafe_b64encode(raw_session_id.encode("utf-8")).decode().rstrip("=")
+    )
     return f"claude-sdk:{project_digest}:{encoded}"
 
 
@@ -156,21 +155,23 @@ class ClaudeCaptureReconciler:
         return {str(row["session_key"]): dict(row) for row in rows}
 
     async def _record_attempt(
-        self, session_key: str, source_revision: str | None, error: str | None
+        self, session_key: str, source_state: str | None, error: str | None
     ) -> None:
-        """Counts one enqueue attempt. A CHANGED revision resets the count.
+        """Record the outcome for one stat-fenced recovery candidate.
 
-        A transcript the user has since written more into is a genuinely new
-        input, not the same failure repeating, so it deserves its full retry
-        budget again.
+        Only failures consume retry budget. A successful enqueue clears the
+        counter, and a changed stat fence is a genuinely new input deserving a
+        fresh budget.
         """
         await self._db.execute(
             """INSERT INTO claude_capture_backfill
                    (session_key, source_revision, attempts, last_error,
                     enqueued_at, updated_at)
-               VALUES (?, ?, 1, ?, datetime('now'), datetime('now'))
+               VALUES (?, ?, CASE WHEN ? IS NULL THEN 0 ELSE 1 END, ?,
+                       datetime('now'), datetime('now'))
                ON CONFLICT(session_key) DO UPDATE SET
                    attempts = CASE
+                       WHEN excluded.last_error IS NULL THEN 0
                        WHEN claude_capture_backfill.source_revision IS excluded.source_revision
                        THEN claude_capture_backfill.attempts + 1
                        ELSE 1
@@ -179,7 +180,7 @@ class ClaudeCaptureReconciler:
                    last_error = excluded.last_error,
                    enqueued_at = excluded.enqueued_at,
                    updated_at = excluded.updated_at""",
-            (session_key, source_revision, error),
+            (session_key, source_state, error, error),
         )
         await self._db.commit()
 
@@ -249,12 +250,10 @@ class ClaudeCaptureReconciler:
                 "enqueued": 0,
             }
 
-        preview = await self._importer.preview(limit=PREVIEW_LIMIT)
-        if not preview.get("import_ready"):
-            raise CaptureReconcileBlocked(
-                str(preview.get("account_blocked_reason") or "import_not_ready")
-            )
-        account_key = preview.get("provider_account_key")
+        account, local_sources = await self._importer.capture_inventory()
+        if not account.available:
+            raise CaptureReconcileBlocked(str(account.reason or "import_not_ready"))
+        account_key = account.account_key
         if not isinstance(account_key, str):
             raise CaptureReconcileBlocked("account_identity_unavailable")
 
@@ -263,42 +262,38 @@ class ClaudeCaptureReconciler:
 
         candidates: list[dict[str, Any]] = []
         skipped_pre_era = 0
-        for session in preview.get("sessions", []):
-            if not isinstance(session, dict) or not session.get("import_available"):
+        exhausted = 0
+        for source in local_sources:
+            if source.import_blocked_reason is not None:
                 continue
-            raw_id = session.get("session_id")
-            project_key = session.get("project_key")
-            revision = session.get("source_revision")
-            if not (
-                isinstance(raw_id, str)
-                and isinstance(project_key, str)
-                and isinstance(revision, str)
-            ):
-                continue
+            raw_id = source.session_id
+            project_key = source.project_key
             # Both identity forms: a hook binding stores the raw UUID, an
             # import stores the composite. Either means it is already there.
             if raw_id in known or _sdk_identity(project_key, raw_id) in known:
                 continue
-            modified_ns = session.get("last_modified_ns")
-            if not isinstance(modified_ns, int) or modified_ns < era_start_ns:
+            modified_ns = source.latest_mtime_ns
+            if modified_ns < era_start_ns:
                 skipped_pre_era += 1
                 continue
             session_key = f"{project_key}:{raw_id}"
             prior = attempts.get(session_key)
             if (
                 prior is not None
-                and prior.get("source_revision") == revision
+                and prior.get("source_revision") == source.source_state
                 and int(prior.get("attempts") or 0) >= MAX_ATTEMPTS
+                and prior.get("last_error")
             ):
+                exhausted += 1
                 continue
             candidates.append(
                 {
                     "session_key": session_key,
                     "session_id": raw_id,
                     "project_key": project_key,
-                    "source_revision": revision,
+                    "source_state": source.source_state,
                     "last_modified_ns": modified_ns,
-                    "bytes": session.get("bytes") if isinstance(session.get("bytes"), int) else 0,
+                    "bytes": source.total_bytes,
                 }
             )
 
@@ -326,24 +321,47 @@ class ClaudeCaptureReconciler:
             batch.append(item)
             budget += size
 
-        for item in oversized[:MAX_SELECTED_SESSIONS]:
-            await self._record_attempt(
-                item["session_key"],
-                item["source_revision"],
-                f"transcript exceeds the {BATCH_BYTE_BUDGET}-byte import budget",
-            )
+        if not dry_run:
+            for item in oversized[:MAX_SELECTED_SESSIONS]:
+                await self._record_attempt(
+                    item["session_key"],
+                    item["source_state"],
+                    f"transcript exceeds the {BATCH_BYTE_BUDGET}-byte import budget",
+                )
 
         report = {
             "status": "ok",
             "cloud_sessions": len(known),
-            "local_sessions": len(preview.get("sessions", [])),
+            "local_sessions": len(local_sources),
             "missing": len(candidates),
+            "exhausted": exhausted,
             "skipped_pre_era": skipped_pre_era,
             "era_start": era_start.isoformat(),
             "enqueued": 0,
             "batch": [item["session_key"] for item in batch],
         }
         if not batch or dry_run:
+            return report
+
+        prepared = await self._importer.capture_revisions(
+            {(item["session_id"], item["project_key"]) for item in batch}
+        )
+        ready_batch: list[dict[str, Any]] = []
+        for item in batch:
+            source = prepared.get((item["session_id"], item["project_key"]))
+            if source is None or source.source_revision is None:
+                await self._record_attempt(
+                    item["session_key"],
+                    item["source_state"],
+                    "source changed or disappeared",
+                )
+                continue
+            item["source_revision"] = source.source_revision
+            item["source_state"] = source.source_state
+            ready_batch.append(item)
+        batch = ready_batch
+        report["batch"] = [item["session_key"] for item in batch]
+        if not batch:
             return report
 
         request = ClaudeHistoryImportRequest(
@@ -358,21 +376,23 @@ class ClaudeCaptureReconciler:
             ],
         )
         try:
-            result = await self._importer.import_selected(request)
+            result = await self._importer.import_selected(
+                request, enqueue_origin="capture_recovery"
+            )
         except (ClaudeHistoryConflict, ValueError) as exc:
             # A conflict is normal (the user wrote more mid-pass); record it
             # against every session in the batch so a permanently broken one
             # exhausts its budget instead of blocking the queue forever.
             for item in batch:
                 await self._record_attempt(
-                    item["session_key"], item["source_revision"], str(exc)
+                    item["session_key"], item["source_state"], str(exc)
                 )
             report["status"] = "conflict"
             report["detail"] = str(exc)
             return report
 
         for item in batch:
-            await self._record_attempt(item["session_key"], item["source_revision"], None)
+            await self._record_attempt(item["session_key"], item["source_state"], None)
         report["enqueued"] = len(batch)
         report["import"] = result
         # LOUD ON PURPOSE: a backfill firing means the hook path lost data.
@@ -391,16 +411,20 @@ class ClaudeCaptureReconciler:
             "SELECT session_key, attempts, last_error, enqueued_at "
             "FROM claude_capture_backfill ORDER BY updated_at DESC LIMIT 50"
         )
-        exhausted = [
-            dict(row) for row in rows if int(row["attempts"] or 0) >= MAX_ATTEMPTS
-        ]
+        exhausted_rows = await self._db.fetchall(
+            """SELECT session_key, attempts, last_error, enqueued_at
+               FROM claude_capture_backfill
+               WHERE attempts >= ? AND last_error IS NOT NULL
+               ORDER BY updated_at DESC""",
+            (MAX_ATTEMPTS,),
+        )
         return {
             "enabled": AUTO_BACKFILL_ENABLED,
             "running": self.active,
             "interval_seconds": PASS_INTERVAL_SECONDS,
             "max_per_pass": MAX_SELECTED_SESSIONS,
             "recent": [dict(row) for row in rows],
-            "exhausted": exhausted,
+            "exhausted": [dict(row) for row in exhausted_rows],
         }
 
     # -------------------------------------------------------------- lifecycle

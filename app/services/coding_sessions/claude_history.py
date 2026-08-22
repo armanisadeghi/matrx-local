@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -78,6 +78,7 @@ class _SessionSource:
     source_revision: str | None
     total_bytes: int
     latest_mtime_ns: int
+    source_state: str
     project_key: str
     project_name: str
     title: str
@@ -224,6 +225,35 @@ def _hash_source(
     return _aggregate_revision(parts), total_bytes, latest_mtime_ns
 
 
+def _source_state(streams: tuple[tuple[str, Path], ...]) -> tuple[str, int, int]:
+    """Return a cheap change fence without reading transcript contents.
+
+    The capture reconciler runs unattended. Re-hashing every local transcript on
+    every pass turned a 4.1 GB history into recurring 4.1 GB of disk I/O. Device,
+    inode, size, and nanosecond mtime let it cheaply identify files that need a
+    content revision while still noticing same-size replacements.
+    """
+    digest = hashlib.sha256()
+    total_bytes = 0
+    latest_mtime_ns = 0
+    for stream_key, path in streams:
+        item = path.lstat()
+        if not stat.S_ISREG(item.st_mode) or path.is_symlink():
+            raise ClaudeHistoryConflict("Claude history source is not a regular file")
+        total_bytes += item.st_size
+        latest_mtime_ns = max(latest_mtime_ns, item.st_mtime_ns)
+        for value in (
+            stream_key,
+            str(item.st_dev),
+            str(item.st_ino),
+            str(item.st_size),
+            str(item.st_mtime_ns),
+        ):
+            digest.update(value.encode("utf-8"))
+            digest.update(b"\0")
+    return digest.hexdigest(), total_bytes, latest_mtime_ns
+
+
 def _read_summary(
     projects_root: Path, path: Path, session_id: str
 ) -> tuple[str, str, str | None]:
@@ -284,6 +314,8 @@ def _discover_sources(
     config_dir: Path,
     *,
     hash_content: bool = True,
+    hash_identities: set[tuple[str, str]] | None = None,
+    read_summaries: bool = True,
     index: dict[str, ClaudeSessionIndexEntry] | None = None,
 ) -> tuple[list[_SessionSource], dict[str, int]]:
     # Claude's desktop session index holds the EXACT sidebar label for each
@@ -337,35 +369,43 @@ def _discover_sources(
                     ):
                         stream_list.append((f"subagent:{subagent.stem}", subagent))
             streams = tuple(stream_list)
+            project_key = "claude-local:" + _sha256_text(str(project_dir.resolve()))
             blocked_reason = None
             try:
-                if hash_content:
+                source_state, stat_bytes, stat_mtime_ns = _source_state(streams)
+                should_hash = hash_content or (
+                    hash_identities is not None
+                    and (session_id, project_key) in hash_identities
+                )
+                if should_hash:
                     revision, total_bytes, latest_mtime_ns = _hash_source(
                         projects_root, streams
                     )
                 else:
-                    secure_stats = [path.lstat() for _key, path in streams]
-                    total_bytes = sum(item.st_size for item in secure_stats)
-                    latest_mtime_ns = max(item.st_mtime_ns for item in secure_stats)
+                    total_bytes = stat_bytes
+                    latest_mtime_ns = stat_mtime_ns
                     revision = None
                     if total_bytes > MAX_IMPORT_BYTES:
                         blocked_reason = "source_exceeds_import_byte_cap"
             except ValueError:
                 revision = None
                 blocked_reason = "source_exceeds_import_byte_cap"
-                secure_stats = [path.lstat() for _key, path in streams]
-                total_bytes = sum(item.st_size for item in secure_stats)
-                latest_mtime_ns = max(item.st_mtime_ns for item in secure_stats)
+                source_state, total_bytes, latest_mtime_ns = _source_state(streams)
             except (ClaudeHistoryConflict, FileNotFoundError, OSError):
                 continue
             all_file_count += len(streams)
             all_bytes += total_bytes
-            try:
-                title, project_name, git_branch = _read_summary(
-                    projects_root, main_file, session_id
-                )
-            except (ClaudeHistoryConflict, FileNotFoundError, OSError):
-                continue
+            if read_summaries:
+                try:
+                    title, project_name, git_branch = _read_summary(
+                        projects_root, main_file, session_id
+                    )
+                except (ClaudeHistoryConflict, FileNotFoundError, OSError):
+                    continue
+            else:
+                title = f"Claude session {session_id[:8]}"
+                project_name = "Local Claude project"
+                git_branch = None
             index_entry = session_index.get(session_id)
             if index_entry is not None:
                 title = index_entry.title or title
@@ -380,8 +420,8 @@ def _discover_sources(
                     source_revision=revision,
                     total_bytes=total_bytes,
                     latest_mtime_ns=latest_mtime_ns,
-                    project_key="claude-local:"
-                    + _sha256_text(str(project_dir.resolve())),
+                    source_state=source_state,
+                    project_key=project_key,
                     project_name=project_name,
                     title=title,
                     git_branch=git_branch,
@@ -434,6 +474,48 @@ class ClaudeHistoryImporter:
             read_session_index, self._sessions_dir
         )
         return entries
+
+    async def capture_inventory(
+        self,
+    ) -> tuple[_AccountSnapshot, list[_SessionSource]]:
+        """Stat every local session for recovery without hashing transcript bytes.
+
+        This is intentionally separate from the user-facing preview. Preview
+        promises content-bound revisions for every displayed row; the background
+        reconciler first needs only identity, size, and a cheap change fence so it
+        can find candidates beyond the newest 200 without re-reading gigabytes.
+        """
+        account, discovered = await asyncio.gather(
+            self._account_reader(),
+            asyncio.to_thread(
+                _discover_sources,
+                self._config_dir,
+                hash_content=False,
+                read_summaries=False,
+            ),
+        )
+        sources, _totals = discovered
+        return account, sources
+
+    async def capture_revisions(
+        self, identities: set[tuple[str, str]]
+    ) -> dict[tuple[str, str], _SessionSource]:
+        """Hash only the bounded recovery candidates selected from inventory."""
+        if not identities:
+            return {}
+        sources, _totals = await asyncio.to_thread(
+            _discover_sources,
+            self._config_dir,
+            hash_content=False,
+            hash_identities=identities,
+            read_summaries=False,
+        )
+        return {
+            (source.session_id, source.project_key): source
+            for source in sources
+            if (source.session_id, source.project_key) in identities
+            and source.source_revision is not None
+        }
 
     async def preview(self, *, limit: int = 50) -> dict[str, Any]:
         if not 1 <= limit <= MAX_PREVIEW_SESSIONS:
@@ -509,7 +591,12 @@ class ClaudeHistoryImporter:
         }
 
     async def import_selected(
-        self, request: ClaudeHistoryImportRequest
+        self,
+        request: ClaudeHistoryImportRequest,
+        *,
+        enqueue_origin: Literal[
+            "explicit_history", "capture_recovery", "local_runtime"
+        ] = "explicit_history",
     ) -> dict[str, Any]:
         account = await self._account_reader()
         if not account.available or account.account_key is None:
@@ -622,7 +709,9 @@ class ClaudeHistoryImporter:
         # commit. A label failure can therefore never leave a 500 response
         # behind transcript rows the caller was told did not enqueue.
         transcript_count = len(requests)
-        queued = await outbox.enqueue_many([*requests, *label_requests])
+        queued = await outbox.enqueue_many(
+            [*requests, *label_requests], enqueue_origin=enqueue_origin
+        )
         duplicate_flags = queued["duplicates_by_index"]
         transcript_duplicates = sum(duplicate_flags[:transcript_count])
         label_duplicates = sum(duplicate_flags[transcript_count:])

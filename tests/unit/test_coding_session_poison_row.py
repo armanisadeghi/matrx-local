@@ -28,7 +28,7 @@ from app.services.coding_sessions.models import (
 from app.services.local_db.database import LocalDatabase
 
 _MUTATED = (
-    '[aidream_client] /coding-sessions/bridge → HTTP 409: '
+    "[aidream_client] /coding-sessions/bridge → HTTP 409: "
     '{"error":"entry_mutated","message":"entry was previously stored with a '
     'different payload"}'
 )
@@ -126,4 +126,41 @@ async def test_poison_row_is_quarantined_and_the_queue_drains(tmp_path: Path) ->
     assert len(rows) == 1
     assert rows[0]["http_status"] == 409
     assert poison in str(rows[0]["envelope_json"])
+    await db.close()
+
+
+@pytest.mark.anyio
+async def test_invalid_local_envelope_is_quarantined_without_retrying(
+    tmp_path: Path,
+) -> None:
+    db = LocalDatabase(tmp_path / "matrx.db")
+    await db.connect()
+    await db.execute(
+        """INSERT INTO auth_tokens (key, access_token, user_id, updated_at)
+           VALUES ('current_user', 'test-token', ?, datetime('now'))""",
+        ("00000000-0000-4000-8000-000000000001",),
+    )
+    await db.commit()
+
+    client = _Client("never-refuse")
+    outbox = CodingSessionBridgeOutbox(db=db, client=client, cloud_enabled=True)
+    await outbox.enqueue(_request(str(uuid4())))
+    accepted_event = str(uuid4())
+    await outbox.enqueue(_request(accepted_event))
+    await db.execute(
+        "UPDATE coding_session_bridge_outbox SET envelope_json='{}' WHERE id=1"
+    )
+    await db.commit()
+
+    result = await outbox.sync_pending()
+
+    assert result["sent"] == 1
+    assert client.accepted == [accepted_event]
+    assert await outbox.pending_count() == 0
+    rows = await db.fetchall(
+        "SELECT http_status, last_error FROM coding_session_bridge_quarantine"
+    )
+    assert len(rows) == 1
+    assert rows[0]["http_status"] is None
+    assert "integrity" in str(rows[0]["last_error"])
     await db.close()

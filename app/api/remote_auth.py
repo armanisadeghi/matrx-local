@@ -46,7 +46,7 @@ from __future__ import annotations
 import hashlib
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
 
 import httpx
 
@@ -97,6 +97,22 @@ class VerifiedUser:
     is_anon: bool
 
 
+TokenVerificationStatus = Literal[
+    "verified",
+    "invalid",
+    "unavailable",
+    "unconfigured",
+]
+
+
+@dataclass(frozen=True)
+class TokenVerificationResult:
+    """Issuer-verification result with invalid and unavailable kept distinct."""
+
+    status: TokenVerificationStatus
+    user: Optional[VerifiedUser] = None
+
+
 # Positive results cached briefly to keep the auth hot-path off the network.
 # Keyed by a hash of the token (never store the raw token in a process-global
 # dict). Negative results get a shorter TTL so a freshly-issued token isn't
@@ -139,25 +155,26 @@ def _cache_put(key: str, value: Optional[VerifiedUser]) -> None:
     _verify_cache[key] = (time.monotonic() + ttl, value)
 
 
-async def verify_supabase_token(token: str) -> Optional[VerifiedUser]:
-    """Validate a Supabase access token via the auth server; cache the result.
+async def verify_supabase_token_result(token: str) -> TokenVerificationResult:
+    """Validate a token against the configured Supabase Auth issuer.
 
-    Returns a :class:`VerifiedUser` when the token is genuine and unexpired,
-    or ``None`` when it is invalid/expired/unverifiable. Never raises — a
-    network failure is treated as "not verified" (fail closed) so an
-    unreachable auth server cannot turn into an auth bypass.
+    ``invalid`` is an issuer verdict and may be cached briefly. ``unavailable``
+    means the issuer could not be reached or returned a transient server error;
+    callers that persist credentials must not erase a previously-good session
+    merely because validation infrastructure is temporarily unavailable.
     """
     if not token:
-        return None
+        return TokenVerificationResult("invalid")
     if not (SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY):
-        # Without a configured auth server there is no way to verify; callers
-        # that require verification will reject. Fail closed.
-        return None
+        return TokenVerificationResult("unconfigured")
 
     key = _token_key(token)
     hit, cached = _cache_get(key)
     if hit:
-        return cached
+        return TokenVerificationResult(
+            "verified" if cached is not None else "invalid",
+            cached,
+        )
 
     url = f"{SUPABASE_URL.rstrip('/')}/auth/v1/user"
     headers = {
@@ -170,24 +187,26 @@ async def verify_supabase_token(token: str) -> Optional[VerifiedUser]:
             resp = await client.get(url, headers=headers)
     except Exception as exc:
         logger.debug("[remote_auth] token introspection network error: %s", exc)
-        # Do NOT cache transient network failures as a hard negative for the
-        # full negative TTL — a brief blip shouldn't lock out a valid user.
-        return None
+        return TokenVerificationResult("unavailable")
 
-    if resp.status_code != 200:
+    if resp.status_code in {401, 403}:
         _cache_put(key, None)
-        return None
+        return TokenVerificationResult("invalid")
+    if resp.status_code != 200:
+        logger.debug(
+            "[remote_auth] token introspection temporarily unavailable (HTTP %s)",
+            resp.status_code,
+        )
+        return TokenVerificationResult("unavailable")
 
     try:
         data = resp.json()
     except Exception:
-        _cache_put(key, None)
-        return None
+        return TokenVerificationResult("unavailable")
 
     uid = data.get("id")
     if not isinstance(uid, str) or not uid:
-        _cache_put(key, None)
-        return None
+        return TokenVerificationResult("unavailable")
 
     email = data.get("email")
     role = data.get("role") or data.get("aud")
@@ -198,7 +217,18 @@ async def verify_supabase_token(token: str) -> Optional[VerifiedUser]:
         is_anon=is_anon,
     )
     _cache_put(key, user)
-    return user
+    return TokenVerificationResult("verified", user)
+
+
+async def verify_supabase_token(token: str) -> Optional[VerifiedUser]:
+    """Validate a Supabase access token via the auth server; cache the result.
+
+    Returns a :class:`VerifiedUser` when the token is genuine and unexpired,
+    or ``None`` when it is invalid/expired/unverifiable. Never raises — a
+    network failure is treated as "not verified" (fail closed) so an
+    unreachable auth server cannot turn into an auth bypass.
+    """
+    return (await verify_supabase_token_result(token)).user
 
 
 def invalidate_token(token: str) -> None:

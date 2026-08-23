@@ -425,6 +425,11 @@ Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding/codin
   and `complete=true`. A legacy, truncated, changing, or malformed response
   blocks the pass; title sync never mutates Claude's files from partial cloud
   knowledge.
+- **The local index must also be complete.** The reader reports actual
+  truncation separately from its 50,000-file bound. Apply, verify, and retry
+  fail closed if any candidate was truncated or unreadable; preview/status
+  remain available so the user can inspect the blocker. A record must also
+  prove writable before the writer will touch it.
 - **Every compared provider detail comes back from AI Dream.** Identity rows
   expose the last acknowledged Claude project display name, git branch,
   worktree name, archive state, pin state/rank, and category alongside title
@@ -442,9 +447,14 @@ Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding/codin
   unobserved, never invented or treated as equal.
 - **A write-down begins with a durable intent.** The intent is committed before
   any Claude index file is opened for mutation. Every copy outcome is then
-  recorded, including partial writes/refusals, and the convergence observation
-  carries its receipt id. A failed/partial intent is individually retryable
-  with fresh byte/mtime fences. The UI pages this evidence through
+  recorded before enqueue, including partial writes/refusals, and the
+  convergence observation carries its receipt id. A write followed by enqueue
+  failure remains an explicit retry obligation; the pushed-title ledger advances
+  only after the envelope is durable. On restart, abandoned operations close as
+  failed and orphaned intents gain an inspectable `recovery_required` row. A
+  failed/partial intent is individually retryable with fresh byte/mtime fences;
+  retrying an already verified intent is a no-op. The UI pages this evidence
+  with an opaque compound keyset cursor through
   `/coding-session/claude/labels/operations/{operation_id}` and proves final
   state through the operation's `/verify` endpoint.
 - **Pins + categories ride the same observation (2026-08-21).** The desktop app keeps pins and

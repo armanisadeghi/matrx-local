@@ -66,6 +66,9 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
 - **Human steps are guided sessions.** Anything only Arman can do: one link, one task,
   what to look for, what to report — never a list or menu. →
   `/Users/armanisadeghi/code/common-docs/policies/human-steps-are-guided-sessions.md`
+- **Every org-scoped write carries an explicit `organization_id`.** Database defaults,
+  personal/system fallbacks, and parent-inheritance triggers are defects. Emergency work order:
+  `/Users/armanisadeghi/code/common-docs/projects/no-db-assigned-org/PLAN.md`
 
 ## Configuration posture — everything here ships to the user
 

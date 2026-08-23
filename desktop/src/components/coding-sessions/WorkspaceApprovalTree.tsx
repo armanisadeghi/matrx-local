@@ -3,6 +3,8 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Copy,
+  ExternalLink,
   Folder,
   FolderCheck,
   FolderGit2,
@@ -14,6 +16,8 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { invoke } from "@tauri-apps/api/core";
 import { engine } from "@/lib/api";
 import type {
   WorkspaceDiscoveryNode,
@@ -41,6 +45,14 @@ export function hasProject(node: WorkspaceDiscoveryNode): boolean {
   return node.kind !== "directory" || node.children.some(hasProject);
 }
 
+export function filterWorkspaceNode(node: WorkspaceDiscoveryNode, query: string): WorkspaceDiscoveryNode | null {
+  const normalized = query.trim().toLocaleLowerCase();
+  if (!normalized) return node;
+  const children = node.children.map((child) => filterWorkspaceNode(child, normalized)).filter((child): child is WorkspaceDiscoveryNode => child !== null);
+  const matches = node.name.toLocaleLowerCase().includes(normalized) || node.path.toLocaleLowerCase().includes(normalized) || node.project_kinds.some((kind) => kind.toLocaleLowerCase().includes(normalized));
+  return matches || children.length > 0 ? { ...node, children } : null;
+}
+
 function projectLabel(node: WorkspaceDiscoveryNode): string {
   if (node.kind === "git_repository") return "Git repository";
   if (node.project_kinds.length === 0) return "Project";
@@ -53,6 +65,8 @@ function WorkspaceNode({
   busyPath,
   onApprove,
   onRevoke,
+  onCopy,
+  onOpen,
   depth = 0,
 }: {
   node: WorkspaceDiscoveryNode;
@@ -60,6 +74,8 @@ function WorkspaceNode({
   busyPath: string | null;
   onApprove: (path: string) => Promise<void>;
   onRevoke: (path: string) => Promise<void>;
+  onCopy: (path: string) => void;
+  onOpen: (path: string) => Promise<void>;
   depth?: number;
 }) {
   const visibleChildren = useMemo(
@@ -71,6 +87,7 @@ function WorkspaceNode({
   const inheritedApproval = approvedFolders.some(
     (folder) => folder !== node.path && isWithin(folder, node.path),
   );
+  const inheritedFrom = approvedFolders.find((folder) => folder !== node.path && isWithin(folder, node.path));
   const isProject = node.kind !== "directory";
   const hasChildren = visibleChildren.length > 0;
 
@@ -107,6 +124,8 @@ function WorkspaceNode({
         <span className="min-w-0 flex-1 truncate text-sm" title={node.path}>
           {node.name}
         </span>
+        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 opacity-70 hover:opacity-100" onClick={() => onCopy(node.path)} aria-label={`Copy path for ${node.name}`}><Copy className="h-3.5 w-3.5" /></Button>
+        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 opacity-70 hover:opacity-100" onClick={() => void onOpen(node.path)} aria-label={`Open ${node.name} in Finder`}><ExternalLink className="h-3.5 w-3.5" /></Button>
         {isProject && (
           <span className="hidden text-xs text-muted-foreground sm:inline">
             {projectLabel(node)}
@@ -134,7 +153,7 @@ function WorkspaceNode({
             </Button>
           </>
         ) : inheritedApproval ? (
-          <Badge variant="outline">Approved by parent</Badge>
+          <Badge variant="outline" title={inheritedFrom}>Inherited approval</Badge>
         ) : isProject ? (
           <Button
             type="button"
@@ -163,6 +182,8 @@ function WorkspaceNode({
               busyPath={busyPath}
               onApprove={onApprove}
               onRevoke={onRevoke}
+              onCopy={onCopy}
+              onOpen={onOpen}
               depth={depth + 1}
             />
           ))}
@@ -182,17 +203,26 @@ export function WorkspaceApprovalTree({
   const [discovery, setDiscovery] = useState<WorkspaceDiscoveryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [busyPath, setBusyPath] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const reportError = useCallback((reason: unknown) => {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    setLocalError(message);
+    onError(message);
+  }, [onError]);
 
   const discover = useCallback(async () => {
     setLoading(true);
     try {
       setDiscovery(await engine.discoverRuntimeWorkspaces());
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : String(reason));
+      reportError(reason);
     } finally {
       setLoading(false);
     }
-  }, [onError]);
+  }, [reportError]);
 
   useEffect(() => {
     void discover();
@@ -204,7 +234,7 @@ export function WorkspaceApprovalTree({
       const { open } = await import("@tauri-apps/plugin-dialog");
       selected = await open({ directory: true, multiple: false });
     } catch (reason) {
-      onError(
+      reportError(
         reason instanceof Error
           ? reason.message
           : "The native folder picker is unavailable.",
@@ -217,13 +247,14 @@ export function WorkspaceApprovalTree({
       await engine.addRuntimeWorkspaceRoot(selected);
       await onChanged();
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : String(reason));
+      reportError(reason);
     } finally {
       setBusyPath(null);
     }
   };
 
   const mutateApproval = async (path: string, approve: boolean) => {
+    if (!approve && !window.confirm(`Revoke agent access to ${path}? Active runs are not stopped, but future runs will no longer be allowed to start there.`)) return;
     setBusyPath(path);
     try {
       if (approve) await engine.approveRuntimeFolder(path);
@@ -240,19 +271,20 @@ export function WorkspaceApprovalTree({
           : current,
       );
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : String(reason));
+      reportError(reason);
     } finally {
       setBusyPath(null);
     }
   };
 
   const removeRoot = async (path: string) => {
+    if (!window.confirm(`Remove ${path} from code locations? Existing folder approvals beneath it may become unusable until the location is added again.`)) return;
     setBusyPath(path);
     try {
       const result = await engine.removeRuntimeWorkspaceRoot(path);
       await onChanged();
       if (result.affected_approvals?.length) {
-        onError(
+        reportError(
           `${result.affected_approvals.length} existing approval${
             result.affected_approvals.length === 1 ? " is" : "s are"
           } now outside your code locations. Revoke ${
@@ -261,13 +293,27 @@ export function WorkspaceApprovalTree({
         );
       }
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : String(reason));
+      reportError(reason);
     } finally {
       setBusyPath(null);
     }
   };
 
   const roots = discovery?.roots ?? [];
+  const filteredRoots = useMemo(() => roots.map((root) => filterWorkspaceNode(root, query)).filter((root): root is WorkspaceDiscoveryNode => root !== null), [query, roots]);
+
+  const copyPath = (path: string) => {
+    void navigator.clipboard.writeText(path).then(() => setFeedback(`Copied ${path}`)).catch(reportError);
+  };
+
+  const openPath = async (path: string) => {
+    try {
+      await invoke("open_filesystem_path", { path, reveal: false });
+      setFeedback(`Opened ${path}`);
+    } catch (reason) {
+      reportError(reason);
+    }
+  };
 
   return (
     <section aria-labelledby="code-locations-heading" className="space-y-3">
@@ -309,6 +355,10 @@ export function WorkspaceApprovalTree({
         </div>
       </div>
 
+      {workspaceRoots.length > 0 && <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter projects and paths" aria-label="Filter code locations and projects" />}
+      {feedback && <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground" role="status">{feedback}</div>}
+      {localError && <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert"><span>{localError}</span><Button type="button" variant="outline" size="sm" onClick={() => { setLocalError(null); void discover(); }}>Clear and scan again</Button></div>}
+
       {workspaceRoots.length === 0 && !loading && (
         <div className="rounded-md border border-dashed p-5 text-center">
           <FolderPlus className="mx-auto h-6 w-6 text-muted-foreground" />
@@ -320,8 +370,8 @@ export function WorkspaceApprovalTree({
         </div>
       )}
 
-      {workspaceRoots.map((root) => {
-        const node = roots.find((candidate) => candidate.path === root);
+      {workspaceRoots.filter((root) => !query || filteredRoots.some((candidate) => candidate.path === root)).map((root) => {
+        const node = filteredRoots.find((candidate) => candidate.path === root);
         const exactApproval = approvedFolders.includes(root);
         return (
           <div key={root} className="rounded-md border">
@@ -330,6 +380,8 @@ export function WorkspaceApprovalTree({
               <span className="min-w-0 flex-1 truncate font-mono text-xs" title={root}>
                 {root}
               </span>
+              <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => copyPath(root)} aria-label={`Copy code location ${root}`}><Copy className="h-3.5 w-3.5" /></Button>
+              <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => void openPath(root)} aria-label={`Open code location ${root} in Finder`}><ExternalLink className="h-3.5 w-3.5" /></Button>
               {exactApproval ? (
                 <>
                   <Badge variant="secondary">All projects approved</Badge>
@@ -381,6 +433,8 @@ export function WorkspaceApprovalTree({
                   busyPath={busyPath}
                   onApprove={(path) => mutateApproval(path, true)}
                   onRevoke={(path) => mutateApproval(path, false)}
+                  onCopy={copyPath}
+                  onOpen={openPath}
                 />
               </ul>
             ) : loading ? (
@@ -395,6 +449,8 @@ export function WorkspaceApprovalTree({
           </div>
         );
       })}
+
+      {query && filteredRoots.length === 0 && <div className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">No discovered projects or paths match “{query}”.</div>}
 
       {discovery && (
         <p className="text-xs text-muted-foreground" aria-live="polite">

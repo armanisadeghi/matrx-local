@@ -357,6 +357,11 @@ export function ClaudeHistorySync() {
       (selectedSessions.length > preview.limits.selected_sessions ||
         selectedBytes > preview.limits.import_bytes),
   );
+  const selectionLimitReason = preview && selectedSessions.length > preview.limits.selected_sessions
+    ? `The selection has ${selectedSessions.length} sessions; this operation allows ${preview.limits.selected_sessions}.`
+    : preview && selectedBytes > preview.limits.import_bytes
+      ? `The selection is ${formatBytes(selectedBytes)}; this operation allows ${formatBytes(preview.limits.import_bytes)}.`
+      : null;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -491,7 +496,7 @@ export function ClaudeHistorySync() {
                   Copy selected to local delivery queue
                 </Button>
               </div>
-              {selectionOverLimit && <p className="text-sm text-destructive" role="alert">This selection exceeds the operation limits shown above. Remove sessions before copying.</p>}
+              {selectionLimitReason && <p className="text-sm text-destructive" role="alert">{selectionLimitReason} Remove sessions before copying.</p>}
             </CardContent>
           </Card>
         )}
@@ -770,7 +775,7 @@ function OverviewPanel({
                         {PROVIDER_SCOPE[provider]}
                       </p>
                       {readiness ? <div className="mt-2 space-y-2 rounded-md border px-2.5 py-2 text-xs">
-                        <div className="flex flex-wrap gap-1.5"><Badge variant={readiness.product.installed ? "secondary" : "outline"}>{readiness.product.installed ? "Product installed" : "Product not found"}</Badge><Badge variant={readiness.product.running ? "secondary" : "outline"}>{readiness.product.running ? "Running now" : "Not running"}</Badge><Badge variant={readiness.adapter.detected ? "secondary" : "outline"}>{readiness.adapter.detected ? "AI Matrx adapter found" : "AI Matrx adapter not found"}</Badge><Badge variant="outline">Connection unverified</Badge></div>
+                        <div className="flex flex-wrap gap-1.5"><Badge variant={readiness.product.installed === true ? "secondary" : "outline"}>{readiness.product.installed === true ? "Product installed" : readiness.product.installed === false ? "Product not found" : "Product installation unknown"}</Badge><Badge variant={readiness.product.running === true ? "secondary" : "outline"}>{readiness.product.running === true ? "Running now" : readiness.product.running === false ? "Not running" : "Running state unknown"}</Badge><Badge variant={readiness.adapter.detected ? "secondary" : "outline"}>{readiness.adapter.detected ? "AI Matrx adapter found" : "AI Matrx adapter not found"}</Badge><Badge variant="outline">Connection unverified</Badge></div>
                         <p className="text-muted-foreground">{readiness.connection.detail}</p>
                         {readiness.upstream_spool.supported && <p className="text-muted-foreground">Adapter spool: {readiness.upstream_spool.pending ?? "unknown"} pending · {readiness.upstream_spool.poison ?? "unknown"} needs attention · {readiness.upstream_spool.in_flight ?? "unknown"} in flight</p>}
                         {readiness.actions.length > 0 && <div className="flex flex-wrap gap-2">{readiness.actions.map((action) => <Button key={action.id} type="button" size="sm" variant="outline" onClick={() => setGuidedInstruction({ label: action.label, instruction: action.instruction })}>{action.label}</Button>)}</div>}

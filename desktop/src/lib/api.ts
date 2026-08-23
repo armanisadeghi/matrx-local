@@ -564,7 +564,7 @@ export interface CodingSessionBridgeStatus {
 export interface CodingSessionProviderReadiness {
   provider: CodingSessionProvider;
   display_name: string;
-  product: { installed: boolean; version: string | null; running: boolean; evidence: string[] };
+  product: { installed: boolean | null; version: string | null; running: boolean | null; evidence: string[] };
   adapter: {
     detected: boolean;
     configured: boolean | null;

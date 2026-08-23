@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hasProject, isWithin } from "./WorkspaceApprovalTree";
+import { filterWorkspaceNode, hasProject, isWithin } from "./WorkspaceApprovalTree";
 import type { WorkspaceDiscoveryNode } from "@/lib/api";
 
 function node(
@@ -31,5 +31,16 @@ describe("workspace approval tree", () => {
     const team = node("/code/team", "directory", [project]);
     expect(hasProject(team)).toBe(true);
     expect(hasProject(node("/code/archive"))).toBe(false);
+  });
+
+  it("filters by descendant name while preserving the path to the match", () => {
+    const root = node("/code", "directory", [
+      node("/code/matrx-local", "git_repository"),
+      node("/code/other", "git_repository"),
+    ]);
+    const filtered = filterWorkspaceNode(root, "matrx");
+    expect(filtered?.path).toBe("/code");
+    expect(filtered?.children.map((child) => child.path)).toEqual(["/code/matrx-local"]);
+    expect(filterWorkspaceNode(root, "missing")).toBeNull();
   });
 });

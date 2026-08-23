@@ -25,8 +25,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     StrictBool,
+    Field,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 # Provenance tier of the currently-applied config, in precedence order.
@@ -63,6 +65,40 @@ class AppConfigNotice(BaseModel):
     url: str | None = None
 
 
+class CodingSessionRuntimeConfig(BaseModel):
+    """Public operator knobs for the local Claude runtime.
+
+    Defaults are the compiled offline tier. Remote/cache rows may override
+    them without an app release; malformed values reject the whole row rather
+    than partially applying an unsafe execution policy.
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    max_active_runs: int = Field(default=4, ge=1, le=32)
+    execution_timeout_seconds: float = Field(default=3600.0, ge=30.0, le=86_400.0)
+    idle_timeout_seconds: float = Field(default=900.0, ge=15.0, le=10_800.0)
+    identity_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
+    start_identity_wait_seconds: float = Field(default=20.0, ge=0.1, le=120.0)
+    interrupt_timeout_seconds: float = Field(default=10.0, ge=0.1, le=120.0)
+    shutdown_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
+    mirror_timeout_seconds: float = Field(default=120.0, ge=1.0, le=1_800.0)
+    mirror_conflict_retries: int = Field(default=3, ge=1, le=10)
+    mirror_retry_delay_seconds: float = Field(default=1.0, ge=0.0, le=30.0)
+    identity_poll_seconds: float = Field(default=0.5, ge=0.05, le=5.0)
+    event_buffer_max: int = Field(default=2000, ge=100, le=20_000)
+    subscriber_queue_max: int = Field(default=4000, ge=100, le=40_000)
+    status_history_runs: int = Field(default=200, ge=10, le=5000)
+
+    @model_validator(mode="after")
+    def _subscriber_queue_covers_replay(self) -> CodingSessionRuntimeConfig:
+        if self.subscriber_queue_max < self.event_buffer_max + 2:
+            raise ValueError(
+                "subscriber_queue_max must be at least event_buffer_max + 2"
+            )
+        return self
+
+
 def _validate_service_url(value: str) -> str:
     """Require an http(s) URL; https for anything that isn't loopback.
 
@@ -93,6 +129,9 @@ class AppConfigV1(BaseModel):
     # coercion would mask an operator typo as an applied flag.
     flags: dict[str, StrictBool] = {}
     notice: AppConfigNotice | None = None
+    coding_session_runtime: CodingSessionRuntimeConfig = Field(
+        default_factory=CodingSessionRuntimeConfig
+    )
 
     @field_validator(
         "aidream_server_url",

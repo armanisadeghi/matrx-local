@@ -214,7 +214,7 @@ async def main() -> None:
         "provider_session_id")}))
     kinds = await _watch(started["runtime_id"], "start-run")
     print("[e2e] event kinds:", kinds)
-    final = runtime.status(started["runtime_id"])
+    final = await runtime.status(started["runtime_id"])
     assert final["status"] == "completed", final
     assert final["conversation_id"], "conversation_id was never established"
     provider_session_id = final["provider_session_id"]
@@ -246,7 +246,7 @@ async def main() -> None:
         )
     )
     await _watch(resumed["runtime_id"], "resume-run")
-    resumed_final = runtime.status(resumed["runtime_id"])
+    resumed_final = await runtime.status(resumed["runtime_id"])
     assert resumed_final["status"] == "completed", resumed_final
     assert resumed_final["provider_session_id"] == provider_session_id, (
         "resume changed the provider session identity"
@@ -276,7 +276,7 @@ async def main() -> None:
     cancel_result = await runtime.cancel(cancel_run["runtime_id"])
     print("[e2e] cancel:", cancel_result)
     await _watch(cancel_run["runtime_id"], "cancel-run")
-    cancel_final = runtime.status(cancel_run["runtime_id"])
+    cancel_final = await runtime.status(cancel_run["runtime_id"])
     print("[e2e] cancel final:", cancel_final["status"])
     assert cancel_final["status"] == "cancelled", cancel_final
     # Drain whatever the settle mirror captured; delivery must still succeed.

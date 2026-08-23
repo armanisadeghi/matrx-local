@@ -41,6 +41,7 @@ from app.services.app_config.models import (
     AppConfigError,
     AppConfigNotice,
     AppConfigRow,
+    CodingSessionRuntimeConfig,
     ResolvedAppConfig,
     Tier,
     parse_row,
@@ -101,6 +102,9 @@ _COMPILED_DEFAULTS_ROW: dict = {
         "web_app_origin": WEB_APP_ORIGIN_DEFAULT,
         "flags": {},
         "notice": None,
+        "coding_session_runtime": CodingSessionRuntimeConfig().model_dump(
+            mode="json"
+        ),
     },
     "updated_at": None,
 }
@@ -327,7 +331,9 @@ class AppConfigService:
 
     def _write_cache(self, row: AppConfigRow, fetched_at: datetime) -> None:
         payload = {
-            "row": row.model_dump(mode="json"),
+            # Preserve which additive fields the remote row actually supplied;
+            # materialized defaults would later falsify cache provenance.
+            "row": row.model_dump(mode="json", exclude_unset=True),
             "fetched_at": fetched_at.isoformat(),
         }
         try:

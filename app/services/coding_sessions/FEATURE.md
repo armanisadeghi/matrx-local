@@ -626,6 +626,26 @@ Claude Code's own UI, and stays locally `--resume`-able.
   sequence and UTC emission time. SSE accepts `after_sequence`; if that cursor
   predates the bounded replay buffer it emits `stream_gap` with the available
   range so the consumer can refresh status instead of silently missing output.
+- **V30 is the local run/evidence journal.** Run state, provider/session
+  correlation, execution and mirror outcomes, monotonic sequence, and bounded
+  replay evidence commit to SQLite at every transition. Raw start prompts and
+  SDK message content are deliberately not durable: the current in-memory run
+  may show its existing product preview and live SSE content, while restart
+  replay carries an explicit `message_persisted=false` redaction marker. At
+  engine boot, any persisted `starting`/`running` row becomes terminal
+  `interrupted` with `engine_restarted_before_terminal_state`; known runtime
+  IDs remain queryable after restart and only absent IDs return `unknown_runtime`.
+- **Every execution limit is remote app config with a compiled offline
+  fallback.** `config.coding_session_runtime` controls concurrent runs,
+  execution wall clock, SDK-event idle time, transcript identity discovery,
+  mirror/import and interrupt/cancel bounds, shutdown settlement, retry timing,
+  and in-memory/durable replay sizes. Capabilities and status expose the exact
+  effective values with per-field provenance; each run retains its start-time
+  snapshot separately from the current controls. Recent status hydration is
+  memory-bounded while an exact older runtime id remains queryable from SQLite.
+  A mirror timeout is a mirror failure, never
+  an execution failure; a hung mirror/import cannot suppress the durable
+  `runtime_finished` event.
 - Engine shutdown interrupts active runs (Hard Rule 0, wired in `app/main.py`).
 
 Verification: `tests/unit/test_local_claude_runtime.py` (allowlist/approval

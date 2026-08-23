@@ -50,9 +50,12 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
+import aiosqlite
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.common.system_logger import get_logger
+from app.services.app_config import get_app_config
+from app.services.app_config.models import CodingSessionRuntimeConfig
 from app.services.coding_sessions.claude_probe import (
     read_account_snapshot as _read_account_snapshot,
     resolve_claude_executable,
@@ -75,15 +78,25 @@ from app.services.local_db.repositories import TokenRepo
 
 logger = get_logger()
 
-_EVENT_BUFFER_MAX = 2000
-_SUBSCRIBER_QUEUE_MAX = 4000
-_TRANSCRIPT_WAIT_SECONDS = 30.0
-_MIRROR_CONFLICT_RETRIES = 3
-_MAX_ACTIVE_RUNS = 4
+_JOURNAL_BUSY_TIMEOUT_MS = 15_000
+_RESTART_REASON = "engine_restarted_before_terminal_state"
+_PROMPT_NOT_RETAINED = "Prompt not retained"
+_DURABLE_EXECUTION_ERRORS = frozenset(
+    {
+        "Local runtime stopped before a terminal provider result.",
+        "Provider execution became idle beyond the configured limit.",
+        "Provider execution exceeded the configured wall-clock limit.",
+    }
+)
 
 WORKSPACE_ROOTS_SETTING = "claude_runtime_workspace_roots"
 APPROVED_FOLDERS_SETTING = "claude_runtime_approved_folders"
 DEFAULT_WORKSPACE_ROOTS = ["~/code"]
+
+
+def _utc_iso(value: float | None = None) -> str:
+    moment = datetime.now(tz=UTC) if value is None else datetime.fromtimestamp(value, tz=UTC)
+    return moment.isoformat().replace("+00:00", "Z")
 
 
 class LocalRuntimeRefused(RuntimeError):
@@ -93,6 +106,14 @@ class LocalRuntimeRefused(RuntimeError):
         super().__init__(detail)
         self.code = code
         self.detail = detail
+
+
+class _ExecutionIdleTimeout(TimeoutError):
+    """No SDK event arrived inside the configured idle window."""
+
+
+class _ExecutionWallTimeout(TimeoutError):
+    """The whole provider execution exceeded its configured wall clock."""
 
 
 class LocalRuntimeStartRequest(BaseModel):
@@ -150,16 +171,18 @@ class _LocalRun:
     turns_completed: int = 0
     mirror_passes: int = 0
     mirror_error: str | None = None
+    restart_reason: str | None = None
+    runtime_config: dict[str, Any] = field(default_factory=dict)
+    runtime_config_provenance: dict[str, Any] = field(default_factory=dict)
     next_sequence: int = 1
     client: Any = None
     task: asyncio.Task[None] | None = None
-    events: deque[dict[str, Any]] = field(
-        default_factory=lambda: deque(maxlen=_EVENT_BUFFER_MAX)
-    )
+    events: deque[dict[str, Any]] = field(default_factory=deque)
     subscribers: list[asyncio.Queue[dict[str, Any] | None]] = field(
         default_factory=list
     )
     identity_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    emit_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def mirror_status(self) -> str:
         if self.mirror_error is not None:
@@ -182,9 +205,10 @@ class _LocalRun:
             "provider_session_id": self.provider_session_id,
             "conversation_id": self.conversation_id,
             "error": self.error,
-            "started_at": datetime.fromtimestamp(self.started_at, tz=UTC).isoformat(),
+            "restart_reason": self.restart_reason,
+            "started_at": _utc_iso(self.started_at),
             "ended_at": (
-                datetime.fromtimestamp(self.ended_at, tz=UTC).isoformat()
+                _utc_iso(self.ended_at)
                 if self.ended_at
                 else None
             ),
@@ -202,6 +226,10 @@ class _LocalRun:
                 int(self.events[0]["sequence"]) if self.events else None
             ),
             "last_event_sequence": self.next_sequence - 1,
+            "runtime_config_snapshot": {
+                **self.runtime_config,
+                **self.runtime_config_provenance,
+            },
         }
 
 
@@ -260,21 +288,316 @@ class LocalClaudeRuntime:
         importer: ClaudeHistoryImporter | None = None,
         db: Any = None,
         account_reader: Any = _read_account_snapshot,
+        runtime_config: CodingSessionRuntimeConfig | None = None,
     ) -> None:
         self._runs: dict[str, _LocalRun] = {}
         self._importer = importer
         self._db = db
         self._account_reader = account_reader
+        self._injected_runtime_config = runtime_config
         self._lock = asyncio.Lock()
         self._discovery_lock = asyncio.Lock()
+        self._hydrate_lock = asyncio.Lock()
+        self._hydrated = False
 
     def _database(self):
         return self._db if self._db is not None else get_db()
+
+    def _runtime_config(self) -> CodingSessionRuntimeConfig:
+        if self._injected_runtime_config is not None:
+            return self._injected_runtime_config
+        return get_app_config().row.config.coding_session_runtime
+
+    def _runtime_config_status(self) -> dict[str, Any]:
+        config = self._runtime_config()
+        values = config.model_dump(mode="json")
+        if self._injected_runtime_config is not None:
+            return {
+                "source": "injected",
+                "field_sources": {key: "injected" for key in values},
+                **values,
+            }
+        resolved = get_app_config()
+        section_supplied = (
+            "coding_session_runtime" in resolved.row.config.model_fields_set
+        )
+        supplied_fields = config.model_fields_set if section_supplied else set()
+        field_sources = {
+            key: resolved.tier if key in supplied_fields else "compiled_defaults"
+            for key in values
+        }
+        unique_sources = set(field_sources.values())
+        source = next(iter(unique_sources)) if len(unique_sources) == 1 else "mixed"
+        return {"source": source, "field_sources": field_sources, **values}
+
+    def _apply_runtime_config_snapshot(self, run: _LocalRun) -> None:
+        snapshot = self._runtime_config_status()
+        run.runtime_config = {
+            key: value
+            for key, value in snapshot.items()
+            if key not in {"source", "field_sources"}
+        }
+        run.runtime_config_provenance = {
+            "source": snapshot["source"],
+            "field_sources": snapshot["field_sources"],
+        }
+
+    @staticmethod
+    def _durable_execution_error(error: str | None) -> str | None:
+        if error is None or error in _DURABLE_EXECUTION_ERRORS:
+            return error
+        return "Provider execution failed; detailed error was not retained."
+
+    @staticmethod
+    def _durable_mirror_error(error: str | None) -> str | None:
+        if error is None or error in {
+            "mirror_timeout",
+            "transcript_identity_timeout",
+            "claude_account_unavailable",
+            "no_matrx_user",
+        }:
+            return error
+        return "AI Matrx mirror failed; detailed error was not retained."
+
+    @classmethod
+    def _run_upsert(cls, run: _LocalRun) -> tuple[str, tuple[Any, ...]]:
+        durable_error = cls._durable_execution_error(run.error)
+        durable_mirror_error = cls._durable_mirror_error(run.mirror_error)
+        return (
+            """INSERT INTO coding_session_runtime_runs (
+                   runtime_id, session_id, workspace, action, status,
+                   prompt_preview, provider_session_id, provider_project_key,
+                   conversation_id, transcript_path, execution_error,
+                   mirror_passes, mirror_error, cancel_requested, started_at,
+                   ended_at, turns_completed, next_sequence, restart_reason,
+                   runtime_config_json, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(runtime_id) DO UPDATE SET
+                   status=excluded.status,
+                   provider_session_id=excluded.provider_session_id,
+                   provider_project_key=excluded.provider_project_key,
+                   conversation_id=excluded.conversation_id,
+                   transcript_path=excluded.transcript_path,
+                   execution_error=excluded.execution_error,
+                   mirror_passes=excluded.mirror_passes,
+                   mirror_error=excluded.mirror_error,
+                   cancel_requested=excluded.cancel_requested,
+                   ended_at=excluded.ended_at,
+                   turns_completed=excluded.turns_completed,
+                   next_sequence=excluded.next_sequence,
+                   restart_reason=excluded.restart_reason,
+                   runtime_config_json=excluded.runtime_config_json,
+                   updated_at=datetime('now')""",
+            (
+                run.runtime_id,
+                run.session_id,
+                str(run.workspace),
+                run.action,
+                run.status,
+                _PROMPT_NOT_RETAINED,
+                run.provider_session_id,
+                run.provider_project_key,
+                run.conversation_id,
+                str(run.transcript_path) if run.transcript_path is not None else None,
+                durable_error,
+                run.mirror_passes,
+                durable_mirror_error,
+                int(run.cancel_requested),
+                run.started_at,
+                run.ended_at,
+                run.turns_completed,
+                run.next_sequence,
+                run.restart_reason,
+                json.dumps(
+                    {
+                        "values": run.runtime_config,
+                        "provenance": run.runtime_config_provenance,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ),
+        )
+
+    async def _journal_write(
+        self, statements: list[tuple[str, tuple[Any, ...]]]
+    ) -> None:
+        """Commit runtime evidence independently from the shared DB connection."""
+        async with aiosqlite.connect(str(self._database().path)) as connection:
+            await connection.execute(f"PRAGMA busy_timeout={_JOURNAL_BUSY_TIMEOUT_MS}")
+            await connection.execute("PRAGMA synchronous=FULL")
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                for sql, params in statements:
+                    await connection.execute(sql, params)
+                await connection.commit()
+            except BaseException:
+                await connection.rollback()
+                raise
+
+    async def _persist_run(self, run: _LocalRun) -> None:
+        self._ensure_run_config(run)
+        await self._journal_write([self._run_upsert(run)])
+
+    def _ensure_run_config(self, run: _LocalRun) -> None:
+        if not run.runtime_config:
+            self._apply_runtime_config_snapshot(run)
+        if run.events.maxlen is None:
+            run.events = deque(
+                run.events, maxlen=int(run.runtime_config["event_buffer_max"])
+            )
+
+    @classmethod
+    def _journal_event(cls, event: dict[str, Any]) -> dict[str, Any]:
+        """Persist replay evidence without durable prompt/SDK message content."""
+        if event.get("event") == "sdk_message":
+            return {
+                "event": "sdk_message",
+                "sdk_message_type": event.get("sdk_message_type"),
+                "message_persisted": False,
+                "message_redacted_reason": "runtime_content_not_journaled",
+                "sequence": event["sequence"],
+                "emitted_at": event["emitted_at"],
+            }
+        if event.get("event") == "runtime_finished":
+            durable = dict(event)
+            execution = dict(durable.get("execution") or {})
+            execution["error"] = cls._durable_execution_error(execution.get("error"))
+            mirror = dict(durable.get("mirror") or {})
+            mirror["error"] = cls._durable_mirror_error(mirror.get("error"))
+            durable["execution"] = execution
+            durable["mirror"] = mirror
+            durable["error"] = cls._durable_execution_error(durable.get("error"))
+            return durable
+        return event
+
+    def _row_to_run(self, row: Any) -> _LocalRun:
+        raw_config = json.loads(str(row["runtime_config_json"]))
+        values = raw_config.get("values", raw_config)
+        provenance = raw_config.get("provenance", {})
+        config = CodingSessionRuntimeConfig.model_validate(values)
+        return _LocalRun(
+            runtime_id=str(row["runtime_id"]),
+            session_id=str(row["session_id"]),
+            workspace=Path(str(row["workspace"])),
+            action=str(row["action"]),
+            status=str(row["status"]),
+            prompt_preview=str(row["prompt_preview"] or _PROMPT_NOT_RETAINED),
+            provider_session_id=row["provider_session_id"],
+            provider_project_key=row["provider_project_key"],
+            conversation_id=row["conversation_id"],
+            transcript_path=(
+                Path(str(row["transcript_path"]))
+                if row["transcript_path"] is not None
+                else None
+            ),
+            error=row["execution_error"],
+            cancel_requested=bool(row["cancel_requested"]),
+            started_at=float(row["started_at"]),
+            ended_at=(float(row["ended_at"]) if row["ended_at"] is not None else None),
+            turns_completed=int(row["turns_completed"]),
+            mirror_passes=int(row["mirror_passes"]),
+            mirror_error=row["mirror_error"],
+            restart_reason=row["restart_reason"],
+            runtime_config=config.model_dump(mode="json"),
+            runtime_config_provenance=dict(provenance),
+            next_sequence=int(row["next_sequence"]),
+            events=deque(maxlen=config.event_buffer_max),
+        )
+
+    async def _load_run(self, runtime_id: str) -> _LocalRun | None:
+        row = await self._database().fetchone(
+            "SELECT * FROM coding_session_runtime_runs WHERE runtime_id=?",
+            (runtime_id,),
+        )
+        if row is None:
+            return None
+        run = self._row_to_run(row)
+        events = await self._database().fetchall(
+            """SELECT event_json FROM (
+                   SELECT sequence, event_json
+                   FROM coding_session_runtime_events
+                   WHERE runtime_id=? ORDER BY sequence DESC LIMIT ?
+               ) ORDER BY sequence""",
+            (runtime_id, run.runtime_config["event_buffer_max"]),
+        )
+        for event in events:
+            run.events.append(json.loads(str(event["event_json"])))
+        self._runs[runtime_id] = run
+        return run
+
+    async def _recent_runtime_ids(self) -> list[str]:
+        rows = await self._database().fetchall(
+            """SELECT runtime_id FROM coding_session_runtime_runs
+               ORDER BY started_at DESC LIMIT ?""",
+            (self._runtime_config().status_history_runs,),
+        )
+        return [str(row["runtime_id"]) for row in rows]
+
+    async def _enforce_loaded_run_bound(
+        self, *, protected: set[str] | None = None
+    ) -> None:
+        keep = set(await self._recent_runtime_ids())
+        keep.update(protected or set())
+        keep.update(
+            runtime_id
+            for runtime_id, run in self._runs.items()
+            if run.status in {"starting", "running"}
+        )
+        for runtime_id in list(self._runs):
+            if runtime_id not in keep:
+                self._runs.pop(runtime_id, None)
+
+    async def _ensure_hydrated(self) -> None:
+        if self._hydrated:
+            return
+        async with self._hydrate_lock:
+            if self._hydrated:
+                return
+            rows = await self._database().fetchall(
+                """SELECT * FROM coding_session_runtime_runs
+                   WHERE status IN ('starting', 'running') ORDER BY started_at"""
+            )
+            for row in rows:
+                run = self._row_to_run(row)
+                run.status = "interrupted"
+                run.error = "Local runtime stopped before a terminal provider result."
+                run.restart_reason = _RESTART_REASON
+                run.ended_at = time.time()
+                await self._emit(
+                    run,
+                    {
+                        "event": "runtime_interrupted",
+                        "runtime_id": run.runtime_id,
+                        "status": run.status,
+                        "reason": _RESTART_REASON,
+                    },
+                )
+                await self._load_run(run.runtime_id)
+            for runtime_id in await self._recent_runtime_ids():
+                if runtime_id not in self._runs:
+                    await self._load_run(runtime_id)
+            self._hydrated = True
+
+    async def _ensure_run(self, runtime_id: str) -> _LocalRun | None:
+        await self._ensure_hydrated()
+        run = self._runs.get(runtime_id) or await self._load_run(runtime_id)
+        await self._enforce_loaded_run_bound(protected={runtime_id})
+        return run
+
+    async def initialize(self) -> None:
+        """Hydrate durable evidence and settle crash-interrupted runs at boot."""
+        await self._ensure_hydrated()
+
+    @property
+    def shutdown_timeout_seconds(self) -> float:
+        return self._runtime_config().shutdown_timeout_seconds
 
     # ------------------------------------------------------------ capabilities
 
     async def capabilities(self) -> dict[str, Any]:
         """Truthful availability: every prerequisite named, none guessed."""
+        await self._ensure_hydrated()
         reasons: list[str] = []
         try:
             import claude_agent_sdk  # noqa: F401
@@ -312,6 +635,7 @@ class LocalClaudeRuntime:
             "active_runs": len(
                 [r for r in self._runs.values() if r.status in {"starting", "running"}]
             ),
+            "runtime_config": self._runtime_config_status(),
             "capabilities": {
                 "start": True,
                 "send": True,
@@ -594,20 +918,22 @@ class LocalClaudeRuntime:
     # ------------------------------------------------------------------- start
 
     async def start(self, request: LocalRuntimeStartRequest) -> dict[str, Any]:
+        await self._ensure_hydrated()
         capabilities = await self.capabilities()
         if not capabilities["available"]:
             raise LocalRuntimeRefused(
                 "runtime_unavailable", "; ".join(capabilities["reasons"])
             )
         workspace = self._require_approved_workspace(request.workspace)
+        config = self._runtime_config()
         async with self._lock:
             active = [
                 r for r in self._runs.values() if r.status in {"starting", "running"}
             ]
-            if len(active) >= _MAX_ACTIVE_RUNS:
+            if len(active) >= config.max_active_runs:
                 raise LocalRuntimeRefused(
                     "too_many_active_runs",
-                    f"{len(active)} runs are already active (max {_MAX_ACTIVE_RUNS})",
+                    f"{len(active)} runs are already active (max {config.max_active_runs})",
                 )
             if request.resume_session_id is not None:
                 raw_id = self.decode_provider_session_id(request.resume_session_id)
@@ -643,7 +969,10 @@ class LocalClaudeRuntime:
                 workspace=workspace,
                 action=action,
                 prompt_preview=request.prompt[:200],
+                events=deque(maxlen=config.event_buffer_max),
             )
+            self._apply_runtime_config_snapshot(run)
+            await self._persist_run(run)
             self._runs[run.runtime_id] = run
         run.task = asyncio.create_task(
             self._execute(run, request), name=f"claude-local-run:{run.runtime_id}"
@@ -652,52 +981,79 @@ class LocalClaudeRuntime:
         # mirror) so the caller gets the conversation UUID to open. A slow
         # start is not an error — the caller can poll status.
         with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(run.identity_ready.wait(), timeout=20.0)
+            await asyncio.wait_for(
+                run.identity_ready.wait(), timeout=config.start_identity_wait_seconds
+            )
         return run.public_status()
 
-    def status(self, runtime_id: str | None = None) -> dict[str, Any]:
+    async def status(self, runtime_id: str | None = None) -> dict[str, Any]:
+        await self._ensure_hydrated()
         if runtime_id is not None:
-            run = self._runs.get(runtime_id)
+            run = await self._ensure_run(runtime_id)
             if run is None:
                 raise LocalRuntimeRefused("unknown_runtime", f"No run {runtime_id}")
             return run.public_status()
+        await self._enforce_loaded_run_bound()
         return {
+            "runtime_config": self._runtime_config_status(),
             "runs": [
-                run.public_status()
-                for run in sorted(
-                    self._runs.values(), key=lambda r: r.started_at, reverse=True
-                )
+                self._runs[runtime_id].public_status()
+                for runtime_id in await self._recent_runtime_ids()
+                if runtime_id in self._runs
             ]
         }
 
     async def cancel(self, runtime_id: str) -> dict[str, Any]:
-        run = self._runs.get(runtime_id)
+        run = await self._ensure_run(runtime_id)
         if run is None:
             raise LocalRuntimeRefused("unknown_runtime", f"No run {runtime_id}")
+        if run.status not in {"starting", "running"}:
+            return {
+                "runtime_id": runtime_id,
+                "cancelled": False,
+                "status": run.status,
+                "interrupt": {"status": "not_active"},
+            }
         run.cancel_requested = True
+        await self._persist_run(run)
         client = run.client
+        interrupt_status = "not_active"
         if client is not None and run.status in {"starting", "running"}:
             try:
-                await client.interrupt()
+                async with asyncio.timeout(
+                    float(run.runtime_config["interrupt_timeout_seconds"])
+                ):
+                    await client.interrupt()
                 cancelled = True
+                interrupt_status = "acknowledged"
+            except TimeoutError:
+                logger.warning("[local_runtime] interrupt timed out for %s", runtime_id)
+                cancelled = False
+                interrupt_status = "timed_out"
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "[local_runtime] interrupt failed for %s: %s", runtime_id, exc
                 )
                 cancelled = False
+                interrupt_status = "failed"
         else:
             cancelled = False
-        return {"runtime_id": runtime_id, "cancelled": cancelled, "status": run.status}
+        return {
+            "runtime_id": runtime_id,
+            "cancelled": cancelled,
+            "status": run.status,
+            "interrupt": {"status": interrupt_status},
+        }
 
     # --------------------------------------------------------------- streaming
 
     async def subscribe(self, runtime_id: str, *, after_sequence: int | None = None):
         """Replay after a cursor and report when the bounded buffer has a gap."""
-        run = self._runs.get(runtime_id)
+        run = await self._ensure_run(runtime_id)
         if run is None:
             raise LocalRuntimeRefused("unknown_runtime", f"No run {runtime_id}")
         queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(
-            maxsize=_SUBSCRIBER_QUEUE_MAX
+            maxsize=int(run.runtime_config["subscriber_queue_max"])
         )
         buffered = list(run.events)
         if after_sequence is not None and buffered:
@@ -716,7 +1072,7 @@ class LocalClaudeRuntime:
         for event in buffered:
             if after_sequence is None or int(event["sequence"]) > after_sequence:
                 queue.put_nowait(event)
-        if run.status in {"completed", "failed", "cancelled"}:
+        if run.status in {"completed", "failed", "cancelled", "interrupted"}:
             queue.put_nowait(None)
         else:
             run.subscribers.append(queue)
@@ -730,11 +1086,48 @@ class LocalClaudeRuntime:
             with contextlib.suppress(ValueError):
                 run.subscribers.remove(queue)
 
-    def _emit(self, run: _LocalRun, event: dict[str, Any]) -> None:
+    async def _emit(self, run: _LocalRun, event: dict[str, Any]) -> None:
+        async with run.emit_lock:
+            await self._emit_locked(run, event)
+
+    async def _emit_locked(self, run: _LocalRun, event: dict[str, Any]) -> None:
+        self._ensure_run_config(run)
         sequenced = dict(event)
         sequenced["sequence"] = run.next_sequence
-        sequenced["emitted_at"] = datetime.now(tz=UTC).isoformat()
+        sequenced["emitted_at"] = _utc_iso()
         run.next_sequence += 1
+        journal_event = self._journal_event(sequenced)
+        upsert = self._run_upsert(run)
+        await self._journal_write(
+            [
+                upsert,
+                (
+                    """INSERT INTO coding_session_runtime_events
+                           (runtime_id, sequence, emitted_at, event_json)
+                       VALUES (?, ?, ?, ?)""",
+                    (
+                        run.runtime_id,
+                        int(sequenced["sequence"]),
+                        str(sequenced["emitted_at"]),
+                        json.dumps(
+                            journal_event,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            default=repr,
+                        ),
+                    ),
+                ),
+                (
+                    """DELETE FROM coding_session_runtime_events
+                       WHERE runtime_id=? AND sequence <= ?""",
+                    (
+                        run.runtime_id,
+                        int(sequenced["sequence"])
+                        - int(run.runtime_config["event_buffer_max"]),
+                    ),
+                ),
+            ]
+        )
         run.events.append(sequenced)
         for queue in list(run.subscribers):
             try:
@@ -742,15 +1135,36 @@ class LocalClaudeRuntime:
             except asyncio.QueueFull:
                 # A stalled consumer must never stall the run; it can re-attach
                 # and replay the bounded buffer.
+                self._close_subscriber_with_gap(run, queue)
                 with contextlib.suppress(ValueError):
                     run.subscribers.remove(queue)
+
+    @staticmethod
+    def _close_subscriber_with_gap(
+        run: _LocalRun, queue: asyncio.Queue[dict[str, Any] | None]
+    ) -> None:
+        while not queue.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                queue.get_nowait()
+        queue.put_nowait(
+            {
+                "event": "stream_gap",
+                "reason": "subscriber_queue_overflow",
+                "earliest_available": (
+                    int(run.events[0]["sequence"]) if run.events else None
+                ),
+                "latest_available": run.next_sequence - 1,
+                "resync_required": True,
+            }
+        )
+        queue.put_nowait(None)
 
     def _finish_subscribers(self, run: _LocalRun) -> None:
         for queue in list(run.subscribers):
             if queue.full():
-                with contextlib.suppress(asyncio.QueueEmpty):
-                    queue.get_nowait()
-            queue.put_nowait(None)
+                self._close_subscriber_with_gap(run, queue)
+            else:
+                queue.put_nowait(None)
         run.subscribers.clear()
 
     # --------------------------------------------------------------- execution
@@ -810,34 +1224,58 @@ class LocalClaudeRuntime:
             )
             saw_result = False
             try:
-                async with client:
-                    run.status = "running"
-                    self._emit(
-                        run,
-                        {
-                            "event": "runtime_started",
-                            "runtime_id": run.runtime_id,
-                            "session_id": run.session_id,
-                            "action": run.action,
-                            "workspace": str(run.workspace),
-                        },
-                    )
-                    if not run.cancel_requested:
-                        await client.query(request.prompt, session_id=run.session_id)
-                        async for message in client.receive_response():
-                            payload = _message_payload(message)
-                            self._emit(
+                try:
+                    async with asyncio.timeout(
+                        float(run.runtime_config["execution_timeout_seconds"])
+                    ):
+                        async with client:
+                            run.status = "running"
+                            await self._emit(
                                 run,
                                 {
-                                    "event": "sdk_message",
-                                    "sdk_message_type": type(message).__name__,
-                                    "message": payload,
+                                    "event": "runtime_started",
+                                    "runtime_id": run.runtime_id,
+                                    "session_id": run.session_id,
+                                    "action": run.action,
+                                    "workspace": str(run.workspace),
                                 },
                             )
-                            if isinstance(message, ResultMessage):
-                                saw_result = True
-                                run.turns_completed += 1
-                                await self._mirror(run)
+                            if not run.cancel_requested:
+                                await client.query(
+                                    request.prompt, session_id=run.session_id
+                                )
+                                responses = client.receive_response().__aiter__()
+                                while True:
+                                    try:
+                                        async with asyncio.timeout(
+                                            float(
+                                                run.runtime_config[
+                                                    "idle_timeout_seconds"
+                                                ]
+                                            )
+                                        ):
+                                            message = await responses.__anext__()
+                                    except StopAsyncIteration:
+                                        break
+                                    except TimeoutError as exc:
+                                        raise _ExecutionIdleTimeout from exc
+                                    payload = _message_payload(message)
+                                    await self._emit(
+                                        run,
+                                        {
+                                            "event": "sdk_message",
+                                            "sdk_message_type": type(message).__name__,
+                                            "message": payload,
+                                        },
+                                    )
+                                    if isinstance(message, ResultMessage):
+                                        saw_result = True
+                                        run.turns_completed += 1
+                                        await self._mirror_bounded(run)
+                except _ExecutionIdleTimeout:
+                    raise
+                except TimeoutError as exc:
+                    raise _ExecutionWallTimeout from exc
             finally:
                 run.client = None
                 identity_task.cancel()
@@ -854,6 +1292,12 @@ class LocalClaudeRuntime:
         except asyncio.CancelledError:
             run.status = "cancelled"
             raise
+        except _ExecutionIdleTimeout:
+            run.status = "failed"
+            run.error = "Provider execution became idle beyond the configured limit."
+        except _ExecutionWallTimeout:
+            run.status = "failed"
+            run.error = "Provider execution exceeded the configured wall-clock limit."
         except Exception as exc:  # noqa: BLE001
             run.status = "cancelled" if run.cancel_requested else "failed"
             if run.status == "failed":
@@ -871,7 +1315,7 @@ class LocalClaudeRuntime:
         """Mirror best-effort, then always publish the execution terminal."""
         run.ended_at = time.time()
         try:
-            await self._mirror(run, final=True)
+            await self._mirror_bounded(run, final=True)
         except BaseException as exc:  # cancellation must not suppress terminal state
             run.mirror_error = str(exc)
             logger.error(
@@ -881,7 +1325,7 @@ class LocalClaudeRuntime:
                 exc_info=True,
             )
         finally:
-            self._emit(
+            await self._emit(
                 run,
                 {
                     "event": "runtime_finished",
@@ -903,21 +1347,24 @@ class LocalClaudeRuntime:
 
     async def _establish_identity(self, run: _LocalRun) -> None:
         """Wait for Claude's own transcript file, then compute bridge identity."""
-        deadline = time.time() + _TRANSCRIPT_WAIT_SECONDS
+        config = run.runtime_config
+        deadline = time.time() + float(config["identity_timeout_seconds"])
         while time.time() < deadline:
             transcript = self._find_transcript(run.session_id)
             if transcript is not None:
                 self._bind_identity(run, transcript)
                 # First mirror as soon as the session exists, so the binding +
                 # conversation are minted early and the browser can open it.
-                await self._mirror(run)
+                await self._mirror_bounded(run)
                 run.identity_ready.set()
                 return
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(float(config["identity_poll_seconds"]))
+        run.mirror_error = "transcript_identity_timeout"
+        await self._persist_run(run)
         logger.warning(
             "[local_runtime] transcript for session %s did not appear within %ss",
             run.session_id,
-            _TRANSCRIPT_WAIT_SECONDS,
+            config["identity_timeout_seconds"],
         )
 
     def _bind_identity(self, run: _LocalRun, transcript: Path) -> None:
@@ -934,6 +1381,24 @@ class LocalClaudeRuntime:
             project_key, run.session_id
         )
 
+    async def _mirror_bounded(self, run: _LocalRun, *, final: bool = False) -> None:
+        """Bound mirror latency so provider settlement always reaches terminal."""
+        self._ensure_run_config(run)
+        try:
+            async with asyncio.timeout(
+                float(run.runtime_config["mirror_timeout_seconds"])
+            ):
+                await self._mirror(run, final=final)
+            await self._persist_run(run)
+        except TimeoutError:
+            run.mirror_error = "mirror_timeout"
+            await self._persist_run(run)
+            logger.error(
+                "[local_runtime] mirror timed out for %s after %ss",
+                run.runtime_id,
+                run.runtime_config["mirror_timeout_seconds"],
+            )
+
     # ------------------------------------------------------------------ mirror
 
     async def _mirror(self, run: _LocalRun, *, final: bool = False) -> None:
@@ -949,6 +1414,7 @@ class LocalClaudeRuntime:
         if transcript is None:
             return
         self._bind_identity(run, transcript)
+        await self._persist_run(run)
         importer = self._importer or ClaudeHistoryImporter()
         account = await self._account_reader()
         if not account.available or account.account_key is None:
@@ -966,7 +1432,7 @@ class LocalClaudeRuntime:
                 user_id, run.provider_session_id, run.provider_project_key
             )
         projects_root = transcript.parent.parent
-        attempts = _MIRROR_CONFLICT_RETRIES if final else 1
+        attempts = int(run.runtime_config["mirror_conflict_retries"]) if final else 1
         for attempt in range(attempts):
             try:
                 streams: list[tuple[str, Path]] = [("main", transcript)]
@@ -993,7 +1459,7 @@ class LocalClaudeRuntime:
                 )
                 run.mirror_passes += 1
                 run.mirror_error = None
-                self._emit(
+                await self._emit(
                     run,
                     {
                         "event": "mirror_pass",
@@ -1008,7 +1474,9 @@ class LocalClaudeRuntime:
             except ClaudeHistoryConflict as exc:
                 run.mirror_error = str(exc)
                 if attempt + 1 < attempts:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(
+                        float(run.runtime_config["mirror_retry_delay_seconds"])
+                    )
             except Exception as exc:  # noqa: BLE001
                 run.mirror_error = str(exc)
                 logger.error(
@@ -1027,17 +1495,50 @@ class LocalClaudeRuntime:
             )
 
     async def shutdown(self) -> None:
-        for run in list(self._runs.values()):
-            if run.status in {"starting", "running"}:
-                run.cancel_requested = True
-                client = run.client
-                if client is not None:
-                    with contextlib.suppress(Exception):
-                        await client.interrupt()
+        active = [
+            run
+            for run in self._runs.values()
+            if run.status in {"starting", "running"}
+        ]
+
+        async def _interrupt(run: _LocalRun) -> None:
+            run.cancel_requested = True
+            await self._persist_run(run)
+            client = run.client
+            if client is None:
+                return
+            try:
+                async with asyncio.timeout(
+                    float(run.runtime_config["interrupt_timeout_seconds"])
+                ):
+                    await client.interrupt()
+            except Exception:  # timeout and provider interrupt failures
+                logger.warning(
+                    "[local_runtime] shutdown interrupt did not settle for %s",
+                    run.runtime_id,
+                    exc_info=True,
+                )
+
+        await asyncio.gather(*(_interrupt(run) for run in active))
+        tasks: list[asyncio.Task[None]] = []
+        for run in active:
             if run.task is not None and not run.task.done():
                 run.task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await run.task
+                tasks.append(run.task)
+        if tasks:
+            try:
+                async with asyncio.timeout(
+                    self._runtime_config().shutdown_timeout_seconds
+                ):
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            except TimeoutError:
+                logger.error(
+                    "[local_runtime] %s run task(s) did not settle before shutdown",
+                    len(tasks),
+                )
+                raise RuntimeError(
+                    f"{len(tasks)} local runtime task(s) did not settle before shutdown"
+                )
 
 
 _runtime: LocalClaudeRuntime | None = None

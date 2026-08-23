@@ -926,6 +926,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("coding_session_bridge", exc)
 
+    # Phase 2h.1: hydrate the local provider-run journal. This starts no child
+    # process; it only makes prior terminal evidence queryable and marks runs
+    # that lost the engine process as explicitly interrupted.
+    _registry.starting("coding_session_local_runtime")
+    try:
+        from app.services.coding_sessions.local_runtime import get_local_claude_runtime
+
+        _local_runtime = get_local_claude_runtime()
+        await _local_runtime.initialize()
+        _registry.ready("coding_session_local_runtime", durable_journal=True)
+        logger.info("[app/main.py] Phase 2h.1: Local runtime journal hydrated ✓")
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 2h.1: Local runtime journal FAILED to hydrate",
+            exc_info=True,
+        )
+        _registry.failed("coding_session_local_runtime", exc)
+
     # Phase 2i: capture reconciler. A failed Claude Code hook is NON-BLOCKING,
     # so the MCP-delivered hook path can stop mirroring permanently and
     # silently (23.5h lost on 2026-08-16). This loop diffs Claude's own local
@@ -1631,19 +1649,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Local Claude Code runtime: interrupt every active SDK run so no `claude`
     # child outlives the engine (lifecycle ownership — Hard Rule 0). Touch the
-    # singleton only if it was ever created; shutdown must not instantiate it.
+    # boot-hydrated singleton without instantiating a replacement during teardown.
     try:
         from app.services.coding_sessions import local_runtime as _local_runtime_mod
 
         _local_runtime = _local_runtime_mod._runtime
         if _local_runtime is not None:
-            await asyncio.wait_for(_local_runtime.shutdown(), timeout=8.0)
+            _registry.stopping("coding_session_local_runtime")
+            await asyncio.wait_for(
+                _local_runtime.shutdown(),
+                timeout=_local_runtime.shutdown_timeout_seconds,
+            )
+            _registry.stopped("coding_session_local_runtime")
             logger.info("[app/main.py] Local Claude runtime runs stopped ✓")
     except (asyncio.TimeoutError, Exception) as exc:
         logger.warning(
             "[app/main.py] Local Claude runtime did not stop cleanly: %s", exc
         )
-        _registry.stopped("coding_session_bridge")
+        _registry.failed("coding_session_local_runtime", exc)
 
     try:
         from app.services.coding_sessions import (

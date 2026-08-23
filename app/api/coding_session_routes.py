@@ -505,7 +505,7 @@ async def runtime_status(
     runtime_id: str | None = Query(default=None),
 ) -> dict[str, object]:
     try:
-        return get_local_claude_runtime().status(runtime_id)
+        return await get_local_claude_runtime().status(runtime_id)
     except LocalRuntimeRefused as exc:
         raise _refused(exc) from exc
 
@@ -538,7 +538,7 @@ async def runtime_events(
 
     runtime = get_local_claude_runtime()
     try:
-        runtime.status(runtime_id)
+        await runtime.status(runtime_id)
     except LocalRuntimeRefused as exc:
         raise _refused(exc) from exc
 
@@ -547,7 +547,7 @@ async def runtime_events(
             event_id = event.get("sequence")
             prefix = f"id: {event_id}\n" if isinstance(event_id, int) else ""
             yield f"{prefix}data: {_json.dumps(event, ensure_ascii=False)}\n\n"
-        final = runtime.status(runtime_id)
+        final = await runtime.status(runtime_id)
         yield f"event: done\ndata: {_json.dumps(final, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(

@@ -39,6 +39,15 @@ module's semver helpers; keep `app_config` itself deliberately small.
 | `service.py` | `AppConfigService` engine: boot resolution (sync, offline), atomic disk cache, 6h refresh loop + `refresh_now()`, launcher-registry reporting, singleton + accessors |
 | `__init__.py` | Public surface: `get_aidream_server_url` / `get_matrx_files_url` / `get_scraper_server_url` / `get_web_app_origin` / `get_flag` / `get_notice` / `get_app_config` |
 
+`config.coding_session_runtime` is the typed, public control plane for local
+Claude execution: admission concurrency, execution/idle/identity/mirror/
+interrupt/shutdown timeouts, mirror retry timing, and replay/history bounds.
+Every field has a validated compiled fallback in `service.py`; a missing key in
+an older remote/cache row uses that fallback, while an invalid known value
+rejects the row atomically. Coding Sessions capability/status APIs surface the
+effective values with per-field provenance, so a field supplied by remote or
+cache is distinguishable from a compiled fallback inside a partial/older row.
+
 ## Wiring
 
 - **Startup:** `app/main.py` Phase 00 (before every sync engine that consumes

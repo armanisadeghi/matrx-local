@@ -138,6 +138,8 @@ def test_remote_beats_cache(tmp_path: Path) -> None:
     assert svc.get_flag("desktop_beta") is True
     assert svc.get_flag("nonexistent") is False
     assert svc.last_error is None
+    cached = json.loads((tmp_path / "app_config.json").read_text())
+    assert "coding_session_runtime" not in cached["row"]["config"]
 
 
 def test_env_override_wins_over_remote(tmp_path: Path) -> None:
@@ -170,6 +172,30 @@ def test_unknown_keys_are_ignored() -> None:
 def test_bad_types_reject_the_payload() -> None:
     row = dict(REMOTE_ROW)
     row["config"] = {**REMOTE_ROW["config"], "flags": {"x": "yes"}}
+    with pytest.raises(AppConfigValidationError):
+        parse_row(row)
+
+def test_runtime_controls_have_offline_defaults_and_reject_unsafe_values() -> None:
+    parsed = parse_row(REMOTE_ROW)
+    assert parsed.config.coding_session_runtime.max_active_runs == 4
+    assert parsed.config.coding_session_runtime.shutdown_timeout_seconds == 30.0
+
+    row = dict(REMOTE_ROW)
+    row["config"] = {
+        **REMOTE_ROW["config"],
+        "coding_session_runtime": {"max_active_runs": 0},
+    }
+    with pytest.raises(AppConfigValidationError):
+        parse_row(row)
+
+    row["config"]["coding_session_runtime"] = {"max_active_runs": "4"}
+    with pytest.raises(AppConfigValidationError):
+        parse_row(row)
+
+    row["config"]["coding_session_runtime"] = {
+        "event_buffer_max": 2000,
+        "subscriber_queue_max": 100,
+    }
     with pytest.raises(AppConfigValidationError):
         parse_row(row)
 

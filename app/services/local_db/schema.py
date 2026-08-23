@@ -1263,6 +1263,53 @@ CREATE INDEX IF NOT EXISTS idx_coding_session_title_push_pending
 ON coding_session_title_push_intents(status, updated_at);
 """
 
+# Local provider executions must remain inspectable after an engine restart.
+# The journal stores product-visible metadata plus redacted event evidence; it
+# never stores the raw start prompt or durable SDK message content.
+_V30_CODING_SESSION_RUNTIME_JOURNAL = """
+CREATE TABLE IF NOT EXISTS coding_session_runtime_runs (
+    runtime_id            TEXT PRIMARY KEY,
+    session_id            TEXT NOT NULL,
+    workspace             TEXT NOT NULL,
+    action                TEXT NOT NULL CHECK (action IN ('start', 'resume')),
+    status                TEXT NOT NULL CHECK (status IN (
+        'starting', 'running', 'completed', 'failed', 'cancelled', 'interrupted'
+    )),
+    prompt_preview        TEXT NOT NULL DEFAULT '',
+    provider_session_id   TEXT,
+    provider_project_key  TEXT,
+    conversation_id       TEXT,
+    transcript_path       TEXT,
+    execution_error       TEXT,
+    mirror_passes         INTEGER NOT NULL DEFAULT 0,
+    mirror_error          TEXT,
+    cancel_requested      INTEGER NOT NULL DEFAULT 0,
+    started_at            REAL NOT NULL,
+    ended_at              REAL,
+    turns_completed       INTEGER NOT NULL DEFAULT 0,
+    next_sequence         INTEGER NOT NULL DEFAULT 1,
+    restart_reason        TEXT,
+    runtime_config_json   TEXT NOT NULL,
+    updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_coding_session_runtime_runs_recent
+ON coding_session_runtime_runs(started_at DESC);
+
+CREATE TABLE IF NOT EXISTS coding_session_runtime_events (
+    runtime_id            TEXT NOT NULL,
+    sequence              INTEGER NOT NULL,
+    emitted_at            TEXT NOT NULL,
+    event_json            TEXT NOT NULL,
+    PRIMARY KEY (runtime_id, sequence),
+    FOREIGN KEY (runtime_id) REFERENCES coding_session_runtime_runs(runtime_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_coding_session_runtime_events_replay
+ON coding_session_runtime_events(runtime_id, sequence);
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1293,4 +1340,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (27, _V27_CODING_SESSION_HISTORY_SCANS),
     (28, _V28_CODING_SESSION_BRIDGE_QUEUE_ITEM_COUNT),
     (29, _V29_CODING_SESSION_METADATA_SYNC_OPERATIONS),
+    (30, _V30_CODING_SESSION_RUNTIME_JOURNAL),
 ]

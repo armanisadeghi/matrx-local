@@ -56,7 +56,7 @@ async def coding_runtime_status(
     args: Dict[str, Any], req: Optional[Request]
 ) -> Dict[str, Any]:
     runtime_id = args.get("runtime_id")
-    return get_local_claude_runtime().status(
+    return await get_local_claude_runtime().status(
         runtime_id if isinstance(runtime_id, str) and runtime_id else None
     )
 

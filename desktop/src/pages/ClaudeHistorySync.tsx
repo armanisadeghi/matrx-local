@@ -16,6 +16,10 @@ import {
 
 import { AgentRuntimeCard } from "@/components/coding-sessions/AgentRuntimeCard";
 import {
+  DeliveryEvidenceDialog,
+  type DeliveryEvidenceFilter,
+} from "@/components/coding-sessions/DeliveryEvidenceDialog";
+import {
   HistoryInventoryTable,
   historyChangeCounts,
 } from "@/components/coding-sessions/HistoryInventoryTable";
@@ -234,11 +238,11 @@ export function ClaudeHistorySync() {
     }
   };
 
-  const syncLabels = async () => {
+  const syncLabels = async (dryRun: boolean) => {
     setLabelSyncing(true);
     setLabelError(null);
     try {
-      setLabelResult(await engine.syncClaudeLabels());
+      setLabelResult(await engine.syncClaudeLabels(dryRun));
       await refreshLabelStatus();
       await refreshStatus();
     } catch (nextError) {
@@ -492,13 +496,12 @@ export function ClaudeHistorySync() {
         <Card>
           <CardHeader className="flex flex-row items-start justify-between gap-4">
             <div>
-              <CardTitle className="text-base">Keep titles in sync</CardTitle>
+              <CardTitle className="text-base">Compare session details before syncing</CardTitle>
               <p className="mt-1 text-sm text-muted-foreground">
-                Keeps one label in both places, both ways. A rename in Claude
-                Code lands here, and a conversation you rename in AI Matrx is
-                written back into Claude Code&rsquo;s own session list. Sessions
-                AI Matrx has never seen are never read or touched, and if you
-                renamed the same session in both places, Claude Code wins.
+                Preview the differences first. Nothing changes until you review
+                the plan and choose Apply. The current engine compares titles and
+                also carries available project, branch, worktree, archive, pin,
+                rank, and category metadata toward AI Matrx.
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
                 Claude Code reads its session list when it starts, so a title
@@ -507,15 +510,15 @@ export function ClaudeHistorySync() {
             </div>
             <Button
               variant="outline"
-              onClick={() => void syncLabels()}
-              disabled={labelSyncing}
+              onClick={() => void syncLabels(labelResult?.dry_run !== true)}
+              disabled={labelSyncing || labelStatus?.index_available === false}
             >
               {labelSyncing ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <Tags className="mr-2 h-4 w-4" />
               )}
-              Sync titles now
+              {labelResult?.dry_run ? `Apply ${labelResult.queued.toLocaleString()} proposed updates` : "Preview session detail changes"}
             </Button>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -535,11 +538,11 @@ export function ClaudeHistorySync() {
                   value={labelStatus.index_records.toLocaleString()}
                 />
                 <Summary
-                  label="Titles acknowledged"
+                  label="Sessions with a recorded cloud settlement"
                   value={labelStatus.synced_sessions.toLocaleString()}
                 />
                 <Summary
-                  label="Renames sent back"
+                  label="Claude indexes previously written"
                   value={labelStatus.pushed_sessions.toLocaleString()}
                 />
                 <Summary
@@ -555,19 +558,20 @@ export function ClaudeHistorySync() {
               </div>
             )}
             {labelResult && (
-              <div className="space-y-2 rounded-md border p-3 text-sm">
+              <div className={`space-y-3 rounded-md border p-3 text-sm ${labelResult.dry_run ? "border-blue-500/30 bg-blue-500/5" : ""}`}>
                 <div className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  {labelResult.dry_run ? <Tags className="h-4 w-4 text-blue-600" /> : <CloudUpload className="h-4 w-4 text-blue-600" />}
                   <span>
-                    {labelResult.queued.toLocaleString()} title update
-                    {labelResult.queued === 1 ? "" : "s"} queued ·{" "}
+                    {labelResult.dry_run ? "Preview: " : "Applied locally: "}
+                    {labelResult.queued.toLocaleString()} metadata envelope
+                    {labelResult.queued === 1 ? "" : "s"} {labelResult.dry_run ? "would be added to the local delivery queue" : "added to the local delivery queue; cloud acknowledgement is still pending"} ·{" "}
                     {labelResult.already_queued > 0 && (
                       <>
                         {labelResult.already_queued.toLocaleString()} already waiting ·{" "}
                       </>
                     )}
                     {labelResult.matched.toLocaleString()} of{" "}
-                    {labelResult.bound_sessions.toLocaleString()} synced sessions
+                    {labelResult.bound_sessions.toLocaleString()} cloud-bound sessions
                     matched a Claude session · {labelResult.unchanged.toLocaleString()}{" "}
                     already identical
                   </span>
@@ -612,15 +616,8 @@ export function ClaudeHistorySync() {
                     another computer.
                   </p>
                 )}
-                {labelResult.sample_titles.length > 0 && (
-                  <ul className="space-y-1 text-xs text-muted-foreground">
-                    {labelResult.sample_titles.slice(0, 5).map((item) => (
-                      <li key={item.provider_session_id} className="truncate">
-                        {item.title}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                {labelResult.sample_titles.length > 0 && <div className="overflow-x-auto rounded-md border bg-background"><table className="w-full min-w-[680px] text-xs"><thead className="border-b bg-muted/40 text-left"><tr><th className="px-3 py-2">Session</th><th className="px-3 py-2">Claude Code value</th><th className="px-3 py-2">AI Matrx value before sync</th><th className="px-3 py-2">Planned result</th></tr></thead><tbody className="divide-y">{labelResult.sample_titles.map((item) => <tr key={item.provider_session_id}><td className="px-3 py-2 font-mono">{item.provider_session_id}</td><td className="px-3 py-2">{item.title}</td><td className="px-3 py-2 text-muted-foreground">Not returned by the current engine contract</td><td className="px-3 py-2">{item.title}</td></tr>)}</tbody></table></div>}
+                {labelResult.sample_titles.length < labelResult.queued && <p className="text-xs text-muted-foreground">The engine returned only {labelResult.sample_titles.length} sample rows for {labelResult.queued.toLocaleString()} proposed updates. The remaining exact comparisons are not available to this UI yet, so this is not a complete row-level proof.</p>}
               </div>
             )}
           </CardContent>
@@ -666,6 +663,7 @@ function OverviewPanel({
   onNavigate: (tab: CodingSessionsTab) => void;
   onOpenAccount: () => void;
 }) {
+  const [deliveryFilter, setDeliveryFilter] = useState<DeliveryEvidenceFilter | null>(null);
   const capabilityLabels = {
     event_mirror: "Live events",
     historical_import: "History import",
@@ -732,14 +730,14 @@ function OverviewPanel({
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="font-medium">{PROVIDER_LABELS[provider]}</h3>
                         {status.pending > 0 && (
-                          <Badge variant="outline">
-                            {status.pending.toLocaleString()} delivery events queued
-                          </Badge>
+                          <Button type="button" variant="outline" size="sm" onClick={() => setDeliveryFilter({ state: "pending", provider })}>
+                            {status.pending.toLocaleString()} waiting envelope{status.pending === 1 ? "" : "s"} · inspect
+                          </Button>
                         )}
                         {status.quarantined > 0 && (
-                          <Badge variant="destructive">
-                            {status.quarantined.toLocaleString()} preserved events
-                          </Badge>
+                          <Button type="button" variant="destructive" size="sm" onClick={() => setDeliveryFilter({ state: "quarantine", provider })}>
+                            {status.quarantined.toLocaleString()} not accepted · inspect
+                          </Button>
                         )}
                         {status.pending === 0 && status.quarantined === 0 && (
                           <Badge variant="secondary">No delivery events waiting</Badge>
@@ -800,15 +798,6 @@ function OverviewPanel({
                               Open local runtime
                             </Button>
                           </>
-                        )}
-                        {(status.pending > 0 || status.quarantined > 0) && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => document.getElementById("delivery-pipeline")?.scrollIntoView({ behavior: "smooth" })}
-                          >
-                            View delivery details
-                          </Button>
                         )}
                       </div>
                     </div>
@@ -911,10 +900,9 @@ function OverviewPanel({
                   they do not block newer events.
                 </p>
                 {bridgeStatus.quarantine.reasons?.map((reason) => (
-                  <p className="mt-2 text-xs text-muted-foreground" key={reason.code}>
-                    {reason.count.toLocaleString()} · {reason.message}
-                  </p>
+                  <Button key={reason.code} type="button" variant="ghost" size="sm" className="mt-1 h-auto justify-start px-0 text-xs text-muted-foreground" onClick={() => setDeliveryFilter({ state: "quarantine" })}>{reason.count.toLocaleString()} · {reason.message} · inspect</Button>
                 ))}
+                <div><Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setDeliveryFilter({ state: "quarantine" })}>Inspect all preserved envelopes</Button></div>
               </div>
             </div>
           )}
@@ -1009,6 +997,7 @@ function OverviewPanel({
           <span>{error}</span>
         </div>
       )}
+      <DeliveryEvidenceDialog filter={deliveryFilter} onClose={() => setDeliveryFilter(null)} onChanged={onRefresh} />
     </>
   );
 }

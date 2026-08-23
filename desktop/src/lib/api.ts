@@ -487,6 +487,40 @@ export interface CodingSessionBridgeStatus {
   last_acknowledgement: CodingSessionActivitySummary | null;
 }
 
+export interface CodingSessionDeliveryEnvelope {
+  receipt_id: number;
+  state: "pending" | "quarantine";
+  provider: CodingSessionProvider;
+  action: string;
+  source: string;
+  enqueue_origin: string;
+  session_ref: string | null;
+  item_count: number;
+  payload_bytes: number;
+  created_at: string;
+  attempts: number;
+  next_attempt_at: number | null;
+  retry_in_seconds: number;
+  http_status: number | null;
+  quarantined_at: string | null;
+  error: { code: string | null; message: string | null } | null;
+  actions: {
+    retry: boolean;
+    discard: boolean;
+    discard_requires_confirmation: boolean;
+  };
+}
+
+export interface CodingSessionDeliveryEnvelopePage {
+  schema_version: 1;
+  terminology: "delivery_envelopes";
+  state: "pending" | "quarantine";
+  total: number;
+  items: CodingSessionDeliveryEnvelope[];
+  has_more: boolean;
+  next_cursor: number | null;
+}
+
 export interface ClaudeCaptureStatus {
   enabled: boolean;
   running: boolean;
@@ -545,6 +579,10 @@ export interface LocalRuntimeRun {
   session_id: string;
   action: "start" | "resume";
   status: "starting" | "running" | "completed" | "failed" | "cancelled";
+  execution?: {
+    status: "starting" | "running" | "completed" | "failed" | "cancelled";
+    error: string | null;
+  };
   workspace: string;
   prompt_preview: string;
   provider_session_id: string | null;
@@ -555,7 +593,15 @@ export interface LocalRuntimeRun {
   turns_completed: number;
   mirror_passes: number;
   mirror_error: string | null;
+  mirror?: {
+    status: "pending" | "enqueued" | "failed" | "not_started";
+    passes: number;
+    error: string | null;
+    conversation_id: string | null;
+  };
   event_count: number;
+  first_event_sequence?: number | null;
+  last_event_sequence?: number;
 }
 
 /** A configurable storage path entry from GET /settings/paths */
@@ -2348,6 +2394,33 @@ class EngineAPI {
 
   async getCodingSessionStatus(): Promise<CodingSessionBridgeStatus> {
     return this.request("/coding-session/status");
+  }
+
+  async getCodingSessionDeliveryEnvelopes(filters: {
+    state: "pending" | "quarantine";
+    limit?: number;
+    afterReceiptId?: number;
+    provider?: CodingSessionProvider;
+    action?: string;
+    source?: string;
+  }): Promise<CodingSessionDeliveryEnvelopePage> {
+    const query = new URLSearchParams({
+      state: filters.state,
+      limit: String(filters.limit ?? 50),
+    });
+    if (filters.afterReceiptId !== undefined) query.set("after_receipt_id", String(filters.afterReceiptId));
+    if (filters.provider) query.set("provider", filters.provider);
+    if (filters.action) query.set("action", filters.action);
+    if (filters.source) query.set("source", filters.source);
+    return this.request(`/coding-session/delivery/envelopes?${query.toString()}`);
+  }
+
+  async retryCodingSessionDeliveryEnvelope(receiptId: number): Promise<Record<string, unknown>> {
+    return this.request(`/coding-session/delivery/envelopes/${encodeURIComponent(receiptId)}/retry`, { method: "POST" });
+  }
+
+  async discardCodingSessionDeliveryEnvelope(receiptId: number): Promise<Record<string, unknown>> {
+    return this.request(`/coding-session/delivery/envelopes/${encodeURIComponent(receiptId)}?confirm=true`, { method: "DELETE" });
   }
 
   async getClaudeCaptureStatus(): Promise<ClaudeCaptureStatus> {

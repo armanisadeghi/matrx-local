@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  CloudUpload,
   Loader2,
   Play,
   RefreshCw,
@@ -41,6 +42,20 @@ function statusBadge(status: LocalRuntimeRun["status"]) {
       return <Badge variant="outline">cancelled</Badge>;
     default:
       return <Badge>{status}</Badge>;
+  }
+}
+
+function mirrorBadge(run: LocalRuntimeRun) {
+  const status = run.mirror?.status ?? (run.mirror_error ? "failed" : run.mirror_passes > 0 ? "enqueued" : "not_started");
+  switch (status) {
+    case "failed":
+      return <Badge variant="destructive">AI Matrx delivery failed</Badge>;
+    case "enqueued":
+      return <Badge variant="secondary">Stored for AI Matrx delivery</Badge>;
+    case "pending":
+      return <Badge variant="outline">AI Matrx delivery pending</Badge>;
+    default:
+      return <Badge variant="outline">No AI Matrx delivery recorded</Badge>;
   }
 }
 
@@ -172,48 +187,44 @@ export function AgentRuntimeCard() {
         )}
 
         <div>
-          <div className="text-sm font-medium">Runs</div>
-          <div className="mt-2 space-y-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div><div className="text-sm font-medium">Runs</div><p className="text-xs text-muted-foreground">Provider execution and AI Matrx delivery settle independently. Both are shown for every run.</p></div>
+            {capabilities?.capabilities.start && <Badge variant="outline"><CloudUpload className="mr-1 h-3 w-3" />Start supported through AI Matrx New work</Badge>}
+          </div>
+          <div className="mt-2 space-y-2">
             {!initialLoad && runs.length === 0 && (
               <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
                 No runs yet. Start one from AI Matrx → New work → Claude Code.
               </div>
             )}
             {runs.map((run) => (
-              <div
+              <article
                 key={run.runtime_id}
-                className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm"
+                className="rounded-md border px-3 py-3 text-sm"
               >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    {statusBadge(run.status)}
-                    <span className="text-xs text-muted-foreground">
-                      {run.action === "resume" ? "resumed" : "started"} ·{" "}
-                      {run.workspace.split("/").slice(-1)[0]} · turns{" "}
-                      {run.turns_completed}
-                    </span>
-                  </div>
-                  <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {run.prompt_preview}
-                  </div>
-                  {run.error && (
-                    <div className="mt-0.5 truncate text-xs text-destructive">
-                      {run.error}
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">Claude execution</span>
+                      {statusBadge(run.execution?.status ?? run.status)}
+                      <span className="text-xs text-muted-foreground">{run.action === "resume" ? "resumed" : "started"} · {run.turns_completed} turn{run.turns_completed === 1 ? "" : "s"}</span>
                     </div>
-                  )}
+                    <div className="mt-2 flex flex-wrap items-center gap-2"><span className="text-xs font-medium text-muted-foreground">AI Matrx delivery</span>{mirrorBadge(run)}<span className="text-xs text-muted-foreground">{run.mirror?.passes ?? run.mirror_passes} mirror pass{(run.mirror?.passes ?? run.mirror_passes) === 1 ? "" : "es"}</span></div>
+                    <p className="mt-2 truncate text-xs">{run.prompt_preview || "No prompt preview reported"}</p>
+                    <dl className="mt-2 grid gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
+                      <div><dt className="inline font-medium text-foreground">Workspace: </dt><dd className="inline" title={run.workspace}>{run.workspace}</dd></div>
+                      <div><dt className="inline font-medium text-foreground">Runtime: </dt><dd className="inline font-mono">{run.runtime_id}</dd></div>
+                      <div><dt className="inline font-medium text-foreground">Provider session: </dt><dd className="inline font-mono">{run.provider_session_id ?? "not reported"}</dd></div>
+                      <div><dt className="inline font-medium text-foreground">AI Matrx conversation: </dt><dd className="inline font-mono">{run.conversation_id ?? "not reported"}</dd></div>
+                      <div><dt className="inline font-medium text-foreground">Events retained: </dt><dd className="inline">{run.event_count}{run.first_event_sequence != null && run.last_event_sequence != null ? ` · sequence ${run.first_event_sequence}–${run.last_event_sequence}` : ""}</dd></div>
+                      <div><dt className="inline font-medium text-foreground">Started: </dt><dd className="inline">{new Date(run.started_at).toLocaleString()}</dd></div>
+                    </dl>
+                    {(run.execution?.error ?? run.error) && <div className="mt-2 text-xs text-destructive"><span className="font-medium">Claude execution error:</span> {run.execution?.error ?? run.error}</div>}
+                    {(run.mirror?.error ?? run.mirror_error) && <div className="mt-2 text-xs text-destructive"><span className="font-medium">AI Matrx delivery error:</span> {run.mirror?.error ?? run.mirror_error}</div>}
+                  </div>
+                  {ACTIVE_STATUSES.has(run.status) && <Button variant="outline" size="sm" onClick={() => void cancel(run.runtime_id)} disabled={busy}><Square className="mr-2 h-3.5 w-3.5" />Stop Claude run</Button>}
                 </div>
-                {ACTIVE_STATUSES.has(run.status) && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void cancel(run.runtime_id)}
-                    disabled={busy}
-                  >
-                    <Square className="mr-2 h-3.5 w-3.5" />
-                    Stop
-                  </Button>
-                )}
-              </div>
+              </article>
             ))}
           </div>
         </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { HashRouter, Routes, Route } from "react-router-dom";
+import { HashRouter, Navigate, Routes, Route } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppLayout, type PageEntry } from "@/components/layout/AppLayout";
 import { Dashboard } from "@/pages/Dashboard";
@@ -28,7 +28,6 @@ import { Configurations } from "@/pages/Configurations";
 import { TauriFetchBrowser } from "@/pages/TauriFetchBrowser";
 import { BridgeTest } from "@/pages/BridgeTest";
 import { CodingSessions } from "@/pages/CodingSessions";
-import { ClaudeHistorySync } from "@/pages/ClaudeHistory";
 import { useEngine } from "@/hooks/use-engine";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
@@ -464,7 +463,10 @@ function AppInner() {
       { path: "/browser/tauri", element: <TauriFetchBrowser /> },
       { path: "/configurations", element: <Configurations /> },
       { path: "/coding-sessions", element: <CodingSessions /> },
-      { path: "/claude-history", element: <ClaudeHistorySync /> },
+      {
+        path: "/claude-history",
+        element: <Navigate to="/coding-sessions?tab=history" replace />,
+      },
       {
         path: "/bridge-test",
         element: (

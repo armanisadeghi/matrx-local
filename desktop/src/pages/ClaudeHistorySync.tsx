@@ -28,6 +28,14 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { engine } from "@/lib/api";
 import type {
@@ -45,6 +53,7 @@ import type {
   CodingSessionProviderReadinessStatus,
 } from "@/lib/api";
 import {
+  claudeAccountReasonMessage,
   codingSessionActionLabel,
   codingSessionSourceLabel,
   formatRetryDuration,
@@ -75,20 +84,9 @@ function formatBytes(value: number): string {
 }
 
 function blockedMessage(reason: string | null): string {
-  switch (reason) {
-    case "claude_not_installed":
-      return "AI Matrx could not locate an executable Claude Code installation. Open Local runtime for diagnostics.";
-    case "claude_not_signed_in":
-      return "Sign in to Claude Code, then review again.";
-    case "claude_status_timeout":
-      return "Claude Code was found, but its account check timed out. Close any blocked Claude process and review again.";
-    case "claude_status_execution_failed":
-      return "Claude Code was found, but its account status command failed. Open Local runtime for the exact recovery step.";
-    case "claude_account_identity_unavailable":
-      return "Claude is signed in, but this login does not expose a stable account identity. Sync is paused so histories from different accounts cannot be mixed.";
-    default:
-      return "Claude account status is unavailable. Open Claude Code and confirm its login, then review again.";
-  }
+  return reason
+    ? claudeAccountReasonMessage(reason)
+    : "Claude account status is unavailable. Open Claude Code and confirm its login, then review again.";
 }
 
 export function ClaudeHistorySync() {
@@ -1066,7 +1064,26 @@ function OverviewPanel({
           <span>{error}</span>
         </div>
       )}
-      {guidedInstruction && <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-4 text-sm" role="status"><div className="flex items-start justify-between gap-3"><div><p className="font-medium">{guidedInstruction.label}</p><p className="mt-1 whitespace-pre-wrap text-muted-foreground">{guidedInstruction.instruction}</p></div><Button type="button" variant="ghost" size="sm" onClick={() => setGuidedInstruction(null)}>Done</Button></div></div>}
+      <Dialog
+        open={guidedInstruction !== null}
+        onOpenChange={(open) => {
+          if (!open) setGuidedInstruction(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{guidedInstruction?.label ?? "Coding provider guidance"}</DialogTitle>
+            <DialogDescription className="whitespace-pre-wrap text-left">
+              {guidedInstruction?.instruction}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end">
+            <DialogClose asChild>
+              <Button type="button">Done</Button>
+            </DialogClose>
+          </div>
+        </DialogContent>
+      </Dialog>
       <DeliveryEvidenceDialog filter={deliveryFilter} onClose={() => setDeliveryFilter(null)} onChanged={onRefresh} />
     </>
   );

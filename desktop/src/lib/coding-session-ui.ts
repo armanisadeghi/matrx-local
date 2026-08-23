@@ -47,3 +47,32 @@ export function codingSessionActionLabel(action: string): string {
 export function codingSessionSourceLabel(source: string): string {
   return SOURCE_LABELS[source] ?? source.replace(/_/g, " ");
 }
+
+const CLAUDE_ACCOUNT_REASON_MESSAGES: Record<string, string> = {
+  claude_not_installed:
+    "Claude Code is not installed or could not be found on this computer.",
+  claude_not_signed_in:
+    "Open Claude Code and sign in with the Claude account you want to use.",
+  claude_status_timeout:
+    "Claude Code was found, but its account check timed out. Close any blocked Claude process and try again.",
+  claude_status_execution_failed:
+    "Claude Code was found, but it could not report its account status. Open Claude Code, confirm it starts normally, and try again.",
+  claude_account_identity_unavailable:
+    "Claude is signed in, but this login did not report a stable email or organization identity. Sync stays paused so accounts cannot be mixed.",
+  "Claude Code is not installed on this machine (no `claude` binary found)":
+    "Claude Code is not installed or could not be found on this computer.",
+  "Claude login unavailable":
+    "Open Claude Code and sign in with the Claude account you want to use.",
+  "Sign in to AI Matrx in the desktop app":
+    "Sign in to AI Matrx in the desktop app, then refresh this check.",
+};
+
+/** Turn local provider probe codes into guidance; never expose an internal key. */
+export function claudeAccountReasonMessage(reason: string): string {
+  const known = CLAUDE_ACCOUNT_REASON_MESSAGES[reason];
+  if (known) return known;
+  if (reason.startsWith("claude-agent-sdk unavailable:")) {
+    return "The Claude runtime component is unavailable. Update and restart AI Matrx Local, then try again.";
+  }
+  return "Claude account access could not be verified. Open Claude Code, confirm it is signed in, then refresh this check.";
+}

@@ -30,6 +30,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { engine } from "@/lib/api";
 import { getAppRuntimeConfig } from "@/lib/app-config";
 import type { LocalRuntimeCapabilities, LocalRuntimeRun } from "@/lib/api";
+import { claudeAccountReasonMessage } from "@/lib/coding-session-ui";
 
 const ACTIVE_STATUSES = new Set(["starting", "running"]);
 
@@ -183,7 +184,7 @@ export function AgentRuntimeCard() {
               <div className="font-medium">Runtime setup needs attention</div>
               <ul className="mt-1 list-disc pl-5">
                 {[...new Set(capabilities.reasons)].map((reason) => (
-                  <li key={reason}>{reason}</li>
+                  <li key={reason}>{claudeAccountReasonMessage(reason)}</li>
                 ))}
               </ul>
             </div>

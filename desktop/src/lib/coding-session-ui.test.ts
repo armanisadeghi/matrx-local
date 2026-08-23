@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  claudeAccountReasonMessage,
   codingSessionActionLabel,
   codingSessionSourceLabel,
   formatRetryDuration,
@@ -39,5 +40,21 @@ describe("coding session UI helpers", () => {
     expect(codingSessionActionLabel("observe_hook")).toBe("Live event delivery");
     expect(codingSessionActionLabel("custom_action")).toBe("custom action");
     expect(codingSessionSourceLabel("claude_local_jsonl")).toBe("Claude history import");
+  });
+
+  it("turns Claude account probe codes into user guidance", () => {
+    expect(claudeAccountReasonMessage("claude_not_signed_in")).toBe(
+      "Open Claude Code and sign in with the Claude account you want to use.",
+    );
+    expect(claudeAccountReasonMessage("future_probe_reason")).toBe(
+      "Claude account access could not be verified. Open Claude Code, confirm it is signed in, then refresh this check.",
+    );
+    expect(
+      claudeAccountReasonMessage(
+        "claude-agent-sdk unavailable: private import exception",
+      ),
+    ).toBe(
+      "The Claude runtime component is unavailable. Update and restart AI Matrx Local, then try again.",
+    );
   });
 });

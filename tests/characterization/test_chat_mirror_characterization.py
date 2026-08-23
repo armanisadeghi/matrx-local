@@ -22,6 +22,8 @@ import json
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+import pytest
+
 from app.services.local_db import database as database_module
 from app.services.local_db import schema as schema_module
 from app.services.local_db.database import LocalDatabase
@@ -1226,7 +1228,7 @@ def _fake_cloud(engine: ChatSyncEngine):
         out = []
         for r in rows:
             rr = dict(r)
-            rr["organization_id"] = "org-1"
+            rr["organization_id"] = r.get("organization_id", _EXPLICIT_ORG_ID)
             rr["created_by"] = "u1"
             rr["updated_at"] = "2026-07-20T10:00:00.000000+00:00"
             out.append(rr)
@@ -1238,6 +1240,168 @@ def _fake_cloud(engine: ChatSyncEngine):
     engine._client.insert_rows_if_absent = fake_insert  # type: ignore[method-assign]
     engine._client.get_rows_since = fake_get  # type: ignore[method-assign]
     return pushed
+
+
+_EXPLICIT_ORG_ID = "11111111-1111-4111-8111-111111111111"
+_STALE_CHILD_ORG_ID = "99999999-9999-4999-8999-999999999999"
+_CHILD_TABLES = (
+    "user_request",
+    "message",
+    "request",
+    "tool_call",
+    "media",
+    "artifact",
+)
+
+
+async def _insert_chat_child(
+    db: LocalDatabase,
+    table: str,
+    row_id: str,
+    conversation_id: str,
+) -> None:
+    if table == "user_request":
+        await db.execute(
+            "INSERT INTO chat.user_request (id, metadata, organization_id) "
+            "VALUES (?, ?, ?)",
+            (
+                row_id,
+                json.dumps({"conversation_id": conversation_id}),
+                _STALE_CHILD_ORG_ID,
+            ),
+        )
+    else:
+        await db.execute(
+            f'INSERT INTO chat."{table}" '
+            "(id, conversation_id, organization_id) VALUES (?, ?, ?)",
+            (row_id, conversation_id, _STALE_CHILD_ORG_ID),
+        )
+    await db.execute(
+        "INSERT INTO sync_queue (entity_type, entity_id, action, payload) "
+        "VALUES (?, ?, 'upsert', '{}')",
+        (f"chat.{table}", row_id),
+    )
+    await db.commit()
+
+
+async def _assign_conversation_org(
+    db: LocalDatabase,
+    *conversation_ids: str,
+) -> None:
+    for conversation_id in conversation_ids:
+        await db.execute(
+            "UPDATE chat.conversation SET organization_id = ? WHERE id = ?",
+            (_EXPLICIT_ORG_ID, conversation_id),
+        )
+    await db.commit()
+
+
+@pytest.mark.parametrize("table", _CHILD_TABLES)
+def test_each_child_payload_carries_authoritative_conversation_org(
+    tmp_path: Path,
+    table: str,
+) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        child_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1"
+        await db.execute(
+            "INSERT INTO chat.conversation (id, organization_id) VALUES (?, ?)",
+            (conversation_id, _EXPLICIT_ORG_ID),
+        )
+        await _insert_chat_child(db, table, child_id, conversation_id)
+
+        engine = ChatSyncEngine()
+        engine.configure("u1", "jwt")
+        pushed = _fake_cloud(engine)
+        result = await engine._push_pending()
+
+        assert result == {"sent": 1, "failed": 0}
+        assert len(pushed) == 1
+        assert pushed[0][0] == table
+        payload = pushed[0][1][0]
+        assert payload["id"] == child_id
+        assert payload["organization_id"] == _EXPLICIT_ORG_ID
+        if table == "user_request":
+            assert payload["metadata"]["conversation_id"] == conversation_id
+        else:
+            assert payload["conversation_id"] == conversation_id
+        assert (await db.fetchone("SELECT COUNT(*) AS c FROM sync_queue"))["c"] == 0
+
+    _run(tmp_path, scenario)
+
+
+def test_conversation_without_explicit_org_dead_letters_before_http(
+    tmp_path: Path,
+) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        await db.execute(
+            "INSERT INTO chat.conversation (id, organization_id) VALUES (?, NULL)",
+            (conversation_id,),
+        )
+        await db.execute(
+            "INSERT INTO sync_queue (entity_type, entity_id, action, payload) "
+            "VALUES ('chat.conversation', ?, 'upsert', '{}')",
+            (conversation_id,),
+        )
+        await db.commit()
+
+        engine = ChatSyncEngine()
+        engine.configure("u1", "jwt")
+        http_calls = 0
+
+        async def forbidden_insert(*args, **kwargs):
+            nonlocal http_calls
+            http_calls += 1
+            raise AssertionError("org-less conversation reached HTTP")
+
+        engine._client.insert_rows_if_absent = forbidden_insert  # type: ignore[method-assign]
+        result = await engine._push_pending()
+
+        assert result == {"sent": 0, "failed": 1}
+        assert http_calls == 0
+        assert dict(
+            await db.fetchone("SELECT action, attempts FROM sync_queue")
+        ) == {"action": "dead", "attempts": 1}
+
+    _run(tmp_path, scenario)
+
+
+@pytest.mark.parametrize("table", _CHILD_TABLES)
+@pytest.mark.parametrize("failure_kind", ("missing_parent", "missing_org"))
+def test_each_child_missing_parent_or_org_dead_letters_before_http(
+    tmp_path: Path,
+    table: str,
+    failure_kind: str,
+) -> None:
+    async def scenario(db: LocalDatabase) -> None:
+        conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        child_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1"
+        if failure_kind == "missing_org":
+            await db.execute(
+                "INSERT INTO chat.conversation (id, organization_id) VALUES (?, NULL)",
+                (conversation_id,),
+            )
+        await _insert_chat_child(db, table, child_id, conversation_id)
+
+        engine = ChatSyncEngine()
+        engine.configure("u1", "jwt")
+        http_calls = 0
+
+        async def forbidden_insert(*args, **kwargs):
+            nonlocal http_calls
+            http_calls += 1
+            raise AssertionError("org-less payload reached HTTP")
+
+        engine._client.insert_rows_if_absent = forbidden_insert  # type: ignore[method-assign]
+        result = await engine._push_pending()
+
+        assert result == {"sent": 0, "failed": 1}
+        assert http_calls == 0
+        queued = dict(await db.fetchone("SELECT action, attempts FROM sync_queue"))
+        assert queued == {"action": "dead", "attempts": 1}
+
+    _run(tmp_path, scenario)
 
 
 def test_postgrest_batches_only_contain_rows_with_matching_keys() -> None:
@@ -1297,6 +1461,9 @@ def test_push_drains_outbox_parent_first_and_applies_echo(tmp_path: Path) -> Non
         await store.ensure_conversation_exists(
             "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01", "u1"
         )
+        await _assign_conversation_org(
+            db, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+        )
         await store.create_pending_user_request(
             "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa21",
             "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
@@ -1319,8 +1486,8 @@ def test_push_drains_outbox_parent_first_and_applies_echo(tmp_path: Path) -> Non
         order = [t for t, _ in pushed]
         assert order.index("conversation") < order.index("message")
         conv_payload = pushed[0][1][0]
-        # cloud-owned columns stripped; jsonb sent as real JSON
-        assert "organization_id" not in conv_payload
+        # tenant identity is explicit; actor columns remain cloud-owned.
+        assert conv_payload["organization_id"] == _EXPLICIT_ORG_ID
         assert "created_by" not in conv_payload
         assert isinstance(conv_payload["config"], dict)
 
@@ -1330,7 +1497,7 @@ def test_push_drains_outbox_parent_first_and_applies_echo(tmp_path: Path) -> Non
                 "SELECT * FROM chat.conversation WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'"
             )
         )
-        assert row["organization_id"] == "org-1"
+        assert row["organization_id"] == _EXPLICIT_ORG_ID
         assert row["updated_at"].startswith("2026-07-20T10")
         left = await db.fetchone("SELECT COUNT(*) AS c FROM sync_queue")
         assert left["c"] == 0
@@ -1346,6 +1513,7 @@ def test_push_projection_excludes_cloud_tool_result_ledger(tmp_path: Path) -> No
         conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
         tool_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa31"
         await store.ensure_conversation_exists(conversation_id, "u1")
+        await _assign_conversation_org(db, conversation_id)
         await store.log_tool_call_start(
             tool_id,
             {
@@ -1377,12 +1545,12 @@ def test_push_projection_excludes_cloud_tool_result_ledger(tmp_path: Path) -> No
             "claim_expires_at",
             "resolved_at",
             "resolution_source",
-            "organization_id",
             "created_by",
             "updated_by",
             "updated_at",
             "version",
         }.intersection(tool_payload)
+        assert tool_payload["organization_id"] == _EXPLICIT_ORG_ID
 
     _run(tmp_path, scenario)
 
@@ -1396,6 +1564,7 @@ def test_existing_row_push_preserves_version_conflict(tmp_path: Path) -> None:
         await convs.create(
             {"id": conversation_id, "title": "local edit", "created_by": "u1"}
         )
+        await _assign_conversation_org(db, conversation_id)
 
         engine = ChatSyncEngine()
         engine.configure("u1", "jwt")
@@ -1578,6 +1747,7 @@ def test_flush_pending_pushes_without_running_a_pull(tmp_path: Path) -> None:
         conversation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
         store = SQLiteConversationStore()
         await store.ensure_conversation_exists(conversation_id, "u1")
+        await _assign_conversation_org(db, conversation_id)
 
         engine = ChatSyncEngine()
         engine.configure("u1", "jwt")
@@ -1811,6 +1981,11 @@ def test_push_poison_row_isolation(tmp_path: Path) -> None:
                 "title": "bad",
                 "created_by": "u1",
             }
+        )
+        await _assign_conversation_org(
+            db,
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa41",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa42",
         )
 
         engine = ChatSyncEngine()

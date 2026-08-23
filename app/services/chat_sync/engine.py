@@ -13,8 +13,11 @@ Doctrine (docs/SYNC_CONTRACT.md):
   ``deleted_at`` tombstones in both directions.
 - Loud failures: a permission/404 error from the cloud is an ERROR naming the
   table, never a silent skip.
-- The cloud stamps ownership/audit columns (organization_id, created_by,
-  updated_by, version) via triggers; pushes strip them.
+- Every organization-scoped write carries ``organization_id`` explicitly.
+  Child rows copy the authoritatively loaded conversation org into the final
+  payload before HTTP; a missing parent or org is dead-lettered locally.
+- The cloud stamps actor/version columns (created_by, updated_by, version);
+  pushes strip those cloud-owned fields.
 
 Checkpoints: sync_meta rows keyed ``chat.<table>``; the keyset cursor
 (cursor timestamp + pk of the last applied row) is stored as JSON in
@@ -63,11 +66,12 @@ _PUSH_ORDER = [
 # allowlist (not a denylist) so newly-added server ledger columns remain
 # cloud-only until a local writer intentionally adopts them.
 #
-# No ownership column appears here, ever.  `user_id` was the legacy owner on
-# the chat component tables and is being dropped; its canonical replacement
-# `created_by` is stamped cloud-side by `platform._stamp_actor` on insert, so
-# publishing either one is a legacy write, not a fallback.  Same for
-# `project_id`: a feature table may not carry a project FK.
+# ``organization_id`` is tenant identity, not an actor/audit column.  It must
+# appear on every organization-scoped payload.  ``user_id`` was the legacy
+# owner on the chat component tables and is being dropped; its canonical
+# replacement ``created_by`` is stamped cloud-side by ``platform._stamp_actor``
+# on insert, so publishing either one is a legacy write.  Same for
+# ``project_id``: a feature table may not carry a project FK.
 _PUSH_COLUMNS: dict[str, frozenset[str]] = {
     "conversation": frozenset(
         {
@@ -91,6 +95,7 @@ _PUSH_COLUMNS: dict[str, frozenset[str]] = {
             "api_duration_ms", "tool_duration_ms", "total_duration_ms",
             "total_input_tokens", "total_output_tokens", "total_cached_tokens",
             "total_tokens", "total_cost", "iterations", "total_tool_calls",
+            "organization_id",
         }
     ),
     "message": frozenset(
@@ -99,7 +104,7 @@ _PUSH_COLUMNS: dict[str, frozenset[str]] = {
             "content_history", "user_content", "metadata", "model_context",
             "error", "source", "is_visible_to_user", "is_visible_to_model",
             "content_chars", "tool_results_chars", "agent_id", "voice",
-            "created_at", "deleted_at",
+            "created_at", "deleted_at", "organization_id",
         }
     ),
     "request": frozenset(
@@ -110,7 +115,7 @@ _PUSH_COLUMNS: dict[str, frozenset[str]] = {
             "tool_calls_count", "tool_calls_details", "finish_reason",
             "response_id", "metadata", "ai_model_id", "raw_usage",
             "trim_summary", "status", "error", "execution_kind", "execution_id",
-            "created_at", "deleted_at",
+            "created_at", "deleted_at", "organization_id",
         }
     ),
     "tool_call": frozenset(
@@ -124,12 +129,14 @@ _PUSH_COLUMNS: dict[str, frozenset[str]] = {
             "retry_count", "execution_events", "metadata", "is_client_delegated",
             "fault_domain", "file_path", "runtime_execution_id", "persist_key",
             "value_ref_key", "model_stub_at", "created_at", "deleted_at",
+            "organization_id",
         }
     ),
     "media": frozenset(
         {
             "id", "conversation_id", "kind", "url", "file_uri",
             "mime_type", "file_size_bytes", "metadata", "created_at", "deleted_at",
+            "organization_id",
         }
     ),
     "artifact": frozenset(
@@ -138,10 +145,14 @@ _PUSH_COLUMNS: dict[str, frozenset[str]] = {
             "task_id", "artifact_type", "status", "external_system", "external_id",
             "external_url", "title", "description", "thumbnail_url", "metadata",
             "canvas_item_id", "source_system", "source_id", "artifact_index",
-            "created_at", "deleted_at",
+            "created_at", "deleted_at", "organization_id",
         }
     ),
 }
+
+_CONVERSATION_ORG_CHILDREN = frozenset(
+    {"user_request", "message", "request", "tool_call", "media", "artifact"}
+)
 
 DEFAULT_INTERVAL = int(os.getenv("MATRX_CHAT_SYNC_INTERVAL", "300"))
 _PULL_PAGE_SIZE = 500
@@ -510,6 +521,20 @@ class ChatSyncEngine:
             strip = frozenset(spec["columns"]) - allowed
             payload = encode_local_row(_SCHEMA, table, local_row, strip=strip)
             payload = _normalize_outbound_payload(table, payload)
+            org_error = await self._apply_authoritative_organization(
+                table, local_row, payload
+            )
+            if org_error is not None:
+                logger.error(
+                    "[chat_sync] REFUSED outbound chat.%s id=%s — %s; "
+                    "DEAD-LETTERED before HTTP",
+                    table,
+                    entity_id,
+                    org_error,
+                )
+                await self._dead_letter(entry["id"])
+                failed += 1
+                continue
             if not payload.get(pk):
                 logger.error(
                     "[chat_sync] chat.%s %s projection omitted its primary key — "
@@ -602,6 +627,86 @@ class ChatSyncEngine:
                 error_message=f"push: {failed} row(s) failed this cycle",
             )
         return sent, failed
+
+    async def _apply_authoritative_organization(
+        self,
+        table: str,
+        local_row: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> str | None:
+        """Put authoritative org provenance on the final outbound payload.
+
+        Conversations already carry the request-selected organization.  The
+        six locally-authored child families derive their organization from
+        that exact conversation row before HTTP.  This is deliberately a
+        fail-closed projection boundary: the database is never asked to infer
+        tenant identity from a parent or actor.
+        """
+        if table == "conversation":
+            organization_id = payload.get("organization_id")
+            if not isinstance(organization_id, str) or not _looks_like_uuid(
+                organization_id
+            ):
+                return "conversation has no valid explicit organization_id"
+            return None
+
+        if table not in _CONVERSATION_ORG_CHILDREN:
+            return None
+
+        conversation_id = await self._conversation_id_for_child(table, local_row)
+        if not conversation_id or not _looks_like_uuid(conversation_id):
+            return "child has no valid authoritative conversation parent"
+
+        db = get_db()
+        conversation = await db.fetchone(
+            "SELECT organization_id FROM chat.conversation WHERE id = ?",
+            (conversation_id,),
+        )
+        if conversation is None:
+            return f"authoritative conversation {conversation_id} is missing locally"
+
+        organization_id = conversation["organization_id"]
+        if not isinstance(organization_id, str) or not _looks_like_uuid(
+            organization_id
+        ):
+            return (
+                f"authoritative conversation {conversation_id} has no valid "
+                "organization_id"
+            )
+
+        payload["organization_id"] = organization_id
+        return None
+
+    async def _conversation_id_for_child(
+        self,
+        table: str,
+        local_row: dict[str, Any],
+    ) -> str | None:
+        direct = local_row.get("conversation_id")
+        if isinstance(direct, str) and direct:
+            return direct
+
+        if table == "user_request":
+            metadata = local_row.get("metadata")
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except (TypeError, ValueError):
+                    return None
+            if isinstance(metadata, dict):
+                value = metadata.get("conversation_id")
+                return value if isinstance(value, str) and value else None
+
+        if table == "artifact" and local_row.get("message_id"):
+            message = await get_db().fetchone(
+                "SELECT conversation_id FROM chat.message WHERE id = ?",
+                (local_row["message_id"],),
+            )
+            if message is not None:
+                value = message["conversation_id"]
+                return value if isinstance(value, str) and value else None
+
+        return None
 
     async def _write_one_row(
         self,

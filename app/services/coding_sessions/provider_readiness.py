@@ -10,6 +10,7 @@ claim.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import plistlib
 import re
@@ -52,6 +53,7 @@ _VERSION_RE = re.compile(r"\b\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?\b")
 VersionProbe = Callable[[str], Awaitable[str | None]]
 ProcessProbe = Callable[[], set[str]]
 WhichProbe = Callable[[str], str | None]
+ProcessFactory = Callable[..., Awaitable[Any]]
 
 
 def _utc(value: object) -> str | None:
@@ -115,17 +117,48 @@ def _process_names() -> set[str]:
     return names
 
 
-async def _executable_version(executable: str) -> str | None:
+async def _executable_version(
+    executable: str,
+    *,
+    timeout: float = 2.0,
+    process_factory: ProcessFactory = asyncio.create_subprocess_exec,
+) -> str | None:
     try:
-        process = await asyncio.create_subprocess_exec(
+        process = await process_factory(
             executable,
             "--version",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        output, _ = await asyncio.wait_for(process.communicate(), timeout=2.0)
-    except (OSError, TimeoutError):
+    except OSError:
         return None
+    communicate = asyncio.create_task(process.communicate())
+    try:
+        output, _ = await asyncio.wait_for(asyncio.shield(communicate), timeout=timeout)
+    except asyncio.TimeoutError:
+        if process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.terminate()
+        try:
+            await asyncio.wait_for(asyncio.shield(communicate), timeout=0.5)
+        except asyncio.TimeoutError:
+            if process.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+            await communicate
+        return None
+    except asyncio.CancelledError:
+        if process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.terminate()
+        try:
+            await asyncio.wait_for(asyncio.shield(communicate), timeout=0.5)
+        except asyncio.TimeoutError:
+            if process.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+            await communicate
+        raise
     text = output.decode("utf-8", errors="replace")[:512]
     match = _VERSION_RE.search(text)
     return match.group(0) if match else None
@@ -355,13 +388,21 @@ class ProviderReadinessFacade:
         acknowledgement = (
             state.get("last_acknowledgement") if isinstance(state, dict) else None
         )
+        local_at = _utc(enqueue.get("at") if isinstance(enqueue, dict) else None)
+        cloud_at = _utc(
+            acknowledgement.get("at") if isinstance(acknowledgement, dict) else None
+        )
+        candidates = [
+            {"kind": "local_enqueue", "at": local_at} if local_at else None,
+            {"kind": "cloud_acknowledgement", "at": cloud_at} if cloud_at else None,
+        ]
+        present = [item for item in candidates if item is not None]
         return {
-            "last_local_enqueue_at": _utc(
-                enqueue.get("at") if isinstance(enqueue, dict) else None
-            ),
-            "last_cloud_acknowledgement_at": _utc(
-                acknowledgement.get("at") if isinstance(acknowledgement, dict) else None
-            ),
+            "last_local_enqueue_at": local_at,
+            "last_cloud_acknowledgement_at": cloud_at,
+            "most_recent": max(present, key=lambda item: item["at"])
+            if present
+            else None,
         }
 
     @staticmethod
@@ -517,12 +558,18 @@ class ProviderReadinessFacade:
             activity = self._activity(provider, delivery_status)
             if activity["last_cloud_acknowledgement_at"]:
                 detail = "A prior cloud acknowledgement is proven; it does not prove a current live connection."
+                connection_evidence = ["prior_cloud_acknowledgement"]
             elif spool["supported"] and any(
                 (spool["pending"], spool["in_flight"], spool["temporary"])
             ):
                 detail = "Undelivered adapter files are present; no current live connection is proven."
+                connection_evidence = ["undelivered_upstream_files"]
+            elif activity["last_local_enqueue_at"]:
+                detail = "A prior local enqueue is proven; no cloud acknowledgement or current live connection is proven."
+                connection_evidence = ["prior_local_enqueue"]
             else:
                 detail = "No safe local probe proves a current live connection."
+                connection_evidence = []
             providers[provider] = {
                 "provider": provider,
                 "display_name": _DISPLAY_NAMES[provider],
@@ -530,7 +577,11 @@ class ProviderReadinessFacade:
                 "adapter": adapter,
                 "upstream_spool": spool,
                 "activity": activity,
-                "connection": {"state": "unverified", "detail": detail},
+                "connection": {
+                    "state": "unverified",
+                    "detail": detail,
+                    "evidence": connection_evidence,
+                },
                 "actions": self._actions(provider, product_state, adapter),
             }
         return {

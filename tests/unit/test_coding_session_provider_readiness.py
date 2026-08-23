@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import plistlib
@@ -9,7 +10,10 @@ from typing import Any
 
 import pytest
 
-from app.services.coding_sessions.provider_readiness import ProviderReadinessFacade
+from app.services.coding_sessions.provider_readiness import (
+    ProviderReadinessFacade,
+    _executable_version,
+)
 
 
 def _json(path: Path, value: dict[str, Any]) -> None:
@@ -161,8 +165,13 @@ async def test_reports_each_evidence_layer_without_claiming_connection(
     assert codex["activity"] == {
         "last_local_enqueue_at": "2026-08-23T17:40:00Z",
         "last_cloud_acknowledgement_at": "2026-08-23T17:45:00Z",
+        "most_recent": {
+            "kind": "cloud_acknowledgement",
+            "at": "2026-08-23T17:45:00Z",
+        },
     }
     assert codex["connection"]["state"] == "unverified"
+    assert codex["connection"]["evidence"] == ["prior_cloud_acknowledgement"]
     assert any(action["id"] == "review_codex_hook_trust" for action in codex["actions"])
 
     cursor = status["providers"]["cursor"]
@@ -230,3 +239,39 @@ async def test_unpublished_adapters_offer_guidance_not_install_execution(
             or "pre-release" in actions[-1]["instruction"]
         )
         assert all("command" not in action for action in actions)
+
+
+@pytest.mark.anyio
+async def test_timed_out_version_probe_terminates_and_reaps_child() -> None:
+    class _Process:
+        def __init__(self) -> None:
+            self.returncode: int | None = None
+            self.terminated = False
+            self.reaped = False
+            self._finished = asyncio.Event()
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            await self._finished.wait()
+            self.reaped = True
+            return b"", b""
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.returncode = -15
+            self._finished.set()
+
+        def kill(self) -> None:
+            self.returncode = -9
+            self._finished.set()
+
+    process = _Process()
+
+    async def factory(*_args: object, **_kwargs: object) -> _Process:
+        return process
+
+    assert (
+        await _executable_version("fake", timeout=0.001, process_factory=factory)
+        is None
+    )
+    assert process.terminated is True
+    assert process.reaped is True

@@ -80,6 +80,7 @@ async def test_signed_in_account_uses_canonical_launcher_and_safe_identity(
     assert snapshot.executable_path == str(launcher)
     assert snapshot.client_version == "2.1.228"
     assert snapshot.account_label == "a***n@t***.com"
+    assert snapshot.local_display_identity == "arman@titaniumsuccess.com"
     assert snapshot.account_key is not None
     assert snapshot.fingerprint == snapshot.account_key[:12]
 
@@ -109,6 +110,7 @@ async def test_account_probe_ignores_inherited_developer_api_key(
 
     assert snapshot.available is True
     assert snapshot.account_label == "org:org-subs"
+    assert snapshot.local_display_identity == "org-subscription"
 
 
 @pytest.mark.parametrize(

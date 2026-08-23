@@ -256,7 +256,14 @@ export function ClaudeHistorySync() {
     setLabelSyncing(true);
     setLabelError(null);
     try {
-      setLabelResult(await engine.syncClaudeLabels(dryRun));
+      const next = await engine.syncClaudeLabels(dryRun);
+      if (next.schema_version !== 3 || !next.operation_id || !next.operation) {
+        setLabelResult(null);
+        throw new Error(
+          "This local engine cannot provide the required per-session comparison operation. Update and restart AI Matrx Local before applying session-detail changes.",
+        );
+      }
+      setLabelResult(next);
       await refreshLabelStatus();
       await refreshStatus();
     } catch (nextError) {
@@ -513,7 +520,7 @@ export function ClaudeHistorySync() {
         )}
         {historyStatus && historyStatus.pending_history_imports > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
-            <div><p className="font-medium">{historyStatus.pending_history_imports.toLocaleString()} history envelopes await cloud acknowledgement</p><p className="mt-1 text-muted-foreground">{historyStatus.oldest_history_import?.last_error ? `Blocked after ${historyStatus.oldest_history_import.attempts} attempts: ${historyStatus.oldest_history_import.last_error}` : "Stored safely on this Mac and waiting for delivery."}</p></div>
+            <div><p className="font-medium">{historyStatus.pending_history_imports.toLocaleString()} history envelopes await cloud acknowledgement</p><p className="mt-1 text-muted-foreground">{historyStatus.oldest_history_import?.error?.message ? `Blocked after ${historyStatus.oldest_history_import.attempts} attempts: ${historyStatus.oldest_history_import.error.message}` : "Stored safely on this Mac and waiting for delivery."}</p></div>
             <div className="flex gap-2"><Button type="button" variant="outline" disabled={discarding || retrying || syncing} onClick={() => void retryPending()}>{retrying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Retry now</Button><Button type="button" variant="outline" disabled={discarding || retrying || syncing} onClick={() => { if (window.confirm(`Discard ${historyStatus.pending_history_imports} queued history envelopes from this Mac? Claude files are unchanged.`)) void discardPending(); }}>{discarding ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}Discard queued copies</Button></div>
           </div>
         )}
@@ -547,7 +554,7 @@ export function ClaudeHistorySync() {
               ) : (
                 <Tags className="mr-2 h-4 w-4" />
               )}
-              {labelResult?.dry_run ? `Apply ${labelResult.queued.toLocaleString()} proposed updates` : "Preview session detail changes"}
+              {labelResult?.dry_run && labelResult.operation_id ? `Apply ${labelResult.queued.toLocaleString()} proposed updates` : "Preview session detail changes"}
             </Button>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -654,7 +661,7 @@ export function ClaudeHistorySync() {
                     another computer.
                   </p>
                 )}
-                {labelResult.operation_id && labelResult.operation ? <SessionDetailsComparisonTable result={labelResult} busy={labelSyncing} onVerified={setLabelResult} /> : <><div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs">This engine version returned aggregate title samples, not complete side-by-side evidence. Apply is available for compatibility, but post-sync convergence cannot be proven from this response.</div>{labelResult.sample_titles.length > 0 && <ul className="space-y-1 text-xs text-muted-foreground">{labelResult.sample_titles.map((item) => <li key={item.provider_session_id}>{item.title}</li>)}</ul>}</>}
+                <SessionDetailsComparisonTable result={labelResult} busy={labelSyncing} onVerified={setLabelResult} />
               </div>
             )}
           </CardContent>
@@ -790,9 +797,11 @@ function OverviewPanel({
                       </p>
                       {readiness ? <div className="mt-2 space-y-2 rounded-md border px-2.5 py-2 text-xs">
                         <div className="flex flex-wrap gap-1.5"><Badge variant={readiness.product.installed === true ? "secondary" : "outline"}>{readiness.product.installed === true ? "Product installed" : readiness.product.installed === false ? "Product not found" : "Product installation unknown"}</Badge><Badge variant={readiness.product.running === true ? "secondary" : "outline"}>{readiness.product.running === true ? "Running now" : readiness.product.running === false ? "Not running" : "Running state unknown"}</Badge><Badge variant={readiness.adapter.detected ? "secondary" : "outline"}>{readiness.adapter.detected ? "AI Matrx adapter found" : "AI Matrx adapter not found"}</Badge><Badge variant="outline">Connection unverified</Badge></div>
+                        <p className="text-muted-foreground">Product version: {readiness.product.version ?? "not reported"} · adapter version: {readiness.adapter.version ?? "not reported"} · adapter setup: {readiness.adapter.configured === true ? "configured" : readiness.adapter.configured === false ? "not configured" : "not verified"} · hook trust: {readiness.adapter.hook_trust.replace(/_/g, " ")}</p>
                         <p className="text-muted-foreground">{readiness.connection.detail}</p>
                         {readiness.activity.most_recent && <p className="text-muted-foreground">Most recent evidence: {readiness.activity.most_recent.kind === "cloud_acknowledgement" ? "AI Matrx acknowledged a delivery" : "this Mac stored provider work"} at {formatDate(readiness.activity.most_recent.at)}. This is activity evidence, not a live connection claim.</p>}
-                        {readiness.upstream_spool.supported && <p className="text-muted-foreground">Adapter spool: {readiness.upstream_spool.pending ?? "unknown"} pending · {readiness.upstream_spool.poison ?? "unknown"} needs attention · {readiness.upstream_spool.in_flight ?? "unknown"} in flight</p>}
+                        {readiness.upstream_spool.supported && <button type="button" className="text-left text-muted-foreground underline-offset-2 hover:underline" onClick={() => setGuidedInstruction({ label: `${PROVIDER_LABELS[provider]} adapter spool evidence`, instruction: `${readiness.upstream_spool.pending ?? "Unknown"} pending, ${readiness.upstream_spool.poison ?? "unknown"} needing attention, ${readiness.upstream_spool.in_flight ?? "unknown"} in flight, and ${readiness.upstream_spool.temporary ?? "unknown"} temporary adapter artifacts. ${readiness.upstream_spool.oldest_pending_at ? `The oldest pending artifact was observed at ${formatDate(readiness.upstream_spool.oldest_pending_at)}.` : "No oldest-pending timestamp was reported."} These are provider adapter aggregates, not AI Matrx delivery-envelope rows. Use the provider action below to inspect or repair the adapter itself.` })}>Adapter spool: {readiness.upstream_spool.pending ?? "unknown"} pending · {readiness.upstream_spool.poison ?? "unknown"} needs attention · {readiness.upstream_spool.in_flight ?? "unknown"} in flight · {readiness.upstream_spool.temporary ?? "unknown"} temporary · explain</button>}
+                        {(readiness.product.evidence.length > 0 || readiness.adapter.evidence.length > 0 || readiness.connection.evidence?.length) && <details><summary className="cursor-pointer text-muted-foreground">Show detection evidence</summary><ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted-foreground">{[...readiness.product.evidence, ...readiness.adapter.evidence, ...(readiness.connection.evidence ?? [])].map((item, index) => <li key={`${index}:${item}`}>{item}</li>)}</ul></details>}
                         {readiness.actions.length > 0 && <div className="flex flex-wrap gap-2">{readiness.actions.map((action) => <Button key={action.id} type="button" size="sm" variant="outline" onClick={() => setGuidedInstruction({ label: action.label, instruction: action.instruction })}>{action.label}</Button>)}</div>}
                       </div> : <div className="mt-2 rounded-md border border-dashed px-2.5 py-2 text-xs text-muted-foreground"><span className="font-medium text-foreground">Readiness is loading or unavailable.</span> Product support below is not a connection claim.</div>}
                       <p className="mt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -889,6 +898,17 @@ function OverviewPanel({
               <Button className="mt-3" size="sm" onClick={onOpenAccount}>
                 Open account settings
               </Button>
+            </div>
+          )}
+          {bridgeStatus && bridgeStatus.publisher.transport_circuit.state !== "closed" && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+              <p className="font-medium">AI Matrx transport is temporarily paused</p>
+              <p className="mt-1 text-muted-foreground">
+                {bridgeStatus.publisher.transport_circuit.state === "open" ? "Repeated offline transport failures opened a bounded cooldown." : "The publisher is testing one delivery after the cooldown."}
+                {bridgeStatus.publisher.transport_circuit.retry_in_seconds !== null && bridgeStatus.publisher.transport_circuit.retry_in_seconds > 0 ? ` Next probe in ${formatRetryDuration(bridgeStatus.publisher.transport_circuit.retry_in_seconds)}.` : " A probe is due now."}
+                {` ${bridgeStatus.publisher.transport_circuit.failure_count.toLocaleString()} transport failure${bridgeStatus.publisher.transport_circuit.failure_count === 1 ? "" : "s"} were observed; stored envelopes remain local.`}
+              </p>
+              {(bridgeStatus.pending.total > 0 || bridgeStatus.quarantine.total > 0) && <Button type="button" className="mt-3" size="sm" variant="outline" onClick={() => setDeliveryFilter({ state: bridgeStatus.pending.total > 0 ? "pending" : "quarantine" })}>Inspect affected stored envelopes</Button>}
             </div>
           )}
           <div className="grid gap-2 sm:grid-cols-4" aria-label="Delivery stages">

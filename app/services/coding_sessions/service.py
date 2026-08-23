@@ -903,11 +903,9 @@ class CodingSessionBridgeOutbox:
         if row is None:
             return None
         result = dict(row)
+        result["created_at"] = _utc_timestamp(result.get("created_at"))
         safe_error = _safe_delivery_error(result.pop("last_error", None))
         result["error"] = safe_error
-        # Compatibility for the existing history card; this is the same
-        # redacted object, never the persisted raw server text.
-        result["last_error"] = safe_error
         return result
 
     async def quarantined_native_import_count(self) -> int:
@@ -1334,7 +1332,7 @@ class CodingSessionBridgeOutbox:
             return None
         return {
             "receipt_id": int(row["last_enqueued_receipt_id"]),
-            "at": str(row["last_enqueued_at"]),
+            "at": _utc_timestamp(row["last_enqueued_at"]),
             "provider": str(row["provider"]),
             "action": str(row["action"]),
             "source": str(row["source"]),
@@ -1346,7 +1344,7 @@ class CodingSessionBridgeOutbox:
             return None
         return {
             "receipt_id": int(row["last_acknowledged_receipt_id"]),
-            "at": str(row["last_acknowledged_at"]),
+            "at": _utc_timestamp(row["last_acknowledged_at"]),
             "provider": str(row["provider"]),
             "action": str(row["action"]),
             "source": str(row["source"]),
@@ -1506,7 +1504,7 @@ class CodingSessionBridgeOutbox:
                 "attempts": int(head["attempts"]),
                 "next_attempt_at": next_attempt_at,
                 "retry_in_seconds": max(0.0, next_attempt_at - time.time()),
-                "created_at": str(head["created_at"]),
+                "created_at": _utc_timestamp(head["created_at"]),
                 "error": _safe_delivery_error(head["last_error"]),
             }
 

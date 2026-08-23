@@ -441,6 +441,7 @@ async def test_successful_codex_ack_is_persisted_after_validation(
     receipt = await service.enqueue(_hook(provider="codex"))
     queued = await service.delivery_status()
     assert queued["last_enqueue"]["receipt_id"] == receipt.receipt_id
+    assert queued["last_enqueue"]["at"].endswith("Z")
     assert queued["last_acknowledgement"] is None
 
     assert await service.sync_pending() == {
@@ -453,6 +454,7 @@ async def test_successful_codex_ack_is_persisted_after_validation(
     assert delivered["pending"]["total"] == 0
     assert delivered["providers"]["codex"]["acknowledged_envelopes"] == 1
     assert acknowledgement == delivered["last_acknowledgement"]
+    assert acknowledgement["at"].endswith("Z")
     assert acknowledgement == {
         "receipt_id": receipt.receipt_id,
         "at": acknowledgement["at"],
@@ -826,6 +828,7 @@ async def test_first_cloud_401_pauses_all_lanes_until_credentials_change(
         "provider": "claude_code",
     }
     assert status["head_blocker"]["error"]["code"] == ("cloud_credentials_rejected")
+    assert status["head_blocker"]["created_at"].endswith("Z")
 
     tokens.access_token = "replacement-jwt"
     await service.credentials_changed()
@@ -853,7 +856,9 @@ async def test_history_retry_recovers_ordered_drain_without_dropping_hook(
     assert await service.pending_native_import_count() == 1
     oldest = await service.oldest_native_import()
     assert oldest is not None and oldest["attempts"] == 1
-    assert oldest["last_error"]
+    assert oldest["created_at"].endswith("Z")
+    assert oldest["error"]
+    assert "last_error" not in oldest
 
     assert await service.retry_pending_native_imports() == {
         "retried": 1,

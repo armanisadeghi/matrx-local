@@ -353,7 +353,7 @@ export interface ClaudeHistoryStatus {
     id: number;
     attempts: number;
     next_attempt_at: number;
-    last_error: string | null;
+    error: { code: string | null; message: string | null } | null;
     created_at: string;
   } | null;
   last_sync: Record<string, unknown> | null;
@@ -386,7 +386,7 @@ export interface ClaudeLabelPushDown {
 }
 
 export interface ClaudeLabelSyncResult {
-  schema_version: 2 | 3;
+  schema_version: 3;
   source: "claude_desktop_session_index";
   dry_run: boolean;
   bound_sessions: number;
@@ -403,10 +403,10 @@ export interface ClaudeLabelSyncResult {
   sample_titles: { provider_session_id: string; title: string }[];
   /** AI Matrx → Claude Code: renames written back into Claude's own index. */
   push_down: ClaudeLabelPushDown;
-  operation_id?: string;
-  operation?: ClaudeSessionDetailOperation;
-  comparisons?: ClaudeSessionDetailComparison[];
-  comparisons_truncated?: boolean;
+  operation_id: string;
+  operation: ClaudeSessionDetailOperation;
+  comparisons: ClaudeSessionDetailComparison[];
+  comparisons_truncated: boolean;
   comparisons_next_cursor?: string | null;
   detected?: number;
   acknowledged?: number;
@@ -558,6 +558,20 @@ export interface CodingSessionBridgeStatus {
       receipt_id?: number;
       provider?: CodingSessionProvider;
     } | null;
+    transport_circuit: {
+      state: "closed" | "open" | "half_open";
+      reason: string | null;
+      failure_count: number;
+      opened_at: number | null;
+      retry_at: number | null;
+      retry_in_seconds: number | null;
+      config: {
+        batch_size: number;
+        poll_interval_seconds: number;
+        offline_failures_to_open: number;
+        offline_cooldown_seconds: number;
+      };
+    };
   };
   pending: {
     total: number;

@@ -14,6 +14,7 @@ from app.services.coding_sessions.claude_history import (
     ClaudeHistoryConflict,
     ClaudeHistoryImporter,
     ClaudeHistoryImportRequest,
+    ClaudeHistoryPrepareRequest,
     _AccountSnapshot,
     account_label,
     derive_account_key,
@@ -53,13 +54,25 @@ def _write_session(
 
 async def _account_a() -> _AccountSnapshot:
     return _AccountSnapshot(
-        True, "a" * 64, "a" * 12, "2.1.228", None, account_label="a***n@t***.com"
+        True,
+        "a" * 64,
+        "a" * 12,
+        "2.1.228",
+        None,
+        account_label="a***n@t***.com",
+        local_display_identity="arman@titaniumsuccess.com",
     )
 
 
 async def _account_b() -> _AccountSnapshot:
     return _AccountSnapshot(
-        True, "b" * 64, "b" * 12, "2.1.228", None, account_label="o***r@e***.com"
+        True,
+        "b" * 64,
+        "b" * 12,
+        "2.1.228",
+        None,
+        account_label="o***r@e***.com",
+        local_display_identity="other@example.com",
     )
 
 
@@ -82,7 +95,7 @@ async def importer_env(tmp_path: Path):
 
 
 @pytest.mark.anyio
-async def test_preview_discloses_scope_without_paths_or_account_pii(
+async def test_preview_discloses_scope_and_local_account_without_private_content(
     importer_env,
 ) -> None:
     config_dir, db, outbox = importer_env
@@ -135,11 +148,110 @@ async def test_preview_discloses_scope_without_paths_or_account_pii(
     assert preview["sessions"][0]["subagent_count"] == 1
     assert preview["provider_account_key_version"] == ACCOUNT_KEY_VERSION
     assert preview["provider_account_label"] == "a***n@t***.com"
+    assert preview["provider_account_display_identity"] == (
+        "arman@titaniumsuccess.com"
+    )
     serialized = json.dumps(preview)
     assert "/private/company" not in serialized
     assert "private prompt" not in serialized
-    # Only the masked display label may carry an "@"; never a raw address.
-    assert "@" not in serialized.replace("a***n@t***.com", "")
+
+
+@pytest.mark.anyio
+async def test_review_is_stat_fenced_paged_and_reports_scan_deltas(
+    importer_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir, db, outbox = importer_env
+    first_id = str(uuid4())
+    second_id = str(uuid4())
+    first_path = _write_session(
+        config_dir,
+        session_id=first_id,
+        records=[
+            {"type": "custom-title", "customTitle": "First review session"},
+            {"type": "user", "message": {"content": "one"}},
+        ],
+    )
+    _write_session(
+        config_dir,
+        session_id=second_id,
+        records=[
+            {"type": "custom-title", "customTitle": "Second review session"},
+            {"type": "user", "message": {"content": "two"}},
+        ],
+    )
+
+    def fail_if_hashed(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("review must not content-hash the transcript corpus")
+
+    monkeypatch.setattr(
+        "app.services.coding_sessions.claude_history._hash_source", fail_if_hashed
+    )
+    importer = ClaudeHistoryImporter(
+        db=db, outbox=outbox, config_dir=config_dir, account_reader=_account_a
+    )
+
+    first = await importer.review(limit=1)
+    assert first["scan"]["new_count"] == 2
+    assert first["page"] == {
+        "returned": 1,
+        "total": 2,
+        "has_more": True,
+        "next_cursor": first["page"]["next_cursor"],
+    }
+    assert first["items"][0]["source_revision"] is None
+    filtered = await importer.inventory_page(
+        first["scan_id"], search="Second review", limit=100
+    )
+    assert filtered["page"]["total"] == 1
+    assert filtered["items"][0]["title"] == "Second review session"
+
+    second = await importer.review(limit=100)
+    assert second["scan"]["unchanged_count"] == 2
+    first_path.unlink()
+    third = await importer.review(limit=100)
+    assert third["scan"]["missing_count"] == 1
+    missing = await importer.inventory_page(
+        third["scan_id"], change_types=("missing",), include_missing=True
+    )
+    assert missing["items"][0]["session_id"] == first_id
+    assert missing["items"][0]["import_blocked_reason"] == "source_missing"
+
+
+@pytest.mark.anyio
+async def test_prepare_hashes_only_selected_inventory_rows(importer_env) -> None:
+    config_dir, db, outbox = importer_env
+    session_id = str(uuid4())
+    _write_session(
+        config_dir,
+        session_id=session_id,
+        records=[{"type": "user", "message": {"content": "selected"}}],
+    )
+    importer = ClaudeHistoryImporter(
+        db=db, outbox=outbox, config_dir=config_dir, account_reader=_account_a
+    )
+    review = await importer.review(limit=100)
+    row = review["items"][0]
+    result = await importer.prepare_selected(
+        ClaudeHistoryPrepareRequest.model_validate(
+            {
+                "scan_id": review["scan_id"],
+                "provider_account_key": review["provider_account_key"],
+                "sessions": [
+                    {
+                        "session_id": row["session_id"],
+                        "provider_project_key": row["project_key"],
+                        "source_state": row["source_state"],
+                    }
+                ],
+            }
+        )
+    )
+    assert len(result["prepared"]) == 1
+    assert len(result["prepared"][0]["source_revision"]) == 64
+    refreshed = await importer.inventory_page(review["scan_id"], limit=100)
+    assert refreshed["items"][0]["source_revision"] == result["prepared"][0][
+        "source_revision"
+    ]
 
 
 @pytest.mark.anyio
@@ -260,6 +372,7 @@ async def test_selected_import_is_atomic_bounded_and_replay_safe(importer_env) -
     metadata = envelopes[0].source_metadata
     assert metadata is not None
     assert metadata.provider_account_key == "a" * 64
+    assert "arman@titaniumsuccess.com" not in serialized
     assert metadata.provider_account_key_version == ACCOUNT_KEY_VERSION
     assert metadata.provider_account_fingerprint == "a" * 12
     assert metadata.provider_account_label == "a***n@t***.com"

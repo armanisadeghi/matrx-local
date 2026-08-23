@@ -6,9 +6,10 @@ Windows. Claude's native installer puts the user-owned launcher in
 signed-in installation as missing. Every coding-session consumer uses this
 module so history import and the local runtime cannot disagree.
 
-The probe reads only Claude's documented local CLI status. Raw identity data
-never leaves this module: callers receive the existing deterministic account
-key, its short fingerprint, and a display-safe masked label.
+The probe reads only Claude's documented local CLI status. Cloud-bound metadata
+continues to use the deterministic account key and masked label. The loopback
+desktop may additionally show ``local_display_identity`` so the person using
+the machine can tell which of their own accounts Claude reported.
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ ProbeStatus = Literal[
 
 @dataclass(frozen=True)
 class AccountSnapshot:
-    """Privacy-reduced Claude account state consumed by history and runtime."""
+    """Claude account state with separate cloud-safe and local-display fields."""
 
     available: bool
     account_key: str | None
@@ -61,6 +62,7 @@ class AccountSnapshot:
     executable_path: str | None = None
     probe_status: ProbeStatus | None = None
     diagnostic: str | None = None
+    local_display_identity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -420,6 +422,7 @@ async def read_account_snapshot(
         executable_path=executable_path,
         probe_status="ready",
         diagnostic=version_diagnostic,
+        local_display_identity=email or normalized_org_id,
     )
 
 

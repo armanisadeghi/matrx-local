@@ -1086,6 +1086,73 @@ SELECT
 FROM coding_session_bridge_quarantine
 """
 
+# A review is a durable, immutable inventory snapshot rather than a transient
+# list.  Keeping the row-level comparison locally lets the desktop explain
+# exactly what was new, changed, missing, or unchanged without re-reading every
+# transcript or sending filesystem inventory to the cloud.
+_V27_CODING_SESSION_HISTORY_SCANS = """
+CREATE TABLE IF NOT EXISTS coding_session_history_scans (
+    scan_id               TEXT PRIMARY KEY,
+    provider              TEXT NOT NULL,
+    provider_account_key  TEXT,
+    previous_scan_id      TEXT,
+    status                TEXT NOT NULL CHECK (status IN ('scanning', 'completed', 'failed')),
+    started_at            TEXT NOT NULL,
+    completed_at          TEXT,
+    session_count         INTEGER NOT NULL DEFAULT 0,
+    present_count         INTEGER NOT NULL DEFAULT 0,
+    new_count             INTEGER NOT NULL DEFAULT 0,
+    content_changed_count INTEGER NOT NULL DEFAULT 0,
+    metadata_changed_count INTEGER NOT NULL DEFAULT 0,
+    missing_count         INTEGER NOT NULL DEFAULT 0,
+    unchanged_count       INTEGER NOT NULL DEFAULT 0,
+    blocked_count         INTEGER NOT NULL DEFAULT 0,
+    file_count            INTEGER NOT NULL DEFAULT 0,
+    project_count         INTEGER NOT NULL DEFAULT 0,
+    total_bytes           INTEGER NOT NULL DEFAULT 0,
+    error_message         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_coding_session_history_scans_latest
+ON coding_session_history_scans(provider, provider_account_key, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS coding_session_history_scan_rows (
+    scan_id               TEXT NOT NULL,
+    session_id            TEXT NOT NULL,
+    project_key           TEXT NOT NULL,
+    present               INTEGER NOT NULL DEFAULT 1,
+    change_type           TEXT NOT NULL CHECK (change_type IN (
+        'new', 'content_changed', 'metadata_changed', 'missing', 'unchanged'
+    )),
+    source_state          TEXT,
+    source_revision       TEXT,
+    title                 TEXT NOT NULL,
+    title_source          TEXT,
+    project_name          TEXT NOT NULL,
+    git_branch            TEXT,
+    worktree_name         TEXT,
+    is_archived           INTEGER,
+    is_pinned             INTEGER,
+    pinned_rank           INTEGER,
+    category              TEXT,
+    payload_bytes         INTEGER NOT NULL DEFAULT 0,
+    file_count            INTEGER NOT NULL DEFAULT 0,
+    subagent_count        INTEGER NOT NULL DEFAULT 0,
+    last_modified_ns      INTEGER NOT NULL DEFAULT 0,
+    import_available      INTEGER NOT NULL DEFAULT 0,
+    import_blocked_reason TEXT,
+    PRIMARY KEY (scan_id, session_id, project_key),
+    FOREIGN KEY (scan_id) REFERENCES coding_session_history_scans(scan_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_coding_session_history_rows_page
+ON coding_session_history_scan_rows(scan_id, present, last_modified_ns DESC);
+
+CREATE INDEX IF NOT EXISTS idx_coding_session_history_rows_change
+ON coding_session_history_scan_rows(scan_id, change_type, last_modified_ns DESC);
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1113,4 +1180,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (24, _V24_CODING_SESSION_BRIDGE_DELIVERY_ACTIVITY),
     (25, _V25_CODING_SESSION_BRIDGE_DELIVERY_LANES),
     (26, _V26_CODING_SESSION_BRIDGE_QUEUE_METADATA),
+    (27, _V27_CODING_SESSION_HISTORY_SCANS),
 ]

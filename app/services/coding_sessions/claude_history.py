@@ -29,6 +29,10 @@ from app.services.coding_sessions.claude_session_index import (
     read_session_index,
 )
 from app.services.coding_sessions.models import BridgeRequest
+from app.services.coding_sessions.history_inventory import (
+    HistoryChangeType,
+    HistoryInventoryStore,
+)
 from app.services.coding_sessions.service import CodingSessionBridgeOutbox
 from app.services.coding_sessions.title_sync import (
     session_metadata_request,
@@ -65,8 +69,30 @@ class ClaudeHistoryImportRequest(BaseModel):
     ]
 
 
+class ClaudeHistoryPrepareSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: UUID
+    provider_project_key: Annotated[str, Field(min_length=1, max_length=1024)]
+    source_state: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+class ClaudeHistoryPrepareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scan_id: UUID
+    provider_account_key: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    sessions: Annotated[
+        list[ClaudeHistoryPrepareSelection],
+        Field(min_length=1, max_length=MAX_SELECTED_SESSIONS),
+    ]
+
+
 class ClaudeHistoryConflict(ValueError):
     pass
+
+
+_review_lock = asyncio.Lock()
 
 
 @dataclass(frozen=True)
@@ -467,6 +493,7 @@ class ClaudeHistoryImporter:
         self._account_reader = account_reader
         self._tokens = TokenRepo(self._db)
         self._sync_meta = SyncMetaRepo(self._db)
+        self._inventory = HistoryInventoryStore(self._db)
 
     async def _read_index(self) -> dict[str, ClaudeSessionIndexEntry]:
         """Claude's own sidebar labels, keyed by CLI session UUID."""
@@ -517,6 +544,195 @@ class ClaudeHistoryImporter:
             and source.source_revision is not None
         }
 
+    @staticmethod
+    def _inventory_row(
+        source: _SessionSource,
+        previous: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        entry = source.index_entry
+        metadata = {
+            "title": source.title,
+            "title_source": entry.title_source if entry else None,
+            "project_name": source.project_name,
+            "git_branch": source.git_branch,
+            "worktree_name": entry.worktree_name if entry else None,
+            "is_archived": entry.is_archived if entry else None,
+            "is_pinned": entry.is_pinned if entry else None,
+            "pinned_rank": entry.pinned_rank if entry else None,
+            "category": entry.category if entry else None,
+            "import_blocked_reason": source.import_blocked_reason,
+        }
+        if previous is None:
+            change_type: HistoryChangeType = "new"
+            source_revision = None
+        elif previous.get("source_state") != source.source_state:
+            change_type = "content_changed"
+            source_revision = None
+        elif any(previous.get(key) != value for key, value in metadata.items()):
+            change_type = "metadata_changed"
+            source_revision = previous.get("source_revision")
+        else:
+            change_type = "unchanged"
+            source_revision = previous.get("source_revision")
+        return {
+            "session_id": source.session_id,
+            "project_key": source.project_key,
+            "present": True,
+            "change_type": change_type,
+            "source_state": source.source_state,
+            "source_revision": source_revision,
+            **metadata,
+            "bytes": source.total_bytes,
+            "file_count": len(source.streams),
+            "subagent_count": len(source.streams) - 1,
+            "last_modified_ns": source.latest_mtime_ns,
+            "import_available": source.import_blocked_reason is None,
+        }
+
+    async def review(
+        self,
+        *,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Create a durable stat-fenced inventory and report its exact delta."""
+        if not 1 <= limit <= MAX_PREVIEW_SESSIONS:
+            raise ValueError(f"limit must be between 1 and {MAX_PREVIEW_SESSIONS}")
+        if _review_lock.locked():
+            raise ClaudeHistoryConflict("A Claude history review is already running")
+        async with _review_lock:
+            account, index = await asyncio.gather(
+                self._account_reader(), self._read_index()
+            )
+            previous_scan = await self._inventory.latest_completed_scan(
+                "claude_code", account.account_key
+            )
+            previous_scan_id = previous_scan["scan_id"] if previous_scan else None
+            previous_rows = await self._inventory.comparison_rows(previous_scan_id)
+            scan_id = await self._inventory.begin_scan(
+                provider="claude_code",
+                provider_account_key=account.account_key,
+                previous_scan_id=previous_scan_id,
+            )
+            try:
+                sources, totals = await asyncio.to_thread(
+                    _discover_sources,
+                    self._config_dir,
+                    hash_content=False,
+                    index=index,
+                )
+                rows: list[dict[str, Any]] = []
+                present_identities: set[tuple[str, str]] = set()
+                for source in sources:
+                    identity = (source.session_id, source.project_key)
+                    present_identities.add(identity)
+                    rows.append(
+                        self._inventory_row(source, previous_rows.get(identity))
+                    )
+                for identity, previous in previous_rows.items():
+                    if identity in present_identities:
+                        continue
+                    missing = dict(previous)
+                    missing.update(
+                        {
+                            "present": False,
+                            "change_type": "missing",
+                            "source_revision": None,
+                            "import_available": False,
+                            "import_blocked_reason": "source_missing",
+                            "bytes": previous.get("payload_bytes", 0),
+                        }
+                    )
+                    rows.append(missing)
+                summary = await self._inventory.complete_scan(
+                    scan_id, rows=rows, totals=totals
+                )
+            except Exception as exc:
+                await self._inventory.fail_scan(scan_id, str(exc))
+                raise
+
+            token_row = await self._tokens.get()
+            page = await self._inventory.list_rows(scan_id, limit=limit)
+            return {
+                "schema_version": 2,
+                "source": "claude_local_jsonl",
+                "scan": summary,
+                "account_identity_available": account.available,
+                "provider_account_key": account.account_key,
+                "provider_account_key_version": ACCOUNT_KEY_VERSION,
+                "account_fingerprint": account.fingerprint,
+                "provider_account_label": account.account_label,
+                "provider_account_display_identity": account.local_display_identity,
+                "account_identity_observed_at": summary["completed_at"],
+                "account_blocked_reason": account.reason,
+                "claude_client_version": account.client_version,
+                "matrx_user_available": bool(token_row and token_row.get("user_id")),
+                "import_ready": account.available
+                and bool(token_row and token_row.get("user_id")),
+                "limits": {
+                    "page_size_max": MAX_PREVIEW_SESSIONS,
+                    "selected_sessions": MAX_SELECTED_SESSIONS,
+                    "import_bytes": MAX_IMPORT_BYTES,
+                    "line_bytes": MAX_LINE_BYTES,
+                },
+                **page,
+                "facets": await self._inventory.facets(scan_id),
+            }
+
+    async def inventory_page(
+        self,
+        scan_id: str,
+        **query: Any,
+    ) -> dict[str, Any]:
+        if await self._inventory.get_scan(scan_id) is None:
+            raise ValueError("Unknown history scan")
+        result = await self._inventory.list_rows(scan_id, **query)
+        result["facets"] = await self._inventory.facets(scan_id)
+        return result
+
+    async def prepare_selected(
+        self, request: ClaudeHistoryPrepareRequest
+    ) -> dict[str, Any]:
+        """Hash only selected rows, preserving fast review for large histories."""
+        account = await self._account_reader()
+        if not account.available or account.account_key != request.provider_account_key:
+            raise ClaudeHistoryConflict(
+                "Claude account changed after review; review again before importing"
+            )
+        identities = {
+            (str(selection.session_id), selection.provider_project_key)
+            for selection in request.sessions
+        }
+        sources = await self.capture_revisions(identities)
+        prepared: list[dict[str, str]] = []
+        for selection in request.sessions:
+            identity = (str(selection.session_id), selection.provider_project_key)
+            source = sources.get(identity)
+            if source is None or source.source_revision is None:
+                raise ClaudeHistoryConflict(
+                    f"Claude session {selection.session_id} is no longer importable"
+                )
+            if source.source_state != selection.source_state:
+                raise ClaudeHistoryConflict(
+                    f"Claude session {selection.session_id} changed after review"
+                )
+            prepared.append(
+                {
+                    "session_id": source.session_id,
+                    "project_key": source.project_key,
+                    "source_state": source.source_state,
+                    "source_revision": source.source_revision,
+                }
+            )
+        try:
+            await self._inventory.set_source_revisions(str(request.scan_id), prepared)
+        except ValueError as exc:
+            raise ClaudeHistoryConflict(str(exc)) from exc
+        return {
+            "schema_version": 1,
+            "scan_id": str(request.scan_id),
+            "prepared": prepared,
+        }
+
     async def preview(self, *, limit: int = 50) -> dict[str, Any]:
         if not 1 <= limit <= MAX_PREVIEW_SESSIONS:
             raise ValueError(f"limit must be between 1 and {MAX_PREVIEW_SESSIONS}")
@@ -537,6 +753,7 @@ class ClaudeHistoryImporter:
             "provider_account_key_version": ACCOUNT_KEY_VERSION,
             "account_fingerprint": account.fingerprint,
             "provider_account_label": account.account_label,
+            "provider_account_display_identity": account.local_display_identity,
             "account_blocked_reason": account.reason,
             "claude_client_version": account.client_version,
             "matrx_user_available": matrx_user_available,
@@ -729,6 +946,7 @@ class ClaudeHistoryImporter:
             "accepted": True,
             "provider_account_fingerprint": account.fingerprint,
             "provider_account_label": account.account_label,
+            "provider_account_display_identity": account.local_display_identity,
             "selected_sessions": len(selected_sources),
             "labeled_sessions": len(label_requests),
             "queued_label_updates": queued_labels,
@@ -1089,6 +1307,8 @@ __all__ = [
     "ClaudeHistoryConflict",
     "ClaudeHistoryImporter",
     "ClaudeHistoryImportRequest",
+    "ClaudeHistoryPrepareRequest",
+    "ClaudeHistoryPrepareSelection",
     "ClaudeHistorySelection",
     "account_label",
     "derive_account_key",

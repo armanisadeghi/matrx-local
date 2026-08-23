@@ -60,12 +60,7 @@ from typing import Any
 from uuid import UUID
 
 from app.common.system_logger import get_logger
-from app.services.aidream.client import (
-    AIDreamClient,
-    AIDreamError,
-    AIDreamOfflineError,
-    get_aidream_client,
-)
+from app.services.aidream.client import AIDreamClient, get_aidream_client
 from app.services.coding_sessions.claude_label_writer import (
     ClaudeSessionIndexWriter,
 )
@@ -74,6 +69,10 @@ from app.services.coding_sessions.claude_session_index import (
     read_session_index,
 )
 from app.services.coding_sessions.models import BridgeRequest
+from app.services.coding_sessions.identity_client import (
+    IdentityInventoryBlocked,
+    fetch_complete_identity_inventory,
+)
 from app.services.coding_sessions.service import (
     SESSION_METADATA_EVENT,
     CodingSessionBridgeOutbox,
@@ -84,8 +83,6 @@ from app.services.local_db.repositories import SyncMetaRepo, TokenRepo
 
 logger = get_logger()
 
-IDENTITY_PATH = "/coding-sessions/sessions"
-MAX_IDENTITY_ROWS = 1000
 _CLAUDE_SDK_PREFIX = "claude-sdk:"
 
 # The ladder tier the server reports when the AI Matrx title was typed by the
@@ -228,18 +225,13 @@ class ClaudeSessionMetadataReconciler:
         if client is None:
             raise ClaudeTitleSyncBlocked("aidream_server_unconfigured")
         try:
-            response = await client.get(
-                f"{IDENTITY_PATH}?provider=claude_code&limit={MAX_IDENTITY_ROWS}",
+            return await fetch_complete_identity_inventory(
+                client=client,
                 jwt=str(token_row["access_token"]),
+                provider="claude_code",
             )
-        except AIDreamOfflineError as exc:
-            raise ClaudeTitleSyncBlocked("aidream_unreachable") from exc
-        except AIDreamError as exc:
-            raise ClaudeTitleSyncBlocked(f"aidream_error:{exc}") from exc
-        sessions = response.get("sessions") if isinstance(response, dict) else None
-        if not isinstance(sessions, list):
-            raise ClaudeTitleSyncBlocked("identity_list_malformed")
-        return [row for row in sessions if isinstance(row, dict)]
+        except IdentityInventoryBlocked as exc:
+            raise ClaudeTitleSyncBlocked(exc.reason) from exc
 
     async def sync(self, *, dry_run: bool = False) -> dict[str, Any]:
         """Serialize title reconciliation so reports and mutation fences agree."""

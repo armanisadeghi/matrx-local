@@ -70,7 +70,16 @@ class _FakeClient:
         self.calls.append(path)
         if isinstance(self._sessions, Exception):
             raise self._sessions
-        return {"provider": "claude_code", "sessions": self._sessions}
+        return {
+            "schema_version": 2,
+            "provider": "claude_code",
+            "sessions": self._sessions,
+            "total_count": len(self._sessions),
+            "page_count": len(self._sessions),
+            "has_more": False,
+            "complete": True,
+            "next_cursor": None,
+        }
 
 
 class _BridgeAckClient:

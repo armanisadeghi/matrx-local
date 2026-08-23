@@ -90,7 +90,16 @@ class _FakeClient:
         self._sessions = sessions
 
     async def get(self, path: str, jwt: str | None = None) -> Any:
-        return {"provider": "claude_code", "sessions": self._sessions}
+        return {
+            "schema_version": 2,
+            "provider": "claude_code",
+            "sessions": self._sessions,
+            "total_count": len(self._sessions),
+            "page_count": len(self._sessions),
+            "has_more": False,
+            "complete": True,
+            "next_cursor": None,
+        }
 
 
 async def _pending_payloads(db: LocalDatabase) -> list[dict[str, Any]]:

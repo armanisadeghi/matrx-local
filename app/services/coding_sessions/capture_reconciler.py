@@ -53,12 +53,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.common.system_logger import get_logger
-from app.services.aidream.client import (
-    AIDreamClient,
-    AIDreamError,
-    AIDreamOfflineError,
-    get_aidream_client,
-)
+from app.services.aidream.client import AIDreamClient, get_aidream_client
 from app.services.coding_sessions.claude_history import (
     MAX_IMPORT_BYTES,
     MAX_SELECTED_SESSIONS,
@@ -67,13 +62,14 @@ from app.services.coding_sessions.claude_history import (
     ClaudeHistoryImporter,
     ClaudeHistorySelection,
 )
+from app.services.coding_sessions.identity_client import (
+    IdentityInventoryBlocked,
+    fetch_complete_identity_inventory,
+)
 from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import TokenRepo
 
 logger = get_logger()
-
-IDENTITY_PATH = "/coding-sessions/sessions"
-MAX_IDENTITY_ROWS = 1000
 
 # A session that cannot be imported is retried this many times, then left with
 # its error recorded. Without this an unreadable transcript re-enters the
@@ -199,18 +195,13 @@ class ClaudeCaptureReconciler:
         if client is None:
             raise CaptureReconcileBlocked("aidream_server_unconfigured")
         try:
-            response = await client.get(
-                f"{IDENTITY_PATH}?provider=claude_code&limit={MAX_IDENTITY_ROWS}",
+            return await fetch_complete_identity_inventory(
+                client=client,
                 jwt=str(token_row["access_token"]),
+                provider="claude_code",
             )
-        except AIDreamOfflineError as exc:
-            raise CaptureReconcileBlocked("aidream_unreachable") from exc
-        except AIDreamError as exc:
-            raise CaptureReconcileBlocked(f"aidream_error:{exc}") from exc
-        sessions = response.get("sessions") if isinstance(response, dict) else None
-        if not isinstance(sessions, list):
-            raise CaptureReconcileBlocked("identity_list_malformed")
-        return [row for row in sessions if isinstance(row, dict)]
+        except IdentityInventoryBlocked as exc:
+            raise CaptureReconcileBlocked(exc.reason) from exc
 
     # ------------------------------------------------------------------- pass
 

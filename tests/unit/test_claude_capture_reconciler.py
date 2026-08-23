@@ -73,7 +73,16 @@ class _FakeClient:
 
     async def get(self, path: str, jwt: str) -> dict[str, Any]:  # noqa: ARG002
         self.calls += 1
-        return {"provider": "claude_code", "sessions": self._sessions}
+        return {
+            "schema_version": 2,
+            "provider": "claude_code",
+            "sessions": self._sessions,
+            "total_count": len(self._sessions),
+            "page_count": len(self._sessions),
+            "has_more": False,
+            "complete": True,
+            "next_cursor": None,
+        }
 
 
 @pytest.fixture

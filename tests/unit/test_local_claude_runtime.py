@@ -34,6 +34,7 @@ from app.services.coding_sessions.local_runtime import (
     LocalRuntimeStartRequest,
     _LocalRun,
 )
+from app.services.coding_sessions.claude_session_index import ClaudeSessionIndexEntry
 from app.services.coding_sessions.workspace_discovery import WorkspaceDiscoveryNode
 from app.services.coding_sessions import local_runtime as runtime_module
 from app.services.coding_sessions.service import CodingSessionBridgeOutbox
@@ -383,6 +384,40 @@ async def test_resumable_reads_claude_own_store_and_decodes_composite(env) -> No
         + base64.urlsafe_b64encode(session_id.encode()).decode().rstrip("=")
     )
     assert LocalClaudeRuntime.decode_provider_session_id(composite) == session_id
+
+
+async def test_resumable_prefers_exact_local_index_workspace(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, _outbox, config_dir, workspace_root, _settings, _db = env
+    project = workspace_root / "exact-index-workspace"
+    project.mkdir()
+    session_id = str(uuid4())
+    _write_transcript(
+        config_dir,
+        session_id,
+        [{"type": "user", "uuid": str(uuid4())}],
+    )
+    entry = ClaudeSessionIndexEntry(
+        cli_session_id=session_id,
+        title="Indexed session",
+        title_source="user",
+        workspace_name=project.name,
+        git_branch=None,
+        worktree_name=None,
+        is_archived=False,
+        last_activity_at=1,
+        local_cwd=project,
+    )
+    monkeypatch.setattr(
+        "app.services.coding_sessions.claude_session_index.read_session_index",
+        lambda _root=None: ({session_id: entry}, {"files": 1, "records": 1}),
+    )
+
+    verdict = await runtime.resumable(session_id)
+
+    assert verdict["resumable"] is True
+    assert verdict["workspace"] == str(project)
 
 
 async def test_resume_start_refused_without_transcript(env) -> None:

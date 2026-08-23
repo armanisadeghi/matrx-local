@@ -55,6 +55,9 @@ class ClaudeSessionIndexEntry:
     is_pinned: bool | None = None
     pinned_rank: int | None = None
     category: str | None = None
+    # Exact local-only workspace path for native resume. It is deliberately
+    # excluded from ``metadata_payload`` and every bridge envelope.
+    local_cwd: Path | None = None
     # Every record file carrying this ``cliSessionId``, across accounts. Local
     # only — never part of any payload. See the module docstring.
     record_paths: tuple[Path, ...] = ()
@@ -141,6 +144,14 @@ def _workspace_label(record: dict[str, Any]) -> str | None:
     return None
 
 
+def _local_cwd(record: dict[str, Any]) -> Path | None:
+    for key in ("cwd", "originCwd"):
+        raw = record.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return Path(raw).expanduser()
+    return None
+
+
 def _entry_from_record(record: dict[str, Any]) -> ClaudeSessionIndexEntry | None:
     cli_session_id = record.get("cliSessionId")
     if not isinstance(cli_session_id, str) or not cli_session_id.strip():
@@ -156,6 +167,7 @@ def _entry_from_record(record: dict[str, Any]) -> ClaudeSessionIndexEntry | None
         worktree_name=_clean_text(record.get("worktreeName")),
         is_archived=archived if isinstance(archived, bool) else None,
         last_activity_at=activity if isinstance(activity, int) else 0,
+        local_cwd=_local_cwd(record),
     )
 
 

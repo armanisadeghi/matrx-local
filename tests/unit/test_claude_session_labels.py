@@ -159,7 +159,8 @@ def test_index_reader_keeps_the_newest_record_and_leaks_no_raw_path(
     assert entry.git_branch == "feature/labels"
     assert entry.worktree_name == "labels-wt"
     assert entry.is_archived is True
-    # Display label only — the raw cwd and worktree path never become payload.
+    # Exact cwd remains local-only for native resume; it never becomes payload.
+    assert entry.local_cwd == Path("/Users/someone/code/matrx-frontend")
     assert entry.workspace_name == "matrx-frontend"
     payload = entry.metadata_payload()
     assert payload == {

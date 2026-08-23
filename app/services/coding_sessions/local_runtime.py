@@ -559,8 +559,9 @@ class LocalClaudeRuntime:
         }
 
     def _workspace_for_transcript(self, raw_id: str, transcript: Path) -> Path | None:
-        # Claude's desktop session index knows the exact cwd; the transcript's
-        # own records carry it too. Index first, JSONL scan as fallback.
+        # Claude's desktop session index knows the exact local cwd; the
+        # transcript's own records carry it too. Index first, JSONL scan as
+        # fallback. ``local_cwd`` never enters metadata_payload or the cloud.
         try:
             from app.services.coding_sessions.claude_session_index import (
                 read_session_index,
@@ -568,9 +569,9 @@ class LocalClaudeRuntime:
 
             entries, _ = read_session_index(None)
             entry = entries.get(raw_id)
-            cwd = getattr(entry, "cwd", None) if entry is not None else None
-            if isinstance(cwd, str) and cwd:
-                return Path(cwd)
+            cwd = entry.local_cwd if entry is not None else None
+            if cwd is not None:
+                return cwd
         except Exception:  # noqa: BLE001 — index is optional; JSONL is ground truth
             pass
         try:

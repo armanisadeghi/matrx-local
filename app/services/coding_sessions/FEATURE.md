@@ -309,10 +309,15 @@ paths, file contents, or secrets into the desktop chat replica.
 
 ## Explicit Claude history sync
 
-`GET /coding-session/claude/history/preview` is the only discovery door. It runs only after the
-user presses **Review local history**, reports file/session/byte/project counts plus bounded session
-summaries, and uploads nothing. `POST /coding-session/claude/history/import` accepts at most ten
-session IDs with their exact preview revisions and atomically commits every generated
+`POST /coding-session/claude/history/review` is the only discovery door. It runs only after the
+user presses **Review local history**, persists an immutable local inventory, reports exact
+new/content-changed/details-changed/missing/unchanged counts, and uploads nothing. `GET
+/coding-session/claude/history/scans/{scan_id}` searches, filters, sorts, and pages that stable
+inventory instead of hiding older sessions. A review uses file identity/size/mtime fences and does
+not reread the transcript corpus. `POST /coding-session/claude/history/prepare` content-hashes only
+the at-most-ten selected rows and refuses if their review fence changed. `POST
+/coding-session/claude/history/import` accepts those exact prepared revisions and atomically commits
+every generated
 `append_native` batch **and its `SessionMetadata` observation in one transaction**
 to the existing V19 outbox before returning 202. A metadata failure rolls back the
 transcript batches, so a 500 can never conceal a partial commit. `GET
@@ -325,13 +330,13 @@ the ordered publisher; neither repair silently drops an event.
 - **The source is Claude's documented local JSONL.** Main transcripts come from
   `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<project>/<session>.jsonl`; subordinate JSONL files
   become independent `subagent:<id>` streams.
-- **Preview is privacy-minimal.** It never returns transcript text or a raw directory. It exposes a
-  project display basename plus an opaque SHA-256 project key. Its selection revision hashes the
-  exact bytes of every main/subagent stream, not file timestamps. The import reopens bounded regular
-  files without following symlinks, re-hashes the bytes actually read, and rejects a replacement or
-  mutation before the outbox changes. The import preserves exact raw JSON only after explicit
-  selection; the full parsed provider record remains owner-only (JSON whitespace/key-order are not
-  claimed as durable semantics).
+- **Review is privacy-minimal.** It never returns transcript text or a raw directory. It exposes a
+  project display basename plus an opaque SHA-256 project key. Preparation hashes the exact bytes of
+  every selected main/subagent stream. The import reopens bounded regular files without following
+  symlinks, re-hashes the bytes actually read, and rejects a replacement or mutation before the
+  outbox changes. The import preserves exact raw JSON only after explicit selection; the full parsed
+  provider record remains owner-only (JSON whitespace/key-order are not claimed as durable
+  semantics).
 - **Account identity is provenance, not authorization.** `claude auth status --json` is reduced to
   the canonical v2 `provider_account_key`: a deterministic SHA-256 of the fixed public namespace
   `matrx:coding-session:claude-code-account:v2` plus apiProvider/authMethod/orgId/lowercased email,
@@ -339,9 +344,11 @@ the ordered publisher; neither repair silently drops an event.
   with a per-installation secret and falsely conflicted across machines). It is an opaque
   correlation ID, deliberately not a secret. The wire metadata also carries
   `provider_account_key_version=2`, `provider_account_fingerprint` (the key's first 12 hex chars),
-  and a display-safe `provider_account_label` — a masked email such as `a***n@t***.com`, else
-  `org:<orgId[:8]>`; `orgName` is never used because it commonly embeds the raw email. The raw
-  email, organization name, credentials, and tokens never enter preview, outbox, or cloud metadata.
+  and a cloud-safe `provider_account_label` — a masked email such as `a***n@t***.com`, else
+  `org:<orgId[:8]>`; `orgName` is never used because it commonly embeds the raw email. The direct
+  loopback review/runtime responses additionally return the full locally observed account identity
+  so the person can identify which of their accounts is active. That display field never enters an
+  outbox envelope or cloud metadata; organization names, credentials, and tokens never enter either.
   An unknown account may be enriched once; a known same-version key can never change for the same
   provider session ID, and a v2 key upgrades a legacy v1 binding exactly once on re-import. This
   identity describes the active login at import time; Claude's local transcript does not

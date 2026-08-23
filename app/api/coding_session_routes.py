@@ -171,20 +171,6 @@ async def persist_coding_session_hook(
         ) from exc
 
 
-@router.get("/claude/history/preview")
-async def preview_claude_history(
-    limit: int = Query(default=50, ge=1, le=200),
-) -> dict[str, object]:
-    """Inspect local Claude history only after an explicit user request."""
-    try:
-        return await ClaudeHistoryImporter().preview(limit=limit)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
-
-
 @router.post("/claude/history/review")
 async def review_claude_history(
     limit: int = Query(default=100, ge=1, le=200),

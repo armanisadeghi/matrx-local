@@ -671,7 +671,7 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   deleting. If unused, `git rm` both.
 - **Owner hint:** whoever does the CDN installer-slimming work — fold into that.
 
-### MXL-D-079 — Large coding-session envelopes fail TLS in-process (`bad record mac`), starving every delivery lane
+### MXL-D-079 — Large coding-session envelopes fail TLS in-process (`bad record mac`)
 - **Area:** `app/services/aidream/client.py` (`AIDreamClient.post`),
   `app/services/coding_sessions/service.py` (`sync_pending` offline `break`)
 - **Symptom:** On v1.4.38 the publisher no longer crashes (fixed
@@ -693,13 +693,20 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
     silent for 3+ minutes with 2 outbound sockets open and no log line.
   - `attempts` never advanced past 1 for the retried row across four ticks,
     which is not yet explained and may be a second bug in the backoff path.
-- **Suspected design contributor:** a TLS failure on ONE row is classified
-  `AIDreamOfflineError`, and offline deliberately `break`s the whole tick as
-  "publisher-wide". When the failure is actually per-envelope (size-related),
-  one big row at the oldest lane head starves all 226 lanes indefinitely.
-  Consider: escalate a repeated per-row offline into a per-row backoff so other
-  lanes proceed, and/or cap/stream large envelopes.
-- **Status:** `open`
+- **Resolved starvation class (2026-08-23):** the publisher now treats one
+  transport-shaped failure as envelope-specific until a smallest-envelope
+  cross-lane probe also fails. One failed lane keeps its durable per-lane
+  order/backoff while unrelated lanes advance. Two failed lane heads open a
+  bounded global circuit, preventing a real outage from burning every lane;
+  status exposes closed/open/half-open state and retry timing. Full batches
+  drain immediately instead of sleeping for the 15-second idle interval.
+  Focused regressions cover large-envelope isolation, same-lane ordering,
+  bounded true-offline attempts, half-open recovery, cancellation, and
+  multi-batch throughput.
+- **Status:** `partially resolved` — cross-lane starvation and publisher pause
+  are fixed. The in-process TLS `bad record mac` root cause was not reproduced
+  or fixed by this change; large envelopes may still retry with backoff and
+  need separate transport investigation and/or chunking.
 - **Analysis stamp:** Analyzed 2026-08-19 — verified live in code + logs +
   access.log + live DB; root cause of the TLS corruption itself NOT identified.
 - **Owner hint:** whoever owns the coding-session bridge edge; pairs with the

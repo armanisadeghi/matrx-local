@@ -857,13 +857,13 @@ async def test_history_retry_recovers_ordered_drain_without_dropping_hook(
 
     assert await service.retry_pending_native_imports() == {
         "retried": 1,
-        "pending": 2,
+        "pending": 1,
     }
-    assert (await service.sync_pending(limit=2))["sent"] == 2
+    assert (await service.sync_pending(limit=2))["sent"] == 1
     assert [call[1]["action"] for call in client.calls] == [
         "append_native",
-        "append_native",
         "observe_hook",
+        "append_native",
     ]
     assert await service.pending_count() == 0
 

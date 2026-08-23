@@ -8,6 +8,7 @@ import json
 import re
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -37,8 +38,6 @@ _SERVER_PATH = "/coding-sessions/bridge"
 # content, so the server applies it to an EXISTING binding of either fidelity
 # and settles an unbound session with accepted=0 instead of minting one.
 SESSION_METADATA_EVENT = "SessionMetadata"
-_PUBLISH_INTERVAL_SECONDS = 15.0
-_MAX_BATCH = 100
 _MAX_BACKOFF_SECONDS = 60.0
 _ENQUEUE_ORIGINS = frozenset(
     {
@@ -79,6 +78,26 @@ _TERMINAL_ERROR_CODES = frozenset({"entry_mutated"})
 # them transiently and dropping a row early would be real data loss.
 _TERMINAL_STATUSES = frozenset({400, 409, 422})
 _QUARANTINE_AFTER_ATTEMPTS = 25
+
+
+@dataclass(frozen=True)
+class PublisherCircuitConfig:
+    """Runtime knobs for fair batching and bounded outage detection."""
+
+    batch_size: int = 100
+    poll_interval_seconds: float = 15.0
+    offline_failures_to_open: int = 2
+    offline_cooldown_seconds: float = 15.0
+
+    def __post_init__(self) -> None:
+        if self.batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+        if self.poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be positive")
+        if self.offline_failures_to_open < 2:
+            raise ValueError("offline_failures_to_open must be at least 2")
+        if self.offline_cooldown_seconds <= 0:
+            raise ValueError("offline_cooldown_seconds must be positive")
 
 _PROVIDER_CAPABILITIES: dict[BridgeProvider, dict[str, Any]] = {
     BridgeProvider.CLAUDE_CODE: {
@@ -464,6 +483,7 @@ class CodingSessionBridgeOutbox:
         client_factory: Callable[[], AIDreamClient | None] = get_aidream_client,
         token_repo: TokenRepo | None = None,
         cloud_enabled: bool | None = None,
+        circuit_config: PublisherCircuitConfig | None = None,
     ) -> None:
         self._db = db or get_db()
         self._client = client
@@ -474,12 +494,19 @@ class CodingSessionBridgeOutbox:
 
             cloud_enabled = CLOUD_PARTICIPATION_ENABLED
         self._cloud_enabled = cloud_enabled
+        self._circuit_config = circuit_config or PublisherCircuitConfig()
         self._task: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._stopping = False
         self._sync_lock = asyncio.Lock()
         self._credential_blocker: dict[str, Any] | None = None
         self._blocked_token_hash: str | None = None
+        self._circuit_state = "closed"
+        self._circuit_opened_at: float | None = None
+        self._circuit_retry_at: float | None = None
+        self._circuit_failure_count = 0
+        self._circuit_reason: str | None = None
+        self._continue_immediately = False
         # Rows aidream has ALREADY accepted whose local delete has not yet
         # won the SQLite write lock. They are never uploaded again — the
         # publisher only retries their delete.
@@ -1492,6 +1519,7 @@ class CodingSessionBridgeOutbox:
                 "blocker": dict(self._credential_blocker)
                 if self._credential_blocker is not None
                 else None,
+                "transport_circuit": self._transport_circuit_status(),
             },
             "pending": pending,
             "quarantine": quarantine,
@@ -1515,11 +1543,14 @@ class CodingSessionBridgeOutbox:
             "delivery": delivery,
         }
 
-    async def sync_pending(self, *, limit: int = _MAX_BATCH) -> dict[str, Any]:
+    async def sync_pending(self, *, limit: int | None = None) -> dict[str, Any]:
         """Publish eligible lane heads while preserving order inside each lane."""
+        if limit is None:
+            limit = self._circuit_config.batch_size
         if limit < 1:
             raise ValueError("limit must be at least 1")
         async with self._sync_lock:
+            self._continue_immediately = False
             if not self._cloud_enabled:
                 await self._defer_head("cloud_participation_disabled", increment=False)
                 return {
@@ -1567,14 +1598,32 @@ class CodingSessionBridgeOutbox:
             # skipping it here is order-preserving, not order-breaking.
             await self._drain_delivered_undeleted()
 
+            now = time.time()
+            probe_smallest = False
+            if self._circuit_state == "open":
+                retry_at = self._circuit_retry_at or 0.0
+                if now < retry_at:
+                    return {
+                        "sent": 0,
+                        "failed": 0,
+                        "blocked": "transport_offline",
+                    }
+                self._circuit_state = "half_open"
+                probe_smallest = True
+
             sent = 0
             failed = 0
             processed = 0
+            offline_failures = 0
             while processed < limit:
                 row = await self._db.fetchone(
                     """SELECT o.id, o.envelope_json, o.envelope_sha256,
-                              o.attempts, o.next_attempt_at, o.lane_key
+                              o.attempts, o.next_attempt_at, o.lane_key,
+                              COALESCE(m.payload_bytes, length(o.envelope_json))
+                                  AS payload_bytes
                        FROM coding_session_bridge_outbox AS o
+                       LEFT JOIN coding_session_bridge_queue_metadata AS m
+                         ON m.receipt_id = o.id
                        WHERE o.next_attempt_at <= ?
                          AND NOT EXISTS (
                              SELECT 1
@@ -1582,9 +1631,13 @@ class CodingSessionBridgeOutbox:
                              WHERE prior.lane_key = o.lane_key
                                AND prior.id < o.id
                          )
-                       ORDER BY o.id
+                       ORDER BY
+                           CASE WHEN ? THEN
+                               COALESCE(m.payload_bytes, length(o.envelope_json))
+                           END,
+                           o.id
                        LIMIT 1""",
-                    (time.time(),),
+                    (time.time(), int(probe_smallest)),
                 )
                 if row is None:
                     break
@@ -1694,9 +1747,26 @@ class CodingSessionBridgeOutbox:
                         break
                     failed += 1
                     if isinstance(exc, AIDreamOfflineError):
-                        # Network reachability is publisher-wide, not a poison
-                        # row; burning every lane's retry counter adds no value.
-                        break
+                        offline_failures += 1
+                        self._circuit_failure_count = offline_failures
+                        if (
+                            self._circuit_state == "half_open"
+                            or offline_failures
+                            >= self._circuit_config.offline_failures_to_open
+                        ):
+                            self._open_transport_circuit()
+                            return {
+                                "sent": sent,
+                                "failed": failed,
+                                "blocked": "transport_offline",
+                            }
+                        # One transport-shaped failure is not proof that the
+                        # whole service is offline. A size-specific TLS/proxy
+                        # failure must not stop unrelated lanes, so probe the
+                        # smallest other eligible lane head next. A second
+                        # failure opens the bounded global circuit instead of
+                        # burning every lane.
+                        probe_smallest = True
                     continue
                 except asyncio.CancelledError:
                     raise
@@ -1738,6 +1808,10 @@ class CodingSessionBridgeOutbox:
                     response=response,
                 ):
                     sent += 1
+                    if self._circuit_state != "closed" or offline_failures:
+                        self._close_transport_circuit()
+                    offline_failures = 0
+                    probe_smallest = False
                     continue
 
                 # The delete lost the write lock. The row is DELIVERED, so it
@@ -1746,7 +1820,72 @@ class CodingSessionBridgeOutbox:
                 self._delivered_undeleted.add(int(row["id"]))
                 failed += 1
                 break
+            if processed >= limit and await self._has_ready_lane_head():
+                self._continue_immediately = True
             return {"sent": sent, "failed": failed, "blocked": None}
+
+    async def _has_ready_lane_head(self) -> bool:
+        """Whether another order-safe envelope can run without waiting."""
+        row = await self._db.fetchone(
+            """SELECT o.id
+               FROM coding_session_bridge_outbox AS o
+               WHERE o.next_attempt_at <= ?
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM coding_session_bridge_outbox AS prior
+                     WHERE prior.lane_key = o.lane_key
+                       AND prior.id < o.id
+                 )
+               ORDER BY o.id
+               LIMIT 1""",
+            (time.time(),),
+        )
+        return row is not None and int(row["id"]) not in self._delivered_undeleted
+
+    def _open_transport_circuit(self) -> None:
+        now = time.time()
+        self._circuit_state = "open"
+        self._circuit_opened_at = now
+        self._circuit_retry_at = now + self._circuit_config.offline_cooldown_seconds
+        self._circuit_reason = "repeated_transport_offline"
+
+    def _close_transport_circuit(self) -> None:
+        self._circuit_state = "closed"
+        self._circuit_opened_at = None
+        self._circuit_retry_at = None
+        self._circuit_failure_count = 0
+        self._circuit_reason = None
+
+    def _transport_circuit_status(self) -> dict[str, Any]:
+        now = time.time()
+        retry_at = self._circuit_retry_at
+        return {
+            "state": self._circuit_state,
+            "reason": self._circuit_reason,
+            "failure_count": self._circuit_failure_count,
+            "opened_at": self._circuit_opened_at,
+            "retry_at": retry_at,
+            "retry_in_seconds": (
+                max(0.0, retry_at - now) if retry_at is not None else None
+            ),
+            "config": {
+                "batch_size": self._circuit_config.batch_size,
+                "poll_interval_seconds": self._circuit_config.poll_interval_seconds,
+                "offline_failures_to_open": (
+                    self._circuit_config.offline_failures_to_open
+                ),
+                "offline_cooldown_seconds": (
+                    self._circuit_config.offline_cooldown_seconds
+                ),
+            },
+        }
+
+    def _publisher_wait_seconds(self) -> float:
+        """Wake for a circuit probe when it is sooner than the idle poll."""
+        wait = self._circuit_config.poll_interval_seconds
+        if self._circuit_state == "open" and self._circuit_retry_at is not None:
+            return min(wait, max(0.001, self._circuit_retry_at - time.time()))
+        return wait
 
     async def _drain_delivered_undeleted(self) -> None:
         """Retry deletes for rows aidream already accepted. Never re-uploads."""
@@ -2013,7 +2152,7 @@ class CodingSessionBridgeOutbox:
                     (
                         attempts,
                         reason[:1000],
-                        time.time() + _PUBLISH_INTERVAL_SECONDS,
+                        time.time() + self._circuit_config.poll_interval_seconds,
                         int(row["id"]),
                     ),
                 )
@@ -2054,9 +2193,15 @@ class CodingSessionBridgeOutbox:
                 raise
             except Exception:
                 logger.exception("[coding_session_bridge] publisher tick failed")
+            if self._continue_immediately:
+                # Yield for cancellation and peer tasks, then drain the next
+                # full batch without imposing the ordinary idle poll delay.
+                await asyncio.sleep(0)
+                continue
             try:
                 await asyncio.wait_for(
-                    self._wake.wait(), timeout=_PUBLISH_INTERVAL_SECONDS
+                    self._wake.wait(),
+                    timeout=self._publisher_wait_seconds(),
                 )
             except asyncio.TimeoutError:
                 pass
@@ -2075,5 +2220,6 @@ def get_coding_session_bridge_outbox() -> CodingSessionBridgeOutbox:
 __all__ = [
     "BridgeMutationConflict",
     "CodingSessionBridgeOutbox",
+    "PublisherCircuitConfig",
     "get_coding_session_bridge_outbox",
 ]

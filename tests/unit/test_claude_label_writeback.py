@@ -23,6 +23,7 @@ from app.services.coding_sessions.claude_label_writer import ClaudeSessionIndexW
 from app.services.coding_sessions.claude_session_index import read_session_index
 from app.services.coding_sessions.service import CodingSessionBridgeOutbox
 from app.services.coding_sessions.title_sync import ClaudeSessionMetadataReconciler
+from app.services.coding_sessions.title_sync import payload_digest
 from app.services.local_db.database import LocalDatabase
 
 # Every serialization Claude Code's own writers have produced.
@@ -64,7 +65,9 @@ def _write_record(
     folder = root / account / org
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{record['sessionId']}.json"
-    path.write_bytes(json.dumps(record, **(serializer or SERIALIZERS[0])).encode("utf-8"))
+    path.write_bytes(
+        json.dumps(record, **(serializer or SERIALIZERS[0])).encode("utf-8")
+    )
     return path
 
 
@@ -301,7 +304,9 @@ def test_freshest_record_wins_when_last_activity_ties(tmp_path: Path) -> None:
     ]
     # Sorts LAST, so a first-read tie-break would pick a stale sibling.
     fresh = _write_record(
-        root, _record(session_id, title="Renamed here", titleSource="user"), account="zz"
+        root,
+        _record(session_id, title="Renamed here", titleSource="user"),
+        account="zz",
     )
     for path in stale:
         os.utime(path, ns=(1_000_000_000_000_000_000, 1_000_000_000_000_000_000))
@@ -360,6 +365,24 @@ async def test_ai_matrx_rename_reaches_claudes_own_label_and_reports_it_back(
     assert result["push_down"]["refused"] == 0
     assert json.loads(path.read_bytes())["title"] == "Renamed in AI Matrx"
     assert json.loads(path.read_bytes())["titleSource"] == "user"
+    operation = await db.fetchone(
+        """SELECT mode, status, detected_sessions, enqueued_sessions
+           FROM coding_session_metadata_sync_operations WHERE operation_id=?""",
+        (result["operation_id"],),
+    )
+    assert dict(operation) == {
+        "mode": "apply",
+        "status": "completed",
+        "detected_sessions": 1,
+        "enqueued_sessions": 1,
+    }
+    intent = await db.fetchone(
+        """SELECT status, receipt_id, copy_outcomes_json
+           FROM coding_session_title_push_intents"""
+    )
+    assert intent["status"] == "convergence_queued"
+    assert intent["receipt_id"] is not None
+    assert json.loads(intent["copy_outcomes_json"])["written"] == 1
     # The server is told the agreed label, marked as the user's, so its
     # `applied_title` converges and a later Claude rename can still win.
     payloads = [
@@ -375,6 +398,84 @@ async def test_ai_matrx_rename_reaches_claudes_own_label_and_reports_it_back(
     again = await _reconciler(db, outbox, tmp_path, [_identity(session_id)]).sync()
     assert again["push_down"]["written"] == 0
     assert again["push_down"]["already_identical"] == 1
+
+
+@pytest.mark.anyio
+async def test_verification_refetches_both_sides_and_proves_convergence(env) -> None:
+    db, outbox, tmp_path = env
+    session_id = str(uuid4())
+    root = tmp_path / "claude-code-sessions"
+    _write_record(root, _record(session_id))
+    client = _FakeClient([_identity(session_id)])
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=client,
+        index_reader=lambda: read_session_index(root),
+        writer=ClaudeSessionIndexWriter(backup_root=tmp_path / "backups"),
+    )
+    applied = await reconciler.sync()
+    desired_payload = {
+        "title": "Renamed in AI Matrx",
+        "title_origin": "ai_matrx_user",
+    }
+    await db.execute(
+        """INSERT INTO claude_session_metadata_sent
+               (provider_session_id, payload_sha256, updated_at)
+           VALUES (?, ?, datetime('now'))""",
+        (session_id, payload_digest(desired_payload)),
+    )
+    await db.commit()
+    client._sessions[0].update(
+        {
+            "conversation_title": "Renamed in AI Matrx",
+            "claude_title": "Renamed in AI Matrx",
+        }
+    )
+
+    verified = await reconciler.verify(applied["operation_id"])
+
+    assert verified["operation"]["mode"] == "verify"
+    assert verified["operation"]["parent_operation_id"] == applied["operation_id"]
+    assert verified["operation"]["verified_sessions"] == 1
+    assert verified["items"][0]["state"] == "verified"
+    intent = await db.fetchone("SELECT status FROM coding_session_title_push_intents")
+    assert intent["status"] == "verified"
+
+
+@pytest.mark.anyio
+async def test_refused_write_is_durable_and_individually_retryable(env) -> None:
+    db, outbox, tmp_path = env
+    session_id = str(uuid4())
+    root = tmp_path / "claude-code-sessions"
+    record = _record(session_id)
+    path = _write_record(root, record)
+    path.write_text(json.dumps(record, indent=2))  # readable but unknown byte format
+    reconciler = _reconciler(db, outbox, tmp_path, [_identity(session_id)])
+
+    failed = await reconciler.sync()
+
+    assert failed["push_down"]["refused"] == 1
+    intent = await db.fetchone(
+        """SELECT intent_id, status, copy_outcomes_json
+           FROM coding_session_title_push_intents"""
+    )
+    assert intent["status"] == "refused"
+    assert json.loads(intent["copy_outcomes_json"])["copies"] == [
+        {"detail": None, "status": "unknown_format"}
+    ]
+
+    path.write_bytes(json.dumps(record, **SERIALIZERS[0]).encode("utf-8"))
+    retried = await reconciler.retry_push_intent(str(intent["intent_id"]))
+
+    assert retried["operation"]["mode"] == "retry"
+    assert retried["items"][0]["state"] == "enqueued"
+    assert json.loads(path.read_bytes())["title"] == "Renamed in AI Matrx"
+    repaired = await db.fetchone(
+        "SELECT status, receipt_id FROM coding_session_title_push_intents"
+    )
+    assert repaired["status"] == "convergence_queued"
+    assert repaired["receipt_id"] is not None
 
 
 @pytest.mark.anyio
@@ -440,7 +541,9 @@ async def test_claude_overwriting_our_write_is_not_fought_over(env) -> None:
     assert json.loads(path.read_bytes())["title"] == "Renamed in AI Matrx"
 
     # Claude Code reloads and flushes its own cached label back over ours.
-    path.write_bytes(json.dumps(_record(session_id, title="Claude's cached label")).encode())
+    path.write_bytes(
+        json.dumps(_record(session_id, title="Claude's cached label")).encode()
+    )
     result = await _reconciler(db, outbox, tmp_path, [_identity(session_id)]).sync()
 
     # We already wrote exactly this title once; Claude's value is newer, so it

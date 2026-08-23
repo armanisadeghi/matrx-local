@@ -401,6 +401,22 @@ Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding/codin
   and `complete=true`. A legacy, truncated, changing, or malformed response
   blocks the pass; title sync never mutates Claude's files from partial cloud
   knowledge.
+- **Session details sync is preview → apply → acknowledge → verify.** Every pass
+  has a durable operation id and one payload-free comparison row per bound
+  session across title, project, branch, worktree, archive, pin/rank, and
+  category. A preview records chosen direction/action/reason and changes no
+  files or queue state. Apply records detected and enqueued separately;
+  `claude_session_metadata_sent` remains the acknowledgement proof. Verification
+  refetches the complete AI Matrx identity inventory and rereads Claude's index
+  before it can call a row `verified`. Missing server fields are reported as
+  unobserved, never invented or treated as equal.
+- **A write-down begins with a durable intent.** The intent is committed before
+  any Claude index file is opened for mutation. Every copy outcome is then
+  recorded, including partial writes/refusals, and the convergence observation
+  carries its receipt id. A failed/partial intent is individually retryable
+  with fresh byte/mtime fences. The UI pages this evidence through
+  `/coding-session/claude/labels/operations/{operation_id}` and proves final
+  state through the operation's `/verify` endpoint.
 - **Pins + categories ride the same observation (2026-08-21).** The desktop app keeps pins and
   custom sidebar groups in its localStorage LevelDB, which the machine's session-sync agent
   extracts into the canonical ledger (`~/.claude/claude-code-sidebar-state.json`; see that

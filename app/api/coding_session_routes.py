@@ -25,8 +25,8 @@ from app.services.coding_sessions.claude_history import (
     ClaudeHistoryPrepareRequest,
 )
 from app.services.coding_sessions.title_sync import (
-    ClaudeSessionMetadataReconciler,
     ClaudeTitleSyncBlocked,
+    get_claude_session_metadata_reconciler,
 )
 from app.services.coding_sessions.local_runtime import (
     LocalRuntimeFolderRequest,
@@ -208,7 +208,9 @@ async def list_claude_history_scan(
     archived: bool | None = Query(default=None),
     importable: bool | None = Query(default=None),
     include_missing: bool = Query(default=False),
-    sort: str = Query(default="modified", pattern="^(modified|title|project|bytes|change)$"),
+    sort: str = Query(
+        default="modified", pattern="^(modified|title|project|bytes|change)$"
+    ),
     direction: str = Query(default="desc", pattern="^(asc|desc)$"),
 ) -> dict[str, object]:
     """Search, filter, sort, and page one immutable review snapshot."""
@@ -293,7 +295,7 @@ async def discard_pending_claude_history() -> dict[str, object]:
 @router.get("/claude/labels/status")
 async def claude_label_status() -> dict[str, object]:
     """Report whether Claude's own session index is readable and last synced."""
-    return await ClaudeSessionMetadataReconciler().status()
+    return await get_claude_session_metadata_reconciler().status()
 
 
 @router.post("/claude/labels/sync", status_code=status.HTTP_202_ACCEPTED)
@@ -306,11 +308,52 @@ async def sync_claude_labels(
     the user never mirrored never leave this machine.
     """
     try:
-        return await ClaudeSessionMetadataReconciler().sync(dry_run=dry_run)
+        return await get_claude_session_metadata_reconciler().sync(dry_run=dry_run)
     except ClaudeTitleSyncBlocked as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=exc.reason,
+        ) from exc
+
+
+@router.get("/claude/labels/operations/{operation_id}")
+async def claude_label_operation(
+    operation_id: str,
+    limit: int = Query(default=200, ge=1, le=200),
+    after_session_ref: str | None = Query(default=None, min_length=1, max_length=64),
+) -> dict[str, object]:
+    """Page the exact per-session evidence for one preview/apply/verify pass."""
+    try:
+        return await get_claude_session_metadata_reconciler().operation(
+            operation_id, limit=limit, after_session_ref=after_session_ref
+        )
+    except ClaudeTitleSyncBlocked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=exc.reason
+        ) from exc
+
+
+@router.post("/claude/labels/operations/{operation_id}/verify")
+async def verify_claude_label_operation(operation_id: str) -> dict[str, object]:
+    """Refetch both sides and record acknowledgement/convergence proof."""
+    try:
+        return await get_claude_session_metadata_reconciler().verify(operation_id)
+    except ClaudeTitleSyncBlocked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=exc.reason
+        ) from exc
+
+
+@router.post("/claude/labels/push-intents/{intent_id}/retry")
+async def retry_claude_label_push_intent(intent_id: str) -> dict[str, object]:
+    """Retry one durable Claude-file write and its convergence observation."""
+    try:
+        return await get_claude_session_metadata_reconciler().retry_push_intent(
+            intent_id
+        )
+    except ClaudeTitleSyncBlocked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=exc.reason
         ) from exc
 
 

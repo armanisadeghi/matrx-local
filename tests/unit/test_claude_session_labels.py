@@ -380,7 +380,28 @@ async def test_dry_run_reports_without_enqueueing(env) -> None:
         index_reader=lambda: read_session_index(root),
     )
     result = await reconciler.sync(dry_run=True)
-    assert result["queued"] == 1
+    assert result["queued"] == 0
+    assert result["detected"] == 1
+    assert result["comparisons"][0]["state"] == "detected"
+    assert result["operation"]["mode"] == "preview"
+    assert {item["field"] for item in result["comparisons"][0]["comparisons"]} == {
+        "title",
+        "project_name",
+        "git_branch",
+        "worktree_name",
+        "is_archived",
+        "is_pinned",
+        "pinned_rank",
+        "category",
+    }
+    operation_rows = await db.fetchall(
+        """SELECT state, action FROM coding_session_metadata_sync_rows
+           WHERE operation_id=?""",
+        (result["operation_id"],),
+    )
+    assert [(row["state"], row["action"]) for row in operation_rows] == [
+        ("detected", "observe_ai_matrx")
+    ]
     assert result["sample_titles"][0]["title"] == "Planned label"
     assert await db.fetchall("SELECT id FROM coding_session_bridge_outbox") == []
 

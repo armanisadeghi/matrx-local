@@ -1191,6 +1191,78 @@ SET item_count = CASE
 END;
 """
 
+# Every session-details pass is an inspectable operation. Row comparisons are
+# local-only metadata (never transcript content) and push intents are committed
+# before another application's files are opened for mutation.
+_V29_CODING_SESSION_METADATA_SYNC_OPERATIONS = """
+CREATE TABLE IF NOT EXISTS coding_session_metadata_sync_operations (
+    operation_id       TEXT PRIMARY KEY,
+    mode               TEXT NOT NULL CHECK (mode IN ('preview', 'apply', 'verify', 'retry')),
+    status             TEXT NOT NULL CHECK (status IN ('running', 'completed', 'partial', 'failed')),
+    started_at         TEXT NOT NULL,
+    completed_at       TEXT,
+    parent_operation_id TEXT,
+    bound_sessions     INTEGER NOT NULL DEFAULT 0,
+    compared_sessions  INTEGER NOT NULL DEFAULT 0,
+    detected_sessions  INTEGER NOT NULL DEFAULT 0,
+    enqueued_sessions  INTEGER NOT NULL DEFAULT 0,
+    acknowledged_sessions INTEGER NOT NULL DEFAULT 0,
+    verified_sessions  INTEGER NOT NULL DEFAULT 0,
+    failed_sessions    INTEGER NOT NULL DEFAULT 0,
+    index_files        INTEGER NOT NULL DEFAULT 0,
+    index_records      INTEGER NOT NULL DEFAULT 0,
+    index_unreadable   INTEGER NOT NULL DEFAULT 0,
+    index_truncated    INTEGER NOT NULL DEFAULT 0,
+    index_writable     INTEGER NOT NULL DEFAULT 0,
+    error_message      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_coding_session_metadata_sync_latest
+ON coding_session_metadata_sync_operations(started_at DESC);
+
+CREATE TABLE IF NOT EXISTS coding_session_metadata_sync_rows (
+    operation_id       TEXT NOT NULL,
+    provider_session_id TEXT NOT NULL,
+    session_ref        TEXT NOT NULL,
+    local_values_json  TEXT NOT NULL,
+    cloud_values_json  TEXT NOT NULL,
+    chosen_values_json TEXT NOT NULL,
+    direction          TEXT NOT NULL,
+    action             TEXT NOT NULL,
+    reason             TEXT NOT NULL,
+    state              TEXT NOT NULL,
+    receipt_id         INTEGER,
+    write_intent_id    TEXT,
+    outcome_json       TEXT,
+    PRIMARY KEY (operation_id, provider_session_id),
+    FOREIGN KEY (operation_id) REFERENCES coding_session_metadata_sync_operations(operation_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_coding_session_metadata_sync_rows_state
+ON coding_session_metadata_sync_rows(operation_id, state, session_ref);
+
+CREATE TABLE IF NOT EXISTS coding_session_title_push_intents (
+    intent_id           TEXT PRIMARY KEY,
+    operation_id        TEXT NOT NULL,
+    provider_session_id TEXT NOT NULL,
+    cli_session_id      TEXT NOT NULL,
+    desired_title       TEXT NOT NULL,
+    desired_payload_json TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    receipt_id          INTEGER,
+    copy_outcomes_json  TEXT,
+    error_message       TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    FOREIGN KEY (operation_id) REFERENCES coding_session_metadata_sync_operations(operation_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_coding_session_title_push_pending
+ON coding_session_title_push_intents(status, updated_at);
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1220,4 +1292,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (26, _V26_CODING_SESSION_BRIDGE_QUEUE_METADATA),
     (27, _V27_CODING_SESSION_HISTORY_SCANS),
     (28, _V28_CODING_SESSION_BRIDGE_QUEUE_ITEM_COUNT),
+    (29, _V29_CODING_SESSION_METADATA_SYNC_OPERATIONS),
 ]

@@ -186,8 +186,13 @@ def _field_comparisons(
             "field": field,
             "local": local.get(field),
             "ai_matrx": cloud.get(field),
+            "local_observed": field in local,
             "ai_matrx_observed": field in cloud,
-            "equal": field in cloud and local.get(field) == cloud.get(field),
+            "equal": (
+                field in local
+                and field in cloud
+                and local.get(field) == cloud.get(field)
+            ),
         }
         for field in _DETAIL_FIELDS
     ]
@@ -882,10 +887,13 @@ class ClaudeSessionMetadataReconciler:
                 elif entry is not None:
                     expected_digest = payload_digest(current_local)
                     acked = sent.get(provider_session_id) == expected_digest
-                    observed_fields = set(current_cloud)
-                    exposed_equal = bool(observed_fields) and all(
-                        current_cloud.get(field) == current_local.get(field)
-                        for field in observed_fields
+                    observed_local_fields = set(current_local).intersection(
+                        _DETAIL_FIELDS
+                    )
+                    exposed_equal = bool(observed_local_fields) and all(
+                        field in current_cloud
+                        and current_cloud.get(field) == current_local.get(field)
+                        for field in observed_local_fields
                     )
                     outcome.update(
                         {

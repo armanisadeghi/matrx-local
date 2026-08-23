@@ -394,6 +394,13 @@ async def test_dry_run_reports_without_enqueueing(env) -> None:
         "pinned_rank",
         "category",
     }
+    project_comparison = next(
+        item
+        for item in result["comparisons"][0]["comparisons"]
+        if item["field"] == "project_name"
+    )
+    assert project_comparison["local_observed"] is False
+    assert project_comparison["equal"] is False
     operation_rows = await db.fetchall(
         """SELECT state, action FROM coding_session_metadata_sync_rows
            WHERE operation_id=?""",

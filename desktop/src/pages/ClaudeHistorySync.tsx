@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   CheckCircle2,
   CloudUpload,
-  Copy,
   Database,
   History,
   Loader2,
@@ -16,12 +15,15 @@ import {
 } from "lucide-react";
 
 import { AgentRuntimeCard } from "@/components/coding-sessions/AgentRuntimeCard";
+import {
+  HistoryInventoryTable,
+  historyChangeCounts,
+} from "@/components/coding-sessions/HistoryInventoryTable";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { engine } from "@/lib/api";
 import type {
   ClaudeCaptureStatus,
@@ -83,8 +85,22 @@ function blockedMessage(reason: string | null): string {
 
 export function ClaudeHistorySync() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<CodingSessionsTab>("overview");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const activeTab: CodingSessionsTab =
+    requestedTab === "history" || requestedTab === "titles" || requestedTab === "runtime"
+      ? requestedTab
+      : "overview";
+  const setActiveTab = useCallback((tab: CodingSessionsTab) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (tab === "overview") next.delete("tab");
+      else next.set("tab", tab);
+      return next;
+    });
+  }, [setSearchParams]);
   const [preview, setPreview] = useState<ClaudeHistoryPreview | null>(null);
+  const [previousPreview, setPreviousPreview] = useState<ClaudeHistoryPreview | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -250,7 +266,8 @@ export function ClaudeHistorySync() {
     setError(null);
     setResult(null);
     try {
-      const next = await engine.previewClaudeHistory(100);
+      const next = await engine.previewClaudeHistory(200);
+      setPreviousPreview(preview);
       setPreview(next);
       setSelected(new Set());
       await refreshStatus();
@@ -261,14 +278,7 @@ export function ClaudeHistorySync() {
     }
   };
 
-  const toggle = (sessionId: string) => {
-    setSelected((current) => {
-      const next = new Set(current);
-      if (next.has(sessionId)) next.delete(sessionId);
-      else next.add(sessionId);
-      return next;
-    });
-  };
+  const reviewChanges = preview ? historyChangeCounts(preview, previousPreview) : null;
 
   const sync = async () => {
     if (!preview?.provider_account_key || selectedSessions.length === 0) return;
@@ -341,12 +351,11 @@ export function ClaudeHistorySync() {
           <TabsList className="h-auto flex-wrap justify-start">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="history">History import</TabsTrigger>
-            <TabsTrigger value="titles">Title sync</TabsTrigger>
+            <TabsTrigger value="titles">Session details sync</TabsTrigger>
             <TabsTrigger value="runtime">Local runtime</TabsTrigger>
           </TabsList>
         </div>
-        <div className="flex-1 space-y-4 overflow-y-auto p-6">
-        {activeTab === "overview" && (
+        <TabsContent value="overview" className="m-0 flex-1 space-y-4 overflow-y-auto p-6">
           <OverviewPanel
             bridgeStatus={bridgeStatus}
             captureStatus={captureStatus}
@@ -363,10 +372,9 @@ export function ClaudeHistorySync() {
             onNavigate={setActiveTab}
             onOpenAccount={() => navigate("/settings")}
           />
-        )}
+        </TabsContent>
 
-        {activeTab === "history" && (
-          <>
+        <TabsContent value="history" className="m-0 flex-1 space-y-4 overflow-y-auto p-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-4">
             <div>
@@ -417,14 +425,70 @@ export function ClaudeHistorySync() {
                   <span>{blockedMessage(preview.account_blocked_reason)}</span>
                 </div>
               )}
+              {previousPreview && reviewChanges && (
+                <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3" role="status">
+                  <p className="font-medium">What changed since the previous review in this window</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {reviewChanges.new.toLocaleString()} new · {reviewChanges.changed.toLocaleString()} changed · {reviewChanges.unchanged.toLocaleString()} unchanged · {reviewChanges.noLongerReturned.toLocaleString()} no longer in the returned window
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    This comparison lasts only while this page is open. Durable scan history is not yet reported by the engine.
+                  </p>
+                </div>
+              )}
+              <div className={preview.truncated ? "rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm" : "rounded-md border p-3 text-sm text-muted-foreground"}>
+                The engine found {preview.totals.session_count.toLocaleString()} sessions and returned {preview.sessions.length.toLocaleString()} for this review.
+                {preview.truncated && " Older sessions are not available in this result yet; searching and sorting below applies only to the returned rows."}
+              </div>
             </CardContent>
           )}
         </Card>
-
-          </>
+        {preview && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Session inventory</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Search, sort, filter, and select the rows returned by this review. Full transcripts can contain code, commands, file contents, and secrets.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <HistoryInventoryTable
+                preview={preview}
+                previousPreview={previousPreview}
+                selected={selected}
+                onSelectedChange={setSelected}
+                disabled={syncing}
+              />
+              <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background/95 p-3 backdrop-blur">
+                <span className="text-sm text-muted-foreground">
+                  {selectedSessions.length} selected · {formatBytes(selectedBytes)} · limits: {preview.limits.selected_sessions} sessions and {formatBytes(preview.limits.import_bytes)} per copy operation
+                </span>
+                <Button onClick={() => void sync()} disabled={syncing || !preview.import_ready || selectedSessions.length === 0 || selectionOverLimit}>
+                  {syncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CloudUpload className="mr-2 h-4 w-4" />}
+                  Copy selected to local delivery queue
+                </Button>
+              </div>
+              {selectionOverLimit && <p className="text-sm text-destructive" role="alert">This selection exceeds the operation limits shown above. Remove sessions before copying.</p>}
+            </CardContent>
+          </Card>
         )}
+        {result && (
+          <div className="flex gap-3 rounded-md border border-blue-500/30 bg-blue-500/5 p-4 text-sm" role="status">
+            <CloudUpload className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
+            <div><p className="font-medium">Copies stored locally; cloud delivery is not yet proven</p><p className="mt-1 text-muted-foreground">{result.entries.toLocaleString()} entries from {result.selected_sessions} sessions produced {result.queued_batches} local delivery envelopes. {result.pending_outbox} are waiting for AI Matrx acknowledgement.</p></div>
+          </div>
+        )}
+        {historyStatus && historyStatus.pending_history_imports > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
+            <div><p className="font-medium">{historyStatus.pending_history_imports.toLocaleString()} history envelopes await cloud acknowledgement</p><p className="mt-1 text-muted-foreground">{historyStatus.oldest_history_import?.last_error ? `Blocked after ${historyStatus.oldest_history_import.attempts} attempts: ${historyStatus.oldest_history_import.last_error}` : "Stored safely on this Mac and waiting for delivery."}</p></div>
+            <div className="flex gap-2"><Button type="button" variant="outline" disabled={discarding || retrying || syncing} onClick={() => void retryPending()}>{retrying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Retry now</Button><Button type="button" variant="outline" disabled={discarding || retrying || syncing} onClick={() => { if (window.confirm(`Discard ${historyStatus.pending_history_imports} queued history envelopes from this Mac? Claude files are unchanged.`)) void discardPending(); }}>{discarding ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}Discard queued copies</Button></div>
+          </div>
+        )}
+        {historyStatus && historyStatus.quarantined_history_imports > 0 && <div className="flex gap-3 rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" /><div><p className="font-medium">{historyStatus.quarantined_history_imports.toLocaleString()} preserved history envelopes were not accepted</p><p className="mt-1 text-muted-foreground">They are not counted as synchronized. Open Overview to inspect the reported blocker before retrying.</p></div></div>}
+        {error && <div className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div>}
+        </TabsContent>
 
-        {activeTab === "titles" && (
+        <TabsContent value="titles" className="m-0 flex-1 space-y-4 overflow-y-auto p-6">
         <Card>
           <CardHeader className="flex flex-row items-start justify-between gap-4">
             <div>
@@ -561,204 +625,11 @@ export function ClaudeHistorySync() {
             )}
           </CardContent>
         </Card>
-        )}
+        </TabsContent>
 
-        {activeTab === "history" && preview && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Choose sessions</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                Showing the {preview.sessions.length} most recent sessions. Full transcripts can contain code, commands, file contents, and secrets; imported raw data remains owner-only.
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {preview.sessions.map((session) => {
-                const selectionKey = `${session.project_key}:${session.session_id}`;
-                const checked = selected.has(selectionKey);
-                const disabled =
-                  !session.import_available ||
-                  (!checked && selected.size >= preview.limits.selected_sessions);
-                return (
-                  <label
-                    key={selectionKey}
-                    className="flex cursor-pointer items-start gap-3 rounded-md border p-3 hover:bg-muted/40"
-                  >
-                    <Checkbox
-                      checked={checked}
-                      disabled={disabled || !preview.import_ready}
-                      onCheckedChange={() => toggle(selectionKey)}
-                      aria-label={`Select ${session.title}`}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">
-                        {session.title}
-                      </span>
-                      <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                        <span>{session.project_name}</span>
-                        {session.git_branch && <span>{session.git_branch}</span>}
-                        {session.worktree_name && (
-                          <span>worktree {session.worktree_name}</span>
-                        )}
-                        {session.is_archived && <span>Archived in Claude</span>}
-                        {!session.title_from_claude_index && (
-                          <span>No Claude title — using the first prompt</span>
-                        )}
-                        <span>{formatBytes(session.bytes)}</span>
-                        {session.subagent_count > 0 && (
-                          <span>{session.subagent_count} subagents</span>
-                        )}
-                        {!session.import_available && (
-                          <span>Too large to import safely</span>
-                        )}
-                      </span>
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      title="Copy the native Claude resume command"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        void navigator.clipboard.writeText(
-                          `claude --resume ${session.session_id}`,
-                        );
-                      }}
-                    >
-                      <Copy className="mr-1 h-3.5 w-3.5" />
-                      Resume
-                    </Button>
-                  </label>
-                );
-              })}
-              <div className="sticky bottom-0 mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background/95 p-3 backdrop-blur">
-                <span className="text-sm text-muted-foreground">
-                  {selectedSessions.length} selected · {formatBytes(selectedBytes)}
-                </span>
-                <Button
-                  onClick={() => void sync()}
-                  disabled={
-                    syncing ||
-                    !preview.import_ready ||
-                    selectedSessions.length === 0 ||
-                    selectionOverLimit
-                  }
-                >
-                  {syncing ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <CloudUpload className="mr-2 h-4 w-4" />
-                  )}
-                  Queue selected copies
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {activeTab === "history" && result && (
-          <div className="flex gap-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm">
-            <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-            <div>
-              <p className="font-medium">Claude history is safely queued</p>
-              <p className="mt-1 text-muted-foreground">
-                {result.entries.toLocaleString()} entries from {result.selected_sessions} sessions were reconciled into {result.queued_batches} durable batches. {result.pending_outbox} batches are waiting for cloud acknowledgement.
-              </p>
-              {result.corrupt_lines > 0 && (
-                <p className="mt-2 text-amber-700 dark:text-amber-300">
-                  {result.corrupt_lines} incomplete or corrupt lines were not uploaded. Valid entries keep their original line positions so the gap remains visible.
-                </p>
-              )}
-            </div>
-          </div>
-        )}
-
-        {activeTab === "history" && historyStatus && historyStatus.pending_history_imports > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
-            <div>
-              <p className="font-medium">
-                {historyStatus.pending_history_imports.toLocaleString()} history batches are still queued
-              </p>
-              <p className="mt-1 text-muted-foreground">
-                {historyStatus.oldest_history_import?.last_error
-                  ? `Delivery is blocked after ${historyStatus.oldest_history_import.attempts} attempts: ${historyStatus.oldest_history_import.last_error}`
-                  : "Delivery is waiting for acknowledgement."}
-              </p>
-              <p className="mt-1 text-muted-foreground">
-                Retry after repairing sign-in or server access, or discard the queued copies. Neither action changes Claude files or hook observations.
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={discarding || retrying || syncing}
-                onClick={() => void retryPending()}
-              >
-                {retrying ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                )}
-                Retry now
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={discarding || retrying || syncing}
-                onClick={() => void discardPending()}
-              >
-                {discarding ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Trash2 className="mr-2 h-4 w-4" />
-                )}
-                Discard queued copies
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {activeTab === "history" && historyStatus && historyStatus.quarantined_history_imports > 0 && (
-          <div className="flex gap-3 rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm">
-            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-            <div>
-              <p className="font-medium">
-                {historyStatus.quarantined_history_imports.toLocaleString()} history batch
-                {historyStatus.quarantined_history_imports === 1 ? " was" : "es were"} not delivered
-              </p>
-              <p className="mt-1 text-muted-foreground">
-                AI Matrx refused these preserved local copies. They are not
-                counted as synced; review the provider-wide delivery status for
-                the blocking reason before retrying.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {activeTab === "history" && error && (
-          <div className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
-
-        {activeTab === "history" && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">What this can and cannot restore</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm text-muted-foreground">
-            <p>AI Matrx receives exact local JSONL entries and creates a readable private conversation. Repeating an import reconciles updates idempotently.</p>
-            <p>Native Claude resume remains local: use Claude Code with the original session ID while the same transcript, workspace, and active Claude login are available.</p>
-            <p>AI Matrx does not claim that a copied transcript can recreate Claude file checkpoints, permissions, credentials, or another machine&apos;s workspace.</p>
-            <p>Claude&apos;s local session format exposes names, project grouping, branches, and fork lineage. Stable local pin/archive metadata is not available, so this sync does not invent it.</p>
-          </CardContent>
-        </Card>
-        )}
-
-        {activeTab === "runtime" && <AgentRuntimeCard />}
-      </div>
+        <TabsContent value="runtime" className="m-0 flex-1 space-y-4 overflow-y-auto p-6">
+          <AgentRuntimeCard />
+        </TabsContent>
       </Tabs>
     </div>
   );

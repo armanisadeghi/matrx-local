@@ -4,6 +4,7 @@ import { displaySessionDetailValue } from "./SessionDetailsComparisonTable";
 describe("session detail comparison truthfulness", () => {
   it("distinguishes an unobserved field from an observed empty value", () => {
     expect(displaySessionDetailValue(null, false)).toBe("Not reported by AI Matrx");
+    expect(displaySessionDetailValue(null, false, "Not reported by Claude Code")).toBe("Not reported by Claude Code");
     expect(displaySessionDetailValue(null, true)).toBe("Empty");
   });
 

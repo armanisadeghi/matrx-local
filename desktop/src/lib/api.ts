@@ -407,6 +407,7 @@ export interface ClaudeLabelSyncResult {
   operation?: ClaudeSessionDetailOperation;
   comparisons?: ClaudeSessionDetailComparison[];
   comparisons_truncated?: boolean;
+  comparisons_next_cursor?: string | null;
   detected?: number;
   acknowledged?: number;
   verified?: number;

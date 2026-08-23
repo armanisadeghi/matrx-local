@@ -1,12 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, RotateCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { engine } from "@/lib/api";
 import type { ClaudeLabelSyncResult, ClaudeSessionDetailComparison } from "@/lib/api";
 
-export function displaySessionDetailValue(value: unknown, observed = true): string {
-  if (!observed) return "Not reported by AI Matrx";
+export function displaySessionDetailValue(value: unknown, observed = true, unknownLabel = "Not reported by AI Matrx"): string {
+  if (!observed) return unknownLabel;
   if (value === null || value === undefined || value === "") return "Empty";
   return typeof value === "object" ? JSON.stringify(value) : String(value);
 }
@@ -17,15 +17,30 @@ export function SessionDetailsComparisonTable({ result, busy, onVerified }: {
   onVerified: (result: ClaudeLabelSyncResult) => void;
 }) {
   const [rows, setRows] = useState<ClaudeSessionDetailComparison[]>(result.comparisons ?? []);
-  const [cursor, setCursor] = useState<string | null>(result.comparisons_truncated ? rows[rows.length - 1]?.session_ref ?? null : null);
+  const [cursor, setCursor] = useState<string | null>(result.comparisons_truncated ? result.comparisons_next_cursor ?? null : null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rowFilter, setRowFilter] = useState<"all" | "detected" | "enqueued" | "acknowledged" | "verified">("all");
+  const autoCheckedOperation = useRef<string | null>(null);
 
   useEffect(() => {
     setRows(result.comparisons ?? []);
-    setCursor(result.comparisons_truncated ? result.comparisons?.[result.comparisons.length - 1]?.session_ref ?? null : null);
+    setCursor(result.comparisons_truncated ? result.comparisons_next_cursor ?? null : null);
   }, [result.operation_id]);
+
+  useEffect(() => {
+    if (result.dry_run || result.operation?.mode !== "apply" || !result.operation_id || autoCheckedOperation.current === result.operation_id) return;
+    autoCheckedOperation.current = result.operation_id;
+    const timer = window.setTimeout(() => {
+      setLoading(true);
+      void engine.verifyClaudeSessionDetailOperation(result.operation_id!).then((page) => {
+        setRows(page.items);
+        setCursor(page.has_more ? page.next_cursor : null);
+        onVerified({ ...result, dry_run: false, operation_id: page.operation.operation_id, operation: page.operation, comparisons: page.items, comparisons_truncated: page.has_more, comparisons_next_cursor: page.next_cursor, acknowledged: page.operation.acknowledged_sessions, verified: page.operation.verified_sessions });
+      }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false));
+    }, 1_500);
+    return () => window.clearTimeout(timer);
+  }, [onVerified, result]);
 
   if (!result.operation_id || !result.operation) return null;
 
@@ -57,6 +72,7 @@ export function SessionDetailsComparisonTable({ result, busy, onVerified }: {
         operation: page.operation,
         comparisons: page.items,
         comparisons_truncated: page.has_more,
+        comparisons_next_cursor: page.next_cursor,
         acknowledged: page.operation.acknowledged_sessions,
         verified: page.operation.verified_sessions,
       });
@@ -74,7 +90,7 @@ export function SessionDetailsComparisonTable({ result, busy, onVerified }: {
       const page = await engine.retryClaudeSessionDetailPushIntent(intentId);
       setRows(page.items);
       setCursor(page.has_more ? page.next_cursor : null);
-      onVerified({ ...result, operation_id: page.operation.operation_id, operation: page.operation, comparisons: page.items, comparisons_truncated: page.has_more });
+      onVerified({ ...result, operation_id: page.operation.operation_id, operation: page.operation, comparisons: page.items, comparisons_truncated: page.has_more, comparisons_next_cursor: page.next_cursor });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -107,16 +123,17 @@ export function SessionDetailsComparisonTable({ result, busy, onVerified }: {
         <p className="text-xs text-muted-foreground">Operation <span className="font-mono">{result.operation_id}</span> · {result.operation.status}</p>
         {!result.dry_run && <Button type="button" variant="outline" size="sm" onClick={() => void verify()} disabled={busy || loading}>{loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Reread both sides and verify</Button>}
       </div>
+      {result.operation.mode === "retry" && <p className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">This is the targeted retry operation and contains only the retried write intent. Return to Preview to compare the full current set again.</p>}
       {error && <div className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert"><AlertTriangle className="h-4 w-4 shrink-0" />{error}</div>}
       <div className="overflow-x-auto rounded-md border">
         <table className="w-full min-w-[1050px] text-xs">
-          <thead className="border-b bg-muted/40 text-left"><tr><th className="px-3 py-2">Session</th><th className="px-3 py-2">Field</th><th className="px-3 py-2">Claude Code</th><th className="px-3 py-2">AI Matrx before</th><th className="px-3 py-2">Chosen result</th><th className="px-3 py-2">Evidence state</th></tr></thead>
+          <thead className="border-b bg-muted/40 text-left"><tr><th className="px-3 py-2">Session</th><th className="px-3 py-2">Field</th><th className="px-3 py-2">Claude Code observed</th><th className="px-3 py-2">AI Matrx observed</th><th className="px-3 py-2">Chosen result</th><th className="px-3 py-2">Evidence state</th></tr></thead>
           <tbody className="divide-y">
             {visibleRows.flatMap((row) => row.comparisons.map((field, index) => (
-              <tr key={`${row.session_ref}-${field.field}`} className={field.equal ? "" : "bg-blue-500/5"}>
+              <tr key={`${row.session_ref}-${field.field}`} className={!field.local_observed || !field.ai_matrx_observed ? "bg-amber-500/5" : field.equal ? "" : "bg-blue-500/5"}>
                 {index === 0 && <td rowSpan={row.comparisons.length} className="px-3 py-2 align-top font-mono"><div>{row.session_ref}</div><div className="mt-1 font-sans"><Badge variant="outline">{row.direction}</Badge></div>{row.write_intent_id && !["acknowledged", "verified"].includes(row.state) && <Button type="button" variant="outline" size="sm" className="mt-2" disabled={loading} onClick={() => void retryIntent(row.write_intent_id!)}><RotateCw className="mr-1 h-3 w-3" />Retry write</Button>}</td>}
                 <td className="px-3 py-2 font-medium">{field.field}</td>
-                <td className="max-w-64 px-3 py-2">{displaySessionDetailValue(field.local, field.local_observed)}</td>
+                <td className="max-w-64 px-3 py-2">{displaySessionDetailValue(field.local, field.local_observed, "Not reported by Claude Code")}</td>
                 <td className="max-w-64 px-3 py-2">{displaySessionDetailValue(field.ai_matrx, field.ai_matrx_observed)}</td>
                 <td className="max-w-64 px-3 py-2">{displaySessionDetailValue(row.chosen[field.field])}</td>
                 {index === 0 && <td rowSpan={row.comparisons.length} className="px-3 py-2 align-top"><Badge variant={row.state === "verified" ? "secondary" : row.state === "failed" ? "destructive" : "outline"}>{row.state}</Badge><p className="mt-1 max-w-52 text-muted-foreground">{row.reason}</p>{row.receipt_id && <p className="mt-1 font-mono">Receipt #{row.receipt_id}</p>}</td>}

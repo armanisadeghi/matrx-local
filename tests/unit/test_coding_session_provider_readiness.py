@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+import app.api.coding_session_routes as routes
 from app.services.coding_sessions.provider_readiness import (
     ProviderReadinessFacade,
     _executable_version,
@@ -275,3 +276,26 @@ async def test_timed_out_version_probe_terminates_and_reaps_child() -> None:
     )
     assert process.terminated is True
     assert process.reaped is True
+
+
+@pytest.mark.anyio
+async def test_route_feeds_current_delivery_evidence_into_facade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delivery = {"schema_version": 2, "providers": {}}
+
+    class _Outbox:
+        async def delivery_status(self) -> dict[str, Any]:
+            return delivery
+
+    class _Readiness:
+        async def status(self, value: dict[str, Any]) -> dict[str, object]:
+            assert value is delivery
+            return {"schema_version": 1, "providers": {}}
+
+    monkeypatch.setattr(routes, "get_coding_session_bridge_outbox", lambda: _Outbox())
+    monkeypatch.setattr(routes, "get_provider_readiness", lambda: _Readiness())
+
+    response = await routes.coding_session_provider_readiness()
+
+    assert response == {"schema_version": 1, "providers": {}}

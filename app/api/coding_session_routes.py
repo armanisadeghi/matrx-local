@@ -18,6 +18,7 @@ from app.services.coding_sessions.models import (
     BridgeRequest,
     LocalBridgeReceipt,
 )
+from app.services.coding_sessions.provider_readiness import get_provider_readiness
 from app.services.coding_sessions.claude_history import (
     ClaudeHistoryConflict,
     ClaudeHistoryImporter,
@@ -63,6 +64,13 @@ async def coding_session_delivery_status() -> dict[str, object]:
     returned from this route.
     """
     return await get_coding_session_bridge_outbox().delivery_status()
+
+
+@router.get("/providers/readiness")
+async def coding_session_provider_readiness() -> dict[str, object]:
+    """Separate product, adapter, spool, local, and cloud readiness evidence."""
+    outbox = get_coding_session_bridge_outbox()
+    return await get_provider_readiness().status(await outbox.delivery_status())
 
 
 @router.get("/delivery/envelopes")

@@ -232,6 +232,23 @@ two-step operation: the first request returns its exact impact and
 copy. A quarantined retry validates the preserved bytes and schema before
 atomically returning that envelope to its original ordered lane.
 
+### Provider readiness is evidence, never a connection guess
+
+`GET /coding-session/providers/readiness` joins safe local probes for Claude
+Code, Codex, Cursor, and VS Code with the delivery-status aggregate. It keeps
+product installation/version/running state, adapter detection/configuration,
+authorization and hook-trust knowledge, adapter-owned pending/poison/in-flight
+spools, last local enqueue, and last cloud acknowledgement as separate fields.
+The connection state remains `unverified`: even a running product or a recent
+acknowledgement proves only that exact observation, never a current live
+connection. Unknown installation and process states are nullable instead of
+being reported as false. Paths, process arguments, usernames, provider session
+IDs, and spool filenames never leave the facade.
+
+Actions are guided instructions. Claude and Codex can point to their supported
+host setup/test/trust flows; unpublished Cursor and VS Code artifacts are never
+silently installed from local source checkouts.
+
 ## Automatic capture reconciliation — backfilling what the hooks lost
 
 `capture_reconciler.py` closes the hole a non-blocking hook leaves. Every Claude
@@ -401,6 +418,12 @@ Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding/codin
   and `complete=true`. A legacy, truncated, changing, or malformed response
   blocks the pass; title sync never mutates Claude's files from partial cloud
   knowledge.
+- **Every compared provider detail comes back from AI Dream.** Identity rows
+  expose the last acknowledged Claude project display name, git branch,
+  worktree name, archive state, pin state/rank, and category alongside title
+  evidence. The local comparison reads those `claude_*` fields; it never
+  guesses cloud state from a local sent ledger. Missing values remain explicit
+  `null`, so verification can distinguish cleared metadata from absent proof.
 - **Session details sync is preview → apply → acknowledge → verify.** Every pass
   has a durable operation id and one payload-free comparison row per bound
   session across title, project, branch, worktree, archive, pin/rank, and

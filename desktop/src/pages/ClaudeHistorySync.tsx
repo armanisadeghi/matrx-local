@@ -40,6 +40,7 @@ import type {
   ClaudeLabelSyncStatus,
   CodingSessionBridgeStatus,
   CodingSessionProvider,
+  CodingSessionProviderReadinessStatus,
 } from "@/lib/api";
 import {
   codingSessionActionLabel,
@@ -119,6 +120,7 @@ export function ClaudeHistorySync() {
   const [labelSyncing, setLabelSyncing] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [bridgeStatus, setBridgeStatus] = useState<CodingSessionBridgeStatus | null>(null);
+  const [providerReadiness, setProviderReadiness] = useState<CodingSessionProviderReadinessStatus | null>(null);
   const [captureStatus, setCaptureStatus] = useState<ClaudeCaptureStatus | null>(null);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [overviewRefreshing, setOverviewRefreshing] = useState(false);
@@ -144,9 +146,10 @@ export function ClaudeHistorySync() {
     return runSingleFlight(overviewFlight, async () => {
       setOverviewRefreshing(true);
       try {
-        const [bridgeResult, captureStatusResult] = await Promise.allSettled([
+        const [bridgeResult, captureStatusResult, readinessResult] = await Promise.allSettled([
           engine.getCodingSessionStatus(),
           engine.getClaudeCaptureStatus(),
+          engine.getCodingSessionProviderReadiness(),
         ]);
         const failures: string[] = [];
         const refreshedAt = new Date();
@@ -177,6 +180,11 @@ export function ClaudeHistorySync() {
                 : String(captureStatusResult.reason)
             }`,
           );
+        }
+        if (readinessResult.status === "fulfilled") {
+          setProviderReadiness(readinessResult.value);
+        } else {
+          failures.push(`Provider readiness: ${readinessResult.reason instanceof Error ? readinessResult.reason.message : String(readinessResult.reason)}`);
         }
         setOverviewError(failures.length > 0 ? failures.join(" · ") : null);
       } finally {
@@ -372,6 +380,7 @@ export function ClaudeHistorySync() {
         <TabsContent value="overview" className="m-0 flex-1 space-y-4 overflow-y-auto p-6">
           <OverviewPanel
             bridgeStatus={bridgeStatus}
+            providerReadiness={providerReadiness}
             captureStatus={captureStatus}
             bridgeUpdatedAt={bridgeUpdatedAt}
             captureUpdatedAt={captureUpdatedAt}
@@ -644,6 +653,7 @@ export function ClaudeHistorySync() {
 
 function OverviewPanel({
   bridgeStatus,
+  providerReadiness,
   captureStatus,
   bridgeUpdatedAt,
   captureUpdatedAt,
@@ -659,6 +669,7 @@ function OverviewPanel({
   onOpenAccount,
 }: {
   bridgeStatus: CodingSessionBridgeStatus | null;
+  providerReadiness: CodingSessionProviderReadinessStatus | null;
   captureStatus: ClaudeCaptureStatus | null;
   bridgeUpdatedAt: Date | null;
   captureUpdatedAt: Date | null;
@@ -674,6 +685,7 @@ function OverviewPanel({
   onOpenAccount: () => void;
 }) {
   const [deliveryFilter, setDeliveryFilter] = useState<DeliveryEvidenceFilter | null>(null);
+  const [guidedInstruction, setGuidedInstruction] = useState<{ label: string; instruction: string } | null>(null);
   const capabilityLabels = {
     event_mirror: "Live events",
     historical_import: "History import",
@@ -735,6 +747,7 @@ function OverviewPanel({
               {(Object.keys(PROVIDER_LABELS) as CodingSessionProvider[]).map(
                 (provider) => {
                   const status = bridgeStatus.providers[provider];
+                  const readiness = providerReadiness?.providers[provider];
                   return (
                     <div key={provider} className="rounded-md border p-4">
                       <div className="flex flex-wrap items-center gap-2">
@@ -756,10 +769,12 @@ function OverviewPanel({
                       <p className="mt-1 text-xs text-muted-foreground">
                         {PROVIDER_SCOPE[provider]}
                       </p>
-                      <div className="mt-2 rounded-md border border-dashed px-2.5 py-2 text-xs text-muted-foreground">
-                        <span className="font-medium text-foreground">Connection on this Mac: not reported.</span>{" "}
-                        The engine currently reports product capability and delivered activity, but not whether this provider&rsquo;s AI Matrx adapter is installed, trusted, or connected. “Supported” below does not mean connected.
-                      </div>
+                      {readiness ? <div className="mt-2 space-y-2 rounded-md border px-2.5 py-2 text-xs">
+                        <div className="flex flex-wrap gap-1.5"><Badge variant={readiness.product.installed ? "secondary" : "outline"}>{readiness.product.installed ? "Product installed" : "Product not found"}</Badge><Badge variant={readiness.product.running ? "secondary" : "outline"}>{readiness.product.running ? "Running now" : "Not running"}</Badge><Badge variant={readiness.adapter.detected ? "secondary" : "outline"}>{readiness.adapter.detected ? "AI Matrx adapter found" : "AI Matrx adapter not found"}</Badge><Badge variant="outline">Connection unverified</Badge></div>
+                        <p className="text-muted-foreground">{readiness.connection.detail}</p>
+                        {readiness.upstream_spool.supported && <p className="text-muted-foreground">Adapter spool: {readiness.upstream_spool.pending ?? "unknown"} pending · {readiness.upstream_spool.poison ?? "unknown"} needs attention · {readiness.upstream_spool.in_flight ?? "unknown"} in flight</p>}
+                        {readiness.actions.length > 0 && <div className="flex flex-wrap gap-2">{readiness.actions.map((action) => <Button key={action.id} type="button" size="sm" variant="outline" onClick={() => setGuidedInstruction({ label: action.label, instruction: action.instruction })}>{action.label}</Button>)}</div>}
+                      </div> : <div className="mt-2 rounded-md border border-dashed px-2.5 py-2 text-xs text-muted-foreground"><span className="font-medium text-foreground">Readiness is loading or unavailable.</span> Product support below is not a connection claim.</div>}
                       <p className="mt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                         Product capabilities
                       </p>
@@ -1011,6 +1026,7 @@ function OverviewPanel({
           <span>{error}</span>
         </div>
       )}
+      {guidedInstruction && <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-4 text-sm" role="status"><div className="flex items-start justify-between gap-3"><div><p className="font-medium">{guidedInstruction.label}</p><p className="mt-1 whitespace-pre-wrap text-muted-foreground">{guidedInstruction.instruction}</p></div><Button type="button" variant="ghost" size="sm" onClick={() => setGuidedInstruction(null)}>Done</Button></div></div>}
       <DeliveryEvidenceDialog filter={deliveryFilter} onClose={() => setDeliveryFilter(null)} onChanged={onRefresh} />
     </>
   );

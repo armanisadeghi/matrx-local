@@ -561,6 +561,38 @@ export interface CodingSessionBridgeStatus {
   last_acknowledgement: CodingSessionActivitySummary | null;
 }
 
+export interface CodingSessionProviderReadiness {
+  provider: CodingSessionProvider;
+  display_name: string;
+  product: { installed: boolean; version: string | null; running: boolean; evidence: string[] };
+  adapter: {
+    detected: boolean;
+    configured: boolean | null;
+    version: string | null;
+    authorization: "unknown";
+    hook_trust: "unknown" | "review_required" | "not_applicable";
+    evidence: string[];
+  };
+  upstream_spool: {
+    supported: boolean;
+    pending: number | null;
+    poison: number | null;
+    in_flight: number | null;
+    temporary: number | null;
+    oldest_pending_at: string | null;
+    oldest_pending_age_seconds: number | null;
+  };
+  activity: { last_local_enqueue_at: string | null; last_cloud_acknowledgement_at: string | null };
+  connection: { state: "unverified"; detail: string };
+  actions: Array<{ id: string; label: string; kind: "guided_instruction"; instruction: string }>;
+}
+
+export interface CodingSessionProviderReadinessStatus {
+  schema_version: 1;
+  generated_at: string;
+  providers: Record<CodingSessionProvider, CodingSessionProviderReadiness>;
+}
+
 export interface CodingSessionDeliveryEnvelope {
   receipt_id: number;
   state: "pending" | "quarantine";
@@ -2511,6 +2543,10 @@ class EngineAPI {
 
   async getCodingSessionStatus(): Promise<CodingSessionBridgeStatus> {
     return this.request("/coding-session/status");
+  }
+
+  async getCodingSessionProviderReadiness(): Promise<CodingSessionProviderReadinessStatus> {
+    return this.request("/coding-session/providers/readiness");
   }
 
   async getCodingSessionDeliveryEnvelopes(filters: {

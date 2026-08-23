@@ -12,7 +12,7 @@
  * here exactly like locally-started ones.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -67,6 +67,7 @@ export function AgentRuntimeCard() {
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [initialLoad, setInitialLoad] = useState(true);
+  const [eventsByRun, setEventsByRun] = useState<Record<string, Array<Record<string, unknown>>>>({});
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -93,11 +94,33 @@ export function AgentRuntimeCard() {
   }, [refresh]);
 
   const hasActiveRuns = runs.some((run) => ACTIVE_STATUSES.has(run.status));
+  const activeRunIds = useMemo(() => runs.filter((run) => ACTIVE_STATUSES.has(run.status)).map((run) => run.runtime_id), [runs]);
+  const activeRunKey = activeRunIds.join(",");
   useEffect(() => {
     if (!hasActiveRuns) return;
     const id = setInterval(() => void refresh(), 3000);
     return () => clearInterval(id);
   }, [hasActiveRuns, refresh]);
+
+  useEffect(() => {
+    const baseUrl = engine.engineUrl;
+    if (!baseUrl || activeRunIds.length === 0) return;
+    const sources = activeRunIds.map((runtimeId) => {
+      const source = new EventSource(`${baseUrl}/coding-session/runtime/${encodeURIComponent(runtimeId)}/events`);
+      source.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data) as Record<string, unknown>;
+          setEventsByRun((current) => ({ ...current, [runtimeId]: [...(current[runtimeId] ?? []), payload].slice(-20) }));
+        } catch {
+          setEventsByRun((current) => ({ ...current, [runtimeId]: [...(current[runtimeId] ?? []), { event: "unreadable_event", raw: event.data }].slice(-20) }));
+        }
+      };
+      source.addEventListener("done", () => { source.close(); void refresh(); });
+      source.onerror = () => source.close();
+      return source;
+    });
+    return () => sources.forEach((source) => source.close());
+  }, [activeRunKey, refresh]); // activeRunKey intentionally represents the set
 
   const cancel = async (runtimeId: string) => {
     setBusy(true);
@@ -221,6 +244,7 @@ export function AgentRuntimeCard() {
                     </dl>
                     {(run.execution?.error ?? run.error) && <div className="mt-2 text-xs text-destructive"><span className="font-medium">Claude execution error:</span> {run.execution?.error ?? run.error}</div>}
                     {(run.mirror?.error ?? run.mirror_error) && <div className="mt-2 text-xs text-destructive"><span className="font-medium">AI Matrx delivery error:</span> {run.mirror?.error ?? run.mirror_error}</div>}
+                    {(eventsByRun[run.runtime_id]?.length ?? 0) > 0 && <details className="mt-2 rounded-md bg-muted/30 p-2 text-xs"><summary className="cursor-pointer font-medium">Live runtime events ({eventsByRun[run.runtime_id]?.length} retained in this view)</summary><div className="mt-2 max-h-40 space-y-1 overflow-auto font-mono text-muted-foreground">{eventsByRun[run.runtime_id]?.map((event, index) => <div key={`${String(event.sequence ?? "event")}-${index}`}>{String(event.sequence ?? "—")} · {String(event.event ?? event.type ?? "runtime event")}</div>)}</div></details>}
                   </div>
                   {ACTIVE_STATUSES.has(run.status) && <Button variant="outline" size="sm" onClick={() => void cancel(run.runtime_id)} disabled={busy}><Square className="mr-2 h-3.5 w-3.5" />Stop Claude run</Button>}
                 </div>

@@ -380,6 +380,43 @@ async def test_an_oversized_transcript_never_blocks_the_batch(env, monkeypatch) 
 
 
 @pytest.mark.anyio
+async def test_one_bad_candidate_does_not_consume_its_neighbors_retry_budget(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir, db, importer = env
+    era_start = datetime.now(UTC) - timedelta(days=2)
+    bad_id = str(uuid4())
+    good_id = str(uuid4())
+    _write_session(config_dir, session_id=bad_id, mtime=datetime.now(UTC))
+    _write_session(config_dir, session_id=good_id, mtime=datetime.now(UTC))
+    original = importer.import_selected
+
+    async def fail_one(request, *, enqueue_origin="explicit_history"):
+        if str(request.sessions[0].session_id) == bad_id:
+            raise ValueError("one malformed transcript")
+        return await original(request, enqueue_origin=enqueue_origin)
+
+    monkeypatch.setattr(importer, "import_selected", fail_one)
+    report = await _reconciler(
+        db,
+        importer,
+        [{"provider_session_id": "known", "last_seen_at": era_start.isoformat()}],
+    ).reconcile()
+
+    assert report["status"] == "partial"
+    assert report["enqueued"] == 1
+    assert len(report["failures"]) == 1
+    attempts = await db.fetchall(
+        "SELECT session_key, attempts, last_error FROM claude_capture_backfill"
+    )
+    by_session = {row["session_key"].rsplit(":", 1)[-1]: row for row in attempts}
+    assert by_session[bad_id]["attempts"] == 1
+    assert "malformed" in by_session[bad_id]["last_error"]
+    assert by_session[good_id]["attempts"] == 0
+    assert by_session[good_id]["last_error"] is None
+
+
+@pytest.mark.anyio
 async def test_dry_run_does_not_consume_oversized_retry_budget(
     env, monkeypatch
 ) -> None:

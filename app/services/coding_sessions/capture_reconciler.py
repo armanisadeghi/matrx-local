@@ -355,45 +355,54 @@ class ClaudeCaptureReconciler:
         if not batch:
             return report
 
-        request = ClaudeHistoryImportRequest(
-            provider_account_key=account_key,
-            sessions=[
-                ClaudeHistorySelection(
-                    session_id=item["session_id"],
-                    provider_project_key=item["project_key"],
-                    source_revision=item["source_revision"],
-                )
-                for item in batch
-            ],
-        )
-        try:
-            result = await self._importer.import_selected(
-                request, enqueue_origin="capture_recovery"
+        # Settle each candidate independently. One malformed or concurrently
+        # changing transcript must never consume the retry budget of the nine
+        # unrelated sessions that happened to share its bounded discovery pass.
+        imports: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
+        for item in batch:
+            request = ClaudeHistoryImportRequest(
+                provider_account_key=account_key,
+                sessions=[
+                    ClaudeHistorySelection(
+                        session_id=item["session_id"],
+                        provider_project_key=item["project_key"],
+                        source_revision=item["source_revision"],
+                    )
+                ],
             )
-        except (ClaudeHistoryConflict, ValueError) as exc:
-            # A conflict is normal (the user wrote more mid-pass); record it
-            # against every session in the batch so a permanently broken one
-            # exhausts its budget instead of blocking the queue forever.
-            for item in batch:
+            try:
+                result = await self._importer.import_selected(
+                    request, enqueue_origin="capture_recovery"
+                )
+            except (ClaudeHistoryConflict, ValueError) as exc:
                 await self._record_attempt(
                     item["session_key"], item["source_state"], str(exc)
                 )
-            report["status"] = "conflict"
-            report["detail"] = str(exc)
-            return report
+                failures.append(
+                    {"session_key": item["session_key"], "detail": str(exc)}
+                )
+                continue
+            await self._record_attempt(
+                item["session_key"], item["source_state"], None
+            )
+            imports.append(
+                {"session_key": item["session_key"], "result": result}
+            )
 
-        for item in batch:
-            await self._record_attempt(item["session_key"], item["source_state"], None)
-        report["enqueued"] = len(batch)
-        report["import"] = result
+        report["enqueued"] = len(imports)
+        report["imports"] = imports
+        report["failures"] = failures
+        if failures:
+            report["status"] = "partial" if imports else "conflict"
         # LOUD ON PURPOSE: a backfill firing means the hook path lost data.
         logger.warning(
             "[capture_reconciler] Backfilled %d Claude session(s) the hook path "
             "never delivered (%d still missing). Capture through the plugin's "
             "MCP connection is failing or was interrupted — check /mcp in "
             "Claude Code.",
-            len(batch),
-            max(0, len(candidates) - len(batch)),
+            len(imports),
+            max(0, len(candidates) - len(imports)),
         )
         return report
 

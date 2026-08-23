@@ -19,6 +19,8 @@ from uuid import uuid4
 import pytest
 
 from app.services.coding_sessions import claude_label_writer
+from app.services.coding_sessions import claude_session_index
+from app.services.coding_sessions import title_sync
 from app.services.coding_sessions.claude_label_writer import ClaudeSessionIndexWriter
 from app.services.coding_sessions.claude_session_index import read_session_index
 from app.services.coding_sessions.service import CodingSessionBridgeOutbox
@@ -103,6 +105,14 @@ class _FakeClient:
             "complete": True,
             "next_cursor": None,
         }
+
+
+class _FailingOutbox:
+    async def enqueue(self, _request: Any) -> Any:
+        raise RuntimeError("simulated durable enqueue failure")
+
+    def wake(self) -> None:
+        pass
 
 
 async def _pending_payloads(db: LocalDatabase) -> list[dict[str, Any]]:
@@ -219,6 +229,24 @@ def test_write_refuses_when_the_record_now_names_a_different_session(
     assert path.read_bytes() == before
 
 
+def test_write_refuses_when_the_exact_record_is_not_writable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = str(uuid4())
+    root = tmp_path / "claude-code-sessions"
+    path = _write_record(root, _record(session_id))
+    before = path.read_bytes()
+    monkeypatch.setattr(claude_label_writer, "_writable", lambda _path: False)
+
+    result = ClaudeSessionIndexWriter(backup_root=tmp_path / "b").write_title(
+        cli_session_id=session_id, title="New title", record_paths=(path,)
+    )
+
+    assert result.summary()["refusal_reasons"] == ["not_writable"]
+    assert path.read_bytes() == before
+    assert not (tmp_path / "b").exists()
+
+
 def test_backup_holds_the_bytes_from_before_ai_matrx_ever_wrote(tmp_path: Path) -> None:
     session_id = str(uuid4())
     root = tmp_path / "claude-code-sessions"
@@ -317,6 +345,20 @@ def test_freshest_record_wins_when_last_activity_ties(tmp_path: Path) -> None:
     assert entries[session_id].title == "Renamed here"
     # And the writer is handed every copy, so no stale sibling can win later.
     assert set(entries[session_id].record_paths) == {*stale, fresh}
+
+
+def test_index_reader_reports_actual_truncation_not_a_rounded_file_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "claude-code-sessions"
+    _write_record(root, _record(str(uuid4())), account="one")
+    _write_record(root, _record(str(uuid4())), account="two")
+    monkeypatch.setattr(claude_session_index, "MAX_INDEX_FILES", 1)
+
+    _entries, totals = read_session_index(root)
+
+    assert totals["files"] == 1
+    assert totals["truncated"] == 1
 
 
 # --------------------------------------------------------------------------
@@ -442,6 +484,17 @@ async def test_verification_refetches_both_sides_and_proves_convergence(env) -> 
     intent = await db.fetchone("SELECT status FROM coding_session_title_push_intents")
     assert intent["status"] == "verified"
 
+    pending_before = len(await _pending_payloads(db))
+    repeated = await reconciler.retry_push_intent(
+        str(verified["items"][0]["write_intent_id"])
+    )
+    assert (
+        repeated["operation"]["operation_id"] == verified["operation"]["operation_id"]
+    )
+    assert len(await _pending_payloads(db)) == pending_before
+    intent = await db.fetchone("SELECT status FROM coding_session_title_push_intents")
+    assert intent["status"] == "verified"
+
 
 @pytest.mark.anyio
 async def test_refused_write_is_durable_and_individually_retryable(env) -> None:
@@ -476,6 +529,43 @@ async def test_refused_write_is_durable_and_individually_retryable(env) -> None:
     )
     assert repaired["status"] == "convergence_queued"
     assert repaired["receipt_id"] is not None
+
+
+@pytest.mark.anyio
+async def test_partial_multi_copy_write_is_journaled_and_retry_repairs_every_copy(
+    env,
+) -> None:
+    db, outbox, tmp_path = env
+    session_id = str(uuid4())
+    root = tmp_path / "claude-code-sessions"
+    record = _record(session_id)
+    good = _write_record(root, record, account="good")
+    refused = _write_record(root, record, account="refused")
+    refused.write_text(json.dumps(record, indent=2))
+    reconciler = _reconciler(db, outbox, tmp_path, [_identity(session_id)])
+
+    failed = await reconciler.sync()
+
+    assert json.loads(good.read_bytes())["title"] == "Renamed in AI Matrx"
+    assert json.loads(refused.read_bytes())["title"] != "Renamed in AI Matrx"
+    intent = await db.fetchone(
+        "SELECT intent_id, status, copy_outcomes_json FROM coding_session_title_push_intents"
+    )
+    assert intent["status"] == "partial"
+    assert json.loads(intent["copy_outcomes_json"])["written"] == 1
+    assert failed["comparisons"][0]["state"] == "failed"
+
+    refused.write_bytes(json.dumps(record, **SERIALIZERS[0]).encode("utf-8"))
+    retried = await reconciler.retry_push_intent(str(intent["intent_id"]))
+
+    assert retried["items"][0]["state"] == "enqueued"
+    assert {
+        json.loads(good.read_bytes())["title"],
+        json.loads(refused.read_bytes())["title"],
+    } == {"Renamed in AI Matrx"}
+    outcome = retried["items"][0]["outcome"]
+    assert outcome["unchanged"] == 1
+    assert outcome["written"] == 1
 
 
 @pytest.mark.anyio
@@ -568,3 +658,193 @@ async def test_dry_run_never_opens_another_applications_files(env) -> None:
     assert result["push_down"]["sample_titles"][0]["title"] == "Renamed in AI Matrx"
     assert path.read_bytes() == before
     assert await _pending_payloads(db) == []
+
+
+@pytest.mark.anyio
+async def test_local_write_then_enqueue_failure_is_journaled_and_retryable(env) -> None:
+    db, outbox, tmp_path = env
+    session_id = str(uuid4())
+    root = tmp_path / "claude-code-sessions"
+    path = _write_record(root, _record(session_id))
+    reconciler = _reconciler(db, _FailingOutbox(), tmp_path, [_identity(session_id)])
+
+    result = await reconciler.sync()
+
+    assert json.loads(path.read_bytes())["title"] == "Renamed in AI Matrx"
+    assert result["operation"]["status"] == "partial"
+    assert result["comparisons"][0]["reason"] == (
+        "local_write_succeeded_enqueue_failed"
+    )
+    intent = await db.fetchone(
+        """SELECT intent_id, status, receipt_id, copy_outcomes_json, error_message
+           FROM coding_session_title_push_intents"""
+    )
+    assert intent["status"] == "enqueue_failed"
+    assert intent["receipt_id"] is None
+    assert json.loads(intent["copy_outcomes_json"])["written"] == 1
+    assert "simulated durable enqueue failure" in intent["error_message"]
+    pushed = await db.fetchone("SELECT count(*) AS n FROM claude_session_title_pushed")
+    assert pushed["n"] == 0
+
+    reconciler._outbox = outbox
+    retried = await reconciler.retry_push_intent(str(intent["intent_id"]))
+    assert retried["items"][0]["state"] == "enqueued"
+    repaired = await db.fetchone(
+        "SELECT status, receipt_id FROM coding_session_title_push_intents"
+    )
+    assert repaired["status"] == "convergence_queued"
+    assert repaired["receipt_id"] is not None
+
+
+@pytest.mark.anyio
+async def test_overlong_cloud_title_is_refused_without_silent_truncation(env) -> None:
+    db, outbox, tmp_path = env
+    session_id = str(uuid4())
+    root = tmp_path / "claude-code-sessions"
+    path = _write_record(root, _record(session_id))
+    before = path.read_bytes()
+    long_title = "x" * (claude_label_writer.MAX_TITLE_CHARS + 1)
+
+    result = await _reconciler(
+        db,
+        outbox,
+        tmp_path,
+        [_identity(session_id, conversation_title=long_title)],
+    ).sync()
+
+    assert path.read_bytes() == before
+    assert result["operation"]["status"] == "partial"
+    assert result["comparisons"][0]["reason"] == "title_exceeds_claude_limit"
+    assert (
+        await db.fetchone("SELECT intent_id FROM coding_session_title_push_intents")
+        is None
+    )
+    assert await _pending_payloads(db) == []
+
+
+@pytest.mark.anyio
+async def test_apply_fails_closed_when_local_index_is_truncated(env) -> None:
+    db, outbox, tmp_path = env
+    session_id = str(uuid4())
+    root = tmp_path / "claude-code-sessions"
+    path = _write_record(root, _record(session_id))
+    before = path.read_bytes()
+    entries, totals = read_session_index(root)
+    totals["truncated"] = 1
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=_FakeClient([_identity(session_id)]),
+        index_reader=lambda: (entries, totals),
+        writer=ClaudeSessionIndexWriter(backup_root=tmp_path / "backups"),
+    )
+
+    with pytest.raises(title_sync.ClaudeTitleSyncBlocked) as blocked:
+        await reconciler.sync()
+
+    assert blocked.value.reason == "claude_index_incomplete"
+    assert path.read_bytes() == before
+    assert await _pending_payloads(db) == []
+    operation = await db.fetchone(
+        "SELECT status, index_truncated FROM coding_session_metadata_sync_operations"
+    )
+    assert dict(operation) == {"status": "failed", "index_truncated": 1}
+
+
+@pytest.mark.anyio
+async def test_restart_closes_abandoned_operation_and_preserves_retry_obligation(
+    env,
+) -> None:
+    db, outbox, tmp_path = env
+    operation_id = str(uuid4())
+    intent_id = str(uuid4())
+    session_id = str(uuid4())
+    await db.execute(
+        """INSERT INTO coding_session_metadata_sync_operations
+               (operation_id, mode, status, started_at)
+           VALUES (?, 'apply', 'running', '2026-08-23T00:00:00Z')""",
+        (operation_id,),
+    )
+    await db.execute(
+        """INSERT INTO coding_session_title_push_intents
+               (intent_id, operation_id, provider_session_id, cli_session_id,
+                desired_title, desired_payload_json, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'Wanted', '{"title":"Wanted"}', 'planned',
+                   '2026-08-23T00:00:00Z', '2026-08-23T00:00:00Z')""",
+        (intent_id, operation_id, session_id, session_id),
+    )
+    await db.commit()
+    reconciler = _reconciler(db, outbox, tmp_path, [])
+
+    status = await reconciler.status()
+
+    recovered = await db.fetchone(
+        """SELECT status, completed_at, error_message
+           FROM coding_session_metadata_sync_operations WHERE operation_id=?""",
+        (operation_id,),
+    )
+    intent = await db.fetchone(
+        "SELECT status, error_message FROM coding_session_title_push_intents"
+    )
+    assert recovered["status"] == "failed"
+    assert recovered["completed_at"].endswith("Z")
+    assert recovered["error_message"] == "engine_interrupted_before_completion"
+    assert intent["status"] == "recovery_required"
+    assert status["push_intents_by_state"] == {"recovery_required": 1}
+    evidence = await reconciler.operation(operation_id)
+    assert evidence["items"][0]["write_intent_id"] == intent_id
+    assert evidence["items"][0]["state"] == "recovery_required"
+    assert evidence["items"][0]["reason"] == "engine_interrupted_before_completion"
+
+
+@pytest.mark.anyio
+async def test_operation_pagination_uses_collision_safe_compound_cursor(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db, outbox, tmp_path = env
+    reconciler = _reconciler(db, outbox, tmp_path, [])
+    monkeypatch.setattr(title_sync, "_session_ref", lambda _value: "same-ref")
+    operation_id = await reconciler._start_operation(mode="preview")
+    for index in range(3):
+        await reconciler._record_operation_row(
+            operation_id=operation_id,
+            provider_session_id=f"provider-{index}",
+            local_values={"title": f"title-{index}"},
+            cloud_values={"title": f"title-{index}"},
+            chosen_values={"title": f"title-{index}"},
+            direction="none",
+            action="none",
+            reason="same",
+            state="acknowledged",
+        )
+    await db.commit()
+    await reconciler._finish_operation(
+        operation_id,
+        status="completed",
+        bound_sessions=3,
+        compared_sessions=3,
+        detected_sessions=0,
+        enqueued_sessions=0,
+        acknowledged_sessions=3,
+        verified_sessions=0,
+        failed_sessions=0,
+        index_totals={"files": 3, "records": 3, "unreadable": 0},
+        index_writable=True,
+    )
+
+    cursor = None
+    observed: list[str] = []
+    while True:
+        page = await reconciler.operation(
+            operation_id, limit=1, after_session_ref=cursor
+        )
+        observed.extend(item["chosen"]["title"] for item in page["items"])
+        assert page["page_count"] == 1
+        assert page["total_count"] == 3
+        assert len(page["items"][0]["comparisons"]) == 8
+        cursor = page["next_cursor"]
+        if cursor is None:
+            assert page["complete"] is True
+            break
+
+    assert observed == ["title-0", "title-1", "title-2"]

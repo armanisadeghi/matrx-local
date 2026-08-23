@@ -27,6 +27,7 @@ async def _assert_serialized(instance: Any, method_name: str) -> None:
         instance._lock = asyncio.Lock()
         instance._reconcile_once = MethodType(fake_once, instance)
     else:
+        instance._recovery_checked = True
         instance._sync_once = MethodType(fake_once, instance)
 
     reports = await asyncio.gather(

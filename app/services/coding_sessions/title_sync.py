@@ -64,6 +64,7 @@ from uuid import UUID, uuid4
 from app.common.system_logger import get_logger
 from app.services.aidream.client import AIDreamClient, get_aidream_client
 from app.services.coding_sessions.claude_label_writer import (
+    MAX_TITLE_CHARS,
     ClaudeSessionIndexWriter,
 )
 from app.services.coding_sessions.claude_session_index import (
@@ -143,6 +144,11 @@ def title_sha256(title: str) -> str:
     return hashlib.sha256(title.encode("utf-8")).hexdigest()
 
 
+def _utc_now() -> str:
+    """Canonical wire/storage UTC; never emit offset-equivalent variants."""
+    return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
+
+
 _DETAIL_FIELDS = (
     "title",
     "project_name",
@@ -154,7 +160,7 @@ _DETAIL_FIELDS = (
     "category",
 )
 _CLOUD_DETAIL_KEYS = {
-    "title": "conversation_title",
+    "title": "claude_title",
     "project_name": "claude_project_name",
     "git_branch": "claude_git_branch",
     "worktree_name": "claude_worktree_name",
@@ -167,6 +173,28 @@ _CLOUD_DETAIL_KEYS = {
 
 def _session_ref(provider_session_id: str) -> str:
     return hashlib.sha256(provider_session_id.encode("utf-8")).hexdigest()[:12]
+
+
+def _operation_cursor(session_ref: str, provider_session_id: str) -> str:
+    payload = json.dumps(
+        [session_ref, provider_session_id], separators=(",", ":")
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_operation_cursor(value: str) -> tuple[str, str]:
+    try:
+        padding = "=" * (-len(value) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(value + padding).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ClaudeTitleSyncBlocked("invalid_operation_cursor") from exc
+    if (
+        not isinstance(decoded, list)
+        or len(decoded) != 2
+        or not all(isinstance(item, str) and item for item in decoded)
+    ):
+        raise ClaudeTitleSyncBlocked("invalid_operation_cursor")
+    return decoded[0], decoded[1]
 
 
 def _cloud_detail_values(identity: dict[str, Any]) -> dict[str, Any]:
@@ -213,6 +241,15 @@ def _record_paths_writable(entries: dict[str, ClaudeSessionIndexEntry]) -> bool:
     return True
 
 
+def _index_truncated(totals: dict[str, int]) -> bool:
+    """Accept an exact reader signal, conservatively fence older readers."""
+    return bool(totals.get("truncated", totals.get("files", 0) >= MAX_INDEX_FILES))
+
+
+def _index_incomplete(totals: dict[str, int]) -> bool:
+    return _index_truncated(totals) or int(totals.get("unreadable", 0)) > 0
+
+
 def session_metadata_request(
     *,
     provider_session_id: str,
@@ -256,6 +293,7 @@ class ClaudeSessionMetadataReconciler:
         self._tokens = TokenRepo(self._db)
         self._sync_meta = SyncMetaRepo(self._db)
         self._sync_lock = asyncio.Lock()
+        self._recovery_checked = False
 
     async def _sent_digests(self) -> dict[str, str]:
         rows = await self._db.fetchall(
@@ -317,12 +355,106 @@ class ClaudeSessionMetadataReconciler:
             (
                 operation_id,
                 mode,
-                datetime.now(tz=UTC).isoformat(),
+                _utc_now(),
                 parent_operation_id,
             ),
         )
         await self._db.commit()
         return operation_id
+
+    async def _recover_interrupted_operations(self) -> int:
+        """Close journals abandoned by a process exit without guessing effects.
+
+        A pre-write intent may have been persisted immediately before a crash,
+        so it remains individually retryable.  We mark that ambiguity loudly
+        instead of claiming the operation is still running forever.
+        """
+        if getattr(self, "_recovery_checked", False):
+            return 0
+        self._recovery_checked = True
+        now = _utc_now()
+        cursor = await self._db.execute(
+            """UPDATE coding_session_metadata_sync_operations
+               SET status='failed', completed_at=?,
+                   error_message=COALESCE(error_message, 'engine_interrupted_before_completion')
+               WHERE status='running'""",
+            (now,),
+        )
+        recovered = max(0, int(cursor.rowcount or 0))
+        if recovered:
+            intents = await self._db.fetchall(
+                """SELECT intents.*
+                   FROM coding_session_title_push_intents AS intents
+                   JOIN coding_session_metadata_sync_operations AS operations
+                     ON operations.operation_id = intents.operation_id
+                   WHERE operations.status='failed'
+                     AND operations.error_message='engine_interrupted_before_completion'
+                     AND intents.status IN ('planned', 'local_write_succeeded')"""
+            )
+            for intent in intents:
+                previous_status = str(intent["status"])
+                error = (
+                    "write_outcome_unknown_after_restart"
+                    if previous_status == "planned"
+                    else "enqueue_state_unknown_after_restart"
+                )
+                await self._db.execute(
+                    """UPDATE coding_session_title_push_intents
+                       SET status='recovery_required',
+                           error_message=COALESCE(error_message, ?), updated_at=?
+                       WHERE intent_id=?""",
+                    (error, now, intent["intent_id"]),
+                )
+                existing = await self._db.fetchone(
+                    """SELECT 1 FROM coding_session_metadata_sync_rows
+                       WHERE operation_id=? AND provider_session_id=?""",
+                    (intent["operation_id"], intent["provider_session_id"]),
+                )
+                if existing is None:
+                    desired = json.loads(str(intent["desired_payload_json"]))
+                    copy_outcome = (
+                        json.loads(str(intent["copy_outcomes_json"]))
+                        if intent["copy_outcomes_json"] is not None
+                        else None
+                    )
+                    await self._record_operation_row(
+                        operation_id=str(intent["operation_id"]),
+                        provider_session_id=str(intent["provider_session_id"]),
+                        local_values={},
+                        cloud_values={},
+                        chosen_values=desired,
+                        direction="ai_matrx_to_claude",
+                        action="retry_write_and_observe",
+                        reason="engine_interrupted_before_completion",
+                        state="recovery_required",
+                        receipt_id=(
+                            int(intent["receipt_id"])
+                            if intent["receipt_id"] is not None
+                            else None
+                        ),
+                        write_intent_id=str(intent["intent_id"]),
+                        outcome=copy_outcome,
+                    )
+            await self._db.execute(
+                """UPDATE coding_session_metadata_sync_operations
+                   SET bound_sessions = MAX(bound_sessions, (
+                           SELECT count(*) FROM coding_session_metadata_sync_rows AS rows
+                           WHERE rows.operation_id = coding_session_metadata_sync_operations.operation_id
+                       )),
+                       compared_sessions = MAX(compared_sessions, (
+                           SELECT count(*) FROM coding_session_metadata_sync_rows AS rows
+                           WHERE rows.operation_id = coding_session_metadata_sync_operations.operation_id
+                       )),
+                       failed_sessions = MAX(failed_sessions, (
+                           SELECT count(*) FROM coding_session_metadata_sync_rows AS rows
+                           WHERE rows.operation_id = coding_session_metadata_sync_operations.operation_id
+                             AND rows.state IN ('failed', 'blocked', 'recovery_required')
+                       ))
+                   WHERE status='failed'
+                     AND error_message='engine_interrupted_before_completion'"""
+            )
+            await self._db.commit()
+        return recovered
 
     async def _record_operation_row(
         self,
@@ -391,7 +523,7 @@ class ClaudeSessionMetadataReconciler:
                WHERE operation_id=?""",
             (
                 status,
-                datetime.now(tz=UTC).isoformat(),
+                _utc_now(),
                 bound_sessions,
                 compared_sessions,
                 detected_sessions,
@@ -402,7 +534,7 @@ class ClaudeSessionMetadataReconciler:
                 int(index_totals.get("files", 0)),
                 int(index_totals.get("records", 0)),
                 int(index_totals.get("unreadable", 0)),
-                int(index_totals.get("files", 0) >= MAX_INDEX_FILES),
+                int(_index_truncated(index_totals)),
                 int(index_writable),
                 error_message,
                 operation_id,
@@ -417,6 +549,7 @@ class ClaudeSessionMetadataReconciler:
         limit: int = 200,
         after_session_ref: str | None = None,
     ) -> dict[str, Any]:
+        await self._recover_interrupted_operations()
         operation = await self._db.fetchone(
             """SELECT * FROM coding_session_metadata_sync_operations
                WHERE operation_id=?""",
@@ -424,15 +557,21 @@ class ClaudeSessionMetadataReconciler:
         )
         if operation is None:
             raise ClaudeTitleSyncBlocked("unknown_operation")
+        count_row = await self._db.fetchone(
+            """SELECT count(*) AS n FROM coding_session_metadata_sync_rows
+               WHERE operation_id=?""",
+            (operation_id,),
+        )
         params: list[Any] = [operation_id]
         cursor = ""
         if after_session_ref is not None:
-            cursor = " AND session_ref > ?"
-            params.append(after_session_ref)
+            cursor_ref, cursor_provider_id = _decode_operation_cursor(after_session_ref)
+            cursor = " AND (session_ref > ? OR (session_ref = ? AND provider_session_id > ?))"
+            params.extend([cursor_ref, cursor_ref, cursor_provider_id])
         rows = await self._db.fetchall(
             f"""SELECT * FROM coding_session_metadata_sync_rows
                 WHERE operation_id=?{cursor}
-                ORDER BY session_ref LIMIT ?""",
+                ORDER BY session_ref, provider_session_id LIMIT ?""",
             tuple([*params, limit + 1]),
         )
         has_more = len(rows) > limit
@@ -462,17 +601,29 @@ class ClaudeSessionMetadataReconciler:
                 }
             )
         summary = dict(operation)
+        total_count = int(count_row["n"]) if count_row is not None else 0
         return {
             "schema_version": 1,
             "operation": summary,
             "items": items,
+            "total_count": total_count,
+            "page_count": len(items),
             "has_more": has_more,
-            "next_cursor": items[-1]["session_ref"] if has_more and items else None,
+            "complete": str(operation["status"]) != "running" and not has_more,
+            "next_cursor": (
+                _operation_cursor(
+                    str(page[-1]["session_ref"]),
+                    str(page[-1]["provider_session_id"]),
+                )
+                if has_more and page
+                else None
+            ),
         }
 
     async def sync(self, *, dry_run: bool = False) -> dict[str, Any]:
         """Serialize one preview/apply operation through the shared service."""
         async with self._sync_lock:
+            await self._recover_interrupted_operations()
             return await self._sync_once(dry_run=dry_run)
 
     async def _sync_once(self, *, dry_run: bool = False) -> dict[str, Any]:
@@ -494,6 +645,8 @@ class ClaudeSessionMetadataReconciler:
             identities = await self._identities()
             index, index_totals = self._index_reader()
             index_writable = _record_paths_writable(index)
+            if not dry_run and _index_incomplete(index_totals):
+                raise ClaudeTitleSyncBlocked("claude_index_incomplete")
             sent = await self._sent_digests()
             pushed_titles = await self._pushed_titles()
             outbox = self._outbox or get_coding_session_bridge_outbox()
@@ -571,7 +724,15 @@ class ClaudeSessionMetadataReconciler:
                 intent_id: str | None = None
                 outcome: dict[str, Any] | None = None
 
-                if outbound:
+                if outbound and len(target_title) > MAX_TITLE_CHARS:
+                    direction = "blocked"
+                    action = "none"
+                    reason = "title_exceeds_claude_limit"
+                    state = "blocked"
+                    refused += 1
+                    failed += 1
+                    refusal_reasons[reason] = refusal_reasons.get(reason, 0) + 1
+                elif outbound:
                     chosen_values["title"] = target_title
                     direction = "ai_matrx_to_claude"
                     action = "write_local_then_observe"
@@ -582,11 +743,12 @@ class ClaudeSessionMetadataReconciler:
                         deferred += 0
                     else:
                         intent_id = str(uuid4())
+                        intent_error: str | None = None
                         desired_payload = {
                             "title": target_title,
                             "title_origin": TITLE_ORIGIN_AI_MATRX_USER,
                         }
-                        now = datetime.now(tz=UTC).isoformat()
+                        now = _utc_now()
                         await self._db.execute(
                             """INSERT INTO coding_session_title_push_intents (
                                    intent_id, operation_id, provider_session_id,
@@ -619,20 +781,58 @@ class ClaudeSessionMetadataReconciler:
                         }
                         if result.applied:
                             written += 1
-                            await self._record_pushed(
-                                provider_session_id, title_sha256(target_title)
+                            # The file outcome is durable before the enqueue.
+                            # If enqueue fails or the process exits, retry can
+                            # safely re-fence/rewrite and re-enqueue without a
+                            # false claim that convergence was queued.
+                            await self._db.execute(
+                                """UPDATE coding_session_title_push_intents SET
+                                       status='local_write_succeeded',
+                                       copy_outcomes_json=?, error_message=NULL,
+                                       updated_at=? WHERE intent_id=?""",
+                                (
+                                    json.dumps(outcome, sort_keys=True),
+                                    _utc_now(),
+                                    intent_id,
+                                ),
                             )
+                            await self._db.commit()
                             request = session_metadata_request(
                                 provider_session_id=provider_session_id,
                                 provider_project_key=project_key,
                                 payload=desired_payload,
                             )
-                            receipt = await outbox.enqueue(request)
-                            receipt_id = receipt.receipt_id
-                            queued += int(not receipt.duplicate)
-                            already_queued += int(receipt.duplicate)
-                            state = "enqueued"
-                            intent_status = "convergence_queued"
+                            try:
+                                receipt = await outbox.enqueue(request)
+                            except Exception as exc:
+                                intent_error = str(exc)
+                                failed += 1
+                                state = "failed"
+                                reason = "local_write_succeeded_enqueue_failed"
+                                intent_status = "enqueue_failed"
+                                await self._db.execute(
+                                    """UPDATE coding_session_title_push_intents SET
+                                           status=?, receipt_id=NULL,
+                                           copy_outcomes_json=?, error_message=?,
+                                           updated_at=? WHERE intent_id=?""",
+                                    (
+                                        intent_status,
+                                        json.dumps(outcome, sort_keys=True),
+                                        intent_error,
+                                        _utc_now(),
+                                        intent_id,
+                                    ),
+                                )
+                                await self._db.commit()
+                            else:
+                                receipt_id = receipt.receipt_id
+                                queued += int(not receipt.duplicate)
+                                already_queued += int(receipt.duplicate)
+                                state = "enqueued"
+                                intent_status = "convergence_queued"
+                                await self._record_pushed(
+                                    provider_session_id, title_sha256(target_title)
+                                )
                         else:
                             refused += 1
                             failed += 1
@@ -650,10 +850,10 @@ class ClaudeSessionMetadataReconciler:
                                 intent_status,
                                 receipt_id,
                                 json.dumps(outcome, sort_keys=True),
-                                None
+                                intent_error
                                 if result.applied
                                 else "one_or_more_copies_refused",
-                                datetime.now(tz=UTC).isoformat(),
+                                _utc_now(),
                                 intent_id,
                             ),
                         )
@@ -673,11 +873,18 @@ class ClaudeSessionMetadataReconciler:
                             provider_project_key=project_key,
                             payload=local_values,
                         )
-                        receipt = await outbox.enqueue(request)
-                        receipt_id = receipt.receipt_id
-                        queued += int(not receipt.duplicate)
-                        already_queued += int(receipt.duplicate)
-                        state = "enqueued"
+                        try:
+                            receipt = await outbox.enqueue(request)
+                        except Exception as exc:
+                            failed += 1
+                            state = "failed"
+                            reason = "observation_enqueue_failed"
+                            outcome = {"enqueue_error": str(exc)}
+                        else:
+                            receipt_id = receipt.receipt_id
+                            queued += int(not receipt.duplicate)
+                            already_queued += int(receipt.duplicate)
+                            state = "enqueued"
                 elif sent.get(provider_session_id) != digest:
                     direction = "claude_to_ai_matrx"
                     action = "observe_ai_matrx"
@@ -690,11 +897,18 @@ class ClaudeSessionMetadataReconciler:
                             provider_project_key=project_key,
                             payload=local_values,
                         )
-                        receipt = await outbox.enqueue(request)
-                        receipt_id = receipt.receipt_id
-                        queued += int(not receipt.duplicate)
-                        already_queued += int(receipt.duplicate)
-                        state = "enqueued"
+                        try:
+                            receipt = await outbox.enqueue(request)
+                        except Exception as exc:
+                            failed += 1
+                            state = "failed"
+                            reason = "observation_enqueue_failed"
+                            outcome = {"enqueue_error": str(exc)}
+                        else:
+                            receipt_id = receipt.receipt_id
+                            queued += int(not receipt.duplicate)
+                            already_queued += int(receipt.duplicate)
+                            state = "enqueued"
                 else:
                     unchanged += 1
                     acknowledged += 1
@@ -768,12 +982,13 @@ class ClaudeSessionMetadataReconciler:
             "operation": detail["operation"],
             "comparisons": detail["items"],
             "comparisons_truncated": detail["has_more"],
+            "comparisons_next_cursor": detail["next_cursor"],
             "dry_run": dry_run,
             "bound_sessions": len(identities),
             "index_files": index_totals["files"],
             "index_records": index_totals["records"],
             "index_unreadable": index_totals.get("unreadable", 0),
-            "index_limit_reached": index_totals["files"] >= MAX_INDEX_FILES,
+            "index_limit_reached": _index_truncated(index_totals),
             "index_writable": _record_paths_writable(index),
             "matched": matched,
             "unmatched": len(unmatched),
@@ -802,6 +1017,7 @@ class ClaudeSessionMetadataReconciler:
     async def verify(self, operation_id: str) -> dict[str, Any]:
         """Refetch AI Matrx and reread Claude, then prove each prior outcome."""
         async with self._sync_lock:
+            await self._recover_interrupted_operations()
             source = await self._db.fetchone(
                 """SELECT operation_id FROM coding_session_metadata_sync_operations
                    WHERE operation_id=?""",
@@ -809,9 +1025,6 @@ class ClaudeSessionMetadataReconciler:
             )
             if source is None:
                 raise ClaudeTitleSyncBlocked("unknown_operation")
-            verification_id = await self._start_operation(
-                mode="verify", parent_operation_id=operation_id
-            )
             identities = await self._identities()
             by_id = {
                 str(item["provider_session_id"]): item
@@ -819,11 +1032,16 @@ class ClaudeSessionMetadataReconciler:
                 if isinstance(item.get("provider_session_id"), str)
             }
             index, index_totals = self._index_reader()
+            if _index_incomplete(index_totals):
+                raise ClaudeTitleSyncBlocked("claude_index_incomplete")
             sent = await self._sent_digests()
             previous = await self._db.fetchall(
                 """SELECT * FROM coding_session_metadata_sync_rows
                    WHERE operation_id=? ORDER BY session_ref""",
                 (operation_id,),
+            )
+            verification_id = await self._start_operation(
+                mode="verify", parent_operation_id=operation_id
             )
             verified = acknowledged = pending = failed = 0
             for prior in previous:
@@ -932,7 +1150,7 @@ class ClaudeSessionMetadataReconciler:
                     await self._db.execute(
                         """UPDATE coding_session_title_push_intents
                            SET status=?, updated_at=? WHERE intent_id=?""",
-                        (state, datetime.now(tz=UTC).isoformat(), intent_id),
+                        (state, _utc_now(), intent_id),
                     )
                 await self._db.commit()
 
@@ -954,12 +1172,26 @@ class ClaudeSessionMetadataReconciler:
     async def retry_push_intent(self, intent_id: str) -> dict[str, Any]:
         """Retry one durable write/convergence intent with fresh local fences."""
         async with self._sync_lock:
+            await self._recover_interrupted_operations()
             intent = await self._db.fetchone(
                 """SELECT * FROM coding_session_title_push_intents WHERE intent_id=?""",
                 (intent_id,),
             )
             if intent is None:
                 raise ClaudeTitleSyncBlocked("unknown_push_intent")
+            if str(intent["status"]) == "verified":
+                proof = await self._db.fetchone(
+                    """SELECT rows.operation_id
+                       FROM coding_session_metadata_sync_rows AS rows
+                       JOIN coding_session_metadata_sync_operations AS operations
+                         ON operations.operation_id = rows.operation_id
+                       WHERE rows.write_intent_id=? AND rows.state='verified'
+                       ORDER BY operations.started_at DESC LIMIT 1""",
+                    (intent_id,),
+                )
+                if proof is not None:
+                    return await self.operation(str(proof["operation_id"]))
+                raise ClaudeTitleSyncBlocked("push_intent_already_verified")
             identities = await self._identities()
             identity = next(
                 (
@@ -972,13 +1204,17 @@ class ClaudeSessionMetadataReconciler:
             if identity is None:
                 raise ClaudeTitleSyncBlocked("binding_no_longer_available")
             index, index_totals = self._index_reader()
+            if _index_incomplete(index_totals):
+                raise ClaudeTitleSyncBlocked("claude_index_incomplete")
             entry = index.get(str(intent["cli_session_id"]))
             if entry is None:
                 raise ClaudeTitleSyncBlocked("local_session_not_found")
+            title = str(intent["desired_title"])
+            if len(title) > MAX_TITLE_CHARS:
+                raise ClaudeTitleSyncBlocked("title_exceeds_claude_limit")
             retry_id = await self._start_operation(
                 mode="retry", parent_operation_id=str(intent["operation_id"])
             )
-            title = str(intent["desired_title"])
             result = self._writer.write_title(
                 cli_session_id=entry.cli_session_id,
                 title=title,
@@ -987,10 +1223,23 @@ class ClaudeSessionMetadataReconciler:
             payload = json.loads(str(intent["desired_payload_json"]))
             receipt_id: int | None = None
             state = "failed"
+            enqueue_error: str | None = None
             if result.applied:
-                await self._record_pushed(
-                    str(intent["provider_session_id"]), title_sha256(title)
+                outcome = {
+                    **result.summary(),
+                    "copies": [
+                        {"status": item.status, "detail": item.detail}
+                        for item in result.outcomes
+                    ],
+                }
+                await self._db.execute(
+                    """UPDATE coding_session_title_push_intents SET
+                           status='local_write_succeeded',
+                           copy_outcomes_json=?, error_message=NULL,
+                           updated_at=? WHERE intent_id=?""",
+                    (json.dumps(outcome, sort_keys=True), _utc_now(), intent_id),
                 )
+                await self._db.commit()
                 request = session_metadata_request(
                     provider_session_id=str(intent["provider_session_id"]),
                     provider_project_key=(
@@ -1000,28 +1249,43 @@ class ClaudeSessionMetadataReconciler:
                     ),
                     payload=payload,
                 )
-                receipt = await (
-                    self._outbox or get_coding_session_bridge_outbox()
-                ).enqueue(request)
-                receipt_id = receipt.receipt_id
-                state = "enqueued"
-            outcome = {
-                **result.summary(),
-                "copies": [
-                    {"status": item.status, "detail": item.detail}
-                    for item in result.outcomes
-                ],
-            }
+                try:
+                    receipt = await (
+                        self._outbox or get_coding_session_bridge_outbox()
+                    ).enqueue(request)
+                except Exception as exc:
+                    enqueue_error = str(exc)
+                    state = "failed"
+                else:
+                    receipt_id = receipt.receipt_id
+                    state = "enqueued"
+                    await self._record_pushed(
+                        str(intent["provider_session_id"]), title_sha256(title)
+                    )
+            else:
+                outcome = {
+                    **result.summary(),
+                    "copies": [
+                        {"status": item.status, "detail": item.detail}
+                        for item in result.outcomes
+                    ],
+                }
             await self._db.execute(
                 """UPDATE coding_session_title_push_intents SET
                        status=?, receipt_id=?, copy_outcomes_json=?,
                        error_message=?, updated_at=? WHERE intent_id=?""",
                 (
-                    "convergence_queued" if result.applied else "refused",
+                    (
+                        "convergence_queued"
+                        if result.applied and enqueue_error is None
+                        else "enqueue_failed"
+                        if result.applied
+                        else "refused"
+                    ),
                     receipt_id,
                     json.dumps(outcome, sort_keys=True),
-                    None if result.applied else "one_or_more_copies_refused",
-                    datetime.now(tz=UTC).isoformat(),
+                    enqueue_error if result.applied else "one_or_more_copies_refused",
+                    _utc_now(),
                     intent_id,
                 ),
             )
@@ -1042,20 +1306,21 @@ class ClaudeSessionMetadataReconciler:
             await self._db.commit()
             await self._finish_operation(
                 retry_id,
-                status="completed" if result.applied else "partial",
+                status="completed" if state == "enqueued" else "partial",
                 bound_sessions=1,
                 compared_sessions=1,
                 detected_sessions=1,
-                enqueued_sessions=int(result.applied),
+                enqueued_sessions=int(state == "enqueued"),
                 acknowledged_sessions=0,
                 verified_sessions=0,
-                failed_sessions=int(not result.applied),
+                failed_sessions=int(state != "enqueued"),
                 index_totals=index_totals,
                 index_writable=_record_paths_writable(index),
             )
             return await self.operation(retry_id)
 
     async def status(self) -> dict[str, Any]:
+        await self._recover_interrupted_operations()
         index, index_totals = self._index_reader()
         sync = await self._sync_meta.get_last_sync("claude_session_metadata")
         row = await self._db.fetchone(
@@ -1082,7 +1347,7 @@ class ClaudeSessionMetadataReconciler:
             "index_records": index_totals["records"],
             "index_unreadable": index_totals.get("unreadable", 0),
             "index_limit": MAX_INDEX_FILES,
-            "index_limit_reached": index_totals["files"] >= MAX_INDEX_FILES,
+            "index_limit_reached": _index_truncated(index_totals),
             "synced_sessions": int(row["n"]) if row else 0,
             "acknowledged_sessions": int(row["n"]) if row else 0,
             "latest_operation": dict(latest) if latest is not None else None,

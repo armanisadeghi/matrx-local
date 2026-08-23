@@ -314,7 +314,7 @@ async def sync_claude_labels(
 async def claude_label_operation(
     operation_id: str,
     limit: int = Query(default=200, ge=1, le=200),
-    after_session_ref: str | None = Query(default=None, min_length=1, max_length=64),
+    after_session_ref: str | None = Query(default=None, min_length=1, max_length=512),
 ) -> dict[str, object]:
     """Page the exact per-session evidence for one preview/apply/verify pass."""
     try:

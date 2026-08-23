@@ -193,9 +193,10 @@ def read_session_index(
     paths: dict[str, list[Path]] = {}
     if not sessions_root.exists() or not sessions_root.is_dir():
         return entries, totals
-    for path in sorted(sessions_root.rglob("local_*.json")):
-        if totals["files"] >= MAX_INDEX_FILES:
-            break
+    candidates = sorted(sessions_root.rglob("local_*.json"))
+    if len(candidates) > MAX_INDEX_FILES:
+        totals["truncated"] = 1
+    for path in candidates[:MAX_INDEX_FILES]:
         try:
             info = path.lstat()
         except OSError:

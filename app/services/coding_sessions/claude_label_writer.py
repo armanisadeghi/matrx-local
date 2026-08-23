@@ -128,7 +128,9 @@ class LabelWriteResult:
         }
 
 
-def _serializer_for(record: dict[str, Any], raw: bytes) -> tuple[tuple[str, str], bool] | None:
+def _serializer_for(
+    record: dict[str, Any], raw: bytes
+) -> tuple[tuple[str, str], bool] | None:
     """The exact serialization that reproduces ``raw``, or ``None``."""
     for separators, ensure_ascii in _SERIALIZERS:
         candidate = json.dumps(
@@ -147,6 +149,16 @@ def _fence(path: Path) -> tuple[int, int] | None:
     if not stat.S_ISREG(info.st_mode):
         return None
     return info.st_size, info.st_mtime_ns
+
+
+def _writable(path: Path) -> bool:
+    """Prove the current app user can open the exact record for writing."""
+    try:
+        descriptor = os.open(path, os.O_WRONLY)
+    except OSError:
+        return False
+    os.close(descriptor)
+    return True
 
 
 class ClaudeSessionIndexWriter:
@@ -176,7 +188,9 @@ class ClaudeSessionIndexWriter:
             title=cleaned,
             written=sum(1 for o in outcomes if o.status == "written"),
             unchanged=sum(1 for o in outcomes if o.status == "unchanged"),
-            refused=sum(1 for o in outcomes if o.status not in {"written", "unchanged"}),
+            refused=sum(
+                1 for o in outcomes if o.status not in {"written", "unchanged"}
+            ),
             outcomes=tuple(outcomes),
         )
         if result.refused:
@@ -193,6 +207,8 @@ class ClaudeSessionIndexWriter:
         before = _fence(path)
         if before is None:
             return RecordWriteOutcome(path, "missing")
+        if not _writable(path):
+            return RecordWriteOutcome(path, "not_writable")
         if before[0] > MAX_RECORD_BYTES:
             return RecordWriteOutcome(path, "oversize")
         try:
@@ -236,7 +252,9 @@ class ClaudeSessionIndexWriter:
         self, path: Path, payload: bytes, *, fence: tuple[int, int], digest: bytes
     ) -> RecordWriteOutcome:
         directory = path.parent
-        handle, temp_name = tempfile.mkstemp(dir=directory, prefix=".matrx-", suffix=".json")
+        handle, temp_name = tempfile.mkstemp(
+            dir=directory, prefix=".matrx-", suffix=".json"
+        )
         temp_path = Path(temp_name)
         try:
             with os.fdopen(handle, "wb") as stream:

@@ -34,6 +34,7 @@ import type {
   ClaudeCaptureStatus,
   ClaudeCaptureReconcileResult,
   ClaudeHistoryImportResult,
+  ClaudeHistoryChangeType,
   ClaudeHistoryInventoryPage,
   ClaudeHistoryReview,
   ClaudeHistoryStatus,
@@ -108,6 +109,8 @@ export function ClaudeHistorySync() {
   }, [setSearchParams]);
   const [preview, setPreview] = useState<ClaudeHistoryReview | null>(null);
   const [historyPage, setHistoryPage] = useState<ClaudeHistoryInventoryPage | null>(null);
+  const [historyFocus, setHistoryFocus] = useState<{ token: number; change?: ClaudeHistoryChangeType; availability?: "all" | "available" | "blocked" }>();
+  const [showScanScope, setShowScanScope] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -120,6 +123,7 @@ export function ClaudeHistorySync() {
   const [labelResult, setLabelResult] = useState<ClaudeLabelSyncResult | null>(null);
   const [labelSyncing, setLabelSyncing] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
+  const [showLabelStatusDetails, setShowLabelStatusDetails] = useState(false);
   const [bridgeStatus, setBridgeStatus] = useState<CodingSessionBridgeStatus | null>(null);
   const [providerReadiness, setProviderReadiness] = useState<CodingSessionProviderReadinessStatus | null>(null);
   const [captureStatus, setCaptureStatus] = useState<ClaudeCaptureStatus | null>(null);
@@ -427,11 +431,12 @@ export function ClaudeHistorySync() {
           {preview && (
             <CardContent className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <Summary label="Sessions present" value={preview.scan.present_count.toLocaleString()} />
-                <Summary label="Files examined" value={preview.scan.file_count.toLocaleString()} />
-                <Summary label="Stored locally" value={formatBytes(preview.scan.total_bytes)} />
-                <Summary label="Projects" value={preview.scan.project_count.toLocaleString()} />
+                <Summary label="Sessions present" value={preview.scan.present_count.toLocaleString()} onClick={() => setHistoryFocus({ token: Date.now() })} />
+                <Summary label="Files examined" value={preview.scan.file_count.toLocaleString()} onClick={() => setShowScanScope((value) => !value)} />
+                <Summary label="Stored locally" value={formatBytes(preview.scan.total_bytes)} onClick={() => setShowScanScope((value) => !value)} />
+                <Summary label="Projects" value={preview.scan.project_count.toLocaleString()} onClick={() => setShowScanScope((value) => !value)} />
               </div>
+              {showScanScope && <div className="rounded-md border p-3 text-sm"><p className="font-medium">Exact review scope</p><dl className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2"><div><dt className="font-medium text-foreground">Review ID</dt><dd className="font-mono">{preview.scan.scan_id}</dd></div><div><dt className="font-medium text-foreground">Completed</dt><dd>{formatDate(preview.scan.completed_at)}</dd></div><div><dt className="font-medium text-foreground">Transcript files examined</dt><dd>{preview.scan.file_count.toLocaleString()}</dd></div><div><dt className="font-medium text-foreground">Bytes represented</dt><dd>{preview.scan.total_bytes.toLocaleString()} bytes ({formatBytes(preview.scan.total_bytes)})</dd></div><div><dt className="font-medium text-foreground">Projects represented</dt><dd>{preview.scan.project_count.toLocaleString()}</dd></div><div><dt className="font-medium text-foreground">Rows retained</dt><dd>{preview.scan.session_count.toLocaleString()}</dd></div></dl></div>}
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 {preview.account_identity_available ? (
                   <Badge variant="secondary">
@@ -458,9 +463,7 @@ export function ClaudeHistorySync() {
               {reviewChanges && (
                 <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3" role="status">
                   <p className="font-medium">What this review found</p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {reviewChanges.new.toLocaleString()} new · {reviewChanges.contentChanged.toLocaleString()} transcript changes · {reviewChanges.metadataChanged.toLocaleString()} detail changes · {reviewChanges.missing.toLocaleString()} missing locally · {reviewChanges.unchanged.toLocaleString()} unchanged · {reviewChanges.blocked.toLocaleString()} blocked
-                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => setHistoryFocus({ token: Date.now(), change: "new" })}>{reviewChanges.new.toLocaleString()} new</Button><Button size="sm" variant="outline" onClick={() => setHistoryFocus({ token: Date.now(), change: "content_changed" })}>{reviewChanges.contentChanged.toLocaleString()} transcript changes</Button><Button size="sm" variant="outline" onClick={() => setHistoryFocus({ token: Date.now(), change: "metadata_changed" })}>{reviewChanges.metadataChanged.toLocaleString()} detail changes</Button><Button size="sm" variant="outline" onClick={() => setHistoryFocus({ token: Date.now(), change: "missing" })}>{reviewChanges.missing.toLocaleString()} missing locally</Button><Button size="sm" variant="outline" onClick={() => setHistoryFocus({ token: Date.now(), change: "unchanged" })}>{reviewChanges.unchanged.toLocaleString()} unchanged</Button><Button size="sm" variant="outline" onClick={() => setHistoryFocus({ token: Date.now(), availability: "blocked" })}>{reviewChanges.blocked.toLocaleString()} blocked</Button></div>
                   <p className="mt-1 text-xs text-muted-foreground">
                     Durable review {preview.scan.scan_id} completed {formatDate(preview.scan.completed_at)} against {preview.scan.previous_scan_id ? `review ${preview.scan.previous_scan_id}` : "the first recorded baseline"}.
                   </p>
@@ -486,6 +489,7 @@ export function ClaudeHistorySync() {
                 selected={selected}
                 onSelectedChange={setSelected}
                 onPageRowsChange={setHistoryPage}
+                {...(historyFocus ? { focusFilter: historyFocus } : {})}
                 disabled={syncing}
               />
               <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background/95 p-3 backdrop-blur">
@@ -564,21 +568,26 @@ export function ClaudeHistorySync() {
                 <Summary
                   label="Claude sessions on this Mac"
                   value={labelStatus.index_records.toLocaleString()}
+                  onClick={() => setShowLabelStatusDetails((value) => !value)}
                 />
                 <Summary
                   label="Sessions with a recorded cloud settlement"
                   value={(labelStatus.acknowledged_sessions ?? labelStatus.synced_sessions).toLocaleString()}
+                  onClick={() => setShowLabelStatusDetails((value) => !value)}
                 />
                 <Summary
                   label="Claude indexes previously written"
                   value={labelStatus.pushed_sessions.toLocaleString()}
+                  onClick={() => setShowLabelStatusDetails((value) => !value)}
                 />
                 <Summary
                   label="Index files read"
                   value={labelStatus.index_files.toLocaleString()}
+                  onClick={() => setShowLabelStatusDetails((value) => !value)}
                 />
               </div>
             )}
+            {showLabelStatusDetails && labelStatus && <div className="rounded-md border p-3 text-sm"><p className="font-medium">Session details synchronization evidence</p><dl className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2"><div><dt className="font-medium text-foreground">Index records available</dt><dd>{labelStatus.index_records.toLocaleString()}</dd></div><div><dt className="font-medium text-foreground">Index files read</dt><dd>{labelStatus.index_files.toLocaleString()} · {labelStatus.index_unreadable?.toLocaleString() ?? 0} unreadable</dd></div><div><dt className="font-medium text-foreground">Cloud settlements recorded</dt><dd>{(labelStatus.acknowledged_sessions ?? labelStatus.synced_sessions).toLocaleString()}</dd></div><div><dt className="font-medium text-foreground">Claude indexes previously written</dt><dd>{labelStatus.pushed_sessions.toLocaleString()}</dd></div><div><dt className="font-medium text-foreground">Index write check</dt><dd>{labelStatus.index_writable ? "Writable now" : "Not writable now"}</dd></div><div><dt className="font-medium text-foreground">Pending write intents by state</dt><dd>{labelStatus.push_intents_by_state ? Object.entries(labelStatus.push_intents_by_state).map(([state, count]) => `${state}: ${count}`).join(" · ") || "None" : "Not reported"}</dd></div></dl><p className="mt-2 text-xs text-muted-foreground">Use Preview session detail changes to open exact per-session rows. These totals alone are not convergence proof.</p></div>}
             {labelStatus?.latest_operation && <div className="rounded-md border p-3 text-xs text-muted-foreground">Latest operation <span className="font-mono">{labelStatus.latest_operation.operation_id}</span> · {labelStatus.latest_operation.mode} · {labelStatus.latest_operation.status} · {labelStatus.latest_operation.verified_sessions.toLocaleString()} verified · {labelStatus.latest_operation.failed_sessions.toLocaleString()} failed</div>}
             {labelError && (
               <div className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
@@ -808,12 +817,8 @@ function OverviewPanel({
                         </p>
                       )}
                       <div className="mt-3 rounded-md bg-muted/30 p-2.5 text-xs text-muted-foreground">
-                        <p>
-                          Sessions represented in the current queue: {status.pending_sessions?.toLocaleString() ?? "not available"}
-                        </p>
-                        <p className="mt-1">
-                          Delivery envelopes acknowledged from this Mac: {status.acknowledged_envelopes?.toLocaleString() ?? "not available"}
-                        </p>
+                        <p>{status.pending_sessions !== undefined ? <button type="button" className="underline-offset-2 hover:underline" onClick={() => setDeliveryFilter({ state: "pending", provider })}>Sessions represented in the current queue: {status.pending_sessions.toLocaleString()} · inspect envelopes</button> : "Sessions represented in the current queue: not available"}</p>
+                        <p className="mt-1">{status.acknowledged_envelopes !== undefined ? <button type="button" className="text-left underline-offset-2 hover:underline" onClick={() => setGuidedInstruction({ label: `${PROVIDER_LABELS[provider]} acknowledgement total`, instruction: `${status.acknowledged_envelopes?.toLocaleString()} delivery envelopes from this Mac have recorded cloud acknowledgements. This is a cumulative aggregate; exact historical acknowledgement receipts were intentionally not retained by the current activity ledger, so there are no row records to show. Waiting and preserved envelope counts do retain exact rows.` })}>Delivery envelopes acknowledged from this Mac: {status.acknowledged_envelopes.toLocaleString()} · explain evidence</button> : "Delivery envelopes acknowledged from this Mac: not available"}</p>
                         <p>
                           Last event stored: {status.last_enqueue
                             ? formatDate(status.last_enqueue.at)
@@ -893,6 +898,7 @@ function OverviewPanel({
               label="3. Waiting for AI Matrx"
               detail={`${(bridgeStatus?.pending.total ?? 0).toLocaleString()} delivery envelopes waiting${bridgeStatus?.pending.payload_bytes !== undefined ? ` · ${formatBytes(bridgeStatus.pending.payload_bytes)} stored` : ""}`}
               active={Boolean(bridgeStatus?.pending.total)}
+              {...(bridgeStatus?.pending.total ? { onClick: () => setDeliveryFilter({ state: "pending" as const }) } : {})}
             />
             <PipelineStage
               label="4. Acknowledged"
@@ -1072,17 +1078,20 @@ function PipelineStage({
   label,
   detail,
   active = false,
+  onClick,
 }: {
   label: string;
   detail: string;
   active?: boolean;
+  onClick?: () => void;
 }) {
-  return (
+  const content = (
     <div className={`rounded-md border p-3 ${active ? "border-blue-500/40 bg-blue-500/5" : ""}`}>
       <p className="text-sm font-medium">{label}</p>
       <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
     </div>
   );
+  return onClick ? <button type="button" className="text-left" onClick={onClick}>{content}</button> : content;
 }
 
 function formatDate(value: string): string {

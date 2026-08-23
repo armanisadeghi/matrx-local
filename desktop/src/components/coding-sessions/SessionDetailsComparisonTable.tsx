@@ -20,6 +20,7 @@ export function SessionDetailsComparisonTable({ result, busy, onVerified }: {
   const [cursor, setCursor] = useState<string | null>(result.comparisons_truncated ? rows[rows.length - 1]?.session_ref ?? null : null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rowFilter, setRowFilter] = useState<"all" | "detected" | "enqueued" | "acknowledged" | "verified">("all");
 
   useEffect(() => {
     setRows(result.comparisons ?? []);
@@ -81,19 +82,27 @@ export function SessionDetailsComparisonTable({ result, busy, onVerified }: {
     }
   };
 
-  const stats: Array<[string, number]> = [
-    ["Compared", result.operation.compared_sessions],
-    ["Changes detected", result.operation.detected_sessions],
-    ["Stored for delivery", result.operation.enqueued_sessions],
-    ["Cloud acknowledged", result.operation.acknowledged_sessions],
-    ["Verified equal", result.operation.verified_sessions],
+  const stats: Array<[string, number, typeof rowFilter]> = [
+    ["Compared", result.operation.compared_sessions, "all"],
+    ["Changes detected", result.operation.detected_sessions, "detected"],
+    ["Stored for delivery", result.operation.enqueued_sessions, "enqueued"],
+    ["Cloud acknowledged", result.operation.acknowledged_sessions, "acknowledged"],
+    ["Verified equal", result.operation.verified_sessions, "verified"],
   ];
+  const visibleRows = rows.filter((row) => {
+    if (rowFilter === "all") return true;
+    if (rowFilter === "detected") return row.action !== "none" || row.state === "detected";
+    if (rowFilter === "enqueued") return row.receipt_id !== null || ["enqueued", "acknowledged", "verified"].includes(row.state);
+    if (rowFilter === "acknowledged") return ["acknowledged", "verified"].includes(row.state);
+    return row.state === "verified";
+  });
 
   return (
     <div className="space-y-3">
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-        {stats.map(([label, count]) => <div key={label} className="rounded-md border p-2"><p className="text-xs text-muted-foreground">{label}</p><p className="text-lg font-semibold">{count.toLocaleString()}</p></div>)}
+        {stats.map(([label, count, filter]) => <button type="button" key={label} onClick={() => setRowFilter(filter)} className={`rounded-md border p-2 text-left transition-colors hover:bg-muted/40 ${rowFilter === filter ? "border-blue-500/50 bg-blue-500/5" : ""}`}><p className="text-xs text-muted-foreground">{label} · inspect</p><p className="text-lg font-semibold">{count.toLocaleString()}</p></button>)}
       </div>
+      <p className="text-xs text-muted-foreground">Showing {visibleRows.length.toLocaleString()} matching rows from {rows.length.toLocaleString()} loaded for this operation. Summary counts cover the complete operation; load additional pages when offered.</p>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">Operation <span className="font-mono">{result.operation_id}</span> · {result.operation.status}</p>
         {!result.dry_run && <Button type="button" variant="outline" size="sm" onClick={() => void verify()} disabled={busy || loading}>{loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Reread both sides and verify</Button>}
@@ -103,9 +112,9 @@ export function SessionDetailsComparisonTable({ result, busy, onVerified }: {
         <table className="w-full min-w-[1050px] text-xs">
           <thead className="border-b bg-muted/40 text-left"><tr><th className="px-3 py-2">Session</th><th className="px-3 py-2">Field</th><th className="px-3 py-2">Claude Code</th><th className="px-3 py-2">AI Matrx before</th><th className="px-3 py-2">Chosen result</th><th className="px-3 py-2">Evidence state</th></tr></thead>
           <tbody className="divide-y">
-            {rows.flatMap((row) => row.comparisons.map((field, index) => (
+            {visibleRows.flatMap((row) => row.comparisons.map((field, index) => (
               <tr key={`${row.session_ref}-${field.field}`} className={field.equal ? "" : "bg-blue-500/5"}>
-                {index === 0 && <td rowSpan={row.comparisons.length} className="px-3 py-2 align-top font-mono"><div>{row.session_ref}</div><div className="mt-1 font-sans"><Badge variant="outline">{row.direction}</Badge></div>{row.write_intent_id && <Button type="button" variant="outline" size="sm" className="mt-2" disabled={loading} onClick={() => void retryIntent(row.write_intent_id!)}><RotateCw className="mr-1 h-3 w-3" />Retry write</Button>}</td>}
+                {index === 0 && <td rowSpan={row.comparisons.length} className="px-3 py-2 align-top font-mono"><div>{row.session_ref}</div><div className="mt-1 font-sans"><Badge variant="outline">{row.direction}</Badge></div>{row.write_intent_id && !["acknowledged", "verified"].includes(row.state) && <Button type="button" variant="outline" size="sm" className="mt-2" disabled={loading} onClick={() => void retryIntent(row.write_intent_id!)}><RotateCw className="mr-1 h-3 w-3" />Retry write</Button>}</td>}
                 <td className="px-3 py-2 font-medium">{field.field}</td>
                 <td className="max-w-64 px-3 py-2">{displaySessionDetailValue(field.local, field.local_observed)}</td>
                 <td className="max-w-64 px-3 py-2">{displaySessionDetailValue(field.ai_matrx, field.ai_matrx_observed)}</td>
@@ -113,7 +122,7 @@ export function SessionDetailsComparisonTable({ result, busy, onVerified }: {
                 {index === 0 && <td rowSpan={row.comparisons.length} className="px-3 py-2 align-top"><Badge variant={row.state === "verified" ? "secondary" : row.state === "failed" ? "destructive" : "outline"}>{row.state}</Badge><p className="mt-1 max-w-52 text-muted-foreground">{row.reason}</p>{row.receipt_id && <p className="mt-1 font-mono">Receipt #{row.receipt_id}</p>}</td>}
               </tr>
             )))}
-            {rows.length === 0 && <tr><td colSpan={6} className="p-8 text-center text-muted-foreground"><CheckCircle2 className="mx-auto mb-2 h-5 w-5" />No row-level changes were detected.</td></tr>}
+            {visibleRows.length === 0 && <tr><td colSpan={6} className="p-8 text-center text-muted-foreground"><CheckCircle2 className="mx-auto mb-2 h-5 w-5" />No loaded rows match this evidence state.</td></tr>}
           </tbody>
         </table>
       </div>

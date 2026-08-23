@@ -49,12 +49,14 @@ export function HistoryInventoryTable({
   selected,
   onSelectedChange,
   onPageRowsChange,
+  focusFilter,
   disabled,
 }: {
   review: ClaudeHistoryReview;
   selected: Set<string>;
   onSelectedChange: (next: Set<string>) => void;
   onPageRowsChange: (page: ClaudeHistoryInventoryPage) => void;
+  focusFilter?: { token: number; change?: ClaudeHistoryChangeType; availability?: "all" | "available" | "blocked" };
   disabled?: boolean;
 }) {
   const [pageData, setPageData] = useState<ClaudeHistoryInventoryPage>(review);
@@ -76,6 +78,14 @@ export function HistoryInventoryTable({
     setPageIndex(0);
     onPageRowsChange(review);
   }, [review.scan.scan_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!focusFilter) return;
+    setChangeFilter(focusFilter.change ?? "all");
+    setAvailability(focusFilter.availability ?? "all");
+    setCursors([undefined]);
+    setPageIndex(0);
+  }, [focusFilter?.token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const firstReviewPage = pageIndex === 0 && !query && availability === "all" && changeFilter === "all" && sortKey === "modified" && direction === "desc" && pageSize >= review.items.length;

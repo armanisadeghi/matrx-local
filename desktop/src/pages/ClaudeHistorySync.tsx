@@ -21,7 +21,7 @@ import {
 } from "@/components/coding-sessions/DeliveryEvidenceDialog";
 import {
   HistoryInventoryTable,
-  historyChangeCounts,
+  historyReviewCounts,
 } from "@/components/coding-sessions/HistoryInventoryTable";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge } from "@/components/ui/badge";
@@ -33,7 +33,8 @@ import type {
   ClaudeCaptureStatus,
   ClaudeCaptureReconcileResult,
   ClaudeHistoryImportResult,
-  ClaudeHistoryPreview,
+  ClaudeHistoryInventoryPage,
+  ClaudeHistoryReview,
   ClaudeHistoryStatus,
   ClaudeLabelSyncResult,
   ClaudeLabelSyncStatus,
@@ -103,8 +104,8 @@ export function ClaudeHistorySync() {
       return next;
     });
   }, [setSearchParams]);
-  const [preview, setPreview] = useState<ClaudeHistoryPreview | null>(null);
-  const [previousPreview, setPreviousPreview] = useState<ClaudeHistoryPreview | null>(null);
+  const [preview, setPreview] = useState<ClaudeHistoryReview | null>(null);
+  const [historyPage, setHistoryPage] = useState<ClaudeHistoryInventoryPage | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -255,10 +256,10 @@ export function ClaudeHistorySync() {
   };
 
   const selectedSessions = useMemo(
-    () => preview?.sessions.filter((session) =>
+    () => historyPage?.items.filter((session) =>
       selected.has(`${session.project_key}:${session.session_id}`),
     ) ?? [],
-    [preview, selected],
+    [historyPage, selected],
   );
   const selectedBytes = useMemo(
     () => selectedSessions.reduce((total, session) => total + session.bytes, 0),
@@ -270,9 +271,9 @@ export function ClaudeHistorySync() {
     setError(null);
     setResult(null);
     try {
-      const next = await engine.previewClaudeHistory(200);
-      setPreviousPreview(preview);
+      const next = await engine.reviewClaudeHistory(100);
       setPreview(next);
+      setHistoryPage(next);
       setSelected(new Set());
       await refreshStatus();
     } catch (nextError) {
@@ -282,7 +283,7 @@ export function ClaudeHistorySync() {
     }
   };
 
-  const reviewChanges = preview ? historyChangeCounts(preview, previousPreview) : null;
+  const reviewChanges = preview ? historyReviewCounts(preview) : null;
 
   const sync = async () => {
     if (!preview?.provider_account_key || selectedSessions.length === 0) return;
@@ -290,12 +291,21 @@ export function ClaudeHistorySync() {
     setError(null);
     setResult(null);
     try {
-      const next = await engine.importClaudeHistory(
+      const prepared = await engine.prepareClaudeHistorySelection(
+        preview.scan.scan_id,
         preview.provider_account_key,
         selectedSessions.map((session) => ({
           session_id: session.session_id,
           provider_project_key: session.project_key,
-          source_revision: session.source_revision!,
+          source_state: session.source_state!,
+        })),
+      );
+      const next = await engine.importClaudeHistory(
+        preview.provider_account_key,
+        prepared.prepared.map((session) => ({
+          session_id: session.session_id,
+          provider_project_key: session.project_key,
+          source_revision: session.source_revision,
         })),
       );
       setResult(next);
@@ -402,10 +412,10 @@ export function ClaudeHistorySync() {
           {preview && (
             <CardContent className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <Summary label="Sessions" value={preview.totals.session_count.toLocaleString()} />
-                <Summary label="Files" value={preview.totals.file_count.toLocaleString()} />
-                <Summary label="Stored locally" value={formatBytes(preview.totals.bytes)} />
-                <Summary label="Projects" value={preview.totals.project_count.toLocaleString()} />
+                <Summary label="Sessions present" value={preview.scan.present_count.toLocaleString()} />
+                <Summary label="Files examined" value={preview.scan.file_count.toLocaleString()} />
+                <Summary label="Stored locally" value={formatBytes(preview.scan.total_bytes)} />
+                <Summary label="Projects" value={preview.scan.project_count.toLocaleString()} />
               </div>
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 {preview.account_identity_available ? (
@@ -430,20 +440,19 @@ export function ClaudeHistorySync() {
                   <span>{blockedMessage(preview.account_blocked_reason)}</span>
                 </div>
               )}
-              {previousPreview && reviewChanges && (
+              {reviewChanges && (
                 <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3" role="status">
-                  <p className="font-medium">What changed since the previous review in this window</p>
+                  <p className="font-medium">What this review found</p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    {reviewChanges.new.toLocaleString()} new · {reviewChanges.changed.toLocaleString()} changed · {reviewChanges.unchanged.toLocaleString()} unchanged · {reviewChanges.noLongerReturned.toLocaleString()} no longer in the returned window
+                    {reviewChanges.new.toLocaleString()} new · {reviewChanges.contentChanged.toLocaleString()} transcript changes · {reviewChanges.metadataChanged.toLocaleString()} detail changes · {reviewChanges.missing.toLocaleString()} missing locally · {reviewChanges.unchanged.toLocaleString()} unchanged · {reviewChanges.blocked.toLocaleString()} blocked
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    This comparison lasts only while this page is open. Durable scan history is not yet reported by the engine.
+                    Durable review {preview.scan.scan_id} completed {formatDate(preview.scan.completed_at)} against {preview.scan.previous_scan_id ? `review ${preview.scan.previous_scan_id}` : "the first recorded baseline"}.
                   </p>
                 </div>
               )}
-              <div className={preview.truncated ? "rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm" : "rounded-md border p-3 text-sm text-muted-foreground"}>
-                The engine found {preview.totals.session_count.toLocaleString()} sessions and returned {preview.sessions.length.toLocaleString()} for this review.
-                {preview.truncated && " Older sessions are not available in this result yet; searching and sorting below applies only to the returned rows."}
+              <div className="rounded-md border p-3 text-sm text-muted-foreground">
+                The complete inventory contains {preview.scan.session_count.toLocaleString()} rows. The table queries that durable inventory on demand; search and filters are not limited to the first page.
               </div>
             </CardContent>
           )}
@@ -458,10 +467,10 @@ export function ClaudeHistorySync() {
             </CardHeader>
             <CardContent className="space-y-4">
               <HistoryInventoryTable
-                preview={preview}
-                previousPreview={previousPreview}
+                review={preview}
                 selected={selected}
                 onSelectedChange={setSelected}
+                onPageRowsChange={setHistoryPage}
                 disabled={syncing}
               />
               <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background/95 p-3 backdrop-blur">

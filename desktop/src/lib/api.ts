@@ -285,6 +285,76 @@ export interface ClaudeHistoryPreview {
   truncated: boolean;
 }
 
+export type ClaudeHistoryChangeType =
+  | "new"
+  | "content_changed"
+  | "metadata_changed"
+  | "missing"
+  | "unchanged";
+
+export interface ClaudeHistoryInventoryRow extends ClaudeHistorySessionPreview {
+  present: boolean;
+  change_type: ClaudeHistoryChangeType;
+  source_state: string | null;
+  title_source: string | null;
+  is_pinned: boolean | null;
+  pinned_rank: number | null;
+  category: string | null;
+}
+
+export interface ClaudeHistoryInventoryPage {
+  scan_id: string;
+  items: ClaudeHistoryInventoryRow[];
+  page: {
+    returned: number;
+    total: number;
+    has_more: boolean;
+    next_cursor: string | null;
+  };
+  facets?: { projects: string[]; branches: string[] };
+}
+
+export interface ClaudeHistoryReview extends ClaudeHistoryInventoryPage {
+  schema_version: 2;
+  source: "claude_local_jsonl";
+  scan: {
+    scan_id: string;
+    previous_scan_id: string | null;
+    status: "completed";
+    started_at: string;
+    completed_at: string;
+    session_count: number;
+    present_count: number;
+    new_count: number;
+    content_changed_count: number;
+    metadata_changed_count: number;
+    missing_count: number;
+    unchanged_count: number;
+    blocked_count: number;
+    file_count: number;
+    project_count: number;
+    total_bytes: number;
+  };
+  account_identity_available: boolean;
+  provider_account_key: string | null;
+  provider_account_key_version: 2;
+  account_fingerprint: string | null;
+  provider_account_label: string | null;
+  provider_account_display_identity: string | null;
+  account_identity_observed_at: string;
+  account_blocked_reason: string | null;
+  claude_client_version: string | null;
+  matrx_user_available: boolean;
+  import_ready: boolean;
+  limits: {
+    page_size_max: number;
+    selected_sessions: number;
+    import_bytes: number;
+    line_bytes: number;
+  };
+  facets: { projects: string[]; branches: string[] };
+}
+
 export interface ClaudeHistoryImportResult {
   schema_version: 1;
   accepted: true;
@@ -2369,6 +2439,49 @@ class EngineAPI {
     return this.request<ClaudeHistoryPreview>(
       `/coding-session/claude/history/preview?limit=${encodeURIComponent(limit)}`,
     );
+  }
+
+  async reviewClaudeHistory(limit = 100): Promise<ClaudeHistoryReview> {
+    return this.request(`/coding-session/claude/history/review?limit=${encodeURIComponent(limit)}`, { method: "POST" });
+  }
+
+  async getClaudeHistoryInventoryPage(scanId: string, filters: {
+    cursor?: string;
+    limit?: number;
+    search?: string;
+    changeTypes?: ClaudeHistoryChangeType[];
+    project?: string;
+    branch?: string;
+    archived?: boolean;
+    importable?: boolean;
+    includeMissing?: boolean;
+    sort?: "modified" | "title" | "project" | "bytes" | "change";
+    direction?: "asc" | "desc";
+  }): Promise<ClaudeHistoryInventoryPage> {
+    const query = new URLSearchParams({ limit: String(filters.limit ?? 50) });
+    if (filters.cursor) query.set("cursor", filters.cursor);
+    if (filters.search) query.set("search", filters.search);
+    filters.changeTypes?.forEach((value) => query.append("change_type", value));
+    if (filters.project) query.set("project", filters.project);
+    if (filters.branch) query.set("branch", filters.branch);
+    if (filters.archived !== undefined) query.set("archived", String(filters.archived));
+    if (filters.importable !== undefined) query.set("importable", String(filters.importable));
+    if (filters.includeMissing) query.set("include_missing", "true");
+    if (filters.sort) query.set("sort", filters.sort);
+    if (filters.direction) query.set("direction", filters.direction);
+    return this.request(`/coding-session/claude/history/scans/${encodeURIComponent(scanId)}?${query.toString()}`);
+  }
+
+  async prepareClaudeHistorySelection(
+    scanId: string,
+    providerAccountKey: string,
+    sessions: Array<{ session_id: string; provider_project_key: string; source_state: string }>,
+  ): Promise<{ schema_version: 1; scan_id: string; prepared: Array<{ session_id: string; project_key: string; source_state: string; source_revision: string }> }> {
+    return this.request("/coding-session/claude/history/prepare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scan_id: scanId, provider_account_key: providerAccountKey, sessions }),
+    });
   }
 
   async importClaudeHistory(

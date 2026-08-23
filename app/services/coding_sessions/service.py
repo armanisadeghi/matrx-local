@@ -1115,13 +1115,28 @@ class CodingSessionBridgeOutbox:
                             "preserved envelope failed its integrity check"
                         )
                     request = BridgeRequest.model_validate_json(serialized)
+                    dedupe_key = _stable_delivery_key(request, expected_digest)
+                    if dedupe_key is not None:
+                        duplicate = await (
+                            await connection.execute(
+                                """SELECT id FROM coding_session_bridge_outbox
+                                   WHERE dedupe_key=?""",
+                                (dedupe_key,),
+                            )
+                        ).fetchone()
+                        if duplicate is not None:
+                            raise ValueError(
+                                "The same stable delivery envelope is already pending "
+                                f"as receipt {int(duplicate['id'])}."
+                            )
                     await connection.execute(
                         """INSERT INTO coding_session_bridge_outbox (
                                id, dedupe_key, envelope_json, envelope_sha256,
                                attempts, next_attempt_at, last_error, lane_key
-                           ) VALUES (?, NULL, ?, ?, 0, 0, NULL, ?)""",
+                           ) VALUES (?, ?, ?, ?, 0, 0, NULL, ?)""",
                         (
                             receipt_id,
+                            dedupe_key,
                             serialized,
                             expected_digest,
                             _delivery_lane_key(request),

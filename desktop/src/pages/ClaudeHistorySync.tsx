@@ -691,6 +691,7 @@ function OverviewPanel({
 }) {
   const [deliveryFilter, setDeliveryFilter] = useState<DeliveryEvidenceFilter | null>(null);
   const [guidedInstruction, setGuidedInstruction] = useState<{ label: string; instruction: string } | null>(null);
+  const [showRecoveryDetails, setShowRecoveryDetails] = useState(false);
   const capabilityLabels = {
     event_mirror: "Live events",
     historical_import: "History import",
@@ -982,6 +983,7 @@ function OverviewPanel({
               <Summary
                 label="Exhausted retries"
                 value={captureStatus.exhausted.length.toLocaleString()}
+                onClick={() => setShowRecoveryDetails((value) => !value)}
               />
             </div>
           ) : (
@@ -993,6 +995,7 @@ function OverviewPanel({
             stale={captureStale && Boolean(captureStatus)}
             refreshing={refreshing}
           />
+          {showRecoveryDetails && captureStatus && <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[700px] text-sm"><thead className="border-b bg-muted/40 text-left"><tr><th className="px-3 py-2">Session reference</th><th className="px-3 py-2">State</th><th className="px-3 py-2">Attempts</th><th className="px-3 py-2">Last result</th><th className="px-3 py-2">Stored for delivery</th></tr></thead><tbody className="divide-y">{captureStatus.exhausted.map((item) => <tr key={`exhausted-${item.session_key}`}><td className="px-3 py-2 font-mono text-xs">{item.session_key}</td><td className="px-3 py-2"><Badge variant="destructive">Exhausted</Badge></td><td className="px-3 py-2">{item.attempts}</td><td className="px-3 py-2 text-destructive">{item.last_error ?? "No error detail reported"}</td><td className="px-3 py-2">{item.enqueued_at ? formatDate(item.enqueued_at) : "Not stored"}</td></tr>)}{captureStatus.recent.map((item) => <tr key={`recent-${item.session_key}`}><td className="px-3 py-2 font-mono text-xs">{item.session_key}</td><td className="px-3 py-2"><Badge variant="outline">Recent</Badge></td><td className="px-3 py-2">{item.attempts}</td><td className="px-3 py-2">{item.last_error ?? "No error"}</td><td className="px-3 py-2">{item.enqueued_at ? formatDate(item.enqueued_at) : "Not stored"}</td></tr>)}{captureStatus.exhausted.length === 0 && captureStatus.recent.length === 0 && <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">No recovery attempts are reported.</td></tr>}</tbody></table></div>}
           {captureResult && (
             <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">
               <p className="font-medium">Recovery check finished</p>
@@ -1017,6 +1020,7 @@ function OverviewPanel({
                     : ""}
                 </p>
               )}
+              {captureResult.batch && captureResult.batch.length > 0 && <div className="mt-2 text-xs text-muted-foreground">Exact sessions selected in this pass: <span className="font-mono">{captureResult.batch.join(", ")}</span></div>}
             </div>
           )}
         </CardContent>
@@ -1081,11 +1085,12 @@ function formatDate(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-function Summary({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border p-3">
+function Summary({ label, value, onClick }: { label: string; value: string; onClick?: () => void }) {
+  const content = (
+    <div className={`rounded-md border p-3 text-left ${onClick ? "transition-colors hover:bg-muted/40" : ""}`}>
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-1 text-lg font-semibold">{value}</p>
     </div>
   );
+  return onClick ? <button type="button" onClick={onClick} aria-label={`Inspect ${label}: ${value}`}>{content}</button> : content;
 }

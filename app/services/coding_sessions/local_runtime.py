@@ -150,6 +150,7 @@ class _LocalRun:
     turns_completed: int = 0
     mirror_passes: int = 0
     mirror_error: str | None = None
+    next_sequence: int = 1
     client: Any = None
     task: asyncio.Task[None] | None = None
     events: deque[dict[str, Any]] = field(
@@ -160,12 +161,22 @@ class _LocalRun:
     )
     identity_ready: asyncio.Event = field(default_factory=asyncio.Event)
 
+    def mirror_status(self) -> str:
+        if self.mirror_error is not None:
+            return "failed"
+        if self.mirror_passes > 0:
+            return "enqueued"
+        if self.status in {"starting", "running"}:
+            return "pending"
+        return "not_started"
+
     def public_status(self) -> dict[str, Any]:
         return {
             "runtime_id": self.runtime_id,
             "session_id": self.session_id,
             "action": self.action,
             "status": self.status,
+            "execution": {"status": self.status, "error": self.error},
             "workspace": str(self.workspace),
             "prompt_preview": self.prompt_preview,
             "provider_session_id": self.provider_session_id,
@@ -180,7 +191,17 @@ class _LocalRun:
             "turns_completed": self.turns_completed,
             "mirror_passes": self.mirror_passes,
             "mirror_error": self.mirror_error,
+            "mirror": {
+                "status": self.mirror_status(),
+                "passes": self.mirror_passes,
+                "error": self.mirror_error,
+                "conversation_id": self.conversation_id,
+            },
             "event_count": len(self.events),
+            "first_event_sequence": (
+                int(self.events[0]["sequence"]) if self.events else None
+            ),
+            "last_event_sequence": self.next_sequence - 1,
         }
 
 
@@ -282,6 +303,7 @@ class LocalClaudeRuntime:
             "sdk_available": sdk_available,
             "claude_cli": str(cli) if cli else None,
             "claude_account_label": account.account_label,
+            "claude_account_display_identity": account.local_display_identity,
             "claude_client_version": account.client_version,
             "matrx_user_available": matrx_user,
             "auth_path": "user_subscription_login",
@@ -668,16 +690,31 @@ class LocalClaudeRuntime:
 
     # --------------------------------------------------------------- streaming
 
-    async def subscribe(self, runtime_id: str):
-        """Replay buffered events, then yield live events until the run ends."""
+    async def subscribe(self, runtime_id: str, *, after_sequence: int | None = None):
+        """Replay after a cursor and report when the bounded buffer has a gap."""
         run = self._runs.get(runtime_id)
         if run is None:
             raise LocalRuntimeRefused("unknown_runtime", f"No run {runtime_id}")
         queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(
             maxsize=_SUBSCRIBER_QUEUE_MAX
         )
-        for event in list(run.events):
-            queue.put_nowait(event)
+        buffered = list(run.events)
+        if after_sequence is not None and buffered:
+            earliest = int(buffered[0]["sequence"])
+            latest = int(buffered[-1]["sequence"])
+            if after_sequence < earliest - 1:
+                queue.put_nowait(
+                    {
+                        "event": "stream_gap",
+                        "requested_after": after_sequence,
+                        "earliest_available": earliest,
+                        "latest_available": latest,
+                        "resync_required": True,
+                    }
+                )
+        for event in buffered:
+            if after_sequence is None or int(event["sequence"]) > after_sequence:
+                queue.put_nowait(event)
         if run.status in {"completed", "failed", "cancelled"}:
             queue.put_nowait(None)
         else:
@@ -693,10 +730,14 @@ class LocalClaudeRuntime:
                 run.subscribers.remove(queue)
 
     def _emit(self, run: _LocalRun, event: dict[str, Any]) -> None:
-        run.events.append(event)
+        sequenced = dict(event)
+        sequenced["sequence"] = run.next_sequence
+        sequenced["emitted_at"] = datetime.now(tz=UTC).isoformat()
+        run.next_sequence += 1
+        run.events.append(sequenced)
         for queue in list(run.subscribers):
             try:
-                queue.put_nowait(event)
+                queue.put_nowait(sequenced)
             except asyncio.QueueFull:
                 # A stalled consumer must never stall the run; it can re-attach
                 # and replay the bounded buffer.
@@ -705,8 +746,10 @@ class LocalClaudeRuntime:
 
     def _finish_subscribers(self, run: _LocalRun) -> None:
         for queue in list(run.subscribers):
-            with contextlib.suppress(asyncio.QueueFull):
-                queue.put_nowait(None)
+            if queue.full():
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    queue.get_nowait()
+            queue.put_nowait(None)
         run.subscribers.clear()
 
     # --------------------------------------------------------------- execution
@@ -821,16 +864,34 @@ class LocalClaudeRuntime:
                     exc_info=True,
                 )
         finally:
-            run.ended_at = time.time()
-            # Final mirror so the ledger holds the settle state even when the
-            # run failed or was cancelled mid-turn.
+            await self._settle_run(run)
+
+    async def _settle_run(self, run: _LocalRun) -> None:
+        """Mirror best-effort, then always publish the execution terminal."""
+        run.ended_at = time.time()
+        try:
             await self._mirror(run, final=True)
+        except BaseException as exc:  # cancellation must not suppress terminal state
+            run.mirror_error = str(exc)
+            logger.error(
+                "[local_runtime] final mirror crashed for %s: %s",
+                run.runtime_id,
+                exc,
+                exc_info=True,
+            )
+        finally:
             self._emit(
                 run,
                 {
                     "event": "runtime_finished",
                     "runtime_id": run.runtime_id,
                     "status": run.status,
+                    "execution": {"status": run.status, "error": run.error},
+                    "mirror": {
+                        "status": run.mirror_status(),
+                        "passes": run.mirror_passes,
+                        "error": run.mirror_error,
+                    },
                     "session_id": run.session_id,
                     "conversation_id": run.conversation_id,
                     "error": run.error,

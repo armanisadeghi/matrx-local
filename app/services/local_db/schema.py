@@ -1153,6 +1153,44 @@ CREATE INDEX IF NOT EXISTS idx_coding_session_history_rows_change
 ON coding_session_history_scan_rows(scan_id, change_type, last_modified_ns DESC);
 """
 
+# One durable envelope can carry many native transcript entries. Counts in the
+# delivery inspector must distinguish envelopes from logical items without
+# JSON-parsing the payload column during every status request.
+_V28_CODING_SESSION_BRIDGE_QUEUE_ITEM_COUNT = """
+ALTER TABLE coding_session_bridge_queue_metadata
+ADD COLUMN item_count INTEGER NOT NULL DEFAULT 1;
+
+UPDATE coding_session_bridge_queue_metadata
+SET item_count = CASE
+    WHEN queue_state = 'pending' THEN COALESCE((
+        SELECT CASE
+            WHEN json_valid(outbox.envelope_json)
+             AND json_type(outbox.envelope_json, '$.entries') = 'array'
+                THEN json_array_length(outbox.envelope_json, '$.entries')
+            WHEN json_valid(outbox.envelope_json)
+             AND json_type(outbox.envelope_json, '$.hook_event') = 'object'
+                THEN 1
+            ELSE 0
+        END
+        FROM coding_session_bridge_outbox AS outbox
+        WHERE outbox.id = coding_session_bridge_queue_metadata.receipt_id
+    ), 0)
+    ELSE COALESCE((
+        SELECT CASE
+            WHEN json_valid(preserved.envelope_json)
+             AND json_type(preserved.envelope_json, '$.entries') = 'array'
+                THEN json_array_length(preserved.envelope_json, '$.entries')
+            WHEN json_valid(preserved.envelope_json)
+             AND json_type(preserved.envelope_json, '$.hook_event') = 'object'
+                THEN 1
+            ELSE 0
+        END
+        FROM coding_session_bridge_quarantine AS preserved
+        WHERE preserved.id = coding_session_bridge_queue_metadata.receipt_id
+    ), 0)
+END;
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1181,4 +1219,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (25, _V25_CODING_SESSION_BRIDGE_DELIVERY_LANES),
     (26, _V26_CODING_SESSION_BRIDGE_QUEUE_METADATA),
     (27, _V27_CODING_SESSION_HISTORY_SCANS),
+    (28, _V28_CODING_SESSION_BRIDGE_QUEUE_ITEM_COUNT),
 ]

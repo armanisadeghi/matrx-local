@@ -255,10 +255,88 @@ async def test_migration_creates_dedicated_local_outbox(
         "SELECT version FROM _migrations WHERE version = 26"
     )
     assert metadata_migration and metadata_migration["version"] == 26
+    item_count_migration = await bridge_db.fetchone(
+        "SELECT version FROM _migrations WHERE version = 28"
+    )
+    assert item_count_migration and item_count_migration["version"] == 28
     outbox_columns = await bridge_db.fetchall(
         "PRAGMA table_info(coding_session_bridge_outbox)"
     )
     assert "lane_key" in {row["name"] for row in outbox_columns}
+    metadata_columns = await bridge_db.fetchall(
+        "PRAGMA table_info(coding_session_bridge_queue_metadata)"
+    )
+    assert "item_count" in {row["name"] for row in metadata_columns}
+
+
+@pytest.mark.anyio
+async def test_delivery_envelope_details_are_paginated_safe_and_actionable(
+    bridge_db: LocalDatabase,
+) -> None:
+    service = CodingSessionBridgeOutbox(db=bridge_db, cloud_enabled=False)
+    native = await service.enqueue(_native_import())
+    hook = await service.enqueue(_hook(provider="codex", stable_id="safe-detail"))
+
+    first = await service.delivery_envelopes(queue_state="pending", limit=1)
+
+    assert first["terminology"] == "delivery_envelopes"
+    assert first["total"] == 2
+    assert first["has_more"] is True
+    assert first["next_cursor"] == native.receipt_id
+    assert first["items"][0]["item_count"] == 1
+    assert first["items"][0]["actions"] == {
+        "retry": True,
+        "discard": True,
+        "discard_requires_confirmation": True,
+    }
+    serialized = json.dumps(first)
+    assert "claude-sdk:project:session" not in serialized
+
+    second = await service.delivery_envelopes(
+        queue_state="pending",
+        limit=10,
+        after_receipt_id=first["next_cursor"],
+        provider="codex",
+    )
+    assert [item["receipt_id"] for item in second["items"]] == [hook.receipt_id]
+    assert second["items"][0]["created_at"].endswith("Z")
+
+    preview = await service.discard_delivery_envelope(hook.receipt_id, confirmed=False)
+    assert preview["confirmation_required"] is True
+    assert preview["discarded"] is False
+    assert await service.pending_count() == 2
+    discarded = await service.discard_delivery_envelope(hook.receipt_id, confirmed=True)
+    assert discarded["discarded"] is True
+    assert await service.pending_count() == 1
+
+
+@pytest.mark.anyio
+async def test_one_preserved_envelope_can_be_retried_without_touching_others(
+    bridge_db: LocalDatabase,
+) -> None:
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=FakeClient([AIDreamError(409, '{"error":"entry_mutated"}')]),
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    receipt = await service.enqueue(_hook(stable_id="preserved-retry"))
+    await service.sync_pending()
+    assert await service.quarantined_count() == 1
+
+    result = await service.retry_delivery_envelope(receipt.receipt_id)
+
+    assert result == {
+        "receipt_id": receipt.receipt_id,
+        "previous_state": "quarantine",
+        "state": "pending",
+        "retry_requested": True,
+    }
+    assert await service.quarantined_count() == 0
+    assert await service.pending_count() == 1
+    detail = await service.delivery_envelopes(queue_state="pending")
+    assert detail["items"][0]["attempts"] == 0
+    assert detail["items"][0]["error"] is None
 
 
 @pytest.mark.anyio

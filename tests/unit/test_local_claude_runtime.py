@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections import deque
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -56,7 +57,13 @@ class _FakeSettings:
 
 async def _account() -> _AccountSnapshot:
     return _AccountSnapshot(
-        True, "a" * 64, "a" * 12, "2.1.228", None, account_label="a***n@t***.com"
+        True,
+        "a" * 64,
+        "a" * 12,
+        "2.1.228",
+        None,
+        account_label="a***n@t***.com",
+        local_display_identity="arman@test.com",
     )
 
 
@@ -123,6 +130,15 @@ async def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 # --------------------------------------------------------------------- gates
+
+
+async def test_capabilities_show_full_account_only_in_local_display_field(env) -> None:
+    runtime, *_ = env
+
+    capabilities = await runtime.capabilities()
+
+    assert capabilities["claude_account_display_identity"] == "arman@test.com"
+    assert capabilities["claude_account_label"] == "a***n@t***.com"
 
 
 async def test_workspace_outside_allowlist_is_refused(env, tmp_path: Path) -> None:
@@ -461,6 +477,67 @@ async def test_mirror_pass_lands_exact_append_native_batches_in_outbox(env) -> N
     await runtime._mirror(run)
     assert run.mirror_passes == 2
     assert run.mirror_error is None
+
+
+async def test_final_mirror_failure_cannot_hide_execution_terminal(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, _outbox, _config, workspace_root, _settings, _db = env
+    run = _LocalRun(
+        runtime_id="rt-terminal",
+        session_id=str(uuid4()),
+        workspace=workspace_root,
+        action="start",
+        status="completed",
+    )
+
+    async def _crash(_run: _LocalRun, *, final: bool = False) -> None:
+        assert final is True
+        raise RuntimeError("mirror settlement unavailable")
+
+    monkeypatch.setattr(runtime, "_mirror", _crash)
+    await runtime._settle_run(run)
+
+    terminal = run.events[-1]
+    assert terminal["event"] == "runtime_finished"
+    assert terminal["execution"] == {"status": "completed", "error": None}
+    assert terminal["mirror"] == {
+        "status": "failed",
+        "passes": 0,
+        "error": "mirror settlement unavailable",
+    }
+    assert terminal["sequence"] == 1
+    assert run.public_status()["execution"]["status"] == "completed"
+    assert run.public_status()["mirror"]["status"] == "failed"
+
+
+async def test_runtime_stream_reports_bounded_replay_gap(env) -> None:
+    runtime, _outbox, _config, workspace_root, _settings, _db = env
+    run = _LocalRun(
+        runtime_id="rt-gap",
+        session_id=str(uuid4()),
+        workspace=workspace_root,
+        action="start",
+        status="completed",
+    )
+    run.events = deque(maxlen=2)
+    runtime._runs[run.runtime_id] = run
+    runtime._emit(run, {"event": "one"})
+    runtime._emit(run, {"event": "two"})
+    runtime._emit(run, {"event": "three"})
+
+    replay = [
+        event async for event in runtime.subscribe(run.runtime_id, after_sequence=0)
+    ]
+
+    assert replay[0] == {
+        "event": "stream_gap",
+        "requested_after": 0,
+        "earliest_available": 2,
+        "latest_available": 3,
+        "resync_required": True,
+    }
+    assert [event["sequence"] for event in replay[1:]] == [2, 3]
 
 
 # ------------------------------------------------------------------ registry

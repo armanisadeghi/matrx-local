@@ -22,6 +22,7 @@ from app.services.coding_sessions.claude_history import (
     ClaudeHistoryConflict,
     ClaudeHistoryImporter,
     ClaudeHistoryImportRequest,
+    ClaudeHistoryPrepareRequest,
 )
 from app.services.coding_sessions.title_sync import (
     ClaudeSessionMetadataReconciler,
@@ -62,6 +63,68 @@ async def coding_session_delivery_status() -> dict[str, object]:
     returned from this route.
     """
     return await get_coding_session_bridge_outbox().delivery_status()
+
+
+@router.get("/delivery/envelopes")
+async def coding_session_delivery_envelopes(
+    request: Request,
+    state: str = Query(pattern="^(pending|quarantine)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    after_receipt_id: int | None = Query(default=None, ge=0),
+    provider: str | None = Query(default=None, min_length=1, max_length=64),
+    action: str | None = Query(default=None, min_length=1, max_length=64),
+    source: str | None = Query(default=None, min_length=1, max_length=128),
+    enqueue_origin: str | None = Query(default=None, min_length=1, max_length=64),
+) -> dict[str, object]:
+    """Payload-free, paginated evidence behind every delivery count."""
+    _require_loopback(request)
+    return await get_coding_session_bridge_outbox().delivery_envelopes(
+        queue_state=state,
+        limit=limit,
+        after_receipt_id=after_receipt_id,
+        provider=provider,
+        action=action,
+        source=source,
+        enqueue_origin=enqueue_origin,
+    )
+
+
+@router.post("/delivery/envelopes/{receipt_id}/retry")
+async def retry_coding_session_delivery_envelope(
+    request: Request, receipt_id: int
+) -> dict[str, object]:
+    """Make one exact waiting or preserved envelope eligible for delivery."""
+    _require_loopback(request)
+    try:
+        return await get_coding_session_bridge_outbox().retry_delivery_envelope(
+            receipt_id
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+
+
+@router.delete("/delivery/envelopes/{receipt_id}")
+async def discard_coding_session_delivery_envelope(
+    request: Request,
+    receipt_id: int,
+    confirm: bool = Query(default=False),
+) -> dict[str, object]:
+    """Preview impact first; discard one exact local copy only when confirmed."""
+    _require_loopback(request)
+    try:
+        return await get_coding_session_bridge_outbox().discard_delivery_envelope(
+            receipt_id, confirmed=confirm
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
 
 
 @router.post(
@@ -110,6 +173,89 @@ async def preview_claude_history(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/claude/history/review")
+async def review_claude_history(
+    limit: int = Query(default=100, ge=1, le=200),
+) -> dict[str, object]:
+    """Create a durable inventory snapshot and return its exact delta."""
+    try:
+        return await ClaudeHistoryImporter().review(limit=limit)
+    except ClaudeHistoryConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/claude/history/scans/{scan_id}")
+async def list_claude_history_scan(
+    scan_id: str,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=200),
+    search: str | None = Query(default=None, max_length=200),
+    change_type: list[str] = Query(default=[]),
+    project: str | None = Query(default=None, max_length=200),
+    branch: str | None = Query(default=None, max_length=200),
+    archived: bool | None = Query(default=None),
+    importable: bool | None = Query(default=None),
+    include_missing: bool = Query(default=False),
+    sort: str = Query(default="modified", pattern="^(modified|title|project|bytes|change)$"),
+    direction: str = Query(default="desc", pattern="^(asc|desc)$"),
+) -> dict[str, object]:
+    """Search, filter, sort, and page one immutable review snapshot."""
+    allowed_changes = {
+        "new",
+        "content_changed",
+        "metadata_changed",
+        "missing",
+        "unchanged",
+    }
+    if any(value not in allowed_changes for value in change_type):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Unsupported history change type",
+        )
+    try:
+        return await ClaudeHistoryImporter().inventory_page(
+            scan_id,
+            cursor=cursor,
+            limit=limit,
+            search=search,
+            change_types=tuple(change_type),
+            project=project,
+            branch=branch,
+            archived=archived,
+            importable=importable,
+            include_missing=include_missing,
+            sort=sort,
+            direction=direction,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/claude/history/prepare")
+async def prepare_claude_history_selection(
+    body: ClaudeHistoryPrepareRequest,
+) -> dict[str, object]:
+    """Hash only selected rows and return content-bound import revisions."""
+    try:
+        return await ClaudeHistoryImporter().prepare_selected(body)
+    except ClaudeHistoryConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
 
@@ -254,7 +400,9 @@ async def approve_runtime_folder(
 
 
 @router.delete("/runtime/approvals")
-async def revoke_runtime_folder(request: Request, folder: str = Query()) -> dict[str, object]:
+async def revoke_runtime_folder(
+    request: Request, folder: str = Query()
+) -> dict[str, object]:
     _require_loopback(request)
     return get_local_claude_runtime().revoke_folder(folder)
 
@@ -316,7 +464,9 @@ async def start_runtime_session(
 
 
 @router.get("/runtime/status")
-async def runtime_status(runtime_id: str | None = Query(default=None)) -> dict[str, object]:
+async def runtime_status(
+    runtime_id: str | None = Query(default=None),
+) -> dict[str, object]:
     try:
         return get_local_claude_runtime().status(runtime_id)
     except LocalRuntimeRefused as exc:
@@ -324,7 +474,9 @@ async def runtime_status(runtime_id: str | None = Query(default=None)) -> dict[s
 
 
 @router.post("/runtime/{runtime_id}/cancel")
-async def cancel_runtime_session(request: Request, runtime_id: str) -> dict[str, object]:
+async def cancel_runtime_session(
+    request: Request, runtime_id: str
+) -> dict[str, object]:
     _require_loopback(request)
     try:
         return await get_local_claude_runtime().cancel(runtime_id)
@@ -339,8 +491,11 @@ async def runtime_resumable(provider_session_id: str = Query()) -> dict[str, obj
 
 
 @router.get("/runtime/{runtime_id}/events")
-async def runtime_events(runtime_id: str):
-    """SSE stream: buffered replay, then live SDK events until the run ends."""
+async def runtime_events(
+    runtime_id: str,
+    after_sequence: int | None = Query(default=None, ge=0),
+):
+    """Cursor-aware SSE replay with an explicit gap event if history expired."""
     from fastapi.responses import StreamingResponse
     import json as _json
 
@@ -351,9 +506,12 @@ async def runtime_events(runtime_id: str):
         raise _refused(exc) from exc
 
     async def _stream():
-        async for event in runtime.subscribe(runtime_id):
-            yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
-        yield "event: done\ndata: {}\n\n"
+        async for event in runtime.subscribe(runtime_id, after_sequence=after_sequence):
+            event_id = event.get("sequence")
+            prefix = f"id: {event_id}\n" if isinstance(event_id, int) else ""
+            yield f"{prefix}data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+        final = runtime.status(runtime_id)
+        yield f"event: done\ndata: {_json.dumps(final, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         _stream(),

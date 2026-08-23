@@ -221,6 +221,17 @@ The publisher writes the digest only in the validated acknowledgement +
 outbox-delete transaction. A repeated reconciliation before that reports the
 metadata as already queued, never synchronized.
 
+Migration V28 adds `item_count` to the payload-free queue index. The overview
+therefore names and counts durable **envelopes** separately from the logical
+provider events they carry. `GET /coding-session/delivery/envelopes` paginates
+safe evidence (dimensions, opaque session correlation, size, item count,
+attempts, retry timing, and redacted failure) without exposing transcript or
+command content. One exact envelope can be retried. Discard is deliberately a
+two-step operation: the first request returns its exact impact and
+`confirmation_required`; only `confirm=true` permanently removes the local
+copy. A quarantined retry validates the preserved bytes and schema before
+atomically returning that envelope to its original ordered lane.
+
 ## Automatic capture reconciliation — backfilling what the hooks lost
 
 `capture_reconciler.py` closes the hole a non-blocking hook leaves. Every Claude
@@ -236,6 +247,14 @@ holds, a stat-only inventory of every bounded local session, and the existing
 `import_selected` → the existing outbox for whatever is missing. Only the
 bounded selected candidates are content-hashed before enqueue, while every
 byte-hashing, account-identity, and conflict rule stays the importer's.
+
+The cloud side of that diff is never a capped sample. `identity_client.py`
+walks the schema-v2 opaque keyset cursor until AI Dream reports
+`has_more=false`, `complete=true`, and the accumulated rows equal the frozen
+`total_count`. Capture reconciliation aborts without reading the local
+inventory when any page is malformed, changes snapshot totals, loops a cursor,
+or cannot prove completeness; a partial allowlist must never make a known
+session look missing.
 
 - 🚨 **THE ERA RULE — the consent boundary.** Only sessions whose local activity
   falls at or after the owner's **earliest existing binding** are backfilled:
@@ -376,6 +395,12 @@ Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding/codin
   `SessionMetadata` observation per session whose Claude labels changed. Outbound: see below. `GET
   /coding-session/claude/labels/status` reports index availability and the last pass;
   `?dry_run=true` reports without enqueueing and without opening a single Claude file.
+- **The allowlist must be complete before either direction runs.** The shared
+  `identity_client.py` consumes every schema-v2 keyset page and accepts the
+  inventory only when its final count matches the server-frozen `total_count`
+  and `complete=true`. A legacy, truncated, changing, or malformed response
+  blocks the pass; title sync never mutates Claude's files from partial cloud
+  knowledge.
 - **Pins + categories ride the same observation (2026-08-21).** The desktop app keeps pins and
   custom sidebar groups in its localStorage LevelDB, which the machine's session-sync agent
   extracts into the canonical ledger (`~/.claude/claude-code-sidebar-state.json`; see that
@@ -539,6 +564,12 @@ Claude Code's own UI, and stays locally `--resume`-able.
 - Loopback HTTP routes for the desktop UI: `/coding-session/runtime/*`
   (capabilities, approvals, start, status, cancel, resumable, SSE `/events`).
   Desktop surface: `AgentRuntimeCard` on the Claude Code history page.
+- Provider execution and AI Matrx mirroring are separate settlement outcomes.
+  A final mirror exception can never suppress `runtime_finished`; the terminal
+  event and status expose both results. Every runtime event has a monotonic
+  sequence and UTC emission time. SSE accepts `after_sequence`; if that cursor
+  predates the bounded replay buffer it emits `stream_gap` with the available
+  range so the consumer can refresh status instead of silently missing output.
 - Engine shutdown interrupts active runs (Hard Rule 0, wired in `app/main.py`).
 
 Verification: `tests/unit/test_local_claude_runtime.py` (allowlist/approval

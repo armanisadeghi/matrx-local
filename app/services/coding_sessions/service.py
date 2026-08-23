@@ -161,6 +161,32 @@ def _validated_enqueue_origin(value: str) -> str:
     return value
 
 
+def _envelope_item_count(request: BridgeRequest) -> int:
+    """Number of logical provider events carried by one durable envelope."""
+    if request.entries:
+        return len(request.entries)
+    if request.hook_event is not None:
+        return 1
+    return 0
+
+
+def _session_ref(session_key: object) -> str | None:
+    """Stable local correlation handle without exposing provider identifiers."""
+    if not isinstance(session_key, str) or not session_key:
+        return None
+    return hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:12]
+
+
+def _utc_timestamp(value: object) -> str | None:
+    """SQLite datetime('now') is UTC but lacks an offset; make that truth explicit."""
+    if value is None:
+        return None
+    text = str(value)
+    if text.endswith("Z") or re.search(r"[+-]\d\d:\d\d$", text):
+        return text
+    return f"{text.replace(' ', 'T')}Z"
+
+
 def _delivery_lane_key(request: BridgeRequest) -> str:
     """Canonical local ordering lane for one logical provider session.
 
@@ -530,6 +556,7 @@ class CodingSessionBridgeOutbox:
             ),
             session_key=request.provider_session_id or request.stream_key,
             payload_bytes=len(serialized.encode("utf-8")),
+            item_count=_envelope_item_count(request),
         )
 
         pending = await self.pending_count()
@@ -560,6 +587,7 @@ class CodingSessionBridgeOutbox:
                 str,
                 str | None,
                 int,
+                int,
             ]
         ] = []
         for request in requests:
@@ -574,6 +602,7 @@ class CodingSessionBridgeOutbox:
                     normalized_origin,
                     request.provider_session_id or request.stream_key,
                     len(serialized.encode("utf-8")),
+                    _envelope_item_count(request),
                 )
             )
         ids, duplicates_by_index = await self._commit_enqueue_many(prepared)
@@ -600,6 +629,7 @@ class CodingSessionBridgeOutbox:
                 str,
                 str | None,
                 int,
+                int,
             ]
         ],
     ) -> tuple[list[int], list[bool]]:
@@ -620,6 +650,7 @@ class CodingSessionBridgeOutbox:
                     enqueue_origin,
                     session_key,
                     payload_bytes,
+                    item_count,
                 ) in prepared:
                     if dedupe_key is None:
                         cursor = await connection.execute(
@@ -652,6 +683,7 @@ class CodingSessionBridgeOutbox:
                             enqueue_origin=enqueue_origin,
                             session_key=session_key,
                             payload_bytes=payload_bytes,
+                            item_count=item_count,
                         )
                         duplicates_by_index.append(False)
                         continue
@@ -685,6 +717,7 @@ class CodingSessionBridgeOutbox:
         enqueue_origin: str,
         session_key: str | None,
         payload_bytes: int,
+        item_count: int,
     ) -> tuple[int, bool]:
         """Use a private, FULL-sync transaction for the durable-ack boundary.
 
@@ -734,6 +767,7 @@ class CodingSessionBridgeOutbox:
                         enqueue_origin=enqueue_origin,
                         session_key=session_key,
                         payload_bytes=payload_bytes,
+                        item_count=item_count,
                     )
                 else:
                     existing_cursor = await connection.execute(
@@ -789,13 +823,14 @@ class CodingSessionBridgeOutbox:
         enqueue_origin: str,
         session_key: str | None,
         payload_bytes: int,
+        item_count: int,
     ) -> None:
         provider, action, source = dimensions
         await connection.execute(
             """INSERT INTO coding_session_bridge_queue_metadata (
                    receipt_id, queue_state, provider, action, source,
-                   enqueue_origin, session_key, payload_bytes
-               ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?)""",
+                   enqueue_origin, session_key, payload_bytes, item_count
+               ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?)""",
             (
                 receipt_id,
                 provider,
@@ -804,6 +839,7 @@ class CodingSessionBridgeOutbox:
                 enqueue_origin,
                 session_key,
                 payload_bytes,
+                item_count,
             ),
         )
 
@@ -918,6 +954,248 @@ class CodingSessionBridgeOutbox:
                 raise
         return {"discarded": discarded, "pending": await self.pending_count()}
 
+    async def delivery_envelopes(
+        self,
+        *,
+        queue_state: str,
+        limit: int = 50,
+        after_receipt_id: int | None = None,
+        provider: str | None = None,
+        action: str | None = None,
+        source: str | None = None,
+        enqueue_origin: str | None = None,
+    ) -> dict[str, Any]:
+        """Paginate payload-free envelope evidence for a user drill-down."""
+        if queue_state not in {"pending", "quarantine"}:
+            raise ValueError("queue_state must be pending or quarantine")
+        if limit < 1 or limit > 200:
+            raise ValueError("limit must be between 1 and 200")
+        table = (
+            "coding_session_bridge_outbox"
+            if queue_state == "pending"
+            else "coding_session_bridge_quarantine"
+        )
+        clauses = ["metadata.queue_state = ?"]
+        params: list[Any] = [queue_state]
+        if after_receipt_id is not None:
+            clauses.append("metadata.receipt_id > ?")
+            params.append(after_receipt_id)
+        for column, value in (
+            ("provider", provider),
+            ("action", action),
+            ("source", source),
+            ("enqueue_origin", enqueue_origin),
+        ):
+            if value is not None:
+                clauses.append(f"metadata.{column} = ?")
+                params.append(value)
+        where = " AND ".join(clauses)
+        state_columns = (
+            "state.attempts, state.next_attempt_at, state.last_error, "
+            "state.created_at AS state_created_at, NULL AS http_status, "
+            "NULL AS quarantined_at"
+            if queue_state == "pending"
+            else "state.attempts, 0 AS next_attempt_at, state.last_error, "
+            "state.original_created_at AS state_created_at, state.http_status, "
+            "state.quarantined_at"
+        )
+        rows = await self._db.fetchall(
+            f"""SELECT metadata.receipt_id, metadata.provider, metadata.action,
+                       metadata.source, metadata.enqueue_origin,
+                       metadata.session_key, metadata.payload_bytes,
+                       metadata.item_count, metadata.created_at,
+                       {state_columns}
+                FROM coding_session_bridge_queue_metadata AS metadata
+                JOIN {table} AS state ON state.id = metadata.receipt_id
+                WHERE {where}
+                ORDER BY metadata.receipt_id
+                LIMIT ?""",
+            tuple([*params, limit + 1]),
+        )
+        count_clauses = [clause for clause in clauses if "receipt_id >" not in clause]
+        count_params = [queue_state]
+        for value in (provider, action, source, enqueue_origin):
+            if value is not None:
+                count_params.append(value)
+        count_row = await self._db.fetchone(
+            f"""SELECT COUNT(*) AS count
+                FROM coding_session_bridge_queue_metadata AS metadata
+                WHERE {" AND ".join(count_clauses)}""",
+            tuple(count_params),
+        )
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        now = time.time()
+        items: list[dict[str, Any]] = []
+        for row in page:
+            retry_at = float(row["next_attempt_at"] or 0)
+            items.append(
+                {
+                    "receipt_id": int(row["receipt_id"]),
+                    "state": queue_state,
+                    "provider": str(row["provider"]),
+                    "action": str(row["action"]),
+                    "source": str(row["source"]),
+                    "enqueue_origin": str(row["enqueue_origin"]),
+                    "session_ref": _session_ref(row["session_key"]),
+                    "item_count": int(row["item_count"] or 0),
+                    "payload_bytes": int(row["payload_bytes"] or 0),
+                    "created_at": _utc_timestamp(
+                        row["state_created_at"] or row["created_at"]
+                    ),
+                    "attempts": int(row["attempts"] or 0),
+                    "next_attempt_at": retry_at if retry_at > 0 else None,
+                    "retry_in_seconds": max(0.0, retry_at - now),
+                    "http_status": (
+                        int(row["http_status"])
+                        if row["http_status"] is not None
+                        else None
+                    ),
+                    "quarantined_at": _utc_timestamp(row["quarantined_at"]),
+                    "error": _safe_delivery_error(row["last_error"]),
+                    "actions": {
+                        "retry": True,
+                        "discard": True,
+                        "discard_requires_confirmation": True,
+                    },
+                }
+            )
+        return {
+            "schema_version": 1,
+            "terminology": "delivery_envelopes",
+            "state": queue_state,
+            "total": int(count_row["count"] if count_row else 0),
+            "items": items,
+            "has_more": has_more,
+            "next_cursor": int(page[-1]["receipt_id"]) if has_more and page else None,
+        }
+
+    async def retry_delivery_envelope(self, receipt_id: int) -> dict[str, Any]:
+        """Retry exactly one waiting or preserved envelope, never a whole class."""
+        async with aiosqlite.connect(str(self._db.path)) as connection:
+            connection.row_factory = aiosqlite.Row
+            await connection.execute(
+                f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}"
+            )
+            await connection.execute("PRAGMA synchronous=FULL")
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                pending = await (
+                    await connection.execute(
+                        "SELECT id FROM coding_session_bridge_outbox WHERE id = ?",
+                        (receipt_id,),
+                    )
+                ).fetchone()
+                previous_state = "pending"
+                if pending is not None:
+                    await connection.execute(
+                        """UPDATE coding_session_bridge_outbox
+                           SET attempts=0, next_attempt_at=0, last_error=NULL,
+                               updated_at=datetime('now') WHERE id=?""",
+                        (receipt_id,),
+                    )
+                else:
+                    preserved = await (
+                        await connection.execute(
+                            """SELECT envelope_json, envelope_sha256
+                               FROM coding_session_bridge_quarantine WHERE id=?""",
+                            (receipt_id,),
+                        )
+                    ).fetchone()
+                    if preserved is None:
+                        raise LookupError(f"No delivery envelope {receipt_id}")
+                    previous_state = "quarantine"
+                    serialized = str(preserved["envelope_json"])
+                    expected_digest = str(preserved["envelope_sha256"])
+                    if (
+                        hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+                        != expected_digest
+                    ):
+                        raise ValueError(
+                            "preserved envelope failed its integrity check"
+                        )
+                    request = BridgeRequest.model_validate_json(serialized)
+                    await connection.execute(
+                        """INSERT INTO coding_session_bridge_outbox (
+                               id, dedupe_key, envelope_json, envelope_sha256,
+                               attempts, next_attempt_at, last_error, lane_key
+                           ) VALUES (?, NULL, ?, ?, 0, 0, NULL, ?)""",
+                        (
+                            receipt_id,
+                            serialized,
+                            expected_digest,
+                            _delivery_lane_key(request),
+                        ),
+                    )
+                    await connection.execute(
+                        "DELETE FROM coding_session_bridge_quarantine WHERE id=?",
+                        (receipt_id,),
+                    )
+                    await connection.execute(
+                        """UPDATE coding_session_bridge_queue_metadata
+                           SET queue_state='pending', created_at=datetime('now')
+                           WHERE receipt_id=?""",
+                        (receipt_id,),
+                    )
+                await connection.commit()
+            except BaseException:
+                await connection.rollback()
+                raise
+        self.wake()
+        return {
+            "receipt_id": receipt_id,
+            "previous_state": previous_state,
+            "state": "pending",
+            "retry_requested": True,
+        }
+
+    async def discard_delivery_envelope(
+        self, receipt_id: int, *, confirmed: bool
+    ) -> dict[str, Any]:
+        """Delete exactly one envelope only after an explicit confirmation round-trip."""
+        metadata = await self._db.fetchone(
+            """SELECT queue_state, provider, action, source, item_count, payload_bytes
+               FROM coding_session_bridge_queue_metadata WHERE receipt_id=?""",
+            (receipt_id,),
+        )
+        if metadata is None:
+            raise LookupError(f"No delivery envelope {receipt_id}")
+        impact = {
+            "receipt_id": receipt_id,
+            "state": str(metadata["queue_state"]),
+            "provider": str(metadata["provider"]),
+            "action": str(metadata["action"]),
+            "source": str(metadata["source"]),
+            "item_count": int(metadata["item_count"] or 0),
+            "payload_bytes": int(metadata["payload_bytes"] or 0),
+            "warning": "Discarding permanently removes this local delivery copy.",
+        }
+        if not confirmed:
+            return {
+                "discarded": False,
+                "confirmation_required": True,
+                "impact": impact,
+            }
+        table = (
+            "coding_session_bridge_outbox"
+            if metadata["queue_state"] == "pending"
+            else "coding_session_bridge_quarantine"
+        )
+        await self._durable_writes(
+            [
+                (f"DELETE FROM {table} WHERE id=?", (receipt_id,)),
+                (
+                    "DELETE FROM coding_session_bridge_queue_metadata WHERE receipt_id=?",
+                    (receipt_id,),
+                ),
+            ]
+        )
+        return {
+            "discarded": True,
+            "confirmation_required": False,
+            "impact": impact,
+        }
+
     async def _queue_breakdown(self, table: str) -> dict[str, Any]:
         states = {
             "coding_session_bridge_outbox": "pending",
@@ -928,6 +1206,7 @@ class CodingSessionBridgeOutbox:
             raise ValueError("unsupported coding-session delivery table")
         rows = await self._db.fetchall(
             """SELECT provider, action, source, COUNT(*) AS count,
+                      COALESCE(SUM(item_count), 0) AS item_count,
                       COALESCE(SUM(payload_bytes), 0) AS payload_bytes,
                       COUNT(DISTINCT session_key) AS sessions
                FROM coding_session_bridge_queue_metadata
@@ -948,14 +1227,17 @@ class CodingSessionBridgeOutbox:
         by_source: dict[str, int] = {}
         dimensions: list[dict[str, Any]] = []
         total = 0
+        total_items = 0
         total_payload_bytes = 0
         for row in rows:
             provider = str(row["provider"])
             action = str(row["action"])
             source = str(row["source"])
             count = int(row["count"])
+            item_count = int(row["item_count"])
             payload_bytes = int(row["payload_bytes"])
             total += count
+            total_items += item_count
             total_payload_bytes += payload_bytes
             by_provider[provider] = by_provider.get(provider, 0) + count
             by_action[action] = by_action.get(action, 0) + count
@@ -966,6 +1248,7 @@ class CodingSessionBridgeOutbox:
                     "action": action,
                     "source": source,
                     "count": count,
+                    "item_count": item_count,
                     "payload_bytes": payload_bytes,
                     "sessions": int(row["sessions"]),
                 }
@@ -974,6 +1257,8 @@ class CodingSessionBridgeOutbox:
             sessions_by_provider[str(row["provider"])] = int(row["sessions"])
         return {
             "total": total,
+            "terminology": "delivery_envelopes",
+            "item_count": total_items,
             "payload_bytes": total_payload_bytes,
             "by_provider": by_provider,
             "sessions_by_provider": sessions_by_provider,

@@ -32,29 +32,6 @@ _(none)_
 
 ## Active
 
-### TASK-002: Coding Sessions evidence-first feature overhaul
-- **Status:** in-progress
-- **Created:** 2026-08-23
-- **Priority:** P0/P1
-- **Source:** Arman approved the full four-tab Coding Sessions deep-dive plan and requested complete implementation with sub-agent build and review passes.
-
-**Goal**
-Make Coding Sessions a truthful, inspectable, user-friendly audit and control surface across Overview, History, Session Details Sync, and Local Runtime. Every claim must be backed by visible evidence, every count must drill into its rows, broad operations must preview and prove their final result, and provider cards must report actual readiness rather than static capability.
-
-**Subtasks**
-- [ ] Remove the 1,000-session identity ceiling across aidream and matrx-local.
-- [ ] Add durable scan/sync operation evidence and paginated detail contracts.
-- [ ] Replace History cards with searchable, sortable, filterable, paginated inventory and scan deltas.
-- [ ] Replace Title Sync with preview/apply/acknowledge/reread Session Details Sync.
-- [ ] Add real provider readiness, queue/quarantine drill-downs, and guided repair actions.
-- [ ] Complete Local Runtime controls, live evidence, and separate execution/delivery states.
-- [ ] Fix identified concurrency, partial-write, timestamp, batch-isolation, and terminal-event defects.
-- [ ] Add feature-level frontend/backend regression coverage and installed-app verification.
-- [ ] Update canonical non-official documentation and clear completed tracked defects.
-
-**Notes**
-Approved plan is captured in the 2026-08-23 Coding Sessions deep-dive conversation. Implementation must continually reconcile against all P0-P3 findings; do not declare completion from aggregate test results alone.
-
 ### Log audit 2026-07-14 — scheduled from `docs/LOG_AUDIT_2026-07-14.md`
 
 > Source log export 2026-07-14 12:27:26. Facts + file links only in the audit doc —
@@ -471,6 +448,7 @@ are condensed under Completed. Still open:
   workaround note in tests/conftest.py if desired.
 ## Completed
 
+- [TASK-002] Rebuilt all four Coding Sessions tabs as truthful, inspectable control surfaces with durable operation evidence, uncapped pagination, guided readiness, verified session-detail sync, and persistent local runtime history — 2026-08-23 (`1106549b7`)
 - [TASK-003] Claude-native titles/branches reconciled onto mirrored sessions; live proof 232/232 — 2026-08-16 (`app/services/coding_sessions/title_sync.py`, FEATURE.md § Claude's own labels)
 - [TASK-003b] Return direction: AI Matrx rename reaches Claude's own label, last-writer-wins — 2026-08-16 (`claude_label_writer.py`; proof `aidream/scripts/_verify_claude_label_return_sync.py`)
 

@@ -169,8 +169,8 @@ export function AgentRuntimeCard() {
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
             Claude Code is ready — {capabilities.claude_cli}
-            {capabilities.claude_account_label
-              ? ` · ${capabilities.claude_account_label}`
+            {capabilities.claude_account_display_identity ?? capabilities.claude_account_label
+              ? ` · ${capabilities.claude_account_display_identity ?? capabilities.claude_account_label}`
               : null}
             {" · using your Claude subscription login"}
           </div>

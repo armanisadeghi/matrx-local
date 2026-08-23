@@ -262,6 +262,9 @@ export interface ClaudeHistoryPreview {
   account_fingerprint: string | null;
   provider_account_key_version: 2;
   provider_account_label: string | null;
+  /** Full identity observed locally; loopback desktop display only. */
+  provider_account_display_identity?: string | null;
+  account_identity_observed_at?: string | null;
   account_blocked_reason: string | null;
   claude_client_version: string | null;
   matrx_user_available: boolean;
@@ -384,6 +387,7 @@ export interface LocalRuntimeCapabilities {
   sdk_available: boolean;
   claude_cli: string | null;
   claude_account_label: string | null;
+  claude_account_display_identity?: string | null;
   claude_client_version: string | null;
   matrx_user_available: boolean;
   auth_path: "user_subscription_login";
@@ -2419,8 +2423,21 @@ class EngineAPI {
     return this.request(`/coding-session/delivery/envelopes/${encodeURIComponent(receiptId)}/retry`, { method: "POST" });
   }
 
-  async discardCodingSessionDeliveryEnvelope(receiptId: number): Promise<Record<string, unknown>> {
-    return this.request(`/coding-session/delivery/envelopes/${encodeURIComponent(receiptId)}?confirm=true`, { method: "DELETE" });
+  async discardCodingSessionDeliveryEnvelope(receiptId: number, confirm = false): Promise<{
+    discarded: boolean;
+    confirmation_required: boolean;
+    impact?: {
+      receipt_id: number;
+      state: "pending" | "quarantine";
+      provider: CodingSessionProvider;
+      action: string;
+      source: string;
+      item_count: number;
+      payload_bytes: number;
+      warning: string;
+    };
+  }> {
+    return this.request(`/coding-session/delivery/envelopes/${encodeURIComponent(receiptId)}?confirm=${confirm ? "true" : "false"}`, { method: "DELETE" });
   }
 
   async getClaudeCaptureStatus(): Promise<ClaudeCaptureStatus> {

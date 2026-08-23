@@ -411,7 +411,7 @@ export function ClaudeHistorySync() {
                 {preview.account_identity_available ? (
                   <Badge variant="secondary">
                     Claude account{" "}
-                    {preview.provider_account_label ?? preview.account_fingerprint}
+                    {preview.provider_account_display_identity ?? preview.provider_account_label ?? preview.account_fingerprint}
                   </Badge>
                 ) : (
                   <Badge variant="destructive">Claude identity unavailable</Badge>
@@ -419,6 +419,7 @@ export function ClaudeHistorySync() {
                 {preview.claude_client_version && (
                   <Badge variant="outline">{preview.claude_client_version}</Badge>
                 )}
+                {preview.provider_account_display_identity && <span className="text-xs text-muted-foreground">Observed locally during this review{preview.account_identity_observed_at ? ` at ${formatDate(preview.account_identity_observed_at)}` : ""}.</span>}
                 {!preview.matrx_user_available && (
                   <Badge variant="destructive">AI Matrx sign-in required</Badge>
                 )}
@@ -610,7 +611,7 @@ export function ClaudeHistorySync() {
                 )}
                 {labelResult.unmatched > 0 && (
                   <p className="text-xs text-muted-foreground">
-                    {labelResult.unmatched.toLocaleString()} synced session
+                    {labelResult.unmatched.toLocaleString()} cloud-bound session
                     {labelResult.unmatched === 1 ? " has" : "s have"} no Claude
                     record on this machine — they were most likely created on
                     another computer.
@@ -683,7 +684,7 @@ function OverviewPanel({
             </CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">
               Product support is shown separately from this Mac&rsquo;s live
-              delivery activity. Queue counts are stored delivery events, not
+              delivery activity. Queue counts are stored delivery envelopes, not
               provider conversation totals or connection indicators.
             </p>
           </div>
@@ -740,12 +741,16 @@ function OverviewPanel({
                           </Button>
                         )}
                         {status.pending === 0 && status.quarantined === 0 && (
-                          <Badge variant="secondary">No delivery events waiting</Badge>
+                          <Badge variant="secondary">No delivery envelopes waiting</Badge>
                         )}
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
                         {PROVIDER_SCOPE[provider]}
                       </p>
+                      <div className="mt-2 rounded-md border border-dashed px-2.5 py-2 text-xs text-muted-foreground">
+                        <span className="font-medium text-foreground">Connection on this Mac: not reported.</span>{" "}
+                        The engine currently reports product capability and delivered activity, but not whether this provider&rsquo;s AI Matrx adapter is installed, trusted, or connected. “Supported” below does not mean connected.
+                      </div>
                       <p className="mt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                         Product capabilities
                       </p>
@@ -851,7 +856,7 @@ function OverviewPanel({
             <PipelineStage label="2. Saved locally" detail="Durable, integrity-checked queue" />
             <PipelineStage
               label="3. Waiting for AI Matrx"
-              detail={`${(bridgeStatus?.pending.total ?? 0).toLocaleString()} delivery events queued${bridgeStatus?.pending.payload_bytes !== undefined ? ` · ${formatBytes(bridgeStatus.pending.payload_bytes)} stored` : ""}`}
+              detail={`${(bridgeStatus?.pending.total ?? 0).toLocaleString()} delivery envelopes waiting${bridgeStatus?.pending.payload_bytes !== undefined ? ` · ${formatBytes(bridgeStatus.pending.payload_bytes)} stored` : ""}`}
               active={Boolean(bridgeStatus?.pending.total)}
             />
             <PipelineStage
@@ -891,13 +896,13 @@ function OverviewPanel({
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
               <div>
                 <p className="font-medium">
-                  {bridgeStatus.quarantine.total.toLocaleString()} preserved event
+                  {bridgeStatus.quarantine.total.toLocaleString()} preserved envelope
                   {bridgeStatus.quarantine.total === 1 ? " is" : "s are"} not retrying
                 </p>
                 <p className="mt-1 text-muted-foreground">
-                  These events were not acknowledged by AI Matrx. They remain
+                  These envelopes were not acknowledged by AI Matrx. They remain
                   locally preserved instead of being dropped or reported as synced;
-                  they do not block newer events.
+                  they do not block newer envelopes.
                 </p>
                 {bridgeStatus.quarantine.reasons?.map((reason) => (
                   <Button key={reason.code} type="button" variant="ghost" size="sm" className="mt-1 h-auto justify-start px-0 text-xs text-muted-foreground" onClick={() => setDeliveryFilter({ state: "quarantine" })}>{reason.count.toLocaleString()} · {reason.message} · inspect</Button>

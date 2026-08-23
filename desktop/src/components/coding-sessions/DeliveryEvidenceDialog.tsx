@@ -56,12 +56,18 @@ export function DeliveryEvidenceDialog({
   useEffect(() => { setPage(null); void load(); }, [load]);
 
   const mutate = async (receiptId: number, action: "retry" | "discard") => {
-    if (action === "discard" && !window.confirm(`Discard delivery envelope #${receiptId} from this Mac? The provider's original session is unchanged.`)) return;
     setBusyReceipt(receiptId);
     setError(null);
     try {
       if (action === "retry") await engine.retryCodingSessionDeliveryEnvelope(receiptId);
-      else await engine.discardCodingSessionDeliveryEnvelope(receiptId);
+      else {
+        const preview = await engine.discardCodingSessionDeliveryEnvelope(receiptId, false);
+        const impact = preview.impact;
+        if (!impact) throw new Error("The engine did not return discard impact evidence.");
+        const confirmed = window.confirm(`${impact.warning}\n\nEnvelope #${impact.receipt_id} contains ${impact.item_count} event${impact.item_count === 1 ? "" : "s"} (${formatBytes(impact.payload_bytes)}) from ${impact.provider}. The provider's original session is unchanged.`);
+        if (!confirmed) return;
+        await engine.discardCodingSessionDeliveryEnvelope(receiptId, true);
+      }
       await Promise.all([load(), onChanged()]);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));

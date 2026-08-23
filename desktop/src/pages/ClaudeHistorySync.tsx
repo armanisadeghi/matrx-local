@@ -23,6 +23,7 @@ import {
   HistoryInventoryTable,
   historyReviewCounts,
 } from "@/components/coding-sessions/HistoryInventoryTable";
+import { SessionDetailsComparisonTable } from "@/components/coding-sessions/SessionDetailsComparisonTable";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -555,6 +556,9 @@ export function ClaudeHistorySync() {
                 </span>
               </div>
             )}
+            {labelStatus?.index_available && !labelStatus.index_writable && <div className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" /><span>Claude session indexes can be read but not safely opened for writing. Preview remains available; AI Matrx-to-Claude changes will be refused rather than silently claimed.</span></div>}
+            {labelStatus?.index_limit_reached && <div className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" /><span>The Claude index scan reached its {labelStatus.index_limit?.toLocaleString() ?? "configured"}-file limit. Results are incomplete; choose Preview only after narrowing the local index footprint.</span></div>}
+            {Boolean(labelStatus?.index_unreadable) && <div className="rounded-md border p-3 text-sm text-muted-foreground">{labelStatus?.index_unreadable?.toLocaleString()} index files could not be read and are excluded from the comparison.</div>}
             {labelStatus && labelStatus.index_available && (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <Summary
@@ -563,7 +567,7 @@ export function ClaudeHistorySync() {
                 />
                 <Summary
                   label="Sessions with a recorded cloud settlement"
-                  value={labelStatus.synced_sessions.toLocaleString()}
+                  value={(labelStatus.acknowledged_sessions ?? labelStatus.synced_sessions).toLocaleString()}
                 />
                 <Summary
                   label="Claude indexes previously written"
@@ -575,6 +579,7 @@ export function ClaudeHistorySync() {
                 />
               </div>
             )}
+            {labelStatus?.latest_operation && <div className="rounded-md border p-3 text-xs text-muted-foreground">Latest operation <span className="font-mono">{labelStatus.latest_operation.operation_id}</span> · {labelStatus.latest_operation.mode} · {labelStatus.latest_operation.status} · {labelStatus.latest_operation.verified_sessions.toLocaleString()} verified · {labelStatus.latest_operation.failed_sessions.toLocaleString()} failed</div>}
             {labelError && (
               <div className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
@@ -604,12 +609,12 @@ export function ClaudeHistorySync() {
                   labelResult.push_down.refused > 0 ||
                   labelResult.push_down.deferred_to_claude > 0) && (
                   <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                    {labelResult.dry_run ? <Tags className="h-4 w-4 text-blue-600" /> : <CheckCircle2 className="h-4 w-4 text-emerald-600" />}
                     <span>
                       {labelResult.push_down.written.toLocaleString()} AI Matrx
                       rename
-                      {labelResult.push_down.written === 1 ? "" : "s"} written
-                      back into Claude Code
+                      {labelResult.push_down.written === 1 ? "" : "s"} {labelResult.dry_run ? "would be written" : "written"}
+                      {" "}back into Claude Code
                       {labelResult.push_down.deferred_to_claude > 0 && (
                         <>
                           {" "}
@@ -640,8 +645,7 @@ export function ClaudeHistorySync() {
                     another computer.
                   </p>
                 )}
-                {labelResult.sample_titles.length > 0 && <div className="overflow-x-auto rounded-md border bg-background"><table className="w-full min-w-[680px] text-xs"><thead className="border-b bg-muted/40 text-left"><tr><th className="px-3 py-2">Session</th><th className="px-3 py-2">Claude Code value</th><th className="px-3 py-2">AI Matrx value before sync</th><th className="px-3 py-2">Planned result</th></tr></thead><tbody className="divide-y">{labelResult.sample_titles.map((item) => <tr key={item.provider_session_id}><td className="px-3 py-2 font-mono">{item.provider_session_id}</td><td className="px-3 py-2">{item.title}</td><td className="px-3 py-2 text-muted-foreground">Not returned by the current engine contract</td><td className="px-3 py-2">{item.title}</td></tr>)}</tbody></table></div>}
-                {labelResult.sample_titles.length < labelResult.queued && <p className="text-xs text-muted-foreground">The engine returned only {labelResult.sample_titles.length} sample rows for {labelResult.queued.toLocaleString()} proposed updates. The remaining exact comparisons are not available to this UI yet, so this is not a complete row-level proof.</p>}
+                {labelResult.operation_id && labelResult.operation ? <SessionDetailsComparisonTable result={labelResult} busy={labelSyncing} onVerified={setLabelResult} /> : <><div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs">This engine version returned aggregate title samples, not complete side-by-side evidence. Apply is available for compatibility, but post-sync convergence cannot be proven from this response.</div>{labelResult.sample_titles.length > 0 && <ul className="space-y-1 text-xs text-muted-foreground">{labelResult.sample_titles.map((item) => <li key={item.provider_session_id}>{item.title}</li>)}</ul>}</>}
               </div>
             )}
           </CardContent>
@@ -778,6 +782,7 @@ function OverviewPanel({
                       {readiness ? <div className="mt-2 space-y-2 rounded-md border px-2.5 py-2 text-xs">
                         <div className="flex flex-wrap gap-1.5"><Badge variant={readiness.product.installed === true ? "secondary" : "outline"}>{readiness.product.installed === true ? "Product installed" : readiness.product.installed === false ? "Product not found" : "Product installation unknown"}</Badge><Badge variant={readiness.product.running === true ? "secondary" : "outline"}>{readiness.product.running === true ? "Running now" : readiness.product.running === false ? "Not running" : "Running state unknown"}</Badge><Badge variant={readiness.adapter.detected ? "secondary" : "outline"}>{readiness.adapter.detected ? "AI Matrx adapter found" : "AI Matrx adapter not found"}</Badge><Badge variant="outline">Connection unverified</Badge></div>
                         <p className="text-muted-foreground">{readiness.connection.detail}</p>
+                        {readiness.activity.most_recent && <p className="text-muted-foreground">Most recent evidence: {readiness.activity.most_recent.kind === "cloud_acknowledgement" ? "AI Matrx acknowledged a delivery" : "this Mac stored provider work"} at {formatDate(readiness.activity.most_recent.at)}. This is activity evidence, not a live connection claim.</p>}
                         {readiness.upstream_spool.supported && <p className="text-muted-foreground">Adapter spool: {readiness.upstream_spool.pending ?? "unknown"} pending · {readiness.upstream_spool.poison ?? "unknown"} needs attention · {readiness.upstream_spool.in_flight ?? "unknown"} in flight</p>}
                         {readiness.actions.length > 0 && <div className="flex flex-wrap gap-2">{readiness.actions.map((action) => <Button key={action.id} type="button" size="sm" variant="outline" onClick={() => setGuidedInstruction({ label: action.label, instruction: action.instruction })}>{action.label}</Button>)}</div>}
                       </div> : <div className="mt-2 rounded-md border border-dashed px-2.5 py-2 text-xs text-muted-foreground"><span className="font-medium text-foreground">Readiness is loading or unavailable.</span> Product support below is not a connection claim.</div>}

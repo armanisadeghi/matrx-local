@@ -233,7 +233,7 @@ export interface EngineSettings {
   research_concurrency: number;
 }
 
-export interface ClaudeHistorySessionPreview {
+export interface ClaudeHistorySessionInventoryFields {
   session_id: string;
   source_revision: string | null;
   import_available: boolean;
@@ -253,38 +253,6 @@ export interface ClaudeHistorySessionPreview {
   last_modified_ns: number;
 }
 
-export interface ClaudeHistoryPreview {
-  schema_version: 1;
-  source: "claude_local_jsonl";
-  explicit_action_required: true;
-  account_identity_available: boolean;
-  provider_account_key: string | null;
-  account_fingerprint: string | null;
-  provider_account_key_version: 2;
-  provider_account_label: string | null;
-  /** Full identity observed locally; loopback desktop display only. */
-  provider_account_display_identity?: string | null;
-  account_identity_observed_at?: string | null;
-  account_blocked_reason: string | null;
-  claude_client_version: string | null;
-  matrx_user_available: boolean;
-  import_ready: boolean;
-  totals: {
-    session_count: number;
-    file_count: number;
-    bytes: number;
-    project_count: number;
-  };
-  limits: {
-    preview_sessions: number;
-    selected_sessions: number;
-    import_bytes: number;
-    line_bytes: number;
-  };
-  sessions: ClaudeHistorySessionPreview[];
-  truncated: boolean;
-}
-
 export type ClaudeHistoryChangeType =
   | "new"
   | "content_changed"
@@ -292,7 +260,7 @@ export type ClaudeHistoryChangeType =
   | "missing"
   | "unchanged";
 
-export interface ClaudeHistoryInventoryRow extends ClaudeHistorySessionPreview {
+export interface ClaudeHistoryInventoryRow extends ClaudeHistorySessionInventoryFields {
   present: boolean;
   change_type: ClaudeHistoryChangeType;
   source_state: string | null;
@@ -418,7 +386,7 @@ export interface ClaudeLabelPushDown {
 }
 
 export interface ClaudeLabelSyncResult {
-  schema_version: 2;
+  schema_version: 2 | 3;
   source: "claude_desktop_session_index";
   dry_run: boolean;
   bound_sessions: number;
@@ -435,10 +403,56 @@ export interface ClaudeLabelSyncResult {
   sample_titles: { provider_session_id: string; title: string }[];
   /** AI Matrx → Claude Code: renames written back into Claude's own index. */
   push_down: ClaudeLabelPushDown;
+  operation_id?: string;
+  operation?: ClaudeSessionDetailOperation;
+  comparisons?: ClaudeSessionDetailComparison[];
+  comparisons_truncated?: boolean;
+  detected?: number;
+  acknowledged?: number;
+  verified?: number;
+}
+
+export interface ClaudeSessionDetailComparison {
+  session_ref: string;
+  local: Record<string, unknown>;
+  ai_matrx: Record<string, unknown>;
+  comparisons: Array<{ field: string; local: unknown; ai_matrx: unknown; local_observed: boolean; ai_matrx_observed: boolean; equal: boolean }>;
+  chosen: Record<string, unknown>;
+  direction: string;
+  action: string;
+  reason: string;
+  state: string;
+  receipt_id: number | null;
+  write_intent_id: string | null;
+  outcome: Record<string, unknown> | null;
+}
+
+export interface ClaudeSessionDetailOperation {
+  operation_id: string;
+  mode: string;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+  bound_sessions: number;
+  compared_sessions: number;
+  detected_sessions: number;
+  enqueued_sessions: number;
+  acknowledged_sessions: number;
+  verified_sessions: number;
+  failed_sessions: number;
+  error_message: string | null;
+}
+
+export interface ClaudeSessionDetailOperationPage {
+  schema_version: 1;
+  operation: ClaudeSessionDetailOperation;
+  items: ClaudeSessionDetailComparison[];
+  has_more: boolean;
+  next_cursor: string | null;
 }
 
 export interface ClaudeLabelSyncStatus {
-  schema_version: 2;
+  schema_version: 2 | 3;
   source: "claude_desktop_session_index";
   index_available: boolean;
   index_writable: boolean;
@@ -447,6 +461,12 @@ export interface ClaudeLabelSyncStatus {
   index_records: number;
   synced_sessions: number;
   last_sync: Record<string, unknown> | null;
+  index_unreadable?: number;
+  index_limit?: number;
+  index_limit_reached?: boolean;
+  acknowledged_sessions?: number;
+  latest_operation?: ClaudeSessionDetailOperation | null;
+  push_intents_by_state?: Record<string, number>;
 }
 
 /** GET /coding-session/runtime/capabilities — the local Claude Code runtime. */
@@ -582,8 +602,12 @@ export interface CodingSessionProviderReadiness {
     oldest_pending_at: string | null;
     oldest_pending_age_seconds: number | null;
   };
-  activity: { last_local_enqueue_at: string | null; last_cloud_acknowledgement_at: string | null };
-  connection: { state: "unverified"; detail: string };
+  activity: {
+    last_local_enqueue_at: string | null;
+    last_cloud_acknowledgement_at: string | null;
+    most_recent?: { kind: "local_enqueue" | "cloud_acknowledgement"; at: string } | null;
+  };
+  connection: { state: "unverified"; detail: string; evidence?: string[] };
   actions: Array<{ id: string; label: string; kind: "guided_instruction"; instruction: string }>;
 }
 
@@ -2467,12 +2491,6 @@ class EngineAPI {
     return resp.json();
   }
 
-  async previewClaudeHistory(limit = 50): Promise<ClaudeHistoryPreview> {
-    return this.request<ClaudeHistoryPreview>(
-      `/coding-session/claude/history/preview?limit=${encodeURIComponent(limit)}`,
-    );
-  }
-
   async reviewClaudeHistory(limit = 100): Promise<ClaudeHistoryReview> {
     return this.request(`/coding-session/claude/history/review?limit=${encodeURIComponent(limit)}`, { method: "POST" });
   }
@@ -2609,6 +2627,20 @@ class EngineAPI {
       `/coding-session/claude/labels/sync?dry_run=${dryRun ? "true" : "false"}`,
       { method: "POST" },
     );
+  }
+
+  async getClaudeSessionDetailOperation(operationId: string, afterSessionRef?: string): Promise<ClaudeSessionDetailOperationPage> {
+    const query = new URLSearchParams({ limit: "200" });
+    if (afterSessionRef) query.set("after_session_ref", afterSessionRef);
+    return this.request(`/coding-session/claude/labels/operations/${encodeURIComponent(operationId)}?${query.toString()}`);
+  }
+
+  async verifyClaudeSessionDetailOperation(operationId: string): Promise<ClaudeSessionDetailOperationPage> {
+    return this.request(`/coding-session/claude/labels/operations/${encodeURIComponent(operationId)}/verify`, { method: "POST" });
+  }
+
+  async retryClaudeSessionDetailPushIntent(intentId: string): Promise<ClaudeSessionDetailOperationPage> {
+    return this.request(`/coding-session/claude/labels/push-intents/${encodeURIComponent(intentId)}/retry`, { method: "POST" });
   }
 
   async discardPendingClaudeHistory(): Promise<{

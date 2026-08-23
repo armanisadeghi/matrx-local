@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { engine } from "@/lib/api";
+import { getAppRuntimeConfig } from "@/lib/app-config";
 import type { LocalRuntimeCapabilities, LocalRuntimeRun } from "@/lib/api";
 
 const ACTIVE_STATUSES = new Set(["starting", "running"]);
@@ -60,6 +61,7 @@ function mirrorBadge(run: LocalRuntimeRun) {
 }
 
 export function AgentRuntimeCard() {
+  const newWorkUrl = `${getAppRuntimeConfig().webAppOrigin}/work/new`;
   const [capabilities, setCapabilities] =
     useState<LocalRuntimeCapabilities | null>(null);
   const [runs, setRuns] = useState<LocalRuntimeRun[]>([]);
@@ -217,7 +219,8 @@ export function AgentRuntimeCard() {
           <div className="mt-2 space-y-2">
             {!initialLoad && runs.length === 0 && (
               <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-                No runs yet. Start one from AI Matrx → New work → Claude Code.
+                <p>No runs yet. Start through the canonical AI Matrx work composer, then choose Claude Code on this Mac.</p>
+                <Button asChild variant="outline" size="sm" className="mt-2"><a href={newWorkUrl} target="_blank" rel="noreferrer">Open AI Matrx New work</a></Button>
               </div>
             )}
             {runs.map((run) => (

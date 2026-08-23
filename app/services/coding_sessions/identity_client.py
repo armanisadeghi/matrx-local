@@ -42,6 +42,7 @@ async def fetch_complete_identity_inventory(
 ) -> list[dict[str, Any]]:
     """Fetch every identity in one server-fenced snapshot or fail closed."""
     rows: list[dict[str, Any]] = []
+    seen_identities: set[str] = set()
     cursor: str | None = None
     seen_cursors: set[str] = set()
     expected_total: int | None = None
@@ -90,6 +91,13 @@ async def fetch_complete_identity_inventory(
             raise IdentityInventoryBlocked("identity_list_snapshot_changed")
         if any(not isinstance(row, dict) for row in page):
             raise IdentityInventoryBlocked("identity_list_malformed")
+        for row in page:
+            identity = row.get("provider_session_id")
+            if not isinstance(identity, str) or not identity:
+                raise IdentityInventoryBlocked("identity_list_malformed")
+            if identity in seen_identities:
+                raise IdentityInventoryBlocked("identity_list_duplicate")
+            seen_identities.add(identity)
         rows.extend(page)
         if len(rows) > expected_total:
             raise IdentityInventoryBlocked("identity_list_count_mismatch")

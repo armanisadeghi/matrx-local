@@ -86,3 +86,28 @@ async def test_fails_closed_against_legacy_response_without_completeness() -> No
         )
 
     assert excinfo.value.reason == "identity_list_completeness_unavailable"
+
+
+@pytest.mark.anyio
+async def test_fails_closed_when_pages_repeat_an_identity() -> None:
+    class _DuplicateClient:
+        async def get(self, path: str, jwt: str) -> dict[str, Any]:  # noqa: ARG002
+            cursor = parse_qs(urlparse(path).query).get("cursor")
+            has_more = cursor is None
+            return {
+                "schema_version": 2,
+                "provider": "claude_code",
+                "sessions": [{"provider_session_id": "repeated"}],
+                "total_count": 2,
+                "page_count": 1,
+                "has_more": has_more,
+                "complete": not has_more,
+                "next_cursor": "second" if has_more else None,
+            }
+
+    with pytest.raises(IdentityInventoryBlocked) as excinfo:
+        await fetch_complete_identity_inventory(
+            client=_DuplicateClient(), jwt="jwt", provider="claude_code"
+        )
+
+    assert excinfo.value.reason == "identity_list_duplicate"

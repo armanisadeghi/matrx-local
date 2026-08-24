@@ -8,6 +8,8 @@ import {
   ChevronRight,
   FileText,
   Image,
+  ExternalLink,
+  FileSpreadsheet,
   Layers,
   Loader2,
   NotebookPen,
@@ -26,6 +28,13 @@ import type {
   CloudChatRunControls,
 } from "@/hooks/use-cloud-chat";
 import type { CloudModelOption } from "@/lib/cloud-chat-models";
+import { openExternalUrl } from "@/components/media-gen/shared";
+import {
+  MAX_ATTACHED_GOOGLE_FILES,
+  googleWorkspaceSettingsUrl,
+  listRegisteredGoogleFiles,
+  type RegisteredGoogleFile,
+} from "@/lib/google-workspace";
 import { cn } from "@/lib/utils";
 
 const MAX_ATTACHMENTS = 5;
@@ -76,6 +85,9 @@ export interface CloudChatPlusMenuProps {
   onResetOverrides: () => void;
   attachments: ChatAttachment[];
   onAddAttachments: (files: ChatAttachment[]) => void;
+  /** Google Docs/Sheets attached to this conversation's next turn. */
+  attachedGoogleFiles: RegisteredGoogleFile[];
+  onToggleGoogleFile: (file: RegisteredGoogleFile) => void;
   disabled?: boolean;
 }
 
@@ -122,12 +134,21 @@ export function CloudChatPlusMenu({
   onResetOverrides,
   attachments,
   onAddAttachments,
+  attachedGoogleFiles,
+  onToggleGoogleFile,
   disabled = false,
 }: CloudChatPlusMenuProps) {
   const [open, setOpen] = useState(false);
   const [modelSectionOpen, setModelSectionOpen] = useState(false);
   const [settingsSectionOpen, setSettingsSectionOpen] = useState(false);
   const [toolsSectionOpen, setToolsSectionOpen] = useState(false);
+  const [googleSectionOpen, setGoogleSectionOpen] = useState(false);
+  const [googleFiles, setGoogleFiles] = useState<RegisteredGoogleFile[] | null>(
+    null,
+  );
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleError, setGoogleError] = useState<string | null>(null);
+  const googleFetchedRef = useRef(false);
   const [tools, setTools] = useState<LocalToolEntry[] | null>(null);
   const [toolsLoading, setToolsLoading] = useState(false);
   const [toolsError, setToolsError] = useState<string | null>(null);
@@ -176,6 +197,40 @@ export function CloudChatPlusMenu({
       cancelled = true;
     };
   }, [open, engineUrl]);
+
+  // Registered Google files load once, on first open of that section. There is
+  // no Drive browsing here — these are the files the user already registered
+  // through the Picker on the web app.
+  useEffect(() => {
+    if (!googleSectionOpen || googleFetchedRef.current) return;
+    googleFetchedRef.current = true;
+    const controller = new AbortController();
+    let cancelled = false;
+    setGoogleLoading(true);
+    setGoogleError(null);
+    listRegisteredGoogleFiles(controller.signal)
+      .then((files) => {
+        if (!cancelled) setGoogleFiles(files);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        googleFetchedRef.current = false;
+        setGoogleError(
+          error instanceof Error ? error.message : "Failed to load Google files",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setGoogleLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [googleSectionOpen]);
+
+  const openGoogleSettings = useCallback(() => {
+    void googleWorkspaceSettingsUrl().then((url) => openExternalUrl(url));
+  }, []);
 
   const toolsByCategory = useMemo(() => {
     const groups = new Map<string, LocalToolEntry[]>();
@@ -236,7 +291,14 @@ export function CloudChatPlusMenu({
 
   const overrideCount =
     (modelOverride ? 1 : 0) + (temperature != null ? 1 : 0) + (maxTokens != null ? 1 : 0);
-  const hasAdjustments = overrideCount > 0 || excludedTools.length > 0;
+  const hasAdjustments =
+    overrideCount > 0 ||
+    excludedTools.length > 0 ||
+    attachedGoogleFiles.length > 0;
+  const attachedGoogleIds = useMemo(
+    () => new Set(attachedGoogleFiles.map((file) => file.fileId)),
+    [attachedGoogleFiles],
+  );
 
   const modelDetail = modelOverride
     ? (models.find((m) => m.id === modelOverride)?.label ?? modelOverride)
@@ -503,6 +565,98 @@ export function CloudChatPlusMenu({
                   ))}
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Google files — attach a registered Doc/Sheet to the next turn */}
+          <SectionHeader
+            label="Google files"
+            open={googleSectionOpen}
+            onToggle={() => setGoogleSectionOpen((prev) => !prev)}
+            detail={
+              attachedGoogleFiles.length > 0
+                ? `${attachedGoogleFiles.length} attached`
+                : "None attached"
+            }
+          />
+          {googleSectionOpen && (
+            <div className="max-h-56 overflow-y-auto pb-1 pl-4">
+              {googleLoading && (
+                <p className="flex items-center gap-1.5 px-2 py-1.5 text-[11px] text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Checking your Google account...
+                </p>
+              )}
+              {googleError && (
+                <p className="px-2 py-1.5 text-[11px] text-amber-500">
+                  {googleError}
+                </p>
+              )}
+              {/* Nothing connected or nothing registered is a STATE with a
+                  one-click fix, not an error. Picking new files is a Google
+                  Picker flow that lives on the web app — never in this
+                  webview. */}
+              {googleFiles?.length === 0 && !googleLoading && !googleError && (
+                <div className="px-2 py-1.5">
+                  <p className="text-[11px] text-muted-foreground">
+                    Connect Google and hand a doc or sheet straight to an agent
+                    — it reads and updates the real file.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={openGoogleSettings}
+                    className="mt-1 flex items-center gap-1 text-[11px] text-primary transition-colors hover:underline"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    Set up Google files on the web
+                  </button>
+                </div>
+              )}
+              {(googleFiles ?? []).map((file) => {
+                const checked = attachedGoogleIds.has(file.fileId);
+                const atLimit =
+                  !checked &&
+                  attachedGoogleFiles.length >= MAX_ATTACHED_GOOGLE_FILES;
+                return (
+                  <label
+                    key={file.fileId}
+                    title={
+                      atLimit
+                        ? `Limit is ${MAX_ATTACHED_GOOGLE_FILES} files.`
+                        : (file.accountEmail ?? file.name)
+                    }
+                    className={cn(
+                      "flex items-center gap-2 rounded-md px-2 py-1 text-xs text-foreground transition-colors",
+                      atLimit
+                        ? "cursor-not-allowed opacity-50"
+                        : "cursor-pointer hover:bg-accent/50",
+                    )}
+                  >
+                    <Checkbox
+                      checked={checked}
+                      disabled={atLimit}
+                      onCheckedChange={() => onToggleGoogleFile(file)}
+                      className="h-3 w-3"
+                    />
+                    {file.isSheet ? (
+                      <FileSpreadsheet className="h-3 w-3 shrink-0 opacity-60" />
+                    ) : (
+                      <FileText className="h-3 w-3 shrink-0 opacity-60" />
+                    )}
+                    <span className="truncate">{file.name}</span>
+                  </label>
+                );
+              })}
+              {googleFiles && googleFiles.length > 0 && (
+                <button
+                  type="button"
+                  onClick={openGoogleSettings}
+                  className="mt-1 flex items-center gap-1 px-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  Add more files on the web
+                </button>
+              )}
             </div>
           )}
 

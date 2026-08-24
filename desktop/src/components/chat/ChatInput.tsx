@@ -1,5 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { ArrowUp, Square, Plus, ChevronDown, Cpu, FileText, X } from "lucide-react";
+import {
+  ArrowUp,
+  Square,
+  Plus,
+  ChevronDown,
+  Cpu,
+  FileSpreadsheet,
+  FileText,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LOCAL_MODEL_PREFIX, type ChatMode } from "@/hooks/use-chat";
 import type { AgentInfo } from "@/types/agents";
@@ -40,6 +49,12 @@ interface ChatInputProps {
   /** Files attached via the plus menu, shown as removable chips. */
   attachments?: Array<{ id: string; name: string; size: number }>;
   onRemoveAttachment?: (id: string) => void;
+  /**
+   * Google Docs/Sheets attached via the plus menu. Shown as chips so the
+   * attachment is visible without opening the menu.
+   */
+  googleFiles?: Array<{ fileId: string; name: string; isSheet: boolean }>;
+  onRemoveGoogleFile?: (fileId: string) => void;
   /** Append a filesystem reference to the current draft without taking control of it. */
   draftInsertion?: { id: number; text: string } | null;
 }
@@ -76,6 +91,8 @@ export function ChatInput({
   plusMenuSlot,
   attachments = [],
   onRemoveAttachment,
+  googleFiles = [],
+  onRemoveGoogleFile,
   draftInsertion,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
@@ -171,6 +188,35 @@ export function ChatInput({
 
       {/* Composer Container */}
       <div className="glass relative rounded-xl transition-shadow focus-within:shadow-md">
+        {/* Attached Google file chips */}
+        {googleFiles.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-3 pt-2">
+            {googleFiles.map((file) => (
+              <span
+                key={file.fileId}
+                className="inline-flex max-w-[220px] items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-1.5 py-0.5 text-[11px] text-foreground"
+              >
+                {file.isSheet ? (
+                  <FileSpreadsheet className="h-3 w-3 shrink-0 text-muted-foreground" />
+                ) : (
+                  <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
+                )}
+                <span className="truncate">{file.name}</span>
+                {onRemoveGoogleFile && (
+                  <button
+                    type="button"
+                    onClick={() => onRemoveGoogleFile(file.fileId)}
+                    title={`Remove ${file.name}`}
+                    className="ml-0.5 shrink-0 rounded text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
+
         {/* Attached-file chips */}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-1.5 px-3 pt-2">

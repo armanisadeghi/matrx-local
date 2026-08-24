@@ -68,6 +68,8 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   const cloudAgents = useCloudAgents();
   const {
     activeConversationId,
+    attachedGoogleFiles,
+    googleFileActions,
     createConversation,
     deleteConversation,
     executionTarget,
@@ -428,6 +430,8 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
             showModeSelector={false}
             attachments={attachments}
             onRemoveAttachment={handleRemoveAttachment}
+            googleFiles={attachedGoogleFiles}
+            onRemoveGoogleFile={googleFileActions.remove}
             draftInsertion={draftInsertion}
             plusMenuSlot={
               <CloudChatPlusMenu
@@ -441,6 +445,8 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
                 onResetOverrides={runControlActions.resetOverrides}
                 attachments={attachments}
                 onAddAttachments={handleAddAttachments}
+                attachedGoogleFiles={attachedGoogleFiles}
+                onToggleGoogleFile={googleFileActions.toggle}
                 disabled={isStreaming}
               />
             }

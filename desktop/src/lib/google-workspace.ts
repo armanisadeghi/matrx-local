@@ -27,6 +27,25 @@ export const GOOGLE_SCOPE = {
 } as const;
 
 /**
+ * The reserved context key attached Google files travel under.
+ *
+ * They are NOT a content block: the server side does two things at once
+ * (aidream `services/google_workspace/attachments.py`, reached through
+ * `conversation_context/context_utils.py`) — it names the files for the agent
+ * AND injects the `google_workspace` tool for that turn even when the agent's
+ * own configuration does not carry it. A content block would deliver the first
+ * half and silently drop the second.
+ *
+ * Keep byte-identical to the mirrors: matrx-frontend
+ * `features/google-workspace/attach/googleFileContext.ts` and aidream
+ * `services/google_workspace/attachments.py`.
+ */
+export const GOOGLE_FILES_CONTEXT_KEY = "__google_files";
+
+/** The server truncates past this; the UI refuses past it too. */
+export const MAX_ATTACHED_GOOGLE_FILES = 20;
+
+/**
  * Where AI Matrx connects to Google. Every refusal points here — the origin
  * comes from remote app config, never a compiled-in domain.
  */
@@ -98,6 +117,83 @@ export function resolveGmailSendConnection(
   signal?: AbortSignal,
 ): Promise<GoogleConnectionRef | null> {
   return resolveByScope(GOOGLE_SCOPE.gmailSend, signal);
+}
+
+/**
+ * One Google file the user has ALREADY registered through the Picker on the
+ * web app. `fileId` is the Drive file id (`resource_ref`) — the exact value
+ * `__google_files` carries.
+ */
+export interface RegisteredGoogleFile {
+  fileId: string;
+  name: string;
+  isSheet: boolean;
+  accountEmail: string | null;
+}
+
+interface ResourceRow {
+  connection_id: string;
+  resource_type: string | null;
+  resource_ref: string | null;
+  display_name: string | null;
+}
+
+/**
+ * Every Doc/Sheet the user registered on a usable `drive.file` connection.
+ *
+ * There is NO Drive browsing here and never will be: registering a new file is
+ * a Google Picker flow that lives on the web app. This reads what is already
+ * registered so a desktop chat can hand one to an agent.
+ *
+ * An empty array is a normal STATE (nothing connected, or nothing registered
+ * yet), not an error — the caller shows the pitch.
+ */
+export async function listRegisteredGoogleFiles(
+  signal?: AbortSignal,
+): Promise<RegisteredGoogleFile[]> {
+  const { data: connectionData, error: connectionError } = await supabase
+    .schema("users")
+    .from("integration_connections")
+    .select(CONNECTION_SELECT)
+    .eq("provider", "google")
+    .is("deleted_at", null)
+    .order("updated_at", { ascending: false })
+    .abortSignal(signal ?? new AbortController().signal);
+  if (connectionError) throw new Error(connectionError.message);
+
+  const usable = ((connectionData as ConnectionRow[] | null) ?? []).filter(
+    (row) => isUsable(row, GOOGLE_SCOPE.driveFile),
+  );
+  if (usable.length === 0) return [];
+
+  const emailByConnection = new Map(
+    usable.map((row) => [row.id, row.account_email]),
+  );
+  const { data: resourceData, error: resourceError } = await supabase
+    .schema("users")
+    .from("integration_connection_resources")
+    .select("connection_id, resource_type, resource_ref, display_name")
+    .in("connection_id", [...emailByConnection.keys()])
+    .in("resource_type", ["google_document", "google_spreadsheet"])
+    .is("deleted_at", null)
+    .order("updated_at", { ascending: false })
+    .abortSignal(signal ?? new AbortController().signal);
+  if (resourceError) throw new Error(resourceError.message);
+
+  const files: RegisteredGoogleFile[] = [];
+  const seen = new Set<string>();
+  for (const row of (resourceData as ResourceRow[] | null) ?? []) {
+    const fileId = row.resource_ref?.trim();
+    if (!fileId || seen.has(fileId)) continue;
+    seen.add(fileId);
+    files.push({
+      fileId,
+      name: row.display_name?.trim() || fileId,
+      isSheet: row.resource_type === "google_spreadsheet",
+      accountEmail: emailByConnection.get(row.connection_id) ?? null,
+    });
+  }
+  return files;
 }
 
 export interface ReviewedGmailDraft {

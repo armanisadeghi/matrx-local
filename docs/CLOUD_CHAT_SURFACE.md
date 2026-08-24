@@ -51,6 +51,34 @@ bundle, so cloud agents reach both first-party Google tools from desktop:
 
 - `google_workspace` (executor `aidream`) — Doc/Sheet read, append, create,
   bounded write, and `prepare_email`. Runs on the server; nothing to build here.
+**Attaching a Google file (2026-08-24).** The "+" menu has a **Google files**
+section listing the Docs/Sheets this user ALREADY registered — read straight
+from `users.integration_connection_resources` on healthy `drive.file`
+connections by `desktop/src/lib/google-workspace.ts::listRegisteredGoogleFiles`.
+Checked files ride the next turn as the reserved context key
+`__google_files` — a PLAIN ARRAY of Drive file ids on a top-level `context`
+object (max 20; the server truncates):
+
+```jsonc
+"context": { "__google_files": ["1AbC…", "1XyZ…"] }
+```
+
+aidream (`services/google_workspace/attachments.py`, reached through
+`conversation_context/context_utils.py`) resolves the ids, names the files for
+the agent, and injects `google_workspace` for that turn — which is why this is
+a context directive and not a content block. Mirrors to keep byte-identical:
+`GOOGLE_FILES_CONTEXT_KEY` here, matrx-frontend
+`features/google-workspace/attach/googleFileContext.ts`, and the server
+constant. Wire shape copied from matrx-frontend
+`execute-instance.thunk.ts` — `context` is sent ONLY when non-empty, on all
+three cloud body shapes.
+
+There is **no Drive browsing and no Google Picker in this webview**, and there
+must never be one: registering a new file stays on the web app, and both empty
+states link out to `/user-settings/integrations/google-workspace` in the system
+browser. Attachments are per-conversation state in `use-cloud-chat.ts` and are
+dropped when the active conversation changes.
+
 - `google_email_send` (client-only) — **parked, never executed.** The engine
   holds the proposal and `<GmailReviewCard>` above the composer IS the
   authorization: the user sees and edits the exact message and only their click
@@ -83,7 +111,7 @@ of matrx-frontend's `lib/chat-protocol`. Rules (do not regress):
 Working now: model override, temperature / max-tokens overrides
 (`config_overrides`), per-conversation local-tool exclusions
 (`client.amendments.remove`), text-file attachments (content parts on
-`user_input`).
+`user_input`), Google file attach (`context.__google_files`, see above).
 
 User-level machine policy: Settings → Cloud & Account → Cloud Agent Tools
 (`cloud_tools.disabled_tools`, synced, web-controllable, enforced in the
@@ -97,7 +125,9 @@ Marked "coming soon" in the + menu; each item names its frontend reference:
    chips). Needs an agents/skills catalog fetch from aidream.
 2. **Images & media attachments** → resource ContentBlocks + upload path
    (ref: ResourcePickerMenu). Desktop should shine here (local files,
-   screenshots).
+   screenshots). STILL OPEN — the resource picker's **Google** lane shipped
+   2026-08-24 (see § Google Workspace above), the media lane did not, so the
+   "Images & media" coming-soon row stays true and stays in the menu.
 3. **Audio recording / transcription input** (engine already has Whisper).
 4. **Notes / Documents / Scratchpad** (ref: DocumentsWorkspace,
    working-document thunks).

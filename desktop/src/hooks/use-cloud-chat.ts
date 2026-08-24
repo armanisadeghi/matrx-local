@@ -35,6 +35,11 @@ import {
 } from "@/lib/cloud-chat-message-reconciliation";
 import supabase from "@/lib/supabase";
 import {
+  GOOGLE_FILES_CONTEXT_KEY,
+  MAX_ATTACHED_GOOGLE_FILES,
+  type RegisteredGoogleFile,
+} from "@/lib/google-workspace";
+import {
   buildDesktopClientContext,
   type DesktopClientContext,
 } from "@/lib/desktop-client-context";
@@ -212,6 +217,13 @@ export function buildCloudChatRequest(
   clientContext: DesktopClientContext | null,
   runControls: CloudChatRunControls,
   attachments: ChatAttachment[],
+  /**
+   * Top-level agent-run context (reserved keys like `__google_files`). Sent
+   * only when non-empty — the exact conditional spread the web client uses in
+   * matrx-frontend
+   * `features/agents/redux/execution-system/thunks/execute-instance.thunk.ts`.
+   */
+  context?: Record<string, unknown>,
 ): {
   url: string;
   body: Record<string, unknown>;
@@ -261,6 +273,8 @@ export function buildCloudChatRequest(
   // turn. Cloud requests only — the local engine IS the desktop already.
   const clientEnvelope =
     target === "cloud" && clientContext ? { client: clientContext } : {};
+  const contextEnvelope =
+    context && Object.keys(context).length > 0 ? { context } : {};
 
   if (conversationId) {
     return {
@@ -272,6 +286,7 @@ export function buildCloudChatRequest(
         source_feature: CLOUD_SOURCE_FEATURE,
         ...(configOverrides ? { config_overrides: configOverrides } : {}),
         ...clientEnvelope,
+        ...contextEnvelope,
       },
     };
   }
@@ -288,6 +303,7 @@ export function buildCloudChatRequest(
       ...organizationField,
       ...(configOverrides ? { config_overrides: configOverrides } : {}),
       ...clientEnvelope,
+      ...contextEnvelope,
     };
     if (userContent || attachmentParts.length > 0) body.user_input = userInput;
     if (options.variables && Object.keys(options.variables).length > 0) {
@@ -319,6 +335,7 @@ export function buildCloudChatRequest(
     ...organizationField,
     ...(configOverrides ? { config_overrides: configOverrides } : {}),
     ...clientEnvelope,
+    ...contextEnvelope,
   });
 }
 
@@ -837,6 +854,11 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
   const [runControls, setRunControls] = useState<CloudChatRunControls>(
     DEFAULT_RUN_CONTROLS,
   );
+  // Google files attached to THIS conversation's turns. Per-conversation, so
+  // switching (or starting) a conversation drops them — see the effect below.
+  const [attachedGoogleFiles, setAttachedGoogleFiles] = useState<
+    RegisteredGoogleFile[]
+  >([]);
   const abortRef = useRef<AbortController | null>(null);
   const runGateRef = useRef(new CloudChatRunGate());
   const conversationsRef = useRef(conversations);
@@ -1215,6 +1237,32 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         });
     }
   }, []);
+
+  // Attachments belong to one conversation, never to the app. Changing (or
+  // clearing) the active conversation drops them so a file can never ride
+  // along into an unrelated chat.
+  useEffect(() => {
+    setAttachedGoogleFiles([]);
+  }, [activeConversationId]);
+
+  const googleFileActions = useMemo(
+    () => ({
+      toggle: (file: RegisteredGoogleFile) =>
+        setAttachedGoogleFiles((prev) =>
+          prev.some((item) => item.fileId === file.fileId)
+            ? prev.filter((item) => item.fileId !== file.fileId)
+            : prev.length >= MAX_ATTACHED_GOOGLE_FILES
+              ? prev
+              : [...prev, file],
+        ),
+      remove: (fileId: string) =>
+        setAttachedGoogleFiles((prev) =>
+          prev.filter((item) => item.fileId !== fileId),
+        ),
+      clear: () => setAttachedGoogleFiles([]),
+    }),
+    [],
+  );
 
   const runControlActions = useMemo(
     () => ({
@@ -1623,6 +1671,20 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                 removeTools: runControls.excludedTools,
               })
             : null;
+        // Attached Google files travel as the reserved `__google_files`
+        // context key — a plain array of Drive file ids. aidream resolves the
+        // ids, names the files for the agent, and injects `google_workspace`
+        // for the turn. Cloud only: the local engine has no Google executor.
+        const googleFileIds =
+          executionTarget === "cloud"
+            ? attachedGoogleFiles
+                .slice(0, MAX_ATTACHED_GOOGLE_FILES)
+                .map((file) => file.fileId)
+            : [];
+        const requestContext: Record<string, unknown> =
+          googleFileIds.length > 0
+            ? { [GOOGLE_FILES_CONTEXT_KEY]: googleFileIds }
+            : {};
         const { url, body, startedConversationId } = buildCloudChatRequest(
           requestConversation,
           trimmed,
@@ -1636,6 +1698,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           clientContext,
           runControls,
           attachments,
+          requestContext,
         );
 
         const existingTargetConversationId =
@@ -2154,6 +2217,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     },
     [
       activeConversationId,
+      attachedGoogleFiles,
       availableModels,
       createConversation,
       engineUrl,
@@ -2205,6 +2269,8 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     localLlmError,
     runControls,
     runControlActions,
+    attachedGoogleFiles,
+    googleFileActions,
     groupedConversations,
     createConversation,
     selectConversation,

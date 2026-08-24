@@ -123,6 +123,85 @@ describe("Cloud Chat request contract", () => {
     expect(request.body).not.toHaveProperty("is_new");
   });
 
+  it("omits `context` entirely when nothing is attached", () => {
+    for (const conv of [conversation(), conversation({ cloudConversationId: "c1" })]) {
+      const request = buildCloudChatRequest(
+        conv,
+        "hi",
+        "test-model",
+        "cloud",
+        null,
+        "http://127.0.0.1:22240",
+        "https://api.example.test",
+        undefined,
+        [],
+        null,
+        RUN_CONTROLS,
+        [],
+        {},
+      );
+      expect(request.body).not.toHaveProperty("context");
+    }
+  });
+
+  it("sends attached Google files as a raw id array under __google_files", () => {
+    const context = { __google_files: ["file-a", "file-b"] };
+
+    // Bare chat start.
+    const start = buildCloudChatRequest(
+      conversation(),
+      "hi",
+      "test-model",
+      "cloud",
+      null,
+      "http://127.0.0.1:22240",
+      "https://api.example.test",
+      undefined,
+      [],
+      null,
+      RUN_CONTROLS,
+      [],
+      context,
+    );
+    expect(start.body.context).toEqual({ __google_files: ["file-a", "file-b"] });
+
+    // Agent start.
+    const agentStart = buildCloudChatRequest(
+      conversation(),
+      "hi",
+      "test-model",
+      "cloud",
+      null,
+      "http://127.0.0.1:22240",
+      "https://api.example.test",
+      { agentId: "agent-1" },
+      [],
+      null,
+      RUN_CONTROLS,
+      [],
+      context,
+    );
+    expect(agentStart.body.context).toEqual(context);
+
+    // Continuation.
+    const followUp = buildCloudChatRequest(
+      conversation({ cloudConversationId: "existing-conversation" }),
+      "again",
+      "test-model",
+      "cloud",
+      null,
+      "http://127.0.0.1:22240",
+      "https://api.example.test",
+      undefined,
+      [],
+      null,
+      RUN_CONTROLS,
+      [],
+      context,
+    );
+    expect(followUp.body.context).toEqual(context);
+  });
+
   it("uses the same required start contract for local execution", () => {
     const request = buildCloudChatRequest(
       conversation(),

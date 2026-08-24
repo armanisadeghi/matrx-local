@@ -191,6 +191,11 @@ rendered above the Cloud Chat composer). Pinned by
 `tests/unit/test_delegation_user_review.py` and
 `tests/smoke/test_delegation_user_review_routes.py`.
 
+Not this path: **attaching** a Google Doc/Sheet to a chat turn never reaches
+the engine. The composer sends the registered file ids as the reserved
+`context.__google_files` key and the SERVER reads them — see
+`docs/CLOUD_CHAT_SURFACE.md` § Google Workspace on this surface.
+
 ## User tool exposure gate
 
 Settings key `cloud_tools` (`{"disabled_tools": [<cloud_name>...]}`) —

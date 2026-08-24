@@ -79,7 +79,13 @@ class ClaudeSessionIndexEntry:
             payload["is_pinned"] = self.is_pinned
             if self.is_pinned and self.pinned_rank is not None:
                 payload["pinned_rank"] = self.pinned_rank
-        if self.category:
+            # The ledger had an opinion on this session, so its category state
+            # is an OBSERVATION either way: the key is always present, and an
+            # explicit null tells the server "no category" — the server only
+            # clears a stored category when the key is present (absent key =
+            # no knowledge, clear nothing).
+            payload["category"] = self.category
+        elif self.category:
             payload["category"] = self.category
         return payload
 

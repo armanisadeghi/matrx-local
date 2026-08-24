@@ -380,10 +380,13 @@ the ordered publisher; neither repair silently drops an event.
   while the original file, workspace, and current Claude login exist. The importer does not copy
   file-history snapshots, permissions, credentials, or filesystem state and always reports
   `native_restore_available=false`.
-- **Pinning is unsupported; archive is now READ, never inferred.** Claude Code's desktop app keeps a
-  real `isArchived` flag in its own session index (below), so archive state is observed as provider
-  truth. There is still no local pin/starred/tags/category source anywhere — the product does not
-  infer those and must not invent them.
+- **Pins, categories, and archive are READ from provider truth, never inferred.** Claude Code's
+  desktop app keeps a real `isArchived` flag in its own session index (below); pins and sidebar
+  categories live in the app's localStorage and reach us through the machine's canonical sidebar
+  ledger (`~/.claude/claude-code-sidebar-state.json`, maintained by the session-sync agent — see
+  the pins/categories section further down). Sessions the ledger has no opinion on send nothing —
+  the product never invents pin or category state. (Superseded 2026-08-21: this bullet previously
+  said pinning had no local source; the ledger IS that source now.)
 
 ## Claude's own labels — the same title, kept in sync BOTH ways
 

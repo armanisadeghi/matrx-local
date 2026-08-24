@@ -1,7 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkBreaks from "remark-breaks";
-import remarkGfm from "remark-gfm";
 import {
   Copy,
   Check,
@@ -14,6 +11,8 @@ import {
   Info,
 } from "lucide-react";
 import type { ChatMessage, ToolCallResult } from "@/hooks/use-chat";
+import { MessageMarkdown } from "./MessageMarkdown";
+import { KindBlockView } from "@/features/content-ir/render/KindBlockView";
 import type { ChatMessageBlock, ChatToolBlock } from "@/lib/chat-blocks";
 import { ChatToolCall } from "./ChatToolCall";
 
@@ -133,41 +132,6 @@ function UserMessage({ message }: { message: ChatMessage }) {
   );
 }
 
-function MessageMarkdown({ text }: { text: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkBreaks]}
-      components={{
-        pre: ({ children }) => (
-          <pre className="overflow-x-auto rounded-md bg-muted p-3 text-[0.8125rem]">
-            {children}
-          </pre>
-        ),
-        code: ({ className, children, ...props }) => {
-          const isInline = !className;
-          if (isInline) {
-            return (
-              <code
-                className="rounded bg-muted px-1.5 py-0.5 text-[0.8125rem] font-mono"
-                {...props}
-              >
-                {children}
-              </code>
-            );
-          }
-          return (
-            <code className={className} {...props}>
-              {children}
-            </code>
-          );
-        },
-      }}
-    >
-      {text}
-    </ReactMarkdown>
-  );
-}
-
 /** Map an ordered tool block to the ToolExecutionCard contract, preferring the
  * richer legacy tool_results entry (image/artifact/action_needed) by call_id. */
 function toolBlockResult(
@@ -220,6 +184,19 @@ function MessageBlocks({
               >
                 <MessageMarkdown text={block.content} />
               </div>
+            );
+          case "kind":
+            // Server-built structured content — routed through the SHARED
+            // kind route to a bundled component, or the honest generic floor.
+            return (
+              <KindBlockView
+                key={key}
+                blockId={block.blockId}
+                type={block.blockType}
+                content={block.content}
+                metadata={block.metadata}
+                complete={block.complete}
+              />
             );
           case "thinking":
             return (

@@ -865,6 +865,33 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Cross-repo
 
+### MXL-D-083 — stream-events.ts carries a registry-INDEPENDENT copy of every block's data shape, and nothing imports it
+- **Area:** Content IR / `desktop/src/types/python-generated/stream-events.ts`
+- **Symptom:** the generated file's `--- Render Block Data Models (RenderBlockPayload.data
+  per type) ---` section (`FlashcardItem`, `TranscriptSegment`, …) is generated from
+  `matrx_ai/processing/blocks/models/*.py` — the LEGACY PARSER models — while the same
+  payloads' canonical shapes live in `content_ir.kind_definition`. Two vocabularies for one
+  payload, bridged only by `adapt_block_data` on the server. This is the same class as
+  KINDS_EVERYWHERE_PLAN §10g GAP 1 ("`shape:types` emits 12 files with ZERO importers"):
+  **zero files in `desktop/src` import any of these block data models** (verified
+  2026-08-23 by grep), so today they are unconsumed weight that will drift.
+- **Why it is NOT fixed here:** the honest alignment is the platform-wide one — generate
+  TypeScript from the KIND registry and have every client consume THOSE — which is GAP 1's
+  scope and spans aidream + all clients. Repointing this one generated section locally would
+  create a third vocabulary, not remove the second. The desktop's Content IR consumer
+  (`desktop/src/features/content-ir/`, shipped 2026-08-23) deliberately reads its shapes from
+  the ENVELOPE at runtime and from `GET /workflow/kinds` for identity, so it does not depend
+  on this section at all.
+- **Evidence:**
+  - `aidream/scripts/generate_types.py:862-890` — the section's generator, sourced from
+    `packages/matrx-ai/matrx_ai/processing/blocks/models/`.
+  - `desktop/src/types/python-generated/stream-events.ts:2268+` — the emitted models.
+  - `grep -rn "FlashcardItem\|TranscriptSegment" desktop/src --include=*.ts --include=*.tsx`
+    excluding `python-generated/` → no hits.
+- **Status:** open — belongs to KINDS_EVERYWHERE_PLAN §10g GAP 1, not to this repo alone.
+- **Analysis stamp:** Analyzed 2026-08-23 — verified in code and by grep.
+- **Owner hint:** the GAP 1 chip (generate for all active kinds, repoint bridges, CI-gate).
+
 ### MXL-D-059 — ✅ chat_sync BLIND-UPSERTS server-owned cloud rows (already corrupted production data)
 - **Area:** chat_sync / cross-repo (shared Supabase `chat.*`)
 - **Symptom:** `_push_table` publishes locally-rebuilt rows to the shared cloud DB with an

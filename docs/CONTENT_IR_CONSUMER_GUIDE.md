@@ -212,9 +212,16 @@ That is enough to reuse the **core data-processing layer** in:
 
 ### What is not turnkey yet
 
-The current package is private, source-only (`exports: { ".": "./index.ts" }`),
-and consumed through aidream's workspace. It has no published/versioned build
-artifact that Matrx Local, a standalone web page, or the extension can install
+**Superseded 2026-08-23 for the kernel:** `@ai-matrx/content-ir` is published
+(0.2.0, npm) and this app consumes it as a normal dependency. The RENDER layer
+`@ai-matrx/content-ir-react` 0.1.0 is built and gated (51 tests) but its npm
+name does not exist yet — npm trusted publishing cannot CREATE a name — so it
+is consumed from a committed tarball in `desktop/vendor/` with a one-line swap
+recorded there. The paragraph below describes the state before that.
+
+The package WAS private, source-only (`exports: { ".": "./index.ts" }`),
+and consumed through aidream's workspace, with no published/versioned build
+artifact that Matrx Local, a standalone web page, or the extension could install
 as a normal dependency. Its public barrel also exports a registry type with a
 type-only React import, which is harmless at runtime but unnecessarily leaks a
 React type requirement to TypeScript consumers.
@@ -230,6 +237,36 @@ Further, the following remain host-coupled:
 processing utilities. It is **not yet 90% of an end-to-end renderer**. A small
 packaging project plus two host adapters are needed before Local, vanilla JS,
 and the extension can consume the system consistently.
+
+## WHAT IS BUILT (2026-08-23) — the first consumer slice landed
+
+Prerequisites 1–3 below are DONE for this app; 4–5 remain open. What shipped:
+
+| Piece | Where |
+|---|---|
+| Shared packages consumed (no local fork) | `@ai-matrx/content-ir` 0.2.0 (npm) + `@ai-matrx/content-ir-react` 0.1.0 (`desktop/vendor/`, pending npm publish) |
+| Catalog client — authenticated, RLS-filtered, ETag'd | `desktop/src/features/content-ir/catalog/client.ts` → `GET /workflow/kinds` + `/{slug}` |
+| Registries (identity + component bindings, ONE fetch) | `desktop/src/features/content-ir/runtime/registry.ts` |
+| Envelope ingestion (preserve valid, strip + report malformed) | `desktop/src/features/content-ir/runtime/inbound.ts` |
+| Bundled components + policy + generic floor | `desktop/src/features/content-ir/render/` |
+| Stream integration — a kind block, not flattened markdown | `desktop/src/lib/chat-blocks.ts` (`ChatKindBlock`) → `ChatMessages.tsx` |
+| Fixture tests on REAL server-built envelopes | `desktop/src/features/content-ir/kind-blocks.test.tsx` |
+
+**The platform token is `desktop`.** `content_ir.kind_component.platform` is a
+CHECK-constrained vocabulary; a host that lies there renders the wrong
+component everywhere. Registered rows (migration `010_kind_component_desktop.sql`):
+`markdown` · `web_search_results` / `google_search_results` /
+`news_search_results` · `flashcard_set` · `quiz_set`. Adding a component here
+is a ROW plus a `dispatch.tsx` entry — two explicit halves, never one.
+
+**Custom DB components remain OFF** (prerequisite 4). `source='db'` rows carry
+user-authored code and this app has no reviewed sandbox protocol, so the
+registry never carries the body and such a binding falls to the generic floor.
+Do not change that without the extracted protocol.
+
+**Auth invalidation is wired**: `use-auth.ts` calls `resetContentIr()` on every
+auth-state change and re-warms when a session exists — a catalog RLS-filtered
+for one identity is never reused for another.
 
 ## Prerequisites to make consumption repeatable
 

@@ -61,10 +61,10 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
   `/Users/armanisadeghi/code/common-docs/systems/agents/agent-variable-binding/FEATURE.md`
 - **Limits are knobs, and agents set them.** Never a hardcoded constant or an absent
   control. → `/Users/armanisadeghi/code/common-docs/policies/limits-are-knobs-agents-set-them.md`
-- **We don't do legacy.** Replaced systems are migrated, repointed, DELETED — never
-  frozen or kept "just in case". → `/Users/armanisadeghi/code/common-docs/policies/no-legacy.md`
-- **Human steps are guided sessions.** Anything only Arman can do: one link, one task,
-  what to look for, what to report — never a list or menu. →
+- **We don't do legacy.** Replaced systems are migrated, repointed, DELETED — never frozen or
+  kept "just in case". → `/Users/armanisadeghi/code/common-docs/policies/no-legacy.md`
+- **Human steps are guided sessions.** Anything only Arman can do: one link, one task, what to
+  look for, what to report — never a list or menu. →
   `/Users/armanisadeghi/code/common-docs/policies/human-steps-are-guided-sessions.md`
 - **Every org-scoped write carries an explicit `organization_id`.** Database defaults,
   personal/system fallbacks, and parent-inheritance triggers are defects. Emergency work order:
@@ -157,7 +157,7 @@ grow or import the in-code lists. [app/services/catalogs/FEATURE.md](app/service
 | Media durability (signed URL = handoff, never identity; pass `file_id`) | `/Users/armanisadeghi/code/common-docs/systems/media/media-durability/FEATURE.md` |
 | Matrx Envelope · Tool registry · DB rules | `/Users/armanisadeghi/code/common-docs/systems/{matrx-envelope,tool-registry,db-rules}/FEATURE.md` |
 | Sync doctrine · file sync · coding-session bridge | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) · [app/services/file_sync/FEATURE.md](app/services/file_sync/FEATURE.md) · [app/services/coding_sessions/FEATURE.md](app/services/coding_sessions/FEATURE.md) |
-| Content IR consumers | [docs/CONTENT_IR_CONSUMER_GUIDE.md](docs/CONTENT_IR_CONSUMER_GUIDE.md) |
+| Content IR — NEVER parse a stream; server envelopes render via the SHARED packages (`desktop/src/features/content-ir/`); catalog is `GET /workflow/kinds`, never a `content_ir.*` table read; DB components stay OFF | [docs/CONTENT_IR_CONSUMER_GUIDE.md](docs/CONTENT_IR_CONSUMER_GUIDE.md) |
 | Any image/video UI (one `MediaDescriptor`, one thumb, one action set — never a hand-rolled `<img>`) | [desktop/src/components/media/FEATURE.md](desktop/src/components/media/FEATURE.md) |
 | Multi-window (labels, leader election, panels checklist) | [desktop/src/panels/FEATURE.md](desktop/src/panels/FEATURE.md) |
 | Code-local rules | `app/tools/FEATURE.md`, `app/api/FEATURE.md`, `app/services/*/FEATURE.md` |

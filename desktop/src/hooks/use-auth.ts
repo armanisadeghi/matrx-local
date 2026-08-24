@@ -43,6 +43,7 @@
  * that flow does not go through OAuth.
  */
 
+import { resetContentIr, warmContentIr } from "@/features/content-ir/runtime/registry";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import type { User, Session } from "@supabase/supabase-js";
 import supabase from "@/lib/supabase";
@@ -162,6 +163,14 @@ export function useAuth() {
         update({ session, user: session.user });
         return;
       }
+
+      // WHO IS SIGNED IN CHANGED, so what the kind catalog is allowed to show
+      // changed with it. The cached catalog was RLS-filtered for the previous
+      // identity and must never be reused across one
+      // (docs/CONTENT_IR_CONSUMER_GUIDE.md § "invalidate it on auth change").
+      // A fresh session warms it again; a sign-out leaves it empty.
+      resetContentIr();
+      if (session) warmContentIr();
 
       update({
         session,

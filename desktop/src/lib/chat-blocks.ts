@@ -23,6 +23,7 @@ import type {
   ToolEventPayload,
   ErrorPayload,
 } from "@/types/python-generated/stream-events";
+import { sanitizeRenderBlock } from "@/features/content-ir/runtime/inbound";
 
 export type ToolBlockPhase =
   | "pending"
@@ -57,6 +58,27 @@ export interface ChatToolBlock {
   phase: ToolBlockPhase;
 }
 
+/**
+ * A server-built render block carrying a validated Content IR envelope.
+ *
+ * 🚨 The envelope is stored VERBATIM and is never reparsed or rewritten just
+ * to display it (docs/CONTENT_IR_CONSUMER_GUIDE.md § "Preserve framing"). It
+ * is rendered through the SHARED kind route, which is what makes this app draw
+ * a flashcard deck as a deck instead of the markdown flattening this block
+ * type replaced.
+ */
+export interface ChatKindBlock {
+  type: "kind";
+  blockId: string;
+  /** The block type the server sent; the shared route re-types it. */
+  blockType: string;
+  /** The kind the envelope resolved to — this is why it is a kind block. */
+  kind: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  complete: boolean;
+}
+
 export interface ChatErrorBlock {
   type: "error";
   errorType: string;
@@ -67,6 +89,7 @@ export type ChatMessageBlock =
   | ChatTextBlock
   | ChatThinkingBlock
   | ChatToolBlock
+  | ChatKindBlock
   | ChatErrorBlock;
 
 /**
@@ -200,6 +223,17 @@ export class StreamBlockBuilder {
     markdown: string | null,
     isReasoningType: boolean,
   ): void {
+    // ── STRUCTURED FIRST. A block carrying a validated Content IR envelope is
+    // NOT text: flattening it to markdown (which is all this builder used to
+    // do) threw away the kind, the schema and every component the platform
+    // registered for it. The kernel gate decides — a malformed envelope
+    // reports and falls through to the markdown path below, never vanishes.
+    const { metadata, kind } = sanitizeRenderBlock(payload);
+    if (kind) {
+      this.upsertKindBlock(payload, metadata ?? {}, kind);
+      return;
+    }
+
     if (!markdown) return;
     if (
       !isReasoningType &&
@@ -221,6 +255,39 @@ export class StreamBlockBuilder {
       blockId,
       content: markdown,
     });
+  }
+
+  /**
+   * Upsert a kind block at its first-appearance position, keyed by `blockId`
+   * exactly like the text path — the server re-sends the same id as a block
+   * grows from `streaming` to `complete`.
+   */
+  private upsertKindBlock(
+    payload: RenderBlockPayload,
+    metadata: Record<string, unknown>,
+    kind: string,
+  ): void {
+    const blockId = payload.blockId || `${payload.blockIndex}-${payload.type}`;
+    const block: ChatKindBlock = {
+      type: "kind",
+      blockId,
+      blockType: payload.type,
+      kind,
+      content: payload.content ?? "",
+      metadata,
+      complete: payload.status === "complete",
+    };
+    const existing = this.renderIndex.get(blockId);
+    if (existing !== undefined) {
+      // Never let a replayed `streaming` frame downgrade a block the server
+      // already closed — reconnects re-send earlier frames.
+      const prior = this.blocks[existing];
+      if (prior?.type === "kind" && prior.complete && !block.complete) return;
+      this.blocks[existing] = block;
+      return;
+    }
+    this.renderIndex.set(blockId, this.blocks.length);
+    this.blocks.push(block);
   }
 
   /** Force-terminate every non-terminal tool block (stream died / aborted). */

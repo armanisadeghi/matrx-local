@@ -282,6 +282,13 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
     setVariableValues((prev) => ({ ...prev, [name]: value }));
   }, []);
 
+  // Google file chips are cloud-only, exactly like the menu section that sets
+  // them — a chip for something the local target ignores would lie.
+  const visibleGoogleFiles = useMemo(
+    () => (executionTarget === "cloud" ? attachedGoogleFiles : []),
+    [attachedGoogleFiles, executionTarget],
+  );
+
   const pickerLabel = activeAgent?.name ?? "Select an agent";
   const showVariables = activeVariables.length > 0 && !hasMessages;
   const engineReady = executionTarget === "cloud" || engineStatus === "connected";
@@ -430,12 +437,13 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
             showModeSelector={false}
             attachments={attachments}
             onRemoveAttachment={handleRemoveAttachment}
-            googleFiles={attachedGoogleFiles}
+            googleFiles={visibleGoogleFiles}
             onRemoveGoogleFile={googleFileActions.remove}
             draftInsertion={draftInsertion}
             plusMenuSlot={
               <CloudChatPlusMenu
                 engineUrl={engineUrl}
+                executionTarget={executionTarget}
                 models={availableModels}
                 runControls={runControls}
                 onModelOverride={runControlActions.setModelOverride}

@@ -76,8 +76,20 @@ three cloud body shapes.
 There is **no Drive browsing and no Google Picker in this webview**, and there
 must never be one: registering a new file stays on the web app, and both empty
 states link out to `/user-settings/integrations/google-workspace` in the system
-browser. Attachments are per-conversation state in `use-cloud-chat.ts` and are
-dropped when the active conversation changes.
+browser.
+
+**Cloud target only, and the UI says so.** `__google_files` is resolved by
+aidream; the local engine has no Google executor. On the Local target the
+section header reads `Cloud only`, its body says to switch the chat to Cloud,
+no file list is fetched, and no chips render — the same "state, not a dead
+control" pattern the tools section uses for `Engine offline`. Nothing can be
+attached that would be silently dropped at send time.
+
+Attachments are per-conversation state in `use-cloud-chat.ts`, dropped when the
+active conversation changes. One subtlety pinned by
+`attachmentsConversationRef`: sending the FIRST message of a new chat mints the
+conversation (`activeConversationId` null → id), which is not a switch — the
+ref adopts the minted id so the just-picked chips survive their own send.
 
 - `google_email_send` (client-only) — **parked, never executed.** The engine
   holds the proposal and `<GmailReviewCard>` above the composer IS the

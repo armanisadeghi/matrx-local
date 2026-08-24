@@ -859,6 +859,8 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
   const [attachedGoogleFiles, setAttachedGoogleFiles] = useState<
     RegisteredGoogleFile[]
   >([]);
+  /** Which conversation the attachments above belong to (see the effect below). */
+  const attachmentsConversationRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const runGateRef = useRef(new CloudChatRunGate());
   const conversationsRef = useRef(conversations);
@@ -1241,7 +1243,16 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
   // Attachments belong to one conversation, never to the app. Changing (or
   // clearing) the active conversation drops them so a file can never ride
   // along into an unrelated chat.
+  //
+  // The ref is what makes minting safe: sending the first message of a NEW
+  // conversation runs createConversation(), which flips activeConversationId
+  // null → <id>. That is not a switch — the attachments belong to exactly the
+  // conversation being minted — so `sendMessage` adopts the id in the ref
+  // first and this effect sees no change. Without it the chips vanished the
+  // instant the user pressed Send on a fresh chat.
   useEffect(() => {
+    if (attachmentsConversationRef.current === activeConversationId) return;
+    attachmentsConversationRef.current = activeConversationId;
     setAttachedGoogleFiles([]);
   }, [activeConversationId]);
 
@@ -1314,6 +1325,14 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       setRequestError(null);
       setLocalLlmError(null);
 
+      // Mint the conversation this send belongs to and adopt it for the
+      // attachments, so the null → <id> flip is not read as a switch.
+      const mintConversation = (): Conversation => {
+        const created = createConversation();
+        attachmentsConversationRef.current = created.id;
+        return created;
+      };
+
       const recordPreflightFailure = (
         message: string,
         patch?: Partial<Conversation>,
@@ -1321,7 +1340,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         let conversationId = activeConversationId;
 
         if (!conversationId) {
-          const created = createConversation();
+          const created = mintConversation();
           conversationId = created.id;
         }
 
@@ -1431,7 +1450,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       let existingMessages = currentConversation?.messages ?? [];
 
       if (!conversationId) {
-        currentConversation = createConversation();
+        currentConversation = mintConversation();
         conversationId = currentConversation.id;
         existingMessages = [];
       }

@@ -123,8 +123,13 @@ describe("Cloud Chat request contract", () => {
     expect(request.body).not.toHaveProperty("is_new");
   });
 
-  it("omits `context` entirely when nothing is attached", () => {
-    for (const conv of [conversation(), conversation({ cloudConversationId: "c1" })]) {
+  it("omits `context` entirely when nothing is attached, on all three body shapes", () => {
+    const shapes: Array<[Conversation, { agentId?: string } | undefined]> = [
+      [conversation(), undefined], // bare chat start
+      [conversation(), { agentId: "agent-1" }], // agent start
+      [conversation({ cloudConversationId: "c1" }), undefined], // continuation
+    ];
+    for (const [conv, options] of shapes) {
       const request = buildCloudChatRequest(
         conv,
         "hi",
@@ -133,7 +138,7 @@ describe("Cloud Chat request contract", () => {
         null,
         "http://127.0.0.1:22240",
         "https://api.example.test",
-        undefined,
+        options,
         [],
         null,
         RUN_CONTROLS,

@@ -25,6 +25,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Slider } from "@/components/ui/slider";
 import type {
   ChatAttachment,
+  CloudChatExecutionTarget,
   CloudChatRunControls,
 } from "@/hooks/use-cloud-chat";
 import type { CloudModelOption } from "@/lib/cloud-chat-models";
@@ -76,6 +77,8 @@ const COMING_SOON: ComingSoonRow[] = [
 
 export interface CloudChatPlusMenuProps {
   engineUrl: string | null;
+  /** Google file attach exists on the cloud target only — see the section below. */
+  executionTarget: CloudChatExecutionTarget;
   models: CloudModelOption[];
   runControls: CloudChatRunControls;
   onModelOverride: (model: string | null) => void;
@@ -125,6 +128,7 @@ function SectionHeader({
 
 export function CloudChatPlusMenu({
   engineUrl,
+  executionTarget,
   models,
   runControls,
   onModelOverride,
@@ -203,6 +207,9 @@ export function CloudChatPlusMenu({
   // through the Picker on the web app.
   useEffect(() => {
     if (!googleSectionOpen || googleFetchedRef.current) return;
+    // Cloud only — `__google_files` is resolved by aidream and the local
+    // engine has no Google executor, so there is nothing to list.
+    if (executionTarget !== "cloud") return;
     googleFetchedRef.current = true;
     const controller = new AbortController();
     let cancelled = false;
@@ -226,7 +233,7 @@ export function CloudChatPlusMenu({
       cancelled = true;
       controller.abort();
     };
-  }, [googleSectionOpen]);
+  }, [executionTarget, googleSectionOpen]);
 
   const openGoogleSettings = useCallback(() => {
     void googleWorkspaceSettingsUrl().then((url) => openExternalUrl(url));
@@ -574,88 +581,103 @@ export function CloudChatPlusMenu({
             open={googleSectionOpen}
             onToggle={() => setGoogleSectionOpen((prev) => !prev)}
             detail={
-              attachedGoogleFiles.length > 0
-                ? `${attachedGoogleFiles.length} attached`
-                : "None attached"
+              executionTarget !== "cloud"
+                ? "Cloud only"
+                : attachedGoogleFiles.length > 0
+                  ? `${attachedGoogleFiles.length} attached`
+                  : "None attached"
             }
           />
           {googleSectionOpen && (
             <div className="max-h-56 overflow-y-auto pb-1 pl-4">
-              {googleLoading && (
-                <p className="flex items-center gap-1.5 px-2 py-1.5 text-[11px] text-muted-foreground">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Checking your Google account...
+              {/* The local engine has no Google executor, and aidream is what
+                  resolves `__google_files`. Saying so beats offering a control
+                  that would silently do nothing. */}
+              {executionTarget !== "cloud" && (
+                <p className="px-2 py-1.5 text-[11px] text-muted-foreground">
+                  Google files run on the cloud target. Switch this chat to
+                  Cloud to attach a doc or sheet.
                 </p>
               )}
-              {googleError && (
-                <p className="px-2 py-1.5 text-[11px] text-amber-500">
-                  {googleError}
-                </p>
-              )}
-              {/* Nothing connected or nothing registered is a STATE with a
-                  one-click fix, not an error. Picking new files is a Google
-                  Picker flow that lives on the web app — never in this
-                  webview. */}
-              {googleFiles?.length === 0 && !googleLoading && !googleError && (
-                <div className="px-2 py-1.5">
-                  <p className="text-[11px] text-muted-foreground">
-                    Connect Google and hand a doc or sheet straight to an agent
-                    — it reads and updates the real file.
+              {executionTarget === "cloud" && (
+                <>
+                {googleLoading && (
+                  <p className="flex items-center gap-1.5 px-2 py-1.5 text-[11px] text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Checking your Google account...
                   </p>
+                )}
+                {googleError && (
+                  <p className="px-2 py-1.5 text-[11px] text-amber-500">
+                    {googleError}
+                  </p>
+                )}
+                {/* Nothing connected or nothing registered is a STATE with a
+                    one-click fix, not an error. Picking new files is a Google
+                    Picker flow that lives on the web app — never in this
+                    webview. */}
+                {googleFiles?.length === 0 && !googleLoading && !googleError && (
+                  <div className="px-2 py-1.5">
+                    <p className="text-[11px] text-muted-foreground">
+                      Connect Google and hand a doc or sheet straight to an agent
+                      — it reads and updates the real file.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={openGoogleSettings}
+                      className="mt-1 flex items-center gap-1 text-[11px] text-primary transition-colors hover:underline"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      Set up Google files on the web
+                    </button>
+                  </div>
+                )}
+                {(googleFiles ?? []).map((file) => {
+                  const checked = attachedGoogleIds.has(file.fileId);
+                  const atLimit =
+                    !checked &&
+                    attachedGoogleFiles.length >= MAX_ATTACHED_GOOGLE_FILES;
+                  return (
+                    <label
+                      key={file.fileId}
+                      title={
+                        atLimit
+                          ? `Limit is ${MAX_ATTACHED_GOOGLE_FILES} files.`
+                          : (file.accountEmail ?? file.name)
+                      }
+                      className={cn(
+                        "flex items-center gap-2 rounded-md px-2 py-1 text-xs text-foreground transition-colors",
+                        atLimit
+                          ? "cursor-not-allowed opacity-50"
+                          : "cursor-pointer hover:bg-accent/50",
+                      )}
+                    >
+                      <Checkbox
+                        checked={checked}
+                        disabled={atLimit}
+                        onCheckedChange={() => onToggleGoogleFile(file)}
+                        className="h-3 w-3"
+                      />
+                      {file.isSheet ? (
+                        <FileSpreadsheet className="h-3 w-3 shrink-0 opacity-60" />
+                      ) : (
+                        <FileText className="h-3 w-3 shrink-0 opacity-60" />
+                      )}
+                      <span className="truncate">{file.name}</span>
+                    </label>
+                  );
+                })}
+                {googleFiles && googleFiles.length > 0 && (
                   <button
                     type="button"
                     onClick={openGoogleSettings}
-                    className="mt-1 flex items-center gap-1 text-[11px] text-primary transition-colors hover:underline"
+                    className="mt-1 flex items-center gap-1 px-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
                   >
                     <ExternalLink className="h-3 w-3" />
-                    Set up Google files on the web
+                    Add more files on the web
                   </button>
-                </div>
-              )}
-              {(googleFiles ?? []).map((file) => {
-                const checked = attachedGoogleIds.has(file.fileId);
-                const atLimit =
-                  !checked &&
-                  attachedGoogleFiles.length >= MAX_ATTACHED_GOOGLE_FILES;
-                return (
-                  <label
-                    key={file.fileId}
-                    title={
-                      atLimit
-                        ? `Limit is ${MAX_ATTACHED_GOOGLE_FILES} files.`
-                        : (file.accountEmail ?? file.name)
-                    }
-                    className={cn(
-                      "flex items-center gap-2 rounded-md px-2 py-1 text-xs text-foreground transition-colors",
-                      atLimit
-                        ? "cursor-not-allowed opacity-50"
-                        : "cursor-pointer hover:bg-accent/50",
-                    )}
-                  >
-                    <Checkbox
-                      checked={checked}
-                      disabled={atLimit}
-                      onCheckedChange={() => onToggleGoogleFile(file)}
-                      className="h-3 w-3"
-                    />
-                    {file.isSheet ? (
-                      <FileSpreadsheet className="h-3 w-3 shrink-0 opacity-60" />
-                    ) : (
-                      <FileText className="h-3 w-3 shrink-0 opacity-60" />
-                    )}
-                    <span className="truncate">{file.name}</span>
-                  </label>
-                );
-              })}
-              {googleFiles && googleFiles.length > 0 && (
-                <button
-                  type="button"
-                  onClick={openGoogleSettings}
-                  className="mt-1 flex items-center gap-1 px-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  Add more files on the web
-                </button>
+                )}
+                </>
               )}
             </div>
           )}

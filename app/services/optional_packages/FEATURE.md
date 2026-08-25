@@ -5,6 +5,12 @@
 > capability, recipe, or dependency ANYWHERE in this repo that touches
 > torch/transformers/numpy-family packages, read this first.
 
+> The local NER subsystem this slot hosts (`app/services/ner/`, GLiNER/GLiNER2) has its
+> cross-repo system-of-record at
+> `/Users/armanisadeghi/code/common-docs/systems/knowledge/knowledge-graph/STATE.md`
+> (rulings in `DECISIONS.md`, remaining work in `HANDOFF.md`) — read it before touching
+> local NER in ANY repo.
+
 ## The one rule
 
 **The managed media runtime slot is the ONLY provider of the ML stack.**

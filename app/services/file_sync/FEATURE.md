@@ -3,7 +3,7 @@
 The user's cloud files (matrx-files service, `files.matrxserver.com`) appear
 under the Files root (`~/Documents/Matrx/Files`, path key `files`, tool alias
 `@files/`) in one of two user-choosable modes, so the platform is their cloud
-drive instead of Google Drive. Work order: `docs/handoffs/file-sync-system.md`.
+drive instead of Google Drive. Work order: `docs/handoffs/file-sync-system.md`. Cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/systems/media/file-service/STATE.md` — read it before touching this feature in ANY repo.
 Doctrine: `docs/SYNC_CONTRACT.md` (this feature has a row in its matrix).
 
 ## Modes (`file_sync_mode` setting: `off | pointers | full`, default `pointers`)

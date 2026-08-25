@@ -192,12 +192,18 @@ class AccessHealthService:
         try:
             from app.launcher import get_registry
 
+            registry = get_registry()
+            # Access probes are a health input, not the owner of service
+            # startup/shutdown. During STARTING the lifespan records the final
+            # initial state after the worker has actually started; while
+            # stopped/pending an access observation must never resurrect it.
+            # Once running, access transitions keep READY/DEGRADED current.
+            if registry.current_state(service) not in {"ready", "degraded"}:
+                return
             if new_status == "ok":
-                get_registry().ready(service)
+                registry.ready(service)
             elif new_status == "degraded":
-                get_registry().degraded(
-                    service, reason=self.message(resource_id)
-                )
+                registry.degraded(service, reason=self.message(resource_id))
         except Exception:  # registry is best-effort — never mask the real error
             logger.debug(
                 "[access] could not mirror %s → %s", resource_id, new_status,

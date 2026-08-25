@@ -425,3 +425,49 @@ def test_transition_callback_fires_on_recovery(tmp_path: Path) -> None:
         loop.close()
     assert ("a", "unknown", "degraded") in events
     assert ("a", "degraded", "ok") in events
+
+
+def test_access_health_does_not_finish_a_service_that_is_still_starting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lifespan owns initial READY/DEGRADED after the worker starts.
+
+    Access probing during STARTING must not produce an early registry state or
+    a duplicate startup warning. Later health transitions still mirror into a
+    running service.
+    """
+    import app.launcher as launcher_module
+
+    class FakeRegistry:
+        state = "starting"
+
+        def __init__(self) -> None:
+            self.transitions: list[tuple[str, str]] = []
+
+        def current_state(self, service: str) -> str:
+            return self.state
+
+        def ready(self, service: str) -> None:
+            self.transitions.append((service, "ready"))
+
+        def degraded(self, service: str, *, reason: str) -> None:
+            self.transitions.append((service, "degraded"))
+
+    registry = FakeRegistry()
+    monkeypatch.setattr(launcher_module, "get_registry", lambda: registry)
+
+    svc = AccessHealthService()
+    root = tmp_path / "notes"
+    root.mkdir()
+    svc.register(
+        "notes-canonical",
+        resolver=lambda: root,
+        label="Notes folder",
+        registry_service="notes_sync",
+    )
+    _deny(svc, "notes-canonical")
+    assert registry.transitions == []
+
+    registry.state = "degraded"
+    _allow(svc, "notes-canonical")
+    assert registry.transitions == [("notes_sync", "ready")]

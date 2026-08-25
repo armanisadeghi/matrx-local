@@ -1,6 +1,6 @@
 # schema_mirror — canonical cloud schema snapshot
 
-The cloud database (Supabase project `txzxabzwovsujtloxrus`) is the spec for
+The cloud database (Supabase project `brsgrqvjdzwihsvnfqkf`) is the spec for
 the local SQLite mirror. `snapshot.json` is a checked-in introspection dump of
 the cloud schemas (`chat`, `workbench`, `ai`) that
 `scripts/generate_mirror_schema.py` turns into
@@ -32,7 +32,14 @@ order by table_schema, table_name, ordinal_position;
    `kind`, `pk`, `columns[{name,udt,data_type,nullable,default}]`), bump
    `generated_at`.
 
-3. `python scripts/generate_mirror_schema.py` and commit both files together.
+3. When the refresh removes a column that an older app already mirrored, add
+   it to `retired_columns.json`. This is a non-destructive local upgrade ledger:
+   the column remains on disk, is excluded from sync, and is no longer reported
+   as unknown drift. Never remove an entry while supported installations may
+   still carry that column.
+
+4. `python scripts/generate_mirror_schema.py` and commit the snapshot, retirement
+   ledger (when changed), and generated module together.
 
 CI/parity: `python scripts/generate_mirror_schema.py --check` fails when the
 generated module is stale relative to the snapshot.

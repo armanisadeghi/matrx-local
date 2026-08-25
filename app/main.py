@@ -781,7 +781,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await _doc_sync.start_background_sync()
         if _access.is_degraded(NOTES_RESOURCE):
             reason = _access.message(NOTES_RESOURCE)
-            logger.warning(
+            logger.info(
                 "[app/main.py] Phase 2c: Notes auto-sync started but notes dir "
                 "is NOT accessible: %s",
                 reason,
@@ -834,12 +834,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "files-replica",
             resolver=lambda: _fs_engine.root,
             label="Files folder",
+            registry_service="file_sync",
         )
         await asyncio.to_thread(_get_access().recheck, ["files-replica"])
 
         await _fs_engine.start_background_sync()
-        logger.info("[app/main.py] Phase 2e: File sync started ✓")
-        _registry.ready("file_sync")
+        if _get_access().is_degraded("files-replica"):
+            reason = _get_access().message("files-replica")
+            logger.info(
+                "[app/main.py] Phase 2e: File sync started but replica dir "
+                "is NOT accessible: %s",
+                reason,
+            )
+            _registry.degraded("file_sync", reason=reason)
+        else:
+            logger.info("[app/main.py] Phase 2e: File sync started ✓")
+            _registry.ready("file_sync")
     except Exception as exc:
         logger.error(
             "[app/main.py] Phase 2e: File sync FAILED to start — the local file "

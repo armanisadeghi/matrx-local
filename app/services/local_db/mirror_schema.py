@@ -3,10 +3,33 @@
 Structural mirror of the canonical cloud schemas for the local SQLite store.
 Regenerate with: python scripts/generate_mirror_schema.py
 Source snapshot: schema_mirror/snapshot.json (cloud DB is the spec).
+Local upgrade ledger: schema_mirror/retired_columns.json.
 """
 
 SNAPSHOT_HASH = "55fa79e56f36f15fe771e9397ff6b44cba918c61bc88078e35d1f7adbf81ae99"
 SNAPSHOT_GENERATED_AT = "2026-08-13"
+
+# Cloud columns removed after older app versions created them locally. The
+# mirror preserves their data but excludes them from every sync contract.
+RETIRED_MIRROR_COLUMNS = {
+    "chat": {
+        "agent_memory": [
+            "user_id"
+        ],
+        "agent_run": [
+            "user_id"
+        ],
+        "conversation": [
+            "project_id"
+        ],
+        "observational_memory": [
+            "user_id"
+        ],
+        "user_request": [
+            "user_id"
+        ]
+    }
+}
 
 # schema -> table -> {columns, pk, cursor_col, has_deleted_at, create_sql, index_sql}
 MIRROR_TABLES = {

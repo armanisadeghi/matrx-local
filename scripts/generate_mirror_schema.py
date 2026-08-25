@@ -7,6 +7,11 @@ dump of the cloud schemas — and emits
 ``app/services/local_db/mirror_schema.py``, the generated module the engine
 uses to create and drift-check the local mirror tables.
 
+``schema_mirror/retired_columns.json`` is the checked-in upgrade ledger for
+cloud columns that previously existed in the generated SQLite mirror. SQLite
+replicas keep those columns so an app update never destroys local data, while
+the sync contract ignores them after their cloud retirement.
+
 The generated DDL is a *structural* mirror: same table names, same column
 names, SQLite-compatible types. Constraints are intentionally relaxed:
 
@@ -37,6 +42,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOT_PATH = REPO_ROOT / "schema_mirror" / "snapshot.json"
+RETIRED_COLUMNS_PATH = REPO_ROOT / "schema_mirror" / "retired_columns.json"
 OUTPUT_PATH = REPO_ROOT / "app" / "services" / "local_db" / "mirror_schema.py"
 
 # Phase 1 scope: the chat system. workbench.* and ai.* are present in the
@@ -119,9 +125,62 @@ def build_table_entry(schema: str, name: str, spec: dict) -> dict:
     }
 
 
+def load_retired_columns(snapshot: dict) -> dict[str, dict[str, list[str]]]:
+    """Load and validate the non-destructive local upgrade ledger.
+
+    Every entry must name a column that is absent from the current cloud
+    snapshot but whose table is still part of the structural mirror. This
+    catches misspellings and prevents the ledger from masking real drift.
+    """
+    raw = json.loads(RETIRED_COLUMNS_PATH.read_text())
+    validated: dict[str, dict[str, list[str]]] = {}
+    for schema, tables in raw.items():
+        if schema not in MIRRORED_SCHEMAS:
+            raise SystemExit(
+                f"retired column ledger names non-mirrored schema '{schema}'"
+            )
+        snapshot_tables = snapshot["schemas"].get(schema, {})
+        for table, columns in tables.items():
+            spec = snapshot_tables.get(table)
+            if spec is None or spec["kind"] != "table":
+                raise SystemExit(
+                    f"retired column ledger names missing table '{schema}.{table}'"
+                )
+            table_scope = MIRRORED_SCHEMAS[schema].get("tables")
+            excluded = frozenset(
+                MIRRORED_SCHEMAS[schema].get("exclude_tables", ())
+            )
+            if (
+                table_scope is not None and table not in table_scope
+            ) or table in excluded:
+                raise SystemExit(
+                    f"retired column ledger names excluded table '{schema}.{table}'"
+                )
+            if not isinstance(columns, list) or not all(
+                isinstance(column, str) and column for column in columns
+            ):
+                raise SystemExit(
+                    f"retired columns for '{schema}.{table}' must be non-empty strings"
+                )
+            if len(columns) != len(set(columns)):
+                raise SystemExit(
+                    f"retired columns for '{schema}.{table}' contain duplicates"
+                )
+            current = {column["name"] for column in spec["columns"]}
+            still_current = sorted(current.intersection(columns))
+            if still_current:
+                raise SystemExit(
+                    f"retired column ledger still contains current cloud columns for "
+                    f"'{schema}.{table}': {still_current}"
+                )
+            validated.setdefault(schema, {})[table] = sorted(columns)
+    return validated
+
+
 def generate(snapshot: dict) -> str:
     snap_text = json.dumps(snapshot, indent=1, sort_keys=True) + "\n"
     snap_hash = hashlib.sha256(snap_text.encode()).hexdigest()
+    retired_columns = load_retired_columns(snapshot)
 
     mirror: dict[str, dict[str, dict]] = {}
     for schema, opts in MIRRORED_SCHEMAS.items():
@@ -143,16 +202,22 @@ def generate(snapshot: dict) -> str:
     body = json.dumps(mirror, indent=4, sort_keys=True)
     # Render as a Python literal (json booleans/nulls -> Python).
     body = body.replace(": true", ": True").replace(": false", ": False").replace(": null", ": None")
+    retired_body = json.dumps(retired_columns, indent=4, sort_keys=True)
 
     return f'''"""GENERATED FILE — do not edit by hand.
 
 Structural mirror of the canonical cloud schemas for the local SQLite store.
 Regenerate with: python scripts/generate_mirror_schema.py
 Source snapshot: schema_mirror/snapshot.json (cloud DB is the spec).
+Local upgrade ledger: schema_mirror/retired_columns.json.
 """
 
 SNAPSHOT_HASH = "{snap_hash}"
 SNAPSHOT_GENERATED_AT = "{snapshot["generated_at"]}"
+
+# Cloud columns removed after older app versions created them locally. The
+# mirror preserves their data but excludes them from every sync contract.
+RETIRED_MIRROR_COLUMNS = {retired_body}
 
 # schema -> table -> {{columns, pk, cursor_col, has_deleted_at, create_sql, index_sql}}
 MIRROR_TABLES = {body}

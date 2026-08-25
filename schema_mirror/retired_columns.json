@@ -1,0 +1,19 @@
+{
+  "chat": {
+    "agent_memory": [
+      "user_id"
+    ],
+    "agent_run": [
+      "user_id"
+    ],
+    "conversation": [
+      "project_id"
+    ],
+    "observational_memory": [
+      "user_id"
+    ],
+    "user_request": [
+      "user_id"
+    ]
+  }
+}

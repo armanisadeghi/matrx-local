@@ -11,7 +11,8 @@ see schema_mirror/README.md). Drift handling is loud and additive-only:
 - table missing            -> created
 - column missing locally   -> ALTER TABLE ADD COLUMN
 - column type mismatch     -> ERROR log naming schema.table.column (never silent)
-- extra local column       -> ERROR log (someone hand-edited the mirror)
+- known retired column     -> preserved locally and ignored by sync
+- unknown extra column     -> ERROR log (someone hand-edited the mirror)
 
 Incompatible drift never crashes the engine — the mirror is a replica and the
 app must keep working offline — but it must never be silently absorbed.
@@ -28,7 +29,11 @@ from pathlib import Path
 import aiosqlite
 
 from app.common.system_logger import get_logger
-from app.services.local_db.mirror_schema import MIRROR_TABLES, SNAPSHOT_HASH
+from app.services.local_db.mirror_schema import (
+    MIRROR_TABLES,
+    RETIRED_MIRROR_COLUMNS,
+    SNAPSHOT_HASH,
+)
 
 logger = get_logger()
 
@@ -67,8 +72,9 @@ async def attach_and_ensure_mirror(db: aiosqlite.Connection, main_db_path: Path)
             except OSError:
                 logger.debug("[mirror] could not chmod %s", file_path, exc_info=True)
 
+    retained_retired: list[str] = []
     for schema, tables in MIRROR_TABLES.items():
-        await _ensure_schema_tables(db, schema, tables)
+        retained_retired.extend(await _ensure_schema_tables(db, schema, tables))
 
         await db.execute(
             f'CREATE TABLE IF NOT EXISTS "{schema}"._mirror_meta '
@@ -81,6 +87,12 @@ async def attach_and_ensure_mirror(db: aiosqlite.Connection, main_db_path: Path)
         )
 
     await db.commit()
+    if retained_retired:
+        logger.info(
+            "[mirror] preserving %d retired local column(s), excluded from sync: %s",
+            len(retained_retired),
+            ", ".join(sorted(retained_retired)),
+        )
     logger.info(
         "[mirror] attached %d schema(s) under %s (snapshot %s)",
         len(MIRROR_TABLES),
@@ -89,7 +101,10 @@ async def attach_and_ensure_mirror(db: aiosqlite.Connection, main_db_path: Path)
     )
 
 
-async def _ensure_schema_tables(db: aiosqlite.Connection, schema: str, tables: dict) -> None:
+async def _ensure_schema_tables(
+    db: aiosqlite.Connection, schema: str, tables: dict
+) -> list[str]:
+    retained_retired: list[str] = []
     for name, spec in tables.items():
         await db.execute(spec["create_sql"])
         for idx_sql in spec["index_sql"]:
@@ -115,11 +130,16 @@ async def _ensure_schema_tables(db: aiosqlite.Connection, schema: str, tables: d
                     schema, name, col, local_cols[col], typ,
                 )
 
+        retired = set(RETIRED_MIRROR_COLUMNS.get(schema, {}).get(name, ()))
         for col in local_cols:
             if col not in expected:
-                logger.error(
-                    "[mirror] DRIFT: %s.%s has extra local column %s not in the cloud "
-                    "snapshot — the mirror was hand-edited or the snapshot is stale; "
-                    "refresh schema_mirror/snapshot.json",
-                    schema, name, col,
-                )
+                if col in retired:
+                    retained_retired.append(f"{schema}.{name}.{col}")
+                else:
+                    logger.error(
+                        "[mirror] DRIFT: %s.%s has unknown local column %s not in "
+                        "the cloud snapshot or retirement ledger — the mirror may "
+                        "have been hand-edited; verify schema_mirror sources",
+                        schema, name, col,
+                    )
+    return retained_retired

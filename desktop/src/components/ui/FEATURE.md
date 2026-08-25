@@ -1,5 +1,14 @@
 # UI primitives (`desktop/src/components/ui`)
 
+## Shared package boundary
+
+`Separator` is a compatibility export over exact public
+`@ai-matrx/design-system@0.1.1`. Tailwind scans the installed package artifact,
+so package-owned utility classes cannot disappear from production CSS. Button,
+Badge, and Label remain local because their current styling and element contracts
+are not yet identical to the shared primitives; a matching filename alone is not
+evidence for extraction.
+
 ## Number entry
 
 **Always use `NumberInput` from `@/components/ui/number-input` for numeric fields.**

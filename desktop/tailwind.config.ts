@@ -4,7 +4,11 @@ import tailwindcssTypography from "@tailwindcss/typography";
 
 export default {
   darkMode: "class",
-  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  content: [
+    "./index.html",
+    "./src/**/*.{ts,tsx}",
+    "./node_modules/@ai-matrx/design-system/dist/**/*.{js,mjs}",
+  ],
   theme: {
     container: {
       center: true,

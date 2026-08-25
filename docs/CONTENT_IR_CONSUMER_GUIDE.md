@@ -6,6 +6,8 @@ route, cache, or pass through Content IR.
 **Scope:** consumption only. This guide does not authorize a consumer to create
 or mutate kinds, schemas, components, or other Content IR definitions.
 
+**Verified against code and public registry:** 2026-08-24
+
 ## The short version
 
 Content IR lets the platform give structured content a stable kind identity,
@@ -196,35 +198,22 @@ CSP and permissions impose additional constraints.
 
 ### What is portable now
 
-`aidream/apps/shared/content-ir-core` is a 37-file synchronized twin of the
-pure Content IR kernel in `matrx-frontend/features/content-ir`. Its parser,
-normalization, envelope, schema, fingerprint, session, storage-transform, and
-JSON Schema conversion code has no runtime React, browser, Next, Redux, or
-Supabase dependency. Its only runtime package dependency is `ajv`.
+**Install immutable registry artifacts.** Matrx Local pins
+`@ai-matrx/content-ir@0.2.0` and `@ai-matrx/content-ir-react@0.1.0` exactly.
+Both packages ship built ESM/CommonJS and declarations; this repo contains no
+workspace link, copied kernel, or vendored package tarball. The core parser,
+normalization, envelope, schema, fingerprint, session, storage transform, and
+JSON Schema conversion remain independent of Local.
 
 That is enough to reuse the **core data-processing layer** in:
 
 | Target | Core parse/schema/envelope logic | Full kind consumption/UI |
 | --- | --- | --- |
 | Matrx Local (React/Vite) | Yes | Needs local catalog adapter and renderer |
-| Regular HTML/JavaScript | Yes after a built JS distribution exists | Needs catalog adapter and generic/approved renderer |
-| Chrome extension | Yes after a built JS distribution exists | Needs catalog adapter plus extension-safe component policy |
+| Regular HTML/JavaScript | Yes | Needs catalog adapter and a non-React renderer |
+| Chrome extension | Yes | Needs catalog adapter plus extension-safe component policy |
 
 ### What is not turnkey yet
-
-**Superseded 2026-08-23 for the kernel:** `@ai-matrx/content-ir` is published
-(0.2.0, npm) and this app consumes it as a normal dependency. The RENDER layer
-`@ai-matrx/content-ir-react` 0.1.0 is built and gated (51 tests) but its npm
-name does not exist yet — npm trusted publishing cannot CREATE a name — so it
-is consumed from a committed tarball in `desktop/vendor/` with a one-line swap
-recorded there. The paragraph below describes the state before that.
-
-The package WAS private, source-only (`exports: { ".": "./index.ts" }`),
-and consumed through aidream's workspace, with no published/versioned build
-artifact that Matrx Local, a standalone web page, or the extension could install
-as a normal dependency. Its public barrel also exports a registry type with a
-type-only React import, which is harmless at runtime but unnecessarily leaks a
-React type requirement to TypeScript consumers.
 
 Further, the following remain host-coupled:
 
@@ -233,10 +222,9 @@ Further, the following remain host-coupled:
 - React route/registry and frontend state bindings.
 - The user-authored database-component compiler/sandbox runtime.
 
-**Conclusion:** the intended portability is real for roughly 90% of the pure
-processing utilities. It is **not yet 90% of an end-to-end renderer**. A small
-packaging project plus two host adapters are needed before Local, vanilla JS,
-and the extension can consume the system consistently.
+**Conclusion:** packaging is complete for both the core and React registry.
+End-to-end consumption still requires each host's authorized catalog,
+diagnostics, streaming integration, and component trust policy.
 
 ## WHAT IS BUILT (2026-08-23) — the first consumer slice landed
 
@@ -244,7 +232,7 @@ Prerequisites 1–3 below are DONE for this app; 4–5 remain open. What shipped
 
 | Piece | Where |
 |---|---|
-| Shared packages consumed (no local fork) | `@ai-matrx/content-ir` 0.2.0 (npm) + `@ai-matrx/content-ir-react` 0.1.0 (`desktop/vendor/`, pending npm publish) |
+| Shared packages consumed (no local fork) | Exact public `@ai-matrx/content-ir@0.2.0` + `@ai-matrx/content-ir-react@0.1.0` registry artifacts |
 | Catalog client — authenticated, RLS-filtered, ETag'd | `desktop/src/features/content-ir/catalog/client.ts` → `GET /workflow/kinds` + `/{slug}` |
 | Registries (identity + component bindings, ONE fetch) | `desktop/src/features/content-ir/runtime/registry.ts` |
 | Envelope ingestion (preserve valid, strip + report malformed) | `desktop/src/features/content-ir/runtime/inbound.ts` |
@@ -273,17 +261,15 @@ for one identity is never reused for another.
 Complete these in this order. They are deliberately small and independently
 verifiable.
 
-1. **Publish a framework-free core distribution.** Build and version ESM +
-   `.d.ts` output from the twin; make it installable outside the aidream
-   workspace. Split pure exports from React-flavored type exports (or remove
-   that type dependency from the pure entry point). Test install/use from a
-   Vite React fixture, plain browser build, and extension build.
-2. **Provide an authorized resolved-kind API contract.** It must return all
+1. **DONE — publish the shared distributions.** The core and React registry
+   are exact public dependencies with ESM/CommonJS and declarations. Consumer
+   builds prove the installed artifacts; never restore a workspace link or
+   committed tarball.
+2. **DONE — provide an authorized resolved-kind API contract.** It returns all
    RLS-visible public and user-owned kinds/components a consumer may render,
-   with kind/version/ETag semantics and a by-slug read. Do not assume the
-   current public `/workflow/kinds` endpoint satisfies private Shapes kinds
-   until verified.
-3. **Build Matrx Local's generic Content IR viewer.** Integrate the package,
+   with kind/version/ETag semantics and a by-slug read. Local sends the current
+   user session to `/workflow/kinds`; the server remains visibility authority.
+3. **DONE — build Matrx Local's generic Content IR viewer.** It integrates the package,
    catalog adapter, cache, envelope ingestion, generic fallback, and a small
    bundled-component registry. This is the first high-value consumer slice.
 4. **Extract a shared custom-component sandbox protocol.** Make the existing

@@ -83,8 +83,10 @@ matter here:
 ## Hard rules
 
 1. No global access boolean. No cross-resource clearing. Ever.
-2. Never claim FDA from an errno. Only `diagnose_fda() == denied` justifies
-   the FDA remediation message; tests pin this
+2. Never claim FDA from an errno or from the engine helper alone. The frontend
+   claims FDA remediation only when `diagnose_fda() == denied` **and** the
+   Tauri parent-app probe also reports denied; macOS evaluates those process
+   identities separately. Tests pin this
    (`tests/smoke/test_access_health.py`).
 3. This package stays leaf-level: resolvers are callables, the launcher
    import is lazy. Importing `documents`/`paths` at module level will cycle.

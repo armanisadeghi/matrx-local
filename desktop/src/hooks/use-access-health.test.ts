@@ -1,9 +1,9 @@
 /**
  * deriveAccessPresentation — the copy contract that kills the false-FDA bug.
  *
- * The definitive "Full Disk Access" CLAIM may render ONLY when the engine's
- * FDA diagnosis positively established the denial. Windows/Linux never see
- * the words at all. Mapped-dir failures name their own folder and never
+ * The definitive "Full Disk Access" CLAIM may render ONLY when the engine
+ * helper and Tauri parent app both establish the denial. Windows/Linux never
+ * see the words at all. Mapped-dir failures name their own folder and never
  * claim FDA. (Backend wording is pinned separately in
  * tests/smoke/test_access_health.py — this pins the frontend layer.)
  */
@@ -44,15 +44,65 @@ const fdaGranted: AccessFdaDiagnosis = { ...fdaDenied, status: "granted" };
 const fdaUnknown: AccessFdaDiagnosis = { ...fdaDenied, status: "indeterminate" };
 
 describe("deriveAccessPresentation", () => {
-  it("claims FDA ONLY on a positive engine denial", () => {
+  it("claims FDA only when the engine helper and parent app agree", () => {
+    const p = deriveAccessPresentation(
+      resource(),
+      { platform: "darwin", fda: fdaDenied },
+      false,
+    );
+    expect(p.title).toContain("Full Disk Access");
+    expect(p.primaryAction).toBe("open_settings");
+    expect(p.showFdaAction).toBe(true);
+  });
+
+  it("does not turn a helper-only denial into a false FDA claim", () => {
+    const p = deriveAccessPresentation(
+      resource({
+        capabilities: {
+          enumerate: {
+            path: "/Users/test/Documents/Matrx/Notes",
+            capability: "enumerate",
+            ok: false,
+            errno: 1,
+            error: "Operation not permitted",
+            op: "listing notes",
+            source: "probe",
+            at: 1,
+            generation: 1,
+          },
+        },
+        last_failure: {
+          path: "/Users/test/Documents/Matrx/Notes",
+          capability: "enumerate",
+          ok: false,
+          errno: 1,
+          error: "Operation not permitted",
+          op: "listing notes",
+          source: "probe",
+          at: 1,
+          generation: 1,
+        },
+      }),
+      { platform: "darwin", fda: fdaDenied },
+      true,
+    );
+    expect(p.title).not.toContain("Full Disk Access");
+    expect(p.body).toContain("does not prove");
+    expect(p.primaryAction).toBe("check_again");
+    expect(p.showFdaAction).toBe(false);
+    expect(p.scope).toBe("contextual");
+  });
+
+  it("does not claim FDA when the parent-app result is unavailable", () => {
     const p = deriveAccessPresentation(
       resource(),
       { platform: "darwin", fda: fdaDenied },
       null,
     );
-    expect(p.title).toContain("Full Disk Access");
-    expect(p.primaryAction).toBe("open_settings");
-    expect(p.showFdaAction).toBe(true);
+    expect(p.title).not.toContain("Full Disk Access");
+    expect(p.body).toContain("does not prove");
+    expect(p.showFdaAction).toBe(false);
+    expect(p.scope).toBe("contextual");
   });
 
   it("does NOT claim FDA when the diagnosis is indeterminate", () => {

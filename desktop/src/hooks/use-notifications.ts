@@ -26,6 +26,18 @@ export function notificationToastKey(notification: AppNotification): string {
     : notification.id;
 }
 
+/**
+ * Action-needed items are durable remediation state rendered by the global
+ * banner and notification center. Re-rendering the same state as a transient
+ * popup duplicates it (and hydration can create several popups at startup).
+ * Only ordinary event notifications belong in the toast lane.
+ */
+export function shouldShowNotificationToast(
+  notification: AppNotification,
+): boolean {
+  return notification.actionNeeded == null;
+}
+
 // Programmatically generated tones via Web Audio API — no asset files needed
 function playTone(type: "chime" | "alert" | "error" | "success"): void {
   try {
@@ -258,6 +270,7 @@ export function useNotifications() {
       notifications
         .filter(
           (notification) =>
+            shouldShowNotificationToast(notification) &&
             !hiddenToastIds.has(notificationToastKey(notification)),
         )
         .slice(0, 3),

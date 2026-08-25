@@ -26,6 +26,10 @@ That's not an error. It's a fact."** (Arman, repeatedly.)
   `[action-needed]`, not ERROR (`DownloadManagerContext.tsx`).
 - Adding a new self-fixable failure = one constructor in `failures.py`
   (adapted through `actionNeededFromDownload` and the canonical dispatcher).
+- Reconnect/history snapshots stay inside the Download indicator/modal. They
+  are discoverable and dismissible there, but are not promoted into a fresh
+  global banner or toast when no download was requested in the current app
+  session. A live retry clears the snapshot marker, so a new failure can alert.
 
 ## Attribution precision (the FLUX lesson)
 

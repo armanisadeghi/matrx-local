@@ -101,6 +101,19 @@ export function actionNeededFromDownload(
   };
 }
 
+/**
+ * Global proactive remediation is reserved for a failure observed during the
+ * current app session. Persisted download history remains discoverable through
+ * the download indicator/modal, but reconnect hydration must not resurrect an
+ * old Hugging Face/Civitai request as a new app-wide alert.
+ */
+export function actionNeededFromLiveDownload(
+  download: DownloadEntry,
+): ActionNeeded | null {
+  if (download.snapshot === true) return null;
+  return actionNeededFromDownload(download);
+}
+
 export function actionNeededFromAccessResource(
   resource: AccessResourceHealth,
   health: AccessHealth,
@@ -108,6 +121,10 @@ export function actionNeededFromAccessResource(
 ): ActionNeeded | null {
   if (resource.status !== "degraded") return null;
   const presentation = deriveAccessPresentation(resource, health, parentFdaProbe);
+  // A disagreement between the desktop app and engine helper is diagnostic
+  // context for the owning Documents surface, not a new app-wide permission
+  // request. Promoting it globally recreated the false FDA banner everywhere.
+  if (presentation.scope === "contextual") return null;
   const action: ActionNeededAction =
     presentation.primaryAction === "create_folder"
       ? {

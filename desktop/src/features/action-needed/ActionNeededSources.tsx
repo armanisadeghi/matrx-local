@@ -8,7 +8,7 @@ import type { PermissionKey } from "@/hooks/use-permissions";
 import { registerActionNeededHandler } from "./actions";
 import {
   actionNeededFromAccessResource,
-  actionNeededFromDownload,
+  actionNeededFromLiveDownload,
 } from "./adapters";
 import { actionNeededStore } from "./store";
 
@@ -22,7 +22,7 @@ export function ActionNeededSources() {
   const downloadItems = useMemo(
     () =>
       (downloads?.downloads ?? [])
-        .map(actionNeededFromDownload)
+        .map(actionNeededFromLiveDownload)
         .filter((item) => item != null),
     [downloads?.downloads],
   );

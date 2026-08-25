@@ -222,9 +222,16 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
       if (remaining > 0) eta_seconds = remaining / speed_bps;
     }
 
+    // Hydration/reconnect snapshots describe persisted state; they are not
+    // evidence that this app run attempted a transfer. Explicitly clear the
+    // marker on every live event so a restored entry can become current again
+    // if the user retries it in this session.
+    const origin: DownloadEventOrigin =
+      (payload as DownloadEntry).snapshot === true ? "snapshot" : "live";
     const merged = {
       ...(payload as DownloadEntry & { id: string }),
       backend,
+      snapshot: origin === "snapshot",
       speed_bps,
       ...(eta_seconds !== undefined ? { eta_seconds } : {}),
       // Ensure updated_at always present
@@ -232,11 +239,8 @@ export function DownloadManagerProvider({ children }: { children: ReactNode }) {
         (payload as DownloadEntry).updated_at ?? new Date().toISOString(),
     };
 
-    // Hydration/reconnect snapshots describe persisted state; they are not
-    // evidence that this app run attempted a transfer. Preserve real live
-    // failures as errors while logging historical failures as warnings.
-    const origin: DownloadEventOrigin =
-      (payload as DownloadEntry).snapshot === true ? "snapshot" : "live";
+    // Preserve real live failures as errors while logging historical failures
+    // as warnings.
     const statusLog = getDownloadStatusLog(
       payload as Partial<DownloadEntry> & { id: string },
       origin,

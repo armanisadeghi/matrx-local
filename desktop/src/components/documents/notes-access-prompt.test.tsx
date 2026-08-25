@@ -38,6 +38,7 @@ function render(
   res: AccessResourceHealth,
   platform: string,
   fdaStatus: "granted" | "denied" | "indeterminate" | null,
+  parentFdaProbe: boolean | null = null,
 ): string {
   const presentation = deriveAccessPresentation(
     res,
@@ -52,7 +53,7 @@ function render(
           }
         : null,
     },
-    null,
+    parentFdaProbe,
   );
   return renderToStaticMarkup(
     <PermissionsProvider>
@@ -67,12 +68,19 @@ function render(
 }
 
 describe("NotesAccessPrompt", () => {
-  it("positively-established macOS FDA denial → FDA copy + System Settings action", () => {
-    const html = render(resource(), "darwin", "denied");
+  it("corroborated macOS FDA denial → FDA copy + System Settings action", () => {
+    const html = render(resource(), "darwin", "denied", false);
     expect(html).toContain("Full Disk Access");
     expect(html).toContain("Open System Settings");
     expect(html).toContain("/Users/test/Documents/Matrx/Notes");
     expect(html).toContain("Check again");
+  });
+
+  it("helper-only denial never tells the user to grant FDA again", () => {
+    const html = render(resource(), "darwin", "denied", true);
+    expect(html).toContain("does not prove");
+    expect(html).not.toContain("Matrx needs Full Disk Access");
+    expect(html).not.toContain("Open System Settings");
   });
 
   it("unestablished macOS cause → evidence copy, settings offered as secondary", () => {

@@ -10,9 +10,10 @@
  * cadence.
  *
  * Copy contract (deriveAccessPresentation): the definitive "grant Full Disk
- * Access" claim renders ONLY when the engine's FDA diagnosis is a positive
- * `denied`. Anything else gets evidence-based wording. Windows/Linux never
- * mention FDA.
+ * Access" claim renders ONLY when BOTH macOS process identities agree it is
+ * denied: the Tauri parent app and the engine helper. A helper denial alone
+ * cannot diagnose the parent app's TCC grant. Anything else gets
+ * evidence-based wording. Windows/Linux never mention FDA.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -226,13 +227,16 @@ export interface AccessPresentation {
   primaryAction: "open_settings" | "create_folder" | "check_again";
   /** True only when the FDA remediation (System Settings deep link) is justified. */
   showFdaAction: boolean;
+  /** Contextual states stay on the owning page instead of becoming app-wide alerts. */
+  scope: "global" | "contextual";
 }
 
 /**
  * Pure evidence → copy mapping. The FDA *claim* appears ONLY when the engine
- * positively established the denial (fda.status === "denied"); a hedged
- * mention is allowed on darwin when the cause is unestablished. Windows and
- * Linux never see the words "Full Disk Access".
+ * helper and Tauri parent app both report denial. macOS TCC evaluates process
+ * identities independently, so a helper-only denial cannot prove that the
+ * visible desktop app lacks its already-granted permission. Windows and Linux
+ * never see the words "Full Disk Access".
  */
 export function deriveAccessPresentation(
   resource: AccessResourceHealth,
@@ -250,6 +254,7 @@ export function deriveAccessPresentation(
       }`,
       primaryAction: "create_folder",
       showFdaAction: false,
+      scope: "global",
     };
   }
 
@@ -261,10 +266,12 @@ export function deriveAccessPresentation(
       body: `${resource.message} Adjust the folder's permissions and check again.`,
       primaryAction: "check_again",
       showFdaAction: false,
+      scope: "global",
     };
   }
 
-  const fdaDenied = health.fda?.status === "denied";
+  const engineFdaDenied = health.fda?.status === "denied";
+  const fdaDenied = engineFdaDenied && parentFdaProbe === false;
   if (fdaDenied && !isMapped) {
     return {
       title: "Matrx needs Full Disk Access",
@@ -273,6 +280,7 @@ export function deriveAccessPresentation(
         "Access in System Settings so notes can sync.",
       primaryAction: "open_settings",
       showFdaAction: true,
+      scope: "global",
     };
   }
 
@@ -282,6 +290,30 @@ export function deriveAccessPresentation(
       body: `${resource.message} Check the folder's permissions or remap it in Settings.`,
       primaryAction: "check_again",
       showFdaAction: false,
+      scope: "global",
+    };
+  }
+
+  // The helper and parent are separate macOS TCC principals. A helper-only
+  // denial is evidence that this operation failed in the helper, NOT proof
+  // that the user must grant Full Disk Access to the already-authorized app.
+  // Do not reuse resource.message here: the backend cannot see the parent
+  // result, so that string may contain the same false FDA diagnosis.
+  if (engineFdaDenied) {
+    const failedCapabilities = Object.entries(resource.capabilities)
+      .filter(([, observation]) => !observation.ok)
+      .map(([capability]) => capability.replace(/_/g, " "))
+      .join(", ");
+    return {
+      title: "Matrx needs to recheck your notes folder",
+      body:
+        `The notes engine reported a denied ${failedCapabilities || "filesystem"} ` +
+        `operation at ${resource.last_failure?.path || where}, but that does not ` +
+        "prove the Matrx app lacks Full Disk Access. Check again to refresh the " +
+        "engine's access state.",
+      primaryAction: "check_again",
+      showFdaAction: false,
+      scope: "contextual",
     };
   }
 
@@ -297,5 +329,6 @@ export function deriveAccessPresentation(
     // Unestablished cause still deserves the settings shortcut on macOS —
     // but as a secondary option, not a definitive claim.
     showFdaAction: true,
+    scope: "global",
   };
 }

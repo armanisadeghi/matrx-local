@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   notificationToastKey,
+  shouldShowNotificationToast,
   type AppNotification,
 } from "./use-notifications";
 
@@ -49,5 +50,24 @@ describe("notificationToastKey", () => {
       read: false,
     };
     expect(notificationToastKey(notification)).toBe("ordinary");
+  });
+});
+
+describe("shouldShowNotificationToast", () => {
+  it("does not duplicate durable action-needed state as a popup", () => {
+    expect(shouldShowNotificationToast(actionNotification(10))).toBe(false);
+  });
+
+  it("keeps ordinary event notifications in the toast lane", () => {
+    expect(
+      shouldShowNotificationToast({
+        id: "ordinary",
+        title: "Done",
+        message: "The operation completed.",
+        level: "success",
+        timestamp: 1,
+        read: false,
+      }),
+    ).toBe(true);
   });
 });

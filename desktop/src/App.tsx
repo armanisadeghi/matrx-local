@@ -464,10 +464,6 @@ function AppInner() {
       { path: "/configurations", element: <Configurations /> },
       { path: "/coding-sessions", element: <CodingSessions /> },
       {
-        path: "/claude-history",
-        element: <Navigate to="/coding-sessions?tab=history" replace />,
-      },
-      {
         path: "/bridge-test",
         element: (
           <BridgeTest engineStatus={status} engineUrl={url} user={auth.user} />
@@ -572,6 +568,14 @@ function AppInner() {
               <Route path="*" element={<Login auth={auth} />} />
             ) : (
               <>
+                {/* Redirect-only routes must live in the router, not appPages.
+                    AppLayout keeps every appPage mounted while hiding inactive
+                    pages, so a Navigate there would keep firing after the user
+                    selected another destination. */}
+                <Route
+                  path="/claude-history"
+                  element={<Navigate to="/coding-sessions?tab=history" replace />}
+                />
                 <Route
                   path="/*"
                   element={

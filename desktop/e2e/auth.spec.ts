@@ -44,4 +44,25 @@ test.describe("authentication", () => {
     // And we are NOT on the login page anymore.
     await expect(page.getByText("Sign in to your workspace")).toHaveCount(0);
   });
+
+  test("legacy Coding Sessions redirect does not trap later navigation", async ({
+    page,
+  }) => {
+    test.skip(
+      !creds,
+      "desktop/.env.test missing — run: node e2e/setup/create-test-user.mjs (see docs/UI_TESTING.md)",
+    );
+    await loginViaUI(page, creds!);
+
+    await page.goto("/#/claude-history");
+    await expect(page).toHaveURL(/\/#\/coding-sessions\?tab=history$/);
+
+    await page.getByRole("link", { name: "Chat", exact: true }).click();
+    await expect(page).toHaveURL(/\/#\/chat$/);
+
+    // Give any keep-alive page effects a chance to run. A redirect mounted in
+    // AppLayout used to fire again here and force the hash back to Coding Sessions.
+    await page.waitForTimeout(500);
+    await expect(page).toHaveURL(/\/#\/chat$/);
+  });
 });

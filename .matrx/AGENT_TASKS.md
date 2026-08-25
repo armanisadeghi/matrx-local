@@ -227,7 +227,7 @@ NER is a core product path. Cloud API cost scales with volume. GLiNER is the
 right local runtime (encoder NER) — not llama-server / GGUF.
 
 **Plan doc**
-[`docs/GLINER_NER_INTEGRATION_PLAN.md`](../docs/GLINER_NER_INTEGRATION_PLAN.md)
+[`common-docs/systems/knowledge/knowledge-graph/HANDOFF.md`](/Users/armanisadeghi/code/common-docs/systems/knowledge/knowledge-graph/HANDOFF.md)
 
 **Subtasks**
 - [x] Arman reviews plan + answers decision checklist in the doc — approved 2026-07-13

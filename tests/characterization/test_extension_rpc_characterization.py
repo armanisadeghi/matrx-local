@@ -3,7 +3,7 @@
 Pins the exact set of registered RPC commands and the routing/validation
 behavior of the `tool` handler as of 2026-07-10. The Chrome extension speaks
 this contract — any change here must be coordinated with matrx-extend
-(docs/MATRX_EXTEND_CONNECTION.md).
+(/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md).
 
 Runs without an engine, network, or credentials. `dispatch` is monkeypatched
 so no real tool executes.
@@ -44,7 +44,7 @@ def test_handlers_registry_exact() -> None:
         f"EXTENSION RPC SURFACE CHANGED: registered commands are {sorted(actual)}, "
         f"expected {sorted(EXPECTED_COMMANDS)}. The matrx-extend Chrome extension "
         "depends on this exact command set — if the change is intentional, update "
-        "this characterization AND docs/MATRX_EXTEND_CONNECTION.md AND the "
+        "this characterization AND /Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md AND the "
         "extension client."
     )
 

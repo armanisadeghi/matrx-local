@@ -99,7 +99,7 @@ without scrolling logs.
 | `app/api/extension_invoke.py` | `invoke_extension_tool` outbound (Phase 2, planned) | TBD |
 | `app/tools/dispatcher.py` | `dispatch(tool_name, tool_input, session)` — generic tool entrypoint | top-level |
 | `app/websocket_manager.py` | `broadcast()` / `broadcast_notification()` engine push | ~200-220 |
-| `docs/MATRX_EXTEND_CONNECTION.md` | Full protocol reference | whole file |
+| `/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md` | Full protocol reference | whole file |
 
 ## Failure modes
 
@@ -137,6 +137,6 @@ without scrolling logs.
 
 ## Reference
 
-Full protocol: `docs/MATRX_EXTEND_CONNECTION.md`.
+Full protocol: `/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md`.
 Master cross-repo doc:
-`/Users/armanisadeghi/code/matrx-extend/.claude/worktrees/exciting-moser-4b984f/docs/CROSS_REPO_INTEGRATION.md`.
+`/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md`.

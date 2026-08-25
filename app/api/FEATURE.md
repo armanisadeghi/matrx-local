@@ -4,7 +4,7 @@ Extension scope: `extension_handlers.py`, `extension_routes.py`, `extension_auth
 `extension_broadcast.py`, `extension_invoke.py`, `extension_ws_manager.py`,
 `extension_bridge_routes.py`, `extension_metrics.py`, `extension_boot_check.py`,
 plus `cross_component_envelope.py` / `cross_component_router.py`.
-Cross-repo map: `docs/MATRX_EXTEND_CONNECTION.md`.
+Cross-repo map: `/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md`.
 
 Coding-session scope: `coding_session_routes.py`; implementation and wire
 contract: `app/services/coding_sessions/FEATURE.md`.
@@ -63,7 +63,7 @@ validation for asymmetric algs (RS256/ES256) when `SUPABASE_URL` is set;
 HS256 falls back to bearer-presence over loopback (loud one-time degraded-mode
 log). Rejection logging is rate-limited (first miss WARNs, quiet-gap re-WARNs,
 periodic INFO rate summary; state dict bounded at 256 keys). Full rationale in
-the module docstring + `docs/MATRX_EXTEND_CONNECTION.md`.
+the module docstring + `/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md`.
 
 The engine-issued `mxl_pair_…` token is accepted over both direct loopback and
 the Cloudflare tunnel, but only for `/extension/*`. `AuthMiddleware` performs

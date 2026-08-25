@@ -50,6 +50,6 @@ No server-side signing secret on the user's machine. Logic: `app/api/extension_a
 | RS256 / ES256 | JWKS fetch when `SUPABASE_URL` set; verify sig, iss, exp |
 | HS256 / no JWKS | Bearer-presence on loopback only — trust boundary is OS user |
 
-Boot logs active posture: `[extension_auth]`. Rationale: [MATRX_EXTEND_CONNECTION.md](../MATRX_EXTEND_CONNECTION.md).
+Boot logs active posture: `[extension_auth]`. Rationale: [/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md](/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md).
 
-Extension command surface: [extension-bridge.md](./extension-bridge.md).
+Extension command surface: [/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md](/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md).

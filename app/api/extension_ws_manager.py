@@ -10,7 +10,7 @@ deliberately isolated so:
     the primary UI session manager (`app.websocket_manager`).
   * Wire format diverges — `/ws` speaks the in-process tool dispatcher's
     language, `/extension/ws` speaks the engine→browser invocation
-    envelope contract documented in `docs/MATRX_EXTEND_CONNECTION.md`.
+    envelope contract documented in `/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md`.
 
 This module owns:
 

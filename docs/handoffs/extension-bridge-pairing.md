@@ -12,7 +12,7 @@ required a pair code the desktop never issued; both halves are now built,
 released, and unit/smoke-verified — but the **packaged end-to-end test on a
 real machine has never been run**, and that is the next gate.
 
-Read first: [docs/MATRX_EXTEND_CONNECTION.md](../MATRX_EXTEND_CONNECTION.md)
+Read first: [/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md](/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md)
 (the full bridge contract; § Auth model documents pairing).
 
 ## The vision (Arman's requirements, in his words where possible)

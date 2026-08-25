@@ -151,7 +151,7 @@ grow or import the in-code lists. [app/services/catalogs/FEATURE.md](app/service
 |---|---|
 | Auth (publishable key, user JWT, no `SUPABASE_JWT_SECRET` ever, `/extension/*` token posture) | [docs/official/authentication.md](docs/official/authentication.md) + `app/api/extension_auth.py` |
 | Settings keys / env reference | [docs/official/settings-catalog.md](docs/official/settings-catalog.md) · [docs/official/configuration.md](docs/official/configuration.md) |
-| matrx-extend ↔ engine (Channel B live; envelopes, auth, verification, tunnel runbook) | [docs/MATRX_EXTEND_CONNECTION.md](docs/MATRX_EXTEND_CONNECTION.md); SOR: `/Users/armanisadeghi/code/common-docs/systems/clients/extension/FEATURE.md` |
+| matrx-extend ↔ engine (Channel B live; envelopes, auth, verification, tunnel runbook) | [/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md](/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md); SOR: `/Users/armanisadeghi/code/common-docs/systems/clients/extension/STATE.md` |
 | Cloud Chat as a surface (desktop tools for cloud agents, ordered blocks, "+" menu) | [docs/CLOUD_CHAT_SURFACE.md](docs/CLOUD_CHAT_SURFACE.md) + [app/services/delegation/FEATURE.md](app/services/delegation/FEATURE.md) |
 | Google Workspace on desktop — the `google_email_send` review card IS the authorization; the engine parks the call, never sends | [app/services/delegation/FEATURE.md](app/services/delegation/FEATURE.md) § User-review calls |
 | Media durability (signed URL = handoff, never identity; pass `file_id`) | `/Users/armanisadeghi/code/common-docs/systems/media/media-durability/FEATURE.md` |

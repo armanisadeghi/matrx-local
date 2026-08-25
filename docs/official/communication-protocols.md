@@ -64,4 +64,4 @@ Auth: `SCRAPER_API_KEY` in dev; production uses user Supabase JWT. Details: [rem
 
 ## Extension surface
 
-`/extension/rpc`, `/extension/ws`, broadcast RPC — [extension-bridge.md](./extension-bridge.md).
+`/extension/rpc`, `/extension/ws`, broadcast RPC — [/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md](/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md).

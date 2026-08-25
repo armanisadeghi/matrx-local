@@ -448,6 +448,7 @@ are condensed under Completed. Still open:
   workaround note in tests/conftest.py if desired.
 ## Completed
 
+- [TASK-005] Preserved retired mirror columns without hiding unknown drift — 2026-08-25 (`613fa2651`, MXL-D-082)
 - [TASK-002] Rebuilt all four Coding Sessions tabs as truthful, inspectable control surfaces with durable operation evidence, uncapped pagination, guided readiness, verified session-detail sync, and persistent local runtime history — 2026-08-23 (`1106549b7`)
 - [TASK-003] Claude-native titles/branches reconciled onto mirrored sessions; live proof 232/232 — 2026-08-16 (`app/services/coding_sessions/title_sync.py`, FEATURE.md § Claude's own labels)
 - [TASK-003b] Return direction: AI Matrx rename reaches Claude's own label, last-writer-wins — 2026-08-16 (`claude_label_writer.py`; proof `aidream/scripts/_verify_claude_label_return_sync.py`)

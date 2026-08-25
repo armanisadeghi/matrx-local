@@ -1063,19 +1063,6 @@ mention it as training lineage.)_
 
 ---
 
-### MXL-D-082 — Dev startup reports local schema-mirror drift against its snapshot
-- **Area:** local DB schema mirror startup reconciliation.
-- **Evidence (2026-08-23):** an isolated `./scripts/dev.sh` boot on current
-  `main` completed, but emitted `ERROR [mirror] DRIFT` for extra local columns
-  including `chat.agent_memory.user_id`, `chat.agent_run.user_id`,
-  `chat.conversation.project_id`, and `chat.observational_memory.user_id`, while
-  also adding several cloud columns missing locally. The engine still reached
-  ready and shut down cleanly.
-- **Status:** open, unrelated to Coding Sessions. Determine whether the dev DB
-  legitimately retains migrated local-only columns or the committed
-  `schema_mirror/snapshot.json` is stale; then make the distinction explicit so
-  expected local extensions do not log as corruption and real drift remains loud.
-
 ## Pending Arman review
 
 _(promotion proposals prepared by non-interactive `/task-hygiene` runs land here — ≤3 per batch)_

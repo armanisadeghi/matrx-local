@@ -1,30 +1,15 @@
 # Tools Overview
 
-**Authoritative list:** `app/tools/catalog.py`
+Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/systems/agents/agent-tools/STATE.md — read it before touching this feature in ANY repo.
+
+**Authoritative list:** `app/tools/catalog.py`. Never maintain a second list here or anywhere
+else — a hand-written category table goes stale the day it is written.
 
 ```bash
 uv run python -m app.tools.tool_sync list
 ```
 
-Cloud canon: Supabase `tool.definition` ⨝ `tool.binding` (executor `matrx-local`). Rules: `app/tools/FEATURE.md`. Count enforced by `tests/parity/test_tool_count.py`.
-
----
-
-## Categories (human overview — may lag catalog)
-
-| Category | Examples |
-|----------|----------|
-| File ops | Read, Write, Edit, Glob, Grep |
-| Shell | Bash, BashOutput, TaskStop |
-| System | SystemInfo, Screenshot, ListDirectory, OpenUrl, OpenPath |
-| Clipboard / notify | ClipboardRead/Write, Notify |
-| Network | FetchUrl, FetchWithBrowser, Scrape, Search, Research |
-| Browser automation | BrowserNavigate, Click, Type, Extract, Screenshot, Eval, Tabs |
-| Process / window / input | ListProcesses, LaunchApp, ListWindows, TypeText, Hotkey, … |
-| Audio | ListAudioDevices, RecordAudio, PlayAudio, TranscribeAudio |
-| Discovery / monitoring | NetworkInfo, PortScan, SystemResources, WatchDirectory, … |
-| OS integration | AppleScript, PowerShellScript, ScheduleTask, ImageOCR, WifiNetworks, … |
-
-Platform-gated tools (mail, messages, calendar, etc.) are in the catalog with platform flags — do not duplicate rows here.
+Local rules and traps: `app/tools/FEATURE.md`. Count enforced by
+`tests/parity/test_tool_count.py`. Platform-gated tools carry platform flags in the catalog.
 
 Invoke via `POST /tools/invoke` or WebSocket — [communication-protocols.md](./communication-protocols.md).

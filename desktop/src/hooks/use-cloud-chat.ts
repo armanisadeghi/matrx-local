@@ -1740,7 +1740,16 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         let requestBody: Record<string, unknown> = body;
 
         const consumeSegment = async (response: Response) => {
-        for await (const event of parseAIDreamStream(response, abort.signal)) {
+        for await (const event of parseAIDreamStream(response, {
+          signal: abort.signal,
+          onProtocolIssue: (issue) => {
+            const detail =
+              issue.kind === "malformed-line"
+                ? issue.detail.line
+                : stringifyStreamDetail(issue.detail);
+            addDiagnostic(`Invalid stream frame (${issue.kind}): ${detail}`);
+          },
+        })) {
           eventCount += 1;
 
           switch (event.event) {

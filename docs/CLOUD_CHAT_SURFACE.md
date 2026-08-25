@@ -118,6 +118,28 @@ of matrx-frontend's `lib/chat-protocol`. Rules (do not regress):
   for cache/TTS/copy and for hydrated (DB-loaded) messages, which render
   through the legacy path in `ChatMessages.tsx` when `blocks` is absent.
 
+## Shared agent stream kernel (2026-08-24)
+
+Every AIDream agent response now enters the desktop through one adapter,
+`desktop/src/lib/aidream-stream.ts`, backed by the exact public
+`@ai-matrx/agents@0.2.1` artifact. Both `use-cloud-chat.ts` and the older
+`use-chat.ts` engine route consume that adapter; there is no second inline
+`TextDecoder` / newline / `JSON.parse` implementation.
+
+The package owns byte framing, split UTF-8 preservation, compact answer and
+reasoning normalization, background stream drainage, cancellation, trailing
+unterminated input, and delivery of already-framed events before a transport
+failure. The desktop adapter owns only generated event typing and visible
+diagnostics: malformed JSON and valid unknown envelopes are recoverable but
+are recorded on the assistant message instead of disappearing silently.
+
+Consumer forcing tests live in `desktop/src/lib/aidream-stream.test.ts`; they
+pin malformed recovery, compact reasoning separation, split UTF-8, fragmented
+and trailing frames, cancellation, partial transport failure, and unknown
+valid JSON. Upgrade this dependency only to an immutable registry artifact
+whose own package and tarball gates are green; never point this shipped client
+at an aidream workspace source tree.
+
 ## The "+" menu (`desktop/src/components/chat/PlusMenu.tsx`)
 
 Working now: model override, temperature / max-tokens overrides

@@ -27,6 +27,7 @@ import type { ToolImageData, ToolMediaArtifact } from "@/lib/api";
 import type { ActionNeeded } from "@/features/action-needed";
 import type { ChatMessageBlock } from "@/lib/chat-blocks";
 import { buildConversationStartRequest } from "@/lib/conversation-start";
+import { parseAIDreamStream, stringifyStreamDetail } from "@/lib/aidream-stream";
 
 // ---- Types ----
 
@@ -640,6 +641,7 @@ export function useChat({ engineUrl }: UseChatOptions) {
       }
 
       let accumulated = "";
+      let accumulatedReasoning = "";
 
       try {
         // ── Local Model Path ──────────────────────────────────────────────
@@ -733,65 +735,76 @@ export function useChat({ engineUrl }: UseChatOptions) {
           });
         }
 
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            const raw = line.trim();
-            if (!raw) continue;
-
-            try {
-              const event = JSON.parse(raw) as {
-                event: string;
-                data?: Record<string, unknown>;
+        let streamError: string | null = null;
+        const streamDiagnostics: string[] = [];
+        for await (const event of parseAIDreamStream(resp, {
+          signal: abort.signal,
+          onProtocolIssue: (issue) => {
+            const detail =
+              issue.kind === "malformed-line"
+                ? issue.detail.line
+                : stringifyStreamDetail(issue.detail);
+            streamDiagnostics.push(
+              `Invalid stream frame (${issue.kind}): ${detail}`,
+            );
+            updateAssistant({
+              streamDiagnostics: streamDiagnostics.slice(-12),
+            });
+          },
+        })) {
+          switch (event.event) {
+            case "data": {
+              const inner = event.data as {
+                type?: string;
+                event?: string;
+                conversation_id?: string;
               };
-
-              switch (event.event) {
-                case "data": {
-                  const inner = event.data as { event?: string; conversation_id?: string } | undefined;
-                  if (inner?.event === "conversation_id" && inner.conversation_id) {
-                    updateConversationMeta({
-                      serverConversationId: inner.conversation_id,
-                      routeMode: "conversation",
-                    });
-                  }
-                  break;
-                }
-                case "chunk": {
-                  const text = (event.data as { text?: string })?.text ?? "";
-                  accumulated += text;
-                  updateAssistant({ content: accumulated, isStreaming: true });
-                  break;
-                }
-                case "completion": {
-                  const output = (event.data as { output?: string })?.output;
-                  if (output && !accumulated) accumulated = output;
-                  break;
-                }
-                case "error": {
-                  const msg = (event.data as { message?: string })?.message ?? "Unknown error";
-                  updateAssistant({ content: accumulated || msg, isStreaming: false, error: msg });
-                  break;
-                }
-                case "end":
-                  break;
+              if (
+                (inner.type === "conversation_id" || inner.event === "conversation_id") &&
+                inner.conversation_id
+              ) {
+                updateConversationMeta({
+                  serverConversationId: inner.conversation_id,
+                  routeMode: "conversation",
+                });
               }
-            } catch {
-              // Malformed line — skip
+              break;
             }
+            case "chunk": {
+              accumulated += event.data.text;
+              updateAssistant({ content: accumulated, isStreaming: true });
+              break;
+            }
+            case "reasoning_chunk": {
+              accumulatedReasoning += event.data.text;
+              updateAssistant({
+                reasoning: accumulatedReasoning,
+                streamStatus: "Reasoning...",
+              });
+              break;
+            }
+            case "completion": {
+              const output = (event.data as { output?: string }).output;
+              if (output && !accumulated) accumulated = output;
+              break;
+            }
+            case "error": {
+              streamError = event.data.message ?? "Unknown error";
+              updateAssistant({
+                content: accumulated || streamError,
+                isStreaming: false,
+                error: streamError,
+              });
+              break;
+            }
+            case "end":
+              break;
           }
         }
 
-        updateAssistant({ content: accumulated, isStreaming: false });
+        if (!streamError) {
+          updateAssistant({ content: accumulated, isStreaming: false });
+        }
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "AbortError") {
           updateAssistant({ isStreaming: false });

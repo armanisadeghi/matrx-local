@@ -42,7 +42,6 @@ class ScreenshotArtifact(BaseModel):
     media_ref: MediaRefValue | None = None
     url: str | None = None
     cdn_url: str | None = None
-    signed_url: str | None = None
     download_url: str | None = None
     visibility: Literal["private", "shared", "public"] = "private"
     capture: dict[str, Any] = Field(default_factory=dict)

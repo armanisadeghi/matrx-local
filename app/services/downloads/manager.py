@@ -1092,6 +1092,12 @@ class DownloadManager:
         # (civitai.com → their signed CDN URL), which is exactly right.
         # The key is never logged.
         request_headers: dict[str, str] = {}
+        # Caller-supplied auth (e.g. file-sync hydration of durable
+        # /files/{id}/download URLs — the platform has no signed URLs).
+        # httpx drops Authorization on cross-origin redirects, which is right.
+        meta_headers = (entry.metadata or {}).get("request_headers")
+        if isinstance(meta_headers, dict):
+            request_headers.update({str(k): str(v) for k, v in meta_headers.items()})
         if (entry.metadata or {}).get("civitai_download"):
             from app.services.media_gen.paths import read_civitai_key  # noqa: PLC0415
             civitai_key = read_civitai_key()

@@ -755,7 +755,9 @@ CREATE TABLE IF NOT EXISTS local_artifacts (
     cloud_file_id    TEXT,
     url              TEXT,
     cdn_url          TEXT,
-    signed_url       TEXT,
+    -- signed_url column retired 2026-08-26 (signed URLs eradicated platform-
+    -- wide; durable url/cdn_url/download_url only). Existing local DBs keep a
+    -- vestigial NULL column; nothing reads or writes it.
     download_url     TEXT,
     visibility       TEXT NOT NULL DEFAULT 'private',
     sync_attempts    INTEGER NOT NULL DEFAULT 0,

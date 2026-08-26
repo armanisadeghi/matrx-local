@@ -590,7 +590,6 @@ function renderBlockText(blockType: string, content: string | null, data: Record
     readString(data?.src) ??
     readString(data?.imageUrl) ??
     readString(data?.cdn_url) ??
-    readString(data?.signed_url) ??
     readString(data?.download_url);
   if (!url) return null;
   if (blockType === "image") return `![Generated image](${url})`;
@@ -1839,7 +1838,6 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                 const urlValue =
                   readString(record?.cdn_url) ||
                   readString(record?.url) ||
-                  readString(record?.signed_url) ||
                   readString(record?.download_url);
                 if (urlValue && type === "image_output") {
                   answerRenderBlocks.set(`data-${eventCount}-${type}`, {

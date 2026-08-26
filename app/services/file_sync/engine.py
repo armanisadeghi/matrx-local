@@ -610,7 +610,14 @@ class FileSyncEngine:
             filename=f"{file_id}:{content_key}:{dest.name}",
             display_name=str(dest.relative_to(self.root) if dest.is_relative_to(self.root) else dest.name),
             urls=[url],
-            metadata={"dest_dir": str(dest.parent), "dest_filename": dest.name, "file_id": file_id},
+            metadata={
+                "dest_dir": str(dest.parent),
+                "dest_filename": dest.name,
+                "file_id": file_id,
+                # Durable /files/{id}/download URLs are authenticated; the
+                # manager attaches this Bearer header (signed URLs are gone).
+                "request_headers": self._client.auth_header(),
+            },
             priority=10,
         )
         deadline = asyncio.get_event_loop().time() + _HYDRATE_TIMEOUT_SECONDS

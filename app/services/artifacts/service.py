@@ -314,7 +314,6 @@ class ArtifactService:
             media_ref=MediaRefValue(file_id=str(file_id)),
             url=response.get("url"),
             cdn_url=response.get("cdn_url"),
-            signed_url=response.get("signed_url"),
             download_url=response.get("download_url"),
             visibility=response.get("visibility") or "private",
             capture=capture,
@@ -357,14 +356,14 @@ class ArtifactService:
                  artifact_id, kind, local_path, media_type, file_name, size_bytes,
                  checksum, source_width, source_height, capture_source,
                  capture_json, sync_state, cloud_file_id, url, cdn_url,
-                 signed_url, download_url, visibility, sync_error, published_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 download_url, visibility, sync_error, published_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(artifact_id) DO UPDATE SET
                  local_path=COALESCE(excluded.local_path, local_artifacts.local_path),
                  sync_state=excluded.sync_state,
                  cloud_file_id=excluded.cloud_file_id,
                  url=excluded.url, cdn_url=excluded.cdn_url,
-                 signed_url=excluded.signed_url, download_url=excluded.download_url,
+                 download_url=excluded.download_url,
                  sync_error=excluded.sync_error,
                  published_at=excluded.published_at,
                  updated_at=datetime('now')""",
@@ -384,7 +383,6 @@ class ArtifactService:
                 artifact.file_id,
                 artifact.url,
                 artifact.cdn_url,
-                artifact.signed_url,
                 artifact.download_url,
                 artifact.visibility,
                 sync_error,
@@ -399,14 +397,13 @@ class ArtifactService:
         await self._db.execute(
             """UPDATE local_artifacts SET
                  sync_state='cloud_ready', cloud_file_id=?, url=?, cdn_url=?,
-                 signed_url=?, download_url=?, visibility=?, size_bytes=?,
+                 download_url=?, visibility=?, size_bytes=?,
                  checksum=?, sync_error=NULL, published_at=?, updated_at=datetime('now')
                WHERE artifact_id=?""",
             (
                 artifact.file_id,
                 artifact.url,
                 artifact.cdn_url,
-                artifact.signed_url,
                 artifact.download_url,
                 artifact.visibility,
                 artifact.size_bytes,
@@ -517,7 +514,6 @@ class ArtifactService:
             media_ref=MediaRefValue(file_id=file_id) if file_id else None,
             url=row.get("url"),
             cdn_url=row.get("cdn_url"),
-            signed_url=row.get("signed_url"),
             download_url=row.get("download_url"),
             visibility=row.get("visibility") or "private",
             capture=json.loads(row.get("capture_json") or "{}"),

@@ -128,9 +128,22 @@ class MatrxFilesClient:
     # ------------------------------------------------------------------
 
     async def get_url_envelope(self, file_id: str) -> dict[str, Any]:
-        """{url, cdn_url, signed_url, download_url} — mint fresh right before
-        enqueueing a download; signed URLs expire."""
-        return await self._request("GET", f"/files/{file_id}/url")
+        """{url, cdn_url, download_url} — the DURABLE contract off the record.
+
+        Nothing mints signed URLs anymore (GET /files/{id}/url is deleted);
+        the record's url/download_url point at the authenticated
+        /files/{id}/download route, fetched with our Bearer JWT.
+        """
+        record = await self.get_record(file_id)
+        return {
+            "url": record.get("url"),
+            "cdn_url": record.get("cdn_url"),
+            "download_url": record.get("download_url"),
+        }
+
+    def auth_header(self) -> dict[str, str]:
+        """Authorization header for direct byte fetches of durable file URLs."""
+        return {"Authorization": f"Bearer {self._jwt}"}
 
     async def get_record(self, file_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/files/{file_id}")

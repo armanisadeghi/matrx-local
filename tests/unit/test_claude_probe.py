@@ -187,7 +187,7 @@ async def test_signed_out_status_falls_back_to_desktop_oauth_record(
         org_id="org-1234",
         email="user@example.com",
     )
-    assert snapshot.account_label == "U***r@e***.com"
+    assert snapshot.account_label == "u***r@e***.com"
     assert snapshot.local_display_identity == "user@example.com"
     assert snapshot.diagnostic is not None and "desktop OAuth" in snapshot.diagnostic
 

@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from app.services.coding_sessions.claude_probe import (
+    derive_account_key,
     read_account_snapshot,
     resolve_claude_executable,
 )
@@ -136,11 +137,59 @@ async def test_account_states_are_distinct(
         f"echo '{json.dumps(auth_payload)}'; else echo '2.1.228'; fi\n",
     )
 
-    snapshot = await read_account_snapshot(executable=launcher)
+    snapshot = await read_account_snapshot(
+        executable=launcher,
+        oauth_record_path=tmp_path / "no-desktop-oauth-record.json",
+    )
 
     assert snapshot.available is False
     assert snapshot.reason == expected_reason
     assert snapshot.probe_status == expected_status
+
+
+async def test_signed_out_status_falls_back_to_desktop_oauth_record(
+    tmp_path: Path,
+) -> None:
+    """`auth status` misreporting signed-out must not lose identity.
+
+    Observed on Claude 2.1.228: status says logged out while runs execute.
+    The desktop OAuth record carries the same identity fields, and the
+    derived key must be byte-identical to a CLI-derived one so sessions
+    never fork across probe sources.
+    """
+    launcher = _write_cli(
+        tmp_path / "claude",
+        "if [ \"$1\" = \"auth\" ]; then "
+        "echo '{\"loggedIn\": false, \"authMethod\": \"none\", "
+        "\"apiProvider\": \"firstParty\"}'; else echo '2.1.228'; fi\n",
+    )
+    record = tmp_path / "claude.json"
+    record.write_text(
+        json.dumps(
+            {
+                "oauthAccount": {
+                    "emailAddress": "User@Example.com",
+                    "organizationUuid": "org-1234",
+                }
+            }
+        )
+    )
+
+    snapshot = await read_account_snapshot(
+        executable=launcher, oauth_record_path=record
+    )
+
+    assert snapshot.available is True
+    assert snapshot.probe_status == "ready"
+    assert snapshot.account_key == derive_account_key(
+        api_provider="firstParty",
+        auth_method="claude.ai",
+        org_id="org-1234",
+        email="user@example.com",
+    )
+    assert snapshot.account_label == "U***r@e***.com"
+    assert snapshot.local_display_identity == "user@example.com"
+    assert snapshot.diagnostic is not None and "desktop OAuth" in snapshot.diagnostic
 
 
 async def test_invalid_auth_command_is_execution_failure(tmp_path: Path) -> None:

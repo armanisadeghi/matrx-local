@@ -286,6 +286,42 @@ async def _run_command(
     )
 
 
+_DESKTOP_OAUTH_RECORD = Path.home() / ".claude.json"
+_MAX_OAUTH_RECORD_BYTES = 33_554_432
+
+
+def _desktop_oauth_identity(
+    record_path: Path | None = None,
+) -> tuple[str | None, str | None] | None:
+    """(email, org_id) from the desktop app's OAuth record, or None.
+
+    ``~/.claude.json`` `oauthAccount` is written by Claude's own client on
+    sign-in and names the active subscription account. Returns None when the
+    record is missing/unreadable or carries neither identity field.
+    """
+    path = record_path or _DESKTOP_OAUTH_RECORD
+    try:
+        if path.stat().st_size > _MAX_OAUTH_RECORD_BYTES:
+            return None
+        record = json.loads(path.read_bytes())
+    except (OSError, ValueError):
+        return None
+    account = record.get("oauthAccount") if isinstance(record, dict) else None
+    if not isinstance(account, dict):
+        return None
+    raw_email = account.get("emailAddress")
+    email = (
+        raw_email.strip().lower()
+        if isinstance(raw_email, str) and raw_email.strip()
+        else None
+    )
+    raw_org = account.get("organizationUuid")
+    org_id = raw_org if isinstance(raw_org, str) and raw_org else None
+    if email is None and org_id is None:
+        return None
+    return email, org_id
+
+
 def _safe_object(raw: bytes) -> dict[str, Any] | None:
     try:
         value = json.loads(raw)
@@ -300,6 +336,7 @@ async def read_account_snapshot(
     timeout: float = _DEFAULT_TIMEOUT_SECONDS,
     resolver: Callable[[], Path | None] = resolve_claude_executable,
     process_factory: Callable[..., Awaitable[Any]] = asyncio.create_subprocess_exec,
+    oauth_record_path: Path | None = None,
 ) -> AccountSnapshot:
     """Probe Claude sign-in and reduce it to the canonical privacy-safe state."""
 
@@ -333,8 +370,40 @@ async def read_account_snapshot(
     )
     auth_object = _safe_object(auth.stdout)
     # Claude emits structured logged-out state even when the command exits
-    # non-zero. Inspect that state before classifying an execution failure.
+    # non-zero. Inspect that state before classifying an execution failure —
+    # but `auth status` is NOT the only identity source: the desktop app's
+    # OAuth record (~/.claude.json `oauthAccount`) carries the same email and
+    # organization the CLI reports when signed in, and stays readable when
+    # `auth status` misreports (observed 2026-08-26 on Claude 2.1.228: status
+    # says logged out while runs execute fine — and transiently mid-run while
+    # the CLI refreshes credentials). The derivation constants below are the
+    # CLI's own values ("firstParty"/"claude.ai"), verified byte-identical
+    # against historical provider_account_key rows, so identity never forks.
     if auth_object is not None and auth_object.get("loggedIn") is not True:
+        fallback = _desktop_oauth_identity(oauth_record_path)
+        if fallback is not None:
+            email, org_id = fallback
+            account_key = derive_account_key(
+                api_provider="firstParty",
+                auth_method="claude.ai",
+                org_id=org_id,
+                email=email,
+            )
+            return AccountSnapshot(
+                True,
+                account_key,
+                account_key[:12],
+                None,
+                None,
+                account_label=account_label(email=email, org_id=org_id),
+                executable_path=executable_path,
+                probe_status="ready",
+                diagnostic=(
+                    "identity from the desktop OAuth record; `claude auth "
+                    "status` reported signed out"
+                ),
+                local_display_identity=email or org_id,
+            )
         return AccountSnapshot(
             False,
             None,

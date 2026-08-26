@@ -518,7 +518,7 @@ Re-deriving the ladder here would be the exact defect
 - **Conflict rule: last-writer-wins, Claude Code wins a tie.** Both sides agree only while
   `applied_title` equals the shown label. If Claude's index title no longer equals the server's
   `claude_title`, Claude Code was renamed too and the return leg stands down for that pass. If
-  Claude Code overwrites a title we wrote, nothing is lost — the V21 ledger recognises our own value
+  Claude Code overwrites a title we wrote, nothing is lost — the V21 ledger recognizes our own value
   and stands down, and the next inbound pass pulls Claude's value back.
 - **Latency is honest.** Claude Code loads this index at startup and serves it from memory — a disk
   write is NOT picked up live (verified 2026-08-16: the app kept reporting its cached title after

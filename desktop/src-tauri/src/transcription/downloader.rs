@@ -226,7 +226,7 @@ pub fn is_valid_model(path: &Path) -> bool {
 
     if !is_valid_magic {
         eprintln!(
-            "[downloader] is_valid_model: unrecognised magic bytes for {:?}: [{:#04x}, {:#04x}, {:#04x}, {:#04x}]",
+            "[downloader] is_valid_model: unrecognized magic bytes for {:?}: [{:#04x}, {:#04x}, {:#04x}, {:#04x}]",
             path, magic[0], magic[1], magic[2], magic[3]
         );
     }

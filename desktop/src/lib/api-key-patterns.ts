@@ -1,7 +1,7 @@
 /**
  * API Key Provider Patterns
  *
- * This file defines all the rules for recognising AI provider API keys when
+ * This file defines all the rules for recognizing AI provider API keys when
  * a user pastes a .env file (or any block of KEY=VALUE lines) into the bulk
  * import dialog.
  *
@@ -53,7 +53,7 @@ export const GLOBAL_STRIP_SUFFIXES: string[] = [
 export interface ProviderPattern {
   /**
    * `names[0]` is the canonical provider ID — must match the backend's
-   * VALID_PROVIDERS set.  All other entries are recognised aliases.
+   * VALID_PROVIDERS set.  All other entries are recognized aliases.
    * All comparisons are case-insensitive.
    */
   names: string[];
@@ -320,7 +320,7 @@ function stripSuffixes(name: string): string {
 
 /**
  * Given a raw env-var name (e.g. `NEXT_PUBLIC_GEMINI_API_KEY`), return the
- * canonical provider ID (e.g. `"google"`) or `null` if unrecognised.
+ * canonical provider ID (e.g. `"google"`) or `null` if unrecognized.
  */
 export function resolveProvider(rawName: string): string | null {
   const upper = rawName.trim().toUpperCase();

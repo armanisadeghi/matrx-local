@@ -234,7 +234,7 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## API keys / credentials
 
-### MXL-D-073 — Live `api_key_provider` catalog is missing the `brave` row, so Brave keys are silently unrecognised
+### MXL-D-073 — Live `api_key_provider` catalog is missing the `brave` row, so Brave keys are silently unrecognized
 - **Area:** `public.catalog_entries` kind `api_key_provider`, app `matrx-local`
   (live rows) vs `app/services/catalogs/compiled_data.py`
   (`COMPILED_API_KEY_PROVIDER_ENTRIES`) / `desktop/src/lib/api-key-patterns.ts`

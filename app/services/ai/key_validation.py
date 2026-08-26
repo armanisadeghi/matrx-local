@@ -21,7 +21,7 @@ to rotate a perfectly good credential — the exact dead end we are removing.
 
 Status codes are NOT uniform across providers, so "401 means bad" is wrong:
 Google and xAI answer an invalid key with **400**. Each spec therefore names the
-statuses that mean "rejected" for that provider, and anything unrecognised falls
+statuses that mean "rejected" for that provider, and anything unrecognized falls
 through to `unknown` rather than being guessed at.
 
 The Civitai trap
@@ -79,10 +79,10 @@ class ProviderSpec:
 
 
 def _account_name(body: Any) -> str | None:
-    """Pull a human-recognisable account name out of a whoami payload.
+    """Pull a human-recognizable account name out of a whoami payload.
 
     Providers disagree on the field name, so try the usual suspects in order of
-    how recognisable they are to the person reading the result.
+    how recognizable they are to the person reading the result.
     """
     if not isinstance(body, dict):
         return None

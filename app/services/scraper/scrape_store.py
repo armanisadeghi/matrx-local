@@ -75,7 +75,7 @@ def classify_push_error(exc: BaseException) -> str | None:
     The distinction is the whole point: an unauthenticated or offline push is
     a STATE that resolves itself, and burning a retry on it strands a perfectly
     good row in terminal 'failed' for a reason that fixed itself minutes later.
-    An unrecognised exception counts as a rejection on purpose — the budget
+    An unrecognized exception counts as a rejection on purpose — the budget
     exists to stop a pathologically broken row from retrying forever, and an
     error we cannot name is exactly that until someone names it.
     """

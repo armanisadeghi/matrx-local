@@ -45,7 +45,7 @@ decides which:
 
 **Only a genuine rejection may spend the retry budget.** A user who was signed
 out for a week, or whose network was down, must not return to a permanently
-failed backlog. An *unrecognised* exception counts as a rejection on purpose —
+failed backlog. An *unrecognized* exception counts as a rejection on purpose —
 the budget exists to stop a pathologically broken row from retrying forever,
 and an error nobody has named is exactly that until someone names it.
 

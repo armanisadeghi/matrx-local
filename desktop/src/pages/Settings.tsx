@@ -1073,7 +1073,7 @@ export function Settings({
   }, [loadApiKeyStatus]);
 
   // Keep the provider patterns fresh from the remote catalog so a new
-  // provider row in the DB is recognised without an app update.
+  // provider row in the DB is recognized without an app update.
   useEffect(() => {
     void refreshApiKeyPatterns();
   }, []);
@@ -2315,12 +2315,12 @@ export function Settings({
                           GEMINI_API_KEY
                         </code>{" "}
                         → Google are auto-detected. You can edit any value or
-                        manually map unrecognised keys below.
+                        manually map unrecognized keys below.
                       </p>
                       <Textarea
                         value={bulkEnvText}
                         onChange={(e) => handleBulkEnvChange(e.target.value)}
-                        placeholder={`OPENAI_API_KEY=sk-...\nGEMINI_API_KEY=AIzaSy...\nHUGGING_FACE_HUB_TOKEN=hf_...\n# Comments and unrecognised lines are ignored`}
+                        placeholder={`OPENAI_API_KEY=sk-...\nGEMINI_API_KEY=AIzaSy...\nHUGGING_FACE_HUB_TOKEN=hf_...\n# Comments and unrecognized lines are ignored`}
                         className="font-mono text-sm min-h-40 resize-y"
                         spellCheck={false}
                       />
@@ -2353,7 +2353,7 @@ export function Settings({
                                 {matched.length} of {bulkParsed.length} keys
                                 matched
                                 {unmatched.length > 0 &&
-                                  ` · ${unmatched.length} unrecognised`}
+                                  ` · ${unmatched.length} unrecognized`}
                               </p>
                               {selectableKeys.length > 0 && (
                                 <Button
@@ -2517,7 +2517,7 @@ export function Settings({
                             {unmatched.length > 0 && (
                               <div className="space-y-2">
                                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                                  Unrecognised — map manually to import
+                                  Unrecognized — map manually to import
                                 </p>
                                 {unmatched.map((entry) => {
                                   const customProvider =

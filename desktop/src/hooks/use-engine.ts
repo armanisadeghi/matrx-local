@@ -399,6 +399,52 @@ export function useEngine() {
       update({ wsConnected: false })
     );
 
+    // Push the session to the engine; if the engine REJECTS it (revoked or
+    // otherwise unverifiable), self-heal instead of staying silently split:
+    // one forced refresh mints a genuinely new session and is re-pushed; if
+    // that is rejected too, the session is dead — sign out so the login
+    // screen appears rather than a UI that looks signed in while every
+    // engine cloud lane (sync, coding bridge, browser runtime) is down.
+    const pushSessionToEngine = async (
+      accessToken: string,
+      userId: string,
+      refreshToken?: string,
+      expiresIn?: number,
+      isRetryAfterRefresh = false,
+    ): Promise<void> => {
+      try {
+        await engine.syncTokenToPython(accessToken, userId, refreshToken, expiresIn);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        if (!message.includes("invalid_supabase_session")) {
+          console.warn("[engine] syncTokenToPython failed:", e);
+          return;
+        }
+        if (!isRetryAfterRefresh) {
+          console.warn(
+            "[engine] engine rejected the session; forcing a token refresh",
+          );
+          const { data, error } = await supabase.auth.refreshSession();
+          const refreshed = data?.session;
+          if (!error && refreshed?.access_token && refreshed.user?.id) {
+            await pushSessionToEngine(
+              refreshed.access_token,
+              refreshed.user.id,
+              refreshed.refresh_token ?? undefined,
+              refreshed.expires_in ?? undefined,
+              true,
+            );
+            return;
+          }
+        }
+        console.error(
+          "[engine] session rejected by the engine even after refresh — " +
+            "signing out so a real login can mint a valid session",
+        );
+        await supabase.auth.signOut().catch(() => {});
+      }
+    };
+
     // Re-configure cloud sync and sync JWT to Python whenever auth state changes.
     const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange(
       (event, session) => {
@@ -410,12 +456,12 @@ export function useEngine() {
           if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
             if (session?.access_token && session?.user?.id) {
               // Push the JWT to Python so it persists across restarts.
-              engine.syncTokenToPython(
+              void pushSessionToEngine(
                 session.access_token,
                 session.user.id,
                 session.refresh_token ?? undefined,
                 session.expires_in ?? undefined,
-              ).catch((e) => console.warn("[engine] syncTokenToPython failed:", e));
+              );
 
               // Skip if initialize() already sent configure within the last 10s
               // to avoid a duplicate call on the INITIAL_SESSION event.
@@ -430,13 +476,15 @@ export function useEngine() {
             }
           } else if (event === "TOKEN_REFRESHED") {
             if (session?.access_token && session?.user?.id) {
-              // Push refreshed JWT to Python immediately.
-              engine.syncTokenToPython(
+              // Push refreshed JWT to Python immediately. Already-refreshed:
+              // a rejection here goes straight to sign-out, no second refresh.
+              void pushSessionToEngine(
                 session.access_token,
                 session.user.id,
                 session.refresh_token ?? undefined,
                 session.expires_in ?? undefined,
-              ).catch((e) => console.warn("[engine] syncTokenToPython (refresh) failed:", e));
+                true,
+              );
               try {
                 await engine.reconfigureCloudSync(session.access_token, session.user.id);
               } catch (e) {

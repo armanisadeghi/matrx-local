@@ -88,7 +88,19 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
     verified_user = verification.user
     if verification.status != "verified" or verified_user is None:
         invalidate_token(req.access_token)
-        await clear_token()
+        # Reject the POSTED token, but never wipe a previously-stored session
+        # over it (remote_auth's own doctrine). The 2026-08-25 incident: the UI
+        # restored a revoked session, posted it, and this handler cleared the
+        # engine's good token — leaving the UI "signed in" while every engine
+        # cloud lane (bridge outbox, sync, the browser runtime trigger) died.
+        # Only a stored copy of the SAME bad token is cleared.
+        await _clear_stored_token_if_matches(req.access_token)
+        logger.warning(
+            "[token_routes] rejected posted session for user_id=%s "
+            "(verification=%s); stored session left untouched unless identical",
+            req.user_id,
+            verification.status,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
@@ -101,7 +113,7 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
         )
     if verified_user.user_id != req.user_id:
         invalidate_token(req.access_token)
-        await clear_token()
+        await _clear_stored_token_if_matches(req.access_token)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -264,6 +276,23 @@ async def get_token() -> dict[str, Any]:
         "is_expired": is_expired,
         "access_token": row.get("access_token"),
     }
+
+
+async def _clear_stored_token_if_matches(posted_token: str) -> None:
+    """Clear the stored session only when it IS the token that just failed.
+
+    A bad NEW token must not erase a different, previously-verified stored
+    session — that turns one flaky/revoked restore into a silent engine-wide
+    sign-out while the desktop UI still looks signed in.
+    """
+    repo = TokenRepo()
+    try:
+        row = await repo.get()
+    except Exception:
+        logger.debug("[token_routes] stored-token read failed", exc_info=True)
+        return
+    if row and row.get("access_token") == posted_token:
+        await clear_token()
 
 
 @router.delete("/token")

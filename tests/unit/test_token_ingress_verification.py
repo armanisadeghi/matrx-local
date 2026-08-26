@@ -125,10 +125,16 @@ async def test_verified_matching_token_is_saved_and_wakes_publisher(
 
 
 @pytest.mark.anyio
-async def test_invalid_token_clears_incompatible_persisted_state(
+async def test_invalid_posted_token_leaves_previous_session_untouched(
     monkeypatch: pytest.MonkeyPatch,
     token_route_fakes,
 ) -> None:
+    """A rejected NEW token must not erase a different stored session.
+
+    2026-08-25 incident: the UI restored a revoked session and posted it; the
+    old behavior cleared the engine's previously-verified token, silently
+    killing every engine cloud lane while the UI still looked signed in.
+    """
     repo, outbox = token_route_fakes
 
     async def _verify(_token: str) -> TokenVerificationResult:
@@ -142,13 +148,35 @@ async def test_invalid_token_clears_incompatible_persisted_state(
 
     assert raised.value.status_code == 401
     assert raised.value.detail["code"] == "invalid_supabase_session"
-    assert repo.cleared == 1
-    assert repo.row is None
-    assert outbox.credential_changes == 1
+    assert repo.cleared == 0
+    assert repo.row is not None and repo.row["access_token"] == "previous-token"
+    assert outbox.credential_changes == 0
 
 
 @pytest.mark.anyio
-async def test_verified_user_mismatch_is_rejected_and_cleared(
+async def test_invalid_posted_token_clears_only_its_own_stored_copy(
+    monkeypatch: pytest.MonkeyPatch,
+    token_route_fakes,
+) -> None:
+    repo, _outbox = token_route_fakes
+    repo.row = {"access_token": "wrong-project", "user_id": "user-1"}
+
+    async def _verify(_token: str) -> TokenVerificationResult:
+        return TokenVerificationResult("invalid")
+
+    monkeypatch.setattr(token_routes, "verify_supabase_token_result", _verify)
+    with pytest.raises(HTTPException) as raised:
+        await token_routes.save_token(
+            token_routes.TokenRequest(access_token="wrong-project", user_id="user-1")
+        )
+
+    assert raised.value.status_code == 401
+    assert repo.cleared == 1
+    assert repo.row is None
+
+
+@pytest.mark.anyio
+async def test_verified_user_mismatch_is_rejected_but_stored_session_survives(
     monkeypatch: pytest.MonkeyPatch,
     token_route_fakes,
 ) -> None:
@@ -166,7 +194,8 @@ async def test_verified_user_mismatch_is_rejected_and_cleared(
 
     assert raised.value.status_code == 409
     assert raised.value.detail["code"] == "session_user_mismatch"
-    assert repo.cleared == 1
+    assert repo.cleared == 0
+    assert repo.row is not None and repo.row["access_token"] == "previous-token"
 
 
 @pytest.mark.anyio

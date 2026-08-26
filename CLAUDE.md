@@ -173,7 +173,7 @@ grow or import the in-code lists. [app/services/catalogs/FEATURE.md](app/service
   for shipped regression classes).
 - **Authenticated UI verification** uses the shared canonical admin test account —
   never create a replacement or ask Arman for credentials:
-  `AI_ADMIN_USERNAME="admin@admin.com"`, `AI_ADMIN_PASSWORD="Password1234#"`
+  `AI_ADMIN_USERNAME="admin@admin.com"`, `AI_ADMIN_PASSWORD="<see AI_ADMIN_PASSWORD in .env>"`
   (Playwright reads them from gitignored `desktop/.env.test`; legacy
   `TEST_USER_EMAIL`/`TEST_USER_PASSWORD` aliases accepted). Super-admin identity —
   never use it to prove ordinary-user RLS or entitlements.
@@ -198,3 +198,5 @@ Production-grade only (no stubs/TODOs); simplest version first; one task at a ti
 keep going until done or stuck; update docs when code changes. Never edit
 `docs/official/**` (or any `*/official/*`) without Arman's explicit approval — flag
 staleness instead.
+
+- **Logging into any Matrx UI**: sign in as `admin@admin.com` — the password is `AI_ADMIN_PASSWORD` in the `.env` of `aidream` or `matrx-frontend` (`AI_ADMIN_USERNAME` holds the email).

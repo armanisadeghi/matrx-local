@@ -26,7 +26,7 @@ pnpm test:e2e:headed   # watch it run
 
   ```bash
   AI_ADMIN_USERNAME="admin@admin.com"
-  AI_ADMIN_PASSWORD="Password1234#"
+  AI_ADMIN_PASSWORD="<see AI_ADMIN_PASSWORD in .env>"
   ```
 
   This is the same account documented by `matrx-frontend`; do not create a

@@ -23,7 +23,8 @@ function parseEnvFile(filePath) {
   if (!existsSync(filePath)) return values;
   for (const line of readFileSync(filePath, "utf8").split("\n")) {
     const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-    if (match && !line.trim().startsWith("#")) values[match[1]] = match[2];
+    if (match && !line.trim().startsWith("#"))
+      values[match[1]] = match[2].replace(/^(["'])(.*)\1$/, "$2");
   }
   return values;
 }
@@ -39,7 +40,15 @@ if (!supabaseUrl || !supabaseKey) {
 }
 
 const canonicalEmail = "admin@admin.com";
-const canonicalPassword = "Password1234#";
+const canonicalPassword =
+  process.env.AI_ADMIN_PASSWORD || appEnv.AI_ADMIN_PASSWORD;
+if (!canonicalPassword) {
+  console.error(
+    "FATAL: AI_ADMIN_PASSWORD missing — set it in desktop/.env (gitignored) or the environment. " +
+      "Never hardcode the canonical password.",
+  );
+  process.exit(1);
+}
 const envTestPath = path.join(desktopDir, ".env.test");
 const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: { persistSession: false, autoRefreshToken: false },

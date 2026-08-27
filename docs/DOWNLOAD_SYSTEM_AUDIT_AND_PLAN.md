@@ -406,7 +406,7 @@ Add **same-source backoff** as a follow-up: track host of each active download; 
 
 ## Anti-patterns to never reintroduce
 
-These are documented in [aidream/.claude/skills/accurate-download-progress.md](../../aidream/.claude/skills/accurate-download-progress.md). The matrx-local code currently violates 4 of the 5:
+These are documented in [aidream/.claude/skills/accurate-download-progress/SKILL.md](../../aidream/.claude/skills/accurate-download-progress/SKILL.md). The matrx-local code currently violates 4 of the 5:
 
 1. ❌ Counter and writer in different places — Sites #1, #5 (the bug).
 2. ❌ Threshold-buffer before counting — Sites #1, #5.
@@ -430,4 +430,4 @@ Before merging any download-related PR, walk the eight-item checklist at the bot
 
 - This audit's source: full directory walk by an Explore agent on 2026-05-04.
 - Reference impl that does this right: [aidream/packages/matrx-legal/matrx_legal/courtlistener/bulk/s3_dumps.py](../../aidream/packages/matrx-legal/matrx_legal/courtlistener/bulk/s3_dumps.py) — same author, ~50 LOC, downloads multi-GB files with byte-accurate progress and stall heartbeats.
-- General pattern doc: [aidream/.claude/skills/accurate-download-progress.md](../../aidream/.claude/skills/accurate-download-progress.md).
+- General pattern doc: [aidream/.claude/skills/accurate-download-progress/SKILL.md](../../aidream/.claude/skills/accurate-download-progress/SKILL.md).

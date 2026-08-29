@@ -23,9 +23,9 @@
     "test:e2e:setup": "node e2e/setup/create-test-user.mjs"
   },
   "dependencies": {
-    "@ai-matrx/agents": "0.2.1",
-    "@ai-matrx/content-ir": "0.2.0",
-    "@ai-matrx/content-ir-react": "0.1.0",
+    "@ai-matrx/agents": "0.5.0",
+    "@ai-matrx/content-ir": "0.3.0",
+    "@ai-matrx/content-ir-react": "0.5.0",
     "@ai-matrx/design-system": "0.1.1",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/modifiers": "^9.0.0",

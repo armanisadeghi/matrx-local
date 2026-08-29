@@ -9,16 +9,16 @@ importers:
   .:
     dependencies:
       '@ai-matrx/agents':
-        specifier: 0.5.0
+        specifier: latest
         version: 0.5.0
       '@ai-matrx/content-ir':
-        specifier: 0.3.0
+        specifier: latest
         version: 0.3.0
       '@ai-matrx/content-ir-react':
-        specifier: 0.5.0
-        version: 0.5.0(@ai-matrx/content-ir@0.3.0)(react@19.2.4)
+        specifier: latest
+        version: 0.5.1(@ai-matrx/content-ir@0.3.0)(react@19.2.4)
       '@ai-matrx/design-system':
-        specifier: 0.1.1
+        specifier: latest
         version: 0.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@dnd-kit/core':
         specifier: ^6.3.1
@@ -212,8 +212,8 @@ packages:
     resolution: {integrity: sha512-vZmhIMGgVGzFwQA1YafFjdsZ8fWQlsPFKc357iiKFmu23WsMbR/kqqOTlE8mFlpBfX53HfWQ/xePx+d/+LsVFA==}
     engines: {node: '>=20'}
 
-  '@ai-matrx/content-ir-react@0.5.0':
-    resolution: {integrity: sha512-f2OkY/9YvdYEA7+VzbveXT0p2Jk1l1os+kxoKS0JkEYIFrjXy1lJOZWa+qZqNMJnnunbiyboqPqsef2x1jUQJg==}
+  '@ai-matrx/content-ir-react@0.5.1':
+    resolution: {integrity: sha512-DvEMlydbe8QZzCQAYpurC2PCmkN7OVZ7YM3l3crrK1PMdLsjpMty54NesoXNrq3A5960VtOPphNq4vE2QvYwTA==}
     engines: {node: '>=20'}
     peerDependencies:
       '@ai-matrx/content-ir': 0.3.0
@@ -2973,7 +2973,7 @@ snapshots:
 
   '@ai-matrx/agents@0.5.0': {}
 
-  '@ai-matrx/content-ir-react@0.5.0(@ai-matrx/content-ir@0.3.0)(react@19.2.4)':
+  '@ai-matrx/content-ir-react@0.5.1(@ai-matrx/content-ir@0.3.0)(react@19.2.4)':
     dependencies:
       '@ai-matrx/content-ir': 0.3.0
       react: 19.2.4

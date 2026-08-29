@@ -200,3 +200,11 @@ keep going until done or stuck; update docs when code changes. Never edit
 staleness instead.
 
 - **Logging into any Matrx UI**: sign in as `admin@admin.com` — the password is `AI_ADMIN_PASSWORD` in the `.env` of `aidream` or `matrx-frontend` (`AI_ADMIN_USERNAME` holds the email).
+
+## 🚨 THE LATEST LAW — @ai-matrx packages are NEVER pinned
+
+Every `@ai-matrx/*` dependency in this repo is declared `"latest"` — never a version, never a
+range. Guard: `npm run check:matrx-latest` (fails on any pin). Version problems are fixed by
+releasing forward, never by pinning — a pin licenses silent drift and workaround code (the
+disaster that nearly killed AI Dream). Law + rationale:
+`../common-docs/policies/typescript-package-standard.md` § THE LATEST LAW. The guard script lives in `desktop/package.json`.

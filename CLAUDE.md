@@ -216,7 +216,9 @@ staleness instead.
 ## 🚨 THE LATEST LAW — @ai-matrx packages are NEVER pinned
 
 Every `@ai-matrx/*` dependency in this repo is declared `"latest"` — never a version, never a
-range. Guard: `npm run check:matrx-latest` (fails on any pin). Version problems are fixed by
+range. Guard: `pnpm check:matrx-packages` in `desktop/` (fails on any pin AND on an installed
+version behind npm latest; `check:matrx-latest` is an alias). It is BLOCKING in
+`scripts/release.sh` — this repo cannot ship stale. Version problems are fixed by
 releasing forward, never by pinning — a pin licenses silent drift and workaround code (the
 disaster that nearly killed AI Dream). Law + rationale:
 `../common-docs/policies/typescript-package-standard.md` § THE LATEST LAW. The guard script lives in `desktop/package.json`.

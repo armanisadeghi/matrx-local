@@ -772,6 +772,17 @@ LOCKFILE_CHECK=$(cd desktop && pnpm install --frozen-lockfile 2>&1) || {
 }
 ok "pnpm-lock.yaml is up to date."
 
+# ── @ai-matrx package currency ───────────────────────────────────────────────
+# BLOCKING. THE LATEST LAW says every @ai-matrx spec is "latest"; THE CATCH-UP
+# RULE (C28) says the INSTALLED versions must actually BE npm latest before this
+# repo releases. "latest" resolves at install time, so the lockfile above will
+# happily ship yesterday's package forever — the drift is invisible to every
+# other gate here. Fix forward (reinstall + adopt the CHANGELOG "Consumer
+# action"s); pinning is banned.
+info "Checking @ai-matrx packages are npm latest..."
+(cd desktop && pnpm check:matrx-packages) || fail "@ai-matrx packages are stale or pinned (see above). Run 'pnpm sync:matrx-packages' in desktop/, adopt each new version's CHANGELOG 'Consumer action', commit desktop/package.json + desktop/pnpm-lock.yaml, then re-run. Catch-up work for this repo is also queued on the Autonomous Work Loop (campaign package-catch-up)."
+ok "@ai-matrx packages are npm latest."
+
 # ── Tool registry drift signal (loud, deliberately non-blocking) ─────────────
 # The live DB is canonical, but registry reachability or drift must not stop an
 # otherwise valid desktop release. The checker exits 1 on real drift so this

@@ -1,6 +1,8 @@
 # CLAUDE.md — Matrx Local
 
-## The six laws (SYNCED from common-docs/policies/the-campaign-pattern.md — edit there, never here)
+## The six laws (SYNCED — canonical: common-docs/skills/campaign-pattern; edit there, never here)
+
+🚨 **MANDATORY: before launching, coordinating, or working any large build or campaign, READ the full doctrine — it is IN THIS REPO at `.claude/skills/campaign-pattern/SKILL.md`.**
 
 1. **Done means done — never on your own word.** Finished = verified by someone who did not build it, against the original vision, on the live surface, with real data. Tests feeding manufactured data to their author's own code prove nothing and are defects.
 2. **Attack before you trust.** Hole-poke plans before commitment; adversarially re-verify "done" before believing it.
@@ -218,3 +220,10 @@ range. Guard: `npm run check:matrx-latest` (fails on any pin). Version problems 
 releasing forward, never by pinning — a pin licenses silent drift and workaround code (the
 disaster that nearly killed AI Dream). Law + rationale:
 `../common-docs/policies/typescript-package-standard.md` § THE LATEST LAW. The guard script lives in `desktop/package.json`.
+
+**THE SAME-SESSION LAW:** a fix that belongs in an `@ai-matrx/*` package is made IN the
+package (`aidream/apps/shared/<name>`), released, and adopted in the same session — never
+massaged in host code, never left edited-unpublished. **THE CATCH-UP RULE:** working here,
+refresh `@ai-matrx/*` to latest and reconcile per each package's CHANGELOG `Consumer action`s
+before this repo's next release. Both: same policy, § THE SAME-SESSION LAW + § THE CATCH-UP
+RULE.

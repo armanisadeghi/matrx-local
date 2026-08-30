@@ -1,5 +1,15 @@
 # CLAUDE.md — Matrx Local
 
+## The six laws (SYNCED from common-docs/policies/the-campaign-pattern.md — edit there, never here)
+
+1. **Done means done — never on your own word.** Finished = verified by someone who did not build it, against the original vision, on the live surface, with real data. Tests feeding manufactured data to their author's own code prove nothing and are defects.
+2. **Attack before you trust.** Hole-poke plans before commitment; adversarially re-verify "done" before believing it.
+3. **Fix the class, never the instance.** Root cause → census the siblings → a guard proven failing-then-passing.
+4. **Nothing fails silently.** Every stand-in announces itself with a remedy; a screen is absent or honest — never dead, disabled-looking, or lying.
+5. **Think in platform primitives.** Never scope a capability to the feature that surfaced it; build it in the shared layer so every module and client app inherits it.
+6. **Opinions become knobs.** Behavioral choices are org-configurable settings; organizations decide — never agents, never hardcoded taste.
+
+
 **Why you're reading this: you are doing DESKTOP-APP work in this repo.** This file
 carries what a desktop agent must know to avoid this repo's known failure modes —
 Tauri + Python sidecar specifics, how local tools are exposed to the platform, and

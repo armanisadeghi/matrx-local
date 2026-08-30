@@ -63,7 +63,10 @@ def test_live_row_via_postgrest_primary() -> None:
     resp = httpx.get(
         f"{SUPABASE_URL.rstrip('/')}/rest/v1/app_config",
         params={"app": f"eq.{APP_KEY}"},
-        headers={"apikey": SUPABASE_PUBLISHABLE_KEY},
+        # Same headers as the live client (app/services/app_config/client.py):
+        # the server's default exposed schema is no longer `public`, so the
+        # read must name its schema or PostgREST 404s (PGRST205).
+        headers={"apikey": SUPABASE_PUBLISHABLE_KEY, "Accept-Profile": "public"},
         timeout=_TIMEOUT,
     )
     assert resp.status_code == 200, (

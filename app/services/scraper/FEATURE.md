@@ -116,6 +116,17 @@ The interactive `local_browser` suite (`browser_automation.py`) is a separate,
 headed, user-driven session and is deliberately NOT folded in — but its driver
 is still untracked today (MXL-D-076).
 
+**The pool launch is BOUNDED** (`BROWSER_POOL_START_TIMEOUT_SECONDS` in
+`engine.py`, plus a 90s outer ceiling on `engine.start()` in `app/main.py`
+Phase 3). It runs inside the FastAPI lifespan, and on 2026-08-30 a Chromium
+launch that never returned wedged the whole engine — port never bound, desktop
+reported "did not become reachable within 300 seconds". On timeout the
+partial driver tree is reaped by remembered PID and the failure is recorded on
+`browser_runtime` as the `browser_launch_failed` STATE (one-click repair);
+startup always completes. Pinned by
+`test_a_hung_browser_launch_times_out_instead_of_blocking_startup` in
+`tests/unit/test_scraper_local_lane.py`.
+
 ---
 
 ## The client payload contract — `result_contract.py`

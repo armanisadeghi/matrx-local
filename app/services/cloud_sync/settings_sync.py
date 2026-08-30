@@ -434,8 +434,11 @@ class SettingsSync:
     # ── Supabase REST helpers ───────────────────────────────────────────
 
     def _headers(self) -> dict[str, str]:
+        from app.config import SUPABASE_PROFILE_HEADERS
+
         return {
             "apikey": self._supabase_key,
+            **SUPABASE_PROFILE_HEADERS,
             "Authorization": f"Bearer {self._jwt}",
             "Content-Type": "application/json",
             "Prefer": "return=representation",

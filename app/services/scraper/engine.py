@@ -113,6 +113,15 @@ CACHE_TTL_SECONDS = 1800
 # Pages per research effort level.
 RESEARCH_EFFORT_LIMITS = {"low": 10, "medium": 25, "high": 50, "extreme": 100}
 
+# Hard ceiling on how long the Playwright driver + Chromium may take to come
+# up. A healthy launch is 1-3 seconds; a hung one (stale driver, Gatekeeper
+# stall, corrupt browser build) previously awaited FOREVER inside the FastAPI
+# lifespan — the engine never finished startup, never bound its port, and the
+# desktop reported "did not become reachable within 300 seconds" (2026-08-30).
+# On timeout the pool is reaped and recorded as a launch failure: a STATE with
+# a one-click repair, exactly like any other unlaunchable browser.
+BROWSER_POOL_START_TIMEOUT_SECONDS = 30.0
+
 
 class BrowserUnavailable(RuntimeError):
     """This machine has no usable Playwright browser right now.
@@ -166,8 +175,44 @@ def _extract_driver_pid(browser_pool: Any) -> int | None:
     to scanning our own child processes for the `run-driver` node. Any failure
     returns None — the preflight orphan sweep is the backstop, so a missing PID
     here is not fatal.
+
+    The scan fallback is only safe when THIS pool's driver is the one being
+    looked for on a healthy pool (a just-started pool's driver is a
+    `run-driver` child of this process). It must never be used to pick a
+    reap target after a FAILED launch: this process can own other drivers —
+    the headed `local_browser` session runs its own — and the scan would
+    return whichever it finds first. Failure cleanup uses
+    ``_transport_driver_pid`` instead.
     """
-    # 1) Internal transport (async_playwright().start() → driver subprocess).
+    pid = _transport_driver_pid(browser_pool)
+    if pid is not None:
+        return pid
+
+    # Fallback: find a `run-driver` node among our own descendants.
+    try:
+        import os as _os
+
+        import psutil
+
+        me = psutil.Process(_os.getpid())
+        for child in me.children(recursive=True):
+            try:
+                cmd = " ".join(child.cmdline())
+            except psutil.Error:
+                continue
+            if "run-driver" in cmd:
+                return child.pid
+    except Exception:
+        pass
+    return None
+
+
+def _transport_driver_pid(browser_pool: Any) -> int | None:
+    """The driver PID recorded on THIS pool's Playwright transport, or None.
+
+    Exact by construction — it can only ever name the driver this pool
+    spawned, so it is the only extraction failure cleanup may reap by.
+    """
     try:
         pw = getattr(browser_pool, "_playwright", None)
         proc = getattr(
@@ -182,23 +227,6 @@ def _extract_driver_pid(browser_pool: Any) -> int | None:
         pid = getattr(proc, "pid", None)
         if isinstance(pid, int) and pid > 0:
             return pid
-    except Exception:
-        pass
-
-    # 2) Fallback: find a `run-driver` node among our own descendants.
-    try:
-        import os as _os
-
-        import psutil
-
-        me = psutil.Process(_os.getpid())
-        for child in me.children(recursive=True):
-            try:
-                cmd = " ".join(child.cmdline())
-            except psutil.Error:
-                continue
-            if "run-driver" in cmd:
-                return child.pid
     except Exception:
         pass
     return None
@@ -387,6 +415,7 @@ class ScraperEngine:
         if self._browser_pool is not None:
             return True
 
+        pool = None
         try:
             from matrx_scraper.browser_pool import PlaywrightBrowserPool
 
@@ -394,7 +423,12 @@ class ScraperEngine:
             # app renders the occasional page and every extra Chromium is
             # ~200 MB of the user's RAM.
             pool = PlaywrightBrowserPool(pool_size=1)
-            await pool.start()
+            # Bounded on purpose: this runs inside the app lifespan, and an
+            # unbounded hung launch blocks the ENTIRE engine from ever
+            # accepting a request (see BROWSER_POOL_START_TIMEOUT_SECONDS).
+            await asyncio.wait_for(
+                pool.start(), timeout=BROWSER_POOL_START_TIMEOUT_SECONDS
+            )
             self._browser_pool = pool
             self._driver_pid = _extract_driver_pid(pool)
             browser_runtime.record_pool_started()
@@ -404,6 +438,20 @@ class ScraperEngine:
             )
             return True
         except Exception as pw_exc:
+            if isinstance(pw_exc, asyncio.TimeoutError):
+                pw_exc = TimeoutError(
+                    "Chromium did not finish launching within "
+                    f"{BROWSER_POOL_START_TIMEOUT_SECONDS:.0f}s"
+                )
+            # A timed-out (or half-failed) launch can leave a live driver node
+            # + Chromium tree behind. Reap ONLY the PID recorded on THIS
+            # pool's transport — never the run-driver child scan, which could
+            # name a different driver this process owns (the headed
+            # local_browser session) and kill the wrong tree. No transport pid
+            # → leave it to the preflight orphan sweep, the documented
+            # backstop.
+            if pool is not None:
+                terminate_playwright_tree(_transport_driver_pid(pool))
             browser_runtime.record_launch_failure(pw_exc)
             logger.warning(
                 "[scraper/engine.py] ScraperEngine: Playwright browser pool unavailable — "

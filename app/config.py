@@ -178,6 +178,19 @@ SUPABASE_PUBLISHABLE_KEY = os.getenv(
     "sb_publishable_scm0jzEJiFUB5ItiqOx5Fg_8BOjB6oA",
 )
 
+# PostgREST's DEFAULT exposed schema on db.matrxserver.com is no longer
+# `public` (2026 schema-reorg) — a bare `/rest/v1/<table>` call now resolves
+# against `api` and 404s (PGRST205) for every public-schema table this app
+# reads (app_config, catalog_entries, app_settings, app_instances,
+# app_sync_status, chat mirror, documents). Every PostgREST request from this
+# app MUST therefore name its schema explicitly: Accept-Profile selects it for
+# reads, Content-Profile for writes (POST/PATCH/DELETE). Merge these into the
+# headers of every /rest/v1 call.
+SUPABASE_PROFILE_HEADERS = {
+    "Accept-Profile": "public",
+    "Content-Profile": "public",
+}
+
 # ---------------------------------------------------------------------------
 # Platform-aware storage roots
 #

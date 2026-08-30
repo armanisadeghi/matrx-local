@@ -512,9 +512,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             snapshot = await refresh_vault_keys()
             if not snapshot.ok:
                 logger.info(
-                    "[app/main.py] Credential Vault key source unavailable (%s) — "
+                    "[app/main.py] Credential Vault key source unavailable (%s: %s) — "
                     "local API keys are unaffected",
                     snapshot.state,
+                    snapshot.message or "no detail supplied",
                 )
         except Exception:
             logger.warning(
@@ -987,7 +988,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _registry.starting("scraper")
     engine = get_scraper_engine()
     try:
-        await engine.start()
+        # Bounded: this await sits inside the app lifespan, so ANY hang here
+        # (2026-08-30: a Chromium launch that never returned) blocks the whole
+        # engine from binding its port — the desktop then reports "did not
+        # become reachable within 300 seconds". The pool launch has its own
+        # tighter timeout (BROWSER_POOL_START_TIMEOUT_SECONDS); this outer
+        # ceiling guarantees startup completes even if a future start() step
+        # wedges. A timeout degrades the scraper; it never blocks the app.
+        await asyncio.wait_for(engine.start(), timeout=90.0)
         logger.info("[app/main.py] Phase 3: Scraper engine started ✓")
 
         # A missing Playwright browser does NOT fail the scraper — HTTP scrapes

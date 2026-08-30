@@ -28,6 +28,7 @@ from app.common.system_logger import get_logger
 
 from app.config import (
     AIDREAM_SERVER_URL,
+    SUPABASE_PROFILE_HEADERS,
     SUPABASE_PUBLISHABLE_KEY,
     SUPABASE_URL,
 )
@@ -54,7 +55,7 @@ async def _fetch_postgrest() -> AppConfigRow:
         resp = await client.get(
             url,
             params={"app": f"eq.{APP_KEY}"},
-            headers={"apikey": SUPABASE_PUBLISHABLE_KEY},
+            headers={"apikey": SUPABASE_PUBLISHABLE_KEY, **SUPABASE_PROFILE_HEADERS},
         )
     resp.raise_for_status()
     body = resp.json()
@@ -89,10 +90,13 @@ async def fetch_remote() -> AppConfigRow:
         logger.info("[app_config] fetched remote config via PostgREST (primary)")
         return row
     except (httpx.HTTPError, AppConfigValidationError, ValueError) as exc:
-        failures.append(f"postgrest: {exc}")
+        # repr, not str: transport errors (ConnectError, ReadError) often
+        # stringify EMPTY, which logged as "failed — trying fallback: " and
+        # left nothing to diagnose.
+        failures.append(f"postgrest: {exc!r}")
         logger.warning(
             "[app_config] primary fetch path (PostgREST) failed — trying aidream "
-            "fallback: %s",
+            "fallback: %r",
             exc,
         )
 

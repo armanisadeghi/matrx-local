@@ -59,9 +59,14 @@ class LocalDatabase:
 
         # WAL mode for concurrent reads while writing
         await self._db.execute("PRAGMA journal_mode=WAL")
-        # Wait up to 5s for a competing writer instead of erroring immediately
-        # with SQLITE_BUSY (background sync loop vs request handlers race).
-        await self._db.execute("PRAGMA busy_timeout=5000")
+        # Wait for a competing writer instead of erroring with SQLITE_BUSY
+        # (background sync loop vs request handlers vs the coding-session
+        # durable-ack connections all target this one file). 5s proved too
+        # short on 2026-08-30 — first-boot sync bursts held the write lock
+        # long enough that ASGI handlers and sync ticks crashed with
+        # "database is locked". 15s matches the durable-write connections
+        # (_DURABLE_WRITE_BUSY_TIMEOUT_MS in coding_sessions/service.py).
+        await self._db.execute("PRAGMA busy_timeout=15000")
         # Foreign keys are off by default in SQLite
         await self._db.execute("PRAGMA foreign_keys=ON")
         # Sync less aggressively — we have WAL for crash safety

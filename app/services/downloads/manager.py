@@ -62,6 +62,11 @@ DownloadCategory = Literal[
 # Maximum number of simultaneous downloads.
 MAX_CONCURRENT = 3
 
+# A failed/cancelled record with ZERO downloaded bytes and no activity for
+# this many days is purged at startup instead of restored forever (dismiss
+# stays the immediate manual path; retry from the model catalog stays open).
+FAILURE_HISTORY_RETENTION_DAYS = 30
+
 # How often (in bytes) we flush a progress event to SSE subscribers.
 # At typical LLM download speeds (10–100 MB/s) this is ~10–100 ms between
 # events — frequent enough for smooth UI without flooding the SSE connection.
@@ -1905,6 +1910,27 @@ class DownloadManager:
         civitai_key_present = read_civitai_key() is not None
         try:
             db = get_db()
+            # Ancient zero-progress failures are noise, not history: three
+            # March GGUF validation failures were still being restored as
+            # boot warnings in late August (2026-08-30) because nothing ever
+            # dismissed them. A failed/cancelled row with NO downloaded bytes
+            # and no activity for FAILURE_HISTORY_RETENTION_DAYS is purged
+            # here — retrying it fresh from the model catalog is always
+            # available, and dismiss remains the immediate manual path.
+            purged = await db.execute(
+                "DELETE FROM downloads WHERE status IN ('failed','cancelled') "
+                "AND COALESCE(bytes_done, 0) = 0 "
+                "AND substr(COALESCE(updated_at, created_at, ''), 1, 10) "
+                f"    < date('now', '-{FAILURE_HISTORY_RETENTION_DAYS} days')"
+            )
+            if purged.rowcount:
+                await db.commit()
+                logger.info(
+                    "[downloads] purged %d stale zero-progress failure record(s) "
+                    "older than %d days",
+                    purged.rowcount,
+                    FAILURE_HISTORY_RETENTION_DAYS,
+                )
             rows = await db.fetchall(
                 "SELECT * FROM downloads WHERE status IN ('completed','failed','cancelled') ORDER BY updated_at DESC LIMIT 50"
             )

@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
 import stat
 import sys
+import time
 from pathlib import Path
 
 import aiosqlite
@@ -63,7 +65,7 @@ async def attach_and_ensure_mirror(db: aiosqlite.Connection, main_db_path: Path)
         if not _IDENT_RE.match(schema):
             raise ValueError(f"unsafe mirror schema name: {schema!r}")
         file_path = mirror_dir / f"{schema}.db"
-        await db.execute(f'ATTACH DATABASE ? AS "{schema}"', (str(file_path),))
+        await _attach_schema_with_corruption_recovery(db, schema, file_path)
         await db.execute(f'PRAGMA "{schema}".journal_mode=WAL')
         await db.execute(f'PRAGMA "{schema}".synchronous=NORMAL')
         if not sys.platform.startswith("win"):
@@ -98,6 +100,93 @@ async def attach_and_ensure_mirror(db: aiosqlite.Connection, main_db_path: Path)
         len(MIRROR_TABLES),
         mirror_dir,
         SNAPSHOT_HASH[:12],
+    )
+
+
+# SQLite messages that mean the FILE is unusable (not merely busy). Only these
+# authorize the quarantine-and-rebuild below — a transient lock must never
+# destroy a healthy mirror.
+_CORRUPTION_MARKERS = ("malformed", "not a database", "file is encrypted")
+
+
+def _is_corruption(exc: BaseException) -> bool:
+    return any(marker in str(exc).lower() for marker in _CORRUPTION_MARKERS)
+
+
+async def _attach_schema_with_corruption_recovery(
+    db: aiosqlite.Connection, schema: str, file_path: Path
+) -> None:
+    """Attach one mirror schema; a corrupt file is quarantined and rebuilt.
+
+    The mirror is a REPLICA of the cloud schemas (module docstring): losing
+    the local file loses nothing durable — chat/notes sync re-pulls it. On
+    2026-08-30 a corrupted ``chat.db`` ("database disk image is malformed")
+    made every chat_sync tick crash forever with no recovery path. Now:
+    ``quick_check`` probes each schema at attach time, and a corrupt file is
+    moved aside (``<schema>.corrupt-<ts>.db``, kept for forensics) and
+    recreated empty, loudly.
+    """
+    for attempt in (1, 2):
+        try:
+            await db.execute(f'ATTACH DATABASE ? AS "{schema}"', (str(file_path),))
+        except (sqlite3.DatabaseError, aiosqlite.Error) as exc:
+            if attempt == 2 or not _is_corruption(exc):
+                raise
+            _quarantine_mirror_file(schema, file_path, exc)
+            continue
+
+        try:
+            cursor = await db.execute(f'PRAGMA "{schema}".quick_check(1)')
+            row = await cursor.fetchone()
+            verdict = str(row[0]) if row else "no result"
+        except (sqlite3.DatabaseError, aiosqlite.Error) as exc:
+            if attempt == 2 or not _is_corruption(exc):
+                raise
+            await _detach_quietly(db, schema)
+            _quarantine_mirror_file(schema, file_path, exc)
+            continue
+
+        if verdict.lower() == "ok":
+            return
+        if attempt == 2:
+            raise sqlite3.DatabaseError(
+                f"mirror schema {schema!r} still fails quick_check after rebuild: {verdict}"
+            )
+        await _detach_quietly(db, schema)
+        _quarantine_mirror_file(schema, file_path, sqlite3.DatabaseError(verdict))
+
+
+async def _detach_quietly(db: aiosqlite.Connection, schema: str) -> None:
+    try:
+        await db.execute(f'DETACH DATABASE "{schema}"')
+    except Exception:
+        logger.debug("[mirror] detach of corrupt %s failed", schema, exc_info=True)
+
+
+def _quarantine_mirror_file(schema: str, file_path: Path, exc: BaseException) -> None:
+    """Move the corrupt DB (+ WAL/SHM sidecars) aside so a fresh one is built."""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    for suffix in ("", "-wal", "-shm"):
+        source = Path(str(file_path) + suffix)
+        if not source.exists():
+            continue
+        target = file_path.with_name(f"{schema}.corrupt-{stamp}.db{suffix}")
+        try:
+            source.replace(target)
+        except OSError:
+            # Last resort: a corrupt file we cannot move is deleted — an
+            # unreadable replica has no forensic value worth blocking boot for.
+            logger.error(
+                "[mirror] could not quarantine %s — deleting it", source, exc_info=True
+            )
+            source.unlink(missing_ok=True)
+    logger.error(
+        "[mirror] %s mirror was CORRUPT (%s) — quarantined to %s.corrupt-%s.db and "
+        "rebuilding empty; sync will re-pull it from the cloud",
+        schema,
+        exc,
+        schema,
+        stamp,
     )
 
 

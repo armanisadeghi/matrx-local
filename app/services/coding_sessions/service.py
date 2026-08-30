@@ -664,7 +664,7 @@ class CodingSessionBridgeOutbox:
         duplicates_by_index: list[bool] = []
         async with aiosqlite.connect(str(self._db.path)) as connection:
             connection.row_factory = aiosqlite.Row
-            await connection.execute("PRAGMA busy_timeout=5000")
+            await connection.execute(f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}")
             await connection.execute("PRAGMA synchronous=FULL")
             await connection.execute("BEGIN IMMEDIATE")
             try:
@@ -759,7 +759,7 @@ class CodingSessionBridgeOutbox:
 
         async with aiosqlite.connect(str(self._db.path)) as connection:
             connection.row_factory = aiosqlite.Row
-            await connection.execute("PRAGMA busy_timeout=5000")
+            await connection.execute(f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}")
             await connection.execute("PRAGMA synchronous=FULL")
             await connection.execute("BEGIN IMMEDIATE")
             try:
@@ -922,7 +922,7 @@ class CodingSessionBridgeOutbox:
     async def retry_pending_native_imports(self) -> dict[str, int]:
         """Make queued Claude-history copies immediately eligible for retry."""
         async with aiosqlite.connect(str(self._db.path)) as connection:
-            await connection.execute("PRAGMA busy_timeout=5000")
+            await connection.execute(f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}")
             await connection.execute("PRAGMA synchronous=FULL")
             await connection.execute("BEGIN IMMEDIATE")
             try:
@@ -950,7 +950,7 @@ class CodingSessionBridgeOutbox:
     async def discard_pending_native_imports(self) -> dict[str, int]:
         """Delete only explicitly queued Claude-history copies, never hook rows."""
         async with aiosqlite.connect(str(self._db.path)) as connection:
-            await connection.execute("PRAGMA busy_timeout=5000")
+            await connection.execute(f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}")
             await connection.execute("PRAGMA synchronous=FULL")
             await connection.execute("BEGIN IMMEDIATE")
             try:

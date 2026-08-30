@@ -68,17 +68,28 @@ class AIDreamClient:
         self._base_url = base_url.rstrip("/")
         self._transport = transport
 
-    async def get(self, path: str, jwt: Optional[str] = None) -> Any:
+    async def get(
+        self,
+        path: str,
+        jwt: Optional[str] = None,
+        *,
+        headers: Optional[dict[str, str]] = None,
+    ) -> Any:
         """Perform a GET request to /api{path}.
 
+        ``headers`` merges on top of the defaults (used e.g. for the
+        ``X-Organization-Id`` context header some routers require).
         Returns parsed JSON.
         Raises AIDreamOfflineError on network failure.
         Raises AIDreamError on non-2xx response.
         """
         url = f"{self._base_url}/api{path}"
-        headers: dict[str, str] = {"Accept": "application/json"}
+        merged_headers: dict[str, str] = {"Accept": "application/json"}
         if jwt:
-            headers["Authorization"] = f"Bearer {jwt}"
+            merged_headers["Authorization"] = f"Bearer {jwt}"
+        if headers:
+            merged_headers.update(headers)
+        headers = merged_headers
 
         try:
             async with httpx.AsyncClient(
@@ -123,19 +134,24 @@ class AIDreamClient:
         *,
         jwt: Optional[str] = None,
         timeout: float = 130.0,
+        headers: Optional[dict[str, str]] = None,
     ) -> Any:
         """Perform an authenticated JSON POST to ``/api{path}``.
 
         Tool execution can legitimately run for up to 120 seconds, so callers
         may use a longer timeout than the catalog-oriented GET default.
+        ``headers`` merges on top of the defaults (e.g. ``X-Organization-Id``).
         """
         url = f"{self._base_url}/api{path}"
-        headers: dict[str, str] = {
+        merged_headers: dict[str, str] = {
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
         if jwt:
-            headers["Authorization"] = f"Bearer {jwt}"
+            merged_headers["Authorization"] = f"Bearer {jwt}"
+        if headers:
+            merged_headers.update(headers)
+        headers = merged_headers
 
         try:
             async with httpx.AsyncClient(

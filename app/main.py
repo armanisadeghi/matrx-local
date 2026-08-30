@@ -65,6 +65,9 @@ from app.common.background_tasks import fire_and_forget
 from app.common.system_logger import get_logger
 from app.common.process_shutdown import ShutdownCancellationMiddleware
 import app.common.access_log as access_log
+import traceback as _traceback
+import uuid as _uuid
+from fastapi.responses import JSONResponse as _JSONResponse
 from app.common.platform_ctx import refresh_capabilities
 from app.services.scraper.engine import get_scraper_engine
 from app.services.proxy.server import DEFAULT_PROXY_PORT, get_proxy_server
@@ -2102,7 +2105,49 @@ async def _log_requests_dispatch(request: Request, call_next):
         body_str = _json.dumps(body, indent=2, ensure_ascii=False)
         logger.debug("   body: %s", body_str)
 
-    response = await call_next(request)
+    # An unhandled exception used to unwind past CORSMiddleware to Starlette's
+    # ServerErrorMiddleware, which answers 500 WITHOUT CORS headers. The browser
+    # then rejects the response before any JS sees it, so `fetch` throws a bare
+    # "TypeError: Load failed" — no status, no message. That is exactly what hid
+    # a "database is locked" failure on the Claude session-detail sync
+    # (2026-08-30). This middleware is the innermost one, so a response returned
+    # HERE still flows out through auth and CORS and gets its headers.
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (_time.monotonic() - t0) * 1000
+        failure_id = _uuid.uuid4().hex[:12]
+        logger.error(
+            "\u2190 500 %s %s  (%.0fms)  failure_id=%s",
+            request.method,
+            display_path,
+            duration_ms,
+            failure_id,
+        )
+        logger.error("  %s", _format_request_details(request, body))
+        logger.error("  traceback:\n%s", _traceback.format_exc())
+        access_log.record(
+            method=request.method,
+            path=path,
+            query=_sanitize_url(query),
+            origin=request.headers.get("origin", ""),
+            user_agent=request.headers.get("user-agent", ""),
+            status=500,
+            duration_ms=duration_ms,
+        )
+        return _JSONResponse(
+            status_code=500,
+            content={
+                "detail": "The local engine failed while handling this request.",
+                "failure_id": failure_id,
+                "path": path,
+                "method": request.method,
+                "hint": (
+                    "Search the engine log for this failure_id to see the exact "
+                    "traceback."
+                ),
+            },
+        )
     duration_ms = (_time.monotonic() - t0) * 1000
 
     # ── Response line ─────────────────────────────────────────────────────────

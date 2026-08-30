@@ -51,6 +51,8 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import aiosqlite
+
+from app.services.local_db.write_gate import write_gate
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.common.system_logger import get_logger
@@ -423,7 +425,7 @@ class LocalClaudeRuntime:
         self, statements: list[tuple[str, tuple[Any, ...]]]
     ) -> None:
         """Commit runtime evidence independently from the shared DB connection."""
-        async with aiosqlite.connect(str(self._database().path)) as connection:
+        async with write_gate(), aiosqlite.connect(str(self._database().path)) as connection:
             await connection.execute(f"PRAGMA busy_timeout={_JOURNAL_BUSY_TIMEOUT_MS}")
             await connection.execute("PRAGMA synchronous=FULL")
             await connection.execute("BEGIN IMMEDIATE")

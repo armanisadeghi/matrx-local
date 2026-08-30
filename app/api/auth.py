@@ -14,6 +14,8 @@ authenticated API call.
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
+
+import app.common.access_log as access_log
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -140,8 +142,29 @@ def _auth_error_response(
     status_code: int,
     message: str,
     code: str,
+    request: Request | None = None,
 ) -> JSONResponse:
-    """Return the auth error shape expected by the target surface."""
+    """Return the auth error shape expected by the target surface.
+
+    Also records the rejection in the structured access log. The request-logging
+    middleware is the INNERMOST one, so a request refused here never reaches it:
+    before this, every auth failure was absent from access.log entirely, and the
+    log showed only 200/202 across ~59k requests — reading as "nothing ever
+    failed" when in fact failures were structurally unloggable.
+    """
+    if request is not None:
+        try:
+            access_log.record(
+                method=request.method,
+                path=path,
+                query="",
+                origin=request.headers.get("origin", ""),
+                user_agent=request.headers.get("user-agent", ""),
+                status=status_code,
+                duration_ms=0.0,
+            )
+        except Exception:  # logging must never break the auth decision
+            logger.debug("[auth] could not record rejection", exc_info=True)
     if path == "/v1" or path.startswith("/v1/"):
         return JSONResponse(
             status_code=status_code,
@@ -339,6 +362,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
             return _auth_error_response(
                 path,
+                request=request,
                 status_code=401,
                 message="Authorization required",
                 code="authorization_required",
@@ -363,6 +387,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 )
                 return _auth_error_response(
                     path,
+                    request=request,
                     status_code=401,
                     message="Invalid or expired credentials",
                     code="invalid_credentials",
@@ -377,6 +402,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 )
                 return _auth_error_response(
                     path,
+                    request=request,
                     status_code=403,
                     message="Not authorized for this instance",
                     code="not_authorized_for_instance",

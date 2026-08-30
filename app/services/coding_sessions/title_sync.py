@@ -53,6 +53,8 @@ Deliberate boundaries:
 from __future__ import annotations
 
 import asyncio
+
+from app.services.local_db.write_gate import write_gate
 import base64
 import hashlib
 import json
@@ -348,18 +350,22 @@ class ClaudeSessionMetadataReconciler:
         self, *, mode: str, parent_operation_id: str | None = None
     ) -> str:
         operation_id = str(uuid4())
-        await self._db.execute(
-            """INSERT INTO coding_session_metadata_sync_operations (
-                   operation_id, mode, status, started_at, parent_operation_id
-               ) VALUES (?, ?, 'running', ?, ?)""",
-            (
-                operation_id,
-                mode,
-                _utc_now(),
-                parent_operation_id,
-            ),
-        )
-        await self._db.commit()
+        # The bridge commits every hook on its own BEGIN IMMEDIATE connection.
+        # Racing it here is what made this exact write die with "database is
+        # locked" and hand the UI a bare "Load failed"; take the gate instead.
+        async with write_gate():
+            await self._db.execute(
+                """INSERT INTO coding_session_metadata_sync_operations (
+                       operation_id, mode, status, started_at, parent_operation_id
+                   ) VALUES (?, ?, 'running', ?, ?)""",
+                (
+                    operation_id,
+                    mode,
+                    _utc_now(),
+                    parent_operation_id,
+                ),
+            )
+            await self._db.commit()
         return operation_id
 
     async def _recover_interrupted_operations(self) -> int:

@@ -13,6 +13,8 @@ from typing import Any
 from uuid import UUID
 
 import aiosqlite
+
+from app.services.local_db.write_gate import write_gate
 from pydantic import ValidationError
 
 from app.common.system_logger import get_logger
@@ -662,7 +664,9 @@ class CodingSessionBridgeOutbox:
     ) -> tuple[list[int], list[bool]]:
         ids: list[int] = []
         duplicates_by_index: list[bool] = []
-        async with aiosqlite.connect(str(self._db.path)) as connection:
+        # Serialized against every other writer in this process; SQLite is
+        # never asked to arbitrate a lock it can only lose. See write_gate.
+        async with write_gate(), aiosqlite.connect(str(self._db.path)) as connection:
             connection.row_factory = aiosqlite.Row
             await connection.execute(f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}")
             await connection.execute("PRAGMA synchronous=FULL")
@@ -757,7 +761,9 @@ class CodingSessionBridgeOutbox:
         closes before the HTTP response is assembled.
         """
 
-        async with aiosqlite.connect(str(self._db.path)) as connection:
+        # Serialized against every other writer in this process; SQLite is
+        # never asked to arbitrate a lock it can only lose. See write_gate.
+        async with write_gate(), aiosqlite.connect(str(self._db.path)) as connection:
             connection.row_factory = aiosqlite.Row
             await connection.execute(f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}")
             await connection.execute("PRAGMA synchronous=FULL")
@@ -921,7 +927,9 @@ class CodingSessionBridgeOutbox:
 
     async def retry_pending_native_imports(self) -> dict[str, int]:
         """Make queued Claude-history copies immediately eligible for retry."""
-        async with aiosqlite.connect(str(self._db.path)) as connection:
+        # Serialized against every other writer in this process; SQLite is
+        # never asked to arbitrate a lock it can only lose. See write_gate.
+        async with write_gate(), aiosqlite.connect(str(self._db.path)) as connection:
             await connection.execute(f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}")
             await connection.execute("PRAGMA synchronous=FULL")
             await connection.execute("BEGIN IMMEDIATE")
@@ -949,7 +957,9 @@ class CodingSessionBridgeOutbox:
 
     async def discard_pending_native_imports(self) -> dict[str, int]:
         """Delete only explicitly queued Claude-history copies, never hook rows."""
-        async with aiosqlite.connect(str(self._db.path)) as connection:
+        # Serialized against every other writer in this process; SQLite is
+        # never asked to arbitrate a lock it can only lose. See write_gate.
+        async with write_gate(), aiosqlite.connect(str(self._db.path)) as connection:
             await connection.execute(f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}")
             await connection.execute("PRAGMA synchronous=FULL")
             await connection.execute("BEGIN IMMEDIATE")
@@ -1097,7 +1107,9 @@ class CodingSessionBridgeOutbox:
 
     async def retry_delivery_envelope(self, receipt_id: int) -> dict[str, Any]:
         """Retry exactly one waiting or preserved envelope, never a whole class."""
-        async with aiosqlite.connect(str(self._db.path)) as connection:
+        # Serialized against every other writer in this process; SQLite is
+        # never asked to arbitrate a lock it can only lose. See write_gate.
+        async with write_gate(), aiosqlite.connect(str(self._db.path)) as connection:
             connection.row_factory = aiosqlite.Row
             await connection.execute(
                 f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}"
@@ -1934,7 +1946,9 @@ class CodingSessionBridgeOutbox:
         with it (live 2026-08-19 on v1.4.37, `_record_failure` raising
         `database is locked` out of `except AIDreamOfflineError`).
         """
-        async with aiosqlite.connect(str(self._db.path)) as connection:
+        # Serialized against every other writer in this process; SQLite is
+        # never asked to arbitrate a lock it can only lose. See write_gate.
+        async with write_gate(), aiosqlite.connect(str(self._db.path)) as connection:
             await connection.execute(
                 f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}"
             )
@@ -1950,7 +1964,9 @@ class CodingSessionBridgeOutbox:
 
     async def _delete_delivered_row(self, outbox_id: int) -> bool:
         try:
-            async with aiosqlite.connect(str(self._db.path)) as connection:
+            # Serialized against every other writer in this process; SQLite is
+            # never asked to arbitrate a lock it can only lose. See write_gate.
+            async with write_gate(), aiosqlite.connect(str(self._db.path)) as connection:
                 await connection.execute(
                     f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}"
                 )
@@ -1988,7 +2004,9 @@ class CodingSessionBridgeOutbox:
         response: dict[str, Any],
     ) -> None:
         """One private BEGIN IMMEDIATE transaction: ack summary + delete."""
-        async with aiosqlite.connect(str(self._db.path)) as connection:
+        # Serialized against every other writer in this process; SQLite is
+        # never asked to arbitrate a lock it can only lose. See write_gate.
+        async with write_gate(), aiosqlite.connect(str(self._db.path)) as connection:
             await connection.execute(
                 f"PRAGMA busy_timeout={_DURABLE_WRITE_BUSY_TIMEOUT_MS}"
             )

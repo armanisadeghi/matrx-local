@@ -175,8 +175,44 @@ def _extract_driver_pid(browser_pool: Any) -> int | None:
     to scanning our own child processes for the `run-driver` node. Any failure
     returns None — the preflight orphan sweep is the backstop, so a missing PID
     here is not fatal.
+
+    The scan fallback is only safe when THIS pool's driver is the one being
+    looked for on a healthy pool (a just-started pool's driver is a
+    `run-driver` child of this process). It must never be used to pick a
+    reap target after a FAILED launch: this process can own other drivers —
+    the headed `local_browser` session runs its own — and the scan would
+    return whichever it finds first. Failure cleanup uses
+    ``_transport_driver_pid`` instead.
     """
-    # 1) Internal transport (async_playwright().start() → driver subprocess).
+    pid = _transport_driver_pid(browser_pool)
+    if pid is not None:
+        return pid
+
+    # Fallback: find a `run-driver` node among our own descendants.
+    try:
+        import os as _os
+
+        import psutil
+
+        me = psutil.Process(_os.getpid())
+        for child in me.children(recursive=True):
+            try:
+                cmd = " ".join(child.cmdline())
+            except psutil.Error:
+                continue
+            if "run-driver" in cmd:
+                return child.pid
+    except Exception:
+        pass
+    return None
+
+
+def _transport_driver_pid(browser_pool: Any) -> int | None:
+    """The driver PID recorded on THIS pool's Playwright transport, or None.
+
+    Exact by construction — it can only ever name the driver this pool
+    spawned, so it is the only extraction failure cleanup may reap by.
+    """
     try:
         pw = getattr(browser_pool, "_playwright", None)
         proc = getattr(
@@ -191,23 +227,6 @@ def _extract_driver_pid(browser_pool: Any) -> int | None:
         pid = getattr(proc, "pid", None)
         if isinstance(pid, int) and pid > 0:
             return pid
-    except Exception:
-        pass
-
-    # 2) Fallback: find a `run-driver` node among our own descendants.
-    try:
-        import os as _os
-
-        import psutil
-
-        me = psutil.Process(_os.getpid())
-        for child in me.children(recursive=True):
-            try:
-                cmd = " ".join(child.cmdline())
-            except psutil.Error:
-                continue
-            if "run-driver" in cmd:
-                return child.pid
     except Exception:
         pass
     return None
@@ -425,10 +444,14 @@ class ScraperEngine:
                     f"{BROWSER_POOL_START_TIMEOUT_SECONDS:.0f}s"
                 )
             # A timed-out (or half-failed) launch can leave a live driver node
-            # + Chromium tree behind. Reap by remembered PID — never pkill —
-            # so the orphan doesn't outlive this attempt (Hard Rule 0).
+            # + Chromium tree behind. Reap ONLY the PID recorded on THIS
+            # pool's transport — never the run-driver child scan, which could
+            # name a different driver this process owns (the headed
+            # local_browser session) and kill the wrong tree. No transport pid
+            # → leave it to the preflight orphan sweep, the documented
+            # backstop.
             if pool is not None:
-                terminate_playwright_tree(_extract_driver_pid(pool))
+                terminate_playwright_tree(_transport_driver_pid(pool))
             browser_runtime.record_launch_failure(pw_exc)
             logger.warning(
                 "[scraper/engine.py] ScraperEngine: Playwright browser pool unavailable — "

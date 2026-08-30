@@ -622,12 +622,19 @@ def test_a_hung_browser_launch_times_out_instead_of_blocking_startup(
     from app.services.scraper import browser_runtime
 
     monkeypatch.setattr(browser_runtime, "record_launch_failure", _RecordCall())
+    reaps = _RecordCall()
+    monkeypatch.setattr(engine_mod, "terminate_playwright_tree", reaps)
 
     eng = ScraperEngine()
     asyncio.run(asyncio.wait_for(eng.start(), timeout=5.0))
 
     assert eng.is_ready is True
     assert eng.browser_pool is None
+    # Failure cleanup reaps ONLY the pool's own transport PID. A hung pool
+    # has none, so the reap target must be None — never a PID found by
+    # scanning this process's children, which could name a DIFFERENT driver
+    # we own (the headed local_browser session).
+    assert reaps.calls == [((None,), {})]
 
 
 class _RecordCall:

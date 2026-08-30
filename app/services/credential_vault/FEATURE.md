@@ -93,7 +93,7 @@ Vault-supplied key.
 
 | Where | What |
 |---|---|
-| `client.py` | The four calls: `list_user_items` / `get_item` / `reveal` / `resolve`. Raises `VaultUnavailable(state, message)`. |
+| `client.py` | The four calls: `list_user_items` / `get_item` / `reveal` / `resolve`. Raises `VaultUnavailable(state, message)`. Every call sends `X-Organization-Id` — aidream's vault router requires it (fail-closed org-context backstop; missing header = HTTP 422, the 2026-08-30 startup symptom). The value is the caller's own active `iam.memberships` org, resolved once per user via the public `mbr_for_user` RPC (owner membership first, then oldest); no membership = the `no_organization` STATE, never an error. |
 | `provider_keys.py` | Item → provider matching (`build_candidates`), `fetch_provider_snapshot`, `resolve_one`. |
 | `key_manager.refresh_vault_keys()` | Populates tier 2. Startup (fire-and-forget), sign-in (`POST /auth/token`), and the refresh route. |
 | `key_manager.clear_vault_keys()` | Sign-out (`DELETE /auth/token`). |

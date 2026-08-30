@@ -170,6 +170,7 @@ interface VaultSourceStatus {
     | "unconfigured"
     | "offline"
     | "denied"
+    | "no_organization"
     | "error";
   message: string;
   entries: VaultCredentialEntry[];

@@ -111,6 +111,14 @@ months-old failure must not be restored as a warning on every boot for the
 rest of time. The UI exposes it on prompt cards ("Dismiss") and history rows
 (X), Python-backed entries only.
 
+Dismiss alone proved insufficient: the three 2026-03 GGUF validation failures
+were STILL boot warnings on 2026-08-30 because nobody had clicked it. So
+`_load_history` now also auto-purges failed/cancelled rows with zero
+downloaded bytes and no activity for `FAILURE_HISTORY_RETENTION_DAYS` (30) —
+pure history nobody will resume; a fresh retry from the model catalog stays
+available. Rows with partial progress and completed rows are never expired.
+Pinned by `tests/unit/test_download_stale_failure_purge.py`.
+
 ## Stale-row re-triage
 
 Failed rows written before this taxonomy carry only `error_msg`.

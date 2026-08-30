@@ -22,6 +22,14 @@ import type { components } from "@/types/python-generated/api-types";
 
 interface RequestOptions {
   jwt?: string | null;
+  /**
+   * Required alongside `jwt`. aidream's AuthMiddleware refuses EVERY
+   * authenticated request that names no organization (400
+   * organization_required) before it routes — there is no server-side
+   * fallback. `aidreamGet` fails closed below rather than let the request
+   * round-trip into a guaranteed refusal.
+   */
+  organizationId?: string | null;
   signal?: AbortSignal;
 }
 
@@ -33,7 +41,17 @@ async function aidreamGet<T>(
   const headers: Record<string, string> = {};
 
   if (options.jwt) {
+    if (!options.organizationId) {
+      throw new Error(
+        `[aidream-client] ${path} is an authenticated request but no ` +
+          "organizationId was provided. aidream refuses every authenticated " +
+          "request with no X-Organization-Id header before it routes — " +
+          "resolve the caller's organization (resolveConversationOrganizationId) " +
+          "before calling this endpoint.",
+      );
+    }
     headers["Authorization"] = `Bearer ${options.jwt}`;
+    headers["X-Organization-Id"] = options.organizationId;
   }
 
   const response = await fetch(url, {
@@ -151,7 +169,15 @@ export async function resolveComputeTarget(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (options.jwt) headers["Authorization"] = `Bearer ${options.jwt}`;
+  // aidream refuses an authenticated request with no organization before it
+  // routes. This function is already best-effort (returns null on any
+  // failure and the caller falls through to an unbound run), so a missing
+  // organizationId here degrades the same way a network failure does —
+  // never a fabricated organization.
+  if (options.jwt && options.organizationId) {
+    headers["Authorization"] = `Bearer ${options.jwt}`;
+    headers["X-Organization-Id"] = options.organizationId;
+  }
   try {
     const resp = await fetch(`${baseUrl}/api/compute-targets/resolve`, {
       method: "POST",

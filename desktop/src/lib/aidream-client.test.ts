@@ -26,14 +26,32 @@ describe("AIDream GET requests", () => {
     expect(init?.headers).toEqual({});
   });
 
-  it("sends authentication without an unnecessary content-type header", async () => {
+  it("sends authentication with the organization aidream now requires", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ agents: [], count: 0 }), { status: 200 }),
     );
 
-    await fetchAIDreamAgents("test-jwt");
+    await fetchAIDreamAgents("test-jwt", { organizationId: "org-123" });
 
     const init = fetchMock.mock.calls[0]?.[1];
-    expect(init?.headers).toEqual({ Authorization: "Bearer test-jwt" });
+    expect(init?.headers).toEqual({
+      Authorization: "Bearer test-jwt",
+      "X-Organization-Id": "org-123",
+    });
+  });
+
+  it("refuses an authenticated GET with no organization BEFORE it ever fetches", async () => {
+    // aidream's AuthMiddleware refuses every authenticated request with no
+    // X-Organization-Id header (400 organization_required) before it routes.
+    // The client fails closed at the SAME boundary instead of spending a
+    // round trip on a guaranteed refusal — and never invents an organization.
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ agents: [], count: 0 }), { status: 200 }),
+    );
+
+    await expect(fetchAIDreamAgents("test-jwt")).rejects.toThrow(
+      /organizationId/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

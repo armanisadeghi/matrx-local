@@ -32,6 +32,7 @@ import {
 import supabase from "@/lib/supabase";
 import {
   fetchComputeTargets,
+  resolveConversationOrganizationId,
   type ComputeTarget,
   type ComputeTargetListResponse,
 } from "@/lib/aidream-client";
@@ -61,7 +62,13 @@ export function SandboxPicker({ thisDeviceInstanceId }: SandboxPickerProps) {
         data: { session },
       } = await supabase.auth.getSession();
       const jwt = session?.access_token ?? null;
-      const resp = await fetchComputeTargets({ jwt });
+      // aidream refuses an authenticated request with no organization
+      // before it routes — resolve it the same way conversation start does
+      // whenever we're actually signed in.
+      const organizationId = jwt
+        ? await resolveConversationOrganizationId(jwt)
+        : null;
+      const resp = await fetchComputeTargets({ jwt, organizationId });
       setData(resp);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

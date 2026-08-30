@@ -263,6 +263,59 @@ async def test_remote_execution_forwards_identity_and_injection(
 
 
 @pytest.mark.anyio
+async def test_remote_execution_refuses_when_organization_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """aidream's AuthMiddleware refuses every authenticated request that
+    names no organization (400 organization_required) before it routes.
+    Round-tripping such a request is a guaranteed, wasted failure — the
+    bridge must refuse locally instead, and it must NEVER invent a fallback
+    organization to smooth over one that's missing."""
+    from app.services.ai import remote_tool_bridge as bridge_module
+    from matrx_connect.context import app_context as context_module
+
+    fake_client = _FakeClient(
+        response={"call_id": "call-1", "ok": True, "output": "server result"}
+    )
+    monkeypatch.setattr(bridge_module, "get_aidream_client", lambda: fake_client)
+
+    async def _stored_token():
+        return "jwt-1"
+
+    monkeypatch.setattr(bridge_module, "_stored_jwt", _stored_token)
+    app_ctx = AppContext(
+        emitter=SimpleNamespace(),
+        user_id="user-1",
+        token="jwt-1",
+        request_id="request-1",
+        conversation_id="conversation-1",
+        agent_id="agent-1",
+        metadata={
+            REMOTE_TOOL_CONTEXT_KEY: {
+                "tools": [],
+                "tools_replace": [{"kind": "registered", "name": "fs_read"}],
+                "client": {"surface": "matrx-user/chat"},
+                "scope_ids": ["scope-1"],
+            }
+        },
+        organization_id=None,
+        project_id="project-1",
+        task_id="task-1",
+        source_app="matrx_local",
+    )
+    monkeypatch.setattr(context_module, "get_app_context", lambda: app_ctx)
+
+    result = await RemoteToolBridge().execute(
+        {"path": "/tmp/example.txt"},
+        ToolContext(call_id="call-1", tool_name="fs_read"),
+    )
+
+    assert result.success is False
+    assert result.error.error_type == "organization_required"
+    assert fake_client.posts == []
+
+
+@pytest.mark.anyio
 async def test_refresh_runs_context_mutating_discovery_inside_local_process(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1672,15 +1672,26 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           ...currentConversation,
           ...routePatch,
         };
-        // A NEW cloud conversation must name its organization; the server
-        // owns that choice (GET /auth/whoami). Continuations carry it already.
+        // A NEW cloud conversation must name its organization in the request
+        // BODY; the server owns that choice (GET /auth/whoami).
         const startsCloudConversation =
           executionTarget === "cloud" &&
           !(requestConversation.cloudConversationId ?? requestConversation.serverConversationId);
-        if (startsCloudConversation) {
+        // Separately — and regardless of new vs. continuing — aidream's
+        // AuthMiddleware refuses EVERY authenticated request that names no
+        // organization as the `X-Organization-Id` HEADER (400
+        // organization_required), before it ever reaches conversation
+        // routing. A continuing conversation already belongs to an
+        // organization server-side, but the header gate runs ahead of that
+        // lookup, so it still must be sent on every cloud request.
+        const cloudOrganizationId =
+          executionTarget === "cloud"
+            ? await resolveConversationOrganizationId(token)
+            : null;
+        if (startsCloudConversation && cloudOrganizationId) {
           requestOptions = {
             ...requestOptions,
-            organizationId: await resolveConversationOrganizationId(token),
+            organizationId: cloudOrganizationId,
           };
         }
         const clientContext =
@@ -2099,6 +2110,9 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${segmentToken}`,
+              ...(cloudOrganizationId
+                ? { "X-Organization-Id": cloudOrganizationId }
+                : {}),
             },
             body: JSON.stringify(requestBody),
             signal: abort.signal,

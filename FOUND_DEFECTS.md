@@ -863,6 +863,65 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 - **Owner hint:** whoever next touches `pyproject.toml` deps or the sidecar spec —
   cheap to land alongside.
 
+## Coding sessions / Claude Code tab (root-caused 2026-08-30 from Arman's "it gives me nothing" report)
+
+- **MXL-D-084 — Per-session cloud sync state is not knowable locally; the tab
+  cannot answer "which conversations are synced".**
+  Area: coding_sessions. Status: `open`.
+  Analyzed 2026-08-30 — verified in code and schema.
+  Symptom: Arman asks, correctly, to see which conversations are synced, which
+  are behind, and which are stale. The app cannot answer for any individual
+  conversation, and no UI change can make it answer.
+  Evidence: a delivered outbox row is **deleted** on retirement
+  (`app/services/coding_sessions/service.py::_delete_delivered_row`), and the
+  only surviving acknowledgement record,
+  `coding_session_bridge_delivery_activity`
+  (`app/services/local_db/schema.py:~830`), is keyed
+  `(provider, action, source)` with cumulative counters — **no session
+  identity**. So "synced" is only ever inferable as *absence from the pending
+  and quarantine tables*, which cannot distinguish "delivered" from
+  "never enqueued". The UI already admits this in prose:
+  "exact historical acknowledgement receipts were intentionally not retained by
+  the current activity ledger" (`ClaudeHistorySync.tsx:828`).
+  Fix shape (Arman's own instinct, and it is the right one): a per-session sync
+  state row carrying the fingerprint that was acknowledged — transcript
+  `(size, mtime_ns)` is sufficient and needs no hashing — written where the ack
+  is recorded (`service.py::_write_delivery_acknowledgement`). "Behind" then =
+  current fingerprint != acknowledged fingerprint, computed on disk with no
+  cloud round-trip. Requires a migration + write-path change; not a UI task.
+
+- **MXL-D-085 — Nine `title_sync` write transactions still race the bridge's
+  BEGIN IMMEDIATE connections.**
+  Area: coding_sessions. Status: `open`.
+  Analyzed 2026-08-30 — verified in code.
+  Symptom: residue of the "database is locked" failure fixed in commit
+  `a916aeaf6`. That commit put every short-connection durable write and
+  `title_sync._start_operation` behind the process-wide gate
+  (`app/services/local_db/write_gate.py`), which removes the observed failure.
+  Eleven further shared-connection write spans in
+  `app/services/coding_sessions/title_sync.py` (commit sites at lines ~324,
+  456, 543, 676, 769, 799, 826, 860, 937, 1155, 1242, 1306) still write without
+  taking the gate and remain theoretically contendable under heavy hook load.
+  They were left alone deliberately: each needs its transaction span read
+  individually to place the gate correctly, and mis-scoping a lock is worse
+  than the race it fixes.
+  Fix shape: wrap each span `first write statement → commit` in
+  `async with write_gate():`, one at a time, with a test per span.
+
+- **MXL-D-086 — User-facing copy in the Claude Code tab is internal outbox
+  vocabulary.**
+  Area: UI/UX. Status: `open`.
+  Analyzed 2026-08-30 — verified in code.
+  Symptom: Arman, the product's owner, cannot read his own screen: "eleven
+  waiting envelopes… I don't even know what that means. What is an envelope?"
+  Evidence: `desktop/src/pages/ClaudeHistorySync.tsx` uses "envelope" 15 times
+  (lines 516, 521, 522, 525, 609, 732, 781, 790, 801, 827, 828, 907, 909, 917,
+  958, 962, 964, 969) plus "delivery pipeline" (867), "adapter spool" (801) and
+  "run recovery check" (998). These are names for `coding_session_bridge_outbox`
+  rows and its lane scheduler — implementation nouns with no user meaning.
+  Fix shape: an envelope is "a copy of a conversation waiting to upload". State
+  the object, the location, and the next action; never the table name.
+
 ## Cross-repo
 
 ### MXL-D-083 — stream-events.ts carries a registry-INDEPENDENT copy of every block's data shape, and nothing imports it

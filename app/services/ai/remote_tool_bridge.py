@@ -161,6 +161,21 @@ class RemoteToolBridge:
                     retryable=False,
                 )
 
+            organization_id = app_ctx.organization_id
+            if not organization_id:
+                # aidream's AuthMiddleware refuses every authenticated request
+                # with no X-Organization-Id header before it routes — fail
+                # closed here rather than spend a round trip on a guaranteed
+                # 400. No fallback organization is ever chosen for the caller.
+                return self._error(
+                    ctx,
+                    started_at,
+                    "organization_required",
+                    "Choose the organization you're working in before running "
+                    "a server-owned tool.",
+                    retryable=False,
+                )
+
             request_context = app_ctx.metadata.get(REMOTE_TOOL_CONTEXT_KEY, {})
             if not isinstance(request_context, dict):
                 request_context = {}
@@ -207,6 +222,7 @@ class RemoteToolBridge:
                 "/ai/tools/execute",
                 payload,
                 jwt=jwt,
+                headers={"X-Organization-Id": organization_id},
                 timeout=self._server_timeouts.get(ctx.tool_name, 120.0) + 15.0,
             )
             if not isinstance(response, dict):

@@ -52,6 +52,7 @@ class RuntimeLease:
     lease_holder: str
     lease_seconds: float
     jwt: str
+    organization_id: str
     heartbeat_task: Optional[asyncio.Task[None]] = field(default=None, repr=False)
     settled: bool = False
 
@@ -65,18 +66,32 @@ def _get_client() -> Any | None:
 async def open_runtime_execution(
     *,
     jwt: str | None,
+    organization_id: str | None,
     conversation_id: str | None,
     idempotency_key: str | None = None,
 ) -> RuntimeLease | None:
     """Open an execution on the runtime spine. Returns None on any failure.
 
     Requires a real user JWT — an anonymous/local-only run has no cloud
-    identity and is intentionally not tracked on the spine.
+    identity and is intentionally not tracked on the spine. Likewise requires
+    an ``organization_id``: aidream's AuthMiddleware refuses every
+    authenticated request with no ``X-Organization-Id`` header
+    (organization_required) before it routes, so an org-less caller here
+    would just spend a round trip on a guaranteed 400. This is best-effort,
+    offline-safe tracking — never a hard requirement for the local run — so a
+    missing org means "skip cloud tracking", exactly like a missing JWT.
     """
     if not jwt:
         logger.info(
             "[runtime_spine] no user JWT on this run — skipping cloud runtime "
             "tracking (local-only run)"
+        )
+        return None
+    if not organization_id:
+        logger.info(
+            "[runtime_spine] no organization on this run — skipping cloud "
+            "runtime tracking (aidream requires X-Organization-Id on every "
+            "authenticated request)"
         )
         return None
 
@@ -102,7 +117,11 @@ async def open_runtime_execution(
 
     try:
         data = await client.post(
-            "/v2/runtime/open", payload, jwt=jwt, timeout=_OPEN_TIMEOUT
+            "/v2/runtime/open",
+            payload,
+            jwt=jwt,
+            timeout=_OPEN_TIMEOUT,
+            headers={"X-Organization-Id": organization_id},
         )
         execution_id = str(data["execution_id"])
         lease = RuntimeLease(
@@ -111,6 +130,7 @@ async def open_runtime_execution(
             lease_holder=str(data.get("lease_holder") or ""),
             lease_seconds=float(data.get("lease_seconds") or _DEFAULT_LEASE_SECONDS),
             jwt=jwt,
+            organization_id=organization_id,
         )
         logger.info(
             "[runtime_spine] opened execution %s (root=%s, lease=%ss) for "
@@ -154,6 +174,7 @@ async def _heartbeat_loop(lease: RuntimeLease) -> None:
                 },
                 jwt=lease.jwt,
                 timeout=_HEARTBEAT_TIMEOUT,
+                headers={"X-Organization-Id": lease.organization_id},
             )
             outcome = str((data or {}).get("outcome") or "")
             if outcome in ("lost", "terminal"):
@@ -216,7 +237,11 @@ async def settle_runtime_execution(
         if client is None:
             raise RuntimeError("no aidream server URL resolved")
         await client.post(
-            "/v2/runtime/settle", payload, jwt=lease.jwt, timeout=_SETTLE_TIMEOUT
+            "/v2/runtime/settle",
+            payload,
+            jwt=lease.jwt,
+            timeout=_SETTLE_TIMEOUT,
+            headers={"X-Organization-Id": lease.organization_id},
         )
         logger.info(
             "[runtime_spine] settled execution %s status=%s meters=%s",

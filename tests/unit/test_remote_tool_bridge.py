@@ -51,8 +51,8 @@ class _FakeClient:
     async def fetch_tools(self):
         return self.rows
 
-    async def post(self, path, payload, *, jwt, timeout=130.0):
-        self.posts.append((path, payload, jwt, timeout))
+    async def post(self, path, payload, *, jwt, headers=None, timeout=130.0):
+        self.posts.append((path, payload, jwt, headers, timeout))
         return self.response
 
 
@@ -246,9 +246,10 @@ async def test_remote_execution_forwards_identity_and_injection(
 
     assert result.success is True
     assert result.output == "server result"
-    path, payload, jwt, timeout = fake_client.posts[0]
+    path, payload, jwt, headers, timeout = fake_client.posts[0]
     assert path == "/ai/tools/execute"
     assert jwt == "jwt-1"
+    assert headers == {"X-Organization-Id": "org-1"}
     assert timeout == 135.0
     assert payload["agent_id"] == "agent-1"
     assert payload["conversation_id"] == "conversation-1"

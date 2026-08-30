@@ -841,6 +841,7 @@ async def run_local_ai_task(
     # chat.request.execution_id.
     lease = await open_runtime_execution(
         jwt=ctx.token,
+        organization_id=ctx.organization_id,
         conversation_id=ctx.conversation_id,
         idempotency_key=operation_id,
     )

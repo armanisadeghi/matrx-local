@@ -1,9 +1,9 @@
 /**
  * Mandate references for the desktop app (mirror of matrx-extend's
- * `src/lib/agents/mandates.ts`). A Mandate is the platform's named answer to
+ * `src/lib/mandates.ts`). A Mandate is the platform's named answer to
  * "which agent runs this step" — the agent lives in the DATABASE; this file
  * only names the job. Never an agent UUID here.
- * SoR: common-docs/systems/agents/mandates/FEATURE.md (+ RUNTIME.md).
+ * SoR: common-docs/systems/mandates/STATE.md (+ RUNTIME.md).
  */
 
 /** Canonical server-resolved target for a brand-new desktop Cloud Chat. */

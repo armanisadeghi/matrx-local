@@ -10,7 +10,7 @@
  * body and stream the same events — a Mandate start is a PATH change only.
  */
 
-import { mandateKeyFromAgentRef } from "@/lib/agents/mandates";
+import { mandateKeyFromAgentRef } from "@/lib/mandates";
 
 /** POST {aiBase}/agents/{agent_id} — start an agent stream. */
 export const agentExecutePath = (agentId: string): string =>

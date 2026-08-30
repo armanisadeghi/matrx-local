@@ -1,7 +1,7 @@
 import {
   DEFAULT_CHAT_MANDATE_REF,
   isMandateAgentRef,
-} from "@/lib/agents/mandates";
+} from "@/lib/mandates";
 import supabase from "@/lib/supabase";
 import type {
   AgentInfo,

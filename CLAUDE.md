@@ -47,12 +47,12 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
   `/Users/armanisadeghi/code/common-docs/policies/clients-consume-never-reimplement.md`
 - **Mandates: which agent runs a step is a DATABASE answer, never a code answer.**
   Python half: `matrx_ai.configure()` installs `ServerMandateSource`
-  (`app/services/ai/engine.py`). TS half: `desktop/src/lib/agents/mandates.ts` +
+  (`app/services/ai/engine.py`). TS half: `desktop/src/lib/mandates.ts` +
   `desktop/src/lib/api/routes/ai.ts` — Cloud Chat defaults to the `local.cloud_chat`
   Mandate (`mandate:<key>` UI ref → `POST /api/ai/mandates/{key}`; local target resolves
   via `GET /api/mandates/{key}/resolution`). Never add an agent UUID here; only L3 (local
   personas, unruled) remains open. →
-  `/Users/armanisadeghi/code/common-docs/systems/agents/mandates/RUNTIME.md` (+ `FEATURE.md`, `ROLLOUT.md`)
+  `/Users/armanisadeghi/code/common-docs/systems/mandates/RUNTIME.md` (+ `STATE.md`, `ROLLOUT.md`)
 - **No unapproved schedules.** Every scheduled task exists only with Arman's approval
   by name and interval, registered and claimed via the master registry. →
   `/Users/armanisadeghi/code/common-docs/operations/scheduled-tasks.md`

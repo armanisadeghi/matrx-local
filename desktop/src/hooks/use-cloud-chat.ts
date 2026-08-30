@@ -4,7 +4,7 @@ import {
   fetchMandateResolution,
   resolveConversationOrganizationId,
 } from "@/lib/aidream-client";
-import { mandateKeyFromAgentRef } from "@/lib/agents/mandates";
+import { mandateKeyFromAgentRef } from "@/lib/mandates";
 import { agentTargetExecutePath } from "@/lib/api/routes/ai";
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import {

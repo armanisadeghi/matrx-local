@@ -21,9 +21,12 @@ module's semver helpers; keep `app_config` itself deliberately small.
    compiled `*_DEFAULT` (i.e. developer-only `AIDREAM_SERVER_URL_LIVE`,
    `MATRX_FILES_URL`, `SCRAPER_SERVER_URL` env vars). Wins per-key; logged
    LOUDLY at boot.
-2. **Fresh remote** — fetched this session (PostgREST primary, aidream
-   `GET /api/app-config/matrx-local` fallback; 5s timeouts, publishable key
-   only — works pre-login).
+2. **Fresh remote** — fetched this session (PostgREST primary with the
+   publishable key AND `Accept-Profile: public` — the server's default
+   exposed schema is no longer `public`, so an unprofiled request 404s with
+   PGRST205 (see `SUPABASE_PROFILE_HEADERS` in `app/config.py`); aidream
+   `GET /api/app-config/matrx-local` fallback; 5s timeouts — works
+   pre-login).
 3. **Last-good disk cache** — `MATRX_HOME_DIR / "app_config.json"` (dev world
    caches under `~/.matrx-dev` automatically), written atomically
    (temp file + `os.replace`) on every successful fetch.

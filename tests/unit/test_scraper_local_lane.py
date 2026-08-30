@@ -589,3 +589,50 @@ def test_stop_clears_readiness(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(eng.stop())
     assert eng.is_ready is False
     assert eng.browser_pool is None
+
+
+def test_a_hung_browser_launch_times_out_instead_of_blocking_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Chromium launch that never returns must NOT wedge engine startup.
+
+    2026-08-30: pool.start() hung on a real machine, the FastAPI lifespan
+    never yielded, and the desktop reported "did not become reachable within
+    300 seconds". The launch is now bounded; on timeout the engine still
+    starts, degraded, exactly like any other launch failure.
+    """
+
+    class _HangingPool:
+        def __init__(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        async def start(self) -> None:
+            await asyncio.sleep(3600)
+
+    import matrx_scraper.browser_pool as browser_pool_mod
+
+    monkeypatch.setattr(browser_pool_mod, "PlaywrightBrowserPool", _HangingPool)
+    monkeypatch.setattr(key_manager, "get_cached_user_keys", dict)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    monkeypatch.setattr(scraper_search, "configure_client", lambda _key: None)
+    # Keep the test fast: the ceiling's VALUE is a constant, its EXISTENCE is
+    # what this test pins.
+    monkeypatch.setattr(engine_mod, "BROWSER_POOL_START_TIMEOUT_SECONDS", 0.05)
+
+    from app.services.scraper import browser_runtime
+
+    monkeypatch.setattr(browser_runtime, "record_launch_failure", _RecordCall())
+
+    eng = ScraperEngine()
+    asyncio.run(asyncio.wait_for(eng.start(), timeout=5.0))
+
+    assert eng.is_ready is True
+    assert eng.browser_pool is None
+
+
+class _RecordCall:
+    def __init__(self) -> None:
+        self.calls: list[Any] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> None:
+        self.calls.append((args, kwargs))

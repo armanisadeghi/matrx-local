@@ -113,6 +113,15 @@ CACHE_TTL_SECONDS = 1800
 # Pages per research effort level.
 RESEARCH_EFFORT_LIMITS = {"low": 10, "medium": 25, "high": 50, "extreme": 100}
 
+# Hard ceiling on how long the Playwright driver + Chromium may take to come
+# up. A healthy launch is 1-3 seconds; a hung one (stale driver, Gatekeeper
+# stall, corrupt browser build) previously awaited FOREVER inside the FastAPI
+# lifespan — the engine never finished startup, never bound its port, and the
+# desktop reported "did not become reachable within 300 seconds" (2026-08-30).
+# On timeout the pool is reaped and recorded as a launch failure: a STATE with
+# a one-click repair, exactly like any other unlaunchable browser.
+BROWSER_POOL_START_TIMEOUT_SECONDS = 30.0
+
 
 class BrowserUnavailable(RuntimeError):
     """This machine has no usable Playwright browser right now.
@@ -387,6 +396,7 @@ class ScraperEngine:
         if self._browser_pool is not None:
             return True
 
+        pool = None
         try:
             from matrx_scraper.browser_pool import PlaywrightBrowserPool
 
@@ -394,7 +404,12 @@ class ScraperEngine:
             # app renders the occasional page and every extra Chromium is
             # ~200 MB of the user's RAM.
             pool = PlaywrightBrowserPool(pool_size=1)
-            await pool.start()
+            # Bounded on purpose: this runs inside the app lifespan, and an
+            # unbounded hung launch blocks the ENTIRE engine from ever
+            # accepting a request (see BROWSER_POOL_START_TIMEOUT_SECONDS).
+            await asyncio.wait_for(
+                pool.start(), timeout=BROWSER_POOL_START_TIMEOUT_SECONDS
+            )
             self._browser_pool = pool
             self._driver_pid = _extract_driver_pid(pool)
             browser_runtime.record_pool_started()
@@ -404,6 +419,16 @@ class ScraperEngine:
             )
             return True
         except Exception as pw_exc:
+            if isinstance(pw_exc, asyncio.TimeoutError):
+                pw_exc = TimeoutError(
+                    "Chromium did not finish launching within "
+                    f"{BROWSER_POOL_START_TIMEOUT_SECONDS:.0f}s"
+                )
+            # A timed-out (or half-failed) launch can leave a live driver node
+            # + Chromium tree behind. Reap by remembered PID — never pkill —
+            # so the orphan doesn't outlive this attempt (Hard Rule 0).
+            if pool is not None:
+                terminate_playwright_tree(_extract_driver_pid(pool))
             browser_runtime.record_launch_failure(pw_exc)
             logger.warning(
                 "[scraper/engine.py] ScraperEngine: Playwright browser pool unavailable — "

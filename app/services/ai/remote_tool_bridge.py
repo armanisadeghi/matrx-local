@@ -83,6 +83,7 @@ class RemoteToolBridge:
                 definition = ToolDefinition.model_validate(
                     {
                         **row,
+                        "annotations": _normalize_annotations(row.get("annotations")),
                         "tool_id": row.get("id"),
                         "tool_type": ToolType.EXTERNAL_HANDLER,
                         "function_path": "",
@@ -296,6 +297,23 @@ class RemoteToolBridge:
         )
 
 
+def _normalize_annotations(value: Any) -> list[dict[str, Any]]:
+    """Coerce a server ``annotations`` value into matrx-ai's list-of-dicts.
+
+    The registry now stores MCP-style annotations — a single object such as
+    ``{"title": ..., "destructiveHint": false}`` — while the installed
+    matrx-ai ``ToolDefinition`` declares ``list[dict]``. One dict-shaped row
+    used to fail validation and abort the ENTIRE remote-tool refresh
+    (2026-08-30 startup traceback), so the whole server catalog vanished over
+    one field's shape. Wrap the object form; drop anything unusable.
+    """
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
 async def _stored_jwt() -> str | None:
     from app.services.local_db.repositories import TokenRepo
 
@@ -351,6 +369,7 @@ def _build_local_context_definition(row: dict[str, Any]) -> ToolDefinition:
     definition = ToolDefinition.model_validate(
         {
             **row,
+            "annotations": _normalize_annotations(row.get("annotations")),
             "parameters": schema.get("properties", {}),
             "required_params": schema.get("required", []),
             "description": description,

@@ -154,6 +154,54 @@ async def test_refresh_registers_remote_definitions_without_shadowing_local(
 
 
 @pytest.mark.anyio
+async def test_refresh_accepts_mcp_object_shaped_annotations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dict-shaped (MCP-style) ``annotations`` row must not abort refresh.
+
+    2026-08-30: one registry row carrying ``{"title": ..., "destructiveHint":
+    false}`` failed ToolDefinition validation (list expected) and the WHOLE
+    remote-tool catalog vanished at startup. The bridge normalizes the object
+    form into the list shape matrx-ai declares.
+    """
+    from app.services.ai import remote_tool_bridge as bridge_module
+    from app.tools import catalog as catalog_module
+    from matrx_ai.tools import external_handlers, registry
+
+    fake_client = _FakeClient(
+        rows=[
+            {
+                "id": "annotated-id",
+                "name": "ask_question",
+                "parameters": {},
+                "annotations": {"title": "Ask a question", "destructiveHint": False},
+            },
+        ]
+    )
+    fake_registry = _FakeRegistry()
+    fake_handlers = _FakeHandlers()
+    monkeypatch.setattr(bridge_module, "get_aidream_client", lambda: fake_client)
+    monkeypatch.setattr(catalog_module, "get_catalog", lambda: ())
+    monkeypatch.setattr(
+        registry.ToolRegistry,
+        "get_instance",
+        staticmethod(lambda: fake_registry),
+    )
+    monkeypatch.setattr(
+        external_handlers.ExternalHandlerRegistry,
+        "get_instance",
+        staticmethod(lambda: fake_handlers),
+    )
+
+    count = await RemoteToolBridge().refresh()
+
+    assert count == 1
+    assert fake_registry.tools["ask_question"].annotations == [
+        {"title": "Ask a question", "destructiveHint": False}
+    ]
+
+
+@pytest.mark.anyio
 async def test_remote_execution_forwards_identity_and_injection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

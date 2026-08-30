@@ -112,14 +112,16 @@ class SupabaseDocClient:
             raise RuntimeError("No JWT set — user must be authenticated")
 
         headers = self._headers()
-        # Target a non-public schema (e.g. `workbench`) via the PostgREST profile
-        # headers. Accept-Profile selects the schema to read from; Content-Profile
-        # selects the schema to write to.
-        if schema:
-            if method.upper() in _WRITE_METHODS:
-                headers["Content-Profile"] = schema
-            else:
-                headers["Accept-Profile"] = schema
+        # Target the schema via the PostgREST profile headers. Accept-Profile
+        # selects the schema to read from; Content-Profile the schema to write
+        # to. ALWAYS explicit: the server's default exposed schema is no longer
+        # `public` (2026 schema-reorg — see SUPABASE_PROFILE_HEADERS in
+        # app/config.py), so an unprofiled request 404s on public tables.
+        profile = schema or "public"
+        if method.upper() in _WRITE_METHODS:
+            headers["Content-Profile"] = profile
+        else:
+            headers["Accept-Profile"] = profile
         if extra_headers:
             headers.update(extra_headers)
 

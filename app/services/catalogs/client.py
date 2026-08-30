@@ -36,6 +36,7 @@ from app.common.system_logger import get_logger
 
 from app.config import (
     AIDREAM_SERVER_URL,
+    SUPABASE_PROFILE_HEADERS,
     SUPABASE_PUBLISHABLE_KEY,
     SUPABASE_URL,
 )
@@ -98,6 +99,7 @@ async def _fetch_postgrest(report: ParseReport | None = None) -> list[CatalogEnt
                 },
                 headers={
                     "apikey": SUPABASE_PUBLISHABLE_KEY,
+                    **SUPABASE_PROFILE_HEADERS,
                     "Range-Unit": "items",
                     "Range": f"{start}-{start + _PAGE_SIZE - 1}",
                 },
@@ -151,10 +153,13 @@ async def fetch_remote(report: ParseReport | None = None) -> list[CatalogEntry]:
         )
         return entries
     except (httpx.HTTPError, CatalogsValidationError, ValueError) as exc:
-        failures.append(f"postgrest: {exc}")
+        # repr, not str: transport errors (ConnectError, ReadError) often
+        # stringify EMPTY, which logged as "failed — trying fallback: " and
+        # left nothing to diagnose.
+        failures.append(f"postgrest: {exc!r}")
         logger.warning(
             "[catalogs] primary fetch path (PostgREST) failed — trying aidream "
-            "fallback: %s",
+            "fallback: %r",
             exc,
         )
 

@@ -20,8 +20,11 @@ mirrors its architecture 1:1 and imports its semver helpers).
 
 1. **Fresh remote** — fetched this session (PostgREST primary
    `GET {SUPABASE_URL}/rest/v1/catalog_entries?app=eq.matrx-local&select=*`
-   with the publishable key; aidream `GET /api/catalogs/matrx-local`
-   fallback; 5s timeouts, works pre-login).
+   with the publishable key AND `Accept-Profile: public` — the server's
+   default exposed schema is no longer `public`, so an unprofiled request
+   404s with PGRST205 (see `SUPABASE_PROFILE_HEADERS` in `app/config.py`);
+   aidream `GET /api/catalogs/matrx-local` fallback; 5s timeouts, works
+   pre-login).
 2. **Last-good disk cache** — `MATRX_HOME_DIR / "catalogs.json"` (dev world
    caches under `~/.matrx-dev`), written atomically (temp + `os.replace`) on
    every successful fetch.

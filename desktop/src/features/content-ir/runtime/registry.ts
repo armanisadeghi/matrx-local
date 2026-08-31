@@ -19,7 +19,7 @@ import {
   type KindComponentRow,
   type ComponentRole,
 } from "@ai-matrx/content-ir-react";
-import type { KindDefinition } from "@ai-matrx/content-ir";
+import type { KindDefinition } from "@ai-matrx/content-ir/registry";
 import {
   fetchKind,
   fetchKindCatalog,

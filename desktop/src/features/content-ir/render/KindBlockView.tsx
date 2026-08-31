@@ -20,7 +20,7 @@ import {
   useContentIrKindVersion,
   type IrRenderBlock,
 } from "@ai-matrx/content-ir-react";
-import { readEnvelope, reconstructRegionValue } from "@ai-matrx/content-ir";
+import { readEnvelope, reconstructRegionValue } from "@ai-matrx/content-ir/core";
 import { contentIrRouteEnv, contentIrVersionSources } from "../runtime/route-env";
 import { componentRegistry } from "../runtime/registry";
 import { CONTENT_IR_PLATFORM } from "../platform";

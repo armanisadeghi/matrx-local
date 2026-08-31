@@ -15,6 +15,8 @@
  * never decides visibility.
  */
 
+import { applyOrganizationContextHeader } from "@ai-matrx/agents/matrx";
+
 import type { components } from "@/types/python-generated/api-types";
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import { getActiveOrganizationId } from "@/lib/org/active-org";
@@ -51,7 +53,25 @@ async function authHeaders(): Promise<Record<string, string>> {
   if (!token) return {};
   const organizationId = await getActiveOrganizationId();
   if (!organizationId) return {};
-  return { Authorization: `Bearer ${token}`, "X-Organization-Id": organizationId };
+  try {
+    // The header NAME and the id's validity are the package kernel's
+    // (`applyOrganizationContextHeader`, @ai-matrx/agents 0.6.0, C22). A
+    // stored id the kernel refuses takes the SAME degrade this function
+    // already documents above — anonymous public catalog, never an invented
+    // organization — and says so rather than sending a corrupt header.
+    return applyOrganizationContextHeader(
+      { Authorization: `Bearer ${token}` },
+      organizationId,
+    );
+  } catch (err) {
+    console.error(
+      "[content-ir/catalog] stored organization id was refused by the org-context kernel; " +
+        "falling back to the anonymous public catalog. Re-select your organization to restore " +
+        "org-scoped kinds.",
+      err,
+    );
+    return {};
+  }
 }
 
 /**

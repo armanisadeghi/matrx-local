@@ -31,13 +31,32 @@ describe("AIDream GET requests", () => {
       new Response(JSON.stringify({ agents: [], count: 0 }), { status: 200 }),
     );
 
-    await fetchAIDreamAgents("test-jwt", { organizationId: "org-123" });
+    // A REAL organization id: since @ai-matrx/agents 0.6.0 the package's
+    // org-context kernel writes this header AND validates the id, so the old
+    // "org-123" placeholder is no longer a representative fixture.
+    await fetchAIDreamAgents("test-jwt", {
+      organizationId: "3f2a91c4-5b6d-4e7f-8a90-1b2c3d4e5f60",
+    });
 
     const init = fetchMock.mock.calls[0]?.[1];
     expect(init?.headers).toEqual({
       Authorization: "Bearer test-jwt",
-      "X-Organization-Id": "org-123",
+      "X-Organization-Id": "3f2a91c4-5b6d-4e7f-8a90-1b2c3d4e5f60",
     });
+  });
+
+  it("refuses a MALFORMED organization id before the wire instead of sending it", async () => {
+    // The kernel validates what it binds (@ai-matrx/agents 0.6.0). A corrupt
+    // stored id used to be sent anyway and earned an opaque server 400; now it
+    // is refused here, with a message that names the problem.
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ agents: [], count: 0 }), { status: 200 }),
+    );
+
+    await expect(
+      fetchAIDreamAgents("test-jwt", { organizationId: "org-123" }),
+    ).rejects.toThrow(/organization ID is invalid/i);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("refuses an authenticated GET with no organization BEFORE it ever fetches", async () => {

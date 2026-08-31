@@ -8,7 +8,7 @@
  * A kind identity is never invented.
  */
 
-import { sanitizeInboundEnvelopeMetadata, readEnvelope } from "@ai-matrx/content-ir";
+import { sanitizeInboundEnvelopeMetadata, readEnvelope } from "@ai-matrx/content-ir/core";
 import type { RenderBlockPayload } from "@/types/python-generated/stream-events";
 import { reportContentIrError } from "./diagnostics";
 

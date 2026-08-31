@@ -13,6 +13,8 @@
  * reading anywhere in the platform.
  */
 
+import { applyOrganizationContextHeader } from "@ai-matrx/agents/matrx";
+
 import supabase from "@/lib/supabase";
 import { getAIDreamServerUrl, getWebAppOrigin } from "@/lib/app-config";
 import { requireActiveOrganizationId } from "@/lib/org/active-org";
@@ -232,11 +234,16 @@ export async function sendReviewedGmail(
     `${await getAIDreamServerUrl()}/api/google-workspace/gmail/send-reviewed`,
     {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        "X-Organization-Id": organizationId,
-        "Content-Type": "application/json",
-      },
+      // The organization header is written by the package kernel
+      // (`applyOrganizationContextHeader`, @ai-matrx/agents 0.6.0, C22) — this
+      // repo does not spell the header name a second time.
+      headers: applyOrganizationContextHeader(
+        {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        organizationId,
+      ),
       body: JSON.stringify({
         connection_id: draft.connectionId,
         to: draft.to,

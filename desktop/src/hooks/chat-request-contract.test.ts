@@ -37,6 +37,12 @@ function expectRequiredStartFields(body: Record<string, unknown>): void {
   expect(body.store).toBe(true);
 }
 
+/**
+ * URL EXPECTATIONS ARE LITERALS, NEVER DERIVED. Every cloud AI run-start
+ * surface is promoted to `/api/v2/...` by the package's allowlist
+ * (`applyAiApiVersion`, @ai-matrx/agents 0.6.0); the LOCAL engine mirror is
+ * never promoted, and the last case in this block is the guard that proves it.
+ */
 describe("Cloud Chat request contract", () => {
   it("sends the required triple on a bare AIDream chat start", () => {
     const request = buildCloudChatRequest(
@@ -54,7 +60,7 @@ describe("Cloud Chat request contract", () => {
       [],
     );
 
-    expect(request.url).toBe("https://api.example.test/api/ai/chat");
+    expect(request.url).toBe("https://api.example.test/api/v2/ai/chat");
     expectRequiredStartFields(request.body);
   });
 
@@ -74,7 +80,7 @@ describe("Cloud Chat request contract", () => {
       [],
     );
 
-    expect(request.url).toBe("https://api.example.test/api/ai/agents/agent-1");
+    expect(request.url).toBe("https://api.example.test/api/v2/ai/agents/agent-1");
     expectRequiredStartFields(request.body);
   });
 
@@ -94,7 +100,7 @@ describe("Cloud Chat request contract", () => {
       [],
     );
 
-    expect(request.url).toBe("https://api.example.test/api/ai/mandates/local.cloud_chat");
+    expect(request.url).toBe("https://api.example.test/api/v2/ai/mandates/local.cloud_chat");
     expect(request.body.user_input).toBe("hi");
     expect(request.body.organization_id).toBe("org-1");
     expectRequiredStartFields(request.body);
@@ -117,7 +123,7 @@ describe("Cloud Chat request contract", () => {
     );
 
     expect(request.url).toBe(
-      "https://api.example.test/api/ai/conversations/existing-conversation",
+      "https://api.example.test/api/v2/ai/conversations/existing-conversation",
     );
     expect(request.body).not.toHaveProperty("conversation_id");
     expect(request.body).not.toHaveProperty("is_new");

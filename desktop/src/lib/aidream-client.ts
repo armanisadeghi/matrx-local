@@ -12,6 +12,8 @@
  *     requires a JWT. Callers must skip the fetch when logged out.
  */
 
+import { applyOrganizationContextHeader } from "@ai-matrx/agents/matrx";
+
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import { mandateResolutionPath } from "@/lib/api/routes/ai";
 import type { components } from "@/types/python-generated/api-types";
@@ -38,7 +40,7 @@ async function aidreamGet<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   const url = `${await getAIDreamServerUrl()}/api${path}`;
-  const headers: Record<string, string> = {};
+  let headers: Record<string, string> = {};
 
   if (options.jwt) {
     if (!options.organizationId) {
@@ -53,7 +55,11 @@ async function aidreamGet<T>(
       );
     }
     headers["Authorization"] = `Bearer ${options.jwt}`;
-    headers["X-Organization-Id"] = options.organizationId;
+    // The header itself is the PACKAGE's (`applyOrganizationContextHeader`,
+    // @ai-matrx/agents 0.6.0 — the org-context kernel moved in under C22). It
+    // also validates the id and refuses a malformed one rather than letting a
+    // corrupt stored value earn an opaque server 400.
+    headers = applyOrganizationContextHeader(headers, options.organizationId);
   }
 
   const response = await fetch(url, {
@@ -168,19 +174,24 @@ export async function resolveComputeTarget(
   options: RequestOptions = {},
 ): Promise<SandboxBindingPayload | null> {
   const baseUrl = await getAIDreamServerUrl();
-  const headers: Record<string, string> = {
+  let headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  // aidream refuses an authenticated request with no organization before it
-  // routes. This function is already best-effort (returns null on any
-  // failure and the caller falls through to an unbound run), so a missing
-  // organizationId here degrades the same way a network failure does —
-  // never a fabricated organization.
-  if (options.jwt && options.organizationId) {
-    headers["Authorization"] = `Bearer ${options.jwt}`;
-    headers["X-Organization-Id"] = options.organizationId;
-  }
   try {
+    // aidream refuses an authenticated request with no organization before it
+    // routes. This function is already best-effort (returns null on any
+    // failure and the caller falls through to an unbound run), so a missing
+    // organizationId here degrades the same way a network failure does —
+    // never a fabricated organization.
+    //
+    // The header is written by the package kernel (C22). The kernel also
+    // VALIDATES the id and throws on a malformed one; that throw is inside
+    // this try on purpose, so it degrades to `null` like every other failure
+    // here instead of escaping a function whose contract is "never throws".
+    if (options.jwt && options.organizationId) {
+      headers["Authorization"] = `Bearer ${options.jwt}`;
+      headers = applyOrganizationContextHeader(headers, options.organizationId);
+    }
     const resp = await fetch(`${baseUrl}/api/compute-targets/resolve`, {
       method: "POST",
       headers,

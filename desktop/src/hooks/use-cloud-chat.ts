@@ -6,7 +6,17 @@ import {
   requireActiveOrganizationId,
 } from "@/lib/org/active-org";
 import { mandateKeyFromAgentRef } from "@/lib/mandates";
-import { agentTargetExecutePath } from "@/lib/api/routes/ai";
+import {
+  CHAT_PATH,
+  agentTargetExecutePath,
+  aiRequestUrl,
+  conversationContinuePath,
+  conversationResumePath,
+} from "@/lib/api/routes/ai";
+import {
+  applyOrganizationContextHeader,
+  fetchWithMatrxProtocolFallback,
+} from "@ai-matrx/agents/matrx";
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import {
   cloudModelDisplayName,
@@ -230,10 +240,11 @@ export function buildCloudChatRequest(
   body: Record<string, unknown>;
   startedConversationId?: string;
 } {
-  const base =
-    target === "local"
-      ? `${engineUrl}/ai`
-      : `${cloudServerUrl}/api/ai`;
+  // The ROOT each in-app `/ai/...` path hangs off. The `/ai` segment now
+  // belongs to the path helpers in `lib/api/routes/ai.ts`, because the
+  // package's v2 allowlist is expressed in whole `/ai/...` paths — a base that
+  // swallowed `/ai` would hide every path from it.
+  const root = target === "local" ? `${engineUrl}` : `${cloudServerUrl}/api`;
   const conversationId =
     target === "local"
       ? conversation.localConversationId
@@ -279,7 +290,7 @@ export function buildCloudChatRequest(
 
   if (conversationId) {
     return {
-      url: `${base}/conversations/${conversationId}`,
+      url: aiRequestUrl(target, root, conversationContinuePath(conversationId)),
       body: {
         user_input: userInput,
         stream: true,
@@ -313,7 +324,7 @@ export function buildCloudChatRequest(
     // `options.agentId` is either a concrete agent id or a `mandate:<key>` UI
     // reference; the latter goes to the Mandate start route (same body).
     return buildConversationStartRequest(
-      `${base}${agentTargetExecutePath(options.agentId)}`,
+      aiRequestUrl(target, root, agentTargetExecutePath(options.agentId)),
       body,
     );
   }
@@ -326,7 +337,7 @@ export function buildCloudChatRequest(
     }
   }
 
-  return buildConversationStartRequest(`${base}/chat`, {
+  return buildConversationStartRequest(aiRequestUrl(target, root, CHAT_PATH), {
     ai_model_id: localModel ?? currentModel,
     messages: apiMessages,
     stream: true,
@@ -2110,18 +2121,67 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           delegatedCallsThisSegment.clear();
           const segmentToken = await getFreshAccessToken();
           delegationAccessToken = segmentToken;
-          const response = await fetch(requestUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${segmentToken}`,
-              ...(cloudOrganizationId
-                ? { "X-Organization-Id": cloudOrganizationId }
-                : {}),
+          // The organization header is written by the PACKAGE kernel
+          // (`applyOrganizationContextHeader`, @ai-matrx/agents 0.6.0 — the
+          // org-context kernel moved in under C22). The header NAME is not
+          // this repo's to spell: one client typing 'X-Organization-Id' by
+          // hand is how a rename turns a fail-closed check into a silent
+          // fail-open. WHAT this hook still owns is the POLICY of when an
+          // organization is required — resolved above by
+          // `requireActiveOrganizationId`, which fails closed with a remedy
+          // and opens the picker.
+          const segmentHeaders = cloudOrganizationId
+            ? applyOrganizationContextHeader(
+                {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${segmentToken}`,
+                },
+                cloudOrganizationId,
+              )
+            : {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${segmentToken}`,
+              };
+
+          // THE v2 → v1 TRANSPORT FALLBACK lives in the package
+          // (@ai-matrx/agents 0.6.0, C22), not here. It fires only when a
+          // `/v2/ai/...` ENDPOINT itself fails — a non-abort network throw, a
+          // 404/405 (surface not on v2), or a 5xx — always BEFORE any stream
+          // content is consumed, and never on a user cancel (a cancel logged
+          // as a downgrade would poison the exact telemetry the v2 rollout
+          // reads). Local-engine URLs are not v2 paths, so they pass straight
+          // through.
+          //
+          // The three options below are PARITY, not taste, and none may be
+          // dropped (the matrx-extend adoption recorded the same three):
+          //   - `signal` goes in the OPTIONS bag, not `init` — resilientFetch
+          //     drives its own AbortController and overwrites `init.signal`,
+          //     so a signal passed the old way is silently ignored and Stop
+          //     breaks;
+          //   - `totalTimeoutMs: null` — the shared default is 120_000, which
+          //     would guillotine every agent run at two minutes. Streams are
+          //     uncapped;
+          //   - `throwOnHttpError: false` — the non-2xx branch below reads the
+          //     body and reports through this hook's own error contract, so
+          //     the transport must hand the response back rather than throw.
+          const { response } = await fetchWithMatrxProtocolFallback(
+            requestUrl,
+            {
+              method: "POST",
+              headers: segmentHeaders,
+              body: JSON.stringify(requestBody),
             },
-            body: JSON.stringify(requestBody),
-            signal: abort.signal,
-          });
+            {
+              signal: abort.signal,
+              totalTimeoutMs: null,
+              throwOnHttpError: false,
+              onDowngrade: ({ url, reason, status }) => {
+                addDiagnostic(
+                  `AI v2 unavailable — retrying on v1 (${reason}${status ? ` / HTTP ${status}` : ""}): ${url}`,
+                );
+              },
+            },
+          );
 
           if (!response.ok || !response.body) {
             const rawErrorText = await response.text().catch(() => `HTTP ${response.status}`);
@@ -2188,7 +2248,13 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           }
           sawTerminalEvent = false;
           streamHadError = false;
-          requestUrl = `${cloudServerUrl}/api/ai/conversations/${cloudConversationId}/resume`;
+          // `/resume` has no v2 sibling — `conversationResumePath` says so and
+          // `aiRequestUrl` leaves it on v1 through the package's allowlist.
+          requestUrl = aiRequestUrl(
+            "cloud",
+            `${cloudServerUrl}/api`,
+            conversationResumePath(cloudConversationId),
+          );
           requestBody = {
             user_request_id: userRequestId,
             stream: true,

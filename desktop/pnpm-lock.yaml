@@ -16,7 +16,7 @@ importers:
         version: 0.10.0
       '@ai-matrx/content-ir-react':
         specifier: latest
-        version: 0.8.1(react@19.2.4)
+        version: 0.9.1(react@19.2.4)
       '@ai-matrx/design-system':
         specifier: latest
         version: 0.4.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -217,8 +217,8 @@ packages:
       react:
         optional: true
 
-  '@ai-matrx/content-ir-react@0.8.1':
-    resolution: {integrity: sha512-9dWoBSeIGAHys5ga58fiHFmBTCda9vgRaJgFzFsDorWIb6cUGYsCkQ4mIbfJXRh6tUbkfXTZOgg1pvVqgk0pNw==}
+  '@ai-matrx/content-ir-react@0.9.1':
+    resolution: {integrity: sha512-yMpkTDqifSSSCMcV0071v0raocBSVZnziFDx44IGafw1viTymjP4V6F0T4lkT3Ctf3914SOVDB9n2FpKAD4vog==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=19.0.0'
@@ -227,8 +227,8 @@ packages:
     resolution: {integrity: sha512-+tJiGcVCpEfitD2MvT5dksqcrNswVpe3LWDy7QyjswJwvqJC5ZwIiOmnbJtVpelE6T8iS347OJwlrZNjR056Xg==}
     engines: {node: '>=20'}
 
-  '@ai-matrx/data@0.6.1':
-    resolution: {integrity: sha512-gWk2/EMsiAUtZxbTtgdMsJJ2pxD5tjGvY+mntZXwNuBSmu5lEQ0tZhBD5uNSudHoRh2nrdQCnwUPIuxcjtWhag==}
+  '@ai-matrx/data@0.6.2':
+    resolution: {integrity: sha512-ob2wOGjcQvY+DYEq3aftjXd6MCJKFHcGFr13zD+ZaHt7zEP0C/XBenvA9/6d+ct1PnpogU6ag1miCj+X8/bhTA==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -3302,13 +3302,13 @@ snapshots:
 
   '@ai-matrx/agents@0.6.0(@supabase/supabase-js@2.112.4)(react@19.2.4)':
     dependencies:
-      '@ai-matrx/data': 0.6.1(@supabase/supabase-js@2.112.4)(react@19.2.4)
+      '@ai-matrx/data': 0.6.2(@supabase/supabase-js@2.112.4)(react@19.2.4)
     optionalDependencies:
       react: 19.2.4
     transitivePeerDependencies:
       - '@supabase/supabase-js'
 
-  '@ai-matrx/content-ir-react@0.8.1(react@19.2.4)':
+  '@ai-matrx/content-ir-react@0.9.1(react@19.2.4)':
     dependencies:
       '@ai-matrx/content-ir': 0.10.0
       react: 19.2.4
@@ -3317,7 +3317,7 @@ snapshots:
     dependencies:
       ajv: 8.20.0
 
-  '@ai-matrx/data@0.6.1(@supabase/supabase-js@2.112.4)(react@19.2.4)':
+  '@ai-matrx/data@0.6.2(@supabase/supabase-js@2.112.4)(react@19.2.4)':
     dependencies:
       '@supabase/ssr': 0.12.5(@supabase/supabase-js@2.112.4)
     optionalDependencies:

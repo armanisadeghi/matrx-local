@@ -15,8 +15,11 @@
  *     turns a fail-closed check into a silent fail-open.
  */
 
-import { applyOrganizationContextHeader } from "@ai-matrx/agents/matrx";
-import { describe, expect, it } from "vitest";
+import {
+  applyOrganizationContextHeader,
+  fetchWithMatrxProtocolFallback,
+} from "@ai-matrx/agents/matrx";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CHAT_PATH,
@@ -32,6 +35,10 @@ import {
 const CLOUD_ROOT = "https://api.example.test/api";
 const ENGINE_ROOT = "http://127.0.0.1:22240";
 const ORG_ID = "3f2a91c4-5b6d-4e7f-8a90-1b2c3d4e5f60";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("AI path helpers write the v1, in-app form", () => {
   it("emits the exact paths the package allowlist is expressed in", () => {
@@ -89,6 +96,108 @@ describe("the local engine mirror is NEVER promoted", () => {
     expect(aiRequestUrl("local", ENGINE_ROOT, conversationContinuePath("c1"))).toBe(
       "http://127.0.0.1:22240/ai/conversations/c1",
     );
+  });
+});
+
+describe("the stream transport options are PARITY, not taste", () => {
+  // These three pin the traps the matrx-extend adoption recorded. They call
+  // the REAL package function against a stub `fetch`, because what is being
+  // proven is this repo's WIRING, not the package's internals.
+
+  it("aborts through the options bag — a signal in `init` is overwritten", async () => {
+    // resilientFetch drives its own AbortController and replaces
+    // `init.signal`. If the signal were passed the old way, Stop would go
+    // silently dead. This fails if the wiring ever moves it back into `init`.
+    const controller = new AbortController();
+    const seen: Array<AbortSignal | null | undefined> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+      seen.push(init?.signal);
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        );
+      });
+    });
+
+    const pending = fetchWithMatrxProtocolFallback(
+      `${CLOUD_ROOT}/v2/ai/chat`,
+      { method: "POST" },
+      { signal: controller.signal, totalTimeoutMs: null, throwOnHttpError: false },
+    );
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+
+    // The signal fetch actually received is the transport's own, and it did
+    // fire — which only happens because ours was linked through the options.
+    expect(seen[0]).toBeInstanceOf(AbortSignal);
+    expect(seen[0]?.aborted).toBe(true);
+  });
+
+  it("does not guillotine a long run at the shared 120s default", async () => {
+    // A stub whose HEADERS arrive at 130s — a slow-to-first-token agent turn.
+    // (The package clears both timers the moment headers land, so the total
+    // budget guards exactly this window.) With the
+    // package's DEFAULT total budget this dies at 120s; with `totalTimeoutMs:
+    // null` it lives. Asserting both directions is what makes this a guard
+    // rather than a restatement of the option.
+    const stub = () =>
+      vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+        return new Promise((resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+          setTimeout(() => resolve(new Response("{}")), 130_000);
+        });
+      });
+
+    const settle = async (
+      totalTimeoutMs: number | null | undefined,
+    ): Promise<"resolved" | string> => {
+      vi.useFakeTimers();
+      stub();
+      try {
+        const pending = fetchWithMatrxProtocolFallback(
+          // A v1 URL on purpose: the total budget is orthogonal to the v2
+          // fallback, and a v2 URL would retry on v1 and muddy the assertion.
+          `${CLOUD_ROOT}/ai/chat`,
+          { method: "POST" },
+          {
+            // 200s connect window: this test is about the TOTAL budget only.
+            connectTimeoutMs: 200_000,
+            throwOnHttpError: false,
+            ...(totalTimeoutMs !== undefined ? { totalTimeoutMs } : {}),
+          },
+        ).then(
+          () => "resolved" as const,
+          (err: unknown) => (err instanceof Error ? err.name : String(err)),
+        );
+        await vi.advanceTimersByTimeAsync(150_000);
+        return await pending;
+      } finally {
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+      }
+    };
+
+    // The trap, demonstrated: leave the option off and the run is killed.
+    expect(await settle(undefined)).toBe("TotalTimeoutError");
+    // The wiring this repo ships.
+    expect(await settle(null)).toBe("resolved");
+  });
+
+  it("hands a non-2xx response back instead of throwing", async () => {
+    // The chat hook reads the body of a failed response and reports through
+    // its own error contract, so `throwOnHttpError: false` is load-bearing.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("nope", { status: 403 }),
+    );
+    const { response } = await fetchWithMatrxProtocolFallback(
+      `${CLOUD_ROOT}/ai/chat`,
+      { method: "POST" },
+      { totalTimeoutMs: null, throwOnHttpError: false },
+    );
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe("nope");
   });
 });
 

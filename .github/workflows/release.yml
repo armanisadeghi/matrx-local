@@ -98,9 +98,60 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}
 
-  release:
+  # Create the draft ONCE before the build matrix starts. Letting each
+  # tauri-action matrix leg race to create the same tag can produce two draft
+  # releases with split assets; the finalizer then sees only half a release.
+  prepare-release:
     needs: verify
     if: ${{ needs.verify.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create the single draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION="$(jq -r .version desktop/src-tauri/tauri.conf.json)"
+          TAG="v${VERSION}"
+          mapfile -t RELEASE_IDS < <(
+            gh api --paginate "repos/${REPO}/releases?per_page=100" \
+              --jq ".[] | select(.tag_name == \"${TAG}\") | .id"
+          )
+          if (( ${#RELEASE_IDS[@]} > 1 )); then
+            echo "Multiple releases already exist for ${TAG}: ${RELEASE_IDS[*]}" >&2
+            exit 1
+          fi
+          if (( ${#RELEASE_IDS[@]} == 1 )); then
+            RELEASE_ID="${RELEASE_IDS[0]}"
+            IS_DRAFT="$(gh api "repos/${REPO}/releases/${RELEASE_ID}" --jq .draft)"
+            [[ "$IS_DRAFT" == "true" ]] || {
+              echo "Release ${TAG} already exists and is not a draft" >&2
+              exit 1
+            }
+          else
+            RELEASE_ID="$(gh api --method POST "repos/${REPO}/releases" \
+              -f tag_name="$TAG" \
+              -f target_commitish="${GITHUB_SHA}" \
+              -f name="AI Matrx ${TAG}" \
+              -f body="See the assets below to download and install this version." \
+              -F draft=true \
+              -F prerelease=false \
+              --jq .id)"
+          fi
+          echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
+          echo "Prepared one draft release for ${TAG}: ${RELEASE_ID}"
+
+  release:
+    needs: [verify, prepare-release]
+    if: ${{ needs.verify.result == 'success' && needs.prepare-release.result == 'success' }}
     permissions:
       contents: write
     strategy:
@@ -458,6 +509,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: desktop
+          # Every matrix leg uploads to the one draft created above. This is
+          # the race-free path documented by tauri-action for existing releases.
+          releaseId: ${{ needs.prepare-release.outputs.release_id }}
           tagName: v__VERSION__
           releaseName: "AI Matrx v__VERSION__"
           releaseBody: "See the assets below to download and install this version."
